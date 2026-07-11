@@ -177,6 +177,26 @@ pub struct AsyncRuntimeActorMetrics {
     pub lifecycle_state_notifications: u64,
 }
 
+/// Adapter-owned desired and active runtime timer state.
+///
+/// The tracker centralizes timer generations without moving domain transition
+/// decisions out of `RuntimeSessionService`. Tokio workers still execute the
+/// emitted schedule and cancellation effects.
+#[derive(Debug, Default)]
+pub(super) struct RuntimeTimerTracker {
+    pub(super) shell_transactions: HashSet<RuntimeTimerKey>,
+    pub(super) resize_debounce: HashSet<RuntimeTimerKey>,
+    pub(super) cursor_blink: HashMap<String, RuntimeTimerKey>,
+    pub(super) status_refresh: HashMap<String, RuntimeTimerKey>,
+    pub(super) provider_poll: Option<RuntimeTimerKey>,
+    pub(super) provider_retry: HashMap<String, RuntimeTimerKey>,
+    pub(super) provider_claim: HashMap<String, RuntimeTimerKey>,
+    pub(super) next_provider_claim_generation: u64,
+    pub(super) pane_pipe_health: HashMap<String, RuntimeTimerKey>,
+    pub(super) next_pane_pipe_health_generation: u64,
+    pub(super) idle_cleanup: Option<RuntimeTimerKey>,
+}
+
 /// Carries Async Runtime Session Actor state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -228,66 +248,10 @@ pub struct AsyncRuntimeSessionActor {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) side_effects: VecDeque<RuntimeSideEffect>,
-    /// Stores the scheduled shell transaction timers value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) scheduled_shell_transaction_timers: HashSet<RuntimeTimerKey>,
-    /// Stores the scheduled resize debounce timers value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) scheduled_resize_debounce_timers: HashSet<RuntimeTimerKey>,
-    /// Stores the scheduled cursor blink timers value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) scheduled_cursor_blink_timers: HashMap<String, RuntimeTimerKey>,
-    /// Stores the scheduled status refresh timers value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) scheduled_status_refresh_timers: HashMap<String, RuntimeTimerKey>,
-    /// Stores the scheduled provider poll timer value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) scheduled_provider_poll_timer: Option<RuntimeTimerKey>,
-    /// Stores the scheduled provider retry timers value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) scheduled_provider_retry_timers: HashMap<String, RuntimeTimerKey>,
-    /// Stores timeout timers for provider tasks claimed by async workers.
-    ///
-    /// These timers ensure a worker that never reports completion or failure
-    /// cannot leave a turn running indefinitely.
-    pub(super) scheduled_provider_claim_timers: HashMap<String, RuntimeTimerKey>,
-    /// Stores the next provider claim timer generation value.
-    ///
-    /// The generation lets the actor ignore stale claim timeout events from
-    /// earlier workers for the same turn.
-    pub(super) next_provider_claim_timer_generation: u64,
-    /// Tracks turns that already used automatic output-limit compaction.
-    ///
-    /// This bounds recovery for Responses API incomplete/max_output_tokens
-    /// failures so one pathological turn cannot compact and retry forever.
+    /// Adapter-owned timer scheduling and stale-generation state.
+    pub(super) timers: RuntimeTimerTracker,
+    /// Turns that already used automatic output-limit compaction recovery.
     pub(super) provider_output_limit_compaction_turns: HashSet<String>,
-    /// Stores the scheduled pane pipe health timers value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) scheduled_pane_pipe_health_timers: HashMap<String, RuntimeTimerKey>,
-    /// Stores the next pane pipe health timer generation value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) next_pane_pipe_health_timer_generation: u64,
-    /// Stores the scheduled idle cleanup timer value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) scheduled_idle_cleanup_timer: Option<RuntimeTimerKey>,
     /// Stores the side effect buffer value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

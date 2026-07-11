@@ -176,18 +176,8 @@ impl AsyncRuntimeSessionActor {
                 side_effect_delivery_tx,
                 lifecycle_state_tx,
                 side_effects: VecDeque::with_capacity(config.side_effect_buffer),
-                scheduled_shell_transaction_timers: Default::default(),
-                scheduled_resize_debounce_timers: Default::default(),
-                scheduled_cursor_blink_timers: Default::default(),
-                scheduled_status_refresh_timers: Default::default(),
-                scheduled_provider_poll_timer: None,
-                scheduled_provider_retry_timers: Default::default(),
-                scheduled_provider_claim_timers: Default::default(),
-                next_provider_claim_timer_generation: 0,
+                timers: Default::default(),
                 provider_output_limit_compaction_turns: Default::default(),
-                scheduled_pane_pipe_health_timers: Default::default(),
-                next_pane_pipe_health_timer_generation: 0,
-                scheduled_idle_cleanup_timer: None,
                 side_effect_buffer: config.side_effect_buffer,
                 commands_processed: 0,
                 metrics: Default::default(),
@@ -722,9 +712,9 @@ impl AsyncRuntimeSessionActor {
                 };
                 let result = result.and_then(|dispatch| {
                     if let Some(dispatch) = dispatch {
-                        self.next_provider_claim_timer_generation =
-                            self.next_provider_claim_timer_generation.saturating_add(1);
-                        let generation = self.next_provider_claim_timer_generation;
+                        self.timers.next_provider_claim_generation =
+                            self.timers.next_provider_claim_generation.saturating_add(1);
+                        let generation = self.timers.next_provider_claim_generation;
                         self.service.record_claimed_agent_provider_task(
                             &dispatch,
                             generation,
@@ -1081,7 +1071,7 @@ impl AsyncRuntimeSessionActor {
     /// on duplicated control-flow logic.
     fn apply_runtime_timer_event(&mut self, timer: TimerEvent) -> Result<RuntimeTransition> {
         if runtime_timer_kind_is_shell_transaction(timer.key.kind) {
-            self.scheduled_shell_transaction_timers.remove(&timer.key);
+            self.timers.shell_transactions.remove(&timer.key);
         }
         match timer.key.kind {
             RuntimeTimerKind::ShellTransaction
@@ -1099,7 +1089,7 @@ impl AsyncRuntimeSessionActor {
                 Ok(transition)
             }
             RuntimeTimerKind::ResizeDebounce => {
-                if self.scheduled_resize_debounce_timers.remove(&timer.key) {
+                if self.timers.resize_debounce.remove(&timer.key) {
                     Ok(self.apply_render_timer_event(RenderInvalidationReason::Resize))
                 } else {
                     self.record_ignored_timer_event();
@@ -1107,16 +1097,11 @@ impl AsyncRuntimeSessionActor {
                 }
             }
             RuntimeTimerKind::CursorBlink => {
-                if self
-                    .scheduled_cursor_blink_timers
-                    .get(timer.key.owner_id.as_str())
-                    != Some(&timer.key)
-                {
+                if self.timers.cursor_blink.get(timer.key.owner_id.as_str()) != Some(&timer.key) {
                     self.record_ignored_timer_event();
                     return Ok(RuntimeTransition::default());
                 }
-                self.scheduled_cursor_blink_timers
-                    .remove(timer.key.owner_id.as_str());
+                self.timers.cursor_blink.remove(timer.key.owner_id.as_str());
                 let mut application =
                     self.apply_render_timer_event(RenderInvalidationReason::CursorBlink);
                 application
@@ -1128,15 +1113,12 @@ impl AsyncRuntimeSessionActor {
                 Ok(application)
             }
             RuntimeTimerKind::StatusRefresh => {
-                if self
-                    .scheduled_status_refresh_timers
-                    .get(timer.key.owner_id.as_str())
-                    != Some(&timer.key)
-                {
+                if self.timers.status_refresh.get(timer.key.owner_id.as_str()) != Some(&timer.key) {
                     self.record_ignored_timer_event();
                     return Ok(RuntimeTransition::default());
                 }
-                self.scheduled_status_refresh_timers
+                self.timers
+                    .status_refresh
                     .remove(timer.key.owner_id.as_str());
                 let mut application =
                     self.apply_render_timer_event(RenderInvalidationReason::StatusLine);
@@ -1149,11 +1131,11 @@ impl AsyncRuntimeSessionActor {
                 Ok(application)
             }
             RuntimeTimerKind::IdleCleanup => {
-                if self.scheduled_idle_cleanup_timer.as_ref() != Some(&timer.key) {
+                if self.timers.idle_cleanup.as_ref() != Some(&timer.key) {
                     self.record_ignored_timer_event();
                     return Ok(RuntimeTransition::default());
                 }
-                self.scheduled_idle_cleanup_timer = None;
+                self.timers.idle_cleanup = None;
                 let actor_progress_turn_ids = self.actor_owned_agent_progress_turn_ids();
                 let cleaned = self
                     .service
@@ -1171,49 +1153,45 @@ impl AsyncRuntimeSessionActor {
                 })
             }
             RuntimeTimerKind::ProviderPoll => {
-                if self.scheduled_provider_poll_timer.as_ref() != Some(&timer.key) {
+                if self.timers.provider_poll.as_ref() != Some(&timer.key) {
                     self.record_ignored_timer_event();
                     return Ok(RuntimeTransition::default());
                 }
-                self.scheduled_provider_poll_timer = None;
+                self.timers.provider_poll = None;
                 self.apply_provider_poll_timer_event()
             }
             RuntimeTimerKind::ProviderRetry => {
-                if self
-                    .scheduled_provider_retry_timers
-                    .get(timer.key.owner_id.as_str())
-                    != Some(&timer.key)
-                {
+                if self.timers.provider_retry.get(timer.key.owner_id.as_str()) != Some(&timer.key) {
                     self.record_ignored_timer_event();
                     return Ok(RuntimeTransition::default());
                 }
-                self.scheduled_provider_retry_timers
+                self.timers
+                    .provider_retry
                     .remove(timer.key.owner_id.as_str());
                 self.apply_provider_retry_timer_event(&timer.key)
             }
             RuntimeTimerKind::ProviderClaim => {
-                if self
-                    .scheduled_provider_claim_timers
-                    .get(timer.key.owner_id.as_str())
-                    != Some(&timer.key)
-                {
+                if self.timers.provider_claim.get(timer.key.owner_id.as_str()) != Some(&timer.key) {
                     self.record_ignored_timer_event();
                     return Ok(RuntimeTransition::default());
                 }
-                self.scheduled_provider_claim_timers
+                self.timers
+                    .provider_claim
                     .remove(timer.key.owner_id.as_str());
                 self.apply_provider_claim_timer_event(&timer.key)
             }
             RuntimeTimerKind::PanePipeHealth => {
                 if self
-                    .scheduled_pane_pipe_health_timers
+                    .timers
+                    .pane_pipe_health
                     .get(timer.key.owner_id.as_str())
                     != Some(&timer.key)
                 {
                     self.record_ignored_timer_event();
                     return Ok(RuntimeTransition::default());
                 }
-                self.scheduled_pane_pipe_health_timers
+                self.timers
+                    .pane_pipe_health
                     .remove(timer.key.owner_id.as_str());
                 let stopped = self
                     .service
@@ -1324,7 +1302,8 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         turn_id: &str,
     ) -> Vec<RuntimeSideEffect> {
-        self.scheduled_provider_claim_timers
+        self.timers
+            .provider_claim
             .remove(turn_id)
             .map(|key| RuntimeSideEffect::CancelTimer { key })
             .into_iter()
@@ -1400,7 +1379,7 @@ impl AsyncRuntimeSessionActor {
         let mut turn_ids: std::collections::BTreeSet<String> = self
             .service
             .agent_provider_retry_turn_ids()
-            .chain(self.scheduled_provider_retry_timers.keys())
+            .chain(self.timers.provider_retry.keys())
             .cloned()
             .collect();
         turn_ids.extend(self.service.agent_compaction_resume_turn_ids());
@@ -1458,7 +1437,7 @@ impl AsyncRuntimeSessionActor {
     ) -> Result<bool> {
         if self.service.pending_agent_provider_tasks().is_empty()
             && self.service.pending_agent_compaction_tasks().is_empty()
-            || self.scheduled_provider_poll_timer.is_some()
+            || self.timers.provider_poll.is_some()
         {
             return Ok(false);
         }
@@ -1656,8 +1635,7 @@ impl AsyncRuntimeSessionActor {
                     {
                         self.service
                             .clear_agent_provider_retry_attempt(turn_id.as_str());
-                        self.scheduled_provider_retry_timers
-                            .remove(turn_id.as_str());
+                        self.timers.provider_retry.remove(turn_id.as_str());
                         self.provider_output_limit_compaction_turns
                             .insert(turn_id.clone());
                         let mut side_effects =
@@ -1672,8 +1650,7 @@ impl AsyncRuntimeSessionActor {
                 }
                 self.service
                     .clear_agent_provider_retry_attempt(turn_id.as_str());
-                self.scheduled_provider_retry_timers
-                    .remove(turn_id.as_str());
+                self.timers.provider_retry.remove(turn_id.as_str());
                 self.provider_output_limit_compaction_turns
                     .remove(turn_id.as_str());
                 let mut transition = self.service.apply_agent_provider_failed_transition(
@@ -1705,8 +1682,7 @@ impl AsyncRuntimeSessionActor {
                 self.service.clear_claimed_agent_provider_task(&turn_id);
                 self.service
                     .clear_agent_provider_retry_attempt(turn_id.as_str());
-                self.scheduled_provider_retry_timers
-                    .remove(turn_id.as_str());
+                self.timers.provider_retry.remove(turn_id.as_str());
                 self.provider_output_limit_compaction_turns
                     .remove(turn_id.as_str());
                 let mut transition = self
@@ -1782,8 +1758,7 @@ impl AsyncRuntimeSessionActor {
             if !recovered {
                 self.service
                     .clear_agent_provider_retry_attempt(turn_id.as_str());
-                self.scheduled_provider_retry_timers
-                    .remove(turn_id.as_str());
+                self.timers.provider_retry.remove(turn_id.as_str());
                 let applied = self.service.apply_agent_provider_failed_event(
                     &agent_id,
                     &turn_id,
@@ -1809,8 +1784,7 @@ impl AsyncRuntimeSessionActor {
             if !recovered {
                 self.service
                     .clear_agent_provider_retry_attempt(turn_id.as_str());
-                self.scheduled_provider_retry_timers
-                    .remove(turn_id.as_str());
+                self.timers.provider_retry.remove(turn_id.as_str());
                 let applied = self.service.apply_agent_provider_failed_event(
                     &agent_id,
                     &turn_id,
@@ -1889,66 +1863,46 @@ impl AsyncRuntimeSessionActor {
             | RuntimeTimerKind::Bootstrap
             | RuntimeTimerKind::FocusedShellHook => {
                 if scheduled {
-                    self.scheduled_shell_transaction_timers.insert(key.clone());
+                    self.timers.shell_transactions.insert(key.clone());
                 } else {
-                    self.scheduled_shell_transaction_timers.remove(key);
+                    self.timers.shell_transactions.remove(key);
                 }
             }
             RuntimeTimerKind::IdleCleanup => {
                 if scheduled {
-                    self.scheduled_idle_cleanup_timer = Some(key.clone());
-                } else if self.scheduled_idle_cleanup_timer.as_ref() == Some(key) {
-                    self.scheduled_idle_cleanup_timer = None;
+                    self.timers.idle_cleanup = Some(key.clone());
+                } else if self.timers.idle_cleanup.as_ref() == Some(key) {
+                    self.timers.idle_cleanup = None;
                 }
             }
             RuntimeTimerKind::ResizeDebounce => {
                 if scheduled {
-                    self.scheduled_resize_debounce_timers.insert(key.clone());
+                    self.timers.resize_debounce.insert(key.clone());
                 } else {
-                    self.scheduled_resize_debounce_timers.remove(key);
+                    self.timers.resize_debounce.remove(key);
                 }
             }
             RuntimeTimerKind::CursorBlink => {
-                Self::track_owned_timer_key(
-                    &mut self.scheduled_cursor_blink_timers,
-                    key,
-                    scheduled,
-                );
+                Self::track_owned_timer_key(&mut self.timers.cursor_blink, key, scheduled);
             }
             RuntimeTimerKind::StatusRefresh => {
-                Self::track_owned_timer_key(
-                    &mut self.scheduled_status_refresh_timers,
-                    key,
-                    scheduled,
-                );
+                Self::track_owned_timer_key(&mut self.timers.status_refresh, key, scheduled);
             }
             RuntimeTimerKind::ProviderPoll => {
                 if scheduled {
-                    self.scheduled_provider_poll_timer = Some(key.clone());
-                } else if self.scheduled_provider_poll_timer.as_ref() == Some(key) {
-                    self.scheduled_provider_poll_timer = None;
+                    self.timers.provider_poll = Some(key.clone());
+                } else if self.timers.provider_poll.as_ref() == Some(key) {
+                    self.timers.provider_poll = None;
                 }
             }
             RuntimeTimerKind::ProviderRetry => {
-                Self::track_owned_timer_key(
-                    &mut self.scheduled_provider_retry_timers,
-                    key,
-                    scheduled,
-                );
+                Self::track_owned_timer_key(&mut self.timers.provider_retry, key, scheduled);
             }
             RuntimeTimerKind::ProviderClaim => {
-                Self::track_owned_timer_key(
-                    &mut self.scheduled_provider_claim_timers,
-                    key,
-                    scheduled,
-                );
+                Self::track_owned_timer_key(&mut self.timers.provider_claim, key, scheduled);
             }
             RuntimeTimerKind::PanePipeHealth => {
-                Self::track_owned_timer_key(
-                    &mut self.scheduled_pane_pipe_health_timers,
-                    key,
-                    scheduled,
-                );
+                Self::track_owned_timer_key(&mut self.timers.pane_pipe_health, key, scheduled);
             }
         }
     }
@@ -2088,7 +2042,8 @@ impl AsyncRuntimeSessionActor {
     fn shell_transaction_timer_side_effects(&mut self) -> Vec<RuntimeSideEffect> {
         let timers = self.service.running_shell_transaction_timers();
         let active_keys = shell_transaction_timer_keys(&timers);
-        self.scheduled_shell_transaction_timers
+        self.timers
+            .shell_transactions
             .retain(|key| active_keys.contains(key));
         let now_ms = async_runtime_current_unix_millis();
         timers
@@ -2099,7 +2054,7 @@ impl AsyncRuntimeSessionActor {
                     timer.marker,
                     timer.started_at_unix_ms,
                 );
-                if self.scheduled_shell_transaction_timers.contains(&key) {
+                if self.timers.shell_transactions.contains(&key) {
                     return None;
                 }
                 let deadline_ms = timer.started_at_unix_ms.saturating_add(timer.timeout_ms);
@@ -2120,13 +2075,14 @@ impl AsyncRuntimeSessionActor {
         let timers = self.service.running_shell_transaction_timers();
         let active_keys = shell_transaction_timer_keys(&timers);
         let stale_keys = self
-            .scheduled_shell_transaction_timers
+            .timers
+            .shell_transactions
             .iter()
             .filter(|key| !active_keys.contains(*key))
             .cloned()
             .collect::<Vec<_>>();
         for key in &stale_keys {
-            self.scheduled_shell_transaction_timers.remove(key);
+            self.timers.shell_transactions.remove(key);
         }
         stale_keys
             .into_iter()
@@ -2157,7 +2113,7 @@ impl AsyncRuntimeSessionActor {
         if !self
             .service
             .idle_cleanup_timer_needed_with_actor_progress(actor_progress_turn_ids)
-            || self.scheduled_idle_cleanup_timer.is_some()
+            || self.timers.idle_cleanup.is_some()
         {
             return Vec::new();
         }
@@ -2195,13 +2151,14 @@ impl AsyncRuntimeSessionActor {
             });
         if !client_attached || !config.cursor_blink || config.cursor_blink_interval_ms == 0 {
             return Ok(self
-                .scheduled_cursor_blink_timers
+                .timers
+                .cursor_blink
                 .remove(client_id)
                 .map(|key| RuntimeSideEffect::CancelTimer { key })
                 .into_iter()
                 .collect());
         }
-        if self.scheduled_cursor_blink_timers.contains_key(client_id) {
+        if self.timers.cursor_blink.contains_key(client_id) {
             return Ok(Vec::new());
         }
         let delay_ms = (config.cursor_blink_interval_ms / 2).max(1);
@@ -2234,7 +2191,8 @@ impl AsyncRuntimeSessionActor {
             });
         if !client_attached || !status_refresh_required_by_config(&config) {
             return Ok(self
-                .scheduled_status_refresh_timers
+                .timers
+                .status_refresh
                 .remove(client_id)
                 .map(|key| RuntimeSideEffect::CancelTimer { key })
                 .into_iter()
@@ -2246,7 +2204,7 @@ impl AsyncRuntimeSessionActor {
             client_id,
             generation_base_ms.saturating_add(delay_ms),
         );
-        if let Some(existing_key) = self.scheduled_status_refresh_timers.get(client_id) {
+        if let Some(existing_key) = self.timers.status_refresh.get(client_id) {
             if existing_key.generation <= next_key.generation {
                 return Ok(Vec::new());
             }
@@ -2280,23 +2238,25 @@ impl AsyncRuntimeSessionActor {
             .command_pane_pipe_health_check_needed(pane_id)?
         {
             return Ok(self
-                .scheduled_pane_pipe_health_timers
+                .timers
+                .pane_pipe_health
                 .remove(pane_id)
                 .map(|key| RuntimeSideEffect::CancelTimer { key })
                 .into_iter()
                 .collect());
         }
-        if self.scheduled_pane_pipe_health_timers.contains_key(pane_id) {
+        if self.timers.pane_pipe_health.contains_key(pane_id) {
             return Ok(Vec::new());
         }
-        self.next_pane_pipe_health_timer_generation = self
-            .next_pane_pipe_health_timer_generation
+        self.timers.next_pane_pipe_health_generation = self
+            .timers
+            .next_pane_pipe_health_generation
             .saturating_add(1);
         Ok(vec![RuntimeSideEffect::ScheduleTimer {
             key: RuntimeTimerKey::new(
                 RuntimeTimerKind::PanePipeHealth,
                 pane_id,
-                self.next_pane_pipe_health_timer_generation,
+                self.timers.next_pane_pipe_health_generation,
             ),
             delay_ms: DEFAULT_PANE_PIPE_HEALTH_DELAY_MS,
         }])
