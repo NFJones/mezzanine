@@ -1151,18 +1151,6 @@ impl RuntimeSessionService {
         aged
     }
 
-    /// Applies runtime idle-cleanup timer work that does not require polling PTY
-    /// or process state.
-    ///
-    /// Migrated cleanup targets include hidden-shell render suppression
-    /// retention, stranded agent dispatch recovery, and unreachable running
-    /// turn failure. These operations
-    /// are driven by actor timer events in the daemon path so idle sessions do
-    /// not need to scan them through the compatibility tick.
-    pub fn apply_idle_cleanup_timer_event(&mut self) -> Result<usize> {
-        self.apply_idle_cleanup_timer_event_with_actor_progress(&BTreeSet::new())
-    }
-
     /// Applies runtime idle-cleanup timer work while honoring actor-owned
     /// progress.
     ///
@@ -1187,16 +1175,6 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Reconciles running agent turns after actor-owned state transitions.
-    ///
-    /// The runtime specification requires every running turn to retain an
-    /// observable progress path. Calling this after event application prevents
-    /// stranded turns from depending on a later idle timer before they are
-    /// requeued or failed.
-    pub fn reconcile_agent_runtime_progress_paths(&mut self) -> Result<usize> {
-        self.reconcile_agent_runtime_progress_paths_with_actor_progress(&BTreeSet::new())
-    }
-
     /// Reconciles running agent turns while honoring actor-owned progress.
     ///
     /// # Parameters
@@ -1217,17 +1195,6 @@ impl RuntimeSessionService {
         let unreachable_turn_failures =
             self.fail_unreachable_running_agent_turns_with_actor_progress(actor_progress_turn_ids)?;
         Ok(stranded_shell_recoveries.saturating_add(unreachable_turn_failures))
-    }
-
-    /// Reports whether actor-owned idle cleanup should remain scheduled.
-    ///
-    /// Hidden agent-shell render suppression retention must age out after the
-    /// shell transaction and running turn settle so delayed prompt bytes do not
-    /// leak into normal pane rendering. Stranded shell-dispatch recovery must
-    /// also retry while a pending shell command is blocked behind stale
-    /// readiness state.
-    pub fn idle_cleanup_timer_needed(&self) -> bool {
-        self.idle_cleanup_timer_needed_with_actor_progress(&BTreeSet::new())
     }
 
     /// Reports whether actor-owned idle cleanup should remain scheduled while
@@ -1257,11 +1224,6 @@ impl RuntimeSessionService {
         !self
             .stranded_agent_shell_dispatch_recovery_candidates()
             .is_empty()
-    }
-
-    /// Reports whether any running turn has no remaining runtime progress path.
-    pub fn unreachable_running_agent_turn_timer_needed(&self) -> bool {
-        self.unreachable_running_agent_turn_timer_needed_with_actor_progress(&BTreeSet::new())
     }
 
     /// Reports whether any running turn has no remaining runtime progress path

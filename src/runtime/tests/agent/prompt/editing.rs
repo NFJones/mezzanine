@@ -79,7 +79,13 @@ fn runtime_hidden_agent_shell_rendering_retains_prompt_suppression_after_transac
     let prompt_repaint = service.renderable_pane_output_bytes("%1", b"user@host ~/repo $ ");
     let mut aged = 0usize;
     for _ in 0..64 {
-        aged = aged.saturating_add(service.apply_idle_cleanup_timer_event().unwrap());
+        aged = aged.saturating_add(
+            service
+                .apply_idle_cleanup_timer_event_with_actor_progress(
+                    &std::collections::BTreeSet::new(),
+                )
+                .unwrap(),
+        );
     }
     let later_shell_output = service.renderable_pane_output_bytes("%1", b"later\n");
 

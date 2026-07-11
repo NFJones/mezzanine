@@ -267,8 +267,19 @@ fn runtime_stale_joined_spawn_result_is_unreachable_progress() {
     );
     service.pending_agent_provider_tasks.remove(&parent.turn_id);
 
-    assert!(service.unreachable_running_agent_turn_timer_needed());
-    assert_eq!(service.reconcile_agent_runtime_progress_paths().unwrap(), 1);
+    assert!(
+        service.unreachable_running_agent_turn_timer_needed_with_actor_progress(
+            &std::collections::BTreeSet::new()
+        )
+    );
+    assert_eq!(
+        service
+            .reconcile_agent_runtime_progress_paths_with_actor_progress(
+                &std::collections::BTreeSet::new(),
+            )
+            .unwrap(),
+        1
+    );
     assert_eq!(
         service
             .agent_turn_ledger
