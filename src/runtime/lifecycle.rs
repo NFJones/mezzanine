@@ -407,9 +407,6 @@ impl RuntimeSessionService {
                 cleared_memory
             ),
         )?;
-        if !self.external_effects_use_adapter() {
-            self.persist_or_defer_registry_update()?;
-        }
         Ok(true)
     }
 
@@ -460,9 +457,6 @@ impl RuntimeSessionService {
                 terminated_mcp_servers
             ),
         )?;
-        if !self.external_effects_use_adapter() {
-            self.persist_or_defer_registry_update()?;
-        }
         Ok(true)
     }
 }
