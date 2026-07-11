@@ -18,18 +18,17 @@ use super::{
     DEFAULT_AGENT_ROUTING, DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES,
     DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH, DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW,
     DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT, DEFAULT_PANE_TERM, DEFAULT_SUBAGENT_WAIT_POLICY,
-    DeferredConfigFileWrite, DeferredProjectConfigWrite, DeferredProjectInstructionWrite,
-    EventKind, EventLog, FocusedShellHookQueue, HostClipboard, KeyBindings,
-    MEZ_ENV_FIELD_SEPARATOR, McpRegistry, McpServerStatus, McpStartupTransportPlan, MemoryRecord,
-    MessageService, MezError, ModelProfile, ModelTokenUsage, ModelTokenUsageKey,
-    PaneProcessManager, PaneReadinessOverrideStore, PasteBuffers, Path, PathBuf,
-    PermissionAuthorityChange, PermissionPolicy, ProjectTrustStore, RenderInvalidationReason,
-    Result, RuntimeConfigApplyReport, RuntimeHttpMcpTransportState, RuntimeLifecycleState,
-    RuntimeMcpRetryReport, RuntimeMcpTransportSet, RuntimeModelProfileOverrideStore,
-    RuntimePresetRegistry, RuntimeProviderConfig, RuntimeProviderRegistry,
-    RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSideEffect, RuntimeStatusPillCache,
-    RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition, ScopeRegistry, Session,
-    SessionApprovalStore, SessionMemoryStore, SessionRegistry, SnapshotRepository,
+    DeferredConfigFileWrite, DeferredProjectConfigWrite, EventKind, EventLog,
+    FocusedShellHookQueue, HostClipboard, KeyBindings, MEZ_ENV_FIELD_SEPARATOR, McpRegistry,
+    McpServerStatus, McpStartupTransportPlan, MemoryRecord, MessageService, MezError, ModelProfile,
+    ModelTokenUsage, ModelTokenUsageKey, PaneProcessManager, PaneReadinessOverrideStore,
+    PasteBuffers, Path, PathBuf, PermissionAuthorityChange, PermissionPolicy, ProjectTrustStore,
+    RenderInvalidationReason, Result, RuntimeConfigApplyReport, RuntimeHttpMcpTransportState,
+    RuntimeLifecycleState, RuntimeMcpRetryReport, RuntimeMcpTransportSet,
+    RuntimeModelProfileOverrideStore, RuntimePresetRegistry, RuntimeProviderConfig,
+    RuntimeProviderRegistry, RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSideEffect,
+    RuntimeStatusPillCache, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition, ScopeRegistry,
+    Session, SessionApprovalStore, SessionMemoryStore, SessionRegistry, SnapshotRepository,
     TerminalClientLoopConfig, TerminalScreen, ToolDiscoveryCache, TrustDecision, Value,
     agent_shell_visibility_json_name, apply_registry_update, builtin_subagent_profiles,
     compare_approval_policy_authority, compose_effective_config, current_unix_seconds,
@@ -282,7 +281,7 @@ impl RuntimeSessionService {
             queued_transcript_effects: Vec::new(),
             deferred_config_file_writes: Vec::new(),
             deferred_project_config_writes: Vec::new(),
-            deferred_project_instruction_writes: Vec::new(),
+            queued_config_effects: Vec::new(),
             deferred_transcript_next_sequences: BTreeMap::new(),
             pane_screens: BTreeMap::new(),
             pane_transaction_osc_screens: BTreeMap::new(),
@@ -2545,23 +2544,21 @@ impl RuntimeSessionService {
     pub(crate) fn drain_config_persistence_transition(&mut self) -> RuntimeTransition {
         let coalesced =
             coalesce_deferred_config_file_writes(self.drain_deferred_config_file_writes());
-        let mut side_effects = coalesced
-            .into_iter()
-            .map(|write| {
-                let target = match write.scope {
-                    ConfigScope::Primary | ConfigScope::LiveOverride => {
-                        crate::runtime::PersistenceTarget::Config
-                    }
-                    ConfigScope::ProjectOverlay => crate::runtime::PersistenceTarget::ProjectConfig,
-                };
-                RuntimeSideEffect::Persist {
-                    target,
-                    path: write.path,
-                    bytes: write.text.into_bytes(),
-                    mode: crate::runtime::PersistenceWriteMode::Replace,
+        let mut side_effects = std::mem::take(&mut self.queued_config_effects);
+        side_effects.extend(coalesced.into_iter().map(|write| {
+            let target = match write.scope {
+                ConfigScope::Primary | ConfigScope::LiveOverride => {
+                    crate::runtime::PersistenceTarget::Config
                 }
-            })
-            .collect::<Vec<_>>();
+                ConfigScope::ProjectOverlay => crate::runtime::PersistenceTarget::ProjectConfig,
+            };
+            RuntimeSideEffect::Persist {
+                target,
+                path: write.path,
+                bytes: write.text.into_bytes(),
+                mode: crate::runtime::PersistenceWriteMode::Replace,
+            }
+        }));
         side_effects.extend(
             self.drain_deferred_project_config_writes()
                 .into_iter()
@@ -2570,16 +2567,6 @@ impl RuntimeSessionService {
                     path: write.path,
                     bytes: write.text.into_bytes(),
                     mode: crate::runtime::PersistenceWriteMode::Replace,
-                }),
-        );
-        side_effects.extend(
-            self.drain_deferred_project_instruction_writes()
-                .into_iter()
-                .map(|write| RuntimeSideEffect::Persist {
-                    target: crate::runtime::PersistenceTarget::ProjectInstruction,
-                    path: write.path,
-                    bytes: write.bytes,
-                    mode: crate::runtime::PersistenceWriteMode::CreateNew,
                 }),
         );
         RuntimeTransition {
@@ -2612,13 +2599,6 @@ impl RuntimeSessionService {
         &mut self,
     ) -> Vec<DeferredProjectConfigWrite> {
         std::mem::take(&mut self.deferred_project_config_writes)
-    }
-
-    /// Drains project instruction scaffold writes queued for async persistence.
-    pub(crate) fn drain_deferred_project_instruction_writes(
-        &mut self,
-    ) -> Vec<DeferredProjectInstructionWrite> {
-        std::mem::take(&mut self.deferred_project_instruction_writes)
     }
 
     /// Runs the project trust store operation for this subsystem.

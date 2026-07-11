@@ -49,15 +49,6 @@ pub struct DeferredPanePipeWrite {
     pub bytes: Vec<u8>,
 }
 
-/// Project instruction scaffold write deferred for async persistence.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeferredProjectInstructionWrite {
-    /// Destination instruction file path, normally `AGENTS.md` in the pane CWD.
-    pub path: PathBuf,
-    /// Complete scaffold bytes to create at the destination.
-    pub bytes: Vec<u8>,
-}
-
 /// Project configuration write deferred for async persistence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeferredProjectConfigWrite {

@@ -16,14 +16,14 @@ use super::{
     AgentTurnState, AuditLog, AuthStore, BTreeMap, BTreeSet, BlockedApprovalQueue, ConfigLayer,
     ControlIdempotencyCache, CopyMode, DeferredConfigFileWrite, DeferredPaneInput,
     DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination, DeferredProjectConfigWrite,
-    DeferredProjectInstructionWrite, DiscoveredInstructionFile, EnvironmentSignature, EventLog,
-    FocusedShellHookQueue, HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult,
-    HookFailureKind, HostClipboard, KeyBindings, KeyChord, McpRegistry, McpServerStatus,
-    McpStartupPlan, McpStdioConnection, McpToolCallPlan, McpToolCallResponse, MessageService,
-    MezError, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey,
-    PaneGeometry, PaneId, PaneProcessManager, PaneReadinessOverrideStore, PaneReadinessState,
-    PasteBuffers, PathBuf, PermissionPolicy, ProjectTrustStore, ProviderQuotaUsage, Result,
-    RuntimeSideEffect, RuntimeStatusPillCache, RuntimeStatusPillDefinition, ScopeRegistry, Session,
+    DiscoveredInstructionFile, EnvironmentSignature, EventLog, FocusedShellHookQueue,
+    HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult, HookFailureKind,
+    HostClipboard, KeyBindings, KeyChord, McpRegistry, McpServerStatus, McpStartupPlan,
+    McpStdioConnection, McpToolCallPlan, McpToolCallResponse, MessageService, MezError,
+    ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey, PaneGeometry,
+    PaneId, PaneProcessManager, PaneReadinessOverrideStore, PaneReadinessState, PasteBuffers,
+    PathBuf, PermissionPolicy, ProjectTrustStore, ProviderQuotaUsage, Result, RuntimeSideEffect,
+    RuntimeStatusPillCache, RuntimeStatusPillDefinition, ScopeRegistry, Session,
     SessionApprovalStore, SessionMemoryStore, SessionRecord, SessionRegistry, Size,
     SnapshotRepository, SplitDirection, SubagentProfile, SubagentScopeDeclaration,
     TerminalCursorStyle, TerminalFramePosition, TerminalFrameStyle, TerminalScreen,
@@ -1828,7 +1828,7 @@ pub struct RuntimeSessionService {
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) deferred_project_instruction_writes: Vec<DeferredProjectInstructionWrite>,
+    pub(super) queued_config_effects: Vec<RuntimeSideEffect>,
     /// Stores the deferred transcript next sequences value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

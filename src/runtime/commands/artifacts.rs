@@ -190,11 +190,12 @@ impl RuntimeSessionService {
         }
         let scaffold = runtime_agent_init_scaffold().as_bytes().to_vec();
         if self.external_effects_use_adapter() {
-            self.deferred_project_instruction_writes
-                .push(DeferredProjectInstructionWrite {
-                    path: target.clone(),
-                    bytes: scaffold,
-                });
+            self.queued_config_effects.push(RuntimeSideEffect::Persist {
+                target: crate::runtime::PersistenceTarget::ProjectInstruction,
+                path: target.clone(),
+                bytes: scaffold,
+                mode: crate::runtime::PersistenceWriteMode::CreateNew,
+            });
         } else {
             std::fs::write(&target, &scaffold)?;
         }
