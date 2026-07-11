@@ -49,15 +49,6 @@ pub struct DeferredPanePipeWrite {
     pub bytes: Vec<u8>,
 }
 
-/// Project configuration write deferred for async persistence.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeferredProjectConfigWrite {
-    /// Destination project configuration file.
-    pub path: PathBuf,
-    /// Complete validated config text to replace at the destination.
-    pub text: String,
-}
-
 /// User or project configuration write deferred for async persistence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeferredConfigFileWrite {

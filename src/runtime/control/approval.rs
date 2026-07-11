@@ -265,11 +265,12 @@ impl RuntimeSessionService {
         let text = self.project_config_text_for_update(&config_path)?;
         let updated = append_project_command_rule_text(&text, rule)?;
         if self.external_effects_use_adapter() {
-            self.deferred_project_config_writes
-                .push(DeferredProjectConfigWrite {
-                    path: config_path.clone(),
-                    text: updated.clone(),
-                });
+            self.queued_config_effects.push(RuntimeSideEffect::Persist {
+                target: crate::runtime::PersistenceTarget::ProjectConfig,
+                path: config_path.clone(),
+                bytes: updated.clone().into_bytes(),
+                mode: crate::runtime::PersistenceWriteMode::Replace,
+            });
         } else {
             fs::create_dir_all(parent)?;
             fs::write(&config_path, updated.clone())?;

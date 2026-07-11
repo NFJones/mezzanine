@@ -18,17 +18,17 @@ use super::{
     DEFAULT_AGENT_ROUTING, DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES,
     DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH, DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW,
     DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT, DEFAULT_PANE_TERM, DEFAULT_SUBAGENT_WAIT_POLICY,
-    DeferredConfigFileWrite, DeferredProjectConfigWrite, EventKind, EventLog,
-    FocusedShellHookQueue, HostClipboard, KeyBindings, MEZ_ENV_FIELD_SEPARATOR, McpRegistry,
-    McpServerStatus, McpStartupTransportPlan, MemoryRecord, MessageService, MezError, ModelProfile,
-    ModelTokenUsage, ModelTokenUsageKey, PaneProcessManager, PaneReadinessOverrideStore,
-    PasteBuffers, Path, PathBuf, PermissionAuthorityChange, PermissionPolicy, ProjectTrustStore,
-    RenderInvalidationReason, Result, RuntimeConfigApplyReport, RuntimeHttpMcpTransportState,
-    RuntimeLifecycleState, RuntimeMcpRetryReport, RuntimeMcpTransportSet,
-    RuntimeModelProfileOverrideStore, RuntimePresetRegistry, RuntimeProviderConfig,
-    RuntimeProviderRegistry, RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSideEffect,
-    RuntimeStatusPillCache, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition, ScopeRegistry,
-    Session, SessionApprovalStore, SessionMemoryStore, SessionRegistry, SnapshotRepository,
+    DeferredConfigFileWrite, EventKind, EventLog, FocusedShellHookQueue, HostClipboard,
+    KeyBindings, MEZ_ENV_FIELD_SEPARATOR, McpRegistry, McpServerStatus, McpStartupTransportPlan,
+    MemoryRecord, MessageService, MezError, ModelProfile, ModelTokenUsage, ModelTokenUsageKey,
+    PaneProcessManager, PaneReadinessOverrideStore, PasteBuffers, Path, PathBuf,
+    PermissionAuthorityChange, PermissionPolicy, ProjectTrustStore, RenderInvalidationReason,
+    Result, RuntimeConfigApplyReport, RuntimeHttpMcpTransportState, RuntimeLifecycleState,
+    RuntimeMcpRetryReport, RuntimeMcpTransportSet, RuntimeModelProfileOverrideStore,
+    RuntimePresetRegistry, RuntimeProviderConfig, RuntimeProviderRegistry,
+    RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSideEffect, RuntimeStatusPillCache,
+    RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition, ScopeRegistry, Session,
+    SessionApprovalStore, SessionMemoryStore, SessionRegistry, SnapshotRepository,
     TerminalClientLoopConfig, TerminalScreen, ToolDiscoveryCache, TrustDecision, Value,
     agent_shell_visibility_json_name, apply_registry_update, builtin_subagent_profiles,
     compare_approval_policy_authority, compose_effective_config, current_unix_seconds,
@@ -280,7 +280,6 @@ impl RuntimeSessionService {
             queued_audit_effects: Vec::new(),
             queued_transcript_effects: Vec::new(),
             deferred_config_file_writes: Vec::new(),
-            deferred_project_config_writes: Vec::new(),
             queued_config_effects: Vec::new(),
             deferred_transcript_next_sequences: BTreeMap::new(),
             pane_screens: BTreeMap::new(),
@@ -2559,16 +2558,6 @@ impl RuntimeSessionService {
                 mode: crate::runtime::PersistenceWriteMode::Replace,
             }
         }));
-        side_effects.extend(
-            self.drain_deferred_project_config_writes()
-                .into_iter()
-                .map(|write| RuntimeSideEffect::Persist {
-                    target: crate::runtime::PersistenceTarget::ProjectConfig,
-                    path: write.path,
-                    bytes: write.text.into_bytes(),
-                    mode: crate::runtime::PersistenceWriteMode::Replace,
-                }),
-        );
         RuntimeTransition {
             applied: false,
             side_effects,
@@ -2592,13 +2581,6 @@ impl RuntimeSessionService {
     /// Drains user/project config writes queued for async persistence.
     pub(crate) fn drain_deferred_config_file_writes(&mut self) -> Vec<DeferredConfigFileWrite> {
         std::mem::take(&mut self.deferred_config_file_writes)
-    }
-
-    /// Drains project config writes queued for async persistence.
-    pub(crate) fn drain_deferred_project_config_writes(
-        &mut self,
-    ) -> Vec<DeferredProjectConfigWrite> {
-        std::mem::take(&mut self.deferred_project_config_writes)
     }
 
     /// Runs the project trust store operation for this subsystem.
