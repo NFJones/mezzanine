@@ -261,20 +261,3 @@ pub(super) fn deferred_program_hooks_to_side_effects(
         })
         .collect()
 }
-
-/// Runs the deferred registry update to side effect operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn deferred_registry_update_to_side_effect(
-    deferred_registry_update: Option<(
-        crate::registry::SessionRegistry,
-        crate::runtime::RuntimeRegistryUpdatePlan,
-    )>,
-) -> Vec<RuntimeSideEffect> {
-    deferred_registry_update
-        .map(|(registry, update)| RuntimeSideEffect::PersistRegistry { registry, update })
-        .into_iter()
-        .collect()
-}

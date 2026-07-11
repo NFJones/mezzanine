@@ -1499,10 +1499,11 @@ impl AsyncRuntimeSessionActor {
             .chain(deferred_program_hooks_to_side_effects(
                 self.service.drain_deferred_program_hooks(),
             ))
-            .chain(deferred_registry_update_to_side_effect(
+            .chain(
                 self.service
-                    .drain_deferred_registry_update_for_async_persistence(),
-            ))
+                    .drain_registry_persistence_transition()
+                    .side_effects,
+            )
             .collect()
     }
 

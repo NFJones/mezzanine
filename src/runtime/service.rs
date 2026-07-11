@@ -484,13 +484,23 @@ impl RuntimeSessionService {
         Some((registry, self.registry_update_plan()))
     }
 
-    /// Drains a registry update queued by actor-owned compatibility service paths.
-    pub(crate) fn drain_deferred_registry_update_for_async_persistence(
+    /// Drains registry persistence as a transport-neutral runtime transition.
+    pub(crate) fn drain_registry_persistence_transition(
         &mut self,
-    ) -> Option<(SessionRegistry, RuntimeRegistryUpdatePlan)> {
-        let registry = self.session_registry.clone()?;
-        let update = self.deferred_registry_update.take()?;
-        Some((registry, update))
+    ) -> crate::async_runtime::RuntimeTransition {
+        let Some(registry) = self.session_registry.clone() else {
+            return crate::async_runtime::RuntimeTransition::default();
+        };
+        let Some(update) = self.deferred_registry_update.take() else {
+            return crate::async_runtime::RuntimeTransition::default();
+        };
+        crate::async_runtime::RuntimeTransition {
+            applied: false,
+            side_effects: vec![crate::async_runtime::RuntimeSideEffect::PersistRegistry {
+                registry,
+                update,
+            }],
+        }
     }
 
     /// Persists a precomputed registry update plan when a registry is attached.
