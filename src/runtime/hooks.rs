@@ -11,7 +11,7 @@ use super::{
     RuntimeFocusedShellPaneExecutor, RuntimeSessionService, json_escape, plan_event,
     runtime_hook_execution_status_name, runtime_hook_target_pane_id,
 };
-use crate::runtime::{AsyncHookEvent, RuntimeTransition};
+use crate::runtime::{AsyncHookEvent, RuntimeSideEffect, RuntimeTransition};
 
 // Focused shell hook queueing and lifecycle hook dispatch.
 
@@ -62,6 +62,22 @@ impl RuntimeSessionService {
     /// Drains program hook executions queued for an async hook worker.
     pub(crate) fn drain_deferred_program_hooks(&mut self) -> Vec<DeferredProgramHook> {
         std::mem::take(&mut self.deferred_program_hooks)
+    }
+
+    /// Drains queued program hooks through the runtime transition contract.
+    pub(crate) fn drain_program_hook_transition(&mut self) -> RuntimeTransition {
+        let side_effects = self
+            .drain_deferred_program_hooks()
+            .into_iter()
+            .map(|hook| RuntimeSideEffect::RunProgramHook {
+                plan: Box::new(hook.plan),
+                triggering_event_completed: hook.triggering_event_completed,
+            })
+            .collect();
+        RuntimeTransition {
+            applied: false,
+            side_effects,
+        }
     }
 
     /// Runs the focused shell hook queue len operation for this subsystem.

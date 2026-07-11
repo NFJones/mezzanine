@@ -12,11 +12,10 @@ use super::{
     AsyncRuntimeSessionHandle, AttachedClientStepApplication, AttachedTerminalClientStepPlan,
     AttachedTerminalOutputModes, ClientEvent, ClientId, ClientState, ClientStatusLine,
     ClientViewRole, ControlConnectionState, DEFAULT_ASYNC_IDLE_CLEANUP_INTERVAL, DeferredPaneInput,
-    DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination, DeferredProgramHook,
-    DeliveryCursor, FanoutBatch, MessageConnection, MezError, Notify, PaneEvent, PersistenceEvent,
-    PersistenceTarget, PersistenceWriteMode, RenderInvalidationReason, RenderedClientView, Result,
-    RuntimeAgentProviderDispatch, RuntimeAgentProviderTask, RuntimeEvent, RuntimeEventBatch,
-    RuntimeEventConnectionTable, RuntimeEventIngressReport, RuntimeEventWakeup,
+    DeferredPaneResize, DeferredPaneTermination, DeliveryCursor, FanoutBatch, MessageConnection,
+    MezError, Notify, PaneEvent, PersistenceEvent, RenderInvalidationReason, RenderedClientView,
+    Result, RuntimeAgentProviderDispatch, RuntimeAgentProviderTask, RuntimeEvent,
+    RuntimeEventBatch, RuntimeEventConnectionTable, RuntimeEventIngressReport, RuntimeEventWakeup,
     RuntimeLifecycleState, RuntimeSessionService, RuntimeShellTransactionTimerKind,
     RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
     RuntimeSnapshotControlAsyncWorkKind, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition,
@@ -1485,12 +1484,12 @@ impl AsyncRuntimeSessionActor {
                     .drain_config_persistence_transition()
                     .side_effects,
             )
-            .chain(deferred_pane_pipe_writes_to_side_effects(
-                self.service.drain_deferred_pane_pipe_writes(),
-            ))
-            .chain(deferred_program_hooks_to_side_effects(
-                self.service.drain_deferred_program_hooks(),
-            ))
+            .chain(
+                self.service
+                    .drain_pane_pipe_persistence_transition()
+                    .side_effects,
+            )
+            .chain(self.service.drain_program_hook_transition().side_effects)
             .chain(
                 self.service
                     .drain_registry_persistence_transition()

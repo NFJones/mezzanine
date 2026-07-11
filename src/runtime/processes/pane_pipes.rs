@@ -6,6 +6,9 @@
 //! focused on pane process lifecycle orchestration.
 
 use super::*;
+use crate::runtime::{
+    PersistenceTarget, PersistenceWriteMode, RuntimeSideEffect, RuntimeTransition,
+};
 
 impl RuntimeSessionService {
     /// Runs the write active pane pipe operation for this subsystem.
@@ -267,6 +270,24 @@ impl RuntimeSessionService {
     /// Drains file-backed pane pipe writes queued for async persistence.
     pub(crate) fn drain_deferred_pane_pipe_writes(&mut self) -> Vec<DeferredPanePipeWrite> {
         std::mem::take(&mut self.deferred_pane_pipe_writes)
+    }
+
+    /// Drains file-backed pane-pipe writes through the runtime transition contract.
+    pub(crate) fn drain_pane_pipe_persistence_transition(&mut self) -> RuntimeTransition {
+        let side_effects = self
+            .drain_deferred_pane_pipe_writes()
+            .into_iter()
+            .map(|write| RuntimeSideEffect::Persist {
+                target: PersistenceTarget::PanePipe,
+                path: write.path,
+                bytes: write.bytes,
+                mode: PersistenceWriteMode::Append,
+            })
+            .collect();
+        RuntimeTransition {
+            applied: false,
+            side_effects,
+        }
     }
 
     /// Returns the user-facing active pane pipe status line used by

@@ -66,39 +66,3 @@ pub(super) fn deferred_pane_terminations_to_side_effects(
         })
         .collect()
 }
-
-/// Runs the deferred pane pipe writes to side effects operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn deferred_pane_pipe_writes_to_side_effects(
-    deferred_pane_pipe_writes: Vec<DeferredPanePipeWrite>,
-) -> Vec<RuntimeSideEffect> {
-    deferred_pane_pipe_writes
-        .into_iter()
-        .map(|write| RuntimeSideEffect::Persist {
-            target: PersistenceTarget::PanePipe,
-            path: write.path,
-            bytes: write.bytes,
-            mode: PersistenceWriteMode::Append,
-        })
-        .collect()
-}
-
-/// Runs the deferred program hooks to side effects operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn deferred_program_hooks_to_side_effects(
-    deferred_program_hooks: Vec<DeferredProgramHook>,
-) -> Vec<RuntimeSideEffect> {
-    deferred_program_hooks
-        .into_iter()
-        .map(|hook| RuntimeSideEffect::RunProgramHook {
-            plan: Box::new(hook.plan),
-            triggering_event_completed: hook.triggering_event_completed,
-        })
-        .collect()
-}
