@@ -1423,17 +1423,14 @@ impl AsyncRuntimeSessionActor {
         generation: u64,
         delay_ms: u64,
     ) -> Result<bool> {
-        if self.service.pending_agent_provider_tasks().is_empty()
-            && self.service.pending_agent_compaction_tasks().is_empty()
-            || self.timers.provider_poll.is_some()
-        {
-            return Ok(false);
-        }
-        self.queue_runtime_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
-            key: RuntimeTimerKey::new(RuntimeTimerKind::ProviderPoll, "agent-provider", generation),
-            delay_ms: delay_ms.max(1),
-        }])?;
-        Ok(true)
+        let transition = self.service.provider_poll_timer_transition(
+            self.timers.provider_poll.is_some(),
+            generation,
+            delay_ms,
+        );
+        let queued = !transition.side_effects.is_empty();
+        self.queue_runtime_side_effects(transition.side_effects)?;
+        Ok(queued)
     }
 
     /// Runs the provider dispatch is already queued operation for this subsystem.

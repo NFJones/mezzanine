@@ -72,6 +72,32 @@ impl RuntimeSessionService {
         self.agent_provider_retry_attempts.keys()
     }
 
+    /// Builds the desired provider-poll timer transition for an external timer adapter.
+    pub(crate) fn provider_poll_timer_transition(
+        &self,
+        timer_active: bool,
+        generation: u64,
+        delay_ms: u64,
+    ) -> RuntimeTransition {
+        if timer_active
+            || self.pending_agent_provider_tasks().is_empty()
+                && self.pending_agent_compaction_tasks().is_empty()
+        {
+            return RuntimeTransition::default();
+        }
+        RuntimeTransition {
+            applied: false,
+            side_effects: vec![RuntimeSideEffect::ScheduleTimer {
+                key: RuntimeTimerKey::new(
+                    RuntimeTimerKind::ProviderPoll,
+                    "agent-provider",
+                    generation,
+                ),
+                delay_ms: delay_ms.max(1),
+            }],
+        }
+    }
+
     /// Applies runtime-owned provider retry recovery and emits the delayed retry effect.
     ///
     /// Returns `None` when the failure is not retryable or the retry budget is
