@@ -760,54 +760,58 @@ impl RuntimeSessionService {
 
     /// Drains pane input operations deferred for external pane process adapters.
     pub fn drain_deferred_pane_inputs(&mut self) -> Vec<DeferredPaneInput> {
-        std::mem::take(&mut self.deferred_pane_inputs)
+        std::mem::take(&mut self.queued_pane_input_effects)
+            .into_iter()
+            .filter_map(|effect| match effect {
+                RuntimeSideEffect::WritePaneInput { pane_id, bytes } => Some(DeferredPaneInput {
+                    pane_id,
+                    bytes,
+                    priority: false,
+                }),
+                RuntimeSideEffect::WritePaneInputPriority { pane_id, bytes } => {
+                    Some(DeferredPaneInput {
+                        pane_id,
+                        bytes,
+                        priority: true,
+                    })
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// Drains coalesced pane resize operations deferred for external adapters.
     pub fn drain_deferred_pane_resizes(&mut self) -> Vec<(String, DeferredPaneResize)> {
-        std::mem::take(&mut self.deferred_pane_resizes)
+        std::mem::take(&mut self.queued_pane_resize_effects)
             .into_iter()
+            .filter_map(|(pane_id, effect)| match effect {
+                RuntimeSideEffect::ResizePane { size, .. } => {
+                    Some((pane_id, DeferredPaneResize { size }))
+                }
+                _ => None,
+            })
             .collect()
     }
 
     /// Drains coalesced pane termination operations deferred for external adapters.
     pub fn drain_deferred_pane_terminations(&mut self) -> Vec<(String, DeferredPaneTermination)> {
-        std::mem::take(&mut self.deferred_pane_terminations)
+        std::mem::take(&mut self.queued_pane_termination_effects)
             .into_iter()
+            .filter_map(|(pane_id, effect)| match effect {
+                RuntimeSideEffect::TerminatePane { force, .. } => {
+                    Some((pane_id, DeferredPaneTermination { force }))
+                }
+                _ => None,
+            })
             .collect()
     }
 
     /// Drains pane-worker I/O through the transport-neutral transition contract.
     pub(crate) fn drain_pane_io_transition(&mut self) -> RuntimeTransition {
-        let mut side_effects = self
-            .drain_deferred_pane_inputs()
-            .into_iter()
-            .map(|input| {
-                if input.priority {
-                    RuntimeSideEffect::WritePaneInputPriority {
-                        pane_id: input.pane_id,
-                        bytes: input.bytes,
-                    }
-                } else {
-                    RuntimeSideEffect::WritePaneInput {
-                        pane_id: input.pane_id,
-                        bytes: input.bytes,
-                    }
-                }
-            })
-            .collect::<Vec<_>>();
-        side_effects.extend(self.drain_deferred_pane_resizes().into_iter().map(
-            |(pane_id, resize)| RuntimeSideEffect::ResizePane {
-                pane_id,
-                size: resize.size,
-            },
-        ));
-        side_effects.extend(self.drain_deferred_pane_terminations().into_iter().map(
-            |(pane_id, termination)| RuntimeSideEffect::TerminatePane {
-                pane_id,
-                force: termination.force,
-            },
-        ));
+        let mut side_effects = std::mem::take(&mut self.queued_pane_input_effects);
+        side_effects.extend(std::mem::take(&mut self.queued_pane_resize_effects).into_values());
+        side_effects
+            .extend(std::mem::take(&mut self.queued_pane_termination_effects).into_values());
         RuntimeTransition {
             applied: false,
             side_effects,
@@ -851,10 +855,16 @@ impl RuntimeSessionService {
             return self.pane_processes.write_pane_input(pane_id, input);
         }
         if self.pane_process_is_adapter_owned(pane_id) {
-            self.deferred_pane_inputs.push(DeferredPaneInput {
-                pane_id: pane_id.to_string(),
-                bytes: input.to_vec(),
-                priority,
+            self.queued_pane_input_effects.push(if priority {
+                RuntimeSideEffect::WritePaneInputPriority {
+                    pane_id: pane_id.to_string(),
+                    bytes: input.to_vec(),
+                }
+            } else {
+                RuntimeSideEffect::WritePaneInput {
+                    pane_id: pane_id.to_string(),
+                    bytes: input.to_vec(),
+                }
             });
             return Ok(());
         }
@@ -889,8 +899,13 @@ impl RuntimeSessionService {
                 .map(|process| process.is_some());
         }
         if self.detached_pane_primary_pids.remove(pane_id).is_some() {
-            self.deferred_pane_terminations
-                .insert(pane_id.to_string(), DeferredPaneTermination { force });
+            self.queued_pane_termination_effects.insert(
+                pane_id.to_string(),
+                RuntimeSideEffect::TerminatePane {
+                    pane_id: pane_id.to_string(),
+                    force,
+                },
+            );
             return Ok(true);
         }
         Ok(false)
@@ -940,9 +955,19 @@ impl RuntimeSessionService {
         self.pane_current_working_directories.remove(pane_id);
         self.pane_foreground_process_groups.remove(pane_id);
         self.program_owned_pane_titles.remove(pane_id);
-        self.deferred_pane_inputs
-            .retain(|input| input.pane_id != pane_id);
-        self.deferred_pane_resizes.remove(pane_id);
+        self.queued_pane_input_effects
+            .retain(|effect| match effect {
+                RuntimeSideEffect::WritePaneInput {
+                    pane_id: target_pane_id,
+                    ..
+                }
+                | RuntimeSideEffect::WritePaneInputPriority {
+                    pane_id: target_pane_id,
+                    ..
+                } => target_pane_id != pane_id,
+                _ => true,
+            });
+        self.queued_pane_resize_effects.remove(pane_id);
         self.queued_pane_pipe_effects
             .retain(|(queued_pane_id, _)| queued_pane_id != pane_id);
         self.pane_screens.remove(pane_id);

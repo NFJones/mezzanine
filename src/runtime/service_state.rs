@@ -14,8 +14,7 @@ use super::{
     ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentScheduler, AgentShellStore,
     AgentShellVisibility, AgentTranscriptStore, AgentTurnExecution, AgentTurnLedger,
     AgentTurnState, AuditLog, AuthStore, BTreeMap, BTreeSet, BlockedApprovalQueue, ConfigLayer,
-    ControlIdempotencyCache, CopyMode, DeferredPaneInput, DeferredPaneResize,
-    DeferredPaneTermination, DiscoveredInstructionFile, EnvironmentSignature, EventLog,
+    ControlIdempotencyCache, CopyMode, DiscoveredInstructionFile, EnvironmentSignature, EventLog,
     FocusedShellHookQueue, HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult,
     HookFailureKind, HostClipboard, KeyBindings, KeyChord, McpRegistry, McpServerStatus,
     McpStartupPlan, McpStdioConnection, McpToolCallPlan, McpToolCallResponse, MessageService,
@@ -1787,17 +1786,17 @@ pub struct RuntimeSessionService {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) deferred_pane_inputs: Vec<DeferredPaneInput>,
+    pub(super) queued_pane_input_effects: Vec<RuntimeSideEffect>,
     /// Stores the deferred pane resizes value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) deferred_pane_resizes: BTreeMap<String, DeferredPaneResize>,
+    pub(super) queued_pane_resize_effects: BTreeMap<String, RuntimeSideEffect>,
     /// Stores the deferred pane terminations value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) deferred_pane_terminations: BTreeMap<String, DeferredPaneTermination>,
+    pub(super) queued_pane_termination_effects: BTreeMap<String, RuntimeSideEffect>,
     /// Stores the deferred pane pipe writes value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
