@@ -504,6 +504,24 @@ impl RuntimeSessionService {
         Ok(update)
     }
 
+    /// Applies pane output through the transport-neutral transition contract.
+    pub(crate) fn apply_pane_output_transition(
+        &mut self,
+        pane_id: impl Into<String>,
+        bytes: Vec<u8>,
+    ) -> Result<RuntimeTransition> {
+        let update = self.apply_pane_output_bytes(pane_id, bytes)?;
+        let applied = update.is_some();
+        let render_reason = update.map(|update| {
+            if update.invalidate_output_frame {
+                RenderInvalidationReason::FullRedraw
+            } else {
+                RenderInvalidationReason::PaneOutput
+            }
+        });
+        Ok(self.runtime_transition_with_render(applied, render_reason))
+    }
+
     /// Runs the poll pane outputs operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

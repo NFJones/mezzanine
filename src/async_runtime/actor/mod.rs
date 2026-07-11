@@ -1058,12 +1058,8 @@ impl AsyncRuntimeSessionActor {
             RuntimeEvent::Pane(PaneEvent::Output { pane_id, bytes }) => {
                 let byte_count = bytes.len();
                 let pane_id_for_pipe_health = pane_id.clone();
-                let update = self.service.apply_pane_output_bytes(pane_id, bytes)?;
-                let invalidate_output_frame = update
-                    .as_ref()
-                    .is_some_and(|update| update.invalidate_output_frame);
-                let applied = update.is_some();
-                if applied {
+                let mut transition = self.service.apply_pane_output_transition(pane_id, bytes)?;
+                if transition.applied {
                     self.metrics.pane_output_chunks =
                         self.metrics.pane_output_chunks.saturating_add(1);
                     self.metrics.pane_output_bytes = self
@@ -1074,26 +1070,14 @@ impl AsyncRuntimeSessionActor {
                         .pane_output_chunk_bytes
                         .record(u64::try_from(byte_count).unwrap_or(u64::MAX));
                 }
-                let mut side_effects = if applied {
-                    self.render_side_effects(if invalidate_output_frame {
-                        RenderInvalidationReason::FullRedraw
-                    } else {
-                        RenderInvalidationReason::PaneOutput
-                    })
-                } else {
-                    Vec::new()
-                };
-                if applied {
-                    side_effects.extend(
+                if transition.applied {
+                    transition.side_effects.extend(
                         self.pane_pipe_health_timer_side_effects_for_pane(
                             &pane_id_for_pipe_health,
                         )?,
                     );
                 }
-                Ok(RuntimeTransition {
-                    applied,
-                    side_effects,
-                })
+                Ok(transition)
             }
             RuntimeEvent::Pane(pane_event) => {
                 self.service.apply_pane_completion_transition(pane_event)
