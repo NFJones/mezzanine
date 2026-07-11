@@ -156,6 +156,7 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
         input: &str,
+        queue_for_adapter: bool,
     ) -> Result<AgentShellCommandOutcome> {
         let invocation = parse_slash_command(input)?
             .ok_or_else(|| MezError::invalid_args("init command must be a slash command"))?;
@@ -189,7 +190,7 @@ impl RuntimeSessionService {
             });
         }
         let scaffold = runtime_agent_init_scaffold().as_bytes().to_vec();
-        if self.external_effects_use_adapter() {
+        if queue_for_adapter {
             self.queued_config_effects.push(RuntimeSideEffect::Persist {
                 target: crate::runtime::PersistenceTarget::ProjectInstruction,
                 path: target.clone(),

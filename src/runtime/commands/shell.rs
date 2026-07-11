@@ -184,7 +184,7 @@ impl RuntimeSessionService {
         primary_client_id: &crate::ids::ClientId,
         input: &str,
         display_input: &str,
-        queue_history_for_adapter: bool,
+        queue_external_effects_for_adapter: bool,
     ) -> Result<String> {
         self.require_live()?;
         if self.session.primary_client_id() != Some(primary_client_id) {
@@ -208,7 +208,11 @@ impl RuntimeSessionService {
             self.ensure_runtime_mcp_transports_discovered_blocking()?;
         }
         let is_prompt = !input.trim().is_empty() && !input.trim().starts_with('/');
-        self.persist_agent_prompt_history_entry(&pane_id, input, queue_history_for_adapter)?;
+        self.persist_agent_prompt_history_entry(
+            &pane_id,
+            input,
+            queue_external_effects_for_adapter,
+        )?;
         if is_prompt {
             self.append_agent_user_prompt_to_terminal_buffer(&pane_id, display_input)?;
         }
@@ -453,7 +457,11 @@ impl RuntimeSessionService {
                     outcome.as_ref()
                     && command == "init"
                 {
-                    let init_outcome = self.execute_agent_shell_init_command(&pane_id, input)?;
+                    let init_outcome = self.execute_agent_shell_init_command(
+                        &pane_id,
+                        input,
+                        queue_external_effects_for_adapter,
+                    )?;
                     runtime_agent_shell_command_response_json(&pane_id, input, Some(&init_outcome))
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
@@ -729,7 +737,12 @@ impl RuntimeSessionService {
             && !is_list_mcp_command
             && !is_prompt
         {
-            return self.execute_agent_shell_command(primary_client_id, input);
+            return self.execute_agent_shell_command_with_display_inner(
+                primary_client_id,
+                input,
+                input,
+                true,
+            );
         }
 
         if is_prompt {
