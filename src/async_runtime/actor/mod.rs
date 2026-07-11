@@ -30,7 +30,6 @@ use crate::agent::{
     DEFAULT_PROVIDER_TIMEOUT_MS, ProviderErrorRetryClass, provider_error_retry_class_from_parts,
     provider_event_error_from_parts, provider_event_error_kind,
 };
-use crate::audit::AuditDeferredWrite;
 use crate::control::{decode_control_frame, encode_control_body};
 use crate::runtime::{
     DeferredConfigFileWrite, DeferredProjectConfigWrite, DeferredProjectInstructionWrite,
@@ -1474,9 +1473,11 @@ impl AsyncRuntimeSessionActor {
     fn deferred_service_side_effects_from_service(&mut self) -> Vec<RuntimeSideEffect> {
         self.deferred_pane_io_side_effects_from_service()
             .into_iter()
-            .chain(deferred_audit_writes_to_side_effects(
-                self.service.drain_deferred_audit_writes(),
-            ))
+            .chain(
+                self.service
+                    .drain_audit_persistence_transition()
+                    .side_effects,
+            )
             .chain(deferred_agent_transcript_writes_to_side_effects(
                 self.service.drain_deferred_agent_transcript_writes(),
             ))

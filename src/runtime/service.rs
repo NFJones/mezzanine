@@ -25,13 +25,14 @@ use super::{
     RuntimeConfigApplyReport, RuntimeHttpMcpTransportState, RuntimeLifecycleState,
     RuntimeMcpRetryReport, RuntimeMcpTransportSet, RuntimeModelProfileOverrideStore,
     RuntimePresetRegistry, RuntimeProviderConfig, RuntimeProviderRegistry,
-    RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeStatusPillCache, ScopeRegistry,
-    Session, SessionApprovalStore, SessionMemoryStore, SessionRegistry, SnapshotRepository,
-    TerminalScreen, ToolDiscoveryCache, TrustDecision, Value, agent_shell_visibility_json_name,
-    apply_registry_update, builtin_subagent_profiles, compare_approval_policy_authority,
-    compose_effective_config, current_unix_seconds, discover_existing_overlays,
-    discover_project_root, discover_streamable_http_mcp_server_with_auth_token, ensure_absolute,
-    ensure_no_mez_separator, fs, json_escape, runtime_agent_action_failure_retry_limit_from_config,
+    RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSideEffect, RuntimeStatusPillCache,
+    RuntimeTransition, ScopeRegistry, Session, SessionApprovalStore, SessionMemoryStore,
+    SessionRegistry, SnapshotRepository, TerminalScreen, ToolDiscoveryCache, TrustDecision, Value,
+    agent_shell_visibility_json_name, apply_registry_update, builtin_subagent_profiles,
+    compare_approval_policy_authority, compose_effective_config, current_unix_seconds,
+    discover_existing_overlays, discover_project_root,
+    discover_streamable_http_mcp_server_with_auth_token, ensure_absolute, ensure_no_mez_separator,
+    fs, json_escape, runtime_agent_action_failure_retry_limit_from_config,
     runtime_agent_auto_sizing_from_config,
     runtime_agent_compaction_raw_retention_percent_from_config,
     runtime_agent_custom_system_prompt_from_config,
@@ -1979,6 +1980,23 @@ impl RuntimeSessionService {
             self.deferred_audit_writes.extend(pending);
         }
         std::mem::take(&mut self.deferred_audit_writes)
+    }
+
+    /// Drains queued audit persistence through the transport-neutral transition contract.
+    pub(crate) fn drain_audit_persistence_transition(&mut self) -> RuntimeTransition {
+        let side_effects = self
+            .drain_deferred_audit_writes()
+            .into_iter()
+            .map(|write| RuntimeSideEffect::PersistAuditLog {
+                path: write.path,
+                bytes: write.bytes,
+                retention: write.retention,
+            })
+            .collect();
+        RuntimeTransition {
+            applied: false,
+            side_effects,
+        }
     }
 
     /// Runs the agent shell store operation for this subsystem.

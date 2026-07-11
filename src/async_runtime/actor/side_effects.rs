@@ -67,24 +67,6 @@ pub(super) fn deferred_pane_terminations_to_side_effects(
         .collect()
 }
 
-/// Runs the deferred audit writes to side effects operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn deferred_audit_writes_to_side_effects(
-    deferred_audit_writes: Vec<AuditDeferredWrite>,
-) -> Vec<RuntimeSideEffect> {
-    deferred_audit_writes
-        .into_iter()
-        .map(|write| RuntimeSideEffect::PersistAuditLog {
-            path: write.path,
-            bytes: write.bytes,
-            retention: write.retention,
-        })
-        .collect()
-}
-
 /// Runs the deferred agent transcript writes to side effects operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
