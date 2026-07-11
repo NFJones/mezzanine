@@ -385,18 +385,7 @@ impl RuntimeSessionService {
             "subagent task failed"
         };
         let output = subagent_task_output_for_execution(execution);
-        let loop_dependency = self
-            .agent_loop_turns
-            .get(&turn.turn_id)
-            .and_then(|loop_turn| self.agent_loops_by_pane.get(&loop_turn.pane_id))
-            .and_then(|state| state.completion.as_ref())
-            .map(|completion| JoinedSubagentDependency {
-                parent_turn_id: completion.parent_turn_id.clone(),
-                parent_action_id: completion.parent_action_id.clone(),
-                child_turn_id: completion.child_turn_id.clone(),
-                child_agent_id: completion.child_agent_id.clone(),
-                child_display_name: completion.child_display_name.clone(),
-            });
+        let loop_dependency = self.take_agent_loop_dependency_for_turn(&turn.turn_id);
         self.emit_subagent_task_result_with_dependency(
             turn,
             loop_dependency,
@@ -415,8 +404,10 @@ impl RuntimeSessionService {
         &mut self,
         turn: &AgentTurnRecord,
     ) -> Result<()> {
-        self.emit_subagent_task_result(
+        let loop_dependency = self.take_agent_loop_dependency_for_turn(&turn.turn_id);
+        self.emit_subagent_task_result_with_dependency(
             turn,
+            loop_dependency,
             false,
             "subagent task cancelled",
             "cancelled by runtime request",
@@ -433,27 +424,55 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         state: AgentTurnState,
     ) -> Result<()> {
+        let loop_dependency = self.take_agent_loop_dependency_for_turn(&turn.turn_id);
         match state {
-            AgentTurnState::Completed => self.emit_subagent_task_result(
+            AgentTurnState::Completed => self.emit_subagent_task_result_with_dependency(
                 turn,
+                loop_dependency,
                 true,
                 "subagent task completed",
                 "completed without provider output",
             ),
-            AgentTurnState::Failed => self.emit_subagent_task_result(
+            AgentTurnState::Failed => self.emit_subagent_task_result_with_dependency(
                 turn,
+                loop_dependency,
                 false,
                 "subagent task failed",
                 "failed without provider output",
             ),
-            AgentTurnState::Interrupted => self.emit_subagent_task_result(
+            AgentTurnState::Interrupted => self.emit_subagent_task_result_with_dependency(
                 turn,
+                loop_dependency,
                 false,
                 "subagent task interrupted",
                 "interrupted by snapshot resume",
             ),
             _ => Ok(()),
         }
+    }
+
+    /// Takes the controller-owned macro join for one terminal loop work turn.
+    ///
+    /// Taking the record before parent delivery gives cancellation, failure,
+    /// and normal completion paths the same exactly-once behavior even when a
+    /// later lifecycle helper observes the same terminal turn again.
+    fn take_agent_loop_dependency_for_turn(
+        &mut self,
+        turn_id: &str,
+    ) -> Option<JoinedSubagentDependency> {
+        let pane_id = self.agent_loop_turns.get(turn_id)?.pane_id.clone();
+        let completion = self
+            .agent_loops_by_pane
+            .get_mut(&pane_id)?
+            .completion
+            .take()?;
+        Some(JoinedSubagentDependency {
+            parent_turn_id: completion.parent_turn_id,
+            parent_action_id: completion.parent_action_id,
+            child_turn_id: completion.child_turn_id,
+            child_agent_id: completion.child_agent_id,
+            child_display_name: completion.child_display_name,
+        })
     }
 
     /// Emits an intermediate MMP task-status update for a spawned subagent
@@ -556,21 +575,6 @@ impl RuntimeSessionService {
             )?;
         }
         Ok(())
-    }
-
-    /// Runs the emit subagent task result operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn emit_subagent_task_result(
-        &mut self,
-        turn: &AgentTurnRecord,
-        success: bool,
-        summary: &str,
-        output: &str,
-    ) -> Result<()> {
-        self.emit_subagent_task_result_with_dependency(turn, None, success, summary, output)
     }
 
     /// Emits a terminal task result with an optional controller-owned join.
