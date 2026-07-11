@@ -68,11 +68,17 @@ impl RuntimeSessionService {
         &mut self,
         primary_client_id: &crate::ids::ClientId,
         descriptor: &PaneDescriptor,
+        queue_for_adapter: bool,
     ) -> Result<bool> {
         let Some(source) = self.clipboard_or_most_recent_paste_source() else {
             return Ok(false);
         };
-        self.paste_source_to_text_entry_or_pane(primary_client_id, descriptor, source)
+        self.paste_source_to_text_entry_or_pane(
+            primary_client_id,
+            descriptor,
+            source,
+            queue_for_adapter,
+        )
     }
 
     /// Routes one paste source to a prompt text entry or a pane PTY.
@@ -81,13 +87,18 @@ impl RuntimeSessionService {
         primary_client_id: &crate::ids::ClientId,
         descriptor: &PaneDescriptor,
         source: RuntimePasteSource,
+        queue_for_adapter: bool,
     ) -> Result<bool> {
         if source.content.is_empty() {
             return Ok(false);
         }
         let paste_bytes = runtime_readline_paste_bytes(source.content.as_str());
         if self.primary_prompt_input.is_some() {
-            return self.apply_primary_prompt_input(primary_client_id, &paste_bytes);
+            return self.apply_primary_prompt_input(
+                primary_client_id,
+                &paste_bytes,
+                queue_for_adapter,
+            );
         }
         if self
             .agent_shell_store

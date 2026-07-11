@@ -123,8 +123,17 @@ impl RuntimeSessionService {
         primary_client_id: &crate::ids::ClientId,
         step: &AttachedTerminalClientStepPlan,
     ) -> Result<AttachedClientStepApplication> {
-        self.apply_attached_terminal_step_plan_inner(primary_client_id, step, false)
+        self.apply_attached_terminal_step_plan_inner(primary_client_id, step, false, false)
             .map(|(application, _)| application)
+    }
+
+    /// Applies one planned client step with inline pane I/O and adapter-owned effects.
+    pub(crate) fn apply_attached_terminal_step_transition_inline_pane_io(
+        &mut self,
+        primary_client_id: &crate::ids::ClientId,
+        step: &AttachedTerminalClientStepPlan,
+    ) -> Result<(AttachedClientStepApplication, RuntimeTransition)> {
+        self.apply_attached_terminal_step_transition_inner(primary_client_id, step, false)
     }
 
     /// Applies one planned client step and returns its ordered adapter effects.
@@ -133,8 +142,21 @@ impl RuntimeSessionService {
         primary_client_id: &crate::ids::ClientId,
         step: &AttachedTerminalClientStepPlan,
     ) -> Result<(AttachedClientStepApplication, RuntimeTransition)> {
-        let (application, mut side_effects) =
-            self.apply_attached_terminal_step_plan_inner(primary_client_id, step, true)?;
+        self.apply_attached_terminal_step_transition_inner(primary_client_id, step, true)
+    }
+
+    fn apply_attached_terminal_step_transition_inner(
+        &mut self,
+        primary_client_id: &crate::ids::ClientId,
+        step: &AttachedTerminalClientStepPlan,
+        defer_pane_io: bool,
+    ) -> Result<(AttachedClientStepApplication, RuntimeTransition)> {
+        let (application, mut side_effects) = self.apply_attached_terminal_step_plan_inner(
+            primary_client_id,
+            step,
+            defer_pane_io,
+            true,
+        )?;
         let render_reason = if application.full_redraw_required {
             Some(RenderInvalidationReason::FullRedraw)
         } else if application.agent_prompt_inputs_applied > 0 {
@@ -260,6 +282,7 @@ impl RuntimeSessionService {
         primary_client_id: &crate::ids::ClientId,
         step: &AttachedTerminalClientStepPlan,
         defer_pane_io: bool,
+        queue_external_effects: bool,
     ) -> Result<(AttachedClientStepApplication, Vec<RuntimeSideEffect>)> {
         self.require_live()?;
         if self.session.primary_client_id() != Some(primary_client_id) {
@@ -339,7 +362,11 @@ impl RuntimeSessionService {
                 )
             {
                 let overlay_was_open = self.primary_display_overlay.is_some();
-                if self.apply_primary_prompt_terminal_action(primary_client_id, action)? {
+                if self.apply_primary_prompt_terminal_action(
+                    primary_client_id,
+                    action,
+                    queue_external_effects,
+                )? {
                     report.view_refresh_required = true;
                     if overlay_was_open != self.primary_display_overlay.is_some() {
                         report.full_redraw_required = true;
@@ -485,7 +512,11 @@ impl RuntimeSessionService {
                 }
                 TerminalClientLoopAction::HandleMouse(action) => {
                     let overlay_was_open = self.primary_display_overlay.is_some();
-                    match self.apply_attached_mouse_action(primary_client_id, action.clone()) {
+                    match self.apply_attached_mouse_action(
+                        primary_client_id,
+                        action.clone(),
+                        queue_external_effects,
+                    ) {
                         Ok(true) => {
                             report.mouse_actions_reported =
                                 report.mouse_actions_reported.saturating_add(1);

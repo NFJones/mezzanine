@@ -303,6 +303,7 @@ impl RuntimeSessionService {
         &mut self,
         primary_client_id: &crate::ids::ClientId,
         action: MouseAction,
+        queue_for_adapter: bool,
     ) -> Result<bool> {
         match action {
             MouseAction::Ignore => Ok(true),
@@ -470,6 +471,7 @@ impl RuntimeSessionService {
                 match self.paste_clipboard_or_most_recent_buffer_to_text_entry_or_pane(
                     primary_client_id,
                     &descriptor,
+                    queue_for_adapter,
                 ) {
                     Ok(_) => Ok(true),
                     Err(err) if err.kind() == crate::error::MezErrorKind::NotFound => Ok(true),

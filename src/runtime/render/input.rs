@@ -123,10 +123,11 @@ impl RuntimeSessionService {
         &mut self,
         primary_client_id: &crate::ids::ClientId,
         action: &TerminalClientLoopAction,
+        queue_for_adapter: bool,
     ) -> Result<bool> {
         match action {
             TerminalClientLoopAction::ForwardToPane(input) => {
-                self.apply_primary_prompt_input(primary_client_id, input)
+                self.apply_primary_prompt_input(primary_client_id, input, queue_for_adapter)
             }
             TerminalClientLoopAction::ForwardMouseToPane { .. }
             | TerminalClientLoopAction::ExecuteMux(_)
@@ -147,6 +148,7 @@ impl RuntimeSessionService {
         &mut self,
         primary_client_id: &crate::ids::ClientId,
         input: &[u8],
+        queue_for_adapter: bool,
     ) -> Result<bool> {
         if input == b"\x1b" {
             if self
@@ -203,7 +205,10 @@ impl RuntimeSessionService {
                     changed = true;
                     if !command.trim().is_empty() {
                         if prompt_kind == ReadlinePromptKind::Command {
-                            self.remember_primary_command_prompt_submission(&command)?;
+                            self.remember_primary_command_prompt_submission(
+                                &command,
+                                queue_for_adapter,
+                            )?;
                         }
                         match self
                             .execute_terminal_command(primary_client_id, &command)
@@ -235,7 +240,11 @@ impl RuntimeSessionService {
 
     /// Retains one submitted `Ctrl+A :` command for future readline history
     /// navigation and reverse search.
-    fn remember_primary_command_prompt_submission(&mut self, command: &str) -> Result<()> {
+    fn remember_primary_command_prompt_submission(
+        &mut self,
+        command: &str,
+        queue_for_adapter: bool,
+    ) -> Result<()> {
         if command.trim().is_empty() {
             return Ok(());
         }
@@ -247,7 +256,7 @@ impl RuntimeSessionService {
         let Some(store) = self.agent_transcript_store.clone() else {
             return Ok(());
         };
-        if self.external_effects_use_adapter() {
+        if queue_for_adapter {
             self.queued_transcript_effects
                 .push(RuntimeSideEffect::PersistCommandPromptHistory {
                     path: store.command_prompt_history_file(),
