@@ -23,9 +23,9 @@ use super::{
     RuntimeEventIngressReport, RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSessionService,
     RuntimeShellTransactionTimerKind, RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome,
     RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind, RuntimeTimerKey,
-    RuntimeTimerKind, ShutdownEvent, Size, TerminalClientLoopConfig, TimerEvent, VecDeque,
-    compose_client_presentation_with_styles, delivery_batch_json, encode_mmp_body, mpsc, oneshot,
-    plan_attached_terminal_client_step, watch,
+    RuntimeTimerKind, RuntimeTransition, ShutdownEvent, Size, TerminalClientLoopConfig, TimerEvent,
+    VecDeque, compose_client_presentation_with_styles, delivery_batch_json, encode_mmp_body, mpsc,
+    oneshot, plan_attached_terminal_client_step, watch,
 };
 use crate::agent::{
     DEFAULT_PROVIDER_TIMEOUT_MS, ProviderErrorRetryClass, provider_error_retry_class_from_parts,
@@ -153,69 +153,6 @@ fn snapshot_id_from_json_params(params: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(params)
         .ok()
         .and_then(|value| value.get("snapshot_id")?.as_str().map(str::to_string))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::ConfigScope;
-    use std::path::PathBuf;
-
-    /// Verifies that the provider worker watchdog cannot fire before the
-    /// provider transport timeout. The watchdog cleans up abandoned async
-    /// claims, so it must leave enough time for a legitimate long-running
-    /// provider request to settle through the provider layer first.
-    #[test]
-    fn provider_claim_timeout_exceeds_provider_transport_timeout() {
-        let claim_timeout_ms = std::hint::black_box(DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS);
-        let provider_timeout_ms = std::hint::black_box(DEFAULT_PROVIDER_TIMEOUT_MS);
-
-        assert!(
-            claim_timeout_ms > provider_timeout_ms,
-            "provider claim watchdog {} ms must exceed provider timeout {} ms",
-            claim_timeout_ms,
-            provider_timeout_ms
-        );
-    }
-
-    /// Verifies repeated deferred config replacements for the same destination
-    /// collapse to the newest complete document.
-    ///
-    /// A single provider response can contain many `config_change` actions for
-    /// adjacent theme slots. The actor should persist only the final config text
-    /// for each file instead of queueing a long series of superseded full-file
-    /// replacements.
-    #[test]
-    fn coalesce_deferred_config_file_writes_keeps_latest_text_per_target() {
-        let config_path = PathBuf::from("/tmp/mez/config.toml");
-        let project_path = PathBuf::from("/tmp/project/.mezzanine/config.toml");
-
-        let coalesced = coalesce_deferred_config_file_writes(vec![
-            DeferredConfigFileWrite {
-                path: config_path.clone(),
-                scope: ConfigScope::Primary,
-                text: "first".to_string(),
-            },
-            DeferredConfigFileWrite {
-                path: project_path.clone(),
-                scope: ConfigScope::ProjectOverlay,
-                text: "project".to_string(),
-            },
-            DeferredConfigFileWrite {
-                path: config_path.clone(),
-                scope: ConfigScope::Primary,
-                text: "second".to_string(),
-            },
-        ]);
-
-        assert_eq!(coalesced.len(), 2);
-        assert_eq!(coalesced[0].path, config_path);
-        assert_eq!(coalesced[0].scope, ConfigScope::Primary);
-        assert_eq!(coalesced[0].text, "second");
-        assert_eq!(coalesced[1].path, project_path);
-        assert_eq!(coalesced[1].scope, ConfigScope::ProjectOverlay);
-        assert_eq!(coalesced[1].text, "project");
-    }
 }
 
 impl AsyncRuntimeSessionActor {
@@ -1116,10 +1053,7 @@ impl AsyncRuntimeSessionActor {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    async fn apply_runtime_event(
-        &mut self,
-        event: RuntimeEvent,
-    ) -> Result<RuntimeEventApplication> {
+    async fn apply_runtime_event(&mut self, event: RuntimeEvent) -> Result<RuntimeTransition> {
         match event {
             RuntimeEvent::Pane(PaneEvent::Output { pane_id, bytes }) => {
                 let byte_count = bytes.len();
@@ -1156,7 +1090,7 @@ impl AsyncRuntimeSessionActor {
                         )?,
                     );
                 }
-                Ok(RuntimeEventApplication {
+                Ok(RuntimeTransition {
                     applied,
                     side_effects,
                 })
@@ -1164,7 +1098,7 @@ impl AsyncRuntimeSessionActor {
             RuntimeEvent::Pane(PaneEvent::WriteFailed { pane_id, error }) => self
                 .service
                 .apply_pane_write_failure_event(pane_id, error)
-                .map(|applied| RuntimeEventApplication {
+                .map(|applied| RuntimeTransition {
                     applied,
                     side_effects: if applied {
                         self.render_side_effects(RenderInvalidationReason::FullRedraw)
@@ -1175,7 +1109,7 @@ impl AsyncRuntimeSessionActor {
             RuntimeEvent::Pane(PaneEvent::Resized { pane_id, size }) => self
                 .service
                 .apply_pane_resize_completion_event(pane_id, size)
-                .map(|applied| RuntimeEventApplication {
+                .map(|applied| RuntimeTransition {
                     applied,
                     side_effects: if applied {
                         self.render_side_effects(RenderInvalidationReason::Layout)
@@ -1196,7 +1130,7 @@ impl AsyncRuntimeSessionActor {
                     process_group_id,
                     current_working_directory,
                 )
-                .map(|applied| RuntimeEventApplication {
+                .map(|applied| RuntimeTransition {
                     applied,
                     side_effects: if applied {
                         self.render_side_effects(RenderInvalidationReason::PaneOutput)
@@ -1207,7 +1141,7 @@ impl AsyncRuntimeSessionActor {
             RuntimeEvent::Pane(PaneEvent::InputWritten { pane_id, bytes }) => self
                 .service
                 .apply_pane_input_written_event(pane_id, bytes)
-                .map(|applied| RuntimeEventApplication {
+                .map(|applied| RuntimeTransition {
                     applied,
                     side_effects: Vec::new(),
                 }),
@@ -1248,7 +1182,7 @@ impl AsyncRuntimeSessionActor {
                     )
                     .map(|update| {
                         let applied = update.is_some();
-                        RuntimeEventApplication {
+                        RuntimeTransition {
                             applied,
                             side_effects: if applied {
                                 self.render_side_effects(RenderInvalidationReason::Layout)
@@ -1261,7 +1195,7 @@ impl AsyncRuntimeSessionActor {
             RuntimeEvent::Process(ProcessEvent::Failed { pane_id, error }) => self
                 .service
                 .apply_pane_process_failure_event(pane_id, error)
-                .map(|applied| RuntimeEventApplication {
+                .map(|applied| RuntimeTransition {
                     applied,
                     side_effects: if applied {
                         self.render_side_effects(RenderInvalidationReason::FullRedraw)
@@ -1272,7 +1206,7 @@ impl AsyncRuntimeSessionActor {
             RuntimeEvent::Process(ProcessEvent::Spawned { pane_id, pid }) => self
                 .service
                 .apply_pane_process_spawn_event(pane_id, pid)
-                .map(|applied| RuntimeEventApplication {
+                .map(|applied| RuntimeTransition {
                     applied,
                     side_effects: if applied {
                         self.render_side_effects(RenderInvalidationReason::FullRedraw)
@@ -1288,7 +1222,7 @@ impl AsyncRuntimeSessionActor {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn apply_runtime_timer_event(&mut self, timer: TimerEvent) -> Result<RuntimeEventApplication> {
+    fn apply_runtime_timer_event(&mut self, timer: TimerEvent) -> Result<RuntimeTransition> {
         if runtime_timer_kind_is_shell_transaction(timer.key.kind) {
             self.scheduled_shell_transaction_timers.remove(&timer.key);
         }
@@ -1305,7 +1239,7 @@ impl AsyncRuntimeSessionActor {
                 } else {
                     self.shell_transaction_timer_side_effects()
                 };
-                Ok(RuntimeEventApplication {
+                Ok(RuntimeTransition {
                     applied: expired > 0,
                     side_effects,
                 })
@@ -1315,7 +1249,7 @@ impl AsyncRuntimeSessionActor {
                     Ok(self.apply_render_timer_event(RenderInvalidationReason::Resize))
                 } else {
                     self.record_ignored_timer_event();
-                    Ok(RuntimeEventApplication::default())
+                    Ok(RuntimeTransition::default())
                 }
             }
             RuntimeTimerKind::CursorBlink => {
@@ -1325,7 +1259,7 @@ impl AsyncRuntimeSessionActor {
                     != Some(&timer.key)
                 {
                     self.record_ignored_timer_event();
-                    return Ok(RuntimeEventApplication::default());
+                    return Ok(RuntimeTransition::default());
                 }
                 self.scheduled_cursor_blink_timers
                     .remove(timer.key.owner_id.as_str());
@@ -1346,7 +1280,7 @@ impl AsyncRuntimeSessionActor {
                     != Some(&timer.key)
                 {
                     self.record_ignored_timer_event();
-                    return Ok(RuntimeEventApplication::default());
+                    return Ok(RuntimeTransition::default());
                 }
                 self.scheduled_status_refresh_timers
                     .remove(timer.key.owner_id.as_str());
@@ -1363,7 +1297,7 @@ impl AsyncRuntimeSessionActor {
             RuntimeTimerKind::IdleCleanup => {
                 if self.scheduled_idle_cleanup_timer.as_ref() != Some(&timer.key) {
                     self.record_ignored_timer_event();
-                    return Ok(RuntimeEventApplication::default());
+                    return Ok(RuntimeTransition::default());
                 }
                 self.scheduled_idle_cleanup_timer = None;
                 let actor_progress_turn_ids = self.actor_owned_agent_progress_turn_ids();
@@ -1377,7 +1311,7 @@ impl AsyncRuntimeSessionActor {
                     side_effects
                         .extend(self.render_side_effects(RenderInvalidationReason::FullRedraw));
                 }
-                Ok(RuntimeEventApplication {
+                Ok(RuntimeTransition {
                     applied: cleaned > 0,
                     side_effects,
                 })
@@ -1385,7 +1319,7 @@ impl AsyncRuntimeSessionActor {
             RuntimeTimerKind::ProviderPoll => {
                 if self.scheduled_provider_poll_timer.as_ref() != Some(&timer.key) {
                     self.record_ignored_timer_event();
-                    return Ok(RuntimeEventApplication::default());
+                    return Ok(RuntimeTransition::default());
                 }
                 self.scheduled_provider_poll_timer = None;
                 self.apply_provider_poll_timer_event()
@@ -1397,7 +1331,7 @@ impl AsyncRuntimeSessionActor {
                     != Some(&timer.key)
                 {
                     self.record_ignored_timer_event();
-                    return Ok(RuntimeEventApplication::default());
+                    return Ok(RuntimeTransition::default());
                 }
                 self.scheduled_provider_retry_timers
                     .remove(timer.key.owner_id.as_str());
@@ -1410,7 +1344,7 @@ impl AsyncRuntimeSessionActor {
                     != Some(&timer.key)
                 {
                     self.record_ignored_timer_event();
-                    return Ok(RuntimeEventApplication::default());
+                    return Ok(RuntimeTransition::default());
                 }
                 self.scheduled_provider_claim_timers
                     .remove(timer.key.owner_id.as_str());
@@ -1423,7 +1357,7 @@ impl AsyncRuntimeSessionActor {
                     != Some(&timer.key)
                 {
                     self.record_ignored_timer_event();
-                    return Ok(RuntimeEventApplication::default());
+                    return Ok(RuntimeTransition::default());
                 }
                 self.scheduled_pane_pipe_health_timers
                     .remove(timer.key.owner_id.as_str());
@@ -1440,7 +1374,7 @@ impl AsyncRuntimeSessionActor {
                         self.pane_pipe_health_timer_side_effects_for_pane(&timer.key.owner_id)?,
                     );
                 }
-                Ok(RuntimeEventApplication {
+                Ok(RuntimeTransition {
                     applied: stopped > 0,
                     side_effects,
                 })
@@ -1463,12 +1397,9 @@ impl AsyncRuntimeSessionActor {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn apply_render_timer_event(
-        &self,
-        reason: RenderInvalidationReason,
-    ) -> RuntimeEventApplication {
+    fn apply_render_timer_event(&self, reason: RenderInvalidationReason) -> RuntimeTransition {
         let side_effects = self.render_side_effects(reason);
-        RuntimeEventApplication {
+        RuntimeTransition {
             applied: !side_effects.is_empty(),
             side_effects,
         }
@@ -1479,9 +1410,9 @@ impl AsyncRuntimeSessionActor {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn apply_provider_poll_timer_event(&self) -> Result<RuntimeEventApplication> {
+    fn apply_provider_poll_timer_event(&self) -> Result<RuntimeTransition> {
         let side_effects = self.pending_provider_dispatch_side_effects()?;
-        Ok(RuntimeEventApplication {
+        Ok(RuntimeTransition {
             applied: !side_effects.is_empty(),
             side_effects,
         })
@@ -1495,7 +1426,7 @@ impl AsyncRuntimeSessionActor {
     fn apply_provider_retry_timer_event(
         &mut self,
         key: &RuntimeTimerKey,
-    ) -> Result<RuntimeEventApplication> {
+    ) -> Result<RuntimeTransition> {
         let applied = self
             .service
             .queue_agent_provider_retry_task(&key.owner_id, key.generation)?;
@@ -1505,7 +1436,7 @@ impl AsyncRuntimeSessionActor {
             self.provider_retry_attempts.remove(key.owner_id.as_str());
             Vec::new()
         };
-        Ok(RuntimeEventApplication {
+        Ok(RuntimeTransition {
             applied,
             side_effects,
         })
@@ -1515,7 +1446,7 @@ impl AsyncRuntimeSessionActor {
     fn apply_provider_claim_timer_event(
         &mut self,
         key: &RuntimeTimerKey,
-    ) -> Result<RuntimeEventApplication> {
+    ) -> Result<RuntimeTransition> {
         let applied = self
             .service
             .fail_expired_claimed_agent_provider_task(&key.owner_id, key.generation)?;
@@ -1527,7 +1458,7 @@ impl AsyncRuntimeSessionActor {
         if applied {
             side_effects.extend(self.render_side_effects(RenderInvalidationReason::FullRedraw));
         }
-        Ok(RuntimeEventApplication {
+        Ok(RuntimeTransition {
             applied,
             side_effects,
         })
@@ -1752,12 +1683,12 @@ impl AsyncRuntimeSessionActor {
     fn apply_runtime_client_event(
         &mut self,
         client_event: ClientEvent,
-    ) -> Result<RuntimeEventApplication> {
+    ) -> Result<RuntimeTransition> {
         match client_event {
             ClientEvent::Resize { client_id, size } => self
                 .service
                 .apply_primary_client_resize_event(&client_id, size)
-                .map(|applied| RuntimeEventApplication {
+                .map(|applied| RuntimeTransition {
                     applied,
                     side_effects: if applied {
                         self.render_side_effects(RenderInvalidationReason::Layout)
@@ -1768,7 +1699,7 @@ impl AsyncRuntimeSessionActor {
             ClientEvent::Disconnected { client_id, reason } => self
                 .service
                 .apply_primary_client_disconnect_event(&client_id, reason)
-                .map(|applied| RuntimeEventApplication {
+                .map(|applied| RuntimeTransition {
                     applied,
                     side_effects: if applied {
                         self.render_side_effects(RenderInvalidationReason::FullRedraw)
@@ -1801,7 +1732,7 @@ impl AsyncRuntimeSessionActor {
         &self,
         client_id: ClientId,
         reason: RenderInvalidationReason,
-    ) -> RuntimeEventApplication {
+    ) -> RuntimeTransition {
         if !self
             .service
             .session()
@@ -1809,9 +1740,9 @@ impl AsyncRuntimeSessionActor {
             .iter()
             .any(|client| client.id == client_id && client.state == ClientState::Attached)
         {
-            return RuntimeEventApplication::default();
+            return RuntimeTransition::default();
         }
-        RuntimeEventApplication {
+        RuntimeTransition {
             applied: true,
             side_effects: vec![RuntimeSideEffect::RenderClient { client_id, reason }],
         }
@@ -1826,12 +1757,12 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         client_id: ClientId,
         bytes: Vec<u8>,
-    ) -> Result<RuntimeEventApplication> {
+    ) -> Result<RuntimeTransition> {
         if bytes.is_empty() || self.service.session().primary_client_id() != Some(&client_id) {
-            return Ok(RuntimeEventApplication::default());
+            return Ok(RuntimeTransition::default());
         }
         let Some(client_size) = self.attached_client_size(&client_id)? else {
-            return Ok(RuntimeEventApplication::default());
+            return Ok(RuntimeTransition::default());
         };
         let config = self
             .service
@@ -1858,14 +1789,14 @@ impl AsyncRuntimeSessionActor {
             &config,
         )?;
         if step.actions.is_empty() {
-            return Ok(RuntimeEventApplication::default());
+            return Ok(RuntimeTransition::default());
         }
         let (application, deferred_pane_inputs) = self
             .service
             .apply_attached_terminal_step_plan_deferred_pane_io(&client_id, &step)?;
         let mut side_effects = deferred_pane_inputs_to_side_effects(deferred_pane_inputs);
         side_effects.extend(self.client_step_application_side_effects(&client_id, &application));
-        Ok(RuntimeEventApplication {
+        Ok(RuntimeTransition {
             applied: runtime_client_step_application_applied(&application),
             side_effects,
         })
@@ -1936,7 +1867,7 @@ impl AsyncRuntimeSessionActor {
     fn apply_runtime_hook_event(
         &mut self,
         hook_event: AsyncHookEvent,
-    ) -> Result<RuntimeEventApplication> {
+    ) -> Result<RuntimeTransition> {
         match hook_event {
             AsyncHookEvent::ProgramCompleted {
                 plan,
@@ -1945,7 +1876,7 @@ impl AsyncRuntimeSessionActor {
             } => self
                 .service
                 .apply_async_program_hook_result(*plan, *result, triggering_event_completed)
-                .map(|applied| RuntimeEventApplication {
+                .map(|applied| RuntimeTransition {
                     applied,
                     side_effects: Vec::new(),
                 }),
@@ -1956,14 +1887,14 @@ impl AsyncRuntimeSessionActor {
             } => self
                 .service
                 .apply_async_hook_completed_event(hook_id, exit_code, output_preview)
-                .map(|applied| RuntimeEventApplication {
+                .map(|applied| RuntimeTransition {
                     applied,
                     side_effects: Vec::new(),
                 }),
             AsyncHookEvent::Failed { hook_id, error } => self
                 .service
                 .apply_async_hook_failed_event(hook_id, error)
-                .map(|applied| RuntimeEventApplication {
+                .map(|applied| RuntimeTransition {
                     applied,
                     side_effects: Vec::new(),
                 }),
@@ -1978,7 +1909,7 @@ impl AsyncRuntimeSessionActor {
     fn apply_runtime_persistence_event(
         &mut self,
         persistence_event: PersistenceEvent,
-    ) -> Result<RuntimeEventApplication> {
+    ) -> Result<RuntimeTransition> {
         let payload = match persistence_event {
             PersistenceEvent::Completed {
                 target,
@@ -2013,7 +1944,7 @@ impl AsyncRuntimeSessionActor {
             }
         };
         self.service.append_runtime_diagnostic_event(payload)?;
-        Ok(RuntimeEventApplication {
+        Ok(RuntimeTransition {
             applied: true,
             side_effects: Vec::new(),
         })
@@ -2027,7 +1958,7 @@ impl AsyncRuntimeSessionActor {
     async fn apply_runtime_agent_provider_event(
         &mut self,
         provider_event: AgentProviderEvent,
-    ) -> Result<RuntimeEventApplication> {
+    ) -> Result<RuntimeTransition> {
         match provider_event {
             AgentProviderEvent::Failed {
                 agent_id,
@@ -2085,7 +2016,7 @@ impl AsyncRuntimeSessionActor {
                             self.render_side_effects(RenderInvalidationReason::FullRedraw);
                         side_effects.extend(self.pending_provider_dispatch_side_effects()?);
                         side_effects.extend(claim_cancellations);
-                        return Ok(RuntimeEventApplication {
+                        return Ok(RuntimeTransition {
                             applied: true,
                             side_effects,
                         });
@@ -2105,7 +2036,7 @@ impl AsyncRuntimeSessionActor {
                         provider_failure_json.as_deref(),
                         provider_raw_text.as_deref(),
                     )
-                    .map(|applied| RuntimeEventApplication {
+                    .map(|applied| RuntimeTransition {
                         applied,
                         side_effects: {
                             let mut side_effects = if applied {
@@ -2128,7 +2059,7 @@ impl AsyncRuntimeSessionActor {
                 let _ = self
                     .service
                     .append_agent_shell_output_status_lines_to_terminal_buffer(&pane_id, &lines);
-                Ok(RuntimeEventApplication {
+                Ok(RuntimeTransition {
                     applied: true,
                     side_effects: Vec::new(),
                 })
@@ -2158,7 +2089,7 @@ impl AsyncRuntimeSessionActor {
                     side_effects.extend(self.pending_provider_dispatch_side_effects()?);
                 }
                 side_effects.extend(claim_cancellations);
-                Ok(RuntimeEventApplication {
+                Ok(RuntimeTransition {
                     applied,
                     side_effects,
                 })
@@ -2170,7 +2101,7 @@ impl AsyncRuntimeSessionActor {
     fn apply_runtime_agent_compaction_event(
         &mut self,
         compaction_event: AgentCompactionEvent,
-    ) -> Result<RuntimeEventApplication> {
+    ) -> Result<RuntimeTransition> {
         let applied = match compaction_event {
             AgentCompactionEvent::Completed { pane_id, response } => self
                 .service
@@ -2189,7 +2120,7 @@ impl AsyncRuntimeSessionActor {
         if applied {
             side_effects.extend(self.pending_provider_dispatch_side_effects()?);
         }
-        Ok(RuntimeEventApplication {
+        Ok(RuntimeTransition {
             applied,
             side_effects,
         })
@@ -2199,7 +2130,7 @@ impl AsyncRuntimeSessionActor {
     fn apply_runtime_agent_remember_event(
         &mut self,
         remember_event: AgentRememberEvent,
-    ) -> Result<RuntimeEventApplication> {
+    ) -> Result<RuntimeTransition> {
         let applied = match remember_event {
             AgentRememberEvent::Completed { pane_id, response } => self
                 .service
@@ -2210,7 +2141,7 @@ impl AsyncRuntimeSessionActor {
                 .service
                 .apply_agent_remember_failed_event(&pane_id, &message)?,
         };
-        Ok(RuntimeEventApplication {
+        Ok(RuntimeTransition {
             applied,
             side_effects: if applied {
                 self.render_side_effects(RenderInvalidationReason::FullRedraw)
@@ -2254,7 +2185,7 @@ impl AsyncRuntimeSessionActor {
         message: String,
         provider_failure_json: Option<String>,
         provider_raw_text: Option<String>,
-    ) -> Result<RuntimeEventApplication> {
+    ) -> Result<RuntimeTransition> {
         let attempt = self
             .provider_retry_attempts
             .get(turn_id.as_str())
@@ -2289,7 +2220,7 @@ impl AsyncRuntimeSessionActor {
                     provider_failure_json.as_deref(),
                     provider_raw_text.as_deref(),
                 )?;
-                return Ok(RuntimeEventApplication {
+                return Ok(RuntimeTransition {
                     applied,
                     side_effects: if applied {
                         self.render_side_effects(RenderInvalidationReason::FullRedraw)
@@ -2315,7 +2246,7 @@ impl AsyncRuntimeSessionActor {
                     provider_failure_json.as_deref(),
                     provider_raw_text.as_deref(),
                 )?;
-                return Ok(RuntimeEventApplication {
+                return Ok(RuntimeTransition {
                     applied,
                     side_effects: if applied {
                         self.render_side_effects(RenderInvalidationReason::FullRedraw)
@@ -2335,11 +2266,11 @@ impl AsyncRuntimeSessionActor {
         )?;
         if !applied {
             self.provider_retry_attempts.remove(turn_id.as_str());
-            return Ok(RuntimeEventApplication::default());
+            return Ok(RuntimeTransition::default());
         }
         self.provider_retry_attempts
             .insert(turn_id.clone(), attempt);
-        Ok(RuntimeEventApplication {
+        Ok(RuntimeTransition {
             applied: true,
             side_effects: vec![RuntimeSideEffect::ScheduleTimer {
                 key: RuntimeTimerKey::new(
@@ -2363,7 +2294,7 @@ impl AsyncRuntimeSessionActor {
     fn apply_runtime_shutdown_event(
         &mut self,
         shutdown: ShutdownEvent,
-    ) -> Result<RuntimeEventApplication> {
+    ) -> Result<RuntimeTransition> {
         let applied = if shutdown.failed {
             self.service
                 .apply_supervisor_failure_event(shutdown.reason, shutdown.force)?
@@ -2371,7 +2302,7 @@ impl AsyncRuntimeSessionActor {
             self.service
                 .apply_supervisor_shutdown_event(shutdown.reason, shutdown.force)?
         };
-        Ok(RuntimeEventApplication {
+        Ok(RuntimeTransition {
             applied,
             side_effects: if applied {
                 self.render_side_effects(RenderInvalidationReason::FullRedraw)
@@ -3527,24 +3458,6 @@ fn provider_retry_timer_side_effect_turn_id(effect: &RuntimeSideEffect) -> Optio
     }
 }
 
-/// Carries Runtime Event Application state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Default)]
-struct RuntimeEventApplication {
-    /// Stores the applied value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    applied: bool,
-    /// Stores the side effects value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    side_effects: Vec<RuntimeSideEffect>,
-}
-
 /// Runs the runtime client step application applied operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -4520,5 +4433,68 @@ impl AsyncRuntimeSessionHandle {
         response
             .await
             .map_err(|_| MezError::invalid_state("async runtime session actor reply was dropped"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ConfigScope;
+    use std::path::PathBuf;
+
+    /// Verifies that the provider worker watchdog cannot fire before the
+    /// provider transport timeout. The watchdog cleans up abandoned async
+    /// claims, so it must leave enough time for a legitimate long-running
+    /// provider request to settle through the provider layer first.
+    #[test]
+    fn provider_claim_timeout_exceeds_provider_transport_timeout() {
+        let claim_timeout_ms = std::hint::black_box(DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS);
+        let provider_timeout_ms = std::hint::black_box(DEFAULT_PROVIDER_TIMEOUT_MS);
+
+        assert!(
+            claim_timeout_ms > provider_timeout_ms,
+            "provider claim watchdog {} ms must exceed provider timeout {} ms",
+            claim_timeout_ms,
+            provider_timeout_ms
+        );
+    }
+
+    /// Verifies repeated deferred config replacements for the same destination
+    /// collapse to the newest complete document.
+    ///
+    /// A single provider response can contain many `config_change` actions for
+    /// adjacent theme slots. The actor should persist only the final config text
+    /// for each file instead of queueing a long series of superseded full-file
+    /// replacements.
+    #[test]
+    fn coalesce_deferred_config_file_writes_keeps_latest_text_per_target() {
+        let config_path = PathBuf::from("/tmp/mez/config.toml");
+        let project_path = PathBuf::from("/tmp/project/.mezzanine/config.toml");
+
+        let coalesced = coalesce_deferred_config_file_writes(vec![
+            DeferredConfigFileWrite {
+                path: config_path.clone(),
+                scope: ConfigScope::Primary,
+                text: "first".to_string(),
+            },
+            DeferredConfigFileWrite {
+                path: project_path.clone(),
+                scope: ConfigScope::ProjectOverlay,
+                text: "project".to_string(),
+            },
+            DeferredConfigFileWrite {
+                path: config_path.clone(),
+                scope: ConfigScope::Primary,
+                text: "second".to_string(),
+            },
+        ]);
+
+        assert_eq!(coalesced.len(), 2);
+        assert_eq!(coalesced[0].path, config_path);
+        assert_eq!(coalesced[0].scope, ConfigScope::Primary);
+        assert_eq!(coalesced[0].text, "second");
+        assert_eq!(coalesced[1].path, project_path);
+        assert_eq!(coalesced[1].scope, ConfigScope::ProjectOverlay);
+        assert_eq!(coalesced[1].text, "project");
     }
 }

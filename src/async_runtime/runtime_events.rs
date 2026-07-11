@@ -739,3 +739,16 @@ pub struct RuntimeEventIngressReport {
     /// Stable event-family names in delivery order.
     pub families: Vec<String>,
 }
+
+/// Result of applying one transport-neutral runtime transition.
+///
+/// The transition records whether domain state changed and the ordered effects
+/// an adapter must execute. It contains no Tokio handles or transport state, so
+/// synchronous tests and asynchronous actors can share the same contract.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct RuntimeTransition {
+    /// Whether the event changed authoritative runtime state.
+    pub(crate) applied: bool,
+    /// Ordered external work emitted by the state transition.
+    pub(crate) side_effects: Vec<RuntimeSideEffect>,
+}

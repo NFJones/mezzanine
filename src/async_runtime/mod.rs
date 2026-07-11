@@ -167,7 +167,8 @@ pub use runtime_events::{
     AgentCompactionEvent, AgentProviderEvent, AgentRememberEvent, AsyncHookEvent, ClientEvent,
     PaneEvent, PersistenceEvent, PersistenceTarget, PersistenceWriteMode, ProcessEvent,
     RenderInvalidationReason, RuntimeEvent, RuntimeEventBatch, RuntimeEventIngressReport,
-    RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, ShutdownEvent, TimerEvent,
+    RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition, ShutdownEvent,
+    TimerEvent,
 };
 pub use side_effects::{
     AsyncClientOutputFlushServiceReport, AsyncHookSideEffectServiceReport,
