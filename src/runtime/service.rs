@@ -457,7 +457,6 @@ impl RuntimeSessionService {
             event_log,
             lifecycle_state,
             session_registry: None,
-            deferred_registry_update: None,
             socket_path,
             created_at_unix_seconds,
             last_attach_at_unix_seconds: None,
@@ -637,7 +636,6 @@ impl RuntimeSessionService {
             return Ok(false);
         }
         if self.external_effects_use_adapter() {
-            self.deferred_registry_update = Some(update);
             return Ok(true);
         }
         self.persist_registry_update_plan(&update)
@@ -658,25 +656,6 @@ impl RuntimeSessionService {
     /// Emits current registry persistence directly through the transition contract.
     pub(crate) fn registry_persistence_transition(&self) -> crate::runtime::RuntimeTransition {
         let Some((registry, update)) = self.registry_update_for_async_persistence() else {
-            return crate::runtime::RuntimeTransition::default();
-        };
-        crate::runtime::RuntimeTransition {
-            applied: false,
-            side_effects: vec![crate::runtime::RuntimeSideEffect::PersistRegistry {
-                registry,
-                update,
-            }],
-        }
-    }
-
-    /// Drains registry persistence as a transport-neutral runtime transition.
-    pub(crate) fn drain_registry_persistence_transition(
-        &mut self,
-    ) -> crate::runtime::RuntimeTransition {
-        let Some(registry) = self.session_registry.clone() else {
-            return crate::runtime::RuntimeTransition::default();
-        };
-        let Some(update) = self.deferred_registry_update.take() else {
             return crate::runtime::RuntimeTransition::default();
         };
         crate::runtime::RuntimeTransition {
@@ -2671,7 +2650,6 @@ impl RuntimeSessionService {
         side_effects.extend(self.drain_config_persistence_transition().side_effects);
         side_effects.extend(self.drain_pane_pipe_persistence_transition().side_effects);
         side_effects.extend(self.drain_program_hook_transition().side_effects);
-        side_effects.extend(self.drain_registry_persistence_transition().side_effects);
         RuntimeTransition {
             applied: false,
             side_effects,

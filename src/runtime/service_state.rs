@@ -2635,11 +2635,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) session_registry: Option<SessionRegistry>,
-    /// Stores the deferred registry update value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) deferred_registry_update: Option<RuntimeRegistryUpdatePlan>,
     /// Stores the socket path value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

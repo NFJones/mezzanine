@@ -344,6 +344,9 @@ impl AsyncRuntimeSessionActor {
                     )
                     .and_then(|(output, consumed)| {
                         self.queue_deferred_pane_io_side_effects_from_service()?;
+                        self.queue_runtime_side_effects(
+                            self.service.registry_persistence_transition().side_effects,
+                        )?;
                         Ok(AsyncControlInputResult {
                             output,
                             consumed,
@@ -415,6 +418,9 @@ impl AsyncRuntimeSessionActor {
                     .await
                     .and_then(|(output, consumed)| {
                         self.queue_deferred_pane_io_side_effects_from_service()?;
+                        self.queue_runtime_side_effects(
+                            self.service.registry_persistence_transition().side_effects,
+                        )?;
                         Ok(AsyncControlInputResult {
                             output,
                             consumed,
@@ -443,9 +449,12 @@ impl AsyncRuntimeSessionActor {
                     &mut connection,
                 );
                 let result = self
-                    .service
-                    .persist_or_defer_registry_update()
-                    .and_then(|_| self.queue_deferred_pane_io_side_effects_from_service())
+                    .queue_deferred_pane_io_side_effects_from_service()
+                    .and_then(|_| {
+                        self.queue_runtime_side_effects(
+                            self.service.registry_persistence_transition().side_effects,
+                        )
+                    })
                     .map(|_| AsyncControlInputResult {
                         output: encode_control_body(&body),
                         consumed,
