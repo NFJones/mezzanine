@@ -315,10 +315,14 @@ impl RuntimeSessionService {
         } else {
             Vec::new()
         };
-        Ok(RuntimeTransition {
+        let mut transition = RuntimeTransition {
             applied,
             side_effects,
-        })
+        };
+        transition
+            .side_effects
+            .extend(self.drain_registry_persistence_transition().side_effects);
+        Ok(transition)
     }
 
     /// Applies a supervisor-originated shutdown event delivered through async

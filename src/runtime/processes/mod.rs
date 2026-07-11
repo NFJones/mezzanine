@@ -253,7 +253,11 @@ impl RuntimeSessionService {
                 Some(RenderInvalidationReason::FullRedraw),
             ),
         };
-        Ok(self.runtime_transition_with_render(applied, render_reason))
+        let mut transition = self.runtime_transition_with_render(applied, render_reason);
+        transition
+            .side_effects
+            .extend(self.drain_registry_persistence_transition().side_effects);
+        Ok(transition)
     }
 
     /// Applies one non-output pane event through the transport-neutral transition contract.
