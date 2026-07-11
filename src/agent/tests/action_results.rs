@@ -63,8 +63,8 @@ fn action_result_context_compacts_shell_observation_for_model() {
 /// Shell action results are now the primary way models inspect files before
 /// building `apply_patch` hunks. The context cleaner may remove Mezzanine
 /// wrapper traffic and echoed commands, but it must not strip prompt-looking
-/// prefixes or trailing whitespace from real command output because that makes
-/// later patch context differ from the actual file.
+/// prefixes, wrapper-looking lines, or trailing whitespace from real command
+/// output because that makes later patch context differ from the actual file.
 fn action_result_context_preserves_patch_relevant_shell_output() {
     let turn = turn();
     let action = shell_action("a1");
@@ -89,7 +89,7 @@ fn action_result_context_preserves_patch_relevant_shell_output() {
                     "signal": null,
                     "timed_out": false,
                     "combined_output_bytes": 128,
-                    "combined_output_preview": format!("$ {command}\n$ literal prompt line\n> literal continuation line\ntrailing spaces   \nMEZ_MARKER_TOKEN=abc\n"),
+                    "combined_output_preview": format!("$ {command}\n$ literal prompt line\n> literal continuation line\ntrailing spaces   \nMEZ_MARKER_TOKEN=abc\n__mez_tx_status=0\nordinary output\n"),
                     "boundary_state": "end-marker-observed",
                     "output_truncated": false
                 }
@@ -103,7 +103,7 @@ fn action_result_context_preserves_patch_relevant_shell_output() {
     assert!(
         context
             .contains(&format!(
-                "$ {command}\n$ literal prompt line\n> literal continuation line\ntrailing spaces   \nMEZ_MARKER_TOKEN=abc\n"
+                "$ {command}\n$ literal prompt line\n> literal continuation line\ntrailing spaces   \nMEZ_MARKER_TOKEN=abc\n__mez_tx_status=0\nordinary output\n"
             )),
         "{context}"
     );

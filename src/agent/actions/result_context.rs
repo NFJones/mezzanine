@@ -286,38 +286,6 @@ fn append_read_observation_lines(lines: &mut Vec<String>, observations: &[ShellR
     }
 }
 
-/// Returns true when a line is known Mezzanine wrapper traffic rather than user
-/// command output.
-#[allow(dead_code)]
-pub(super) fn shell_output_line_is_mezzanine_wrapper(trimmed: &str) -> bool {
-    [
-        "MEZ_MARKER_TOKEN",
-        "MEZ_TURN",
-        "MEZ_AGENT",
-        "MEZ_PANE",
-        "MEZ_STATUS",
-        "MEZ_STTY_STATE",
-        "MEZ_RESTORE_",
-        "MEZ_HISTORY_",
-        "HISTFILE=/dev/null",
-        "MEZ_COMMAND_",
-        "MEZ_OUTPUT_FILE",
-        "__MEZ_SHELL_OUTPUT_BASE64_",
-        "mez_marker=",
-        "printf '\\033]133",
-        "env -u MEZ_MARKER_TOKEN",
-        "__mez_tx_",
-        "unset -f __mez_tx_",
-        "stty -",
-        "unset MEZ_",
-        "set +o history",
-        "set -o history",
-        "history -d",
-    ]
-    .iter()
-    .any(|marker| trimmed.contains(marker))
-}
-
 /// Appends non-empty model-readable result text.
 fn append_action_result_content_text(result: &ActionResult, lines: &mut Vec<String>) {
     let mut content = result.content_text();

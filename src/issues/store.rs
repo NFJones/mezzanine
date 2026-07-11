@@ -646,15 +646,3 @@ fn row_u64(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
 fn rusqlite_from_mez_error(error: MezError) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
 }
-
-#[allow(dead_code)]
-fn inspect_issue(connection: &Connection, id: &str) -> Result<Option<IssueRecord>> {
-    connection
-        .query_row(
-            "SELECT id, project, kind, state, title, body, notes, created_at, updated_at FROM issues WHERE id = ?1",
-            params![id],
-            row_to_issue_record,
-        )
-        .optional()
-        .map_err(MezError::from)
-}
