@@ -156,7 +156,7 @@ impl AsyncRuntimeSessionActor {
         let side_effect_delivery_notify = Arc::new(Notify::new());
         let (side_effect_delivery_tx, side_effect_delivery_rx) = watch::channel(0u64);
         let (lifecycle_state_tx, lifecycle_state_rx) = watch::channel(service.lifecycle_state());
-        service.set_defer_external_effects(true);
+        service.use_external_effect_adapter();
         Ok((
             AsyncRuntimeSessionHandle {
                 sender: sender.clone(),

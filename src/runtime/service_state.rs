@@ -496,6 +496,22 @@ pub(super) struct RuntimeAgentPatchRecord {
     pub error_message: Option<String>,
 }
 
+/// Selects whether external effects execute inline or through an adapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RuntimeExternalEffectMode {
+    /// Compatibility callers execute supported effects inline.
+    Inline,
+    /// Runtime transitions queue external work for an effect adapter.
+    Adapter,
+}
+
+impl RuntimeExternalEffectMode {
+    /// Returns whether external work must be emitted for an adapter.
+    pub(super) const fn uses_adapter(self) -> bool {
+        matches!(self, Self::Adapter)
+    }
+}
+
 /// Carries Runtime Lifecycle State state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -1885,7 +1901,7 @@ pub struct RuntimeSessionService {
     /// Whether blocking external effects are queued for an adapter instead of run inline.
     ///
     /// The async actor enables this once; synchronous compatibility callers leave it disabled.
-    pub(super) defer_external_effects: bool,
+    pub(super) external_effect_mode: RuntimeExternalEffectMode,
     /// Stores the paste buffers value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

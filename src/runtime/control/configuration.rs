@@ -244,7 +244,7 @@ impl RuntimeSessionService {
         request: &crate::control::JsonRpcRequest,
         caller_client_id: &crate::ids::ClientId,
     ) -> Option<String> {
-        if !self.defer_external_effects {
+        if !self.external_effects_use_adapter() {
             return None;
         }
         if !matches!(request.method.as_str(), "config/set" | "config/unset") {

@@ -4,6 +4,8 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+use super::service_state::RuntimeExternalEffectMode;
+
 use super::{
     AgentLogLevel, AgentScheduler, AgentSessionMetadata, AgentShellStore, AgentShellVisibility,
     AgentTranscriptStore, AgentTurnLedger, AgentTurnRecord, AgentTurnState, AgentTurnTrigger,
@@ -251,7 +253,7 @@ impl RuntimeSessionService {
             foreground_title_idle_sync_polls: 0,
             pane_exit_records: BTreeMap::new(),
             active_pane_pipes: BTreeMap::new(),
-            defer_external_effects: false,
+            external_effect_mode: RuntimeExternalEffectMode::Inline,
             paste_buffers: PasteBuffers::default_limit(),
             active_paste_buffer: None,
             host_clipboard: HostClipboard::system(),
@@ -448,11 +450,16 @@ impl RuntimeSessionService {
     }
 
     /// Enables or disables deferred registry persistence for async actor owners.
-    pub(crate) fn set_defer_external_effects(&mut self, defer: bool) {
-        self.defer_external_effects = defer;
+    pub(crate) fn use_external_effect_adapter(&mut self) {
+        self.external_effect_mode = RuntimeExternalEffectMode::Adapter;
         if let Some(audit_log) = self.audit_log.as_mut() {
-            audit_log.set_defer_writes(defer);
+            audit_log.set_defer_writes(true);
         }
+    }
+
+    /// Returns whether transitions must queue external work for an adapter.
+    pub(super) const fn external_effects_use_adapter(&self) -> bool {
+        self.external_effect_mode.uses_adapter()
     }
 
     /// Persists the current registry update plan when this service owns a
@@ -480,7 +487,7 @@ impl RuntimeSessionService {
         if self.session_registry.is_none() {
             return Ok(false);
         }
-        if self.defer_external_effects {
+        if self.external_effects_use_adapter() {
             self.deferred_registry_update = Some(update);
             return Ok(true);
         }
@@ -1957,7 +1964,7 @@ impl RuntimeSessionService {
             let pending = existing.drain_deferred_writes();
             self.deferred_audit_writes.extend(pending);
         }
-        audit_log.set_defer_writes(self.defer_external_effects);
+        audit_log.set_defer_writes(self.external_effects_use_adapter());
         self.audit_log = Some(audit_log);
     }
 

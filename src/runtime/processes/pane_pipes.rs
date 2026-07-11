@@ -20,12 +20,11 @@ impl RuntimeSessionService {
         if bytes.is_empty() {
             return Ok(());
         }
+        let use_external_effect_adapter = self.external_effects_use_adapter();
         let Some(pipe) = self.active_pane_pipes.get_mut(pane_id) else {
             return Ok(());
         };
-        if self.defer_external_effects
-            && let Some(path) = pipe.file_target_path()
-        {
+        if use_external_effect_adapter && let Some(path) = pipe.file_target_path() {
             pipe.record_deferred_output(bytes.len());
             self.deferred_pane_pipe_writes.push(DeferredPanePipeWrite {
                 pane_id: pane_id.to_string(),
@@ -63,7 +62,7 @@ impl RuntimeSessionService {
         path: PathBuf,
     ) -> Result<String> {
         let _ = self.stop_active_pane_pipe(pane_id.as_str());
-        let pipe = if self.defer_external_effects {
+        let pipe = if self.external_effects_use_adapter() {
             ActivePanePipe::deferred_file(pane_id.clone(), path)
         } else {
             ActivePanePipe::file(pane_id.clone(), path)?
@@ -90,7 +89,7 @@ impl RuntimeSessionService {
         command: String,
     ) -> Result<String> {
         let _ = self.stop_active_pane_pipe(pane_id.as_str());
-        let pipe = if self.defer_external_effects {
+        let pipe = if self.external_effects_use_adapter() {
             ActivePanePipe::deferred_command(pane_id.clone(), self.session.shell.path(), command)?
         } else {
             ActivePanePipe::command(pane_id.clone(), self.session.shell.path(), command)?

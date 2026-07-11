@@ -247,7 +247,7 @@ impl RuntimeSessionService {
         let Some(store) = self.agent_transcript_store.clone() else {
             return Ok(());
         };
-        if self.defer_external_effects {
+        if self.external_effects_use_adapter() {
             self.deferred_command_prompt_history_writes
                 .push(DeferredCommandPromptHistoryWrite {
                     path: store.command_prompt_history_file(),
