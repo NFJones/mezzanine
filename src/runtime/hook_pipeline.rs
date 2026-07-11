@@ -221,10 +221,10 @@ impl RuntimeSessionService {
             ));
         };
         let target_async_owned = if let Some(target_pane_id) = plan.target_pane_id.as_deref() {
-            self.pane_process_is_async_owned(target_pane_id)
+            self.pane_process_is_adapter_owned(target_pane_id)
         } else {
             self.active_window_pane_descriptor(None)
-                .map(|descriptor| self.pane_process_is_async_owned(descriptor.pane_id.as_str()))
+                .map(|descriptor| self.pane_process_is_adapter_owned(descriptor.pane_id.as_str()))
                 .unwrap_or(false)
         };
         if target_async_owned && continuation.is_none() {

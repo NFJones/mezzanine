@@ -645,7 +645,7 @@ impl RuntimeSessionService {
             };
             if self.pane_processes.contains_pane(pane_id) {
                 self.pane_processes.resize_pane(pane_id, descriptor.size)?;
-            } else if self.pane_process_is_async_owned(pane_id) {
+            } else if self.pane_process_is_adapter_owned(pane_id) {
                 self.deferred_pane_resizes.insert(
                     pane_id.to_string(),
                     DeferredPaneResize {

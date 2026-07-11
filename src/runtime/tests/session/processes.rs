@@ -16,7 +16,7 @@ fn runtime_pane_output_device_status_report_is_forwarded_to_pane_input() {
     service.start_initial_pane_process(Some("cat")).unwrap();
     let pane_id = service.active_pane_id().unwrap().to_string();
     let _process = service
-        .take_running_pane_process_for_async_owner(&pane_id)
+        .take_running_pane_process_for_adapter(&pane_id)
         .unwrap();
 
     service
@@ -233,7 +233,7 @@ fn runtime_service_can_handoff_running_pane_process_to_async_owner() {
         .unwrap();
 
     let process = service
-        .take_running_pane_process_for_async_owner(&started.pane_id)
+        .take_running_pane_process_for_adapter(&started.pane_id)
         .unwrap();
 
     assert!(!service.pane_processes().contains_pane(&started.pane_id));
@@ -263,7 +263,7 @@ fn runtime_service_can_handoff_running_pane_process_to_async_owner() {
     );
     assert_eq!(
         service
-            .restore_running_pane_process_from_async_owner(&started.pane_id, process)
+            .restore_running_pane_process_from_adapter(&started.pane_id, process)
             .unwrap(),
         started.primary_pid
     );
@@ -777,7 +777,7 @@ fn runtime_pane_write_failure_fails_running_file_action() {
         .id
         .to_string();
     let mut process = service
-        .take_running_pane_process_for_async_owner(&pane_id)
+        .take_running_pane_process_for_adapter(&pane_id)
         .unwrap();
     mark_test_pane_ready(&mut service, &pane_id);
     service.permission_policy_mut().set_approval_bypass(true);

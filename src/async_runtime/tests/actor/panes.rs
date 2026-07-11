@@ -310,7 +310,7 @@ async fn async_actor_primary_detach_retains_worker_owned_panes() {
 
     let client = async {
         let mut processes = handle
-            .take_running_pane_processes_for_async_owner(8)
+            .take_running_pane_processes_for_adapter(8)
             .await
             .unwrap();
         assert_eq!(processes.len(), 1);
@@ -345,7 +345,7 @@ async fn async_actor_primary_detach_retains_worker_owned_panes() {
         RuntimeLifecycleState::Detached
     );
     assert!(
-        exit.service.pane_process_is_async_owned(&pane_id),
+        exit.service.pane_process_is_adapter_owned(&pane_id),
         "detaching the primary client must not release async worker ownership"
     );
 }
@@ -370,7 +370,7 @@ async fn async_actor_control_initialize_resizes_worker_owned_initial_pane() {
 
     let client = async {
         let mut processes = handle
-            .take_running_pane_processes_for_async_owner(8)
+            .take_running_pane_processes_for_adapter(8)
             .await
             .unwrap();
         assert_eq!(processes.len(), 1);
@@ -471,7 +471,7 @@ async fn async_actor_forced_shutdown_terminates_worker_owned_panes() {
 
     let client = async {
         let mut processes = handle
-            .take_running_pane_processes_for_async_owner(8)
+            .take_running_pane_processes_for_adapter(8)
             .await
             .unwrap();
         assert_eq!(processes.len(), 1);
@@ -510,7 +510,7 @@ async fn async_actor_forced_shutdown_terminates_worker_owned_panes() {
         RuntimeLifecycleState::Killed
     );
     assert!(
-        !exit.service.pane_process_is_async_owned(&pane_id),
+        !exit.service.pane_process_is_adapter_owned(&pane_id),
         "forced shutdown must release async ownership after queuing worker termination"
     );
     assert!(exit.service.session().windows().is_empty());
@@ -535,7 +535,7 @@ async fn async_actor_drains_service_deferred_input_after_pane_handoff() {
 
     let client = async {
         let mut processes = handle
-            .take_running_pane_processes_for_async_owner(8)
+            .take_running_pane_processes_for_adapter(8)
             .await
             .unwrap();
         assert_eq!(processes.len(), 1);
@@ -593,7 +593,7 @@ async fn async_actor_drains_service_deferred_termination_after_pane_handoff() {
 
     let client = async {
         let mut processes = handle
-            .take_running_pane_processes_for_async_owner(8)
+            .take_running_pane_processes_for_adapter(8)
             .await
             .unwrap();
         assert_eq!(processes.len(), 1);

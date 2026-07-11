@@ -858,10 +858,8 @@ impl AsyncRuntimeSessionActor {
                 let _ = reply.send(self.drain_pane_io_side_effects(&pane_id, limit));
                 false
             }
-            AsyncRuntimeRequest::TakeRunningPaneProcessesForAsyncOwner { limit, reply } => {
-                let result = self
-                    .service
-                    .take_running_pane_processes_for_async_owner(limit);
+            AsyncRuntimeRequest::TakeRunningPaneProcessesForAdapter { limit, reply } => {
+                let result = self.service.take_running_pane_processes_for_adapter(limit);
                 let _ = reply.send(result);
                 false
             }
@@ -3813,7 +3811,7 @@ impl AsyncRuntimeSessionHandle {
             .await?
     }
 
-    /// Drains queued actor side effects for supervised async workers.
+    /// Drains queued actor side effects for supervised external adapters.
     ///
     /// The returned effects are already ordered by the runtime events that
     /// produced them. A zero limit is rejected so callers cannot accidentally
@@ -3957,13 +3955,13 @@ impl AsyncRuntimeSessionHandle {
     }
 
     /// Moves running pane process handles out of the serialized runtime owner
-    /// so async pane process workers can own PTY I/O.
-    pub async fn take_running_pane_processes_for_async_owner(
+    /// so external pane process adapters can own PTY I/O.
+    pub async fn take_running_pane_processes_for_adapter(
         &self,
         limit: usize,
     ) -> Result<Vec<(String, super::PaneProcess)>> {
         self.request(
-            |reply| AsyncRuntimeRequest::TakeRunningPaneProcessesForAsyncOwner { limit, reply },
+            |reply| AsyncRuntimeRequest::TakeRunningPaneProcessesForAdapter { limit, reply },
         )
         .await?
     }

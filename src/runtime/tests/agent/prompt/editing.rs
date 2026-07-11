@@ -1213,7 +1213,7 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
         .id
         .to_string();
     let mut process = service
-        .take_running_pane_process_for_async_owner(&pane_id)
+        .take_running_pane_process_for_adapter(&pane_id)
         .unwrap();
 
     let show = service

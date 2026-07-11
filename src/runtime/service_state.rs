@@ -1738,7 +1738,7 @@ pub struct RuntimeSessionService {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) async_owned_pane_processes: BTreeMap<String, u32>,
+    pub(super) detached_pane_primary_pids: BTreeMap<String, u32>,
     /// Stores the latest async runtime actor metrics snapshot when available.
     ///
     /// The actor-owned command path updates this snapshot before rendering

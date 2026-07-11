@@ -95,7 +95,7 @@ fn runtime_control_agent_shell_visibility_enters_and_exits_pane_subshell() {
         .id
         .to_string();
     let mut process = service
-        .take_running_pane_process_for_async_owner(&pane_id)
+        .take_running_pane_process_for_adapter(&pane_id)
         .unwrap();
     service
         .pane_screens
@@ -858,7 +858,7 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
         .id
         .to_string();
     let mut process = service
-        .take_running_pane_process_for_async_owner(&pane_id)
+        .take_running_pane_process_for_adapter(&pane_id)
         .unwrap();
 
     let show = service
@@ -1036,7 +1036,7 @@ fn runtime_agent_shell_slash_exit_exits_pane_subshell() {
         .id
         .to_string();
     let mut process = service
-        .take_running_pane_process_for_async_owner(&pane_id)
+        .take_running_pane_process_for_adapter(&pane_id)
         .unwrap();
     let show = service
         .execute_terminal_command(&primary, "agent-shell")

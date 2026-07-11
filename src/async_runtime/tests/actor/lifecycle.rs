@@ -912,7 +912,7 @@ async fn async_actor_dispatches_bootstrap_after_prompt_ready_output_event() {
 
     let client = async {
         let mut processes = handle
-            .take_running_pane_processes_for_async_owner(8)
+            .take_running_pane_processes_for_adapter(8)
             .await
             .unwrap();
         assert_eq!(processes.len(), 1);

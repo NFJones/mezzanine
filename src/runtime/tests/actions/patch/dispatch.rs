@@ -448,7 +448,7 @@ fn runtime_shell_command_dispatch_uses_action_timeout() {
         .id
         .to_string();
     let mut process = service
-        .take_running_pane_process_for_async_owner(&pane_id)
+        .take_running_pane_process_for_adapter(&pane_id)
         .unwrap();
     mark_test_pane_ready(&mut service, &pane_id);
     service.permission_policy_mut().set_approval_bypass(true);

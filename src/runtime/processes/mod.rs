@@ -121,7 +121,7 @@ impl RuntimeSessionService {
             false,
         )
         .map(|update| {
-            self.async_owned_pane_processes.remove(&pane_id);
+            self.detached_pane_primary_pids.remove(&pane_id);
             Some(update)
         })
     }
@@ -685,16 +685,13 @@ impl RuntimeSessionService {
     }
 
     /// Removes a live pane process from synchronous manager ownership for an
-    /// async pane process owner.
+    /// external pane process adapter.
     ///
     /// The session, screen, readiness, and lifecycle metadata stay in the
     /// runtime service; only PTY/process I/O ownership moves. Callers must start
-    /// a replacement async owner before routing user input away from the
+    /// a replacement external adapter before routing user input away from the
     /// compatibility manager path.
-    pub fn take_running_pane_process_for_async_owner(
-        &mut self,
-        pane_id: &str,
-    ) -> Result<PaneProcess> {
+    pub fn take_running_pane_process_for_adapter(&mut self, pane_id: &str) -> Result<PaneProcess> {
         self.require_live()?;
         let primary_pid = self.pane_processes.primary_pid(pane_id).ok_or_else(|| {
             MezError::new(
@@ -709,18 +706,18 @@ impl RuntimeSessionService {
                 .insert(pane_id.to_string(), current_working_directory);
         }
         let process = self.pane_processes.take_running_pane_process(pane_id)?;
-        self.async_owned_pane_processes
+        self.detached_pane_primary_pids
             .insert(pane_id.to_string(), primary_pid);
         Ok(process)
     }
 
-    /// Removes up to `limit` running pane processes for async pane workers.
+    /// Removes up to `limit` running pane processes for pane I/O adapters.
     ///
     /// This is the dynamic production handoff entry point used by the async
     /// pane-process supervisor. Pane state remains in the runtime service while
     /// process, PTY output, input, resize, and termination ownership moves to
-    /// one async worker per returned process.
-    pub fn take_running_pane_processes_for_async_owner(
+    /// one external adapter per returned process.
+    pub fn take_running_pane_processes_for_adapter(
         &mut self,
         limit: usize,
     ) -> Result<Vec<(String, PaneProcess)>> {
@@ -738,39 +735,39 @@ impl RuntimeSessionService {
             .collect::<Vec<_>>();
         let mut processes = Vec::with_capacity(pane_ids.len());
         for pane_id in pane_ids {
-            let process = self.take_running_pane_process_for_async_owner(&pane_id)?;
+            let process = self.take_running_pane_process_for_adapter(&pane_id)?;
             processes.push((pane_id, process));
         }
         Ok(processes)
     }
 
     /// Restores a pane process to synchronous manager ownership after a
-    /// cancelled async owner handoff.
-    pub fn restore_running_pane_process_from_async_owner(
+    /// cancelled external adapter handoff.
+    pub fn restore_running_pane_process_from_adapter(
         &mut self,
         pane_id: impl Into<String>,
         process: PaneProcess,
     ) -> Result<u32> {
         self.require_live()?;
         let pane_id = pane_id.into();
-        self.async_owned_pane_processes.remove(&pane_id);
+        self.detached_pane_primary_pids.remove(&pane_id);
         self.pane_processes
             .insert_running_pane_process(pane_id, process)
     }
 
-    /// Drains pane input operations deferred for async pane process workers.
+    /// Drains pane input operations deferred for external pane process adapters.
     pub fn drain_deferred_pane_inputs(&mut self) -> Vec<DeferredPaneInput> {
         std::mem::take(&mut self.deferred_pane_inputs)
     }
 
-    /// Drains coalesced pane resize operations deferred for async workers.
+    /// Drains coalesced pane resize operations deferred for external adapters.
     pub fn drain_deferred_pane_resizes(&mut self) -> Vec<(String, DeferredPaneResize)> {
         std::mem::take(&mut self.deferred_pane_resizes)
             .into_iter()
             .collect()
     }
 
-    /// Drains coalesced pane termination operations deferred for async workers.
+    /// Drains coalesced pane termination operations deferred for external adapters.
     pub fn drain_deferred_pane_terminations(&mut self) -> Vec<(String, DeferredPaneTermination)> {
         std::mem::take(&mut self.deferred_pane_terminations)
             .into_iter()
@@ -814,9 +811,9 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Returns true when a pane's PTY/process handle is owned by an async worker.
-    pub fn pane_process_is_async_owned(&self, pane_id: &str) -> bool {
-        self.async_owned_pane_processes.contains_key(pane_id)
+    /// Returns true when a pane's PTY/process handle is owned by an external adapter.
+    pub fn pane_process_is_adapter_owned(&self, pane_id: &str) -> bool {
+        self.detached_pane_primary_pids.contains_key(pane_id)
     }
 
     /// Runs the primary pid for live pane process operation for this subsystem.
@@ -827,11 +824,11 @@ impl RuntimeSessionService {
     pub(super) fn primary_pid_for_live_pane_process(&self, pane_id: &str) -> Option<u32> {
         self.pane_processes
             .primary_pid(pane_id)
-            .or_else(|| self.async_owned_pane_processes.get(pane_id).copied())
+            .or_else(|| self.detached_pane_primary_pids.get(pane_id).copied())
     }
 
     /// Writes pane input immediately when the synchronous manager still owns
-    /// the pane, or records it for the async pane worker when ownership has
+    /// the pane, or records it for the pane I/O adapter when ownership has
     /// moved across the actor boundary.
     pub(super) fn write_runtime_pane_input(&mut self, pane_id: &str, input: &[u8]) -> Result<()> {
         self.write_runtime_pane_input_with_priority(pane_id, input, false)
@@ -850,7 +847,7 @@ impl RuntimeSessionService {
         if self.pane_processes.contains_pane(pane_id) {
             return self.pane_processes.write_pane_input(pane_id, input);
         }
-        if self.pane_process_is_async_owned(pane_id) {
+        if self.pane_process_is_adapter_owned(pane_id) {
             self.deferred_pane_inputs.push(DeferredPaneInput {
                 pane_id: pane_id.to_string(),
                 bytes: input.to_vec(),
@@ -874,7 +871,7 @@ impl RuntimeSessionService {
     }
 
     /// Terminates a pane process immediately when manager-owned, or queues a
-    /// termination request for an async worker when ownership has moved.
+    /// termination request for an external adapter when ownership has moved.
     pub(super) fn terminate_runtime_pane_process(
         &mut self,
         pane_id: &str,
@@ -888,7 +885,7 @@ impl RuntimeSessionService {
                 .terminate_pane(pane_id)
                 .map(|process| process.is_some());
         }
-        if self.async_owned_pane_processes.remove(pane_id).is_some() {
+        if self.detached_pane_primary_pids.remove(pane_id).is_some() {
             self.deferred_pane_terminations
                 .insert(pane_id.to_string(), DeferredPaneTermination { force });
             return Ok(true);
@@ -911,10 +908,10 @@ impl RuntimeSessionService {
         Ok(terminated)
     }
 
-    /// Terminates all manager-owned and async-owned pane processes.
+    /// Terminates all manager-owned and adapter-owned pane processes.
     pub(super) fn terminate_all_runtime_pane_processes(&mut self, force: bool) -> Result<usize> {
         let mut pane_ids = self.pane_processes.tracked_pane_ids();
-        pane_ids.extend(self.async_owned_pane_processes.keys().cloned());
+        pane_ids.extend(self.detached_pane_primary_pids.keys().cloned());
         self.terminate_runtime_pane_processes(pane_ids.iter().map(String::as_str), force)
     }
 
@@ -1156,7 +1153,7 @@ impl RuntimeSessionService {
             .flat_map(|window| {
                 window.panes().iter().filter_map(|pane| {
                     if self.pane_processes.contains_pane(pane.id.as_str())
-                        || self.pane_process_is_async_owned(pane.id.as_str())
+                        || self.pane_process_is_adapter_owned(pane.id.as_str())
                     {
                         let size = self
                             .pane_process_size_for(window, pane.id.as_str())

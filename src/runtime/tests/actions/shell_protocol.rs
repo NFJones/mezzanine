@@ -416,7 +416,7 @@ fn runtime_agent_shell_exit_after_shell_transaction_uses_command_exit() {
         .id
         .to_string();
     let mut process = service
-        .take_running_pane_process_for_async_owner(&pane_id)
+        .take_running_pane_process_for_adapter(&pane_id)
         .unwrap();
     service
         .agent_shell_store_mut()
@@ -985,7 +985,7 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
         .id
         .to_string();
     let mut process = service
-        .take_running_pane_process_for_async_owner(&pane_id)
+        .take_running_pane_process_for_adapter(&pane_id)
         .unwrap();
     mark_test_pane_ready(&mut service, &pane_id);
     service.permission_policy_mut().set_approval_bypass(true);
@@ -1102,7 +1102,7 @@ fn runtime_shell_transaction_pending_payload_uses_short_start_timer() {
     service.start_initial_pane_process(Some("cat")).unwrap();
     let pane_id = "%1".to_string();
     let mut process = service
-        .take_running_pane_process_for_async_owner(&pane_id)
+        .take_running_pane_process_for_adapter(&pane_id)
         .unwrap();
     service.running_shell_transactions.insert(
         "marker-start".to_string(),

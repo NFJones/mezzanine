@@ -39,7 +39,7 @@ async fn async_pane_process_supervisor_claims_live_manager_panes() {
         assert_eq!(report.spawned_workers, 1);
         assert_eq!(
             handle
-                .take_running_pane_processes_for_async_owner(8)
+                .take_running_pane_processes_for_adapter(8)
                 .await
                 .unwrap()
                 .len(),

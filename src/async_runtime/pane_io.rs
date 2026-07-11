@@ -1336,7 +1336,7 @@ where
         report.polls = report.polls.saturating_add(1);
         let mut made_progress = false;
         let processes = match handle
-            .take_running_pane_processes_for_async_owner(config.take_limit)
+            .take_running_pane_processes_for_adapter(config.take_limit)
             .await
         {
             Ok(processes) => processes,

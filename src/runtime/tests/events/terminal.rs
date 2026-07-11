@@ -73,9 +73,7 @@ fn runtime_control_terminal_step_replays_completed_response_without_reapplying_i
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
-    let handed_off = service
-        .take_running_pane_processes_for_async_owner(1)
-        .unwrap();
+    let handed_off = service.take_running_pane_processes_for_adapter(1).unwrap();
     assert_eq!(handed_off.len(), 1);
     assert!(service.drain_deferred_pane_inputs().is_empty());
 

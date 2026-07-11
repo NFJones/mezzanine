@@ -225,7 +225,7 @@ impl RuntimeSessionService {
             control_idempotency,
             message_service,
             pane_processes,
-            async_owned_pane_processes: BTreeMap::new(),
+            detached_pane_primary_pids: BTreeMap::new(),
             async_runtime_metrics: None,
             runtime_metrics: Default::default(),
             pane_current_working_directories: BTreeMap::new(),

@@ -830,7 +830,7 @@ pub(super) enum AsyncRuntimeRequest {
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
-    TakeRunningPaneProcessesForAsyncOwner {
+    TakeRunningPaneProcessesForAdapter {
         /// Stores the limit value for this data structure.
         ///
         /// The field is part of structured state exchanged across this module
