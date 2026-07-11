@@ -7,7 +7,8 @@
 
 use super::*;
 use crate::runtime::{
-    PersistenceTarget, PersistenceWriteMode, RuntimeSideEffect, RuntimeTransition,
+    PersistenceTarget, PersistenceWriteMode, RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind,
+    RuntimeTransition,
 };
 
 impl RuntimeSessionService {
@@ -159,6 +160,39 @@ impl RuntimeSessionService {
             .map(|pipe| pipe.command_status())
             .transpose()
             .map(|status| status.flatten().is_some())
+    }
+
+    /// Builds the desired command-pane-pipe health timer transition.
+    pub(crate) fn pane_pipe_health_timer_transition(
+        &self,
+        pane_id: &str,
+        active_key: Option<RuntimeTimerKey>,
+        next_generation: u64,
+        delay_ms: u64,
+    ) -> Result<RuntimeTransition> {
+        if !self.command_pane_pipe_health_check_needed(pane_id)? {
+            return Ok(RuntimeTransition {
+                applied: false,
+                side_effects: active_key
+                    .map(|key| RuntimeSideEffect::CancelTimer { key })
+                    .into_iter()
+                    .collect(),
+            });
+        }
+        if active_key.is_some() {
+            return Ok(RuntimeTransition::default());
+        }
+        Ok(RuntimeTransition {
+            applied: false,
+            side_effects: vec![RuntimeSideEffect::ScheduleTimer {
+                key: RuntimeTimerKey::new(
+                    RuntimeTimerKind::PanePipeHealth,
+                    pane_id,
+                    next_generation,
+                ),
+                delay_ms,
+            }],
+        })
     }
 
     /// Returns pane ids that currently have command-backed pipes.

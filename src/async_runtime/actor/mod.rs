@@ -2065,33 +2065,26 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         pane_id: &str,
     ) -> Result<Vec<RuntimeSideEffect>> {
-        if !self
-            .service
-            .command_pane_pipe_health_check_needed(pane_id)?
-        {
-            return Ok(self
-                .timers
-                .pane_pipe_health
-                .remove(pane_id)
-                .map(|key| RuntimeSideEffect::CancelTimer { key })
-                .into_iter()
-                .collect());
-        }
-        if self.timers.pane_pipe_health.contains_key(pane_id) {
-            return Ok(Vec::new());
-        }
-        self.timers.next_pane_pipe_health_generation = self
+        let next_generation = self
             .timers
             .next_pane_pipe_health_generation
             .saturating_add(1);
-        Ok(vec![RuntimeSideEffect::ScheduleTimer {
-            key: RuntimeTimerKey::new(
-                RuntimeTimerKind::PanePipeHealth,
-                pane_id,
-                self.timers.next_pane_pipe_health_generation,
-            ),
-            delay_ms: DEFAULT_PANE_PIPE_HEALTH_DELAY_MS,
-        }])
+        let transition = self.service.pane_pipe_health_timer_transition(
+            pane_id,
+            self.timers.pane_pipe_health.get(pane_id).cloned(),
+            next_generation,
+            DEFAULT_PANE_PIPE_HEALTH_DELAY_MS,
+        )?;
+        if transition.side_effects.iter().any(|effect| {
+            matches!(
+                effect,
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::PanePipeHealth
+            )
+        }) {
+            self.timers.next_pane_pipe_health_generation = next_generation;
+        }
+        Ok(transition.side_effects)
     }
 
     /// Runs the command pane pipe health timer side effects operation for this subsystem.
