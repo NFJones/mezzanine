@@ -254,9 +254,11 @@ impl RuntimeSessionService {
             ),
         };
         let mut transition = self.runtime_transition_with_render(applied, render_reason);
-        transition
-            .side_effects
-            .extend(self.drain_registry_persistence_transition().side_effects);
+        if applied {
+            transition
+                .side_effects
+                .extend(self.registry_persistence_transition().side_effects);
+        }
         Ok(transition)
     }
 
@@ -504,7 +506,9 @@ impl RuntimeSessionService {
                 ),
             )?;
         }
-        self.persist_or_defer_registry_update_plan(update.registry_update.clone())?;
+        if !self.external_effects_use_adapter() {
+            self.persist_or_defer_registry_update_plan(update.registry_update.clone())?;
+        }
         Ok(update)
     }
 
