@@ -1259,20 +1259,8 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         key: &RuntimeTimerKey,
     ) -> Result<RuntimeTransition> {
-        let applied = self
-            .service
-            .queue_agent_provider_retry_task(&key.owner_id, key.generation)?;
-        let side_effects = if applied {
-            self.pending_provider_dispatch_side_effects()?
-        } else {
-            self.service
-                .clear_agent_provider_retry_attempt(key.owner_id.as_str());
-            Vec::new()
-        };
-        Ok(RuntimeTransition {
-            applied,
-            side_effects,
-        })
+        self.service
+            .apply_agent_provider_retry_timer_transition(&key.owner_id, key.generation)
     }
 
     /// Applies the timeout for an async provider worker claim lease.

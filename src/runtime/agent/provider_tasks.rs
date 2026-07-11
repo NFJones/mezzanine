@@ -766,6 +766,31 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
+    /// Applies a provider retry timer through the runtime-owned transition boundary.
+    pub(crate) fn apply_agent_provider_retry_timer_transition(
+        &mut self,
+        turn_id: &str,
+        attempt: u64,
+    ) -> Result<RuntimeTransition> {
+        if !self.queue_agent_provider_retry_task(turn_id, attempt)? {
+            self.clear_agent_provider_retry_attempt(turn_id);
+            return Ok(RuntimeTransition::default());
+        }
+        let task = self
+            .runtime_agent_provider_task(turn_id)
+            .ok_or_else(|| MezError::invalid_state("queued provider retry has no dispatch task"))?;
+        let agent_id = AgentId::opaque(task.agent_id).ok_or_else(|| {
+            MezError::invalid_state("queued provider retry has an invalid agent id")
+        })?;
+        Ok(RuntimeTransition {
+            applied: true,
+            side_effects: vec![RuntimeSideEffect::DispatchAgentProvider {
+                agent_id,
+                turn_id: task.turn_id,
+            }],
+        })
+    }
+
     /// Queues a running provider turn after automatic compaction recovery.
     ///
     /// This is used after an output-limit failure triggers model-backed
