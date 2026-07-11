@@ -825,6 +825,9 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "list-macros" => "list available macros and their #macro prompt names.",
         "list-sessions" => "list resumable saved agent conversations.",
         "list-skills" => "list available skills and their $skill prompt names.",
+        "sync-builtin-skills" => {
+            "synchronize managed built-in skills into the user configuration root."
+        }
         "list-modified-files" => "list files modified by this agent conversation.",
         "copy-context" => "copy the current model request context.",
         "copy-trace-log" => "copy the retained pane agent trace log.",
@@ -837,9 +840,13 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "init" => "generate a project instruction scaffold.",
         "logout" => "log out of a provider account.",
         "list-mcp" => "list configured MCP servers and tools.",
+        "issue" => "create, inspect, update, or delete project issue records.",
+        "show-issues" => "browse project issue records and open issue details.",
         "memory" => "inspect or change persistent memory enablement.",
+        "show-memories" => "browse durable memory records and open memory details.",
         "remember" => "generate durable memories from the current context or a statement.",
         "model" => "inspect or change model and reasoning settings.",
+        "thinking" => "inspect or toggle pane-local model reasoning visibility.",
         "latency" => "inspect or change latency/cost preference.",
         "routing" => "toggle pane-local automatic model sizing.",
         "directive" => "inspect or set a session-scoped developer-instruction addendum.",

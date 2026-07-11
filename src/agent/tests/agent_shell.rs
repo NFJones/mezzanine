@@ -77,6 +77,17 @@ fn agent_shell_executes_builtin_slash_command_effects() {
         body.contains("show the current agent shell session status."),
         "{body}"
     );
+    assert!(body.contains("| `/sync-builtin-skills` |"), "{body}");
+    assert!(
+        body.contains("synchronize managed built-in skills into the user configuration root."),
+        "{body}"
+    );
+    assert!(body.contains("| `/show-issues` |"), "{body}");
+    assert!(
+        body.contains("browse project issue records and open issue details."),
+        "{body}"
+    );
+    assert!(!body.contains("run the slash command."), "{body}");
     assert!(body.contains("| Copy and diagnostics |  |  |"), "{body}");
     assert!(body.contains("| Configuration |  |  |"), "{body}");
     assert!(body.contains("| Discovery |  |  |"), "{body}");
