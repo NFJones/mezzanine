@@ -1152,6 +1152,50 @@ impl RuntimeSessionService {
         self.append_lifecycle_event(EventKind::Diagnostic, payload)
     }
 
+    /// Applies one persistence-worker completion through the transport-neutral transition contract.
+    pub(crate) fn apply_persistence_transition(
+        &mut self,
+        event: crate::async_runtime::PersistenceEvent,
+    ) -> Result<crate::async_runtime::RuntimeTransition> {
+        let payload = match event {
+            crate::async_runtime::PersistenceEvent::Completed {
+                target,
+                path,
+                bytes,
+            } => serde_json::json!({
+                "worker": "async-persistence",
+                "target": target.as_str(),
+                "path": path.to_string_lossy(),
+                "state": "completed",
+                "bytes": bytes,
+            })
+            .to_string(),
+            crate::async_runtime::PersistenceEvent::Failed {
+                target,
+                path,
+                error,
+            } => {
+                if target == crate::async_runtime::PersistenceTarget::PanePipe {
+                    let _ =
+                        self.stop_file_pane_pipes_for_path(path.as_path(), "persistence-failed")?;
+                }
+                serde_json::json!({
+                    "worker": "async-persistence",
+                    "target": target.as_str(),
+                    "path": path.to_string_lossy(),
+                    "state": "failed",
+                    "error": error,
+                })
+                .to_string()
+            }
+        };
+        self.append_runtime_diagnostic_event(payload)?;
+        Ok(crate::async_runtime::RuntimeTransition {
+            applied: true,
+            side_effects: Vec::new(),
+        })
+    }
+
     /// Runs the message service operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

@@ -1750,44 +1750,7 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         persistence_event: PersistenceEvent,
     ) -> Result<RuntimeTransition> {
-        let payload = match persistence_event {
-            PersistenceEvent::Completed {
-                target,
-                path,
-                bytes,
-            } => serde_json::json!({
-                "worker": "async-persistence",
-                "target": target.as_str(),
-                "path": path.to_string_lossy(),
-                "state": "completed",
-                "bytes": bytes,
-            })
-            .to_string(),
-            PersistenceEvent::Failed {
-                target,
-                path,
-                error,
-            } => {
-                if target == PersistenceTarget::PanePipe {
-                    let _ = self
-                        .service
-                        .stop_file_pane_pipes_for_path(path.as_path(), "persistence-failed")?;
-                }
-                serde_json::json!({
-                    "worker": "async-persistence",
-                    "target": target.as_str(),
-                    "path": path.to_string_lossy(),
-                    "state": "failed",
-                    "error": error,
-                })
-                .to_string()
-            }
-        };
-        self.service.append_runtime_diagnostic_event(payload)?;
-        Ok(RuntimeTransition {
-            applied: true,
-            side_effects: Vec::new(),
-        })
+        self.service.apply_persistence_transition(persistence_event)
     }
 
     /// Runs the apply runtime agent provider event operation for this subsystem.
