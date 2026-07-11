@@ -187,6 +187,9 @@ impl RuntimeSessionService {
             || application.agent_prompt_inputs_applied > 0
             || application.view_refresh_required
             || application.full_redraw_required;
+        if applied {
+            side_effects.extend(self.registry_persistence_transition().side_effects);
+        }
         Ok((
             application,
             RuntimeTransition {
@@ -550,7 +553,9 @@ impl RuntimeSessionService {
             }
         }
 
-        self.persist_or_defer_registry_update()?;
+        if !self.external_effects_use_adapter() {
+            self.persist_or_defer_registry_update()?;
+        }
         Ok((report, deferred_pane_inputs))
     }
 
