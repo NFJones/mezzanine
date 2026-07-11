@@ -2381,6 +2381,100 @@ impl AsyncRuntimeSessionActor {
         })
     }
 
+    /// Applies timer scheduling bookkeeping in emitted side-effect order.
+    ///
+    /// A cancellation followed by a schedule for the same generation must
+    /// leave that timer active, while a schedule followed by cancellation must
+    /// remove it. Keeping this ordering here mirrors the timer worker contract.
+    fn track_runtime_timer_side_effect(&mut self, effect: &RuntimeSideEffect) {
+        let (key, scheduled) = match effect {
+            RuntimeSideEffect::ScheduleTimer { key, .. } => (key, true),
+            RuntimeSideEffect::CancelTimer { key } => (key, false),
+            _ => return,
+        };
+        match key.kind {
+            RuntimeTimerKind::ShellTransaction
+            | RuntimeTimerKind::ReadinessProbe
+            | RuntimeTimerKind::Bootstrap
+            | RuntimeTimerKind::FocusedShellHook => {
+                if scheduled {
+                    self.scheduled_shell_transaction_timers.insert(key.clone());
+                } else {
+                    self.scheduled_shell_transaction_timers.remove(key);
+                }
+            }
+            RuntimeTimerKind::IdleCleanup => {
+                if scheduled {
+                    self.scheduled_idle_cleanup_timer = Some(key.clone());
+                } else if self.scheduled_idle_cleanup_timer.as_ref() == Some(key) {
+                    self.scheduled_idle_cleanup_timer = None;
+                }
+            }
+            RuntimeTimerKind::ResizeDebounce => {
+                if scheduled {
+                    self.scheduled_resize_debounce_timers.insert(key.clone());
+                } else {
+                    self.scheduled_resize_debounce_timers.remove(key);
+                }
+            }
+            RuntimeTimerKind::CursorBlink => {
+                Self::track_owned_timer_key(
+                    &mut self.scheduled_cursor_blink_timers,
+                    key,
+                    scheduled,
+                );
+            }
+            RuntimeTimerKind::StatusRefresh => {
+                Self::track_owned_timer_key(
+                    &mut self.scheduled_status_refresh_timers,
+                    key,
+                    scheduled,
+                );
+            }
+            RuntimeTimerKind::ProviderPoll => {
+                if scheduled {
+                    self.scheduled_provider_poll_timer = Some(key.clone());
+                } else if self.scheduled_provider_poll_timer.as_ref() == Some(key) {
+                    self.scheduled_provider_poll_timer = None;
+                }
+            }
+            RuntimeTimerKind::ProviderRetry => {
+                Self::track_owned_timer_key(
+                    &mut self.scheduled_provider_retry_timers,
+                    key,
+                    scheduled,
+                );
+            }
+            RuntimeTimerKind::ProviderClaim => {
+                Self::track_owned_timer_key(
+                    &mut self.scheduled_provider_claim_timers,
+                    key,
+                    scheduled,
+                );
+            }
+            RuntimeTimerKind::PanePipeHealth => {
+                Self::track_owned_timer_key(
+                    &mut self.scheduled_pane_pipe_health_timers,
+                    key,
+                    scheduled,
+                );
+            }
+        }
+    }
+
+    /// Updates one owner-keyed timer generation without discarding effect order.
+    fn track_owned_timer_key(
+        timers: &mut std::collections::HashMap<String, RuntimeTimerKey>,
+        key: &RuntimeTimerKey,
+        scheduled: bool,
+    ) {
+        if scheduled {
+            timers.insert(key.owner_id.clone(), key.clone());
+        } else if timers.get(key.owner_id.as_str()) == Some(key) {
+            timers.remove(key.owner_id.as_str());
+        }
+    }
+
     /// Runs the queue runtime side effects operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -2407,145 +2501,13 @@ impl AsyncRuntimeSessionActor {
             .iter()
             .filter(|effect| matches!(effect, RuntimeSideEffect::CancelTimer { .. }))
             .count();
-        let scheduled_shell_timer_keys =
-            shell_transaction_schedule_timer_keys(side_effects.as_slice());
-        let cancelled_shell_timer_keys =
-            shell_transaction_cancel_timer_keys(side_effects.as_slice());
-        let scheduled_idle_cleanup_timer_key =
-            idle_cleanup_schedule_timer_key(side_effects.as_slice());
-        let cancelled_idle_cleanup_timer_keys =
-            idle_cleanup_cancel_timer_keys(side_effects.as_slice());
-        let scheduled_resize_debounce_timer_keys =
-            resize_debounce_schedule_timer_keys(side_effects.as_slice());
-        let cancelled_resize_debounce_timer_keys =
-            resize_debounce_cancel_timer_keys(side_effects.as_slice());
-        let scheduled_cursor_blink_timer_keys =
-            cursor_blink_schedule_timer_keys(side_effects.as_slice());
-        let cancelled_cursor_blink_timer_keys =
-            cursor_blink_cancel_timer_keys(side_effects.as_slice());
-        let scheduled_provider_poll_timer_key =
-            provider_poll_schedule_timer_key(side_effects.as_slice());
-        let cancelled_provider_poll_timer_keys =
-            provider_poll_cancel_timer_keys(side_effects.as_slice());
-        let scheduled_provider_retry_timer_keys =
-            provider_retry_schedule_timer_keys(side_effects.as_slice());
-        let cancelled_provider_retry_timer_keys =
-            provider_retry_cancel_timer_keys(side_effects.as_slice());
-        let scheduled_provider_claim_timer_keys =
-            provider_claim_schedule_timer_keys(side_effects.as_slice());
-        let cancelled_provider_claim_timer_keys =
-            provider_claim_cancel_timer_keys(side_effects.as_slice());
-        let scheduled_pane_pipe_health_timer_keys =
-            pane_pipe_health_schedule_timer_keys(side_effects.as_slice());
-        let cancelled_pane_pipe_health_timer_keys =
-            pane_pipe_health_cancel_timer_keys(side_effects.as_slice());
         let queued = side_effects.len();
         let should_notify = !side_effects.is_empty();
         for effect in &side_effects {
-            match effect {
-                RuntimeSideEffect::ScheduleTimer { key, .. }
-                    if key.kind == RuntimeTimerKind::StatusRefresh =>
-                {
-                    self.scheduled_status_refresh_timers
-                        .insert(key.owner_id.clone(), key.clone());
-                }
-                RuntimeSideEffect::CancelTimer { key }
-                    if key.kind == RuntimeTimerKind::StatusRefresh
-                        && self
-                            .scheduled_status_refresh_timers
-                            .get(key.owner_id.as_str())
-                            == Some(key) =>
-                {
-                    self.scheduled_status_refresh_timers
-                        .remove(key.owner_id.as_str());
-                }
-                _ => {}
-            }
+            self.track_runtime_timer_side_effect(effect);
         }
         for effect in side_effects {
             self.enqueue_runtime_side_effect(effect);
-        }
-        self.scheduled_shell_transaction_timers
-            .extend(scheduled_shell_timer_keys);
-        for key in cancelled_shell_timer_keys {
-            self.scheduled_shell_transaction_timers.remove(&key);
-        }
-        if let Some(key) = scheduled_idle_cleanup_timer_key {
-            self.scheduled_idle_cleanup_timer = Some(key);
-        }
-        for key in cancelled_idle_cleanup_timer_keys {
-            if self.scheduled_idle_cleanup_timer.as_ref() == Some(&key) {
-                self.scheduled_idle_cleanup_timer = None;
-            }
-        }
-        self.scheduled_resize_debounce_timers
-            .extend(scheduled_resize_debounce_timer_keys);
-        for key in cancelled_resize_debounce_timer_keys {
-            self.scheduled_resize_debounce_timers.remove(&key);
-        }
-        for key in scheduled_cursor_blink_timer_keys {
-            self.scheduled_cursor_blink_timers
-                .insert(key.owner_id.clone(), key);
-        }
-        for key in cancelled_cursor_blink_timer_keys {
-            if self
-                .scheduled_cursor_blink_timers
-                .get(key.owner_id.as_str())
-                == Some(&key)
-            {
-                self.scheduled_cursor_blink_timers
-                    .remove(key.owner_id.as_str());
-            }
-        }
-        if let Some(key) = scheduled_provider_poll_timer_key {
-            self.scheduled_provider_poll_timer = Some(key);
-        }
-        for key in cancelled_provider_poll_timer_keys {
-            if self.scheduled_provider_poll_timer.as_ref() == Some(&key) {
-                self.scheduled_provider_poll_timer = None;
-            }
-        }
-        for key in scheduled_provider_retry_timer_keys {
-            self.scheduled_provider_retry_timers
-                .insert(key.owner_id.clone(), key);
-        }
-        for key in cancelled_provider_retry_timer_keys {
-            if self
-                .scheduled_provider_retry_timers
-                .get(key.owner_id.as_str())
-                == Some(&key)
-            {
-                self.scheduled_provider_retry_timers
-                    .remove(key.owner_id.as_str());
-            }
-        }
-        for key in scheduled_provider_claim_timer_keys {
-            self.scheduled_provider_claim_timers
-                .insert(key.owner_id.clone(), key);
-        }
-        for key in cancelled_provider_claim_timer_keys {
-            if self
-                .scheduled_provider_claim_timers
-                .get(key.owner_id.as_str())
-                == Some(&key)
-            {
-                self.scheduled_provider_claim_timers
-                    .remove(key.owner_id.as_str());
-            }
-        }
-        for key in scheduled_pane_pipe_health_timer_keys {
-            self.scheduled_pane_pipe_health_timers
-                .insert(key.owner_id.clone(), key);
-        }
-        for key in cancelled_pane_pipe_health_timer_keys {
-            if self
-                .scheduled_pane_pipe_health_timers
-                .get(key.owner_id.as_str())
-                == Some(&key)
-            {
-                self.scheduled_pane_pipe_health_timers
-                    .remove(key.owner_id.as_str());
-            }
         }
         if should_notify {
             self.metrics.runtime_side_effects_queued = self
@@ -3743,147 +3705,34 @@ fn runtime_timer_kind_is_shell_transaction(kind: RuntimeTimerKind) -> bool {
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn shell_transaction_schedule_timer_keys(effects: &[RuntimeSideEffect]) -> Vec<RuntimeTimerKey> {
-    effects
-        .iter()
-        .filter_map(|effect| match effect {
-            RuntimeSideEffect::ScheduleTimer { key, .. }
-                if runtime_timer_kind_is_shell_transaction(key.kind) =>
-            {
-                Some(key.clone())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 /// Runs the shell transaction cancel timer keys operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn shell_transaction_cancel_timer_keys(effects: &[RuntimeSideEffect]) -> Vec<RuntimeTimerKey> {
-    effects
-        .iter()
-        .filter_map(|effect| match effect {
-            RuntimeSideEffect::CancelTimer { key }
-                if runtime_timer_kind_is_shell_transaction(key.kind) =>
-            {
-                Some(key.clone())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 /// Runs the idle cleanup schedule timer key operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn idle_cleanup_schedule_timer_key(effects: &[RuntimeSideEffect]) -> Option<RuntimeTimerKey> {
-    effects.iter().find_map(|effect| match effect {
-        RuntimeSideEffect::ScheduleTimer { key, .. }
-            if key.kind == RuntimeTimerKind::IdleCleanup =>
-        {
-            Some(key.clone())
-        }
-        _ => None,
-    })
-}
-
 /// Runs the idle cleanup cancel timer keys operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn idle_cleanup_cancel_timer_keys(effects: &[RuntimeSideEffect]) -> Vec<RuntimeTimerKey> {
-    effects
-        .iter()
-        .filter_map(|effect| match effect {
-            RuntimeSideEffect::CancelTimer { key } if key.kind == RuntimeTimerKind::IdleCleanup => {
-                Some(key.clone())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 /// Runs the resize debounce schedule timer keys operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn resize_debounce_schedule_timer_keys(effects: &[RuntimeSideEffect]) -> Vec<RuntimeTimerKey> {
-    effects
-        .iter()
-        .filter_map(|effect| match effect {
-            RuntimeSideEffect::ScheduleTimer { key, .. }
-                if key.kind == RuntimeTimerKind::ResizeDebounce =>
-            {
-                Some(key.clone())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 /// Runs the resize debounce cancel timer keys operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn resize_debounce_cancel_timer_keys(effects: &[RuntimeSideEffect]) -> Vec<RuntimeTimerKey> {
-    effects
-        .iter()
-        .filter_map(|effect| match effect {
-            RuntimeSideEffect::CancelTimer { key }
-                if key.kind == RuntimeTimerKind::ResizeDebounce =>
-            {
-                Some(key.clone())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 /// Runs the cursor blink schedule timer keys operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn cursor_blink_schedule_timer_keys(effects: &[RuntimeSideEffect]) -> Vec<RuntimeTimerKey> {
-    effects
-        .iter()
-        .filter_map(|effect| match effect {
-            RuntimeSideEffect::ScheduleTimer { key, .. }
-                if key.kind == RuntimeTimerKind::CursorBlink =>
-            {
-                Some(key.clone())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 /// Runs the cursor blink cancel timer keys operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn cursor_blink_cancel_timer_keys(effects: &[RuntimeSideEffect]) -> Vec<RuntimeTimerKey> {
-    effects
-        .iter()
-        .filter_map(|effect| match effect {
-            RuntimeSideEffect::CancelTimer { key } if key.kind == RuntimeTimerKind::CursorBlink => {
-                Some(key.clone())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 /// Runs the status refresh required by config operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -3956,151 +3805,34 @@ fn provider_failure_is_retryable(
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn provider_poll_schedule_timer_key(effects: &[RuntimeSideEffect]) -> Option<RuntimeTimerKey> {
-    effects.iter().rev().find_map(|effect| match effect {
-        RuntimeSideEffect::ScheduleTimer { key, .. }
-            if key.kind == RuntimeTimerKind::ProviderPoll =>
-        {
-            Some(key.clone())
-        }
-        _ => None,
-    })
-}
-
 /// Runs the provider poll cancel timer keys operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn provider_poll_cancel_timer_keys(effects: &[RuntimeSideEffect]) -> Vec<RuntimeTimerKey> {
-    effects
-        .iter()
-        .filter_map(|effect| match effect {
-            RuntimeSideEffect::CancelTimer { key }
-                if key.kind == RuntimeTimerKind::ProviderPoll =>
-            {
-                Some(key.clone())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 /// Runs the provider retry schedule timer keys operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn provider_retry_schedule_timer_keys(effects: &[RuntimeSideEffect]) -> Vec<RuntimeTimerKey> {
-    effects
-        .iter()
-        .filter_map(|effect| match effect {
-            RuntimeSideEffect::ScheduleTimer { key, .. }
-                if key.kind == RuntimeTimerKind::ProviderRetry =>
-            {
-                Some(key.clone())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 /// Runs the provider retry cancel timer keys operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn provider_retry_cancel_timer_keys(effects: &[RuntimeSideEffect]) -> Vec<RuntimeTimerKey> {
-    effects
-        .iter()
-        .filter_map(|effect| match effect {
-            RuntimeSideEffect::CancelTimer { key }
-                if key.kind == RuntimeTimerKind::ProviderRetry =>
-            {
-                Some(key.clone())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 /// Runs the provider claim schedule timer keys operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn provider_claim_schedule_timer_keys(effects: &[RuntimeSideEffect]) -> Vec<RuntimeTimerKey> {
-    effects
-        .iter()
-        .filter_map(|effect| match effect {
-            RuntimeSideEffect::ScheduleTimer { key, .. }
-                if key.kind == RuntimeTimerKind::ProviderClaim =>
-            {
-                Some(key.clone())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 /// Runs the provider claim cancel timer keys operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn provider_claim_cancel_timer_keys(effects: &[RuntimeSideEffect]) -> Vec<RuntimeTimerKey> {
-    effects
-        .iter()
-        .filter_map(|effect| match effect {
-            RuntimeSideEffect::CancelTimer { key }
-                if key.kind == RuntimeTimerKind::ProviderClaim =>
-            {
-                Some(key.clone())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 /// Runs the pane pipe health schedule timer keys operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn pane_pipe_health_schedule_timer_keys(effects: &[RuntimeSideEffect]) -> Vec<RuntimeTimerKey> {
-    effects
-        .iter()
-        .filter_map(|effect| match effect {
-            RuntimeSideEffect::ScheduleTimer { key, .. }
-                if key.kind == RuntimeTimerKind::PanePipeHealth =>
-            {
-                Some(key.clone())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 /// Runs the pane pipe health cancel timer keys operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn pane_pipe_health_cancel_timer_keys(effects: &[RuntimeSideEffect]) -> Vec<RuntimeTimerKey> {
-    effects
-        .iter()
-        .filter_map(|effect| match effect {
-            RuntimeSideEffect::CancelTimer { key }
-                if key.kind == RuntimeTimerKind::PanePipeHealth =>
-            {
-                Some(key.clone())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 /// Runs the side effects include registry persistence operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
