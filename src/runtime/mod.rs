@@ -280,7 +280,7 @@ mod render;
 /// declaration makes the boundary available to the crate.
 mod service;
 #[cfg(test)]
-pub(crate) use service::coalesce_deferred_config_file_writes;
+pub(crate) use service::coalesce_config_persistence_effects;
 /// Exposes the types module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -307,8 +307,8 @@ pub use agent_state::{
     RuntimeAutoSizingDispatch, RuntimeAutoSizingFallbackPolicy, RuntimeAutoSizingTargetProfile,
 };
 pub use deferred::{
-    AttachedClientStepApplication, DeferredConfigFileWrite, DeferredPaneInput,
-    DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination,
+    AttachedClientStepApplication, DeferredPaneInput, DeferredPanePipeWrite, DeferredPaneResize,
+    DeferredPaneTermination,
 };
 pub use env::{
     AuxiliarySocketKind, DEFAULT_SOCKET_NAME, MEZ_ENV_FIELD_SEPARATOR, PaneEnvironment, RuntimeEnv,

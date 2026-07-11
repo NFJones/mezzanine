@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use super::{ConfigScope, Size};
+use super::Size;
 
 /// Pane input write deferred for an async pane process owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,17 +47,6 @@ pub struct DeferredPanePipeWrite {
     pub path: PathBuf,
     /// Output bytes to append.
     pub bytes: Vec<u8>,
-}
-
-/// User or project configuration write deferred for async persistence.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeferredConfigFileWrite {
-    /// Destination configuration file.
-    pub path: PathBuf,
-    /// Configuration scope that determines the persistence file policy.
-    pub scope: ConfigScope,
-    /// Complete validated config text to replace at the destination.
-    pub text: String,
 }
 
 /// Effects applied while processing one attached terminal client step.

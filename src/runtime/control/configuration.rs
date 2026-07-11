@@ -573,12 +573,20 @@ impl RuntimeSessionService {
                         &previous_permission_policy,
                         method,
                     )?;
-                    self.deferred_config_file_writes
-                        .push(DeferredConfigFileWrite {
-                            path: target_path.clone(),
-                            scope: plan.scope,
-                            text: plan.text.clone(),
-                        });
+                    let persistence_target = match plan.scope {
+                        ConfigScope::Primary | ConfigScope::LiveOverride => {
+                            crate::runtime::PersistenceTarget::Config
+                        }
+                        ConfigScope::ProjectOverlay => {
+                            crate::runtime::PersistenceTarget::ProjectConfig
+                        }
+                    };
+                    self.queued_config_effects.push(RuntimeSideEffect::Persist {
+                        target: persistence_target,
+                        path: target_path.clone(),
+                        bytes: plan.text.clone().into_bytes(),
+                        mode: crate::runtime::PersistenceWriteMode::Replace,
+                    });
                 }
                 Err(error) => {
                     self.config_layers = previous_layers;

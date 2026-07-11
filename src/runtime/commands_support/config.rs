@@ -8,11 +8,11 @@
 
 use super::super::{
     CommandInvocation, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,
-    ConfigMutationValue, ConfigPaths, ConfigScope, DeferredConfigFileWrite, EventKind, MezError,
-    PathBuf, Result, RuntimeSessionService, UiThemeDefinition, Value, builtin_ui_theme_definition,
-    compose_effective_config, fs, json_escape, persist_config_text, plan_config_mutation,
-    resolve_ui_theme, runtime_config_apply_event_payload, runtime_effective_config_value,
-    validate_config_text,
+    ConfigMutationValue, ConfigPaths, ConfigScope, EventKind, MezError, PathBuf, Result,
+    RuntimeSessionService, RuntimeSideEffect, UiThemeDefinition, Value,
+    builtin_ui_theme_definition, compose_effective_config, fs, json_escape, persist_config_text,
+    plan_config_mutation, resolve_ui_theme, runtime_config_apply_event_payload,
+    runtime_effective_config_value, validate_config_text,
 };
 use super::{
     TERMINAL_COMMAND_LIVE_OVERRIDE_LAYER, runtime_expand_user_path, runtime_positional_args,
@@ -429,11 +429,12 @@ pub(in crate::runtime) fn runtime_apply_persisted_config_mutation_batch(
                 )?;
                 if service.external_effects_use_adapter() {
                     service
-                        .deferred_config_file_writes
-                        .push(DeferredConfigFileWrite {
+                        .queued_config_effects
+                        .push(RuntimeSideEffect::Persist {
+                            target: crate::runtime::PersistenceTarget::Config,
                             path: path.clone(),
-                            scope: ConfigScope::Primary,
-                            text: batch.text.clone(),
+                            bytes: batch.text.clone().into_bytes(),
+                            mode: crate::runtime::PersistenceWriteMode::Replace,
                         });
                 }
                 service.session.advance_config_generation();

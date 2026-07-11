@@ -17,13 +17,13 @@ use super::{
     DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS, DEFAULT_AGENT_LOOP_LIMIT,
     DEFAULT_AGENT_ROUTING, DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES,
     DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH, DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW,
-    DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT, DEFAULT_PANE_TERM, DEFAULT_SUBAGENT_WAIT_POLICY,
-    DeferredConfigFileWrite, EventKind, EventLog, FocusedShellHookQueue, HostClipboard,
-    KeyBindings, MEZ_ENV_FIELD_SEPARATOR, McpRegistry, McpServerStatus, McpStartupTransportPlan,
-    MemoryRecord, MessageService, MezError, ModelProfile, ModelTokenUsage, ModelTokenUsageKey,
-    PaneProcessManager, PaneReadinessOverrideStore, PasteBuffers, Path, PathBuf,
-    PermissionAuthorityChange, PermissionPolicy, ProjectTrustStore, RenderInvalidationReason,
-    Result, RuntimeConfigApplyReport, RuntimeHttpMcpTransportState, RuntimeLifecycleState,
+    DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT, DEFAULT_PANE_TERM, DEFAULT_SUBAGENT_WAIT_POLICY, EventKind,
+    EventLog, FocusedShellHookQueue, HostClipboard, KeyBindings, MEZ_ENV_FIELD_SEPARATOR,
+    McpRegistry, McpServerStatus, McpStartupTransportPlan, MemoryRecord, MessageService, MezError,
+    ModelProfile, ModelTokenUsage, ModelTokenUsageKey, PaneProcessManager,
+    PaneReadinessOverrideStore, PasteBuffers, Path, PathBuf, PermissionAuthorityChange,
+    PermissionPolicy, ProjectTrustStore, RenderInvalidationReason, Result,
+    RuntimeConfigApplyReport, RuntimeHttpMcpTransportState, RuntimeLifecycleState,
     RuntimeMcpRetryReport, RuntimeMcpTransportSet, RuntimeModelProfileOverrideStore,
     RuntimePresetRegistry, RuntimeProviderConfig, RuntimeProviderRegistry,
     RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSideEffect, RuntimeStatusPillCache,
@@ -105,19 +105,36 @@ fn runtime_status_refresh_interval_ms_for_config(config: &TerminalClientLoopConf
     }
 }
 
-/// Keeps only the final replacement text for each deferred config file target.
-pub(crate) fn coalesce_deferred_config_file_writes(
-    writes: Vec<DeferredConfigFileWrite>,
-) -> Vec<DeferredConfigFileWrite> {
-    let mut coalesced = Vec::<DeferredConfigFileWrite>::new();
-    for write in writes {
-        if let Some(existing) = coalesced
-            .iter_mut()
-            .find(|existing| existing.scope == write.scope && existing.path == write.path)
-        {
-            *existing = write;
+/// Keeps only the final replacement effect for each configuration target.
+pub(crate) fn coalesce_config_persistence_effects(
+    effects: Vec<RuntimeSideEffect>,
+) -> Vec<RuntimeSideEffect> {
+    let mut coalesced = Vec::<RuntimeSideEffect>::new();
+    for effect in effects {
+        let RuntimeSideEffect::Persist {
+            target,
+            path,
+            mode: crate::runtime::PersistenceWriteMode::Replace,
+            ..
+        } = &effect
+        else {
+            coalesced.push(effect);
+            continue;
+        };
+        if let Some(existing) = coalesced.iter_mut().find(|existing| {
+            matches!(
+                existing,
+                RuntimeSideEffect::Persist {
+                    target: existing_target,
+                    path: existing_path,
+                    mode: crate::runtime::PersistenceWriteMode::Replace,
+                    ..
+                } if existing_target == target && existing_path == path
+            )
+        }) {
+            *existing = effect;
         } else {
-            coalesced.push(write);
+            coalesced.push(effect);
         }
     }
     coalesced
@@ -279,7 +296,6 @@ impl RuntimeSessionService {
             deferred_pane_pipe_writes: Vec::new(),
             queued_audit_effects: Vec::new(),
             queued_transcript_effects: Vec::new(),
-            deferred_config_file_writes: Vec::new(),
             queued_config_effects: Vec::new(),
             deferred_transcript_next_sequences: BTreeMap::new(),
             pane_screens: BTreeMap::new(),
@@ -2541,26 +2557,11 @@ impl RuntimeSessionService {
 
     /// Drains configuration persistence through one transport-neutral runtime transition.
     pub(crate) fn drain_config_persistence_transition(&mut self) -> RuntimeTransition {
-        let coalesced =
-            coalesce_deferred_config_file_writes(self.drain_deferred_config_file_writes());
-        let mut side_effects = std::mem::take(&mut self.queued_config_effects);
-        side_effects.extend(coalesced.into_iter().map(|write| {
-            let target = match write.scope {
-                ConfigScope::Primary | ConfigScope::LiveOverride => {
-                    crate::runtime::PersistenceTarget::Config
-                }
-                ConfigScope::ProjectOverlay => crate::runtime::PersistenceTarget::ProjectConfig,
-            };
-            RuntimeSideEffect::Persist {
-                target,
-                path: write.path,
-                bytes: write.text.into_bytes(),
-                mode: crate::runtime::PersistenceWriteMode::Replace,
-            }
-        }));
         RuntimeTransition {
             applied: false,
-            side_effects,
+            side_effects: coalesce_config_persistence_effects(std::mem::take(
+                &mut self.queued_config_effects,
+            )),
         }
     }
 
@@ -2576,11 +2577,6 @@ impl RuntimeSessionService {
             applied: false,
             side_effects,
         }
-    }
-
-    /// Drains user/project config writes queued for async persistence.
-    pub(crate) fn drain_deferred_config_file_writes(&mut self) -> Vec<DeferredConfigFileWrite> {
-        std::mem::take(&mut self.deferred_config_file_writes)
     }
 
     /// Runs the project trust store operation for this subsystem.

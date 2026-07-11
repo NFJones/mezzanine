@@ -27,7 +27,7 @@ use crate::agent::{
 use crate::control::{decode_control_frame, encode_control_body};
 use crate::runtime::PaneResizeUpdate;
 #[cfg(test)]
-use crate::runtime::{DeferredConfigFileWrite, coalesce_deferred_config_file_writes};
+use crate::runtime::coalesce_config_persistence_effects;
 
 // Serialized runtime actor and handle implementation.
 
@@ -3605,7 +3605,7 @@ impl AsyncRuntimeSessionHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ConfigScope;
+    use crate::runtime::{PersistenceTarget, PersistenceWriteMode};
     use std::path::PathBuf;
 
     /// Verifies that the provider worker watchdog cannot fire before the
@@ -3633,34 +3633,41 @@ mod tests {
     /// for each file instead of queueing a long series of superseded full-file
     /// replacements.
     #[test]
-    fn coalesce_deferred_config_file_writes_keeps_latest_text_per_target() {
+    fn coalesce_config_persistence_effects_keeps_latest_text_per_target() {
         let config_path = PathBuf::from("/tmp/mez/config.toml");
         let project_path = PathBuf::from("/tmp/project/.mezzanine/config.toml");
 
-        let coalesced = coalesce_deferred_config_file_writes(vec![
-            DeferredConfigFileWrite {
+        let coalesced = coalesce_config_persistence_effects(vec![
+            RuntimeSideEffect::Persist {
+                target: PersistenceTarget::Config,
                 path: config_path.clone(),
-                scope: ConfigScope::Primary,
-                text: "first".to_string(),
+                bytes: b"first".to_vec(),
+                mode: PersistenceWriteMode::Replace,
             },
-            DeferredConfigFileWrite {
+            RuntimeSideEffect::Persist {
+                target: PersistenceTarget::ProjectConfig,
                 path: project_path.clone(),
-                scope: ConfigScope::ProjectOverlay,
-                text: "project".to_string(),
+                bytes: b"project".to_vec(),
+                mode: PersistenceWriteMode::Replace,
             },
-            DeferredConfigFileWrite {
+            RuntimeSideEffect::Persist {
+                target: PersistenceTarget::Config,
                 path: config_path.clone(),
-                scope: ConfigScope::Primary,
-                text: "second".to_string(),
+                bytes: b"second".to_vec(),
+                mode: PersistenceWriteMode::Replace,
             },
         ]);
 
         assert_eq!(coalesced.len(), 2);
-        assert_eq!(coalesced[0].path, config_path);
-        assert_eq!(coalesced[0].scope, ConfigScope::Primary);
-        assert_eq!(coalesced[0].text, "second");
-        assert_eq!(coalesced[1].path, project_path);
-        assert_eq!(coalesced[1].scope, ConfigScope::ProjectOverlay);
-        assert_eq!(coalesced[1].text, "project");
+        assert!(matches!(
+            &coalesced[0],
+            RuntimeSideEffect::Persist { target: PersistenceTarget::Config, path, bytes, .. }
+                if path == &config_path && bytes == b"second"
+        ));
+        assert!(matches!(
+            &coalesced[1],
+            RuntimeSideEffect::Persist { target: PersistenceTarget::ProjectConfig, path, bytes, .. }
+                if path == &project_path && bytes == b"project"
+        ));
     }
 }

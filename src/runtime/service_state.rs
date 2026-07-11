@@ -14,15 +14,15 @@ use super::{
     ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentScheduler, AgentShellStore,
     AgentShellVisibility, AgentTranscriptStore, AgentTurnExecution, AgentTurnLedger,
     AgentTurnState, AuditLog, AuthStore, BTreeMap, BTreeSet, BlockedApprovalQueue, ConfigLayer,
-    ControlIdempotencyCache, CopyMode, DeferredConfigFileWrite, DeferredPaneInput,
-    DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination, DiscoveredInstructionFile,
-    EnvironmentSignature, EventLog, FocusedShellHookQueue, HookDefinition, HookEvent,
-    HookExecutionPlan, HookExecutionResult, HookFailureKind, HostClipboard, KeyBindings, KeyChord,
-    McpRegistry, McpServerStatus, McpStartupPlan, McpStdioConnection, McpToolCallPlan,
-    McpToolCallResponse, MessageService, MezError, ModelProfile, ModelRequest, ModelResponse,
-    ModelTokenUsage, ModelTokenUsageKey, PaneGeometry, PaneId, PaneProcessManager,
-    PaneReadinessOverrideStore, PaneReadinessState, PasteBuffers, PathBuf, PermissionPolicy,
-    ProjectTrustStore, ProviderQuotaUsage, Result, RuntimeSideEffect, RuntimeStatusPillCache,
+    ControlIdempotencyCache, CopyMode, DeferredPaneInput, DeferredPanePipeWrite,
+    DeferredPaneResize, DeferredPaneTermination, DiscoveredInstructionFile, EnvironmentSignature,
+    EventLog, FocusedShellHookQueue, HookDefinition, HookEvent, HookExecutionPlan,
+    HookExecutionResult, HookFailureKind, HostClipboard, KeyBindings, KeyChord, McpRegistry,
+    McpServerStatus, McpStartupPlan, McpStdioConnection, McpToolCallPlan, McpToolCallResponse,
+    MessageService, MezError, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
+    ModelTokenUsageKey, PaneGeometry, PaneId, PaneProcessManager, PaneReadinessOverrideStore,
+    PaneReadinessState, PasteBuffers, PathBuf, PermissionPolicy, ProjectTrustStore,
+    ProviderQuotaUsage, Result, RuntimeSideEffect, RuntimeStatusPillCache,
     RuntimeStatusPillDefinition, ScopeRegistry, Session, SessionApprovalStore, SessionMemoryStore,
     SessionRecord, SessionRegistry, Size, SnapshotRepository, SplitDirection, SubagentProfile,
     SubagentScopeDeclaration, TerminalCursorStyle, TerminalFramePosition, TerminalFrameStyle,
@@ -1817,7 +1817,6 @@ pub struct RuntimeSessionService {
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) deferred_config_file_writes: Vec<DeferredConfigFileWrite>,
     /// Stores the deferred project instruction writes value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
