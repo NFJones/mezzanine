@@ -2165,21 +2165,7 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         shutdown: ShutdownEvent,
     ) -> Result<RuntimeTransition> {
-        let applied = if shutdown.failed {
-            self.service
-                .apply_supervisor_failure_event(shutdown.reason, shutdown.force)?
-        } else {
-            self.service
-                .apply_supervisor_shutdown_event(shutdown.reason, shutdown.force)?
-        };
-        Ok(RuntimeTransition {
-            applied,
-            side_effects: if applied {
-                self.render_side_effects(RenderInvalidationReason::FullRedraw)
-            } else {
-                Vec::new()
-            },
-        })
+        self.service.apply_shutdown_transition(shutdown)
     }
 
     /// Applies timer scheduling bookkeeping in emitted side-effect order.

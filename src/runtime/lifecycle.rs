@@ -9,7 +9,7 @@ use super::{
     Size, json_escape,
 };
 use crate::async_runtime::{
-    ClientEvent, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition,
+    ClientEvent, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition, ShutdownEvent,
 };
 use crate::session::ClientTerminalDescriptor;
 
@@ -288,6 +288,35 @@ impl RuntimeSessionService {
         )?;
         self.persist_or_defer_registry_update()?;
         Ok(())
+    }
+
+    /// Applies supervisor shutdown through the transport-neutral transition contract.
+    pub(crate) fn apply_shutdown_transition(
+        &mut self,
+        shutdown: ShutdownEvent,
+    ) -> Result<RuntimeTransition> {
+        let applied = if shutdown.failed {
+            self.apply_supervisor_failure_event(shutdown.reason, shutdown.force)?
+        } else {
+            self.apply_supervisor_shutdown_event(shutdown.reason, shutdown.force)?
+        };
+        let side_effects = if applied {
+            self.session
+                .clients()
+                .iter()
+                .filter(|client| client.state == crate::session::ClientState::Attached)
+                .map(|client| RuntimeSideEffect::RenderClient {
+                    client_id: client.id.clone(),
+                    reason: RenderInvalidationReason::FullRedraw,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Ok(RuntimeTransition {
+            applied,
+            side_effects,
+        })
     }
 
     /// Applies a supervisor-originated shutdown event delivered through async
