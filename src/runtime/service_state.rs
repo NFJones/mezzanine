@@ -13,24 +13,23 @@ use super::provider_registry::{RuntimePresetRegistry, RuntimeProviderRegistry};
 use super::{
     ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentScheduler, AgentShellStore,
     AgentShellVisibility, AgentTranscriptStore, AgentTurnExecution, AgentTurnLedger,
-    AgentTurnState, AuditDeferredWrite, AuditLog, AuthStore, BTreeMap, BTreeSet,
-    BlockedApprovalQueue, ConfigLayer, ControlIdempotencyCache, CopyMode,
-    DeferredAgentPromptHistoryWrite, DeferredAgentTranscriptWrite,
-    DeferredCommandPromptHistoryWrite, DeferredConfigFileWrite, DeferredPaneInput,
-    DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination, DeferredProjectConfigWrite,
-    DeferredProjectInstructionWrite, DiscoveredInstructionFile, EnvironmentSignature, EventLog,
-    FocusedShellHookQueue, HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult,
-    HookFailureKind, HostClipboard, KeyBindings, KeyChord, McpRegistry, McpServerStatus,
-    McpStartupPlan, McpStdioConnection, McpToolCallPlan, McpToolCallResponse, MessageService,
-    MezError, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey,
-    PaneGeometry, PaneId, PaneProcessManager, PaneReadinessOverrideStore, PaneReadinessState,
-    PasteBuffers, PathBuf, PermissionPolicy, ProjectTrustStore, ProviderQuotaUsage, Result,
-    RuntimeSideEffect, RuntimeStatusPillCache, RuntimeStatusPillDefinition, ScopeRegistry, Session,
-    SessionApprovalStore, SessionMemoryStore, SessionRecord, SessionRegistry, Size,
-    SnapshotRepository, SplitDirection, SubagentProfile, SubagentScopeDeclaration,
-    TerminalCursorStyle, TerminalFramePosition, TerminalFrameStyle, TerminalScreen,
-    ToolDiscoveryCache, UiTheme, WindowFrameAction, WindowId, execute_streamable_http_exchange,
-    mcp_tools_call_operation,
+    AgentTurnState, AuditLog, AuthStore, BTreeMap, BTreeSet, BlockedApprovalQueue, ConfigLayer,
+    ControlIdempotencyCache, CopyMode, DeferredAgentPromptHistoryWrite,
+    DeferredAgentTranscriptWrite, DeferredCommandPromptHistoryWrite, DeferredConfigFileWrite,
+    DeferredPaneInput, DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination,
+    DeferredProjectConfigWrite, DeferredProjectInstructionWrite, DiscoveredInstructionFile,
+    EnvironmentSignature, EventLog, FocusedShellHookQueue, HookDefinition, HookEvent,
+    HookExecutionPlan, HookExecutionResult, HookFailureKind, HostClipboard, KeyBindings, KeyChord,
+    McpRegistry, McpServerStatus, McpStartupPlan, McpStdioConnection, McpToolCallPlan,
+    McpToolCallResponse, MessageService, MezError, ModelProfile, ModelRequest, ModelResponse,
+    ModelTokenUsage, ModelTokenUsageKey, PaneGeometry, PaneId, PaneProcessManager,
+    PaneReadinessOverrideStore, PaneReadinessState, PasteBuffers, PathBuf, PermissionPolicy,
+    ProjectTrustStore, ProviderQuotaUsage, Result, RuntimeSideEffect, RuntimeStatusPillCache,
+    RuntimeStatusPillDefinition, ScopeRegistry, Session, SessionApprovalStore, SessionMemoryStore,
+    SessionRecord, SessionRegistry, Size, SnapshotRepository, SplitDirection, SubagentProfile,
+    SubagentScopeDeclaration, TerminalCursorStyle, TerminalFramePosition, TerminalFrameStyle,
+    TerminalScreen, ToolDiscoveryCache, UiTheme, WindowFrameAction, WindowId,
+    execute_streamable_http_exchange, mcp_tools_call_operation,
 };
 use crate::error::MezErrorKind;
 use crate::layout::PaneTitleSource;
@@ -1806,11 +1805,11 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) deferred_pane_pipe_writes: Vec<DeferredPanePipeWrite>,
-    /// Stores the deferred audit writes value for this data structure.
+    /// Stores audit persistence effects awaiting adapter execution.
     ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) deferred_audit_writes: Vec<AuditDeferredWrite>,
+    /// The runtime retains canonical effects rather than audit-specific
+    /// compatibility records after the audit writer encodes each record.
+    pub(super) queued_audit_effects: Vec<RuntimeSideEffect>,
     /// Stores the deferred agent transcript writes value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

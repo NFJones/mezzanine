@@ -125,6 +125,15 @@ pub(crate) fn coalesce_deferred_config_file_writes(
     coalesced
 }
 
+/// Converts one encoded audit write into its canonical persistence effect.
+fn audit_persistence_effect(write: AuditDeferredWrite) -> RuntimeSideEffect {
+    RuntimeSideEffect::PersistAuditLog {
+        path: write.path,
+        bytes: write.bytes,
+        retention: write.retention,
+    }
+}
+
 /// Returns persisted per-model token accounting with legacy aggregate fallback.
 fn runtime_agent_token_usage_by_model_from_metadata(
     metadata: &AgentSessionMetadata,
@@ -270,7 +279,7 @@ impl RuntimeSessionService {
             deferred_pane_resizes: BTreeMap::new(),
             deferred_pane_terminations: BTreeMap::new(),
             deferred_pane_pipe_writes: Vec::new(),
-            deferred_audit_writes: Vec::new(),
+            queued_audit_effects: Vec::new(),
             deferred_agent_transcript_writes: Vec::new(),
             deferred_agent_prompt_history_writes: Vec::new(),
             deferred_command_prompt_history_writes: Vec::new(),
@@ -2104,7 +2113,8 @@ impl RuntimeSessionService {
     pub fn set_audit_log(&mut self, mut audit_log: AuditLog) {
         if let Some(existing) = self.audit_log.as_mut() {
             let pending = existing.drain_deferred_writes();
-            self.deferred_audit_writes.extend(pending);
+            self.queued_audit_effects
+                .extend(pending.into_iter().map(audit_persistence_effect));
         }
         audit_log.set_defer_writes(self.external_effects_use_adapter());
         self.audit_log = Some(audit_log);
@@ -2114,7 +2124,8 @@ impl RuntimeSessionService {
     fn clear_audit_log(&mut self) {
         if let Some(existing) = self.audit_log.as_mut() {
             let pending = existing.drain_deferred_writes();
-            self.deferred_audit_writes.extend(pending);
+            self.queued_audit_effects
+                .extend(pending.into_iter().map(audit_persistence_effect));
         }
         self.audit_log = None;
     }
@@ -2128,29 +2139,16 @@ impl RuntimeSessionService {
         self.audit_log.as_ref()
     }
 
-    /// Drains audit JSONL payloads queued for async persistence.
-    pub(crate) fn drain_deferred_audit_writes(&mut self) -> Vec<AuditDeferredWrite> {
-        if let Some(audit_log) = self.audit_log.as_mut() {
-            let pending = audit_log.drain_deferred_writes();
-            self.deferred_audit_writes.extend(pending);
-        }
-        std::mem::take(&mut self.deferred_audit_writes)
-    }
-
     /// Drains queued audit persistence through the transport-neutral transition contract.
     pub(crate) fn drain_audit_persistence_transition(&mut self) -> RuntimeTransition {
-        let side_effects = self
-            .drain_deferred_audit_writes()
-            .into_iter()
-            .map(|write| RuntimeSideEffect::PersistAuditLog {
-                path: write.path,
-                bytes: write.bytes,
-                retention: write.retention,
-            })
-            .collect();
+        if let Some(audit_log) = self.audit_log.as_mut() {
+            let pending = audit_log.drain_deferred_writes();
+            self.queued_audit_effects
+                .extend(pending.into_iter().map(audit_persistence_effect));
+        }
         RuntimeTransition {
             applied: false,
-            side_effects,
+            side_effects: std::mem::take(&mut self.queued_audit_effects),
         }
     }
 
