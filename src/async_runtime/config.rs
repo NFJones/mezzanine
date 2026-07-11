@@ -268,11 +268,6 @@ pub struct AsyncRuntimeSessionActor {
     /// The generation lets the actor ignore stale claim timeout events from
     /// earlier workers for the same turn.
     pub(super) next_provider_claim_timer_generation: u64,
-    /// Stores the provider retry attempts value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) provider_retry_attempts: HashMap<String, u32>,
     /// Tracks turns that already used automatic output-limit compaction.
     ///
     /// This bounds recovery for Responses API incomplete/max_output_tokens

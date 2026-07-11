@@ -377,6 +377,7 @@ impl RuntimeSessionService {
             pane_foreground_process_groups: BTreeMap::new(),
             program_owned_pane_titles: BTreeMap::new(),
             pending_agent_provider_tasks: BTreeSet::new(),
+            agent_provider_retry_attempts: BTreeMap::new(),
             claimed_agent_provider_tasks: BTreeMap::new(),
             subagent_task_routes: BTreeMap::new(),
             subagent_window_ids: BTreeSet::new(),

@@ -2401,6 +2401,8 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) pending_agent_provider_tasks: BTreeSet<String>,
+    /// Retry attempts keyed by provider turn id.
+    pub(super) agent_provider_retry_attempts: BTreeMap<String, u32>,
     /// Stores provider tasks claimed by async workers but not yet settled.
     ///
     /// Claimed tasks are removed from `pending_agent_provider_tasks`, so this

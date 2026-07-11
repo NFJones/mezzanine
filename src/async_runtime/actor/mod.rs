@@ -199,7 +199,6 @@ impl AsyncRuntimeSessionActor {
                 scheduled_provider_retry_timers: Default::default(),
                 scheduled_provider_claim_timers: Default::default(),
                 next_provider_claim_timer_generation: 0,
-                provider_retry_attempts: Default::default(),
                 provider_output_limit_compaction_turns: Default::default(),
                 scheduled_pane_pipe_health_timers: Default::default(),
                 next_pane_pipe_health_timer_generation: 0,
@@ -1303,7 +1302,8 @@ impl AsyncRuntimeSessionActor {
         let side_effects = if applied {
             self.pending_provider_dispatch_side_effects()?
         } else {
-            self.provider_retry_attempts.remove(key.owner_id.as_str());
+            self.service
+                .clear_agent_provider_retry_attempt(key.owner_id.as_str());
             Vec::new()
         };
         Ok(RuntimeTransition {
@@ -1413,8 +1413,8 @@ impl AsyncRuntimeSessionActor {
     /// valid path to progress.
     fn actor_owned_agent_progress_turn_ids(&self) -> std::collections::BTreeSet<String> {
         let mut turn_ids: std::collections::BTreeSet<String> = self
-            .provider_retry_attempts
-            .keys()
+            .service
+            .agent_provider_retry_turn_ids()
             .chain(self.scheduled_provider_retry_timers.keys())
             .cloned()
             .collect();
@@ -1669,7 +1669,8 @@ impl AsyncRuntimeSessionActor {
                         .service
                         .queue_agent_output_limit_recovery_compaction(&agent_id, &turn_id, &error)?
                     {
-                        self.provider_retry_attempts.remove(turn_id.as_str());
+                        self.service
+                            .clear_agent_provider_retry_attempt(turn_id.as_str());
                         self.scheduled_provider_retry_timers
                             .remove(turn_id.as_str());
                         self.provider_output_limit_compaction_turns
@@ -1684,7 +1685,8 @@ impl AsyncRuntimeSessionActor {
                         });
                     }
                 }
-                self.provider_retry_attempts.remove(turn_id.as_str());
+                self.service
+                    .clear_agent_provider_retry_attempt(turn_id.as_str());
                 self.scheduled_provider_retry_timers
                     .remove(turn_id.as_str());
                 self.provider_output_limit_compaction_turns
@@ -1716,7 +1718,8 @@ impl AsyncRuntimeSessionActor {
             } => {
                 let claim_cancellations = self.provider_claim_cancel_timer_side_effects(&turn_id);
                 self.service.clear_claimed_agent_provider_task(&turn_id);
-                self.provider_retry_attempts.remove(turn_id.as_str());
+                self.service
+                    .clear_agent_provider_retry_attempt(turn_id.as_str());
                 self.scheduled_provider_retry_timers
                     .remove(turn_id.as_str());
                 self.provider_output_limit_compaction_turns
@@ -1748,11 +1751,7 @@ impl AsyncRuntimeSessionActor {
         message: &str,
         provider_failure_json: Option<&str>,
     ) -> bool {
-        let attempts = self
-            .provider_retry_attempts
-            .get(turn_id)
-            .copied()
-            .unwrap_or(0);
+        let attempts = self.service.agent_provider_retry_attempt(turn_id);
         attempts < DEFAULT_PROVIDER_RETRY_MAX_ATTEMPTS
             && provider_failure_is_retryable(kind, message, provider_failure_json)
     }
@@ -1772,10 +1771,8 @@ impl AsyncRuntimeSessionActor {
         provider_raw_text: Option<String>,
     ) -> Result<RuntimeTransition> {
         let attempt = self
-            .provider_retry_attempts
-            .get(turn_id.as_str())
-            .copied()
-            .unwrap_or(0)
+            .service
+            .agent_provider_retry_attempt(turn_id.as_str())
             .saturating_add(1);
         let delay_ms = provider_retry_delay_ms(attempt);
         let error = provider_event_error_from_parts(
@@ -1794,7 +1791,8 @@ impl AsyncRuntimeSessionActor {
                 &agent_id, &turn_id, &error, attempt,
             )?;
             if !recovered {
-                self.provider_retry_attempts.remove(turn_id.as_str());
+                self.service
+                    .clear_agent_provider_retry_attempt(turn_id.as_str());
                 self.scheduled_provider_retry_timers
                     .remove(turn_id.as_str());
                 let applied = self.service.apply_agent_provider_failed_event(
@@ -1820,7 +1818,8 @@ impl AsyncRuntimeSessionActor {
                 &agent_id, &turn_id, &error, attempt,
             )?;
             if !recovered {
-                self.provider_retry_attempts.remove(turn_id.as_str());
+                self.service
+                    .clear_agent_provider_retry_attempt(turn_id.as_str());
                 self.scheduled_provider_retry_timers
                     .remove(turn_id.as_str());
                 let applied = self.service.apply_agent_provider_failed_event(
@@ -1850,11 +1849,12 @@ impl AsyncRuntimeSessionActor {
             delay_ms,
         )?;
         if !applied {
-            self.provider_retry_attempts.remove(turn_id.as_str());
+            self.service
+                .clear_agent_provider_retry_attempt(turn_id.as_str());
             return Ok(RuntimeTransition::default());
         }
-        self.provider_retry_attempts
-            .insert(turn_id.clone(), attempt);
+        self.service
+            .set_agent_provider_retry_attempt(turn_id.clone(), attempt);
         Ok(RuntimeTransition {
             applied: true,
             side_effects: vec![RuntimeSideEffect::ScheduleTimer {

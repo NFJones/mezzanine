@@ -10,6 +10,29 @@ use super::*;
 use crate::agent::{ClaudeCodeProvider, anthropic_provider_from_auth_store_with_provider_options};
 
 impl RuntimeSessionService {
+    /// Returns the recorded retry attempt for one provider turn.
+    pub(crate) fn agent_provider_retry_attempt(&self, turn_id: &str) -> u32 {
+        self.agent_provider_retry_attempts
+            .get(turn_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Records the current retry attempt for one provider turn.
+    pub(crate) fn set_agent_provider_retry_attempt(&mut self, turn_id: String, attempt: u32) {
+        self.agent_provider_retry_attempts.insert(turn_id, attempt);
+    }
+
+    /// Clears retry-attempt state for one provider turn.
+    pub(crate) fn clear_agent_provider_retry_attempt(&mut self, turn_id: &str) {
+        self.agent_provider_retry_attempts.remove(turn_id);
+    }
+
+    /// Returns provider turns whose progress is represented by retry policy state.
+    pub(crate) fn agent_provider_retry_turn_ids(&self) -> impl Iterator<Item = &String> {
+        self.agent_provider_retry_attempts.keys()
+    }
+
     /// Builds a runtime provider dispatch from one configured provider API.
     ///
     /// Provider `kind` describes the brand/defaults, while `api` selects the
