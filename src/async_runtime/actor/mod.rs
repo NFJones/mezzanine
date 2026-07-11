@@ -10,13 +10,13 @@ use super::{
     AsyncMessageInputResult, AsyncRenderedClientFlush, AsyncRenderedClientFrame,
     AsyncRuntimeActorConfig, AsyncRuntimeActorExit, AsyncRuntimeRequest, AsyncRuntimeSessionActor,
     AsyncRuntimeSessionHandle, AttachedClientStepApplication, AttachedTerminalClientStepPlan,
-    AttachedTerminalFdReadiness, AttachedTerminalFdRole, AttachedTerminalOutputModes, ClientEvent,
-    ClientId, ClientState, ClientStatusLine, ClientViewRole, ControlConnectionState,
-    DEFAULT_ASYNC_IDLE_CLEANUP_INTERVAL, DeferredAgentPromptHistoryWrite,
-    DeferredAgentTranscriptWrite, DeferredCommandPromptHistoryWrite, DeferredPaneInput,
-    DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination, DeferredProgramHook,
-    DeliveryCursor, FanoutBatch, MessageConnection, MezError, Notify, PaneEvent, PersistenceEvent,
-    PersistenceTarget, PersistenceWriteMode, RenderInvalidationReason, RenderedClientView, Result,
+    AttachedTerminalOutputModes, ClientEvent, ClientId, ClientState, ClientStatusLine,
+    ClientViewRole, ControlConnectionState, DEFAULT_ASYNC_IDLE_CLEANUP_INTERVAL,
+    DeferredAgentPromptHistoryWrite, DeferredAgentTranscriptWrite,
+    DeferredCommandPromptHistoryWrite, DeferredPaneInput, DeferredPanePipeWrite,
+    DeferredPaneResize, DeferredPaneTermination, DeferredProgramHook, DeliveryCursor, FanoutBatch,
+    MessageConnection, MezError, Notify, PaneEvent, PersistenceEvent, PersistenceTarget,
+    PersistenceWriteMode, RenderInvalidationReason, RenderedClientView, Result,
     RuntimeAgentProviderDispatch, RuntimeAgentProviderTask, RuntimeEvent, RuntimeEventBatch,
     RuntimeEventConnectionTable, RuntimeEventIngressReport, RuntimeEventWakeup,
     RuntimeLifecycleState, RuntimeSessionService, RuntimeShellTransactionTimerKind,
@@ -24,7 +24,7 @@ use super::{
     RuntimeSnapshotControlAsyncWorkKind, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition,
     ShutdownEvent, Size, TerminalClientLoopConfig, TimerEvent, VecDeque,
     compose_client_presentation_with_styles, delivery_batch_json, encode_mmp_body, mpsc, oneshot,
-    plan_attached_terminal_client_step, watch,
+    watch,
 };
 use crate::agent::{
     DEFAULT_PROVIDER_TIMEOUT_MS, ProviderErrorRetryClass, provider_error_retry_class_from_parts,
@@ -36,7 +36,7 @@ use crate::runtime::{
     DeferredConfigFileWrite, DeferredProjectConfigWrite, DeferredProjectInstructionWrite,
     PaneResizeUpdate,
 };
-use crate::terminal::{AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, TerminalFdInterest};
+use crate::terminal::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
 
 use side_effects::*;
 
@@ -593,11 +593,9 @@ impl AsyncRuntimeSessionActor {
                 let previous_lifecycle_state = self.service.lifecycle_state();
                 let result = self
                     .service
-                    .apply_attached_terminal_step_plan_deferred_pane_io(&primary_client_id, &step)
-                    .and_then(|(application, deferred_pane_inputs)| {
-                        self.queue_runtime_side_effects(deferred_pane_inputs_to_side_effects(
-                            deferred_pane_inputs,
-                        ))?;
+                    .apply_attached_terminal_step_transition(&primary_client_id, &step)
+                    .and_then(|(application, transition)| {
+                        self.queue_runtime_side_effects(transition.side_effects)?;
                         self.queue_deferred_pane_io_side_effects_from_service()?;
                         self.queue_pending_provider_dispatch_side_effects()?;
                         Ok(application)
@@ -1591,9 +1589,9 @@ impl AsyncRuntimeSessionActor {
                     client_id,
                     RenderInvalidationReason::FullRedraw,
                 )),
-            ClientEvent::Input { client_id, bytes } => {
-                self.apply_runtime_client_input_event(client_id, bytes)
-            }
+            ClientEvent::Input { client_id, bytes } => self
+                .service
+                .apply_client_input_transition(&client_id, &bytes),
         }
     }
 
@@ -1626,56 +1624,6 @@ impl AsyncRuntimeSessionActor {
     ///
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn apply_runtime_client_input_event(
-        &mut self,
-        client_id: ClientId,
-        bytes: Vec<u8>,
-    ) -> Result<RuntimeTransition> {
-        if bytes.is_empty() || self.service.session().primary_client_id() != Some(&client_id) {
-            return Ok(RuntimeTransition::default());
-        }
-        let Some(client_size) = self.attached_client_size(&client_id)? else {
-            return Ok(RuntimeTransition::default());
-        };
-        let config = self
-            .service
-            .terminal_client_loop_config(TerminalClientLoopConfig::default())?;
-        let view = self.service.render_client_view_with_resolved_config(
-            ClientViewRole::Primary,
-            client_size,
-            &config,
-        )?;
-        let readiness = [AttachedTerminalFdReadiness {
-            role: AttachedTerminalFdRole::Input,
-            fd: 0,
-            interest: TerminalFdInterest::read(),
-            readable: true,
-            writable: false,
-            hangup: false,
-            error: false,
-        }];
-        let step = plan_attached_terminal_client_step(
-            &readiness,
-            Some(&bytes),
-            view.as_ref(),
-            None,
-            &config,
-        )?;
-        if step.actions.is_empty() {
-            return Ok(RuntimeTransition::default());
-        }
-        let (application, deferred_pane_inputs) = self
-            .service
-            .apply_attached_terminal_step_plan_deferred_pane_io(&client_id, &step)?;
-        let mut side_effects = deferred_pane_inputs_to_side_effects(deferred_pane_inputs);
-        side_effects.extend(self.client_step_application_side_effects(&client_id, &application));
-        Ok(RuntimeTransition {
-            applied: runtime_client_step_application_applied(&application),
-            side_effects,
-        })
-    }
-
     /// Runs the attached client size operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -1705,34 +1653,6 @@ impl AsyncRuntimeSessionActor {
     ///
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn client_step_application_side_effects(
-        &self,
-        client_id: &ClientId,
-        application: &AttachedClientStepApplication,
-    ) -> Vec<RuntimeSideEffect> {
-        let reason = if application.full_redraw_required {
-            Some(RenderInvalidationReason::FullRedraw)
-        } else if application.agent_prompt_inputs_applied > 0 {
-            Some(RenderInvalidationReason::AgentPrompt)
-        } else if application.view_refresh_required
-            || application.mux_actions_applied > 0
-            || application.mouse_actions_reported > 0
-        {
-            Some(RenderInvalidationReason::Overlay)
-        } else {
-            None
-        };
-        reason
-            .map(|reason| {
-                vec![RuntimeSideEffect::RenderClient {
-                    client_id: client_id.clone(),
-                    reason,
-                }]
-            })
-            .unwrap_or_default()
-    }
-
     /// Runs the apply runtime hook event operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -3178,17 +3098,6 @@ fn provider_retry_timer_side_effect_turn_id(effect: &RuntimeSideEffect) -> Optio
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_client_step_application_applied(application: &AttachedClientStepApplication) -> bool {
-    application.forwarded_bytes > 0
-        || application.mux_actions_applied > 0
-        || application.mouse_actions_reported > 0
-        || !application.unsupported_actions.is_empty()
-        || application.agent_prompt_inputs_applied > 0
-        || application.view_refresh_required
-        || application.full_redraw_required
-}
-
 /// Runs the coalesce render invalidation reason operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

@@ -7,6 +7,11 @@
 //! tests while preserving behavior through  methods.
 
 use super::*;
+use crate::async_runtime::{RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition};
+use crate::terminal::{
+    AttachedTerminalFdReadiness, AttachedTerminalFdRole, TerminalFdInterest,
+    plan_attached_terminal_client_step,
+};
 
 impl RuntimeSessionService {
     /// Returns the compact approval label shown in the pane agent status area.
@@ -133,6 +138,109 @@ impl RuntimeSessionService {
         step: &AttachedTerminalClientStepPlan,
     ) -> Result<(AttachedClientStepApplication, Vec<DeferredPaneInput>)> {
         self.apply_attached_terminal_step_plan_inner(primary_client_id, step, true)
+    }
+
+    /// Applies one planned client step and returns its ordered adapter effects.
+    pub(crate) fn apply_attached_terminal_step_transition(
+        &mut self,
+        primary_client_id: &crate::ids::ClientId,
+        step: &AttachedTerminalClientStepPlan,
+    ) -> Result<(AttachedClientStepApplication, RuntimeTransition)> {
+        let (application, deferred_inputs) =
+            self.apply_attached_terminal_step_plan_deferred_pane_io(primary_client_id, step)?;
+        let mut side_effects = deferred_inputs
+            .into_iter()
+            .map(|input| {
+                if input.priority {
+                    RuntimeSideEffect::WritePaneInputPriority {
+                        pane_id: input.pane_id,
+                        bytes: input.bytes,
+                    }
+                } else {
+                    RuntimeSideEffect::WritePaneInput {
+                        pane_id: input.pane_id,
+                        bytes: input.bytes,
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        let render_reason = if application.full_redraw_required {
+            Some(RenderInvalidationReason::FullRedraw)
+        } else if application.agent_prompt_inputs_applied > 0 {
+            Some(RenderInvalidationReason::AgentPrompt)
+        } else if application.view_refresh_required
+            || application.mux_actions_applied > 0
+            || application.mouse_actions_reported > 0
+        {
+            Some(RenderInvalidationReason::Overlay)
+        } else {
+            None
+        };
+        side_effects.extend(render_reason.map(|reason| RuntimeSideEffect::RenderClient {
+            client_id: primary_client_id.clone(),
+            reason,
+        }));
+        let applied = application.forwarded_bytes > 0
+            || application.mux_actions_applied > 0
+            || application.mouse_actions_reported > 0
+            || !application.unsupported_actions.is_empty()
+            || application.agent_prompt_inputs_applied > 0
+            || application.view_refresh_required
+            || application.full_redraw_required;
+        Ok((
+            application,
+            RuntimeTransition {
+                applied,
+                side_effects,
+            },
+        ))
+    }
+
+    /// Plans and applies raw primary-client input as a runtime transition.
+    pub(crate) fn apply_client_input_transition(
+        &mut self,
+        client_id: &crate::ids::ClientId,
+        bytes: &[u8],
+    ) -> Result<RuntimeTransition> {
+        if bytes.is_empty() || self.session.primary_client_id() != Some(client_id) {
+            return Ok(RuntimeTransition::default());
+        }
+        let Some(client) = self.session.clients().iter().find(|client| {
+            client.id == *client_id && client.state == crate::session::ClientState::Attached
+        }) else {
+            return Ok(RuntimeTransition::default());
+        };
+        let size = if let Some(terminal) = client.terminal.as_ref() {
+            Size::new(terminal.columns, terminal.rows)?
+        } else if let Some(window) = self.session.active_window() {
+            window.size
+        } else {
+            return Ok(RuntimeTransition::default());
+        };
+        let config = self.terminal_client_loop_config(TerminalClientLoopConfig::default())?;
+        let view =
+            self.render_client_view_with_resolved_config(ClientViewRole::Primary, size, &config)?;
+        let readiness = [AttachedTerminalFdReadiness {
+            role: AttachedTerminalFdRole::Input,
+            fd: 0,
+            interest: TerminalFdInterest::read(),
+            readable: true,
+            writable: false,
+            hangup: false,
+            error: false,
+        }];
+        let step = plan_attached_terminal_client_step(
+            &readiness,
+            Some(bytes),
+            view.as_ref(),
+            None,
+            &config,
+        )?;
+        if step.actions.is_empty() {
+            return Ok(RuntimeTransition::default());
+        }
+        self.apply_attached_terminal_step_transition(client_id, &step)
+            .map(|(_, transition)| transition)
     }
 
     /// Opens an actor-owned command prompt on the primary client.
