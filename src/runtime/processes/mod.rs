@@ -42,7 +42,7 @@ use crate::agent::{
     readiness_probe_command_for_classification,
 };
 use crate::async_runtime::{
-    PaneEvent, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition,
+    PaneEvent, ProcessEvent, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition,
 };
 use crate::process::PaneProcess;
 use crate::terminal::{TerminalStyledLine, parse_mez_shell_transaction_osc};
@@ -215,6 +215,47 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
+    /// Applies one process lifecycle event through the transport-neutral transition contract.
+    pub(crate) fn apply_process_transition(
+        &mut self,
+        event: ProcessEvent,
+    ) -> Result<RuntimeTransition> {
+        let (applied, render_reason) = match event {
+            ProcessEvent::Exited {
+                pane_id,
+                primary_pid,
+                exit_code,
+                signal,
+            } => {
+                let primary_pid = primary_pid
+                    .or_else(|| self.pane_processes.primary_pid(&pane_id))
+                    .unwrap_or(0);
+                let signal_number = signal
+                    .as_deref()
+                    .and_then(|signal| signal.parse::<i32>().ok());
+                let status = PaneExitStatus {
+                    code: exit_code,
+                    signal: signal_number,
+                    success: exit_code == Some(0) && signal.is_none(),
+                };
+                (
+                    self.apply_pane_process_exit_event(pane_id, primary_pid, status)?
+                        .is_some(),
+                    Some(RenderInvalidationReason::Layout),
+                )
+            }
+            ProcessEvent::Failed { pane_id, error } => (
+                self.apply_pane_process_failure_event(pane_id, error)?,
+                Some(RenderInvalidationReason::FullRedraw),
+            ),
+            ProcessEvent::Spawned { pane_id, pid } => (
+                self.apply_pane_process_spawn_event(pane_id, pid)?,
+                Some(RenderInvalidationReason::FullRedraw),
+            ),
+        };
+        Ok(self.runtime_transition_with_render(applied, render_reason))
+    }
+
     /// Applies one non-output pane event through the transport-neutral transition contract.
     ///
     /// Pane output remains actor-owned temporarily because it also updates ingress metrics and
@@ -256,6 +297,15 @@ impl RuntimeSessionService {
                 ));
             }
         };
+        Ok(self.runtime_transition_with_render(applied, render_reason))
+    }
+
+    /// Builds a transition with one render invalidation for every attached client.
+    fn runtime_transition_with_render(
+        &self,
+        applied: bool,
+        render_reason: Option<RenderInvalidationReason>,
+    ) -> RuntimeTransition {
         let side_effects = if applied {
             render_reason
                 .into_iter()
@@ -273,10 +323,10 @@ impl RuntimeSessionService {
         } else {
             Vec::new()
         };
-        Ok(RuntimeTransition {
+        RuntimeTransition {
             applied,
             side_effects,
-        })
+        }
     }
 
     /// Applies one pane input write failure delivered by an async pane driver.

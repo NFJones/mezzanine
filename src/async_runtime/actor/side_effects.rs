@@ -278,20 +278,3 @@ pub(super) fn deferred_registry_update_to_side_effect(
         .into_iter()
         .collect()
 }
-
-/// Runs the pane exit status from process event operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn pane_exit_status_from_process_event(
-    exit_code: Option<i32>,
-    signal: Option<&str>,
-) -> PaneExitStatus {
-    let signal_number = signal.and_then(|signal| signal.parse::<i32>().ok());
-    PaneExitStatus {
-        code: exit_code,
-        signal: signal_number,
-        success: exit_code == Some(0) && signal.is_none(),
-    }
-}

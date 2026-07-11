@@ -16,16 +16,16 @@ use super::{
     DEFAULT_ASYNC_IDLE_CLEANUP_INTERVAL, DeferredAgentPromptHistoryWrite,
     DeferredAgentTranscriptWrite, DeferredCommandPromptHistoryWrite, DeferredPaneInput,
     DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination, DeferredProgramHook,
-    DeliveryCursor, FanoutBatch, MessageConnection, MezError, Notify, PaneEvent, PaneExitStatus,
-    PersistenceEvent, PersistenceTarget, PersistenceWriteMode, ProcessEvent,
-    RenderInvalidationReason, RenderedClientView, Result, RuntimeAgentProviderDispatch,
-    RuntimeAgentProviderTask, RuntimeEvent, RuntimeEventBatch, RuntimeEventConnectionTable,
-    RuntimeEventIngressReport, RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSessionService,
-    RuntimeShellTransactionTimerKind, RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome,
-    RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind, RuntimeTimerKey,
-    RuntimeTimerKind, RuntimeTransition, ShutdownEvent, Size, TerminalClientLoopConfig, TimerEvent,
-    VecDeque, compose_client_presentation_with_styles, delivery_batch_json, encode_mmp_body, mpsc,
-    oneshot, plan_attached_terminal_client_step, watch,
+    DeliveryCursor, FanoutBatch, MessageConnection, MezError, Notify, PaneEvent, PersistenceEvent,
+    PersistenceTarget, PersistenceWriteMode, RenderInvalidationReason, RenderedClientView, Result,
+    RuntimeAgentProviderDispatch, RuntimeAgentProviderTask, RuntimeEvent, RuntimeEventBatch,
+    RuntimeEventConnectionTable, RuntimeEventIngressReport, RuntimeEventWakeup,
+    RuntimeLifecycleState, RuntimeSessionService, RuntimeShellTransactionTimerKind,
+    RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
+    RuntimeSnapshotControlAsyncWorkKind, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition,
+    ShutdownEvent, Size, TerminalClientLoopConfig, TimerEvent, VecDeque,
+    compose_client_presentation_with_styles, delivery_batch_json, encode_mmp_body, mpsc, oneshot,
+    plan_attached_terminal_client_step, watch,
 };
 use crate::agent::{
     DEFAULT_PROVIDER_TIMEOUT_MS, ProviderErrorRetryClass, provider_error_retry_class_from_parts,
@@ -1115,58 +1115,9 @@ impl AsyncRuntimeSessionActor {
             }
             RuntimeEvent::Shutdown(shutdown) => self.apply_runtime_shutdown_event(shutdown),
             RuntimeEvent::Timer(timer) => self.apply_runtime_timer_event(timer),
-            RuntimeEvent::Process(ProcessEvent::Exited {
-                pane_id,
-                primary_pid,
-                exit_code,
-                signal,
-            }) => {
-                let primary_pid = primary_pid.unwrap_or_else(|| {
-                    self.service
-                        .pane_processes()
-                        .primary_pid(&pane_id)
-                        .unwrap_or(0)
-                });
-                self.service
-                    .apply_pane_process_exit_event(
-                        pane_id,
-                        primary_pid,
-                        pane_exit_status_from_process_event(exit_code, signal.as_deref()),
-                    )
-                    .map(|update| {
-                        let applied = update.is_some();
-                        RuntimeTransition {
-                            applied,
-                            side_effects: if applied {
-                                self.render_side_effects(RenderInvalidationReason::Layout)
-                            } else {
-                                Vec::new()
-                            },
-                        }
-                    })
+            RuntimeEvent::Process(process_event) => {
+                self.service.apply_process_transition(process_event)
             }
-            RuntimeEvent::Process(ProcessEvent::Failed { pane_id, error }) => self
-                .service
-                .apply_pane_process_failure_event(pane_id, error)
-                .map(|applied| RuntimeTransition {
-                    applied,
-                    side_effects: if applied {
-                        self.render_side_effects(RenderInvalidationReason::FullRedraw)
-                    } else {
-                        Vec::new()
-                    },
-                }),
-            RuntimeEvent::Process(ProcessEvent::Spawned { pane_id, pid }) => self
-                .service
-                .apply_pane_process_spawn_event(pane_id, pid)
-                .map(|applied| RuntimeTransition {
-                    applied,
-                    side_effects: if applied {
-                        self.render_side_effects(RenderInvalidationReason::FullRedraw)
-                    } else {
-                        Vec::new()
-                    },
-                }),
         }
     }
 
