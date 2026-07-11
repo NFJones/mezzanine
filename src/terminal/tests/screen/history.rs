@@ -3,7 +3,7 @@
 use crate::terminal::screen::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 use crate::terminal::{
     AlternateScreenState, DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer, Size,
-    TerminalScreen,
+    TerminalScreen, TerminalStyledLine,
 };
 
 /// Verifies history buffer evicts oldest lines first.
@@ -15,9 +15,9 @@ use crate::terminal::{
 fn history_buffer_evicts_oldest_lines_first() {
     let mut history = HistoryBuffer::new(2).unwrap();
 
-    history.push_line("one");
-    history.push_line("two");
-    history.push_line("three");
+    history.push_styled_line(TerminalStyledLine::plain("one"));
+    history.push_styled_line(TerminalStyledLine::plain("two"));
+    history.push_styled_line(TerminalStyledLine::plain("three"));
 
     assert_eq!(history.lines().collect::<Vec<_>>(), vec!["two", "three"]);
 }
@@ -31,10 +31,10 @@ fn history_buffer_evicts_oldest_lines_first() {
 fn history_buffer_relimits_and_evicts_oldest_lines() {
     let mut history = HistoryBuffer::new(4).unwrap();
 
-    history.push_line("one");
-    history.push_line("two");
-    history.push_line("three");
-    history.push_line("four");
+    history.push_styled_line(TerminalStyledLine::plain("one"));
+    history.push_styled_line(TerminalStyledLine::plain("two"));
+    history.push_styled_line(TerminalStyledLine::plain("three"));
+    history.push_styled_line(TerminalStyledLine::plain("four"));
     history.set_limit(2).unwrap();
 
     assert_eq!(history.limit(), 2);
@@ -52,7 +52,7 @@ fn history_buffer_rotates_oldest_lines_in_configured_batches() {
     let mut history = HistoryBuffer::new_with_rotation(5, 2).unwrap();
 
     for line in ["one", "two", "three", "four", "five", "six"] {
-        history.push_line(line);
+        history.push_styled_line(TerminalStyledLine::plain(line));
     }
 
     assert_eq!(history.limit(), 5);
@@ -61,7 +61,7 @@ fn history_buffer_rotates_oldest_lines_in_configured_batches() {
         history.lines().collect::<Vec<_>>(),
         vec!["three", "four", "five", "six"]
     );
-    history.push_line("seven");
+    history.push_styled_line(TerminalStyledLine::plain("seven"));
     assert_eq!(
         history.lines().collect::<Vec<_>>(),
         vec!["three", "four", "five", "six", "seven"]
@@ -77,7 +77,7 @@ fn history_buffer_rotates_oldest_lines_in_configured_batches() {
 #[test]
 fn terminal_screen_relimits_history_buffer() {
     let mut screen = TerminalScreen::new(Size::new(8, 2).unwrap(), 4).unwrap();
-    screen.restore_normal_content(
+    screen.restore_normal_styled_content(
         &["one".to_string(), "two".to_string(), "three".to_string()],
         &[],
     );
@@ -359,14 +359,14 @@ fn terminal_screen_row_only_resize_preserves_history_and_visible_rows() {
 #[test]
 fn terminal_screen_resize_shrink_preserves_dropped_row_copy_text_in_history() {
     let mut screen = TerminalScreen::new(Size::new(10, 5).unwrap(), 10).unwrap();
-    screen.restore_normal_content(
+    screen.restore_normal_styled_content(
         &[],
         &[
-            "line0".to_string(),
-            "line1".to_string(),
-            "line2".to_string(),
-            "line3".to_string(),
-            "line4".to_string(),
+            TerminalStyledLine::plain("line0"),
+            TerminalStyledLine::plain("line1"),
+            TerminalStyledLine::plain("line2"),
+            TerminalStyledLine::plain("line3"),
+            TerminalStyledLine::plain("line4"),
         ],
     );
     // Annotate only one dropped row; plain dropped rows must still be kept.

@@ -105,16 +105,6 @@ pub enum CapabilitySupport {
     PolicyGated,
 }
 
-impl CapabilitySupport {
-    /// Defines the fn const used by this subsystem.
-    ///
-    /// Keeping this value documented makes the contract explicit at the module
-    /// boundary and avoids relying on call-site inference.
-    pub const fn is_available(self) -> bool {
-        !matches!(self, Self::Unsupported)
-    }
-}
-
 /// SGR color and text-attribute support advertised by a profile or TERM entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SgrCapabilities {

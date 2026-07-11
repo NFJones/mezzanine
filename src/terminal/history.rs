@@ -88,15 +88,6 @@ impl HistoryBuffer {
         Self::new(DEFAULT_HISTORY_LIMIT).expect("default history limit is non-zero")
     }
 
-    /// Runs the push line operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn push_line(&mut self, line: impl Into<String>) {
-        self.push_styled_line(TerminalStyledLine::plain(line.into()));
-    }
-
     /// Pushes a line with non-default SGR style spans into bounded history.
     pub fn push_styled_line(&mut self, line: TerminalStyledLine) {
         self.push_styled_line_with_wrap(line, false);

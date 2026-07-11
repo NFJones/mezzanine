@@ -377,21 +377,6 @@ pub enum PaneAgentStatusField {
     Preset,
 }
 
-impl PaneAgentStatusField {
-    /// Returns the pane-frame template field associated with this selector.
-    pub const fn frame_field(self) -> &'static str {
-        match self {
-            Self::Model => "agent.model",
-            Self::Reasoning => "agent.reasoning",
-            Self::Thinking => "agent.thinking",
-            Self::Routing => "agent.routing",
-            Self::ApprovalPolicy => "policy.mode",
-            Self::Latency => "agent.latency",
-            Self::Preset => "agent.preset",
-        }
-    }
-}
-
 /// A zero-based terminal cell occupied by a selectable pane agent status pill.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MousePaneAgentStatusCell {

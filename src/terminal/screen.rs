@@ -386,12 +386,6 @@ impl TerminalStyledLine {
             copy_text: None,
         }
     }
-
-    /// Builds a line that displays one text value but copies another.
-    pub fn with_copy_text(mut self, copy_text: impl Into<String>) -> Self {
-        self.copy_text = Some(copy_text.into());
-        self
-    }
 }
 
 /// Terminal mode flags and title state that can be restored without a PTY replay.
@@ -1783,14 +1777,6 @@ impl TerminalScreen {
             .collect()
     }
 
-    /// Returns the rendition stored for one screen cell, when the cell exists.
-    pub fn cell_rendition(&self, row: usize, column: usize) -> Option<GraphicRendition> {
-        self.renditions
-            .get(row)
-            .and_then(|row| row.get(column))
-            .copied()
-    }
-
     /// Runs the normal content lines operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -1930,19 +1916,6 @@ impl TerminalScreen {
         }
         self.clear_screen();
         self.normal_viewport_detached_from_history = true;
-    }
-
-    /// Runs the restore normal content operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn restore_normal_content(&mut self, history_lines: &[String], visible_lines: &[String]) {
-        let visible_lines = visible_lines
-            .iter()
-            .map(|line| TerminalStyledLine::plain(line.clone()))
-            .collect::<Vec<_>>();
-        self.restore_normal_styled_content(history_lines, &visible_lines);
     }
 
     /// Restores plain normal-screen history and styled visible rows.

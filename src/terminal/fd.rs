@@ -536,17 +536,6 @@ impl TerminalFdInterest {
     ///
     /// Keeping this value documented makes the contract explicit at the module
     /// boundary and avoids relying on call-site inference.
-    pub const fn read_write() -> Self {
-        Self {
-            read: true,
-            write: true,
-        }
-    }
-
-    /// Defines the fn const used by this subsystem.
-    ///
-    /// Keeping this value documented makes the contract explicit at the module
-    /// boundary and avoids relying on call-site inference.
     pub const fn is_empty(self) -> bool {
         !self.read && !self.write
     }

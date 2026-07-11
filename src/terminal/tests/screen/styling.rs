@@ -39,7 +39,6 @@ fn terminal_screen_restores_styled_visible_snapshot_content() {
         vec!["history"]
     );
     assert_eq!(screen.visible_lines()[0], "styled");
-    assert_eq!(screen.cell_rendition(0, 0), Some(rendition));
     assert_eq!(
         screen.visible_styled_lines()[0].style_spans,
         vec![TerminalStyleSpan {
@@ -107,33 +106,12 @@ fn terminal_screen_stores_sgr_rendition_per_printed_cell() {
         background: Some(TerminalColor::Indexed(200)),
     };
     assert_eq!(screen.graphic_rendition, styled);
-    assert_eq!(screen.cell_rendition(0, 0), Some(styled));
-
     screen.feed(b"\x1b[38;2;1;2;3;48;5;42mY");
     assert_eq!(screen.visible_lines()[0], "XY");
-    assert_eq!(
-        screen.cell_rendition(0, 1),
-        Some(GraphicRendition {
-            bold: true,
-            dim: false,
-            italic: false,
-            strikethrough: false,
-            double_underline: false,
-            hidden: false,
-            underline: true,
-            inverse: false,
-            foreground: Some(TerminalColor::Rgb(1, 2, 3)),
-            background: Some(TerminalColor::Indexed(42)),
-        })
-    );
 
     screen.feed(b"\x1b[22;24;39;49mZ");
     assert_eq!(screen.visible_lines()[0], "XYZ");
     assert_eq!(screen.graphic_rendition, GraphicRendition::default());
-    assert_eq!(
-        screen.cell_rendition(0, 2),
-        Some(GraphicRendition::default())
-    );
     assert_eq!(screen.visible_styled_lines()[0].text, "XYZ");
     assert_eq!(
         screen.visible_styled_lines()[0].style_spans,

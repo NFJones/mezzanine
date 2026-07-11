@@ -108,7 +108,7 @@ fn runtime_config_reload_applies_history_limit_to_live_screens() {
         }])
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(12, 2).unwrap(), 4).unwrap();
-    screen.restore_normal_content(
+    screen.restore_normal_styled_content(
         &["one".to_string(), "two".to_string(), "three".to_string()],
         &[],
     );

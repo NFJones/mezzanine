@@ -193,22 +193,6 @@ impl KeyChord {
         }
     }
 
-    /// Builds an Alt+Shift chord. Printable `Shift+=` is normalized to `+`
-    /// because terminals normally report the shifted character itself.
-    pub fn alt_shift(code: KeyCode) -> Self {
-        match code {
-            KeyCode::Char('=') => Self::alt(KeyCode::Char('+')),
-            _ => Self {
-                code,
-                modifiers: KeyModifiers {
-                    ctrl: false,
-                    alt: true,
-                    shift: true,
-                },
-            },
-        }
-    }
-
     /// Runs the ctrl alt operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -221,18 +205,6 @@ impl KeyChord {
                 ctrl: true,
                 alt: true,
                 shift: false,
-            },
-        }
-    }
-
-    /// Builds a Ctrl+Alt+Shift chord.
-    pub fn ctrl_alt_shift(code: KeyCode) -> Self {
-        Self {
-            code,
-            modifiers: KeyModifiers {
-                ctrl: true,
-                alt: true,
-                shift: true,
             },
         }
     }

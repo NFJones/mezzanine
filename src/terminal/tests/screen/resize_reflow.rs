@@ -1,6 +1,6 @@
 //! Regression tests for terminal screen resize reflow behavior.
 
-use crate::terminal::{Size, TerminalScreen, terminal_text_width};
+use crate::terminal::{Size, TerminalScreen, TerminalStyledLine, terminal_text_width};
 
 /// Verifies alternate-screen resize keeps the live grid top-left anchored.
 ///
@@ -125,13 +125,16 @@ fn terminal_screen_reflows_agent_transcript_rows_with_gutter() {
 #[test]
 fn terminal_screen_row_only_resize_keeps_stationary_view_when_tail_fits() {
     let mut screen = TerminalScreen::new(Size::new(5, 5).unwrap(), 10).unwrap();
-    screen.restore_normal_content(
+    screen.restore_normal_styled_content(
         &[
             "old-1".to_string(),
             "old-2".to_string(),
             "old-3".to_string(),
         ],
-        &["live1".to_string(), "live2".to_string()],
+        &[
+            TerminalStyledLine::plain("live1"),
+            TerminalStyledLine::plain("live2"),
+        ],
     );
     screen.resize(Size::new(5, 3).unwrap());
     assert_eq!(screen.visible_lines(), vec!["live1", "live2", ""]);
