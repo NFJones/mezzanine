@@ -80,8 +80,14 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
         .find(|(_, loop_turn)| loop_turn.pane_id == child_pane_id)
         .map(|(turn_id, _)| turn_id.clone())
         .expect("runtime-owned /loop macro step should queue loop work");
+    let loop_completion = service
+        .agent_loops_by_pane
+        .get(child_pane_id)
+        .and_then(|state| state.completion.as_ref())
+        .expect("runtime-owned loop should retain the macro parent completion");
+    assert_eq!(loop_completion.child_agent_id, child_agent_id);
     assert!(
-        service
+        !service
             .joined_subagent_dependencies
             .contains_key(&child_turn_id)
     );
@@ -143,7 +149,7 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
             .count(),
         1
     );
-    assert_eq!(service.joined_subagent_dependencies.len(), 1);
+    assert!(service.joined_subagent_dependencies.is_empty());
     service.pane_processes_mut().terminate_all().unwrap();
 }
 

@@ -14,6 +14,7 @@ use crate::agent::{
 };
 use crate::macros::{MacroCatalog, MacroDefinition, discover_macro_catalog, load_macro_definition};
 use crate::project::TrustDecision;
+use crate::runtime::agent_state::RuntimeAgentLoopCompletion;
 use crate::runtime::service_state::{
     MacroJudgeDecision, MacroJudgeOutcome, MacroManagedSubagent, MacroRunPhase, MacroRunState,
     MacroRunStep,
@@ -376,6 +377,12 @@ impl RuntimeSessionService {
                 .any(|dependency| {
                     dependency.parent_turn_id == parent_turn.turn_id
                         && dependency.parent_action_id == action.id
+                })
+                || self.agent_loops_by_pane.values().any(|state| {
+                    state.completion.as_ref().is_some_and(|completion| {
+                        completion.parent_turn_id == parent_turn.turn_id
+                            && completion.parent_action_id == action.id
+                    })
                 });
         let result = self.queue_macro_managed_message_step(
             parent_turn,
@@ -392,7 +399,16 @@ impl RuntimeSessionService {
                     dependency.parent_turn_id == parent_turn.turn_id
                         && dependency.parent_action_id == action.id
                 })
-                .map(|dependency| dependency.child_turn_id.clone());
+                .map(|dependency| dependency.child_turn_id.clone())
+                .or_else(|| {
+                    self.agent_loops_by_pane.values().find_map(|state| {
+                        state.completion.as_ref().and_then(|completion| {
+                            (completion.parent_turn_id == parent_turn.turn_id
+                                && completion.parent_action_id == action.id)
+                                .then(|| completion.child_turn_id.clone())
+                        })
+                    })
+                });
             if child_turn_id.is_some() && !already_recorded_step_action {
                 let (macro_name, total_steps) = self
                     .macro_runs_by_parent_turn
@@ -1045,6 +1061,11 @@ impl RuntimeSessionService {
             dep.parent_turn_id == parent_turn.turn_id
                 && dep.child_agent_id == child_agent_id
                 && self.joined_subagent_dependency_has_live_child(dep)
+        }) || self.agent_loops_by_pane.values().any(|state| {
+            state.completion.as_ref().is_some_and(|completion| {
+                completion.parent_turn_id == parent_turn.turn_id
+                    && completion.child_agent_id == child_agent_id
+            })
         });
         if macro_step_in_flight {
             return Ok(Some(ActionResult::failed(
@@ -1088,16 +1109,22 @@ impl RuntimeSessionService {
                 .ok_or_else(|| MezError::invalid_state("macro loop did not create a work turn"))?;
             self.subagent_task_routes
                 .insert(child_turn_id.clone(), parent_turn.agent_id.clone());
-            self.joined_subagent_dependencies.insert(
-                child_turn_id.clone(),
-                JoinedSubagentDependency {
-                    parent_turn_id: parent_turn.turn_id.clone(),
-                    parent_action_id: action.id.clone(),
-                    child_turn_id: child_turn_id.clone(),
-                    child_agent_id: child_agent_id.to_string(),
-                    child_display_name: Some(child_display_name.clone()),
-                },
-            );
+            let loop_state = self
+                .agent_loops_by_pane
+                .get_mut(child_pane_id)
+                .ok_or_else(|| MezError::invalid_state("macro loop controller is unavailable"))?;
+            if loop_state.completion.is_some() {
+                return Err(MezError::invalid_state(
+                    "macro loop controller already has a parent completion",
+                ));
+            }
+            loop_state.completion = Some(RuntimeAgentLoopCompletion {
+                parent_turn_id: parent_turn.turn_id.clone(),
+                parent_action_id: action.id.clone(),
+                child_turn_id: child_turn_id.clone(),
+                child_agent_id: child_agent_id.to_string(),
+                child_display_name: Some(child_display_name.clone()),
+            });
             return Ok(Some(ActionResult::running(
                 parent_turn,
                 action,

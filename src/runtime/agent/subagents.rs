@@ -385,7 +385,25 @@ impl RuntimeSessionService {
             "subagent task failed"
         };
         let output = subagent_task_output_for_execution(execution);
-        self.emit_subagent_task_result(turn, success, summary, &output)
+        let loop_dependency = self
+            .agent_loop_turns
+            .get(&turn.turn_id)
+            .and_then(|loop_turn| self.agent_loops_by_pane.get(&loop_turn.pane_id))
+            .and_then(|state| state.completion.as_ref())
+            .map(|completion| JoinedSubagentDependency {
+                parent_turn_id: completion.parent_turn_id.clone(),
+                parent_action_id: completion.parent_action_id.clone(),
+                child_turn_id: completion.child_turn_id.clone(),
+                child_agent_id: completion.child_agent_id.clone(),
+                child_display_name: completion.child_display_name.clone(),
+            });
+        self.emit_subagent_task_result_with_dependency(
+            turn,
+            loop_dependency,
+            success,
+            summary,
+            &output,
+        )
     }
 
     /// Runs the emit cancelled subagent task result operation for this subsystem.
@@ -552,7 +570,28 @@ impl RuntimeSessionService {
         summary: &str,
         output: &str,
     ) -> Result<()> {
-        let parent_agent_id = self.subagent_task_result_parent_agent_id(turn);
+        self.emit_subagent_task_result_with_dependency(turn, None, success, summary, output)
+    }
+
+    /// Emits a terminal task result with an optional controller-owned join.
+    fn emit_subagent_task_result_with_dependency(
+        &mut self,
+        turn: &AgentTurnRecord,
+        dependency: Option<JoinedSubagentDependency>,
+        success: bool,
+        summary: &str,
+        output: &str,
+    ) -> Result<()> {
+        let parent_agent_id = dependency
+            .as_ref()
+            .and_then(|dependency| {
+                self.agent_turn_ledger
+                    .turns()
+                    .iter()
+                    .find(|turn| turn.turn_id == dependency.parent_turn_id)
+                    .map(|turn| turn.agent_id.clone())
+            })
+            .or_else(|| self.subagent_task_result_parent_agent_id(turn));
         let has_subagent_runtime_state = parent_agent_id.is_some()
             || self
                 .subagent_scope_declarations
@@ -607,14 +646,21 @@ impl RuntimeSessionService {
             )?;
         }
         self.subagent_task_routes.remove(&turn.turn_id);
-        let is_macro_step = turn.cooperation_mode.as_deref() == Some("macro-step");
+        let is_macro_step =
+            dependency.is_some() || turn.cooperation_mode.as_deref() == Some("macro-step");
         let terminal_macro_step_failure = is_macro_step && !success;
         if !is_macro_step || terminal_macro_step_failure {
             self.subagent_scopes.unregister(&turn.agent_id);
             self.subagent_scope_declarations.remove(&turn.agent_id);
             self.subagent_lineage.remove(&turn.agent_id);
         }
-        self.resolve_joined_subagent_dependency(turn, success, summary, output)?;
+        if let Some(dependency) = dependency {
+            self.resolve_joined_subagent_dependency_record(
+                turn, dependency, success, summary, output,
+            )?;
+        } else {
+            self.resolve_joined_subagent_dependency(turn, success, summary, output)?;
+        }
         if !is_macro_step || terminal_macro_step_failure {
             self.pending_terminal_subagent_pane_closes
                 .insert(turn.pane_id.clone());
@@ -758,6 +804,18 @@ impl RuntimeSessionService {
         else {
             return Ok(());
         };
+        self.resolve_joined_subagent_dependency_record(turn, dependency, success, summary, output)
+    }
+
+    /// Resolves one explicit joined dependency against a terminal child turn.
+    fn resolve_joined_subagent_dependency_record(
+        &mut self,
+        _turn: &AgentTurnRecord,
+        dependency: JoinedSubagentDependency,
+        success: bool,
+        summary: &str,
+        output: &str,
+    ) -> Result<()> {
         let Some(parent_turn) = self
             .agent_turn_ledger
             .turns()

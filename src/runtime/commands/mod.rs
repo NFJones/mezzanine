@@ -776,6 +776,7 @@ impl RuntimeSessionService {
                 iteration: 1,
                 emitted_apply_patch: false,
                 max_iterations,
+                completion: None,
             },
         );
         let started = match self.start_agent_loop_work_turn(pane_id) {
@@ -1408,6 +1409,7 @@ mod tests {
             iteration: 1,
             emitted_apply_patch: false,
             max_iterations: 8,
+            completion: None,
         });
         let later = runtime_agent_loop_work_prompt(&RuntimeAgentLoopState {
             pane_id: "%1".to_string(),
@@ -1419,6 +1421,7 @@ mod tests {
             iteration: 3,
             emitted_apply_patch: false,
             max_iterations: 8,
+            completion: None,
         });
 
         assert_eq!(first, later);

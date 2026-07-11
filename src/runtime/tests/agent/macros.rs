@@ -146,11 +146,16 @@ fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
         .find(|(_, loop_turn)| loop_turn.pane_id == child_pane_id)
         .map(|(turn_id, _)| turn_id)
         .expect("macro /loop step should start its first loop-owned work turn");
-    let dependency = service
-        .joined_subagent_dependencies
-        .get(loop_turn_id)
-        .expect("macro step should join the logical loop result");
-    assert_eq!(dependency.child_agent_id, *child_agent_id);
+    let completion = loop_state
+        .completion
+        .as_ref()
+        .expect("macro step should join the logical loop controller result");
+    assert_eq!(completion.child_agent_id, *child_agent_id);
+    assert!(
+        !service
+            .joined_subagent_dependencies
+            .contains_key(loop_turn_id)
+    );
     let parent_turn = service
         .agent_turn_ledger
         .turns()

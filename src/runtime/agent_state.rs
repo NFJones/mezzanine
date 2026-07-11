@@ -322,6 +322,25 @@ pub enum RuntimeAgentLoopMode {
     NewEachIteration,
 }
 
+/// Parent macro action waiting for one logical `/loop` controller result.
+///
+/// Loop work turns are transient and receive a new turn id for every
+/// iteration. This record therefore lives on the controller so parent
+/// completion cannot be lost when an intermediate iteration settles.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeAgentLoopCompletion {
+    /// Parent macro orchestration turn waiting for the loop.
+    pub parent_turn_id: String,
+    /// Parent action that should receive the terminal loop result.
+    pub parent_action_id: String,
+    /// First loop work turn exposed as the logical macro step identifier.
+    pub child_turn_id: String,
+    /// Persistent macro child agent executing the loop.
+    pub child_agent_id: String,
+    /// Human-readable display name assigned to the macro child.
+    pub child_display_name: Option<String>,
+}
+
 /// Runtime-owned state for one active `/loop` command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeAgentLoopState {
@@ -345,6 +364,8 @@ pub struct RuntimeAgentLoopState {
     pub emitted_apply_patch: bool,
     /// Maximum number of work iterations allowed before the loop stops.
     pub max_iterations: usize,
+    /// Parent macro action settled once when the controller terminates.
+    pub completion: Option<RuntimeAgentLoopCompletion>,
 }
 
 /// Metadata attached to a loop-owned agent turn.
