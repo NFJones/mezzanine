@@ -6,8 +6,6 @@
 //! side-effect boundaries explicit without changing when the effects are
 //! scheduled or drained.
 
-use std::path::PathBuf;
-
 use super::Size;
 
 /// Pane input write deferred for an async pane process owner.
@@ -36,17 +34,6 @@ pub struct DeferredPaneResize {
 pub struct DeferredPaneTermination {
     /// Whether the pane termination was requested as a forceful kill.
     pub force: bool,
-}
-
-/// File-backed pane pipe write deferred for async persistence.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeferredPanePipeWrite {
-    /// Pane whose rendered output should be piped.
-    pub pane_id: String,
-    /// File target configured by `pipe-pane -o`.
-    pub path: PathBuf,
-    /// Output bytes to append.
-    pub bytes: Vec<u8>,
 }
 
 /// Effects applied while processing one attached terminal client step.

@@ -14,21 +14,20 @@ use layout::terminal_clipboard_policy_accepts_osc52;
 use super::{
     ActionContentBlock, ActionResult, ActionStatus, ActivePanePipe, AgentId, AgentTurnRecord,
     AgentTurnState, AuditActor, BTreeSet, ContextBlock, ContextSourceKind, DeferredPaneInput,
-    DeferredPanePipeWrite, DeferredPaneResize, DeferredPaneTermination, EventKind,
-    ExitedPaneProcess, HookEvent, HookExecutionResult, HookExecutionStatus, HookFailure,
-    HookFailureKind, MezError, PaneDescriptor, PaneExitRecord, PaneExitStatus, PaneExitUpdate,
-    PaneId, PaneOutputUpdate, PaneProcessOutput, PaneProcessStart, PaneReadinessState,
-    PaneResizeUpdate, PaneSizeSpec, Path, PathBuf, ReadinessOverrideRevocation, ResizeAxis,
-    ResizeDirection, Result, RunningShellTransactionKind, RunningShellTransactionRef,
-    RuntimeHookPipelineBlock, RuntimeLifecycleState, RuntimeSessionService,
-    RuntimeShellTransactionActionFailure, RuntimeShellTransactionTimerKind,
-    RuntimeShellTransactionTimerRef, SessionSnapshotPayload, ShellClassification, ShellTransaction,
-    Size, SplitDirection, StoppedPanePipe, TerminalOscEvent, TerminalScreen, WindowId,
-    action_result_context_content, current_unix_millis, current_unix_seconds,
-    decode_shell_output_transport_with_diagnostics, focused_shell_pre_action_timeout_result,
-    hook_execution_audit_record, json_escape, local_action_plan, optional_i32_json,
-    pane_content_size_for_geometry, pane_environment_with_term,
-    postprocess_shell_action_success_output, rendered_window_body_size,
+    DeferredPaneResize, DeferredPaneTermination, EventKind, ExitedPaneProcess, HookEvent,
+    HookExecutionResult, HookExecutionStatus, HookFailure, HookFailureKind, MezError,
+    PaneDescriptor, PaneExitRecord, PaneExitStatus, PaneExitUpdate, PaneId, PaneOutputUpdate,
+    PaneProcessOutput, PaneProcessStart, PaneReadinessState, PaneResizeUpdate, PaneSizeSpec, Path,
+    PathBuf, ReadinessOverrideRevocation, ResizeAxis, ResizeDirection, Result,
+    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeHookPipelineBlock,
+    RuntimeLifecycleState, RuntimeSessionService, RuntimeShellTransactionActionFailure,
+    RuntimeShellTransactionTimerKind, RuntimeShellTransactionTimerRef, SessionSnapshotPayload,
+    ShellClassification, ShellTransaction, Size, SplitDirection, StoppedPanePipe, TerminalOscEvent,
+    TerminalScreen, WindowId, action_result_context_content, current_unix_millis,
+    current_unix_seconds, decode_shell_output_transport_with_diagnostics,
+    focused_shell_pre_action_timeout_result, hook_execution_audit_record, json_escape,
+    local_action_plan, optional_i32_json, pane_content_size_for_geometry,
+    pane_environment_with_term, postprocess_shell_action_success_output, rendered_window_body_size,
     runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
     runtime_execution_ready_for_provider_continuation, runtime_hook_event_name,
     runtime_hook_execution_status_name, runtime_marker_for_action,
@@ -944,8 +943,8 @@ impl RuntimeSessionService {
         self.deferred_pane_inputs
             .retain(|input| input.pane_id != pane_id);
         self.deferred_pane_resizes.remove(pane_id);
-        self.deferred_pane_pipe_writes
-            .retain(|write| write.pane_id != pane_id);
+        self.queued_pane_pipe_effects
+            .retain(|(queued_pane_id, _)| queued_pane_id != pane_id);
         self.pane_screens.remove(pane_id);
         self.pane_transaction_osc_screens.remove(pane_id);
         self.pane_transaction_osc_pending.remove(pane_id);

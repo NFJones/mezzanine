@@ -27,11 +27,15 @@ impl RuntimeSessionService {
         };
         if use_external_effect_adapter && let Some(path) = pipe.file_target_path() {
             pipe.record_deferred_output(bytes.len());
-            self.deferred_pane_pipe_writes.push(DeferredPanePipeWrite {
-                pane_id: pane_id.to_string(),
-                path,
-                bytes: bytes.to_vec(),
-            });
+            self.queued_pane_pipe_effects.push((
+                pane_id.to_string(),
+                RuntimeSideEffect::Persist {
+                    target: PersistenceTarget::PanePipe,
+                    path,
+                    bytes: bytes.to_vec(),
+                    mode: PersistenceWriteMode::Append,
+                },
+            ));
             return Ok(());
         }
         let Err(error) = pipe.write_output(bytes) else {
@@ -290,26 +294,14 @@ impl RuntimeSessionService {
         Ok(stopped_pipes)
     }
 
-    /// Drains file-backed pane pipe writes queued for async persistence.
-    pub(crate) fn drain_deferred_pane_pipe_writes(&mut self) -> Vec<DeferredPanePipeWrite> {
-        std::mem::take(&mut self.deferred_pane_pipe_writes)
-    }
-
     /// Drains file-backed pane-pipe writes through the runtime transition contract.
     pub(crate) fn drain_pane_pipe_persistence_transition(&mut self) -> RuntimeTransition {
-        let side_effects = self
-            .drain_deferred_pane_pipe_writes()
-            .into_iter()
-            .map(|write| RuntimeSideEffect::Persist {
-                target: PersistenceTarget::PanePipe,
-                path: write.path,
-                bytes: write.bytes,
-                mode: PersistenceWriteMode::Append,
-            })
-            .collect();
         RuntimeTransition {
             applied: false,
-            side_effects,
+            side_effects: std::mem::take(&mut self.queued_pane_pipe_effects)
+                .into_iter()
+                .map(|(_, effect)| effect)
+                .collect(),
         }
     }
 

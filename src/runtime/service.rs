@@ -293,7 +293,7 @@ impl RuntimeSessionService {
             deferred_pane_inputs: Vec::new(),
             deferred_pane_resizes: BTreeMap::new(),
             deferred_pane_terminations: BTreeMap::new(),
-            deferred_pane_pipe_writes: Vec::new(),
+            queued_pane_pipe_effects: Vec::new(),
             queued_audit_effects: Vec::new(),
             queued_transcript_effects: Vec::new(),
             queued_config_effects: Vec::new(),

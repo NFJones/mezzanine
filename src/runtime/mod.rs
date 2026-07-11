@@ -307,8 +307,7 @@ pub use agent_state::{
     RuntimeAutoSizingDispatch, RuntimeAutoSizingFallbackPolicy, RuntimeAutoSizingTargetProfile,
 };
 pub use deferred::{
-    AttachedClientStepApplication, DeferredPaneInput, DeferredPanePipeWrite, DeferredPaneResize,
-    DeferredPaneTermination,
+    AttachedClientStepApplication, DeferredPaneInput, DeferredPaneResize, DeferredPaneTermination,
 };
 pub use env::{
     AuxiliarySocketKind, DEFAULT_SOCKET_NAME, MEZ_ENV_FIELD_SEPARATOR, PaneEnvironment, RuntimeEnv,
