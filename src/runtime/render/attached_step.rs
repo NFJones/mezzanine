@@ -127,43 +127,14 @@ impl RuntimeSessionService {
             .map(|(application, _)| application)
     }
 
-    /// Runs the apply attached terminal step plan deferred pane io operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn apply_attached_terminal_step_plan_deferred_pane_io(
-        &mut self,
-        primary_client_id: &crate::ids::ClientId,
-        step: &AttachedTerminalClientStepPlan,
-    ) -> Result<(AttachedClientStepApplication, Vec<DeferredPaneInput>)> {
-        self.apply_attached_terminal_step_plan_inner(primary_client_id, step, true)
-    }
-
     /// Applies one planned client step and returns its ordered adapter effects.
     pub(crate) fn apply_attached_terminal_step_transition(
         &mut self,
         primary_client_id: &crate::ids::ClientId,
         step: &AttachedTerminalClientStepPlan,
     ) -> Result<(AttachedClientStepApplication, RuntimeTransition)> {
-        let (application, deferred_inputs) =
-            self.apply_attached_terminal_step_plan_deferred_pane_io(primary_client_id, step)?;
-        let mut side_effects = deferred_inputs
-            .into_iter()
-            .map(|input| {
-                if input.priority {
-                    RuntimeSideEffect::WritePaneInputPriority {
-                        pane_id: input.pane_id,
-                        bytes: input.bytes,
-                    }
-                } else {
-                    RuntimeSideEffect::WritePaneInput {
-                        pane_id: input.pane_id,
-                        bytes: input.bytes,
-                    }
-                }
-            })
-            .collect::<Vec<_>>();
+        let (application, mut side_effects) =
+            self.apply_attached_terminal_step_plan_inner(primary_client_id, step, true)?;
         let render_reason = if application.full_redraw_required {
             Some(RenderInvalidationReason::FullRedraw)
         } else if application.agent_prompt_inputs_applied > 0 {
@@ -289,12 +260,12 @@ impl RuntimeSessionService {
         primary_client_id: &crate::ids::ClientId,
         step: &AttachedTerminalClientStepPlan,
         defer_pane_io: bool,
-    ) -> Result<(AttachedClientStepApplication, Vec<DeferredPaneInput>)> {
+    ) -> Result<(AttachedClientStepApplication, Vec<RuntimeSideEffect>)> {
         self.require_live()?;
         if self.session.primary_client_id() != Some(primary_client_id) {
             return Err(MezError::forbidden("operation requires the primary client"));
         }
-        let mut deferred_pane_inputs = Vec::new();
+        let mut pane_input_effects = Vec::new();
         let mut report = AttachedClientStepApplication {
             forwarded_bytes: 0,
             mux_actions_applied: 0,
@@ -312,7 +283,7 @@ impl RuntimeSessionService {
             report.view_refresh_required = true;
             if consume_action {
                 report.full_redraw_required = true;
-                return Ok((report, deferred_pane_inputs));
+                return Ok((report, pane_input_effects));
             }
         }
 
@@ -411,10 +382,9 @@ impl RuntimeSessionService {
                                 self.active_copy_modes.remove(descriptor.pane_id.as_str());
                                 self.scrollback_copy_mode_panes
                                     .remove(descriptor.pane_id.as_str());
-                                deferred_pane_inputs.push(DeferredPaneInput {
+                                pane_input_effects.push(RuntimeSideEffect::WritePaneInput {
                                     pane_id: descriptor.pane_id.to_string(),
                                     bytes: input.clone(),
-                                    priority: false,
                                 });
                                 report.forwarded_bytes =
                                     report.forwarded_bytes.saturating_add(input.len());
@@ -447,10 +417,9 @@ impl RuntimeSessionService {
                         self.active_copy_modes.remove(descriptor.pane_id.as_str());
                         self.scrollback_copy_mode_panes
                             .remove(descriptor.pane_id.as_str());
-                        deferred_pane_inputs.push(DeferredPaneInput {
+                        pane_input_effects.push(RuntimeSideEffect::WritePaneInput {
                             pane_id: descriptor.pane_id.to_string(),
                             bytes: input.clone(),
-                            priority: false,
                         });
                         report.forwarded_bytes = report.forwarded_bytes.saturating_add(input.len());
                     } else {
@@ -563,7 +532,7 @@ impl RuntimeSessionService {
         if !self.external_effects_use_adapter() {
             self.persist_or_defer_registry_update()?;
         }
-        Ok((report, deferred_pane_inputs))
+        Ok((report, pane_input_effects))
     }
 
     /// Returns true when a mux action can change pane/window geometry enough to

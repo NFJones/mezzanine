@@ -20,12 +20,12 @@ use super::{
     PaneExitUpdate, PaneReadinessState, Path, PathBuf, ProjectTrustStore, Result, RuleDecision,
     RuleMatch, RunningShellTransactionKind, RunningShellTransactionRef,
     RuntimeAgentModifiedFileSummary, RuntimeEnv, RuntimeLifecycleState, RuntimeRegistryUpdatePlan,
-    RuntimeSessionService, RuntimeSubagentLineage, RuntimeSubagentPlacement, SenderIdentity,
-    SocketDirectorySource, SplitDirection, SubagentWaitPolicy, TrustDecision, UnixStream,
-    authorize_unix_peer, authorize_unix_peer_uid, auxiliary_socket_path_for_control_socket,
-    bind_control_socket, default_socket_directory, effective_uid, ensure_private_socket_directory,
-    fs, json_escape, pane_environment, pane_environment_with_term,
-    prune_stale_socket_files_in_directory, runtime_cooperation_mode,
+    RuntimeSessionService, RuntimeSideEffect, RuntimeSubagentLineage, RuntimeSubagentPlacement,
+    SenderIdentity, SocketDirectorySource, SplitDirection, SubagentWaitPolicy, TrustDecision,
+    UnixStream, authorize_unix_peer, authorize_unix_peer_uid,
+    auxiliary_socket_path_for_control_socket, bind_control_socket, default_socket_directory,
+    effective_uid, ensure_private_socket_directory, fs, json_escape, pane_environment,
+    pane_environment_with_term, prune_stale_socket_files_in_directory, runtime_cooperation_mode,
     runtime_hook_event_for_lifecycle, runtime_hook_event_name, runtime_marker_for_action,
     socket_path_for_name,
 };
@@ -111,6 +111,36 @@ use crate::shell::{ResolvedShell, ShellSource};
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
+
+/// Exposes pane-input fields from canonical runtime side effects in assertions.
+trait RuntimeSideEffectTestExt {
+    /// Returns pane id, bytes, and priority for a pane-input side effect.
+    fn pane_input_parts(&self) -> (&str, &[u8], bool);
+}
+
+impl RuntimeSideEffectTestExt for RuntimeSideEffect {
+    fn pane_input_parts(&self) -> (&str, &[u8], bool) {
+        match self {
+            RuntimeSideEffect::WritePaneInput { pane_id, bytes } => (pane_id, bytes, false),
+            RuntimeSideEffect::WritePaneInputPriority { pane_id, bytes } => (pane_id, bytes, true),
+            effect => panic!("expected pane-input side effect, got {effect:?}"),
+        }
+    }
+}
+
+/// Returns only pane-input effects from a transition effect sequence.
+fn pane_input_effects(effects: &[RuntimeSideEffect]) -> Vec<&RuntimeSideEffect> {
+    effects
+        .iter()
+        .filter(|effect| {
+            matches!(
+                effect,
+                RuntimeSideEffect::WritePaneInput { .. }
+                    | RuntimeSideEffect::WritePaneInputPriority { .. }
+            )
+        })
+        .collect()
+}
 
 /// Defines the TEST HOST CLIPBOARD WRITES static used by this subsystem.
 ///

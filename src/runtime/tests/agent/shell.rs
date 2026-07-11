@@ -121,9 +121,9 @@ fn runtime_control_agent_shell_visibility_enters_and_exits_pane_subshell() {
             .join("\n")
             .contains("control show visible text")
     );
-    let enter_input = service.drain_deferred_pane_inputs();
-    assert_eq!(enter_input.len(), 1);
-    assert_eq!(enter_input[0].pane_id, pane_id);
+    let enter_input = service.drain_pane_io_transition().side_effects;
+    assert_eq!(pane_input_effects(&enter_input).len(), 1);
+    assert_eq!(enter_input[0].pane_input_parts().0, pane_id);
     assert!(service.agent_subshell_panes.contains(&pane_id));
 
     let hide = service.dispatch_runtime_control_body(
@@ -131,10 +131,11 @@ fn runtime_control_agent_shell_visibility_enters_and_exits_pane_subshell() {
         &primary,
     );
     assert!(hide.contains(r#""visible":false"#), "{hide}");
-    let exit_input = service.drain_deferred_pane_inputs();
-    assert_eq!(exit_input.len(), 1);
-    assert_eq!(exit_input[0].pane_id, pane_id);
-    assert_eq!(exit_input[0].bytes, b"\x04");
+    let exit_effects = service.drain_pane_io_transition().side_effects;
+    let exit_inputs = pane_input_effects(&exit_effects);
+    assert_eq!(exit_inputs.len(), 1);
+    assert_eq!(exit_inputs[0].pane_input_parts().0, pane_id);
+    assert_eq!(exit_inputs[0].pane_input_parts().1, b"\x04");
     assert!(!service.agent_subshell_panes.contains(&pane_id));
     let _ = process.terminate(Duration::from_millis(10));
 }
@@ -323,7 +324,7 @@ fn runtime_deferred_foreground_input_clears_agent_shell_output_filters() {
     service.remember_mez_wrapper_filter_command("%1", "MEZ_MARKER_TOKEN='abc'");
 
     let (report, deferred) = service
-        .apply_attached_terminal_step_plan_deferred_pane_io(
+        .apply_attached_terminal_step_transition(
             &primary,
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"a".to_vec())],
@@ -337,9 +338,10 @@ fn runtime_deferred_foreground_input_clears_agent_shell_output_filters() {
         .unwrap();
 
     assert_eq!(report.forwarded_bytes, 1);
-    assert_eq!(deferred.len(), 1);
-    assert_eq!(deferred[0].pane_id, "%1");
-    assert_eq!(deferred[0].bytes, b"a");
+    let pane_inputs = pane_input_effects(&deferred.side_effects);
+    assert_eq!(pane_inputs.len(), 1);
+    assert_eq!(pane_inputs[0].pane_input_parts().0, "%1");
+    assert_eq!(pane_inputs[0].pane_input_parts().1, b"a");
     assert!(!service.hidden_shell_render_retention_timer_needed());
     let prompt_repaint = service.visible_pane_output_bytes("%1", b"\r$ ");
     assert_eq!(prompt_repaint, b"\r$ ");
@@ -865,10 +867,10 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
         .execute_terminal_command(&primary, "agent-shell")
         .unwrap();
     assert!(show.contains("visibility=visible"), "{show}");
-    let enter_input = service.drain_deferred_pane_inputs();
-    assert_eq!(enter_input.len(), 1);
-    assert_eq!(enter_input[0].pane_id, pane_id);
-    let enter_text = String::from_utf8_lossy(&enter_input[0].bytes);
+    let enter_input = service.drain_pane_io_transition().side_effects;
+    assert_eq!(pane_input_effects(&enter_input).len(), 1);
+    assert_eq!(enter_input[0].pane_input_parts().0, pane_id);
+    let enter_text = String::from_utf8_lossy(enter_input[0].pane_input_parts().1);
     assert!(
         enter_text.contains("command env -u BASH_ENV -u ENV -u ZDOTDIR"),
         "{enter_text}"
@@ -882,10 +884,11 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
         .execute_terminal_command(&primary, "agent-shell")
         .unwrap();
     assert!(hide.contains("visibility=hidden"), "{hide}");
-    let exit_input = service.drain_deferred_pane_inputs();
-    assert_eq!(exit_input.len(), 1);
-    assert_eq!(exit_input[0].pane_id, pane_id);
-    assert_eq!(exit_input[0].bytes, b"\x04");
+    let exit_effects = service.drain_pane_io_transition().side_effects;
+    let exit_inputs = pane_input_effects(&exit_effects);
+    assert_eq!(exit_inputs.len(), 1);
+    assert_eq!(exit_inputs[0].pane_input_parts().0, pane_id);
+    assert_eq!(exit_inputs[0].pane_input_parts().1, b"\x04");
     assert!(!service.agent_subshell_panes.contains(&pane_id));
     assert!(!service.hidden_shell_render_retention_timer_needed());
     let simple_prompt_repaint = service.visible_pane_output_bytes(&pane_id, b"\r$ ");
@@ -1042,7 +1045,8 @@ fn runtime_agent_shell_slash_exit_exits_pane_subshell() {
         .execute_terminal_command(&primary, "agent-shell")
         .unwrap();
     assert!(show.contains("visibility=visible"), "{show}");
-    assert_eq!(service.drain_deferred_pane_inputs().len(), 1);
+    let enter_effects = service.drain_pane_io_transition().side_effects;
+    assert_eq!(pane_input_effects(&enter_effects).len(), 1);
     assert!(service.agent_subshell_panes.contains(&pane_id));
     service
         .pane_screens
@@ -1063,10 +1067,11 @@ fn runtime_agent_shell_slash_exit_exits_pane_subshell() {
         &primary,
     );
     assert!(response.contains(r#""visibility":"hidden""#), "{response}");
-    let exit_input = service.drain_deferred_pane_inputs();
-    assert_eq!(exit_input.len(), 1);
-    assert_eq!(exit_input[0].pane_id, pane_id);
-    assert_eq!(exit_input[0].bytes, b"\x04");
+    let exit_effects = service.drain_pane_io_transition().side_effects;
+    let exit_inputs = pane_input_effects(&exit_effects);
+    assert_eq!(exit_inputs.len(), 1);
+    assert_eq!(exit_inputs[0].pane_input_parts().0, pane_id);
+    assert_eq!(exit_inputs[0].pane_input_parts().1, b"\x04");
     assert!(!service.agent_subshell_panes.contains(&pane_id));
     let after_exit_screen = service.pane_screen(&pane_id).unwrap();
     assert!(

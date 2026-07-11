@@ -1109,7 +1109,7 @@ fn runtime_resume_picker_view_keeps_selected_link_styling_off_previous_cell() {
             .unwrap()
     };
     assert!(show.contains("visibility=visible"), "{show}");
-    let _ = service.drain_deferred_pane_inputs();
+    let _ = service.drain_pane_io_transition().side_effects;
 
     let submitted = service
         .apply_attached_terminal_step_plan(
@@ -1274,7 +1274,7 @@ fn runtime_resume_picker_attached_frame_keeps_selected_link_styling_off_previous
             .unwrap()
     };
     assert!(show.contains("visibility=visible"), "{show}");
-    let _ = service.drain_deferred_pane_inputs();
+    let _ = service.drain_pane_io_transition().side_effects;
 
     let submitted = service
         .apply_attached_terminal_step_plan(

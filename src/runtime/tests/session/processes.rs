@@ -23,10 +23,10 @@ fn runtime_pane_output_device_status_report_is_forwarded_to_pane_input() {
         .apply_pane_output_bytes(pane_id.clone(), b"\x1b[3;5H\x1b[6n".to_vec())
         .unwrap();
 
-    let deferred = service.drain_deferred_pane_inputs();
+    let deferred = service.drain_pane_io_transition().side_effects;
     assert_eq!(deferred.len(), 1);
-    assert_eq!(deferred[0].pane_id, pane_id);
-    assert_eq!(deferred[0].bytes, b"\x1b[3;5R");
+    assert_eq!(deferred[0].pane_input_parts().0, pane_id);
+    assert_eq!(deferred[0].pane_input_parts().1, b"\x1b[3;5R");
 }
 
 /// Verifies that runtime frame context sources `pane.process_name` from the
@@ -828,7 +828,7 @@ fn runtime_pane_write_failure_fails_running_file_action() {
         )
         .unwrap();
     assert_eq!(first.terminal_state, AgentTurnState::Running);
-    assert_eq!(service.drain_deferred_pane_inputs().len(), 1);
+    assert_eq!(service.drain_pane_io_transition().side_effects.len(), 1);
     assert!(
         service
             .running_shell_transactions

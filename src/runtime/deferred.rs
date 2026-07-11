@@ -6,36 +6,6 @@
 //! side-effect boundaries explicit without changing when the effects are
 //! scheduled or drained.
 
-use super::Size;
-
-/// Pane input write deferred for an async pane process owner.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeferredPaneInput {
-    /// Pane whose PTY should receive the bytes.
-    pub pane_id: String,
-    /// Bytes to write to the pane PTY.
-    pub bytes: Vec<u8>,
-    /// Whether the input must overtake already queued pane input.
-    ///
-    /// Transaction payloads use this to stay directly behind the wrapper whose
-    /// receiver has just announced that it is ready to drain payload data.
-    pub priority: bool,
-}
-
-/// Pane resize operation deferred for an async pane process owner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DeferredPaneResize {
-    /// Latest pane PTY size requested by runtime layout state.
-    pub size: Size,
-}
-
-/// Pane termination operation deferred for an async pane process owner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DeferredPaneTermination {
-    /// Whether the pane termination was requested as a forceful kill.
-    pub force: bool,
-}
-
 /// Effects applied while processing one attached terminal client step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttachedClientStepApplication {

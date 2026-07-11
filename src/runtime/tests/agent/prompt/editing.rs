@@ -1220,7 +1220,8 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
         .execute_terminal_command(&primary, "agent-shell")
         .unwrap();
     assert!(show.contains("visibility=visible"), "{show}");
-    assert_eq!(service.drain_deferred_pane_inputs().len(), 1);
+    let enter_effects = service.drain_pane_io_transition().side_effects;
+    assert_eq!(pane_input_effects(&enter_effects).len(), 1);
     service
         .append_agent_assistant_text_to_terminal_buffer(&pane_id, "done")
         .unwrap();
@@ -1249,10 +1250,11 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_prompt_cursor() {
         Some(AgentShellVisibility::Hidden),
         "Ctrl+D should hide the agent prompt before the parent prompt repaint"
     );
-    let exit_input = service.drain_deferred_pane_inputs();
-    assert_eq!(exit_input.len(), 1);
-    assert_eq!(exit_input[0].pane_id, pane_id);
-    assert_eq!(exit_input[0].bytes, b"\x04");
+    let exit_effects = service.drain_pane_io_transition().side_effects;
+    let exit_inputs = pane_input_effects(&exit_effects);
+    assert_eq!(exit_inputs.len(), 1);
+    assert_eq!(exit_inputs[0].pane_input_parts().0, pane_id);
+    assert_eq!(exit_inputs[0].pane_input_parts().1, b"\x04");
 
     let prompt = b"user@host ~/repo $ ";
     let prompt_repaint = service.renderable_pane_output_bytes(&pane_id, prompt);

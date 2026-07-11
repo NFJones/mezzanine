@@ -23,7 +23,7 @@ fn runtime_deferred_foreground_paste_stays_ordered_and_exits_copy_mode() {
 
     let input = vec![b'x'; crate::process::PTY_INPUT_WRITE_CHUNK_BYTES * 2 + 17];
     let (report, deferred) = service
-        .apply_attached_terminal_step_plan_deferred_pane_io(
+        .apply_attached_terminal_step_transition(
             &primary,
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(input.clone())],
@@ -37,10 +37,19 @@ fn runtime_deferred_foreground_paste_stays_ordered_and_exits_copy_mode() {
         .unwrap();
 
     assert_eq!(report.forwarded_bytes, input.len());
-    assert_eq!(deferred.len(), 1);
-    assert_eq!(deferred[0].bytes, input);
-    assert!(deferred.iter().all(|chunk| chunk.pane_id == "%1"));
-    assert!(deferred.iter().all(|chunk| !chunk.priority));
+    let pane_inputs = pane_input_effects(&deferred.side_effects);
+    assert_eq!(pane_inputs.len(), 1);
+    assert_eq!(pane_inputs[0].pane_input_parts().1, input);
+    assert!(
+        pane_inputs
+            .iter()
+            .all(|effect| effect.pane_input_parts().0 == "%1")
+    );
+    assert!(
+        pane_inputs
+            .iter()
+            .all(|effect| !effect.pane_input_parts().2)
+    );
     assert!(!service.active_copy_modes.contains_key("%1"));
 }
 

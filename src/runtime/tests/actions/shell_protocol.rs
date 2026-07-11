@@ -450,12 +450,12 @@ fn runtime_agent_shell_exit_after_shell_transaction_uses_command_exit() {
     );
 
     assert!(response.contains(r#""visibility":"hidden""#), "{response}");
-    let exit_inputs = service.drain_deferred_pane_inputs();
+    let exit_inputs = service.drain_pane_io_transition().side_effects;
     assert_eq!(exit_inputs.len(), 2);
-    assert_eq!(exit_inputs[0].pane_id, pane_id);
-    assert_eq!(exit_inputs[0].bytes, b"\x03");
-    assert_eq!(exit_inputs[1].pane_id, pane_id);
-    assert_eq!(exit_inputs[1].bytes, b"exit\n");
+    assert_eq!(exit_inputs[0].pane_input_parts().0, pane_id);
+    assert_eq!(exit_inputs[0].pane_input_parts().1, b"\x03");
+    assert_eq!(exit_inputs[1].pane_input_parts().0, pane_id);
+    assert_eq!(exit_inputs[1].pane_input_parts().1, b"exit\n");
     assert!(!service.agent_subshell_panes.contains(&pane_id));
     assert!(!service.agent_subshell_command_exit_panes.contains(&pane_id));
     let _ = process.terminate(Duration::from_millis(10));
@@ -1039,9 +1039,9 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
         .unwrap();
 
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
-    let deferred_wrapper = service.drain_deferred_pane_inputs();
+    let deferred_wrapper = service.drain_pane_io_transition().side_effects;
     assert_eq!(deferred_wrapper.len(), 1);
-    let wrapper_text = String::from_utf8_lossy(&deferred_wrapper[0].bytes);
+    let wrapper_text = String::from_utf8_lossy(deferred_wrapper[0].pane_input_parts().1);
     assert!(wrapper_text.contains("__mez_tx_"), "{wrapper_text}");
     assert!(!wrapper_text.contains("payload-marker"), "{wrapper_text}");
     let (marker, transaction) = service
@@ -1062,9 +1062,9 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
         .observe_agent_shell_transaction_start(&pane_id, &marker, "turn-1", "agent-%1", &pane_id)
         .unwrap();
 
-    let deferred_payload = service.drain_deferred_pane_inputs();
+    let deferred_payload = service.drain_pane_io_transition().side_effects;
     assert_eq!(deferred_payload.len(), 1);
-    let payload_text = String::from_utf8_lossy(&deferred_payload[0].bytes);
+    let payload_text = String::from_utf8_lossy(deferred_payload[0].pane_input_parts().1);
     let encoded = payload_text
         .lines()
         .take_while(|line| !line.starts_with("__MEZ_COMMAND_PAYLOAD_END_"))

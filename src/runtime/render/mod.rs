@@ -11,8 +11,8 @@ use super::service_state::{
 };
 use super::{
     AgentShellVisibility, AgentTurnRecord, AgentTurnState, AttachedClientStepApplication,
-    AttachedTerminalClientStepPlan, ClientViewRole, CopyMode, CopyModeKeyAction, DeferredPaneInput,
-    EventKind, MezError, MouseAction, MouseBorderCell, MousePaneRegion, MouseSelectionDragState,
+    AttachedTerminalClientStepPlan, ClientViewRole, CopyMode, CopyModeKeyAction, EventKind,
+    MezError, MouseAction, MouseBorderCell, MousePaneRegion, MouseSelectionDragState,
     MouseWindowActionFrameCell, MouseWindowFrameCell, MuxAction, ObserverDecisionState,
     PaneDescriptor, PaneGeometry, PaneInputDispatch, PaneNavigationDirection, PasteBufferTarget,
     ReadlineInputDecoder, ReadlineOutcome, ReadlinePrompt, ReadlinePromptKind, RenderedClientView,

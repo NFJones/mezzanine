@@ -13,21 +13,21 @@ use layout::terminal_clipboard_policy_accepts_osc52;
 
 use super::{
     ActionContentBlock, ActionResult, ActionStatus, ActivePanePipe, AgentId, AgentTurnRecord,
-    AgentTurnState, AuditActor, BTreeSet, ContextBlock, ContextSourceKind, DeferredPaneInput,
-    DeferredPaneResize, DeferredPaneTermination, EventKind, ExitedPaneProcess, HookEvent,
-    HookExecutionResult, HookExecutionStatus, HookFailure, HookFailureKind, MezError,
-    PaneDescriptor, PaneExitRecord, PaneExitStatus, PaneExitUpdate, PaneId, PaneOutputUpdate,
-    PaneProcessOutput, PaneProcessStart, PaneReadinessState, PaneResizeUpdate, PaneSizeSpec, Path,
-    PathBuf, ReadinessOverrideRevocation, ResizeAxis, ResizeDirection, Result,
-    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeHookPipelineBlock,
-    RuntimeLifecycleState, RuntimeSessionService, RuntimeShellTransactionActionFailure,
-    RuntimeShellTransactionTimerKind, RuntimeShellTransactionTimerRef, SessionSnapshotPayload,
-    ShellClassification, ShellTransaction, Size, SplitDirection, StoppedPanePipe, TerminalOscEvent,
-    TerminalScreen, WindowId, action_result_context_content, current_unix_millis,
-    current_unix_seconds, decode_shell_output_transport_with_diagnostics,
-    focused_shell_pre_action_timeout_result, hook_execution_audit_record, json_escape,
-    local_action_plan, optional_i32_json, pane_content_size_for_geometry,
-    pane_environment_with_term, postprocess_shell_action_success_output, rendered_window_body_size,
+    AgentTurnState, AuditActor, BTreeSet, ContextBlock, ContextSourceKind, EventKind,
+    ExitedPaneProcess, HookEvent, HookExecutionResult, HookExecutionStatus, HookFailure,
+    HookFailureKind, MezError, PaneDescriptor, PaneExitRecord, PaneExitStatus, PaneExitUpdate,
+    PaneId, PaneOutputUpdate, PaneProcessOutput, PaneProcessStart, PaneReadinessState,
+    PaneResizeUpdate, PaneSizeSpec, Path, PathBuf, ReadinessOverrideRevocation, ResizeAxis,
+    ResizeDirection, Result, RunningShellTransactionKind, RunningShellTransactionRef,
+    RuntimeHookPipelineBlock, RuntimeLifecycleState, RuntimeSessionService,
+    RuntimeShellTransactionActionFailure, RuntimeShellTransactionTimerKind,
+    RuntimeShellTransactionTimerRef, SessionSnapshotPayload, ShellClassification, ShellTransaction,
+    Size, SplitDirection, StoppedPanePipe, TerminalOscEvent, TerminalScreen, WindowId,
+    action_result_context_content, current_unix_millis, current_unix_seconds,
+    decode_shell_output_transport_with_diagnostics, focused_shell_pre_action_timeout_result,
+    hook_execution_audit_record, json_escape, local_action_plan, optional_i32_json,
+    pane_content_size_for_geometry, pane_environment_with_term,
+    postprocess_shell_action_success_output, rendered_window_body_size,
     runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
     runtime_execution_ready_for_provider_continuation, runtime_hook_event_name,
     runtime_hook_execution_status_name, runtime_marker_for_action,
@@ -756,54 +756,6 @@ impl RuntimeSessionService {
         self.detached_pane_primary_pids.remove(&pane_id);
         self.pane_processes
             .insert_running_pane_process(pane_id, process)
-    }
-
-    /// Drains pane input operations deferred for external pane process adapters.
-    pub fn drain_deferred_pane_inputs(&mut self) -> Vec<DeferredPaneInput> {
-        std::mem::take(&mut self.queued_pane_input_effects)
-            .into_iter()
-            .filter_map(|effect| match effect {
-                RuntimeSideEffect::WritePaneInput { pane_id, bytes } => Some(DeferredPaneInput {
-                    pane_id,
-                    bytes,
-                    priority: false,
-                }),
-                RuntimeSideEffect::WritePaneInputPriority { pane_id, bytes } => {
-                    Some(DeferredPaneInput {
-                        pane_id,
-                        bytes,
-                        priority: true,
-                    })
-                }
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// Drains coalesced pane resize operations deferred for external adapters.
-    pub fn drain_deferred_pane_resizes(&mut self) -> Vec<(String, DeferredPaneResize)> {
-        std::mem::take(&mut self.queued_pane_resize_effects)
-            .into_iter()
-            .filter_map(|(pane_id, effect)| match effect {
-                RuntimeSideEffect::ResizePane { size, .. } => {
-                    Some((pane_id, DeferredPaneResize { size }))
-                }
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// Drains coalesced pane termination operations deferred for external adapters.
-    pub fn drain_deferred_pane_terminations(&mut self) -> Vec<(String, DeferredPaneTermination)> {
-        std::mem::take(&mut self.queued_pane_termination_effects)
-            .into_iter()
-            .filter_map(|(pane_id, effect)| match effect {
-                RuntimeSideEffect::TerminatePane { force, .. } => {
-                    Some((pane_id, DeferredPaneTermination { force }))
-                }
-                _ => None,
-            })
-            .collect()
     }
 
     /// Drains pane-worker I/O through the transport-neutral transition contract.

@@ -37,7 +37,7 @@ fn runtime_deferred_foreground_input_synchronizes_active_window_panes() {
         .unwrap();
 
     let (report, deferred) = service
-        .apply_attached_terminal_step_plan_deferred_pane_io(
+        .apply_attached_terminal_step_transition(
             &primary,
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::ForwardToPane(b"a".to_vec())],
@@ -51,11 +51,12 @@ fn runtime_deferred_foreground_input_synchronizes_active_window_panes() {
         .unwrap();
 
     assert_eq!(report.forwarded_bytes, 2);
-    assert_eq!(deferred.len(), 2);
-    assert_eq!(deferred[0].pane_id, "%1");
-    assert_eq!(deferred[0].bytes, b"a");
-    assert_eq!(deferred[1].pane_id, "%2");
-    assert_eq!(deferred[1].bytes, b"a");
+    let pane_inputs = pane_input_effects(&deferred.side_effects);
+    assert_eq!(pane_inputs.len(), 2);
+    assert_eq!(pane_inputs[0].pane_input_parts().0, "%1");
+    assert_eq!(pane_inputs[0].pane_input_parts().1, b"a");
+    assert_eq!(pane_inputs[1].pane_input_parts().0, "%2");
+    assert_eq!(pane_inputs[1].pane_input_parts().1, b"a");
 }
 
 /// Verifies repeated runtime `terminal/step` requests with the same
@@ -75,23 +76,23 @@ fn runtime_control_terminal_step_replays_completed_response_without_reapplying_i
         .unwrap();
     let handed_off = service.take_running_pane_processes_for_adapter(1).unwrap();
     assert_eq!(handed_off.len(), 1);
-    assert!(service.drain_deferred_pane_inputs().is_empty());
+    assert!(service.drain_pane_io_transition().side_effects.is_empty());
 
     let first = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"terminal-step-first","method":"terminal/step","params":{"idempotency_key":"terminal-step-replay","input_bytes":[97],"render":false}}"#,
         &primary,
     );
-    let first_inputs = service.drain_deferred_pane_inputs();
+    let first_inputs = service.drain_pane_io_transition().side_effects;
     assert_eq!(first_inputs.len(), 1);
-    assert_eq!(first_inputs[0].pane_id, "%1");
-    assert_eq!(first_inputs[0].bytes, b"a");
+    assert_eq!(first_inputs[0].pane_input_parts().0, "%1");
+    assert_eq!(first_inputs[0].pane_input_parts().1, b"a");
 
     let second = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"terminal-step-second","method":"terminal/step","params":{"idempotency_key":"terminal-step-replay","input_bytes":[97],"render":false}}"#,
         &primary,
     );
     assert_eq!(second, first);
-    assert!(service.drain_deferred_pane_inputs().is_empty());
+    assert!(service.drain_pane_io_transition().side_effects.is_empty());
     assert_eq!(service.control_idempotency().len(), 1);
 }
 
