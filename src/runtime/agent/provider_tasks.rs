@@ -947,7 +947,7 @@ impl RuntimeSessionService {
         dispatch: &RuntimeAgentProviderDispatch,
         generation: u64,
         timeout_ms: u64,
-    ) -> Result<()> {
+    ) -> Result<RuntimeTransition> {
         let turn = &dispatch.turn;
         self.claimed_agent_provider_tasks.insert(
             turn.turn_id.clone(),
@@ -966,7 +966,17 @@ impl RuntimeSessionService {
                 "provider_task claim_lease started generation={generation} timeout_ms={timeout_ms}"
             ),
         )?;
-        Ok(())
+        Ok(RuntimeTransition {
+            applied: true,
+            side_effects: vec![RuntimeSideEffect::ScheduleTimer {
+                key: RuntimeTimerKey::new(
+                    RuntimeTimerKind::ProviderClaim,
+                    turn.turn_id.clone(),
+                    generation,
+                ),
+                delay_ms: timeout_ms,
+            }],
+        })
     }
 
     /// Clears the provider-worker claim lease for a settled turn.

@@ -715,19 +715,12 @@ impl AsyncRuntimeSessionActor {
                         self.timers.next_provider_claim_generation =
                             self.timers.next_provider_claim_generation.saturating_add(1);
                         let generation = self.timers.next_provider_claim_generation;
-                        self.service.record_claimed_agent_provider_task(
+                        let transition = self.service.record_claimed_agent_provider_task(
                             &dispatch,
                             generation,
                             DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS,
                         )?;
-                        self.queue_runtime_side_effects(vec![RuntimeSideEffect::ScheduleTimer {
-                            key: RuntimeTimerKey::new(
-                                RuntimeTimerKind::ProviderClaim,
-                                turn_id.clone(),
-                                generation,
-                            ),
-                            delay_ms: DEFAULT_PROVIDER_CLAIM_TIMEOUT_MS,
-                        }])?;
+                        self.queue_runtime_side_effects(transition.side_effects)?;
                         self.queue_deferred_pane_io_side_effects_from_service()?;
                         Ok(Some(dispatch))
                     } else {
