@@ -34,8 +34,7 @@ use crate::message::{
 };
 use crate::process::{PaneExitStatus, PaneProcess};
 use crate::runtime::{
-    AttachedClientStepApplication, DeferredPaneInput, DeferredPaneResize, DeferredPaneTermination,
-    RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
+    AttachedClientStepApplication, RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
     RuntimeEventConnectionTable, RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSessionService,
     RuntimeShellTransactionTimerKind, RuntimeSnapshotControlAsyncOutcome,

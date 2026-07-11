@@ -3,25 +3,22 @@
 //! This module owns the async runtime actor boundary for Mezzanine. It keeps related
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
-mod side_effects;
-
 use super::{
     AgentId, AgentProviderEvent, Arc, AsyncControlInputResult, AsyncHookEvent, AsyncMessageFanout,
     AsyncMessageInputResult, AsyncRenderedClientFlush, AsyncRenderedClientFrame,
     AsyncRuntimeActorConfig, AsyncRuntimeActorExit, AsyncRuntimeRequest, AsyncRuntimeSessionActor,
     AsyncRuntimeSessionHandle, AttachedClientStepApplication, AttachedTerminalClientStepPlan,
     AttachedTerminalOutputModes, ClientEvent, ClientId, ClientState, ClientStatusLine,
-    ClientViewRole, ControlConnectionState, DEFAULT_ASYNC_IDLE_CLEANUP_INTERVAL, DeferredPaneInput,
-    DeferredPaneResize, DeferredPaneTermination, DeliveryCursor, FanoutBatch, MessageConnection,
-    MezError, Notify, PaneEvent, PersistenceEvent, RenderInvalidationReason, RenderedClientView,
-    Result, RuntimeAgentProviderDispatch, RuntimeAgentProviderTask, RuntimeEvent,
-    RuntimeEventBatch, RuntimeEventConnectionTable, RuntimeEventIngressReport, RuntimeEventWakeup,
-    RuntimeLifecycleState, RuntimeSessionService, RuntimeShellTransactionTimerKind,
-    RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
-    RuntimeSnapshotControlAsyncWorkKind, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition,
-    ShutdownEvent, Size, TerminalClientLoopConfig, TimerEvent, VecDeque,
-    compose_client_presentation_with_styles, delivery_batch_json, encode_mmp_body, mpsc, oneshot,
-    watch,
+    ClientViewRole, ControlConnectionState, DEFAULT_ASYNC_IDLE_CLEANUP_INTERVAL, DeliveryCursor,
+    FanoutBatch, MessageConnection, MezError, Notify, PaneEvent, PersistenceEvent,
+    RenderInvalidationReason, RenderedClientView, Result, RuntimeAgentProviderDispatch,
+    RuntimeAgentProviderTask, RuntimeEvent, RuntimeEventBatch, RuntimeEventConnectionTable,
+    RuntimeEventIngressReport, RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSessionService,
+    RuntimeShellTransactionTimerKind, RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome,
+    RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind, RuntimeTimerKey,
+    RuntimeTimerKind, RuntimeTransition, ShutdownEvent, Size, TerminalClientLoopConfig, TimerEvent,
+    VecDeque, compose_client_presentation_with_styles, delivery_batch_json, encode_mmp_body, mpsc,
+    oneshot, watch,
 };
 use crate::agent::{
     DEFAULT_PROVIDER_TIMEOUT_MS, ProviderErrorRetryClass, provider_error_retry_class_from_parts,
@@ -32,8 +29,6 @@ use crate::runtime::PaneResizeUpdate;
 #[cfg(test)]
 use crate::runtime::{DeferredConfigFileWrite, coalesce_deferred_config_file_writes};
 use crate::terminal::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
-
-use side_effects::*;
 
 // Serialized runtime actor and handle implementation.
 
@@ -1504,15 +1499,7 @@ impl AsyncRuntimeSessionActor {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn deferred_pane_io_side_effects_from_service(&mut self) -> Vec<RuntimeSideEffect> {
-        deferred_pane_inputs_to_side_effects(self.service.drain_deferred_pane_inputs())
-            .into_iter()
-            .chain(deferred_pane_resizes_to_side_effects(
-                self.service.drain_deferred_pane_resizes(),
-            ))
-            .chain(deferred_pane_terminations_to_side_effects(
-                self.service.drain_deferred_pane_terminations(),
-            ))
-            .collect()
+        self.service.drain_pane_io_transition().side_effects
     }
 
     /// Runs the queue provider poll timer if needed operation for this subsystem.

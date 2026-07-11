@@ -777,6 +777,43 @@ impl RuntimeSessionService {
             .collect()
     }
 
+    /// Drains pane-worker I/O through the transport-neutral transition contract.
+    pub(crate) fn drain_pane_io_transition(&mut self) -> RuntimeTransition {
+        let mut side_effects = self
+            .drain_deferred_pane_inputs()
+            .into_iter()
+            .map(|input| {
+                if input.priority {
+                    RuntimeSideEffect::WritePaneInputPriority {
+                        pane_id: input.pane_id,
+                        bytes: input.bytes,
+                    }
+                } else {
+                    RuntimeSideEffect::WritePaneInput {
+                        pane_id: input.pane_id,
+                        bytes: input.bytes,
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        side_effects.extend(self.drain_deferred_pane_resizes().into_iter().map(
+            |(pane_id, resize)| RuntimeSideEffect::ResizePane {
+                pane_id,
+                size: resize.size,
+            },
+        ));
+        side_effects.extend(self.drain_deferred_pane_terminations().into_iter().map(
+            |(pane_id, termination)| RuntimeSideEffect::TerminatePane {
+                pane_id,
+                force: termination.force,
+            },
+        ));
+        RuntimeTransition {
+            applied: false,
+            side_effects,
+        }
+    }
+
     /// Returns true when a pane's PTY/process handle is owned by an async worker.
     pub fn pane_process_is_async_owned(&self, pane_id: &str) -> bool {
         self.async_owned_pane_processes.contains_key(pane_id)
