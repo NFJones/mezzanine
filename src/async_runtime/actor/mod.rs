@@ -443,8 +443,9 @@ impl AsyncRuntimeSessionActor {
                     &mut connection,
                 );
                 let result = self
-                    .queue_deferred_pane_io_side_effects_from_service()
-                    .and_then(|_| self.service.persist_or_defer_registry_update())
+                    .service
+                    .persist_or_defer_registry_update()
+                    .and_then(|_| self.queue_deferred_pane_io_side_effects_from_service())
                     .map(|_| AsyncControlInputResult {
                         output: encode_control_body(&body),
                         consumed,
