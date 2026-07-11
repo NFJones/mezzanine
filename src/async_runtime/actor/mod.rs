@@ -1862,15 +1862,9 @@ impl AsyncRuntimeSessionActor {
                 pane_id,
                 action_id: _,
                 lines,
-            } => {
-                let _ = self
-                    .service
-                    .append_agent_shell_output_status_lines_to_terminal_buffer(&pane_id, &lines);
-                Ok(RuntimeTransition {
-                    applied: true,
-                    side_effects: Vec::new(),
-                })
-            }
+            } => Ok(self
+                .service
+                .apply_agent_provider_output_progress_transition(&pane_id, &lines)),
             AgentProviderEvent::Completed {
                 agent_id,
                 turn_id,

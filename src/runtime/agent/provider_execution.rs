@@ -30,6 +30,19 @@ fn runtime_execution_is_patch_free(execution: &AgentTurnExecution) -> bool {
 }
 
 impl RuntimeSessionService {
+    /// Applies provider output progress through the transport-neutral transition contract.
+    pub(crate) fn apply_agent_provider_output_progress_transition(
+        &mut self,
+        pane_id: &str,
+        lines: &[String],
+    ) -> crate::async_runtime::RuntimeTransition {
+        let _ = self.append_agent_shell_output_status_lines_to_terminal_buffer(pane_id, lines);
+        crate::async_runtime::RuntimeTransition {
+            applied: true,
+            side_effects: Vec::new(),
+        }
+    }
+
     /// Runs the execute agent turn with provider operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
