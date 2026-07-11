@@ -2423,10 +2423,6 @@ impl AsyncRuntimeSessionActor {
             cursor_blink_schedule_timer_keys(side_effects.as_slice());
         let cancelled_cursor_blink_timer_keys =
             cursor_blink_cancel_timer_keys(side_effects.as_slice());
-        let scheduled_status_refresh_timer_keys =
-            status_refresh_schedule_timer_keys(side_effects.as_slice());
-        let cancelled_status_refresh_timer_keys =
-            status_refresh_cancel_timer_keys(side_effects.as_slice());
         let scheduled_provider_poll_timer_key =
             provider_poll_schedule_timer_key(side_effects.as_slice());
         let cancelled_provider_poll_timer_keys =
@@ -2445,6 +2441,27 @@ impl AsyncRuntimeSessionActor {
             pane_pipe_health_cancel_timer_keys(side_effects.as_slice());
         let queued = side_effects.len();
         let should_notify = !side_effects.is_empty();
+        for effect in &side_effects {
+            match effect {
+                RuntimeSideEffect::ScheduleTimer { key, .. }
+                    if key.kind == RuntimeTimerKind::StatusRefresh =>
+                {
+                    self.scheduled_status_refresh_timers
+                        .insert(key.owner_id.clone(), key.clone());
+                }
+                RuntimeSideEffect::CancelTimer { key }
+                    if key.kind == RuntimeTimerKind::StatusRefresh
+                        && self
+                            .scheduled_status_refresh_timers
+                            .get(key.owner_id.as_str())
+                            == Some(key) =>
+                {
+                    self.scheduled_status_refresh_timers
+                        .remove(key.owner_id.as_str());
+                }
+                _ => {}
+            }
+        }
         for effect in side_effects {
             self.enqueue_runtime_side_effect(effect);
         }
@@ -2477,20 +2494,6 @@ impl AsyncRuntimeSessionActor {
                 == Some(&key)
             {
                 self.scheduled_cursor_blink_timers
-                    .remove(key.owner_id.as_str());
-            }
-        }
-        for key in scheduled_status_refresh_timer_keys {
-            self.scheduled_status_refresh_timers
-                .insert(key.owner_id.clone(), key);
-        }
-        for key in cancelled_status_refresh_timer_keys {
-            if self
-                .scheduled_status_refresh_timers
-                .get(key.owner_id.as_str())
-                == Some(&key)
-            {
-                self.scheduled_status_refresh_timers
                     .remove(key.owner_id.as_str());
             }
         }
@@ -3874,44 +3877,6 @@ fn cursor_blink_cancel_timer_keys(effects: &[RuntimeSideEffect]) -> Vec<RuntimeT
         .iter()
         .filter_map(|effect| match effect {
             RuntimeSideEffect::CancelTimer { key } if key.kind == RuntimeTimerKind::CursorBlink => {
-                Some(key.clone())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// Runs the status refresh schedule timer keys operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn status_refresh_schedule_timer_keys(effects: &[RuntimeSideEffect]) -> Vec<RuntimeTimerKey> {
-    effects
-        .iter()
-        .filter_map(|effect| match effect {
-            RuntimeSideEffect::ScheduleTimer { key, .. }
-                if key.kind == RuntimeTimerKind::StatusRefresh =>
-            {
-                Some(key.clone())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// Runs the status refresh cancel timer keys operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn status_refresh_cancel_timer_keys(effects: &[RuntimeSideEffect]) -> Vec<RuntimeTimerKey> {
-    effects
-        .iter()
-        .filter_map(|effect| match effect {
-            RuntimeSideEffect::CancelTimer { key }
-                if key.kind == RuntimeTimerKind::StatusRefresh =>
-            {
                 Some(key.clone())
             }
             _ => None,

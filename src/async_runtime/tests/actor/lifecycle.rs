@@ -113,6 +113,42 @@ async fn async_actor_ignores_stale_status_refresh_timer_events() {
     assert_eq!(exit.commands_processed, 5);
 }
 
+/// Verifies timer bookkeeping follows side-effect order when one generation is
+/// cancelled and then scheduled again in the same actor enqueue operation.
+/// The final schedule is authoritative, so its timer event must be accepted.
+#[tokio::test(flavor = "current_thread")]
+async fn async_actor_honors_cancel_then_reschedule_timer_order() {
+    let mut service = test_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 1)
+        .unwrap();
+    let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
+        .build()
+        .unwrap();
+
+    let client = async {
+        let key = RuntimeTimerKey::new(RuntimeTimerKind::StatusRefresh, primary.as_str(), 1);
+        handle
+            .queue_runtime_side_effects(vec![
+                RuntimeSideEffect::CancelTimer { key: key.clone() },
+                RuntimeSideEffect::ScheduleTimer {
+                    key: key.clone(),
+                    delay_ms: 1000,
+                },
+            ])
+            .await
+            .unwrap();
+        let mut batch = RuntimeEventBatch::new();
+        batch.push(RuntimeEvent::Timer(TimerEvent { key, now_ms: 1000 }));
+
+        let report = handle.submit_runtime_events(batch).await.unwrap();
+        assert_eq!(report.applied, 1);
+        handle.shutdown().await.unwrap();
+    };
+
+    let ((), _) = tokio::join!(client, actor.run());
+}
+
 /// Verifies alternate-screen exit pane output is promoted to a full redraw
 /// invalidation instead of an ordinary pane-output update. This ensures the
 /// attached-terminal client discards retained differential frame state before
