@@ -409,18 +409,16 @@ impl AsyncRuntimeSessionActor {
                 let previous_lifecycle_state = self.service.lifecycle_state();
                 let result = self
                     .service
-                    .handle_control_input_for_connection_with_snapshots_async(
+                    .handle_control_input_for_connection_with_snapshots_transition(
                         &input,
                         max_content_length,
                         &mut connection,
                         &snapshots,
                     )
                     .await
-                    .and_then(|(output, consumed)| {
+                    .and_then(|(output, consumed, transition)| {
                         self.queue_deferred_pane_io_side_effects_from_service()?;
-                        self.queue_runtime_side_effects(
-                            self.service.registry_persistence_transition().side_effects,
-                        )?;
+                        self.queue_runtime_side_effects(transition.side_effects)?;
                         Ok(AsyncControlInputResult {
                             output,
                             consumed,
@@ -443,18 +441,16 @@ impl AsyncRuntimeSessionActor {
                 reply,
             } => {
                 let previous_lifecycle_state = self.service.lifecycle_state();
-                let body = self.service.complete_runtime_snapshot_control_async_work(
-                    work,
-                    *outcome,
-                    &mut connection,
-                );
+                let (body, transition) = self
+                    .service
+                    .complete_runtime_snapshot_control_async_work_transition(
+                        work,
+                        *outcome,
+                        &mut connection,
+                    );
                 let result = self
                     .queue_deferred_pane_io_side_effects_from_service()
-                    .and_then(|_| {
-                        self.queue_runtime_side_effects(
-                            self.service.registry_persistence_transition().side_effects,
-                        )
-                    })
+                    .and_then(|_| self.queue_runtime_side_effects(transition.side_effects))
                     .map(|_| AsyncControlInputResult {
                         output: encode_control_body(&body),
                         consumed,

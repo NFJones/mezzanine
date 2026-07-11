@@ -9,8 +9,9 @@
 use super::super::{
     ControlConnectionState, EventKind, MezError, Result, RuntimeLifecycleState,
     RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
-    RuntimeSnapshotControlAsyncWorkKind, RuntimeSnapshotOwnedCreationContext, SnapshotRepository,
-    decode_control_frame, encode_control_body, parse_json_rpc_request, runtime_json_rpc_error,
+    RuntimeSnapshotControlAsyncWorkKind, RuntimeSnapshotOwnedCreationContext, RuntimeTransition,
+    SnapshotRepository, decode_control_frame, encode_control_body, parse_json_rpc_request,
+    runtime_json_rpc_error,
 };
 use super::protocol::runtime_snapshot_id_from_request;
 use crate::control::{authorize_control_request, validate_control_method_params_schema};
@@ -132,6 +133,26 @@ impl RuntimeSessionService {
             self.persist_or_defer_registry_update()?;
         }
         Ok((output, offset))
+    }
+
+    /// Handles actor-owned control input and emits its registry persistence
+    /// through the runtime transition contract.
+    pub(crate) async fn handle_control_input_for_connection_with_snapshots_transition(
+        &mut self,
+        input: &[u8],
+        max_content_length: usize,
+        connection: &mut ControlConnectionState,
+        snapshots: &SnapshotRepository,
+    ) -> Result<(Vec<u8>, usize, RuntimeTransition)> {
+        let (output, consumed) = self
+            .handle_control_input_for_connection_with_snapshots_async(
+                input,
+                max_content_length,
+                connection,
+                snapshots,
+            )
+            .await?;
+        Ok((output, consumed, self.registry_persistence_transition()))
     }
 
     /// Prepares a single snapshot control request for repository I/O outside
@@ -265,5 +286,18 @@ impl RuntimeSessionService {
         };
         self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
         body
+    }
+
+    /// Completes actor-owned snapshot work and emits registry persistence as a
+    /// runtime transition rather than deriving it in the async actor.
+    pub(crate) fn complete_runtime_snapshot_control_async_work_transition(
+        &mut self,
+        work: RuntimeSnapshotControlAsyncWork,
+        outcome: RuntimeSnapshotControlAsyncOutcome,
+        connection: &mut ControlConnectionState,
+    ) -> (String, RuntimeTransition) {
+        let body = self.complete_runtime_snapshot_control_async_work(work, outcome, connection);
+        let transition = self.registry_persistence_transition();
+        (body, transition)
     }
 }
