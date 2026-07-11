@@ -14,11 +14,11 @@ use super::{
     RenderInvalidationReason, RenderedClientView, Result, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderTask, RuntimeEvent, RuntimeEventBatch, RuntimeEventConnectionTable,
     RuntimeEventIngressReport, RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSessionService,
-    RuntimeShellTransactionTimerKind, RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome,
-    RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind, RuntimeTimerKey,
-    RuntimeTimerKind, RuntimeTransition, ShutdownEvent, Size, TerminalClientLoopConfig, TimerEvent,
-    VecDeque, compose_client_presentation_with_styles, delivery_batch_json, encode_mmp_body, mpsc,
-    oneshot, watch,
+    RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
+    RuntimeSnapshotControlAsyncWorkKind, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition,
+    ShutdownEvent, Size, TerminalClientLoopConfig, TimerEvent, VecDeque,
+    compose_client_presentation_with_styles, delivery_batch_json, encode_mmp_body, mpsc, oneshot,
+    watch,
 };
 use crate::agent::{
     DEFAULT_PROVIDER_TIMEOUT_MS, ProviderErrorRetryClass, provider_error_retry_class_from_parts,
@@ -1883,29 +1883,14 @@ impl AsyncRuntimeSessionActor {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn shell_transaction_timer_side_effects(&mut self) -> Vec<RuntimeSideEffect> {
-        let timers = self.service.running_shell_transaction_timers();
-        let active_keys = shell_transaction_timer_keys(&timers);
-        self.timers
-            .shell_transactions
-            .retain(|key| active_keys.contains(key));
-        let now_ms = async_runtime_current_unix_millis();
-        timers
+        self.service
+            .shell_transaction_timer_transition(
+                &self.timers.shell_transactions,
+                async_runtime_current_unix_millis(),
+            )
+            .side_effects
             .into_iter()
-            .filter_map(|timer| {
-                let key = RuntimeTimerKey::new(
-                    runtime_timer_kind_for_shell_transaction(timer.kind),
-                    timer.marker,
-                    timer.started_at_unix_ms,
-                );
-                if self.timers.shell_transactions.contains(&key) {
-                    return None;
-                }
-                let deadline_ms = timer.started_at_unix_ms.saturating_add(timer.timeout_ms);
-                Some(RuntimeSideEffect::ScheduleTimer {
-                    key,
-                    delay_ms: deadline_ms.saturating_sub(now_ms),
-                })
-            })
+            .filter(|effect| matches!(effect, RuntimeSideEffect::ScheduleTimer { .. }))
             .collect()
     }
 
@@ -1915,21 +1900,14 @@ impl AsyncRuntimeSessionActor {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn cancel_stale_shell_transaction_timer_side_effects(&mut self) -> Vec<RuntimeSideEffect> {
-        let timers = self.service.running_shell_transaction_timers();
-        let active_keys = shell_transaction_timer_keys(&timers);
-        let stale_keys = self
-            .timers
-            .shell_transactions
-            .iter()
-            .filter(|key| !active_keys.contains(*key))
-            .cloned()
-            .collect::<Vec<_>>();
-        for key in &stale_keys {
-            self.timers.shell_transactions.remove(key);
-        }
-        stale_keys
+        self.service
+            .shell_transaction_timer_transition(
+                &self.timers.shell_transactions,
+                async_runtime_current_unix_millis(),
+            )
+            .side_effects
             .into_iter()
-            .map(|key| RuntimeSideEffect::CancelTimer { key })
+            .filter(|effect| matches!(effect, RuntimeSideEffect::CancelTimer { .. }))
             .collect()
     }
 
@@ -2917,22 +2895,6 @@ fn runtime_side_effect_kind(effect: &RuntimeSideEffect) -> &'static str {
     }
 }
 
-/// Runs the runtime timer kind for shell transaction operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_timer_kind_for_shell_transaction(
-    kind: RuntimeShellTransactionTimerKind,
-) -> RuntimeTimerKind {
-    match kind {
-        RuntimeShellTransactionTimerKind::AgentAction => RuntimeTimerKind::ShellTransaction,
-        RuntimeShellTransactionTimerKind::ReadinessProbe => RuntimeTimerKind::ReadinessProbe,
-        RuntimeShellTransactionTimerKind::Bootstrap => RuntimeTimerKind::Bootstrap,
-        RuntimeShellTransactionTimerKind::FocusedShellHook => RuntimeTimerKind::FocusedShellHook,
-    }
-}
-
 /// Runs the runtime timer kind is shell transaction operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -3059,26 +3021,6 @@ fn side_effects_include_registry_persistence(effects: &[RuntimeSideEffect]) -> b
     effects
         .iter()
         .any(|effect| matches!(effect, RuntimeSideEffect::PersistRegistry { .. }))
-}
-
-/// Runs the shell transaction timer keys operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn shell_transaction_timer_keys(
-    timers: &[crate::runtime::RuntimeShellTransactionTimerRef],
-) -> std::collections::HashSet<RuntimeTimerKey> {
-    timers
-        .iter()
-        .map(|timer| {
-            RuntimeTimerKey::new(
-                runtime_timer_kind_for_shell_transaction(timer.kind),
-                timer.marker.clone(),
-                timer.started_at_unix_ms,
-            )
-        })
-        .collect()
 }
 
 /// Runs the async runtime current unix millis operation for this subsystem.

@@ -37,9 +37,8 @@ use crate::runtime::{
     AttachedClientStepApplication, RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
     RuntimeEventConnectionTable, RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSessionService,
-    RuntimeShellTransactionTimerKind, RuntimeSnapshotControlAsyncOutcome,
-    RuntimeSnapshotControlAsyncWork, RuntimeSnapshotControlAsyncWorkKind,
-    authorize_unix_peer_raw_fd, current_effective_uid,
+    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
+    RuntimeSnapshotControlAsyncWorkKind, authorize_unix_peer_raw_fd, current_effective_uid,
 };
 use crate::session::ClientState;
 use crate::terminal::{

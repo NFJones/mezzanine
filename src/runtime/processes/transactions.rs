@@ -8,6 +8,8 @@
 
 use super::*;
 use crate::agent::AgentAction;
+use crate::runtime::{RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition};
+use std::collections::{BTreeMap, HashSet};
 
 /// Defines the RUNTIME SHELL TRANSACTION OBSERVATION LIMIT BYTES const used by this subsystem.
 ///
@@ -357,6 +359,54 @@ impl RuntimeSessionService {
                 }),
         );
         timers
+    }
+
+    /// Reconciles live shell transaction timers against adapter-owned active keys.
+    pub(crate) fn shell_transaction_timer_transition(
+        &self,
+        active_keys: &HashSet<RuntimeTimerKey>,
+        now_ms: u64,
+    ) -> RuntimeTransition {
+        let desired = self
+            .running_shell_transaction_timers()
+            .into_iter()
+            .map(|timer| {
+                let key = RuntimeTimerKey::new(
+                    match timer.kind {
+                        RuntimeShellTransactionTimerKind::AgentAction => {
+                            RuntimeTimerKind::ShellTransaction
+                        }
+                        RuntimeShellTransactionTimerKind::ReadinessProbe => {
+                            RuntimeTimerKind::ReadinessProbe
+                        }
+                        RuntimeShellTransactionTimerKind::Bootstrap => RuntimeTimerKind::Bootstrap,
+                        RuntimeShellTransactionTimerKind::FocusedShellHook => {
+                            RuntimeTimerKind::FocusedShellHook
+                        }
+                    },
+                    timer.marker,
+                    timer.started_at_unix_ms,
+                );
+                let deadline_ms = timer.started_at_unix_ms.saturating_add(timer.timeout_ms);
+                (key, deadline_ms.saturating_sub(now_ms))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut side_effects = active_keys
+            .iter()
+            .filter(|key| !desired.contains_key(*key))
+            .cloned()
+            .map(|key| RuntimeSideEffect::CancelTimer { key })
+            .collect::<Vec<_>>();
+        side_effects.extend(
+            desired
+                .into_iter()
+                .filter(|(key, _)| !active_keys.contains(key))
+                .map(|(key, delay_ms)| RuntimeSideEffect::ScheduleTimer { key, delay_ms }),
+        );
+        RuntimeTransition {
+            applied: false,
+            side_effects,
+        }
     }
 
     /// Clears strict marker protocol state for one settled shell transaction.
