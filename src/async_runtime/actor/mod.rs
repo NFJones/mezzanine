@@ -1738,37 +1738,7 @@ impl AsyncRuntimeSessionActor {
         &mut self,
         hook_event: AsyncHookEvent,
     ) -> Result<RuntimeTransition> {
-        match hook_event {
-            AsyncHookEvent::ProgramCompleted {
-                plan,
-                result,
-                triggering_event_completed,
-            } => self
-                .service
-                .apply_async_program_hook_result(*plan, *result, triggering_event_completed)
-                .map(|applied| RuntimeTransition {
-                    applied,
-                    side_effects: Vec::new(),
-                }),
-            AsyncHookEvent::Completed {
-                hook_id,
-                exit_code,
-                output_preview,
-            } => self
-                .service
-                .apply_async_hook_completed_event(hook_id, exit_code, output_preview)
-                .map(|applied| RuntimeTransition {
-                    applied,
-                    side_effects: Vec::new(),
-                }),
-            AsyncHookEvent::Failed { hook_id, error } => self
-                .service
-                .apply_async_hook_failed_event(hook_id, error)
-                .map(|applied| RuntimeTransition {
-                    applied,
-                    side_effects: Vec::new(),
-                }),
-        }
+        self.service.apply_hook_transition(hook_event)
     }
 
     /// Runs the apply runtime persistence event operation for this subsystem.

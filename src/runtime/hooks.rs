@@ -11,6 +11,7 @@ use super::{
     RuntimeFocusedShellPaneExecutor, RuntimeSessionService, json_escape, plan_event,
     runtime_hook_execution_status_name, runtime_hook_target_pane_id,
 };
+use crate::async_runtime::{AsyncHookEvent, RuntimeTransition};
 
 // Focused shell hook queueing and lifecycle hook dispatch.
 
@@ -21,6 +22,34 @@ use super::{
 const MAX_FOCUSED_SHELL_HOOK_RESULTS_RETAINED: usize = 256;
 
 impl RuntimeSessionService {
+    /// Applies one hook-worker completion through the transport-neutral transition contract.
+    pub(crate) fn apply_hook_transition(
+        &mut self,
+        event: AsyncHookEvent,
+    ) -> Result<RuntimeTransition> {
+        let applied = match event {
+            AsyncHookEvent::ProgramCompleted {
+                plan,
+                result,
+                triggering_event_completed,
+            } => {
+                self.apply_async_program_hook_result(*plan, *result, triggering_event_completed)?
+            }
+            AsyncHookEvent::Completed {
+                hook_id,
+                exit_code,
+                output_preview,
+            } => self.apply_async_hook_completed_event(hook_id, exit_code, output_preview)?,
+            AsyncHookEvent::Failed { hook_id, error } => {
+                self.apply_async_hook_failed_event(hook_id, error)?
+            }
+        };
+        Ok(RuntimeTransition {
+            applied,
+            side_effects: Vec::new(),
+        })
+    }
+
     /// Enables or disables deferral of non-blocking program hooks.
     ///
     /// The synchronous compatibility runtime leaves this disabled so hooks run
