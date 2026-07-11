@@ -126,7 +126,9 @@ impl RuntimeSessionService {
                 terminal_size.rows
             ),
         )?;
-        self.persist_or_defer_registry_update()?;
+        if !self.external_effects_use_adapter() {
+            self.persist_or_defer_registry_update()?;
+        }
         Ok(())
     }
 
@@ -187,7 +189,9 @@ impl RuntimeSessionService {
             Vec::new()
         };
         let mut side_effects = side_effects;
-        side_effects.extend(self.drain_registry_persistence_transition().side_effects);
+        if applied {
+            side_effects.extend(self.registry_persistence_transition().side_effects);
+        }
         Ok(RuntimeTransition {
             applied,
             side_effects,
