@@ -37,7 +37,7 @@ impl RuntimeSessionService {
         let conversation_id = conversation_id
             .ok_or_else(|| MezError::invalid_state("agent shell session missing for transcript"))?;
         let created_at_unix_seconds = current_unix_seconds().max(1);
-        let entries = if self.defer_agent_transcript_writes {
+        let entries = if self.defer_external_effects {
             let first_sequence = self
                 .deferred_transcript_next_sequences
                 .get(&conversation_id)

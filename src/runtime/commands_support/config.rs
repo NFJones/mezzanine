@@ -416,7 +416,7 @@ pub(in crate::runtime) fn runtime_apply_persisted_config_mutation_batch(
     let batch =
         runtime_plan_config_mutations(format, &current_text, ConfigScope::Primary, mutations)?;
     if batch.changed {
-        if !service.defer_config_file_writes {
+        if !service.defer_external_effects {
             persist_config_text(&path, ConfigScope::Primary, &batch.text)?;
         }
         let previous_layers = service.config_layers.clone();
@@ -427,7 +427,7 @@ pub(in crate::runtime) fn runtime_apply_persisted_config_mutation_batch(
                     EventKind::ConfigChanged,
                     runtime_config_apply_event_payload(event_source, &report),
                 )?;
-                if service.defer_config_file_writes {
+                if service.defer_external_effects {
                     service
                         .deferred_config_file_writes
                         .push(DeferredConfigFileWrite {
@@ -450,7 +450,7 @@ pub(in crate::runtime) fn runtime_apply_persisted_config_mutation_batch(
         changed: batch.changed,
         reload_required: batch.reload_required,
         mutation_count: mutations.len(),
-        deferred: service.defer_config_file_writes,
+        deferred: service.defer_external_effects,
     })
 }
 

@@ -54,11 +54,6 @@ impl RuntimeSessionService {
     ///
     /// The synchronous compatibility runtime leaves this disabled so hooks run
     /// inline. The async actor enables it and drains queued hooks into a
-    /// supervised worker, keeping hook process latency off the actor path.
-    pub(crate) fn set_defer_program_hooks(&mut self, defer: bool) {
-        self.defer_program_hooks = defer;
-    }
-
     /// Drains program hook executions queued for an async hook worker.
     pub(crate) fn drain_deferred_program_hooks(&mut self) -> Vec<DeferredProgramHook> {
         std::mem::take(&mut self.deferred_program_hooks)

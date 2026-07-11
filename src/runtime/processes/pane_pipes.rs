@@ -23,7 +23,7 @@ impl RuntimeSessionService {
         let Some(pipe) = self.active_pane_pipes.get_mut(pane_id) else {
             return Ok(());
         };
-        if self.defer_file_pane_pipe_writes
+        if self.defer_external_effects
             && let Some(path) = pipe.file_target_path()
         {
             pipe.record_deferred_output(bytes.len());
@@ -63,7 +63,7 @@ impl RuntimeSessionService {
         path: PathBuf,
     ) -> Result<String> {
         let _ = self.stop_active_pane_pipe(pane_id.as_str());
-        let pipe = if self.defer_file_pane_pipe_writes {
+        let pipe = if self.defer_external_effects {
             ActivePanePipe::deferred_file(pane_id.clone(), path)
         } else {
             ActivePanePipe::file(pane_id.clone(), path)?
@@ -90,7 +90,7 @@ impl RuntimeSessionService {
         command: String,
     ) -> Result<String> {
         let _ = self.stop_active_pane_pipe(pane_id.as_str());
-        let pipe = if self.defer_command_pane_pipe_startup {
+        let pipe = if self.defer_external_effects {
             ActivePanePipe::deferred_command(pane_id.clone(), self.session.shell.path(), command)?
         } else {
             ActivePanePipe::command(pane_id.clone(), self.session.shell.path(), command)?
@@ -255,16 +255,6 @@ impl RuntimeSessionService {
             stopped_pipes = stopped_pipes.saturating_add(1);
         }
         Ok(stopped_pipes)
-    }
-
-    /// Enables or disables deferred file pipe writes for async persistence.
-    pub(crate) fn set_defer_file_pane_pipe_writes(&mut self, defer: bool) {
-        self.defer_file_pane_pipe_writes = defer;
-    }
-
-    /// Enables or disables deferred command pipe startup for async runtimes.
-    pub(crate) fn set_defer_command_pane_pipe_startup(&mut self, defer: bool) {
-        self.defer_command_pane_pipe_startup = defer;
     }
 
     /// Drains file-backed pane pipe writes queued for async persistence.

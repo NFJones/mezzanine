@@ -251,8 +251,7 @@ impl RuntimeSessionService {
             foreground_title_idle_sync_polls: 0,
             pane_exit_records: BTreeMap::new(),
             active_pane_pipes: BTreeMap::new(),
-            defer_file_pane_pipe_writes: false,
-            defer_command_pane_pipe_startup: false,
+            defer_external_effects: false,
             paste_buffers: PasteBuffers::default_limit(),
             active_paste_buffer: None,
             host_clipboard: HostClipboard::system(),
@@ -322,7 +321,6 @@ impl RuntimeSessionService {
             provider_auth_refresh_leeway_seconds:
                 crate::auth::DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS,
             audit_log: None,
-            defer_audit_writes: false,
             agent_scheduler: AgentScheduler::with_default_limit(),
             agent_shell_store: AgentShellStore::default(),
             agent_pane_trace_logs: BTreeMap::new(),
@@ -408,16 +406,11 @@ impl RuntimeSessionService {
             pane_instruction_files: BTreeMap::new(),
             pane_closing: BTreeSet::new(),
             agent_transcript_store: None,
-            defer_agent_transcript_writes: false,
-            defer_config_file_writes: false,
-            defer_project_config_writes: false,
-            defer_project_instruction_writes: false,
             subagent_scopes: ScopeRegistry::default(),
             project_trust_store: None,
             project_trust_database_path: None,
             announced_project_trust_roots: BTreeSet::new(),
             hook_definitions: Vec::new(),
-            defer_program_hooks: false,
             deferred_program_hooks: Vec::new(),
             focused_shell_hooks: FocusedShellHookQueue::default(),
             next_focused_shell_hook_marker: 1,
@@ -426,7 +419,6 @@ impl RuntimeSessionService {
             event_log,
             lifecycle_state,
             session_registry: None,
-            defer_registry_updates: false,
             deferred_registry_update: None,
             socket_path,
             created_at_unix_seconds,
@@ -455,8 +447,11 @@ impl RuntimeSessionService {
     }
 
     /// Enables or disables deferred registry persistence for async actor owners.
-    pub(crate) fn set_defer_registry_updates(&mut self, defer: bool) {
-        self.defer_registry_updates = defer;
+    pub(crate) fn set_defer_external_effects(&mut self, defer: bool) {
+        self.defer_external_effects = defer;
+        if let Some(audit_log) = self.audit_log.as_mut() {
+            audit_log.set_defer_writes(defer);
+        }
     }
 
     /// Persists the current registry update plan when this service owns a
@@ -484,7 +479,7 @@ impl RuntimeSessionService {
         if self.session_registry.is_none() {
             return Ok(false);
         }
-        if self.defer_registry_updates {
+        if self.defer_external_effects {
             self.deferred_registry_update = Some(update);
             return Ok(true);
         }
@@ -1961,7 +1956,7 @@ impl RuntimeSessionService {
             let pending = existing.drain_deferred_writes();
             self.deferred_audit_writes.extend(pending);
         }
-        audit_log.set_defer_writes(self.defer_audit_writes);
+        audit_log.set_defer_writes(self.defer_external_effects);
         self.audit_log = Some(audit_log);
     }
 
@@ -1981,14 +1976,6 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn audit_log(&self) -> Option<&AuditLog> {
         self.audit_log.as_ref()
-    }
-
-    /// Enables or disables deferred audit persistence for async actor owners.
-    pub(crate) fn set_defer_audit_writes(&mut self, defer: bool) {
-        self.defer_audit_writes = defer;
-        if let Some(audit_log) = self.audit_log.as_mut() {
-            audit_log.set_defer_writes(defer);
-        }
     }
 
     /// Drains audit JSONL payloads queued for async persistence.
@@ -2401,11 +2388,6 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Enables or disables deferred agent transcript writes for async actors.
-    pub(crate) fn set_defer_agent_transcript_writes(&mut self, defer: bool) {
-        self.defer_agent_transcript_writes = defer;
-    }
-
     /// Drains agent transcript writes queued for the async persistence worker.
     pub(crate) fn drain_deferred_agent_transcript_writes(
         &mut self,
@@ -2525,19 +2507,9 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Enables or disables deferred user/project config writes for async actors.
-    pub(crate) fn set_defer_config_file_writes(&mut self, defer: bool) {
-        self.defer_config_file_writes = defer;
-    }
-
     /// Drains user/project config writes queued for async persistence.
     pub(crate) fn drain_deferred_config_file_writes(&mut self) -> Vec<DeferredConfigFileWrite> {
         std::mem::take(&mut self.deferred_config_file_writes)
-    }
-
-    /// Enables or disables deferred project config writes for async actors.
-    pub(crate) fn set_defer_project_config_writes(&mut self, defer: bool) {
-        self.defer_project_config_writes = defer;
     }
 
     /// Drains project config writes queued for async persistence.
@@ -2545,11 +2517,6 @@ impl RuntimeSessionService {
         &mut self,
     ) -> Vec<DeferredProjectConfigWrite> {
         std::mem::take(&mut self.deferred_project_config_writes)
-    }
-
-    /// Enables or disables deferred project instruction writes for async actors.
-    pub(crate) fn set_defer_project_instruction_writes(&mut self, defer: bool) {
-        self.defer_project_instruction_writes = defer;
     }
 
     /// Drains project instruction scaffold writes queued for async persistence.

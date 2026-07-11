@@ -64,7 +64,7 @@ impl RuntimeSessionService {
                 continue;
             }
             self.append_program_hook_start_audit(&plan)?;
-            if self.defer_program_hooks {
+            if self.defer_external_effects {
                 self.defer_program_hook(plan, true);
                 continue;
             }
@@ -164,7 +164,7 @@ impl RuntimeSessionService {
                 continue;
             }
             self.append_program_hook_start_audit(&plan)?;
-            if self.defer_program_hooks && plan.on_failure != HookOnFailure::Block {
+            if self.defer_external_effects && plan.on_failure != HookOnFailure::Block {
                 self.defer_program_hook(plan, false);
                 continue;
             }

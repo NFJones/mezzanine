@@ -171,15 +171,7 @@ impl AsyncRuntimeSessionActor {
         let side_effect_delivery_notify = Arc::new(Notify::new());
         let (side_effect_delivery_tx, side_effect_delivery_rx) = watch::channel(0u64);
         let (lifecycle_state_tx, lifecycle_state_rx) = watch::channel(service.lifecycle_state());
-        service.set_defer_program_hooks(true);
-        service.set_defer_file_pane_pipe_writes(true);
-        service.set_defer_command_pane_pipe_startup(true);
-        service.set_defer_registry_updates(true);
-        service.set_defer_audit_writes(true);
-        service.set_defer_agent_transcript_writes(true);
-        service.set_defer_config_file_writes(true);
-        service.set_defer_project_config_writes(true);
-        service.set_defer_project_instruction_writes(true);
+        service.set_defer_external_effects(true);
         Ok((
             AsyncRuntimeSessionHandle {
                 sender: sender.clone(),

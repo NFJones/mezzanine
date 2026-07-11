@@ -264,7 +264,7 @@ impl RuntimeSessionService {
         })?;
         let text = self.project_config_text_for_update(&config_path)?;
         let updated = append_project_command_rule_text(&text, rule)?;
-        if self.defer_project_config_writes {
+        if self.defer_external_effects {
             self.deferred_project_config_writes
                 .push(DeferredProjectConfigWrite {
                     path: config_path.clone(),

@@ -1882,16 +1882,10 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) active_pane_pipes: BTreeMap<String, ActivePanePipe>,
-    /// Stores the defer file pane pipe writes value for this data structure.
+    /// Whether blocking external effects are queued for an adapter instead of run inline.
     ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) defer_file_pane_pipe_writes: bool,
-    /// Stores the defer command pane pipe startup value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) defer_command_pane_pipe_startup: bool,
+    /// The async actor enables this once; synchronous compatibility callers leave it disabled.
+    pub(super) defer_external_effects: bool,
     /// Stores the paste buffers value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -2178,11 +2172,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) audit_log: Option<AuditLog>,
-    /// Stores the defer audit writes value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) defer_audit_writes: bool,
     /// Stores the agent scheduler value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -2562,26 +2551,6 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) agent_transcript_store: Option<AgentTranscriptStore>,
-    /// Stores the defer agent transcript writes value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) defer_agent_transcript_writes: bool,
-    /// Stores the defer config file writes value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) defer_config_file_writes: bool,
-    /// Stores the defer project config writes value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) defer_project_config_writes: bool,
-    /// Stores the defer project instruction writes value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) defer_project_instruction_writes: bool,
     /// Stores the subagent scopes value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -2607,11 +2576,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) hook_definitions: Vec<HookDefinition>,
-    /// Stores the defer program hooks value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) defer_program_hooks: bool,
     /// Stores the deferred program hooks value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -2653,11 +2617,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) session_registry: Option<SessionRegistry>,
-    /// Stores the defer registry updates value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) defer_registry_updates: bool,
     /// Stores the deferred registry update value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

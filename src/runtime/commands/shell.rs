@@ -1041,7 +1041,7 @@ impl RuntimeSessionService {
         let Some(session) = self.agent_shell_store.get(pane_id) else {
             return Ok(());
         };
-        if self.defer_agent_transcript_writes {
+        if self.defer_external_effects {
             self.deferred_agent_prompt_history_writes
                 .push(DeferredAgentPromptHistoryWrite {
                     path: store.prompt_history_file(),

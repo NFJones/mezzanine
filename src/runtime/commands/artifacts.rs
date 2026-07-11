@@ -189,7 +189,7 @@ impl RuntimeSessionService {
             });
         }
         let scaffold = runtime_agent_init_scaffold().as_bytes().to_vec();
-        if self.defer_project_instruction_writes {
+        if self.defer_external_effects {
             self.deferred_project_instruction_writes
                 .push(DeferredProjectInstructionWrite {
                     path: target.clone(),
