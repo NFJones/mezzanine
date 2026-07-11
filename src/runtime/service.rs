@@ -655,6 +655,20 @@ impl RuntimeSessionService {
         Some((registry, self.registry_update_plan()))
     }
 
+    /// Emits current registry persistence directly through the transition contract.
+    pub(crate) fn registry_persistence_transition(&self) -> crate::runtime::RuntimeTransition {
+        let Some((registry, update)) = self.registry_update_for_async_persistence() else {
+            return crate::runtime::RuntimeTransition::default();
+        };
+        crate::runtime::RuntimeTransition {
+            applied: false,
+            side_effects: vec![crate::runtime::RuntimeSideEffect::PersistRegistry {
+                registry,
+                update,
+            }],
+        }
+    }
+
     /// Drains registry persistence as a transport-neutral runtime transition.
     pub(crate) fn drain_registry_persistence_transition(
         &mut self,

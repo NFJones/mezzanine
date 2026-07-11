@@ -319,9 +319,11 @@ impl RuntimeSessionService {
             applied,
             side_effects,
         };
-        transition
-            .side_effects
-            .extend(self.drain_registry_persistence_transition().side_effects);
+        if applied {
+            transition
+                .side_effects
+                .extend(self.registry_persistence_transition().side_effects);
+        }
         Ok(transition)
     }
 
@@ -368,7 +370,9 @@ impl RuntimeSessionService {
                     json_escape(&reason)
                 ),
             )?;
-            self.persist_or_defer_registry_update()?;
+            if !self.external_effects_use_adapter() {
+                self.persist_or_defer_registry_update()?;
+            }
             return Ok(true);
         }
 
@@ -399,7 +403,9 @@ impl RuntimeSessionService {
                 cleared_memory
             ),
         )?;
-        self.persist_or_defer_registry_update()?;
+        if !self.external_effects_use_adapter() {
+            self.persist_or_defer_registry_update()?;
+        }
         Ok(true)
     }
 
@@ -450,7 +456,9 @@ impl RuntimeSessionService {
                 terminated_mcp_servers
             ),
         )?;
-        self.persist_or_defer_registry_update()?;
+        if !self.external_effects_use_adapter() {
+            self.persist_or_defer_registry_update()?;
+        }
         Ok(true)
     }
 }
