@@ -169,7 +169,12 @@ impl RuntimeSessionService {
         input: &str,
         display_input: &str,
     ) -> Result<String> {
-        self.execute_agent_shell_command_with_display_inner(primary_client_id, input, display_input)
+        self.execute_agent_shell_command_with_display_inner(
+            primary_client_id,
+            input,
+            display_input,
+            false,
+        )
     }
 
     /// Executes an agent prompt submission while allowing a collapsed display
@@ -179,6 +184,7 @@ impl RuntimeSessionService {
         primary_client_id: &crate::ids::ClientId,
         input: &str,
         display_input: &str,
+        queue_history_for_adapter: bool,
     ) -> Result<String> {
         self.require_live()?;
         if self.session.primary_client_id() != Some(primary_client_id) {
@@ -202,7 +208,7 @@ impl RuntimeSessionService {
             self.ensure_runtime_mcp_transports_discovered_blocking()?;
         }
         let is_prompt = !input.trim().is_empty() && !input.trim().starts_with('/');
-        self.persist_agent_prompt_history_entry(&pane_id, input)?;
+        self.persist_agent_prompt_history_entry(&pane_id, input, queue_history_for_adapter)?;
         if is_prompt {
             self.append_agent_user_prompt_to_terminal_buffer(&pane_id, display_input)?;
         }
@@ -745,6 +751,7 @@ impl RuntimeSessionService {
                 primary_client_id,
                 input,
                 input,
+                true,
             );
         }
 
@@ -767,7 +774,7 @@ impl RuntimeSessionService {
                 .ensure_runtime_mcp_transports_discovered_async()
                 .await?;
         }
-        self.persist_agent_prompt_history_entry(&pane_id, input)?;
+        self.persist_agent_prompt_history_entry(&pane_id, input, true)?;
         let outcome = match execute_agent_shell_command_with_context(
             &mut self.agent_shell_store,
             &pane_id,
@@ -1031,7 +1038,12 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn persist_agent_prompt_history_entry(&mut self, pane_id: &str, input: &str) -> Result<()> {
+    fn persist_agent_prompt_history_entry(
+        &mut self,
+        pane_id: &str,
+        input: &str,
+        queue_for_adapter: bool,
+    ) -> Result<()> {
         if input.trim().is_empty() {
             return Ok(());
         }
@@ -1041,7 +1053,7 @@ impl RuntimeSessionService {
         let Some(session) = self.agent_shell_store.get(pane_id) else {
             return Ok(());
         };
-        if self.external_effects_use_adapter() {
+        if queue_for_adapter {
             self.queued_transcript_effects
                 .push(RuntimeSideEffect::PersistPromptHistory {
                     path: store.prompt_history_file(),
