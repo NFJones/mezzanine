@@ -94,11 +94,6 @@ mod pane_io;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod provider;
-/// Exposes the runtime events module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-mod runtime_events;
 /// Exposes the side effects module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -120,6 +115,13 @@ mod terminal;
 /// declaration makes the boundary available to the crate.
 mod terminal_io;
 
+pub use crate::runtime::{
+    AgentCompactionEvent, AgentProviderEvent, AgentRememberEvent, AsyncHookEvent, ClientEvent,
+    PaneEvent, PersistenceEvent, PersistenceTarget, PersistenceWriteMode, ProcessEvent,
+    RenderInvalidationReason, RuntimeEvent, RuntimeEventBatch, RuntimeEventIngressReport,
+    RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition, ShutdownEvent,
+    TimerEvent,
+};
 pub use actor_types::{
     AsyncAttachedTerminalStepRequest, AsyncRenderedClientFlush, AsyncRenderedClientFrame,
     plan_and_apply_async_attached_terminal_client_step, plan_async_attached_terminal_client_step,
@@ -163,13 +165,6 @@ pub use pane_io::{
     run_async_pane_process_service, run_async_pane_process_supervisor_service,
 };
 pub use provider::build_async_agent_provider_service;
-pub use runtime_events::{
-    AgentCompactionEvent, AgentProviderEvent, AgentRememberEvent, AsyncHookEvent, ClientEvent,
-    PaneEvent, PersistenceEvent, PersistenceTarget, PersistenceWriteMode, ProcessEvent,
-    RenderInvalidationReason, RuntimeEvent, RuntimeEventBatch, RuntimeEventIngressReport,
-    RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition, ShutdownEvent,
-    TimerEvent,
-};
 pub use side_effects::{
     AsyncClientOutputFlushServiceReport, AsyncHookSideEffectServiceReport,
     AsyncPersistenceSideEffectServiceReport, AsyncRuntimeSideEffectServiceConfig,

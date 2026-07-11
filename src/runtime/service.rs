@@ -487,16 +487,16 @@ impl RuntimeSessionService {
     /// Drains registry persistence as a transport-neutral runtime transition.
     pub(crate) fn drain_registry_persistence_transition(
         &mut self,
-    ) -> crate::async_runtime::RuntimeTransition {
+    ) -> crate::runtime::RuntimeTransition {
         let Some(registry) = self.session_registry.clone() else {
-            return crate::async_runtime::RuntimeTransition::default();
+            return crate::runtime::RuntimeTransition::default();
         };
         let Some(update) = self.deferred_registry_update.take() else {
-            return crate::async_runtime::RuntimeTransition::default();
+            return crate::runtime::RuntimeTransition::default();
         };
-        crate::async_runtime::RuntimeTransition {
+        crate::runtime::RuntimeTransition {
             applied: false,
-            side_effects: vec![crate::async_runtime::RuntimeSideEffect::PersistRegistry {
+            side_effects: vec![crate::runtime::RuntimeSideEffect::PersistRegistry {
                 registry,
                 update,
             }],
@@ -1155,10 +1155,10 @@ impl RuntimeSessionService {
     /// Applies one persistence-worker completion through the transport-neutral transition contract.
     pub(crate) fn apply_persistence_transition(
         &mut self,
-        event: crate::async_runtime::PersistenceEvent,
-    ) -> Result<crate::async_runtime::RuntimeTransition> {
+        event: crate::runtime::PersistenceEvent,
+    ) -> Result<crate::runtime::RuntimeTransition> {
         let payload = match event {
-            crate::async_runtime::PersistenceEvent::Completed {
+            crate::runtime::PersistenceEvent::Completed {
                 target,
                 path,
                 bytes,
@@ -1170,12 +1170,12 @@ impl RuntimeSessionService {
                 "bytes": bytes,
             })
             .to_string(),
-            crate::async_runtime::PersistenceEvent::Failed {
+            crate::runtime::PersistenceEvent::Failed {
                 target,
                 path,
                 error,
             } => {
-                if target == crate::async_runtime::PersistenceTarget::PanePipe {
+                if target == crate::runtime::PersistenceTarget::PanePipe {
                     let _ =
                         self.stop_file_pane_pipes_for_path(path.as_path(), "persistence-failed")?;
                 }
@@ -1190,7 +1190,7 @@ impl RuntimeSessionService {
             }
         };
         self.append_runtime_diagnostic_event(payload)?;
-        Ok(crate::async_runtime::RuntimeTransition {
+        Ok(crate::runtime::RuntimeTransition {
             applied: true,
             side_effects: Vec::new(),
         })

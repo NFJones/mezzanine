@@ -742,7 +742,7 @@ impl RuntimeSessionService {
         message: &str,
         provider_failure_json: Option<&str>,
         provider_raw_text: Option<&str>,
-    ) -> Result<crate::async_runtime::RuntimeTransition> {
+    ) -> Result<crate::runtime::RuntimeTransition> {
         let applied = self.apply_agent_provider_failed_event(
             agent_id,
             turn_id,
@@ -753,7 +753,7 @@ impl RuntimeSessionService {
         )?;
         Ok(self.runtime_transition_with_render(
             applied,
-            Some(crate::async_runtime::RenderInvalidationReason::FullRedraw),
+            Some(crate::runtime::RenderInvalidationReason::FullRedraw),
         ))
     }
 

@@ -7,7 +7,7 @@
 //! tests while preserving behavior through  methods.
 
 use super::*;
-use crate::async_runtime::{RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition};
+use crate::runtime::{RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition};
 use crate::terminal::{
     AttachedTerminalFdReadiness, AttachedTerminalFdRole, TerminalFdInterest,
     plan_attached_terminal_client_step,

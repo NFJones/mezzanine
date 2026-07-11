@@ -41,10 +41,10 @@ use crate::agent::{
     apply_patch_transaction_phase, bootstrap_script_for_classification, parse_bootstrap_env_output,
     readiness_probe_command_for_classification,
 };
-use crate::async_runtime::{
+use crate::process::PaneProcess;
+use crate::runtime::{
     PaneEvent, ProcessEvent, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition,
 };
-use crate::process::PaneProcess;
 use crate::terminal::{TerminalStyledLine, parse_mez_shell_transaction_osc};
 
 use output_filter::*;

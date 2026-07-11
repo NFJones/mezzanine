@@ -294,6 +294,8 @@ mod sockets;
 /// The nested module keeps status-polling configuration and cache state out of
 /// the central runtime service state.
 mod status_pills;
+/// Exposes transport-neutral runtime event, transition, and side-effect types.
+mod transitions;
 
 pub use agent_state::{
     RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask, RuntimeAgentLoopState,
@@ -359,6 +361,13 @@ pub use sockets::{
 use status_pills::{
     RuntimeStatusPillCache, RuntimeStatusPillDefinition,
     runtime_status_pill_definitions_from_config,
+};
+pub use transitions::{
+    AgentCompactionEvent, AgentProviderEvent, AgentRememberEvent, AsyncHookEvent, ClientEvent,
+    PaneEvent, PersistenceEvent, PersistenceTarget, PersistenceWriteMode, ProcessEvent,
+    RenderInvalidationReason, RuntimeEvent, RuntimeEventBatch, RuntimeEventIngressReport,
+    RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition, ShutdownEvent,
+    TimerEvent,
 };
 
 #[cfg(test)]

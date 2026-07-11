@@ -11,7 +11,7 @@ use super::{
     RuntimeFocusedShellPaneExecutor, RuntimeSessionService, json_escape, plan_event,
     runtime_hook_execution_status_name, runtime_hook_target_pane_id,
 };
-use crate::async_runtime::{AsyncHookEvent, RuntimeTransition};
+use crate::runtime::{AsyncHookEvent, RuntimeTransition};
 
 // Focused shell hook queueing and lifecycle hook dispatch.
 

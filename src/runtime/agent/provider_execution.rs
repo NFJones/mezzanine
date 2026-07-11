@@ -35,9 +35,9 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
         lines: &[String],
-    ) -> crate::async_runtime::RuntimeTransition {
+    ) -> crate::runtime::RuntimeTransition {
         let _ = self.append_agent_shell_output_status_lines_to_terminal_buffer(pane_id, lines);
-        crate::async_runtime::RuntimeTransition {
+        crate::runtime::RuntimeTransition {
             applied: true,
             side_effects: Vec::new(),
         }
@@ -49,13 +49,13 @@ impl RuntimeSessionService {
         agent_id: &AgentId,
         turn_id: &str,
         execution: AgentTurnExecution,
-    ) -> Result<crate::async_runtime::RuntimeTransition> {
+    ) -> Result<crate::runtime::RuntimeTransition> {
         let applied = self
             .apply_agent_provider_completed_event(agent_id, turn_id, execution)
             .await?;
         Ok(self.runtime_transition_with_render(
             applied,
-            Some(crate::async_runtime::RenderInvalidationReason::FullRedraw),
+            Some(crate::runtime::RenderInvalidationReason::FullRedraw),
         ))
     }
 

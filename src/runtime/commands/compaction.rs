@@ -8,7 +8,7 @@
 
 use super::*;
 use crate::agent::anthropic_provider_from_auth_store_with_provider_options;
-use crate::async_runtime::{AgentCompactionEvent, RenderInvalidationReason, RuntimeTransition};
+use crate::runtime::{AgentCompactionEvent, RenderInvalidationReason, RuntimeTransition};
 
 impl RuntimeSessionService {
     /// Executes `/compact` by queuing model-backed conversation compaction.

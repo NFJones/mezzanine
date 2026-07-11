@@ -8,7 +8,7 @@ use super::{
     EventKind, EventLog, HookEvent, Path, Result, RuntimeLifecycleState, RuntimeSessionService,
     Size, json_escape,
 };
-use crate::async_runtime::{
+use crate::runtime::{
     ClientEvent, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition, ShutdownEvent,
 };
 use crate::session::ClientTerminalDescriptor;
