@@ -8,6 +8,9 @@ use super::{
     EventKind, EventLog, HookEvent, Path, Result, RuntimeLifecycleState, RuntimeSessionService,
     Size, json_escape,
 };
+use crate::async_runtime::{
+    ClientEvent, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition,
+};
 use crate::session::ClientTerminalDescriptor;
 
 // Session lifecycle, primary attachment, and kill handling.
@@ -145,6 +148,48 @@ impl RuntimeSessionService {
         }
         self.resize_attached_primary_terminal(client_id, size)?;
         Ok(true)
+    }
+
+    /// Applies one state-changing client event through the transport-neutral
+    /// runtime transition contract.
+    pub(crate) fn apply_client_lifecycle_transition(
+        &mut self,
+        event: ClientEvent,
+    ) -> Result<RuntimeTransition> {
+        let (applied, reason) = match event {
+            ClientEvent::Resize { client_id, size } => (
+                self.apply_primary_client_resize_event(&client_id, size)?,
+                RenderInvalidationReason::Layout,
+            ),
+            ClientEvent::Disconnected { client_id, reason } => (
+                self.apply_primary_client_disconnect_event(&client_id, reason)?,
+                RenderInvalidationReason::FullRedraw,
+            ),
+            ClientEvent::Input { .. }
+            | ClientEvent::ResizeSignal { .. }
+            | ClientEvent::OutputReady { .. } => {
+                return Err(crate::error::MezError::invalid_state(
+                    "client I/O and render signals require an async adapter transition",
+                ));
+            }
+        };
+        let side_effects = if applied {
+            self.session
+                .clients()
+                .iter()
+                .filter(|client| client.state == crate::session::ClientState::Attached)
+                .map(|client| RuntimeSideEffect::RenderClient {
+                    client_id: client.id.clone(),
+                    reason,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        Ok(RuntimeTransition {
+            applied,
+            side_effects,
+        })
     }
 
     /// Applies a primary-client disconnect delivered through async runtime

@@ -1574,28 +1574,9 @@ impl AsyncRuntimeSessionActor {
         client_event: ClientEvent,
     ) -> Result<RuntimeTransition> {
         match client_event {
-            ClientEvent::Resize { client_id, size } => self
-                .service
-                .apply_primary_client_resize_event(&client_id, size)
-                .map(|applied| RuntimeTransition {
-                    applied,
-                    side_effects: if applied {
-                        self.render_side_effects(RenderInvalidationReason::Layout)
-                    } else {
-                        Vec::new()
-                    },
-                }),
-            ClientEvent::Disconnected { client_id, reason } => self
-                .service
-                .apply_primary_client_disconnect_event(&client_id, reason)
-                .map(|applied| RuntimeTransition {
-                    applied,
-                    side_effects: if applied {
-                        self.render_side_effects(RenderInvalidationReason::FullRedraw)
-                    } else {
-                        Vec::new()
-                    },
-                }),
+            event @ (ClientEvent::Resize { .. } | ClientEvent::Disconnected { .. }) => {
+                self.service.apply_client_lifecycle_transition(event)
+            }
             ClientEvent::ResizeSignal { client_id } => Ok(self
                 .apply_runtime_client_render_signal_event(
                     client_id,
