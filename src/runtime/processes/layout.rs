@@ -525,9 +525,9 @@ impl RuntimeSessionService {
         }
 
         let mut next_session = self.session.clone();
-        next_session.resize_pane(primary_client_id, target, size)?;
+        let transition = next_session.resize_pane_transition(primary_client_id, target, size)?;
         self.session = next_session;
-        self.sync_tracked_pty_sizes()?
+        self.sync_pane_resize_effects(&transition.effects)?
             .into_iter()
             .find(|update| update.pane_id == target_pane_id)
             .ok_or_else(|| MezError::invalid_state("resized pane process was not synchronized"))
@@ -635,40 +635,58 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn sync_tracked_pty_sizes(&mut self) -> Result<Vec<PaneResizeUpdate>> {
         self.require_live()?;
-        let descriptors = self.tracked_pane_descriptors();
+        let effects = self
+            .tracked_pane_descriptors()
+            .into_iter()
+            .map(|descriptor| crate::session::PaneResizeEffect {
+                pane_id: descriptor.pane_id,
+                size: descriptor.size,
+            })
+            .collect::<Vec<_>>();
+        self.sync_pane_resize_effects(&effects)
+    }
+
+    /// Applies process-neutral session resize effects to product-owned PTYs and screens.
+    fn sync_pane_resize_effects(
+        &mut self,
+        effects: &[crate::session::PaneResizeEffect],
+    ) -> Result<Vec<PaneResizeUpdate>> {
         let mut updates = Vec::new();
 
-        for descriptor in descriptors {
+        for effect in effects {
+            let descriptor = self
+                .find_pane_descriptor(effect.pane_id.as_str())
+                .ok_or_else(|| MezError::invalid_state("resized pane descriptor was not found"))?;
             let pane_id = descriptor.pane_id.as_str();
             let Some(primary_pid) = self.primary_pid_for_live_pane_process(pane_id) else {
                 continue;
             };
             if self.pane_processes.contains_pane(pane_id) {
-                self.pane_processes.resize_pane(pane_id, descriptor.size)?;
+                self.pane_processes.resize_pane(pane_id, effect.size)?;
             } else if self.pane_process_is_adapter_owned(pane_id) {
                 self.queued_pane_resize_effects.insert(
                     pane_id.to_string(),
                     RuntimeSideEffect::ResizePane {
                         pane_id: pane_id.to_string(),
-                        size: descriptor.size,
+                        size: effect.size,
                     },
                 );
             }
             if let Some(screen) = self.pane_screens.get_mut(descriptor.pane_id.as_str()) {
-                screen.resize(descriptor.size);
+                screen.resize(effect.size);
             }
             if let Some(screen) = self
                 .pane_transaction_osc_screens
                 .get_mut(descriptor.pane_id.as_str())
             {
-                screen.resize(descriptor.size);
+                screen.resize(effect.size);
             }
             let update = PaneResizeUpdate {
                 session_id: self.session.id.to_string(),
                 window_id: descriptor.window_id.to_string(),
                 pane_id: descriptor.pane_id.to_string(),
                 primary_pid,
-                size: descriptor.size,
+                size: effect.size,
                 registry_update: self.registry_update_plan(),
             };
             self.append_pane_resize_event(&update)?;
