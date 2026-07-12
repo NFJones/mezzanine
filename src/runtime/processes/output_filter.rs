@@ -1314,7 +1314,17 @@ impl RuntimeSessionService {
         };
         screen.feed(bytes);
         let _ = screen.drain_terminal_response_bytes();
-        Ok((screen.drain_osc_events(), screen.alternate_screen_active()))
+        let events = screen
+            .drain_osc_events()
+            .into_iter()
+            .filter_map(|event| match event {
+                TerminalOscEvent::ShellIntegration { payload } => {
+                    parse_mez_shell_transaction_osc(&format!("133;{payload}"))
+                }
+                event => Some(event),
+            })
+            .collect();
+        Ok((events, screen.alternate_screen_active()))
     }
 
     /// Scans hidden agent-shell bytes for Mezzanine-owned OSC transaction

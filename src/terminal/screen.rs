@@ -2182,8 +2182,10 @@ impl TerminalScreen {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn dispatch_osc(&mut self, payload: &str) {
-        if let Some(event) = parse_mez_shell_transaction_osc(payload) {
-            self.osc_events.push(event);
+        if let Some(payload) = payload.strip_prefix("133;") {
+            self.osc_events.push(TerminalOscEvent::ShellIntegration {
+                payload: payload.to_string(),
+            });
             return;
         }
         let Some((command, text)) = payload.split_once(';') else {

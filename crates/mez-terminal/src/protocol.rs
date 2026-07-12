@@ -13,6 +13,14 @@ pub const MAX_OSC_STRING_BYTES: usize = 4096;
 /// A structured event produced by an operating-system-command sequence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalOscEvent {
+    /// OSC 133 supplied a shell-integration payload for product interpretation.
+    ///
+    /// The terminal compatibility layer preserves the payload without
+    /// assigning application-specific transaction semantics to its fields.
+    ShellIntegration {
+        /// Payload after the `133;` command prefix.
+        payload: String,
+    },
     /// OSC 0 or OSC 2 changed the terminal title.
     TitleChanged {
         /// Newly requested terminal title.

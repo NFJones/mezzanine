@@ -42,21 +42,22 @@ fn terminal_screen_tracks_mezzanine_shell_transaction_osc_events() {
     assert_eq!(
         screen.drain_osc_events(),
         vec![
-            TerminalOscEvent::ShellPromptStart,
-            TerminalOscEvent::ShellPromptEnd,
-            TerminalOscEvent::ShellCommandOutputStart,
-            TerminalOscEvent::ShellTransactionStart {
-                marker: "abc123".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-1".to_string(),
-                pane_id: "%1".to_string(),
+            TerminalOscEvent::ShellIntegration {
+                payload: "A".to_string(),
             },
-            TerminalOscEvent::ShellTransactionEnd {
-                marker: "abc123".to_string(),
-                turn_id: "turn-1".to_string(),
-                agent_id: "agent-1".to_string(),
-                pane_id: "%1".to_string(),
-                exit_code: 7,
+            TerminalOscEvent::ShellIntegration {
+                payload: "B".to_string(),
+            },
+            TerminalOscEvent::ShellIntegration {
+                payload: "C".to_string(),
+            },
+            TerminalOscEvent::ShellIntegration {
+                payload: "C;mez_marker=abc123;mez_turn=turn-1;mez_agent=agent-1;mez_pane=%1"
+                    .to_string(),
+            },
+            TerminalOscEvent::ShellIntegration {
+                payload: "D;7;mez_marker=abc123;mez_turn=turn-1;mez_agent=agent-1;mez_pane=%1"
+                    .to_string(),
             },
         ]
     );

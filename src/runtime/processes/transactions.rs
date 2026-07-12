@@ -1312,7 +1312,19 @@ impl RuntimeSessionService {
         let mut observed = 0usize;
         let mut observed_harness_transaction_end = false;
         for event in events {
+            let decoded_event;
+            let event = if let TerminalOscEvent::ShellIntegration { payload } = event {
+                let encoded = format!("133;{payload}");
+                decoded_event = crate::terminal::parse_mez_shell_transaction_osc(&encoded);
+                let Some(event) = decoded_event.as_ref() else {
+                    continue;
+                };
+                event
+            } else {
+                event
+            };
             match event {
+                TerminalOscEvent::ShellIntegration { .. } => {}
                 TerminalOscEvent::TitleChanged { .. } | TerminalOscEvent::ClipboardSet { .. } => {}
                 TerminalOscEvent::ShellPromptStart => {
                     if !observed_harness_transaction_end {
@@ -1485,6 +1497,7 @@ impl RuntimeSessionService {
                 }
                 TerminalOscEvent::TitleChanged { .. }
                 | TerminalOscEvent::ClipboardSet { .. }
+                | TerminalOscEvent::ShellIntegration { .. }
                 | TerminalOscEvent::ShellPromptStart
                 | TerminalOscEvent::ShellPromptEnd
                 | TerminalOscEvent::ShellCommandOutputStart
