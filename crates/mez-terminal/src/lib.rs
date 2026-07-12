@@ -12,6 +12,8 @@ pub mod history;
 pub mod mouse;
 /// Pane-facing compatibility profiles and terminfo selection policy.
 pub mod profile;
+/// Restorable terminal mode and parser state contracts.
+pub mod state;
 /// Styled terminal-cell contracts produced by terminal emulation.
 pub mod style;
 
@@ -22,6 +24,11 @@ pub use history::{
 };
 
 pub use style::{GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalStyledLine};
+
+pub use state::{
+    TerminalCursorState, TerminalModeState, TerminalSavedDecPrivateMode, TerminalSavedState,
+    tracked_dec_private_mode,
+};
 
 pub use profile::{
     CapabilitySupport, DEFAULT_TERMINAL_PROFILE_NAME, DecPrivateModeCapabilities,
