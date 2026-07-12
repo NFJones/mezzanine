@@ -394,18 +394,45 @@ impl Session {
 
     /// Selects the next window group in displayed order.
     pub fn next_group(&mut self, primary_client_id: &ClientId) -> Result<()> {
+        self.next_group_transition(primary_client_id)?;
+        Ok(())
+    }
+
+    /// Selects the next window group and returns the affected pane sizes.
+    pub fn next_group_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+    ) -> Result<Vec<PaneResizeEffect>> {
         self.require_primary(primary_client_id)?;
         if self.window_groups.is_empty() {
             return Err(MezError::invalid_state("session has no window groups"));
         }
         let index = (self.active_group_index + 1) % self.window_groups.len();
         self.set_active_group_index(index)?;
+        let effects = self
+            .windows
+            .iter()
+            .flat_map(|window| window.panes())
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect();
         self.record_event();
-        Ok(())
+        Ok(effects)
     }
 
     /// Selects the previous window group in displayed order.
     pub fn previous_group(&mut self, primary_client_id: &ClientId) -> Result<()> {
+        self.previous_group_transition(primary_client_id)?;
+        Ok(())
+    }
+
+    /// Selects the previous window group and returns the affected pane sizes.
+    pub fn previous_group_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+    ) -> Result<Vec<PaneResizeEffect>> {
         self.require_primary(primary_client_id)?;
         if self.window_groups.is_empty() {
             return Err(MezError::invalid_state("session has no window groups"));
@@ -416,20 +443,47 @@ impl Session {
             self.active_group_index - 1
         };
         self.set_active_group_index(index)?;
+        let effects = self
+            .windows
+            .iter()
+            .flat_map(|window| window.panes())
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect();
         self.record_event();
-        Ok(())
+        Ok(effects)
     }
 
     /// Selects the previously active window group.
     pub fn last_group(&mut self, primary_client_id: &ClientId) -> Result<()> {
+        self.last_group_transition(primary_client_id)?;
+        Ok(())
+    }
+
+    /// Selects the previously active window group and returns affected pane sizes.
+    pub fn last_group_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+    ) -> Result<Vec<PaneResizeEffect>> {
         self.require_primary(primary_client_id)?;
         let index = self
             .last_active_group_index
             .filter(|index| *index < self.window_groups.len())
             .ok_or_else(|| MezError::invalid_state("session has no last active group"))?;
         self.set_active_group_index(index)?;
+        let effects = self
+            .windows
+            .iter()
+            .flat_map(|window| window.panes())
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect();
         self.record_event();
-        Ok(())
+        Ok(effects)
     }
 
     /// Renames a target window group.
@@ -701,14 +755,32 @@ impl Session {
         &mut self,
         primary_client_id: &ClientId,
     ) -> Result<Option<PaneId>> {
+        Ok(self
+            .toggle_active_pane_zoom_transition(primary_client_id)?
+            .0)
+    }
+
+    /// Toggles active-pane zoom and returns the affected pane sizes.
+    pub fn toggle_active_pane_zoom_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+    ) -> Result<(Option<PaneId>, Vec<PaneResizeEffect>)> {
         self.require_primary(primary_client_id)?;
         let window = self
             .windows
             .get_mut(self.active_window_index)
             .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
         let zoomed = window.toggle_zoom_active().cloned();
+        let effects = window
+            .panes()
+            .iter()
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect();
         self.record_event();
-        Ok(zoomed)
+        Ok((zoomed, effects))
     }
 
     /// Runs the rotate panes operation for this subsystem.
@@ -733,14 +805,30 @@ impl Session {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn cycle_layout(&mut self, primary_client_id: &ClientId) -> Result<LayoutPolicy> {
+        Ok(self.cycle_layout_transition(primary_client_id)?.0)
+    }
+
+    /// Cycles the active layout and returns the affected pane sizes.
+    pub fn cycle_layout_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+    ) -> Result<(LayoutPolicy, Vec<PaneResizeEffect>)> {
         self.require_primary(primary_client_id)?;
         let window = self
             .windows
             .get_mut(self.active_window_index)
             .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
         let policy = window.cycle_layout();
+        let effects = window
+            .panes()
+            .iter()
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect();
         self.record_event();
-        Ok(policy)
+        Ok((policy, effects))
     }
 
     /// Runs the select layout operation for this subsystem.

@@ -374,11 +374,14 @@ fn primary_can_create_and_switch_window_groups() {
     session.select_group(&primary, "0").unwrap();
     assert_eq!(session.active_window().unwrap().id, default_window);
 
-    session.next_group(&primary).unwrap();
+    let next_effects = session.next_group_transition(&primary).unwrap();
+    assert_eq!(next_effects.len(), 2);
     assert_eq!(session.active_group().unwrap().id, group_id);
-    session.previous_group(&primary).unwrap();
+    let previous_effects = session.previous_group_transition(&primary).unwrap();
+    assert_eq!(previous_effects.len(), 2);
     assert_eq!(session.active_window().unwrap().id, default_window);
-    session.last_group(&primary).unwrap();
+    let last_effects = session.last_group_transition(&primary).unwrap();
+    assert_eq!(last_effects.len(), 2);
     assert_eq!(session.active_group().unwrap().id, group_id);
 }
 
@@ -807,16 +810,23 @@ fn primary_can_cycle_rotate_zoom_and_cycle_layouts() {
     let last = session.select_last_pane(&primary).unwrap();
     assert_eq!(last, ids[2].id);
 
-    let zoomed = session.toggle_active_pane_zoom(&primary).unwrap();
+    let (zoomed, zoom_effects) = session
+        .toggle_active_pane_zoom_transition(&primary)
+        .unwrap();
     assert_eq!(zoomed, Some(ids[2].id.clone()));
-    let unzoomed = session.toggle_active_pane_zoom(&primary).unwrap();
+    assert_eq!(zoom_effects.len(), 3);
+    let (unzoomed, unzoom_effects) = session
+        .toggle_active_pane_zoom_transition(&primary)
+        .unwrap();
     assert_eq!(unzoomed, None);
+    assert_eq!(unzoom_effects.len(), 3);
 
     session.rotate_panes(&primary, false).unwrap();
     assert_eq!(session.active_window().unwrap().panes()[0].id, ids[1].id);
 
-    let policy = session.cycle_layout(&primary).unwrap();
+    let (policy, layout_effects) = session.cycle_layout_transition(&primary).unwrap();
     assert_eq!(policy, LayoutPolicy::EvenVertical);
+    assert_eq!(layout_effects.len(), 3);
     assert_eq!(
         session.active_window().unwrap().panes()[0].size,
         Size::new(27, 24).unwrap()

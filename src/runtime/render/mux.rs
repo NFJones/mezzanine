@@ -75,16 +75,16 @@ impl RuntimeSessionService {
                 self.execute_attached_display_command(primary_client_id, "choose-window")?;
             }
             MuxAction::FocusGroup(GroupFocusTarget::Next) => {
-                self.session.next_group(primary_client_id)?;
-                self.sync_tracked_pty_sizes()?;
+                let effects = self.session.next_group_transition(primary_client_id)?;
+                self.sync_pane_resize_effects(&effects)?;
             }
             MuxAction::FocusGroup(GroupFocusTarget::Previous) => {
-                self.session.previous_group(primary_client_id)?;
-                self.sync_tracked_pty_sizes()?;
+                let effects = self.session.previous_group_transition(primary_client_id)?;
+                self.sync_pane_resize_effects(&effects)?;
             }
             MuxAction::FocusGroup(GroupFocusTarget::LastActive) => {
-                self.session.last_group(primary_client_id)?;
-                self.sync_tracked_pty_sizes()?;
+                let effects = self.session.last_group_transition(primary_client_id)?;
+                self.sync_pane_resize_effects(&effects)?;
             }
             MuxAction::FocusGroup(GroupFocusTarget::ChooseInteractively) => {
                 self.execute_attached_display_command(primary_client_id, "choose-group")?;
@@ -97,12 +97,14 @@ impl RuntimeSessionService {
                 self.execute_attached_display_command(primary_client_id, "display-panes")?;
             }
             MuxAction::TogglePaneZoom => {
-                self.session.toggle_active_pane_zoom(primary_client_id)?;
-                self.sync_tracked_pty_sizes()?;
+                let (_, effects) = self
+                    .session
+                    .toggle_active_pane_zoom_transition(primary_client_id)?;
+                self.sync_pane_resize_effects(&effects)?;
             }
             MuxAction::CycleLayouts => {
-                self.session.cycle_layout(primary_client_id)?;
-                self.sync_tracked_pty_sizes()?;
+                let (_, effects) = self.session.cycle_layout_transition(primary_client_id)?;
+                self.sync_pane_resize_effects(&effects)?;
             }
             MuxAction::BreakPaneToNewWindow => {
                 self.break_pane_and_sync_pty_sizes(
