@@ -549,7 +549,7 @@ async fn async_actor_drains_service_deferred_input_after_pane_handoff() {
             error_roles: Vec::new(),
         };
         let application = handle
-            .apply_attached_terminal_step_plan_inline_pane_io(primary, step)
+            .apply_attached_terminal_step_plan(primary, step)
             .await
             .unwrap();
         assert_eq!(application.forwarded_bytes, 6);

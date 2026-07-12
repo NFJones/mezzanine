@@ -466,10 +466,7 @@ where
                 AsyncAttachedTerminalPaneIoMode::Inline => {
                     await_attached_terminal_step(
                         "inline pane I/O apply",
-                        handle.apply_attached_terminal_step_plan_inline_pane_io(
-                            primary_client_id,
-                            step.clone(),
-                        ),
+                        handle.apply_attached_terminal_step_plan(primary_client_id, step.clone()),
                     )
                     .await
                 }
@@ -559,7 +556,7 @@ where
                 AsyncAttachedTerminalPaneIoMode::Inline => {
                     await_attached_terminal_step(
                         "inline pane I/O apply",
-                        handle.apply_attached_terminal_step_plan_inline_pane_io(
+                        handle.apply_attached_terminal_step_plan(
                             primary_client_id.clone(),
                             step.clone(),
                         ),

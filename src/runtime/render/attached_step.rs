@@ -127,36 +127,14 @@ impl RuntimeSessionService {
             .map(|(application, _)| application)
     }
 
-    /// Applies one planned client step with inline pane I/O and adapter-owned effects.
-    pub(crate) fn apply_attached_terminal_step_transition_inline_pane_io(
-        &mut self,
-        primary_client_id: &crate::ids::ClientId,
-        step: &AttachedTerminalClientStepPlan,
-    ) -> Result<(AttachedClientStepApplication, RuntimeTransition)> {
-        self.apply_attached_terminal_step_transition_inner(primary_client_id, step, false)
-    }
-
     /// Applies one planned client step and returns its ordered adapter effects.
     pub(crate) fn apply_attached_terminal_step_transition(
         &mut self,
         primary_client_id: &crate::ids::ClientId,
         step: &AttachedTerminalClientStepPlan,
     ) -> Result<(AttachedClientStepApplication, RuntimeTransition)> {
-        self.apply_attached_terminal_step_transition_inner(primary_client_id, step, true)
-    }
-
-    fn apply_attached_terminal_step_transition_inner(
-        &mut self,
-        primary_client_id: &crate::ids::ClientId,
-        step: &AttachedTerminalClientStepPlan,
-        defer_pane_io: bool,
-    ) -> Result<(AttachedClientStepApplication, RuntimeTransition)> {
-        let (application, mut side_effects) = self.apply_attached_terminal_step_plan_inner(
-            primary_client_id,
-            step,
-            defer_pane_io,
-            true,
-        )?;
+        let (application, mut side_effects) =
+            self.apply_attached_terminal_step_plan_inner(primary_client_id, step, true, true)?;
         let render_reason = if application.full_redraw_required {
             Some(RenderInvalidationReason::FullRedraw)
         } else if application.agent_prompt_inputs_applied > 0 {

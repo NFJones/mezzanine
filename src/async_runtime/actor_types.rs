@@ -421,27 +421,6 @@ pub(super) enum AsyncRuntimeRequest {
         /// boundary and should remain aligned with the owning type invariant.
         reply: oneshot::Sender<Result<AttachedClientStepApplication>>,
     },
-    /// Represents the Apply Attached Terminal Step Inline Pane Io case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    ApplyAttachedTerminalStepInlinePaneIo {
-        /// Stores the primary client id value for this data structure.
-        ///
-        /// The field is part of structured state exchanged across this module
-        /// boundary and should remain aligned with the owning type invariant.
-        primary_client_id: ClientId,
-        /// Stores the step value for this data structure.
-        ///
-        /// The field is part of structured state exchanged across this module
-        /// boundary and should remain aligned with the owning type invariant.
-        step: AttachedTerminalClientStepPlan,
-        /// Stores the reply value for this data structure.
-        ///
-        /// The field is part of structured state exchanged across this module
-        /// boundary and should remain aligned with the owning type invariant.
-        reply: oneshot::Sender<Result<AttachedClientStepApplication>>,
-    },
     /// Represents the Resize Attached Primary Terminal case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path

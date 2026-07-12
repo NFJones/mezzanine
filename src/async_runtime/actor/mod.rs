@@ -556,28 +556,6 @@ impl AsyncRuntimeSessionActor {
                 self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
                 false
             }
-            AsyncRuntimeRequest::ApplyAttachedTerminalStepInlinePaneIo {
-                primary_client_id,
-                step,
-                reply,
-            } => {
-                let previous_lifecycle_state = self.service.lifecycle_state();
-                let result = self
-                    .service
-                    .apply_attached_terminal_step_transition_inline_pane_io(
-                        &primary_client_id,
-                        &step,
-                    )
-                    .and_then(|(application, transition)| {
-                        self.queue_runtime_side_effects(transition.side_effects)?;
-                        self.queue_deferred_pane_io_side_effects_from_service()?;
-                        self.queue_pending_provider_dispatch_side_effects()?;
-                        Ok(application)
-                    });
-                let _ = reply.send(result);
-                self.notify_lifecycle_state_if_changed(previous_lifecycle_state);
-                false
-            }
             AsyncRuntimeRequest::ResizeAttachedPrimaryTerminal {
                 primary_client_id,
                 size,
@@ -3247,26 +3225,6 @@ impl AsyncRuntimeSessionHandle {
             step,
             reply,
         })
-        .await?
-    }
-
-    /// Runs the apply attached terminal step plan inline pane io operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub async fn apply_attached_terminal_step_plan_inline_pane_io(
-        &self,
-        primary_client_id: ClientId,
-        step: AttachedTerminalClientStepPlan,
-    ) -> Result<AttachedClientStepApplication> {
-        self.request(
-            |reply| AsyncRuntimeRequest::ApplyAttachedTerminalStepInlinePaneIo {
-                primary_client_id,
-                step,
-                reply,
-            },
-        )
         .await?
     }
 
