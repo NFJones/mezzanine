@@ -6,7 +6,7 @@
 
 use super::{
     AGENT_COPY_SKIP_LINE, BTreeMap, DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer,
-    MAX_OSC_STRING_BYTES, Result, Size, terminal_char_width, terminal_grapheme_width,
+    MAX_OSC_STRING_BYTES, MezError, Result, Size, terminal_char_width, terminal_grapheme_width,
     terminal_graphemes, terminal_text_width,
 };
 
@@ -997,7 +997,8 @@ impl TerminalScreen {
             saved_dec_private_modes: BTreeMap::new(),
             scroll_region: None,
             alternate: AlternateScreenState::new(),
-            history: HistoryBuffer::new_with_rotation(history_limit, history_rotate_lines)?,
+            history: HistoryBuffer::new_with_rotation(history_limit, history_rotate_lines)
+                .map_err(|error| MezError::invalid_args(error.message()))?,
             normal_viewport_detached_from_history: false,
             activity_events: 0,
             bell_events: 0,
@@ -1515,9 +1516,7 @@ impl TerminalScreen {
     ) {
         match index {
             NormalPhysicalLineIndex::History(row) => {
-                if let Some(slot) = self.history.line_copy_texts.get_mut(row) {
-                    *slot = copy_text;
-                }
+                self.history.set_copy_text(row, copy_text);
             }
             NormalPhysicalLineIndex::Visible(row) => {
                 if let Some(slot) = self.line_copy_texts.get_mut(row) {
@@ -1804,12 +1803,16 @@ impl TerminalScreen {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn set_history_limit(&mut self, limit: usize) -> Result<()> {
-        self.history.set_limit(limit)
+        self.history
+            .set_limit(limit)
+            .map_err(|error| MezError::invalid_args(error.message()))
     }
 
     /// Updates the history rotation batch size.
     pub fn set_history_rotate_lines(&mut self, rotate_lines: usize) -> Result<()> {
-        self.history.set_rotate_lines(rotate_lines)
+        self.history
+            .set_rotate_lines(rotate_lines)
+            .map_err(|error| MezError::invalid_args(error.message()))
     }
 
     /// Runs the clear history operation for this subsystem.

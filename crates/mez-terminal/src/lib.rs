@@ -6,6 +6,8 @@
 //! outside this boundary. The initial empty facade allows those responsibilities
 //! to be separated in place before production modules move across packages.
 
+/// Bounded pane-facing terminal scrollback history.
+pub mod history;
 /// Pane-facing terminal mouse protocol types and parser.
 pub mod mouse;
 /// Pane-facing compatibility profiles and terminfo selection policy.
@@ -14,6 +16,10 @@ pub mod profile;
 pub mod style;
 
 pub use mouse::{MouseButton, MouseEvent, MouseEventKind, MouseModifiers, parse_sgr_mouse};
+
+pub use history::{
+    DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer, HistoryConfigError,
+};
 
 pub use style::{GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalStyledLine};
 

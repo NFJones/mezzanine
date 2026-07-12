@@ -6,7 +6,7 @@
 //! control sequences. Unsupported terminal capabilities are kept explicit in
 //! the profile layer instead of being advertised as full xterm emulation.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::os::fd::RawFd;
 #[cfg(test)]
 use std::time::Duration;
@@ -38,11 +38,6 @@ mod copy;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod fd;
-/// Exposes the history module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-mod history;
 /// Exposes the keys module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -112,7 +107,6 @@ pub use fd::{
     TerminalWindowFrameContext, TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
     read_attached_terminal_size,
 };
-pub use history::HistoryBuffer;
 pub(crate) use keys::classify_terminal_input_with_command_bindings;
 pub use keys::{
     DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, DEFAULT_MEZZANINE_TERMINFO,
@@ -121,6 +115,7 @@ pub use keys::{
     PasteBufferTarget, TERMINFO_FALLBACK_ORDER, TerminalInputClassification, WindowFocusTarget,
     classify_terminal_input, key_chord_input_bytes, parse_key_chord_notation,
 };
+pub use mez_terminal::{HistoryBuffer, HistoryConfigError};
 pub use mouse::{
     CopyModeKeyAction, MouseAction, MouseBorderCell, MouseButton, MouseEvent, MouseEventKind,
     MouseModifiers, MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MousePaneRegion,
