@@ -314,9 +314,10 @@ impl RuntimeSessionService {
                 Ok(true)
             }
             MouseAction::FocusGroup { index } => {
-                self.session
-                    .select_group(primary_client_id, &index.to_string())?;
-                self.sync_tracked_pty_sizes()?;
+                let effects = self
+                    .session
+                    .select_group_transition(primary_client_id, &index.to_string())?;
+                self.sync_pane_resize_effects(&effects)?;
                 Ok(true)
             }
             MouseAction::PressWindowAction { action } => {

@@ -371,7 +371,8 @@ fn primary_can_create_and_switch_window_groups() {
     assert_eq!(session.active_group_windows().len(), 1);
     assert_eq!(session.active_group_windows()[0].id, window_id);
 
-    session.select_group(&primary, "0").unwrap();
+    let selected_effects = session.select_group_transition(&primary, "0").unwrap();
+    assert_eq!(selected_effects.len(), 2);
     assert_eq!(session.active_window().unwrap().id, default_window);
 
     let next_effects = session.next_group_transition(&primary).unwrap();

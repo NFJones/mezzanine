@@ -385,11 +385,30 @@ impl Session {
 
     /// Selects a window group by id, index, name, or navigation alias.
     pub fn select_group(&mut self, primary_client_id: &ClientId, target: &str) -> Result<()> {
+        self.select_group_transition(primary_client_id, target)?;
+        Ok(())
+    }
+
+    /// Selects a window group and returns the affected pane sizes.
+    pub fn select_group_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+        target: &str,
+    ) -> Result<Vec<PaneResizeEffect>> {
         self.require_primary(primary_client_id)?;
         let group_index = self.group_index_or_active(Some(target))?;
         self.set_active_group_index(group_index)?;
+        let effects = self
+            .windows
+            .iter()
+            .flat_map(|window| window.panes())
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect();
         self.record_event();
-        Ok(())
+        Ok(effects)
     }
 
     /// Selects the next window group in displayed order.
