@@ -1104,6 +1104,17 @@ impl Session {
         source: Option<&str>,
         target: &str,
     ) -> Result<()> {
+        self.swap_panes_transition(primary_client_id, source, target)?;
+        Ok(())
+    }
+
+    /// Swaps panes and returns all resulting pane-size synchronization effects.
+    pub fn swap_panes_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+        source: Option<&str>,
+        target: &str,
+    ) -> Result<Vec<PaneResizeEffect>> {
         self.require_primary(primary_client_id)?;
         let (source_window_index, source_pane_index) = self.pane_location(source)?;
         let (target_window_index, target_pane_index) = self.pane_location(Some(target))?;
@@ -1129,7 +1140,15 @@ impl Session {
         }
 
         self.record_event();
-        Ok(())
+        Ok(self
+            .windows
+            .iter()
+            .flat_map(|window| window.panes())
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect())
     }
 
     /// Runs the break pane operation for this subsystem.

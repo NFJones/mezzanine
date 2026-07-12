@@ -570,9 +570,10 @@ impl RuntimeSessionService {
         if self.session.primary_client_id() != Some(primary_client_id) {
             return Err(MezError::forbidden("operation requires the primary client"));
         }
-        self.session
-            .swap_panes(primary_client_id, source, destination)?;
-        self.sync_tracked_pty_sizes()
+        let effects = self
+            .session
+            .swap_panes_transition(primary_client_id, source, destination)?;
+        self.sync_pane_resize_effects(&effects)
     }
 
     /// Runs the break pane and sync pty sizes operation for this subsystem.

@@ -976,6 +976,33 @@ fn primary_can_swap_panes_in_active_window() {
     assert_eq!(panes[1].id, second_id);
 }
 
+/// Verifies pane swaps expose the complete resulting pane-size set.
+///
+/// Product process and presentation adapters must be able to synchronize the
+/// mutation without re-reading session layout or reconstructing affected panes.
+#[test]
+fn swap_panes_transition_describes_resulting_pane_sizes() {
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    session
+        .split_active_pane_select(&primary, SplitDirection::Vertical, true)
+        .unwrap();
+
+    let effects = session.swap_panes_transition(&primary, None, "1").unwrap();
+
+    let resulting_sizes = session
+        .windows()
+        .iter()
+        .flat_map(|window| window.panes())
+        .map(|pane| (pane.id.clone(), pane.size))
+        .collect::<Vec<_>>();
+    let effect_sizes = effects
+        .into_iter()
+        .map(|effect| (effect.pane_id, effect.size))
+        .collect::<Vec<_>>();
+    assert_eq!(effect_sizes, resulting_sizes);
+}
+
 /// Verifies primary can break pane into new window.
 ///
 /// This regression scenario documents the behavior being protected so a
