@@ -3,7 +3,7 @@
 //! These structures describe windows, panes, dimensions, and policies. Mutation
 //! behavior lives in sibling modules that preserve these invariants.
 
-use super::{LayoutNode, MezError, PaneId, Result, WindowId};
+use super::{LayoutNode, PaneId, Size, WindowId};
 
 /// Defines the MIN PANE COLUMNS const used by this subsystem.
 ///
@@ -15,40 +15,6 @@ pub const MIN_PANE_COLUMNS: u16 = 2;
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const MIN_PANE_ROWS: u16 = 2;
-
-/// Carries Size state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Size {
-    /// Stores the columns value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub columns: u16,
-    /// Stores the rows value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub rows: u16,
-}
-
-impl Size {
-    /// Runs the new operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn new(columns: u16, rows: u16) -> Result<Self> {
-        if columns == 0 || rows == 0 {
-            return Err(MezError::invalid_args(
-                "terminal dimensions must be positive non-zero cells",
-            ));
-        }
-        Ok(Self { columns, rows })
-    }
-}
 
 /// Stored pane rectangle within a window grid.
 ///

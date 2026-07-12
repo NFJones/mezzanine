@@ -761,7 +761,8 @@ fn requested_new_window_pane_size(window_size: Size, spec: PaneSizeSpec) -> Resu
         PaneSizeSpec::Cells { columns, rows } => Size::new(
             columns.unwrap_or(window_size.columns),
             rows.unwrap_or(window_size.rows),
-        ),
+        )
+        .map_err(MezError::from),
         PaneSizeSpec::Percent { percent, axis } => {
             if percent == 0 {
                 return Err(MezError::invalid_args(
@@ -778,7 +779,7 @@ fn requested_new_window_pane_size(window_size: Size, spec: PaneSizeSpec) -> Resu
             } else {
                 window_size.rows
             };
-            Size::new(columns, rows)
+            Size::new(columns, rows).map_err(MezError::from)
         }
         PaneSizeSpec::Delta { direction, amount }
         | PaneSizeSpec::Edge {
@@ -809,25 +810,29 @@ fn requested_new_window_pane_size_from_direction(
                 MezError::invalid_args("pane creation size would reduce columns below zero")
             })?,
             current.rows,
-        ),
+        )
+        .map_err(MezError::from),
         ResizeDirection::Right => Size::new(
             current.columns.checked_add(amount).ok_or_else(|| {
                 MezError::invalid_args("pane creation size columns are out of range")
             })?,
             current.rows,
-        ),
+        )
+        .map_err(MezError::from),
         ResizeDirection::Up => Size::new(
             current.columns,
             current.rows.checked_sub(amount).ok_or_else(|| {
                 MezError::invalid_args("pane creation size would reduce rows below zero")
             })?,
-        ),
+        )
+        .map_err(MezError::from),
         ResizeDirection::Down => Size::new(
             current.columns,
             current.rows.checked_add(amount).ok_or_else(|| {
                 MezError::invalid_args("pane creation size rows are out of range")
             })?,
-        ),
+        )
+        .map_err(MezError::from),
     }
 }
 

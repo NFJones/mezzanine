@@ -6,6 +6,8 @@
 //! outside this boundary. The initial empty facade allows those responsibilities
 //! to be separated in place before production modules move across packages.
 
+/// Positive dimensions for one terminal surface.
+pub mod geometry;
 /// Bounded pane-facing terminal scrollback history.
 pub mod history;
 /// Pane-facing terminal mouse protocol types and parser.
@@ -22,6 +24,8 @@ pub mod style;
 pub mod width;
 
 pub use mouse::{MouseButton, MouseEvent, MouseEventKind, MouseModifiers, parse_sgr_mouse};
+
+pub use geometry::{TerminalSize, TerminalSizeError};
 
 pub use protocol::TerminalOscEvent;
 

@@ -140,7 +140,8 @@ fn split_requested_size(original: Size, default_created: Size, spec: PaneSizeSpe
         PaneSizeSpec::Cells { columns, rows } => Size::new(
             columns.unwrap_or(default_created.columns),
             rows.unwrap_or(default_created.rows),
-        ),
+        )
+        .map_err(MezError::from),
         PaneSizeSpec::Percent { percent, axis } => percent_size_for_axis(
             original,
             default_created,
@@ -183,7 +184,7 @@ pub(super) fn percent_size_for_axis(
     } else {
         fallback.rows
     };
-    Size::new(columns, rows)
+    Size::new(columns, rows).map_err(MezError::from)
 }
 
 /// Runs the split size from direction operation for this subsystem.
@@ -207,28 +208,32 @@ fn split_size_from_direction(
                 MezError::invalid_args("split size would reduce columns below zero")
             })?,
             current.rows,
-        ),
+        )
+        .map_err(MezError::from),
         ResizeDirection::Right => Size::new(
             current
                 .columns
                 .checked_add(amount)
                 .ok_or_else(|| MezError::invalid_args("split size columns are out of range"))?,
             current.rows,
-        ),
+        )
+        .map_err(MezError::from),
         ResizeDirection::Up => Size::new(
             current.columns,
             current
                 .rows
                 .checked_sub(amount)
                 .ok_or_else(|| MezError::invalid_args("split size would reduce rows below zero"))?,
-        ),
+        )
+        .map_err(MezError::from),
         ResizeDirection::Down => Size::new(
             current.columns,
             current
                 .rows
                 .checked_add(amount)
                 .ok_or_else(|| MezError::invalid_args("split size rows are out of range"))?,
-        ),
+        )
+        .map_err(MezError::from),
     }
 }
 

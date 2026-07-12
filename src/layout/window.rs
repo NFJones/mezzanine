@@ -951,6 +951,7 @@ impl Window {
                     columns.unwrap_or(current.columns),
                     rows.unwrap_or(current.rows),
                 )
+                .map_err(MezError::from)
             }
             PaneSizeSpec::Percent { percent, axis } => percent_size_for_axis(
                 self.size,
@@ -1523,28 +1524,32 @@ fn size_from_direction(current: Size, direction: ResizeDirection, amount: u16) -
                 .checked_sub(amount)
                 .ok_or_else(|| MezError::invalid_args("resize would reduce columns below zero"))?,
             current.rows,
-        ),
+        )
+        .map_err(MezError::from),
         ResizeDirection::Right => Size::new(
             current
                 .columns
                 .checked_add(amount)
                 .ok_or_else(|| MezError::invalid_args("resize columns are out of range"))?,
             current.rows,
-        ),
+        )
+        .map_err(MezError::from),
         ResizeDirection::Up => Size::new(
             current.columns,
             current
                 .rows
                 .checked_sub(amount)
                 .ok_or_else(|| MezError::invalid_args("resize would reduce rows below zero"))?,
-        ),
+        )
+        .map_err(MezError::from),
         ResizeDirection::Down => Size::new(
             current.columns,
             current
                 .rows
                 .checked_add(amount)
                 .ok_or_else(|| MezError::invalid_args("resize rows are out of range"))?,
-        ),
+        )
+        .map_err(MezError::from),
     }
 }
 

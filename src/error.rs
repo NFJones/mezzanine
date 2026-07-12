@@ -14,6 +14,12 @@ use thiserror::Error;
 /// boundary and avoids relying on call-site inference.
 pub type Result<T> = std::result::Result<T, MezError>;
 
+impl From<mez_terminal::TerminalSizeError> for MezError {
+    fn from(error: mez_terminal::TerminalSizeError) -> Self {
+        Self::invalid_args(error.message())
+    }
+}
+
 /// Carries Mez Error Kind state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move

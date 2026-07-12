@@ -6,6 +6,8 @@
 use crate::error::{MezError, Result};
 use crate::ids::{IdFactory, PaneId, WindowId};
 
+pub use mez_terminal::TerminalSize as Size;
+
 /// Exposes the sizing module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -40,7 +42,7 @@ pub use tree::LayoutNode;
 pub(crate) use types::RestoredWindowLayout;
 pub use types::{
     LayoutPolicy, MIN_PANE_COLUMNS, MIN_PANE_ROWS, Pane, PaneGeometry, PaneNavigationDirection,
-    PaneSizeSpec, PaneTitleSource, ResizeAxis, ResizeDirection, Size, SplitDirection, Window,
+    PaneSizeSpec, PaneTitleSource, ResizeAxis, ResizeDirection, SplitDirection, Window,
     WindowNameSource,
 };
 

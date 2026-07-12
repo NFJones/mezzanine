@@ -1494,7 +1494,9 @@ impl AsyncRuntimeSessionActor {
             return Ok(None);
         };
         if let Some(terminal) = client.terminal.as_ref() {
-            return Size::new(terminal.columns, terminal.rows).map(Some);
+            return Size::new(terminal.columns, terminal.rows)
+                .map(Some)
+                .map_err(MezError::from);
         }
         Ok(self
             .service

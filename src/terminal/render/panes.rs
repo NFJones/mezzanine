@@ -441,7 +441,7 @@ pub fn rendered_window_body_size(size: Size, window_frames_enabled: bool) -> Res
     } else {
         size.rows
     };
-    Size::new(size.columns, rows.max(1))
+    Size::new(size.columns, rows.max(1)).map_err(MezError::from)
 }
 
 /// Runs the window body size operation for this subsystem.
@@ -475,7 +475,7 @@ pub fn pane_render_region_size_for_geometry(
         .rows
         .saturating_sub(u16::from(geometry_has_bottom_divider(geometry, geometries)))
         .max(1);
-    Size::new(columns, rows)
+    Size::new(columns, rows).map_err(MezError::from)
 }
 
 /// Returns the pane body size available to the pane's PTY primary process.
@@ -498,7 +498,7 @@ pub fn pane_content_size_for_geometry(
         0
     };
     let rows = render_region.rows.saturating_sub(frame_rows).max(1);
-    Size::new(render_region.columns, rows)
+    Size::new(render_region.columns, rows).map_err(MezError::from)
 }
 
 /// Bounded destination for one rendered pane inside the window body canvas.
