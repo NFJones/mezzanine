@@ -39,6 +39,24 @@ pub struct PaneResizeTransition {
     pub effects: Vec<PaneResizeEffect>,
 }
 
+/// Carries the created window and all pane-size effects produced by a pane break.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BreakPaneTransition {
+    /// Window created to contain the broken-out pane.
+    pub window_id: WindowId,
+    /// Pane sizes that downstream process and presentation adapters must synchronize.
+    pub effects: Vec<PaneResizeEffect>,
+}
+
+/// Carries the moved pane and all pane-size effects produced by a pane join.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JoinPaneTransition {
+    /// Pane moved into the destination window.
+    pub pane_id: PaneId,
+    /// Pane sizes that downstream process and presentation adapters must synchronize.
+    pub effects: Vec<PaneResizeEffect>,
+}
+
 impl Session {
     /// Runs the new window operation for this subsystem.
     ///
@@ -1163,6 +1181,19 @@ impl Session {
         name: Option<String>,
         select_new_window: bool,
     ) -> Result<WindowId> {
+        Ok(self
+            .break_pane_transition(primary_client_id, target, name, select_new_window)?
+            .window_id)
+    }
+
+    /// Breaks a pane into a new window and returns all resulting pane-size effects.
+    pub fn break_pane_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+        target: Option<&str>,
+        name: Option<String>,
+        select_new_window: bool,
+    ) -> Result<BreakPaneTransition> {
         self.require_primary(primary_client_id)?;
         let (source_window_index, source_pane_index) = self.pane_location(target)?;
         let source_window_id = self.windows[source_window_index].id.clone();
@@ -1231,7 +1262,16 @@ impl Session {
             self.sync_active_group_to_active_window();
         }
         self.record_event();
-        Ok(window_id)
+        let effects = self
+            .windows
+            .iter()
+            .flat_map(|window| window.panes())
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect();
+        Ok(BreakPaneTransition { window_id, effects })
     }
 
     /// Runs the join pane operation for this subsystem.
@@ -1247,6 +1287,26 @@ impl Session {
         direction: SplitDirection,
         select_joined_pane: bool,
     ) -> Result<PaneId> {
+        Ok(self
+            .join_pane_transition(
+                primary_client_id,
+                source,
+                target,
+                direction,
+                select_joined_pane,
+            )?
+            .pane_id)
+    }
+
+    /// Joins a pane into a destination and returns all resulting pane-size effects.
+    pub fn join_pane_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+        source: Option<&str>,
+        target: &str,
+        direction: SplitDirection,
+        select_joined_pane: bool,
+    ) -> Result<JoinPaneTransition> {
         self.require_primary(primary_client_id)?;
         let (source_window_index, source_pane_index) = self.pane_location(source)?;
         let destination = self.join_destination(target)?;
@@ -1293,7 +1353,19 @@ impl Session {
             self.set_active_window_index(destination_window_index);
         }
         self.record_event();
-        Ok(joined_pane_id)
+        let effects = self
+            .windows
+            .iter()
+            .flat_map(|window| window.panes())
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect();
+        Ok(JoinPaneTransition {
+            pane_id: joined_pane_id,
+            effects,
+        })
     }
 
     /// Runs the kill pane operation for this subsystem.

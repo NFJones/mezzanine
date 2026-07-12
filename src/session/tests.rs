@@ -1036,6 +1036,37 @@ fn primary_can_break_pane_into_new_window() {
     );
 }
 
+/// Verifies pane breaks expose the complete resulting pane-size set.
+///
+/// Product process and presentation adapters must synchronize both the source
+/// and newly created windows without rediscovering session layout.
+#[test]
+fn break_pane_transition_describes_resulting_pane_sizes() {
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    session
+        .split_active_pane_select(&primary, SplitDirection::Vertical, true)
+        .unwrap();
+
+    let transition = session
+        .break_pane_transition(&primary, None, Some("moved".to_string()), true)
+        .unwrap();
+
+    assert_eq!(transition.window_id, session.active_window().unwrap().id);
+    let resulting_sizes = session
+        .windows()
+        .iter()
+        .flat_map(|window| window.panes())
+        .map(|pane| (pane.id.clone(), pane.size))
+        .collect::<Vec<_>>();
+    let effect_sizes = transition
+        .effects
+        .into_iter()
+        .map(|effect| (effect.pane_id, effect.size))
+        .collect::<Vec<_>>();
+    assert_eq!(effect_sizes, resulting_sizes);
+}
+
 /// Verifies primary can join pane into destination window.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -1069,6 +1100,42 @@ fn primary_can_join_pane_into_destination_window() {
             .iter()
             .any(|pane| pane.id == source_pane_id)
     );
+}
+
+/// Verifies pane joins expose the complete resulting pane-size set.
+///
+/// Product process and presentation adapters must synchronize the destination
+/// layout without reconstructing which panes changed during the move.
+#[test]
+fn join_pane_transition_describes_resulting_pane_sizes() {
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    let source_pane_id = session.windows()[0].panes()[0].id.clone();
+    let destination_window_id = session.new_window(&primary, "dest", true).unwrap();
+
+    let transition = session
+        .join_pane_transition(
+            &primary,
+            Some(source_pane_id.as_str()),
+            destination_window_id.as_str(),
+            SplitDirection::Vertical,
+            true,
+        )
+        .unwrap();
+
+    assert_eq!(transition.pane_id, source_pane_id);
+    let resulting_sizes = session
+        .windows()
+        .iter()
+        .flat_map(|window| window.panes())
+        .map(|pane| (pane.id.clone(), pane.size))
+        .collect::<Vec<_>>();
+    let effect_sizes = transition
+        .effects
+        .into_iter()
+        .map(|effect| (effect.pane_id, effect.size))
+        .collect::<Vec<_>>();
+    assert_eq!(effect_sizes, resulting_sizes);
 }
 
 /// Verifies killing live pane requires force.

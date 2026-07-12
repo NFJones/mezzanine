@@ -44,7 +44,9 @@ pub use types::{
     Client, ClientRole, ClientState, ClientTerminalDescriptor, ObserverDecisionState,
     ObserverRequest, Session, SessionState, WindowGroup,
 };
-pub use windows::{PaneResizeEffect, PaneResizeTransition};
+pub use windows::{
+    BreakPaneTransition, JoinPaneTransition, PaneResizeEffect, PaneResizeTransition,
+};
 
 /// Exposes the tests module boundary.
 ///

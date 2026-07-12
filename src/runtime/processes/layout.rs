@@ -592,12 +592,16 @@ impl RuntimeSessionService {
         if self.session.primary_client_id() != Some(primary_client_id) {
             return Err(MezError::forbidden("operation requires the primary client"));
         }
-        let window_id =
-            self.session
-                .break_pane(primary_client_id, target, name, select_new_window)?;
+        let transition = self.session.break_pane_transition(
+            primary_client_id,
+            target,
+            name,
+            select_new_window,
+        )?;
+        let window_id = transition.window_id;
         self.window_created_at_unix_seconds
             .insert(window_id.to_string(), current_unix_seconds());
-        let updates = self.sync_tracked_pty_sizes()?;
+        let updates = self.sync_pane_resize_effects(&transition.effects)?;
         Ok((window_id, updates))
     }
 
@@ -618,14 +622,15 @@ impl RuntimeSessionService {
         if self.session.primary_client_id() != Some(primary_client_id) {
             return Err(MezError::forbidden("operation requires the primary client"));
         }
-        let pane_id = self.session.join_pane(
+        let transition = self.session.join_pane_transition(
             primary_client_id,
             source,
             destination,
             direction,
             select_joined_pane,
         )?;
-        let updates = self.sync_tracked_pty_sizes()?;
+        let pane_id = transition.pane_id;
+        let updates = self.sync_pane_resize_effects(&transition.effects)?;
         Ok((pane_id, updates))
     }
 
