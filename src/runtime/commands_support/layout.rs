@@ -304,6 +304,29 @@ pub(super) fn execute_runtime_layout_terminal_command(
                 command: invocation.name.clone(),
             }))
         }
+        "zoom-pane" => {
+            let (zoomed, effects) = service
+                .session
+                .toggle_active_pane_zoom_transition(primary_client_id)?;
+            service.sync_pane_resize_effects(&effects)?;
+            Ok(Some(CommandOutcome::Display {
+                command: invocation.name.clone(),
+                body: format!(
+                    "zoomed={}",
+                    zoomed
+                        .map(|pane_id| pane_id.to_string())
+                        .unwrap_or_else(|| "none".to_string())
+                ),
+            }))
+        }
+        "next-layout" => {
+            let (policy, effects) = service.session.cycle_layout_transition(primary_client_id)?;
+            service.sync_pane_resize_effects(&effects)?;
+            Ok(Some(CommandOutcome::Display {
+                command: invocation.name.clone(),
+                body: format!("layout={}", policy.name()),
+            }))
+        }
         "select-layout" => {
             let layout_name = invocation
                 .positional_args()
@@ -592,8 +615,6 @@ pub(super) fn runtime_command_requires_pty_sync(invocation: &CommandInvocation) 
         invocation.name.as_str(),
         "resize-pane"
             | "resizep"
-            | "zoom-pane"
-            | "next-layout"
             | "swap-pane"
             | "swapp"
             | "break-pane"
