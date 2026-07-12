@@ -69,9 +69,6 @@ pub(super) fn execute_runtime_command_sequence(
         let outcome = execute_command(&mut service.session, &active_client_id, invocation)?;
         let outcome =
             resolve_runtime_layout_command_outcome(service, &mut active_client_id, outcome)?;
-        if runtime_command_requires_pty_sync(invocation) {
-            service.sync_tracked_pty_sizes()?;
-        }
         outcomes.push(outcome);
     }
     Ok(outcomes)
@@ -107,9 +104,6 @@ pub(super) async fn execute_runtime_command_sequence_async(
         let outcome = execute_command(&mut service.session, &active_client_id, invocation)?;
         let outcome =
             resolve_runtime_layout_command_outcome(service, &mut active_client_id, outcome)?;
-        if runtime_command_requires_pty_sync(invocation) {
-            service.sync_tracked_pty_sizes()?;
-        }
         outcomes.push(outcome);
     }
     Ok(outcomes)

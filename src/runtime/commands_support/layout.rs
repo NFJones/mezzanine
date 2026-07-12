@@ -12,7 +12,10 @@ use super::super::{
     split_window_shell_command,
 };
 use super::runtime_expand_user_path;
-use crate::command::LayoutLoadSelector;
+use crate::command::{
+    LayoutLoadSelector, RuntimePaneLayoutPlan, SwapPaneNeighbor, SwapPanePlan,
+    runtime_pane_layout_plan_from_invocation,
+};
 use crate::control::ControlConnectionState;
 use crate::layout::SplitDirection;
 use crate::snapshot::{SnapshotRepository, SnapshotState};
@@ -352,6 +355,68 @@ pub(super) fn execute_runtime_layout_terminal_command(
                 body: format!("layout={}", policy.name()),
             }))
         }
+        "swap-pane" | "swapp" | "break-pane" | "breakp" | "join-pane" | "joinp" => {
+            let plan = runtime_pane_layout_plan_from_invocation(invocation)?
+                .ok_or_else(|| MezError::invalid_state("runtime pane layout plan missing"))?;
+            match plan {
+                RuntimePaneLayoutPlan::Swap(SwapPanePlan::Target {
+                    command,
+                    source,
+                    target,
+                }) => {
+                    service.swap_panes_and_sync_pty_sizes(
+                        primary_client_id,
+                        source.as_deref(),
+                        &target,
+                    )?;
+                    Ok(Some(CommandOutcome::Mutated { command }))
+                }
+                RuntimePaneLayoutPlan::Swap(SwapPanePlan::Neighbor { command, neighbor }) => {
+                    let window = service
+                        .session
+                        .active_window()
+                        .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
+                    if window.panes().len() < 2 {
+                        return Ok(Some(CommandOutcome::Noop { command }));
+                    }
+                    let active = window.active_pane_index();
+                    let target = match neighbor {
+                        SwapPaneNeighbor::Previous if active == 0 => window.panes().len() - 1,
+                        SwapPaneNeighbor::Previous => active - 1,
+                        SwapPaneNeighbor::Next => (active + 1) % window.panes().len(),
+                    };
+                    service.swap_panes_and_sync_pty_sizes(
+                        primary_client_id,
+                        None,
+                        &target.to_string(),
+                    )?;
+                    Ok(Some(CommandOutcome::Mutated { command }))
+                }
+                RuntimePaneLayoutPlan::Break(plan) => {
+                    service.break_pane_and_sync_pty_sizes(
+                        primary_client_id,
+                        plan.target.as_deref(),
+                        plan.name,
+                        plan.select,
+                    )?;
+                    Ok(Some(CommandOutcome::Mutated {
+                        command: plan.command,
+                    }))
+                }
+                RuntimePaneLayoutPlan::Join(plan) => {
+                    service.join_pane_and_sync_pty_sizes(
+                        primary_client_id,
+                        plan.source.as_deref(),
+                        &plan.target,
+                        plan.direction,
+                        plan.select,
+                    )?;
+                    Ok(Some(CommandOutcome::Mutated {
+                        command: plan.command,
+                    }))
+                }
+            }
+        }
         _ => Ok(None),
     }
 }
@@ -607,12 +672,4 @@ fn runtime_mutated_pane_command_outcome(
             command: invocation.name.clone(),
         },
     }
-}
-
-/// Returns whether generic command dispatch still requires tracked PTY synchronization.
-pub(super) fn runtime_command_requires_pty_sync(invocation: &CommandInvocation) -> bool {
-    matches!(
-        invocation.name.as_str(),
-        "swap-pane" | "swapp" | "break-pane" | "breakp" | "join-pane" | "joinp"
-    )
 }

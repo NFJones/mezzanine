@@ -173,6 +173,40 @@ fn runtime_terminal_command_split_spawn_failure_rolls_back_layout_creation() {
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
+/// Verifies pane-move terminal commands synchronize screens through the
+/// runtime-owned resize adapters. Break and join must apply the explicit
+/// session effects instead of relying on generic post-dispatch rediscovery.
+#[test]
+fn runtime_terminal_pane_move_commands_apply_resize_effects() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .start_initial_pane_process(Some("cat >/dev/null"))
+        .unwrap();
+    service
+        .split_pane_with_process(&primary, SplitDirection::Vertical, Some("cat >/dev/null"))
+        .unwrap();
+
+    service
+        .execute_terminal_command(&primary, "swapp -U")
+        .unwrap();
+    service
+        .execute_terminal_command(&primary, "breakp -n moved")
+        .unwrap();
+    assert_eq!(service.session().windows().len(), 2);
+    let broken_size = service.pane_screen("%2").unwrap().size();
+
+    service
+        .execute_terminal_command(&primary, "joinp -t 0 --select")
+        .unwrap();
+    assert_eq!(service.session().windows().len(), 1);
+    assert!(service.pane_screen("%2").unwrap().size().columns < broken_size.columns);
+
+    service.pane_processes_mut().terminate_all().unwrap();
+}
+
 /// Verifies runtime service starts initial pane process through resolved shell.
 ///
 /// This regression scenario documents the behavior being protected so a

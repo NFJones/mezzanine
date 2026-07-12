@@ -114,7 +114,10 @@ pub(crate) use display::{
     new_window_name, new_window_shell_command, split_window_shell_command,
 };
 pub use parser::parse_command_sequence;
-pub(crate) use plans::{resize_spec_from_invocation, split_window_selects_new_pane};
+pub(crate) use plans::{
+    RuntimePaneLayoutPlan, SwapPaneNeighbor, SwapPanePlan, resize_spec_from_invocation,
+    runtime_pane_layout_plan_from_invocation, split_window_selects_new_pane,
+};
 pub use types::{
     BaselineCommand, BaselineCommandStatus, CommandInvocation, CommandOutcome, LayoutLoadSelector,
     baseline_commands,

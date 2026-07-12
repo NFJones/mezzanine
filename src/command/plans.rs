@@ -219,7 +219,7 @@ pub(super) enum ResizePanePlan {
 
 /// Directional neighbor used by swap-pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SwapPaneNeighbor {
+pub(crate) enum SwapPaneNeighbor {
     /// Previous pane in window order.
     Previous,
     /// Next pane in window order.
@@ -228,7 +228,7 @@ pub(super) enum SwapPaneNeighbor {
 
 /// Parsed swap-pane behavior.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum SwapPanePlan {
+pub(crate) enum SwapPanePlan {
     /// Swap source with an explicit target.
     Target {
         /// Original command name.
@@ -249,30 +249,44 @@ pub(super) enum SwapPanePlan {
 
 /// Parsed command data for break-pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct BreakPanePlan {
+pub(crate) struct BreakPanePlan {
     /// Original command name.
-    pub(super) command: String,
+    pub(crate) command: String,
     /// Optional source pane target.
-    pub(super) target: Option<String>,
+    pub(crate) target: Option<String>,
     /// Optional new window name.
-    pub(super) name: Option<String>,
+    pub(crate) name: Option<String>,
     /// Whether the new window should be selected.
-    pub(super) select: bool,
+    pub(crate) select: bool,
 }
 
 /// Parsed command data for join-pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct JoinPanePlan {
+pub(crate) struct JoinPanePlan {
     /// Original command name.
-    pub(super) command: String,
+    pub(crate) command: String,
     /// Optional source pane selector.
-    pub(super) source: Option<String>,
+    pub(crate) source: Option<String>,
     /// Destination pane selector.
-    pub(super) target: String,
+    pub(crate) target: String,
     /// Join direction.
-    pub(super) direction: SplitDirection,
+    pub(crate) direction: SplitDirection,
     /// Whether the joined pane should be selected.
-    pub(super) select: bool,
+    pub(crate) select: bool,
+}
+
+/// Typed runtime-owned pane layout commands.
+///
+/// These commands mutate session layout and must apply session-authored resize
+/// effects through the product runtime rather than through generic dispatch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RuntimePaneLayoutPlan {
+    /// Swap panes and apply the resulting resize effects.
+    Swap(SwapPanePlan),
+    /// Move a pane into a new window and apply the resulting resize effects.
+    Break(BreakPanePlan),
+    /// Move a pane into another window and apply the resulting resize effects.
+    Join(JoinPanePlan),
 }
 
 /// Parsed command data for observer target mutations.
@@ -413,6 +427,19 @@ pub(super) fn command_plan_from_invocation(invocation: &CommandInvocation) -> Re
         })),
         _ => Ok(CommandPlan::Fallback),
     }
+}
+
+/// Parses a layout command that requires runtime-owned resize synchronization.
+pub(crate) fn runtime_pane_layout_plan_from_invocation(
+    invocation: &CommandInvocation,
+) -> Result<Option<RuntimePaneLayoutPlan>> {
+    let plan = match invocation.name.as_str() {
+        "swap-pane" | "swapp" => RuntimePaneLayoutPlan::Swap(swap_pane_plan(invocation)?),
+        "break-pane" | "breakp" => RuntimePaneLayoutPlan::Break(break_pane_plan(invocation)),
+        "join-pane" | "joinp" => RuntimePaneLayoutPlan::Join(join_pane_plan(invocation)?),
+        _ => return Ok(None),
+    };
+    Ok(Some(plan))
 }
 
 fn observer_target_plan(
