@@ -442,10 +442,10 @@ pub(super) fn runtime_kill_pane_command(
         service
             .fail_agent_turns_for_pane_shutdown(&[descriptor.pane_id.to_string()], "pane closed")?;
     }
-    let removed = service
+    let transition = service
         .session
-        .kill_pane(primary_client_id, target, force)?;
-    let terminated = if let Some(pane) = removed {
+        .kill_pane_with_effects(primary_client_id, target, force)?;
+    let terminated = if let Some(pane) = transition.pane {
         let pane_id = pane.id.to_string();
         service.pane_closing.insert(pane_id.clone());
         let _ = service.stop_active_pane_pipe(pane.id.as_str());
@@ -455,11 +455,8 @@ pub(super) fn runtime_kill_pane_command(
     } else {
         0
     };
-    let synced = if service.session.windows().is_empty() {
-        0
-    } else {
-        service.sync_tracked_pty_sizes()?.len()
-    };
+    service.sync_pane_resize_effects(&transition.effects)?;
+    let synced = transition.effects.len();
     service.lifecycle_state = RuntimeLifecycleState::from_session_state(service.session.state);
     service.append_pane_close_event(
         descriptor.pane_id.as_str(),

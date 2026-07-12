@@ -475,10 +475,10 @@ impl RuntimeSessionService {
                 exit_status: process.status,
             },
         );
-        self.close_exited_pane(&descriptor)?;
-        if !self.session.windows().is_empty() {
-            self.sync_tracked_pty_sizes()?;
-        }
+        let transition = self
+            .session
+            .close_exited_pane_with_effects(descriptor.pane_id.as_str())?;
+        self.sync_pane_resize_effects(&transition.effects)?;
         if remove_recorded_process {
             self.pane_processes.remove_exited(&process.pane_id)?;
         }
@@ -988,19 +988,6 @@ impl RuntimeSessionService {
             .collect::<BTreeSet<_>>();
         self.subagent_window_ids
             .retain(|window_id| live_windows.contains(window_id));
-    }
-
-    /// Runs the close exited pane operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn close_exited_pane(&mut self, descriptor: &PaneDescriptor) -> Result<()> {
-        self.pane_closing.remove(descriptor.pane_id.as_str());
-        self.session
-            .close_exited_pane(descriptor.pane_id.as_str())?;
-        self.cleanup_removed_pane_runtime_state(descriptor.pane_id.as_str());
-        Ok(())
     }
 
     /// Runs the initial pane descriptor operation for this subsystem.

@@ -1233,6 +1233,34 @@ fn killing_live_pane_requires_force() {
     assert_eq!(session.active_window().unwrap().panes().len(), 1);
 }
 
+/// Verifies pane removal returns the complete resulting pane-size effect set.
+#[test]
+fn killing_pane_returns_resulting_resize_effects() {
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+
+    let transition = session
+        .kill_pane_with_effects(&primary, Some("1"), true)
+        .unwrap();
+
+    assert_eq!(transition.pane.unwrap().index, 1);
+    let resulting_sizes = session
+        .windows()
+        .iter()
+        .flat_map(|window| window.panes())
+        .map(|pane| (pane.id.clone(), pane.size))
+        .collect::<Vec<_>>();
+    let effect_sizes = transition
+        .effects
+        .into_iter()
+        .map(|effect| (effect.pane_id, effect.size))
+        .collect::<Vec<_>>();
+    assert_eq!(effect_sizes, resulting_sizes);
+}
+
 /// Verifies killing final window marks session empty.
 ///
 /// This regression scenario documents the behavior being protected so a

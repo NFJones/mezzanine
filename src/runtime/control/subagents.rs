@@ -888,11 +888,15 @@ impl RuntimeSessionService {
                 controller,
                 &format!(r#"{{"pane_id":"{}","force":true}}"#, json_escape(pane_id)),
             );
-        } else if let Ok(Some(pane)) = self.session.kill_pane_session_owned(Some(pane_id), true) {
+        } else if let Ok(transition) = self.session.kill_pane_session_owned(Some(pane_id), true) {
+            let Some(pane) = transition.pane else {
+                return;
+            };
             let removed_pane_id = pane.id.to_string();
             let _ = self.stop_active_pane_pipe(&removed_pane_id);
             let _ = self.terminate_runtime_pane_process(&removed_pane_id, true);
             self.cleanup_removed_pane_runtime_state(&removed_pane_id);
+            let _ = self.sync_pane_resize_effects(&transition.effects);
         }
     }
 

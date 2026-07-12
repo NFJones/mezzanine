@@ -57,6 +57,15 @@ pub struct JoinPaneTransition {
     pub effects: Vec<PaneResizeEffect>,
 }
 
+/// Carries a removed pane and all pane-size effects produced by its removal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemovePaneTransition {
+    /// Pane removed from the session, when the target existed.
+    pub pane: Option<Pane>,
+    /// Pane sizes that downstream process and presentation adapters must synchronize.
+    pub effects: Vec<PaneResizeEffect>,
+}
+
 impl Session {
     /// Runs the new window operation for this subsystem.
     ///
@@ -1539,6 +1548,18 @@ impl Session {
         target: Option<&str>,
         force: bool,
     ) -> Result<Option<Pane>> {
+        Ok(self
+            .kill_pane_with_effects(primary_client_id, target, force)?
+            .pane)
+    }
+
+    /// Removes a pane and returns the resulting pane-size synchronization effects.
+    pub fn kill_pane_with_effects(
+        &mut self,
+        primary_client_id: &ClientId,
+        target: Option<&str>,
+        force: bool,
+    ) -> Result<RemovePaneTransition> {
         self.require_primary(primary_client_id)?;
         self.kill_pane_session_owned(target, force)
     }
@@ -1548,7 +1569,7 @@ impl Session {
         &mut self,
         target: Option<&str>,
         force: bool,
-    ) -> Result<Option<Pane>> {
+    ) -> Result<RemovePaneTransition> {
         let (window_index, pane_index) = match target {
             Some(target) => self.pane_location(Some(target))?,
             None => {
@@ -1584,7 +1605,19 @@ impl Session {
         };
 
         self.record_event();
-        Ok(removed)
+        let effects = self
+            .windows
+            .iter()
+            .flat_map(|window| window.panes())
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect();
+        Ok(RemovePaneTransition {
+            pane: removed,
+            effects,
+        })
     }
 
     /// Runs the close exited pane operation for this subsystem.
@@ -1593,6 +1626,14 @@ impl Session {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn close_exited_pane(&mut self, pane_id: &str) -> Result<Option<Pane>> {
+        Ok(self.close_exited_pane_with_effects(pane_id)?.pane)
+    }
+
+    /// Closes an exited pane and returns the resulting pane-size synchronization effects.
+    pub fn close_exited_pane_with_effects(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<RemovePaneTransition> {
         let (window_index, _pane_index) = self.pane_location(Some(pane_id))?;
         let removed = if self.windows[window_index].panes().len() == 1 {
             let window = self.windows.remove(window_index);
@@ -1602,7 +1643,19 @@ impl Session {
             Some(self.windows[window_index].kill_pane(Some(pane_id))?)
         };
         self.record_event();
-        Ok(removed)
+        let effects = self
+            .windows
+            .iter()
+            .flat_map(|window| window.panes())
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect();
+        Ok(RemovePaneTransition {
+            pane: removed,
+            effects,
+        })
     }
 
     /// Runs the kill session operation for this subsystem.

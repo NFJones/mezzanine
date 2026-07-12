@@ -46,6 +46,7 @@ pub use types::{
 };
 pub use windows::{
     BreakPaneTransition, JoinPaneTransition, PaneResizeEffect, PaneResizeTransition,
+    RemovePaneTransition,
 };
 
 /// Exposes the tests module boundary.
