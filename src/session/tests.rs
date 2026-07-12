@@ -889,6 +889,55 @@ fn pane_resize_transition_describes_resulting_pane_sizes() {
     assert_eq!(effect_sizes, resulting_sizes);
 }
 
+/// Verifies selecting and rebalancing layouts describe every resulting pane size.
+///
+/// Runtime adapters consume these effects directly, so both layout mutations
+/// must expose the complete post-layout pane-size set without rediscovery.
+#[test]
+fn layout_policy_transitions_describe_resulting_pane_sizes() {
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+
+    let (selected, select_effects) = session
+        .select_layout_transition(&primary, "even-horizontal")
+        .unwrap();
+    assert_eq!(selected, LayoutPolicy::EvenHorizontal);
+    assert_eq!(select_effects.len(), 2);
+    assert_eq!(
+        select_effects
+            .iter()
+            .map(|effect| (effect.pane_id.clone(), effect.size))
+            .collect::<Vec<_>>(),
+        session
+            .active_window()
+            .unwrap()
+            .panes()
+            .iter()
+            .map(|pane| (pane.id.clone(), pane.size))
+            .collect::<Vec<_>>()
+    );
+
+    let (rebalanced, rebalance_effects) = session.rebalance_window_transition(&primary).unwrap();
+    assert_eq!(rebalanced, LayoutPolicy::EvenHorizontal);
+    assert_eq!(rebalance_effects.len(), 2);
+    assert_eq!(
+        rebalance_effects
+            .iter()
+            .map(|effect| (effect.pane_id.clone(), effect.size))
+            .collect::<Vec<_>>(),
+        session
+            .active_window()
+            .unwrap()
+            .panes()
+            .iter()
+            .map(|pane| (pane.id.clone(), pane.size))
+            .collect::<Vec<_>>()
+    );
+}
+
 /// Verifies geometry replacement returns every resulting pane-size effect.
 ///
 /// Pointer-driven border resizing uses this transition to synchronize product

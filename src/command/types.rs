@@ -27,6 +27,11 @@ pub struct CommandInvocation {
 }
 
 impl CommandInvocation {
+    /// Returns command arguments that are not flags or flag values.
+    pub fn positional_args(&self) -> Vec<&str> {
+        super::positional_args(self)
+    }
+
     /// Runs the target arg operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

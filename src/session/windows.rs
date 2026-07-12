@@ -860,6 +860,17 @@ impl Session {
         primary_client_id: &ClientId,
         layout_name: &str,
     ) -> Result<LayoutPolicy> {
+        Ok(self
+            .select_layout_transition(primary_client_id, layout_name)?
+            .0)
+    }
+
+    /// Selects a layout and returns the affected pane sizes.
+    pub fn select_layout_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+        layout_name: &str,
+    ) -> Result<(LayoutPolicy, Vec<PaneResizeEffect>)> {
         self.require_primary(primary_client_id)?;
         let policy = LayoutPolicy::from_name(layout_name)
             .ok_or_else(|| MezError::invalid_args("select-layout layout is invalid"))?;
@@ -868,8 +879,16 @@ impl Session {
             .get_mut(self.active_window_index)
             .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
         let policy = window.set_layout_policy(policy);
+        let effects = window
+            .panes()
+            .iter()
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect();
         self.record_event();
-        Ok(policy)
+        Ok((policy, effects))
     }
 
     /// Reapplies the active window's current layout policy.
@@ -879,14 +898,30 @@ impl Session {
     /// the selected policy unchanged while forcing the window to recompute its
     /// pane rectangles and sizes.
     pub fn rebalance_window(&mut self, primary_client_id: &ClientId) -> Result<LayoutPolicy> {
+        Ok(self.rebalance_window_transition(primary_client_id)?.0)
+    }
+
+    /// Rebalances the active layout and returns the affected pane sizes.
+    pub fn rebalance_window_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+    ) -> Result<(LayoutPolicy, Vec<PaneResizeEffect>)> {
         self.require_primary(primary_client_id)?;
         let window = self
             .windows
             .get_mut(self.active_window_index)
             .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
         let policy = window.set_layout_policy(window.layout_policy());
+        let effects = window
+            .panes()
+            .iter()
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect();
         self.record_event();
-        Ok(policy)
+        Ok((policy, effects))
     }
 
     /// Applies a layout policy to a specific window without changing focus.

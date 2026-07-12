@@ -294,6 +294,31 @@ pub(super) fn execute_runtime_layout_terminal_command(
                 command: invocation.name.clone(),
             }))
         }
+        "select-layout" => {
+            let layout_name = invocation
+                .positional_args()
+                .first()
+                .copied()
+                .ok_or_else(|| MezError::invalid_args("select-layout requires a layout"))?;
+            let (policy, effects) = service
+                .session
+                .select_layout_transition(primary_client_id, layout_name)?;
+            service.sync_pane_resize_effects(&effects)?;
+            Ok(Some(CommandOutcome::Display {
+                command: invocation.name.clone(),
+                body: format!("layout={}", policy.name()),
+            }))
+        }
+        "rebalance-window" => {
+            let (policy, effects) = service
+                .session
+                .rebalance_window_transition(primary_client_id)?;
+            service.sync_pane_resize_effects(&effects)?;
+            Ok(Some(CommandOutcome::Display {
+                command: invocation.name.clone(),
+                body: format!("layout={}", policy.name()),
+            }))
+        }
         _ => Ok(None),
     }
 }
@@ -560,9 +585,7 @@ pub(super) fn runtime_command_requires_pty_sync(invocation: &CommandInvocation) 
             | "rotate-pane"
             | "rotatep"
             | "zoom-pane"
-            | "select-layout"
             | "next-layout"
-            | "rebalance-window"
             | "swap-pane"
             | "swapp"
             | "break-pane"
