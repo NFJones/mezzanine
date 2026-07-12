@@ -80,8 +80,6 @@ use style::{
     contrasting_binary_foreground, gradient_highlight_for_offset, neutral_surface_step,
     push_or_extend_style_span,
 };
-#[cfg(test)]
-pub(crate) use text::terminal_char_width;
 pub(crate) use text::{
     DEFAULT_AGENT_WRAP_COLUMN_CAP, TerminalEmojiWidth, agent_log_wrap_width, agent_wrap_column_cap,
     overlay_fixed_column_style_spans, set_agent_wrap_column_cap, set_terminal_emoji_width,

@@ -1,7 +1,8 @@
 //! Regression tests for terminal screen unicode behavior.
 
-use crate::terminal::{
-    Size, TerminalScreen, TerminalStyledLine, terminal_char_width, terminal_text_width,
+use crate::{
+    TerminalScreen, TerminalSize as Size, TerminalStyledLine, terminal_char_width,
+    terminal_emoji_width, terminal_text_width,
 };
 
 /// Verifies terminal screen replaces invalid utf8 without breaking layout.
@@ -128,7 +129,7 @@ fn terminal_screen_double_width_character_boundary() {
 /// and styled transcript gutters so a checkmark cannot create phantom rows.
 #[test]
 fn terminal_screen_colored_check_mark_wraps_as_double_width() {
-    assert_eq!(terminal_char_width('✅'), 2);
+    assert_eq!(terminal_char_width('✅', terminal_emoji_width()), 2);
 
     let size = Size::new(5, 4).unwrap();
     let mut screen = TerminalScreen::new(size, 100).unwrap();
@@ -148,14 +149,15 @@ fn terminal_screen_colored_check_mark_wraps_as_double_width() {
 /// phantom blank row with no gutter.
 #[test]
 fn terminal_screen_agent_gutter_wraps_emoji_variation_status_glyphs() {
-    assert_eq!(terminal_char_width('✔'), 1);
-    assert_eq!(terminal_text_width("✔"), 1);
-    assert_eq!(terminal_text_width("✔️"), 2);
-    assert_eq!(terminal_text_width("✔︎"), 1);
-    assert_eq!(terminal_text_width("1️⃣"), 2);
-    assert_eq!(terminal_text_width("👨‍💻"), 2);
-    assert_eq!(terminal_text_width("🇺🇸"), 2);
-    assert_eq!(terminal_text_width("e\u{301}"), 1);
+    let emoji_width = terminal_emoji_width();
+    assert_eq!(terminal_char_width('✔', emoji_width), 1);
+    assert_eq!(terminal_text_width("✔", emoji_width), 1);
+    assert_eq!(terminal_text_width("✔️", emoji_width), 2);
+    assert_eq!(terminal_text_width("✔︎", emoji_width), 1);
+    assert_eq!(terminal_text_width("1️⃣", emoji_width), 2);
+    assert_eq!(terminal_text_width("👨‍💻", emoji_width), 2);
+    assert_eq!(terminal_text_width("🇺🇸", emoji_width), 2);
+    assert_eq!(terminal_text_width("e\u{301}", emoji_width), 1);
 
     let mut screen = TerminalScreen::new(Size::new(13, 4).unwrap(), 10).unwrap();
     screen.set_wrap_continuation_prefix("▐ ");

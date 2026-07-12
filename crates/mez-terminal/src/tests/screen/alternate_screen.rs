@@ -1,6 +1,6 @@
 //! Regression tests for terminal screen alternate screen behavior.
 
-use crate::terminal::{Size, TerminalScreen};
+use crate::{TerminalScreen, TerminalSize as Size};
 
 /// Verifies repeated alternate-screen DECSET preserves the active alternate
 /// buffer and cursor.

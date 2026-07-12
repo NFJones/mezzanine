@@ -1,6 +1,6 @@
 //! Regression tests for terminal screen wrapping behavior.
 
-use crate::terminal::{Size, TerminalScreen};
+use crate::{TerminalScreen, TerminalSize as Size};
 
 /// Verifies that terminal autowrap is deferred after writing the last column.
 /// Real terminals keep the cursor visually on the bottom-right cell until the

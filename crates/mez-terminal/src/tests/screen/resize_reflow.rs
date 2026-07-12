@@ -1,6 +1,9 @@
 //! Regression tests for terminal screen resize reflow behavior.
 
-use crate::terminal::{Size, TerminalScreen, TerminalStyledLine, terminal_text_width};
+use crate::{
+    TerminalScreen, TerminalSize as Size, TerminalStyledLine, terminal_emoji_width,
+    terminal_text_width,
+};
 
 /// Verifies alternate-screen resize keeps the live grid top-left anchored.
 ///
@@ -181,11 +184,9 @@ fn terminal_screen_width_resize_reflows_only_live_viewport() {
     assert_eq!(visible_lines.len(), 4);
     assert!(visible_lines.iter().any(|line| line.contains("live-one")));
     assert!(visible_lines.iter().any(|line| line.contains("live-two")));
-    assert!(
-        visible_lines
-            .iter()
-            .all(|line| terminal_text_width(line) <= 10 && !line.contains("old-"))
-    );
+    assert!(visible_lines.iter().all(|line| {
+        terminal_text_width(line, terminal_emoji_width()) <= 10 && !line.contains("old-")
+    }));
 }
 
 /// Verifies resize cursor restoration counts display-only agent gutter

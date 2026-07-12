@@ -7,4 +7,3 @@ mod client;
 mod fixtures;
 mod input;
 mod presentation;
-mod screen;

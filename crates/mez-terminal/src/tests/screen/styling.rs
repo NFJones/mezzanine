@@ -1,7 +1,9 @@
 //! Regression tests for terminal screen styling behavior.
 
-use crate::terminal::screen::{GraphicRendition, TerminalColor, TerminalStyleSpan};
-use crate::terminal::{Size, TerminalScreen, TerminalStyledLine};
+use crate::{
+    GraphicRendition, TerminalColor, TerminalScreen, TerminalSize as Size, TerminalStyleSpan,
+    TerminalStyledLine,
+};
 
 /// Verifies that snapshot resume can rebuild a visible terminal row with SGR
 /// spans even though the original PTY byte stream is no longer available.

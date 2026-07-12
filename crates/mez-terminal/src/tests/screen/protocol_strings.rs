@@ -1,6 +1,6 @@
 //! Regression tests for terminal screen protocol strings behavior.
 
-use crate::terminal::{Size, TerminalOscEvent, TerminalScreen};
+use crate::{TerminalOscEvent, TerminalScreen, TerminalSize as Size};
 
 /// Verifies terminal screen tracks osc title with bel and st terminators.
 ///

@@ -1,9 +1,9 @@
 //! Regression tests for terminal screen history behavior.
 
-use crate::terminal::screen::{GraphicRendition, TerminalColor, TerminalStyleSpan};
-use crate::terminal::{
-    AlternateScreenState, DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer, Size,
-    TerminalScreen, TerminalStyledLine,
+use crate::{
+    AlternateScreenState, DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, GraphicRendition,
+    HistoryBuffer, TerminalColor, TerminalScreen, TerminalSize as Size, TerminalStyleSpan,
+    TerminalStyledLine,
 };
 
 /// Verifies history buffer evicts oldest lines first.

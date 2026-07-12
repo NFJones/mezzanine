@@ -1,57 +1,6 @@
 //! Regression tests for terminal screen controls behavior.
 
-use crate::terminal::{
-    ClientStatusKind, ClientStatusLine, ClientViewRole, RenderedClientView, Size,
-    TerminalCursorState, TerminalCursorStyle, TerminalModeState, TerminalScreen, UiTheme,
-    compose_client_presentation, pane_divider_glyph_for_test,
-};
-
-/// Verifies client presentation renders status line inside authoritative size.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
-#[test]
-fn client_presentation_renders_status_line_inside_authoritative_size() {
-    let view = RenderedClientView {
-        role: ClientViewRole::Primary,
-        authoritative_size: Size::new(12, 3).unwrap(),
-        client_size: Size::new(12, 3).unwrap(),
-        lines: vec!["one".to_string(), "two".to_string(), "three".to_string()],
-        line_style_spans: vec![Vec::new(), Vec::new(), Vec::new()],
-        selection: None,
-        requires_client_scroll: false,
-        viewport_row: 0,
-        viewport_column: 0,
-        cursor_row: 0,
-        cursor_column: 0,
-        cursor_visible: false,
-        cursor_style: TerminalCursorStyle::Block,
-        cursor_blink: true,
-        cursor_blink_interval_ms: 500,
-        application_keypad: false,
-        bracketed_paste: false,
-        focus_events: false,
-        alternate_screen: false,
-        host_mouse_reporting: true,
-        animation_refresh_interval_ms: 0,
-        ui_theme: UiTheme::default(),
-        agent_prompt_region: None,
-        primary_prompt_active: false,
-    };
-
-    let lines = compose_client_presentation(
-        &view,
-        Some(&ClientStatusLine {
-            kind: ClientStatusKind::CopyMode,
-            text: "select".to_string(),
-        }),
-    );
-
-    assert_eq!(lines.len(), 3);
-    assert_eq!(lines[0], "one");
-    assert_eq!(lines[2], "copy: select");
-}
+use crate::{TerminalCursorState, TerminalModeState, TerminalScreen, TerminalSize as Size};
 
 /// Verifies terminal screen prints line oriented output.
 ///
@@ -554,33 +503,6 @@ fn terminal_screen_restores_terminal_saved_state() {
     assert!(restored.bracketed_paste_enabled());
     assert!(!restored.mode_state().normal_mouse_tracking_enabled);
     assert!(restored.mode_state().button_event_mouse_tracking_enabled);
-}
-
-/// Verifies every mux-managed divider connection mask maps to the expected
-/// thin Unicode box-drawing glyph.
-#[test]
-fn pane_divider_connection_masks_use_correct_box_drawing_glyphs() {
-    let cases = [
-        ((true, true, false, false), '\u{2502}'),
-        ((false, false, true, true), '\u{2500}'),
-        ((false, true, false, true), '\u{250c}'),
-        ((false, true, true, false), '\u{2510}'),
-        ((true, false, false, true), '\u{2514}'),
-        ((true, false, true, false), '\u{2518}'),
-        ((false, true, true, true), '\u{252c}'),
-        ((true, false, true, true), '\u{2534}'),
-        ((true, true, false, true), '\u{251c}'),
-        ((true, true, true, false), '\u{2524}'),
-        ((true, true, true, true), '\u{253c}'),
-    ];
-
-    for ((up, down, left, right), expected) in cases {
-        assert_eq!(
-            pane_divider_glyph_for_test(up, down, left, right),
-            expected,
-            "unexpected glyph for up={up} down={down} left={left} right={right}"
-        );
-    }
 }
 
 /// Verifies that absolute horizontal cursor movement is honored. Full-screen
