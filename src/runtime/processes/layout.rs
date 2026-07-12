@@ -647,7 +647,7 @@ impl RuntimeSessionService {
     }
 
     /// Applies process-neutral session resize effects to product-owned PTYs and screens.
-    fn sync_pane_resize_effects(
+    pub(crate) fn sync_pane_resize_effects(
         &mut self,
         effects: &[crate::session::PaneResizeEffect],
     ) -> Result<Vec<PaneResizeUpdate>> {

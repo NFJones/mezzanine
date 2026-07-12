@@ -878,6 +878,52 @@ fn pane_resize_transition_describes_resulting_pane_sizes() {
     assert_eq!(effect_sizes, resulting_sizes);
 }
 
+/// Verifies geometry replacement returns every resulting pane-size effect.
+///
+/// Pointer-driven border resizing uses this transition to synchronize product
+/// PTYs and terminal surfaces without rediscovering layout output.
+#[test]
+fn pane_geometry_transition_describes_resulting_pane_sizes() {
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    let geometries = vec![
+        PaneGeometry {
+            index: 0,
+            column: 0,
+            row: 0,
+            columns: 30,
+            rows: 24,
+        },
+        PaneGeometry {
+            index: 1,
+            column: 30,
+            row: 0,
+            columns: 50,
+            rows: 24,
+        },
+    ];
+
+    let effects = session
+        .replace_active_window_pane_geometries_transition(&primary, geometries)
+        .unwrap();
+
+    let resulting_sizes = session
+        .active_window()
+        .unwrap()
+        .panes()
+        .iter()
+        .map(|pane| (pane.id.clone(), pane.size))
+        .collect::<Vec<_>>();
+    let effect_sizes = effects
+        .into_iter()
+        .map(|effect| (effect.pane_id, effect.size))
+        .collect::<Vec<_>>();
+    assert_eq!(effect_sizes, resulting_sizes);
+}
+
 /// Verifies primary can swap panes in active window.
 ///
 /// This regression scenario documents the behavior being protected so a

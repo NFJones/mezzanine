@@ -877,14 +877,32 @@ impl Session {
         primary_client_id: &ClientId,
         geometries: Vec<PaneGeometry>,
     ) -> Result<()> {
+        self.replace_active_window_pane_geometries_transition(primary_client_id, geometries)?;
+        Ok(())
+    }
+
+    /// Replaces active-window geometry and returns process-neutral resize effects.
+    pub fn replace_active_window_pane_geometries_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+        geometries: Vec<PaneGeometry>,
+    ) -> Result<Vec<PaneResizeEffect>> {
         self.require_primary(primary_client_id)?;
         let window = self
             .windows
             .get_mut(self.active_window_index)
             .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
         window.replace_pane_geometries(geometries)?;
+        let effects = window
+            .panes()
+            .iter()
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect();
         self.record_event();
-        Ok(())
+        Ok(effects)
     }
 
     /// Resizes a pane in a specific window without changing the active window.

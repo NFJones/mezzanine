@@ -489,9 +489,13 @@ impl RuntimeSessionService {
                     self.resize_pane_pty(primary_client_id, Some(pane_id.as_str()), size)?;
                     return Ok(true);
                 };
-                self.session
-                    .replace_active_window_pane_geometries(primary_client_id, update.geometries)?;
-                self.sync_tracked_pty_sizes()?;
+                let effects = self
+                    .session
+                    .replace_active_window_pane_geometries_transition(
+                        primary_client_id,
+                        update.geometries,
+                    )?;
+                self.sync_pane_resize_effects(&effects)?;
                 Ok(true)
             }
             MouseAction::FinishResizePane => {
