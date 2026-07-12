@@ -609,19 +609,10 @@ fn runtime_mutated_pane_command_outcome(
     }
 }
 
-/// Returns whether a command outcome should be followed by tracked PTY-size synchronization.
+/// Returns whether generic command dispatch still requires tracked PTY synchronization.
 pub(super) fn runtime_command_requires_pty_sync(invocation: &CommandInvocation) -> bool {
     matches!(
         invocation.name.as_str(),
-        "resize-pane"
-            | "resizep"
-            | "swap-pane"
-            | "swapp"
-            | "break-pane"
-            | "breakp"
-            | "join-pane"
-            | "joinp"
-            | "move-pane"
-            | "movep"
+        "swap-pane" | "swapp" | "break-pane" | "breakp" | "join-pane" | "joinp"
     )
 }
