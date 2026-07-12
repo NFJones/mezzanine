@@ -844,6 +844,40 @@ fn primary_can_resize_target_pane() {
     assert_eq!(pane.size, Size::new(20, 10).unwrap());
 }
 
+/// Verifies pane resize transitions describe every resulting pane size.
+///
+/// Runtime adapters synchronize PTYs and terminal surfaces from these effects,
+/// so the transition must expose the complete post-layout pane-size set while
+/// preserving the pane selected by the resize request.
+#[test]
+fn pane_resize_transition_describes_resulting_pane_sizes() {
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    let pane_id = session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+
+    let transition = session
+        .resize_pane_transition(&primary, Some(pane_id.as_str()), Size::new(20, 10).unwrap())
+        .unwrap();
+
+    assert_eq!(transition.pane.id, pane_id);
+    assert_eq!(transition.pane.size, Size::new(20, 10).unwrap());
+    let resulting_sizes = session
+        .active_window()
+        .unwrap()
+        .panes()
+        .iter()
+        .map(|pane| (pane.id.clone(), pane.size))
+        .collect::<Vec<_>>();
+    let effect_sizes = transition
+        .effects
+        .into_iter()
+        .map(|effect| (effect.pane_id, effect.size))
+        .collect::<Vec<_>>();
+    assert_eq!(effect_sizes, resulting_sizes);
+}
+
 /// Verifies primary can swap panes in active window.
 ///
 /// This regression scenario documents the behavior being protected so a

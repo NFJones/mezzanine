@@ -21,6 +21,24 @@ use super::types::{ClientState, Session, SessionState, WindowGroup};
 /// boundary and avoids relying on call-site inference.
 const DEFAULT_PANE_TITLE: &str = "shell";
 
+/// Describes one pane-size synchronization requested by a session layout mutation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneResizeEffect {
+    /// Pane whose terminal surface and PTY must adopt the new size.
+    pub pane_id: PaneId,
+    /// New pane size produced by the layout mutation.
+    pub size: Size,
+}
+
+/// Carries the selected pane and all pane-size effects produced by a resize.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneResizeTransition {
+    /// Pane selected by the resize request after the mutation is applied.
+    pub pane: Pane,
+    /// Pane sizes that downstream process and presentation adapters must synchronize.
+    pub effects: Vec<PaneResizeEffect>,
+}
+
 impl Session {
     /// Runs the new window operation for this subsystem.
     ///
@@ -786,14 +804,34 @@ impl Session {
         target: Option<&str>,
         size: Size,
     ) -> Result<Pane> {
+        Ok(self
+            .resize_pane_transition(primary_client_id, target, size)?
+            .pane)
+    }
+
+    /// Resizes a pane and returns the process-neutral synchronization effects.
+    pub fn resize_pane_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+        target: Option<&str>,
+        size: Size,
+    ) -> Result<PaneResizeTransition> {
         self.require_primary(primary_client_id)?;
         let window = self
             .windows
             .get_mut(self.active_window_index)
             .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
         let pane = window.resize_pane(target, size)?.clone();
+        let effects = window
+            .panes()
+            .iter()
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect();
         self.record_event();
-        Ok(pane)
+        Ok(PaneResizeTransition { pane, effects })
     }
 
     /// Resizes a pane from a spec-defined size request.
@@ -803,14 +841,34 @@ impl Session {
         target: Option<&str>,
         spec: PaneSizeSpec,
     ) -> Result<Pane> {
+        Ok(self
+            .resize_pane_with_spec_transition(primary_client_id, target, spec)?
+            .pane)
+    }
+
+    /// Resolves a pane-size specification and returns process-neutral resize effects.
+    pub fn resize_pane_with_spec_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+        target: Option<&str>,
+        spec: PaneSizeSpec,
+    ) -> Result<PaneResizeTransition> {
         self.require_primary(primary_client_id)?;
         let window = self
             .windows
             .get_mut(self.active_window_index)
             .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
         let pane = window.resize_pane_with_spec(target, spec)?.clone();
+        let effects = window
+            .panes()
+            .iter()
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect();
         self.record_event();
-        Ok(pane)
+        Ok(PaneResizeTransition { pane, effects })
     }
 
     /// Replaces the active window's pane geometry after a rendered border drag.
