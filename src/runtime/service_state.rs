@@ -1893,6 +1893,8 @@ pub struct RuntimeSessionService {
     pub(super) transcript_effects_use_adapter: bool,
     /// Whether session-registry updates are persisted by an adapter.
     pub(super) registry_effects_use_adapter: bool,
+    /// Whether configuration writes are persisted by an adapter.
+    pub(super) config_effects_use_adapter: bool,
     /// Stores the paste buffers value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

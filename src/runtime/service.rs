@@ -313,6 +313,7 @@ impl RuntimeSessionService {
             pane_pipe_effects_use_adapter: false,
             transcript_effects_use_adapter: false,
             registry_effects_use_adapter: false,
+            config_effects_use_adapter: false,
             paste_buffers: PasteBuffers::default_limit(),
             active_paste_buffer: None,
             host_clipboard: HostClipboard::system(),
@@ -536,6 +537,11 @@ impl RuntimeSessionService {
     /// Assigns session-registry persistence to the external effect adapter.
     pub(crate) fn use_registry_effect_adapter(&mut self) {
         self.registry_effects_use_adapter = true;
+    }
+
+    /// Assigns configuration persistence to the external effect adapter.
+    pub(crate) fn use_config_effect_adapter(&mut self) {
+        self.config_effects_use_adapter = true;
     }
 
     /// Returns whether transitions must queue external work for an adapter.

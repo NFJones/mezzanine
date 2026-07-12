@@ -148,6 +148,7 @@ impl AsyncRuntimeSessionActor {
         service.use_pane_pipe_effect_adapter();
         service.use_transcript_effect_adapter();
         service.use_registry_effect_adapter();
+        service.use_config_effect_adapter();
         Ok((
             AsyncRuntimeSessionHandle {
                 sender: sender.clone(),
