@@ -6,7 +6,7 @@
 
 use super::{current_rfc3339_seconds, effective_uid};
 use crate::process::PaneExitStatus;
-use crate::terminal::TerminalStyleSpan;
+use mez_terminal::TerminalStyleSpan;
 
 // Control protocol data types and capabilities.
 

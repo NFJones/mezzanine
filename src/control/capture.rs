@@ -9,7 +9,7 @@ use super::{
     Result, Session, json_escape, pane_state_json, pane_state_json_with_capture,
     pane_target_checked_resolved, target_or_active_pane,
 };
-use crate::terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};
+use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 
 // Pane capture parsing and response helpers.
 

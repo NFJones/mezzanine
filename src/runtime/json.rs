@@ -15,9 +15,10 @@ use super::{
     runtime_string_array_json, shell_command_from_argv, unix_seconds_to_rfc3339,
 };
 use crate::terminal::{
-    GraphicRendition, TerminalColor, TerminalCursorStyle, TerminalStyleSpan, UiColorPair, UiTheme,
-    compose_client_presentation_with_styles, max_viewport_column, max_viewport_row,
+    TerminalCursorStyle, UiColorPair, UiTheme, compose_client_presentation_with_styles,
+    max_viewport_column, max_viewport_row,
 };
+use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 
 // Runtime JSON serialization, parsing, and name mapping helpers.
 

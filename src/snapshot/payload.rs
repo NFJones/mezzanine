@@ -9,7 +9,7 @@ use crate::message::MessageServiceSnapshot;
 use crate::process::PaneExitStatus;
 use crate::session::{Session, SessionState};
 use crate::shell::ShellSource;
-use crate::terminal::{
+use mez_terminal::{
     GraphicRendition, TerminalColor, TerminalCursorState, TerminalModeState,
     TerminalSavedDecPrivateMode, TerminalSavedState, TerminalStyleSpan, tracked_dec_private_mode,
 };
