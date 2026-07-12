@@ -5,9 +5,8 @@
 //! the internal wide-glyph sentinel used by pane/window canvas rendering.
 
 use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::error::{MezError, Result};
 use crate::terminal::{CopyPosition, TerminalStyleSpan, TerminalStyledLine};
@@ -15,41 +14,13 @@ use crate::terminal::{CopyPosition, TerminalStyleSpan, TerminalStyledLine};
 /// Default maximum display-cell width for Mezzanine-owned agent log rows.
 pub(crate) const DEFAULT_AGENT_WRAP_COLUMN_CAP: usize = 120;
 
-const TERMINAL_EMOJI_WIDTH_WIDE: u8 = 0;
-const TERMINAL_EMOJI_WIDTH_NARROW: u8 = 1;
-
-static TERMINAL_EMOJI_WIDTH: AtomicU8 = AtomicU8::new(TERMINAL_EMOJI_WIDTH_WIDE);
 static AGENT_WRAP_COLUMN_CAP: AtomicUsize = AtomicUsize::new(DEFAULT_AGENT_WRAP_COLUMN_CAP);
 
 /// Selects how explicit emoji-presentation status symbols are measured in
 /// terminal display cells.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TerminalEmojiWidth {
-    /// Measure explicit emoji-presentation symbols with the Unicode terminal
-    /// width used by terminals that render these glyphs as two-cell emoji.
-    Wide,
-    /// Measure text-fallback emoji status symbols as one cell for host
-    /// terminals that render them through a monochrome/text font fallback.
-    Narrow,
-}
+pub(crate) use mez_terminal::TerminalEmojiWidth;
 
-impl TerminalEmojiWidth {
-    /// Returns the atomic storage representation for this width policy.
-    fn as_u8(self) -> u8 {
-        match self {
-            Self::Wide => TERMINAL_EMOJI_WIDTH_WIDE,
-            Self::Narrow => TERMINAL_EMOJI_WIDTH_NARROW,
-        }
-    }
-
-    /// Builds a width policy from its atomic storage representation.
-    fn from_u8(value: u8) -> Self {
-        match value {
-            TERMINAL_EMOJI_WIDTH_NARROW => Self::Narrow,
-            _ => Self::Wide,
-        }
-    }
-}
+static TERMINAL_EMOJI_WIDTH: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
 /// Applies the process-wide terminal emoji width policy.
 ///
@@ -61,12 +32,18 @@ impl TerminalEmojiWidth {
 /// # Parameters
 /// - `width`: The emoji status glyph width policy to use.
 pub(crate) fn set_terminal_emoji_width(width: TerminalEmojiWidth) {
-    TERMINAL_EMOJI_WIDTH.store(width.as_u8(), Ordering::Relaxed);
+    TERMINAL_EMOJI_WIDTH.store(
+        u8::from(width == TerminalEmojiWidth::Narrow),
+        Ordering::Relaxed,
+    );
 }
 
 /// Returns the active process-wide terminal emoji width policy.
 pub(crate) fn terminal_emoji_width() -> TerminalEmojiWidth {
-    TerminalEmojiWidth::from_u8(TERMINAL_EMOJI_WIDTH.load(Ordering::Relaxed))
+    match TERMINAL_EMOJI_WIDTH.load(Ordering::Relaxed) {
+        1 => TerminalEmojiWidth::Narrow,
+        _ => TerminalEmojiWidth::Wide,
+    }
 }
 
 /// Applies the process-wide maximum display width for Mezzanine-owned agent rows.
@@ -566,7 +543,7 @@ fn char_column_at_byte(value: &str, byte_index: usize) -> usize {
 
 /// Returns the terminal display width of one Unicode scalar.
 pub(in crate::terminal) fn terminal_char_width(ch: char) -> usize {
-    terminal_char_width_for_emoji_width(ch, terminal_emoji_width())
+    mez_terminal::terminal_char_width(ch, terminal_emoji_width())
 }
 
 /// Returns the display width of one Unicode grapheme cluster.
@@ -581,19 +558,6 @@ pub(crate) fn terminal_grapheme_width(grapheme: &str) -> usize {
     terminal_grapheme_width_for_emoji_width(grapheme, terminal_emoji_width())
 }
 
-/// Returns the display width of one Unicode scalar under an explicit emoji
-/// status glyph width policy.
-///
-/// # Parameters
-/// - `ch`: The Unicode scalar to measure.
-/// - `emoji_width`: The compatibility policy selected for status glyphs.
-fn terminal_char_width_for_emoji_width(ch: char, emoji_width: TerminalEmojiWidth) -> usize {
-    if emoji_width == TerminalEmojiWidth::Narrow && terminal_scalar_has_text_fallback_width(ch) {
-        return 1;
-    }
-    UnicodeWidthChar::width(ch).unwrap_or(0)
-}
-
 /// Returns the display width of one Unicode grapheme cluster under an explicit
 /// emoji status glyph width policy.
 ///
@@ -604,18 +568,7 @@ fn terminal_grapheme_width_for_emoji_width(
     grapheme: &str,
     emoji_width: TerminalEmojiWidth,
 ) -> usize {
-    if emoji_width == TerminalEmojiWidth::Narrow
-        && let Some(width) = narrow_text_fallback_grapheme_width(grapheme)
-    {
-        return width;
-    }
-    let mut chars = grapheme.chars();
-    if let Some(ch) = chars.next()
-        && chars.next().is_none()
-    {
-        return terminal_char_width_for_emoji_width(ch, emoji_width);
-    }
-    UnicodeWidthStr::width(grapheme).min(2)
+    mez_terminal::terminal_grapheme_width(grapheme, emoji_width)
 }
 
 /// Returns the display width of one complete terminal string.
@@ -623,7 +576,7 @@ fn terminal_grapheme_width_for_emoji_width(
 /// # Parameters
 /// - `value`: The terminal text to measure.
 pub(crate) fn terminal_text_width(value: &str) -> usize {
-    terminal_graphemes(value).map(terminal_grapheme_width).sum()
+    mez_terminal::terminal_text_width(value, terminal_emoji_width())
 }
 
 /// Returns an iterator over Unicode grapheme clusters in terminal text.
@@ -631,76 +584,7 @@ pub(crate) fn terminal_text_width(value: &str) -> usize {
 /// # Parameters
 /// - `value`: The terminal text to segment.
 pub(crate) fn terminal_graphemes(value: &str) -> impl Iterator<Item = &str> {
-    UnicodeSegmentation::graphemes(value, true)
-}
-
-/// Returns whether a scalar has a one-cell text fallback presentation.
-///
-/// This identifies emoji-capable status symbols such as `✅` whose default
-/// Unicode width is two cells but whose text-presentation variation sequence is
-/// one cell. It is used only by the explicit narrow compatibility policy.
-///
-/// # Parameters
-/// - `ch`: The Unicode scalar whose text-presentation width is being checked.
-fn terminal_scalar_has_text_fallback_width(ch: char) -> bool {
-    if ch.is_ascii() || !terminal_scalar_is_text_fallback_status_symbol(ch) {
-        return false;
-    }
-    let mut text_presentation = String::new();
-    text_presentation.push(ch);
-    text_presentation.push('\u{FE0E}');
-    UnicodeWidthStr::width(text_presentation.as_str()) == 1
-}
-
-/// Returns whether a scalar belongs to the simple symbol ranges commonly used
-/// for terminal status marks.
-///
-/// The narrow compatibility policy intentionally targets status symbols instead
-/// of every pictographic emoji. High-plane emoji such as `👍` therefore keep
-/// their default two-cell width even if a text-presentation sequence exists.
-///
-/// # Parameters
-/// - `ch`: The Unicode scalar being classified.
-fn terminal_scalar_is_text_fallback_status_symbol(ch: char) -> bool {
-    matches!(
-        ch as u32,
-        0x203C
-            | 0x2049
-            | 0x2139
-            | 0x2194..=0x21AA
-            | 0x231A..=0x23FF
-            | 0x24C2
-            | 0x24D8
-            | 0x25AA..=0x25FE
-            | 0x2600..=0x27BF
-            | 0x2934..=0x2935
-            | 0x2B00..=0x2BFF
-            | 0x3030
-            | 0x303D
-            | 0x3297..=0x3299
-    )
-}
-
-/// Returns the one-cell width for simple emoji/text variation sequences under
-/// the narrow compatibility policy.
-///
-/// Complex emoji clusters such as flags, skin-tone sequences, keycaps, and ZWJ
-/// sequences keep the default grapheme width because terminals that support
-/// those clusters normally allocate them as a single two-cell glyph.
-///
-/// # Parameters
-/// - `grapheme`: The extended grapheme cluster to measure.
-fn narrow_text_fallback_grapheme_width(grapheme: &str) -> Option<usize> {
-    let mut chars = grapheme.chars();
-    let base = chars.next()?;
-    let variation = chars.next()?;
-    if chars.next().is_some() || !matches!(variation, '\u{FE0E}' | '\u{FE0F}') {
-        return None;
-    }
-    Some(terminal_char_width_for_emoji_width(
-        base,
-        TerminalEmojiWidth::Narrow,
-    ))
+    mez_terminal::terminal_graphemes(value)
 }
 
 #[cfg(test)]

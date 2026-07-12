@@ -1382,6 +1382,8 @@ name = "mez-terminal"
 version = "0.1.0"
 dependencies = [
  "mez-core",
+ "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]

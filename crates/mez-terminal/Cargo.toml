@@ -9,3 +9,5 @@ path = "src/lib.rs"
 
 [dependencies]
 mez-core = { path = "../mez-core" }
+unicode-segmentation = "1.12"
+unicode-width = "0.2"

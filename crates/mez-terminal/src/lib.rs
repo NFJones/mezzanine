@@ -18,6 +18,8 @@ pub mod protocol;
 pub mod state;
 /// Styled terminal-cell contracts produced by terminal emulation.
 pub mod style;
+/// Unicode segmentation and display-width contracts for terminal cells.
+pub mod width;
 
 pub use mouse::{MouseButton, MouseEvent, MouseEventKind, MouseModifiers, parse_sgr_mouse};
 
@@ -28,6 +30,11 @@ pub use history::{
 };
 
 pub use style::{GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalStyledLine};
+
+pub use width::{
+    TerminalEmojiWidth, terminal_char_width, terminal_grapheme_width, terminal_graphemes,
+    terminal_text_width,
+};
 
 pub use state::{
     TerminalCursorState, TerminalModeState, TerminalSavedDecPrivateMode, TerminalSavedState,
