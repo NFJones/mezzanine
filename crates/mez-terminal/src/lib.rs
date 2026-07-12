@@ -16,8 +16,10 @@ pub mod mouse;
 pub mod profile;
 /// Pane-facing terminal protocol event contracts.
 pub mod protocol;
-/// Configuration errors for one emulated terminal screen.
+/// Pane-facing terminal parser and emulated screen state.
 pub mod screen;
+/// Configuration errors for one emulated terminal screen.
+pub mod screen_error;
 /// Restorable terminal mode and parser state contracts.
 pub mod state;
 /// Styled terminal-cell contracts produced by terminal emulation.
@@ -31,7 +33,9 @@ pub use geometry::{TerminalSize, TerminalSizeError};
 
 pub use protocol::{MAX_OSC_STRING_BYTES, TerminalOscEvent};
 
-pub use screen::TerminalScreenConfigError;
+pub use screen::{AlternateScreenState, TerminalScreen};
+
+pub use screen_error::TerminalScreenConfigError;
 
 pub use history::{
     DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer, HistoryConfigError,
@@ -40,8 +44,8 @@ pub use history::{
 pub use style::{GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalStyledLine};
 
 pub use width::{
-    TerminalEmojiWidth, terminal_char_width, terminal_grapheme_width, terminal_graphemes,
-    terminal_text_width,
+    TerminalEmojiWidth, set_terminal_emoji_width, terminal_char_width, terminal_emoji_width,
+    terminal_grapheme_width, terminal_graphemes, terminal_text_width,
 };
 
 pub use state::{

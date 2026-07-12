@@ -105,13 +105,11 @@ fn terminal_screen_stores_sgr_rendition_per_printed_cell() {
         foreground: Some(TerminalColor::Indexed(1)),
         background: Some(TerminalColor::Indexed(200)),
     };
-    assert_eq!(screen.graphic_rendition, styled);
     screen.feed(b"\x1b[38;2;1;2;3;48;5;42mY");
     assert_eq!(screen.visible_lines()[0], "XY");
 
     screen.feed(b"\x1b[22;24;39;49mZ");
     assert_eq!(screen.visible_lines()[0], "XYZ");
-    assert_eq!(screen.graphic_rendition, GraphicRendition::default());
     assert_eq!(screen.visible_styled_lines()[0].text, "XYZ");
     assert_eq!(
         screen.visible_styled_lines()[0].style_spans,

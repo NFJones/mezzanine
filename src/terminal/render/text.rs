@@ -20,8 +20,6 @@ static AGENT_WRAP_COLUMN_CAP: AtomicUsize = AtomicUsize::new(DEFAULT_AGENT_WRAP_
 /// terminal display cells.
 pub(crate) use mez_terminal::TerminalEmojiWidth;
 
-static TERMINAL_EMOJI_WIDTH: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
-
 /// Applies the process-wide terminal emoji width policy.
 ///
 /// Mezzanine uses one attached-terminal compatibility policy for all terminal
@@ -32,18 +30,12 @@ static TERMINAL_EMOJI_WIDTH: std::sync::atomic::AtomicU8 = std::sync::atomic::At
 /// # Parameters
 /// - `width`: The emoji status glyph width policy to use.
 pub(crate) fn set_terminal_emoji_width(width: TerminalEmojiWidth) {
-    TERMINAL_EMOJI_WIDTH.store(
-        u8::from(width == TerminalEmojiWidth::Narrow),
-        Ordering::Relaxed,
-    );
+    mez_terminal::set_terminal_emoji_width(width);
 }
 
 /// Returns the active process-wide terminal emoji width policy.
 pub(crate) fn terminal_emoji_width() -> TerminalEmojiWidth {
-    match TERMINAL_EMOJI_WIDTH.load(Ordering::Relaxed) {
-        1 => TerminalEmojiWidth::Narrow,
-        _ => TerminalEmojiWidth::Wide,
-    }
+    mez_terminal::terminal_emoji_width()
 }
 
 /// Applies the process-wide maximum display width for Mezzanine-owned agent rows.
@@ -542,7 +534,7 @@ fn char_column_at_byte(value: &str, byte_index: usize) -> usize {
 }
 
 /// Returns the terminal display width of one Unicode scalar.
-pub(in crate::terminal) fn terminal_char_width(ch: char) -> usize {
+pub(crate) fn terminal_char_width(ch: char) -> usize {
     mez_terminal::terminal_char_width(ch, terminal_emoji_width())
 }
 

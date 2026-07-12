@@ -171,6 +171,8 @@ pub use theme::{
 
 use client_loop::borrow_raw_fd;
 use keys::parse_key_chord_bytes;
+#[cfg(test)]
+pub(crate) use render::terminal_char_width;
 pub(crate) use render::{
     DEFAULT_AGENT_WRAP_COLUMN_CAP, TerminalEmojiWidth, agent_log_wrap_width, agent_wrap_column_cap,
     set_agent_wrap_column_cap, set_terminal_emoji_width, terminal_grapheme_width,
@@ -178,7 +180,7 @@ pub(crate) use render::{
 };
 use render::{
     char_count, line_slice, normalize_selection, search_backward, search_forward,
-    terminal_char_width, validate_copy_position,
+    validate_copy_position,
 };
 
 /// Exposes the tests module boundary.

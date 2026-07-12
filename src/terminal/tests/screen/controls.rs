@@ -218,11 +218,12 @@ fn terminal_screen_bounds_csi_accumulation_and_recovers_after_final_byte() {
 #[test]
 fn terminal_screen_erase_line_clears_row_copy_text() {
     let mut screen = TerminalScreen::new(Size::new(10, 2).unwrap(), 10).unwrap();
-    screen.line_copy_texts[0] = Some("hidden raw copy".to_string());
+    screen.feed(b"visible");
+    screen.set_recent_normal_copy_texts(&["hidden raw copy".to_string()], "");
 
     screen.feed(b"\x1b[2K");
 
-    assert_eq!(screen.line_copy_texts[0], None);
+    assert_eq!(screen.visible_styled_lines()[0].copy_text, None);
 }
 
 /// Verifies shell-cleared panes keep their detached viewport stationary when a

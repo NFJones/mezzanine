@@ -390,8 +390,16 @@ fn terminal_screen_resize_shrink_preserves_dropped_row_copy_text_in_history() {
             TerminalStyledLine::plain("line4"),
         ],
     );
-    // Annotate only one dropped row; plain dropped rows must still be kept.
-    screen.line_copy_texts[1] = Some("copy-one".to_string());
+    screen.set_recent_normal_copy_texts(
+        &[
+            "copy-zero".to_string(),
+            "copy-one".to_string(),
+            "copy-two".to_string(),
+            "copy-three".to_string(),
+            "copy-four".to_string(),
+        ],
+        "",
+    );
 
     screen.resize(Size::new(10, 3).unwrap());
 
@@ -399,7 +407,7 @@ fn terminal_screen_resize_shrink_preserves_dropped_row_copy_text_in_history() {
     let history_styled: Vec<_> = screen.history().styled_lines().collect();
     assert_eq!(history_styled.len(), 2);
     assert_eq!(history_styled[0].text, "line0");
-    assert_eq!(history_styled[0].copy_text, None);
+    assert_eq!(history_styled[0].copy_text.as_deref(), Some("copy-zero"));
     assert_eq!(history_styled[1].text, "line1");
     assert_eq!(history_styled[1].copy_text.as_deref(), Some("copy-one"));
     assert_eq!(screen.visible_lines(), vec!["line2", "line3", "line4"]);

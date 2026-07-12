@@ -8,6 +8,8 @@
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use std::sync::atomic::{AtomicU8, Ordering};
+
 /// Selects how explicit emoji-presentation status symbols are measured.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TerminalEmojiWidth {
@@ -16,6 +18,24 @@ pub enum TerminalEmojiWidth {
     Wide,
     /// Use one-cell text fallback widths for simple status symbols.
     Narrow,
+}
+
+static TERMINAL_EMOJI_WIDTH: AtomicU8 = AtomicU8::new(0);
+
+/// Applies the process-wide terminal emoji-width compatibility policy.
+pub fn set_terminal_emoji_width(width: TerminalEmojiWidth) {
+    TERMINAL_EMOJI_WIDTH.store(
+        u8::from(width == TerminalEmojiWidth::Narrow),
+        Ordering::Relaxed,
+    );
+}
+
+/// Returns the active process-wide terminal emoji-width compatibility policy.
+pub fn terminal_emoji_width() -> TerminalEmojiWidth {
+    match TERMINAL_EMOJI_WIDTH.load(Ordering::Relaxed) {
+        1 => TerminalEmojiWidth::Narrow,
+        _ => TerminalEmojiWidth::Wide,
+    }
 }
 
 /// Returns the terminal display width of one Unicode scalar.
