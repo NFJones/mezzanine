@@ -294,6 +294,16 @@ pub(super) fn execute_runtime_layout_terminal_command(
                 command: invocation.name.clone(),
             }))
         }
+        "rotate-pane" | "rotatep" => {
+            let effects = service.session.rotate_panes_transition(
+                primary_client_id,
+                invocation.has_flag("-D", "--reverse"),
+            )?;
+            service.sync_pane_resize_effects(&effects)?;
+            Ok(Some(CommandOutcome::Mutated {
+                command: invocation.name.clone(),
+            }))
+        }
         "select-layout" => {
             let layout_name = invocation
                 .positional_args()
@@ -582,8 +592,6 @@ pub(super) fn runtime_command_requires_pty_sync(invocation: &CommandInvocation) 
         invocation.name.as_str(),
         "resize-pane"
             | "resizep"
-            | "rotate-pane"
-            | "rotatep"
             | "zoom-pane"
             | "next-layout"
             | "swap-pane"

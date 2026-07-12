@@ -822,8 +822,22 @@ fn primary_can_cycle_rotate_zoom_and_cycle_layouts() {
     assert_eq!(unzoomed, None);
     assert_eq!(unzoom_effects.len(), 3);
 
-    session.rotate_panes(&primary, false).unwrap();
+    let rotate_effects = session.rotate_panes_transition(&primary, false).unwrap();
     assert_eq!(session.active_window().unwrap().panes()[0].id, ids[1].id);
+    assert_eq!(rotate_effects.len(), 3);
+    assert_eq!(
+        rotate_effects
+            .iter()
+            .map(|effect| effect.pane_id.clone())
+            .collect::<Vec<_>>(),
+        session
+            .active_window()
+            .unwrap()
+            .panes()
+            .iter()
+            .map(|pane| pane.id.clone())
+            .collect::<Vec<_>>()
+    );
 
     let (policy, layout_effects) = session.cycle_layout_transition(&primary).unwrap();
     assert_eq!(policy, LayoutPolicy::EvenVertical);

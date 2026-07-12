@@ -808,14 +808,32 @@ impl Session {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn rotate_panes(&mut self, primary_client_id: &ClientId, reverse: bool) -> Result<()> {
+        self.rotate_panes_transition(primary_client_id, reverse)?;
+        Ok(())
+    }
+
+    /// Rotates panes in the active window and returns the resulting pane sizes.
+    pub fn rotate_panes_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+        reverse: bool,
+    ) -> Result<Vec<PaneResizeEffect>> {
         self.require_primary(primary_client_id)?;
         let window = self
             .windows
             .get_mut(self.active_window_index)
             .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
         window.rotate_panes(reverse);
+        let effects = window
+            .panes()
+            .iter()
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect();
         self.record_event();
-        Ok(())
+        Ok(effects)
     }
 
     /// Runs the cycle layout operation for this subsystem.
