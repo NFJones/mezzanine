@@ -10,3 +10,4 @@ path = "src/lib.rs"
 [dependencies]
 mez-core = { path = "../mez-core" }
 mez-terminal = { path = "../mez-terminal" }
+thiserror = "2"
