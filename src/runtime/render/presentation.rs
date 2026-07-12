@@ -4226,7 +4226,8 @@ impl RuntimeSessionService {
                         "replaying persisted agent presentation",
                     )?;
                     if !entry.copy_lines.is_empty() {
-                        screen.set_recent_normal_copy_texts(&entry.copy_lines);
+                        screen
+                            .set_recent_normal_copy_texts(&entry.copy_lines, AGENT_COPY_SKIP_LINE);
                     }
                     continue;
                 }
@@ -4249,7 +4250,7 @@ impl RuntimeSessionService {
                 if !entry.copy_lines.is_empty()
                     && let Some(screen) = self.pane_screens.get_mut(pane_id)
                 {
-                    screen.set_recent_normal_copy_texts(&entry.copy_lines);
+                    screen.set_recent_normal_copy_texts(&entry.copy_lines, AGENT_COPY_SKIP_LINE);
                 }
             }
             let state = self
@@ -4639,7 +4640,7 @@ impl RuntimeSessionService {
                 bytes.as_bytes(),
                 "appending rendered agent lines",
             )?;
-            screen.set_recent_normal_copy_texts(copy_lines);
+            screen.set_recent_normal_copy_texts(copy_lines, AGENT_COPY_SKIP_LINE);
             bytes
         };
         self.persist_agent_presentation_entry(

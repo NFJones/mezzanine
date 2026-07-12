@@ -5,8 +5,8 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AGENT_COPY_SKIP_LINE, BTreeMap, DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer, MezError, Result,
-    Size, terminal_char_width, terminal_grapheme_width, terminal_graphemes, terminal_text_width,
+    BTreeMap, DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer, MezError, Result, Size,
+    terminal_char_width, terminal_grapheme_width, terminal_graphemes, terminal_text_width,
 };
 
 pub use mez_terminal::{
@@ -1559,7 +1559,11 @@ impl TerminalScreen {
     /// Presentation renderers use this after feeding transformed display text
     /// into the terminal screen. Copy mode can then recover the source text
     /// even when the visible line has been styled or simplified for display.
-    pub fn set_recent_normal_copy_texts(&mut self, copy_texts: &[String]) {
+    pub fn set_recent_normal_copy_texts(
+        &mut self,
+        copy_texts: &[String],
+        continuation_copy_text: &str,
+    ) {
         if copy_texts.is_empty() || self.alternate.active() {
             return;
         }
@@ -1588,7 +1592,7 @@ impl TerminalScreen {
             {
                 self.assign_normal_physical_copy_text(
                     target.index,
-                    Some(AGENT_COPY_SKIP_LINE.to_string()),
+                    Some(continuation_copy_text.to_string()),
                 );
             }
             target_end = start;
