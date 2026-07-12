@@ -116,10 +116,8 @@ pub use keys::{
     classify_terminal_input, key_chord_input_bytes, parse_key_chord_notation,
 };
 pub use mez_terminal::{
-    AlternateScreenState, GraphicRendition, HistoryBuffer, HistoryConfigError, TerminalColor,
-    TerminalCursorState, TerminalModeState, TerminalOscEvent, TerminalSavedDecPrivateMode,
+    GraphicRendition, TerminalColor, TerminalCursorState, TerminalModeState, TerminalOscEvent,
     TerminalSavedState, TerminalScreen, TerminalStyleSpan, TerminalStyledLine,
-    tracked_dec_private_mode,
 };
 pub use mouse::{
     CopyModeKeyAction, MouseAction, MouseBorderCell, MouseButton, MouseEvent, MouseEventKind,

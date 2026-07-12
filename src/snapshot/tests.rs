@@ -14,9 +14,10 @@ use crate::message::{Envelope, MessageService, Recipient};
 use crate::session::Session;
 use crate::shell::{ResolvedShell, ShellSource};
 use crate::terminal::{
-    GraphicRendition, TerminalColor, TerminalCursorState, TerminalModeState,
-    TerminalSavedDecPrivateMode, TerminalSavedState, TerminalStyleSpan,
+    GraphicRendition, TerminalColor, TerminalCursorState, TerminalModeState, TerminalSavedState,
+    TerminalStyleSpan,
 };
+use mez_terminal::TerminalSavedDecPrivateMode;
 use std::fs;
 use std::path::PathBuf;
 
