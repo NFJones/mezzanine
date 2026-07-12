@@ -5,3 +5,11 @@
 //! product policy, I/O, persistence, and general-purpose helpers do not belong
 //! here. The initial empty facade establishes that boundary before production
 //! types are extracted from the root package.
+
+/// Stable opaque identifiers shared across Mezzanine subsystems.
+pub mod ids;
+
+pub use ids::{
+    AgentId, ClientId, IdFactory, ObserverRequestId, PaneId, SessionId, StableId, WindowGroupId,
+    WindowId,
+};
