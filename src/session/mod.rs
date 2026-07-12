@@ -45,8 +45,8 @@ pub use types::{
     ObserverRequest, Session, SessionState, WindowGroup,
 };
 pub use windows::{
-    BreakPaneTransition, JoinPaneTransition, PaneResizeEffect, PaneResizeTransition,
-    RemovePaneTransition,
+    BreakPaneTransition, JoinPaneTransition, KillGroupTransition, KillWindowTransition,
+    PaneResizeEffect, PaneResizeTransition, RemovePaneTransition,
 };
 
 /// Exposes the tests module boundary.

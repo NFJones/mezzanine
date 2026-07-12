@@ -493,10 +493,11 @@ pub(super) fn runtime_kill_window_command(
     if force || !panes_have_live_process {
         service.fail_agent_turns_for_pane_shutdown(&pane_ids, "window closed")?;
     }
-    let removed = service
+    let transition = service
         .session
-        .kill_window(primary_client_id, target, force)?;
-    let removed_pane_ids = removed
+        .kill_window_transition(primary_client_id, target, force)?;
+    let removed_pane_ids = transition
+        .window
         .panes()
         .iter()
         .map(|pane| pane.id.to_string())
@@ -510,11 +511,8 @@ pub(super) fn runtime_kill_window_command(
     for pane_id in &removed_pane_ids {
         service.cleanup_removed_pane_runtime_state(pane_id);
     }
-    let synced = if service.session.windows().is_empty() {
-        0
-    } else {
-        service.sync_tracked_pty_sizes()?.len()
-    };
+    service.sync_pane_resize_effects(&transition.effects)?;
+    let synced = transition.effects.len();
     service.lifecycle_state = RuntimeLifecycleState::from_session_state(service.session.state);
     service.append_window_close_event(
         window_id.as_str(),
@@ -559,10 +557,11 @@ pub(super) fn runtime_kill_group_command(
     if force || !panes_have_live_process {
         service.fail_agent_turns_for_pane_shutdown(&pane_ids, "window group closed")?;
     }
-    let removed = service
+    let transition = service
         .session
-        .kill_group(primary_client_id, target, force)?;
-    let removed_pane_ids = removed
+        .kill_group_transition(primary_client_id, target, force)?;
+    let removed_pane_ids = transition
+        .windows
         .iter()
         .flat_map(|window| window.panes().iter().map(|pane| pane.id.to_string()))
         .collect::<Vec<_>>();
@@ -575,11 +574,8 @@ pub(super) fn runtime_kill_group_command(
     for pane_id in &removed_pane_ids {
         service.cleanup_removed_pane_runtime_state(pane_id);
     }
-    let synced = if service.session.windows().is_empty() {
-        0
-    } else {
-        service.sync_tracked_pty_sizes()?.len()
-    };
+    service.sync_pane_resize_effects(&transition.effects)?;
+    let synced = transition.effects.len();
     service.lifecycle_state = RuntimeLifecycleState::from_session_state(service.session.state);
     service.append_lifecycle_event(
         super::super::EventKind::WindowChanged,
@@ -594,7 +590,7 @@ pub(super) fn runtime_kill_group_command(
         body: format!(
             "closed=true:group={}:windows={}:terminated_panes={}:session_empty={}:synced_panes={synced}",
             group_id,
-            removed.len(),
+            transition.windows.len(),
             terminated,
             service.session.windows().is_empty()
         ),

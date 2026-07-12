@@ -66,6 +66,24 @@ pub struct RemovePaneTransition {
     pub effects: Vec<PaneResizeEffect>,
 }
 
+/// Carries a removed window and all pane-size effects produced by its removal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KillWindowTransition {
+    /// Window removed from the session.
+    pub window: Window,
+    /// Pane sizes that downstream process and presentation adapters must synchronize.
+    pub effects: Vec<PaneResizeEffect>,
+}
+
+/// Carries removed group windows and all pane-size effects produced by their removal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KillGroupTransition {
+    /// Windows removed from the session group.
+    pub windows: Vec<Window>,
+    /// Pane sizes that downstream process and presentation adapters must synchronize.
+    pub effects: Vec<PaneResizeEffect>,
+}
+
 impl Session {
     /// Runs the new window operation for this subsystem.
     ///
@@ -1719,6 +1737,18 @@ impl Session {
         target: Option<&str>,
         force: bool,
     ) -> Result<Window> {
+        Ok(self
+            .kill_window_transition(primary_client_id, target, force)?
+            .window)
+    }
+
+    /// Removes a window and returns all resulting pane-size effects.
+    pub fn kill_window_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+        target: Option<&str>,
+        force: bool,
+    ) -> Result<KillWindowTransition> {
         self.require_primary(primary_client_id)?;
         let index = self.window_index_or_active(target)?;
         if self.windows[index].panes().iter().any(|pane| pane.live) && !force {
@@ -1728,8 +1758,20 @@ impl Session {
         }
         let removed = self.windows.remove(index);
         self.after_window_removed(index);
+        let effects = self
+            .windows
+            .iter()
+            .flat_map(|window| window.panes())
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect();
         self.record_event();
-        Ok(removed)
+        Ok(KillWindowTransition {
+            window: removed,
+            effects,
+        })
     }
 
     /// Closes an entire window group and returns the removed windows.
@@ -1739,6 +1781,18 @@ impl Session {
         target: Option<&str>,
         force: bool,
     ) -> Result<Vec<Window>> {
+        Ok(self
+            .kill_group_transition(primary_client_id, target, force)?
+            .windows)
+    }
+
+    /// Removes a window group and returns all resulting pane-size effects.
+    pub fn kill_group_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+        target: Option<&str>,
+        force: bool,
+    ) -> Result<KillGroupTransition> {
         self.require_primary(primary_client_id)?;
         if self.window_groups.len() <= 1 {
             return Err(MezError::forbidden(
@@ -1774,8 +1828,20 @@ impl Session {
             self.active_window_index = self.active_window_index.min(self.windows.len() - 1);
             self.sync_active_group_to_active_window();
         }
+        let effects = self
+            .windows
+            .iter()
+            .flat_map(|window| window.panes())
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect();
         self.record_event();
-        Ok(removed)
+        Ok(KillGroupTransition {
+            windows: removed,
+            effects,
+        })
     }
 }
 

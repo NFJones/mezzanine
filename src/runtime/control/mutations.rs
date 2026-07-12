@@ -392,10 +392,11 @@ impl RuntimeSessionService {
         if force || !panes_have_live_process {
             self.fail_agent_turns_for_pane_shutdown(&pane_ids, "window closed")?;
         }
-        let removed = self
-            .session
-            .kill_window(primary_client_id, target.as_deref(), force)?;
-        let pane_ids = removed
+        let transition =
+            self.session
+                .kill_window_transition(primary_client_id, target.as_deref(), force)?;
+        let pane_ids = transition
+            .window
             .panes()
             .iter()
             .map(|pane| pane.id.to_string())
@@ -406,9 +407,10 @@ impl RuntimeSessionService {
         for pane_id in &pane_ids {
             self.cleanup_removed_pane_runtime_state(pane_id);
         }
+        self.sync_pane_resize_effects(&transition.effects)?;
         self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
         self.append_window_close_event(
-            removed.id.as_str(),
+            transition.window.id.as_str(),
             terminated,
             self.session.windows().is_empty(),
         )?;

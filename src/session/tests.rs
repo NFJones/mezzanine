@@ -422,11 +422,20 @@ fn closing_last_window_in_group_closes_group() {
     let default_window = session.windows()[0].id.clone();
     let (_group_id, window_id) = session.new_group(&primary, "work", true).unwrap();
 
-    let removed = session
-        .kill_window(&primary, Some(window_id.as_str()), true)
+    let transition = session
+        .kill_window_transition(&primary, Some(window_id.as_str()), true)
         .unwrap();
 
-    assert_eq!(removed.id, window_id);
+    assert_eq!(transition.window.id, window_id);
+    assert_eq!(transition.effects.len(), 1);
+    assert_eq!(
+        transition.effects[0].pane_id,
+        session.windows()[0].panes()[0].id
+    );
+    assert_eq!(
+        transition.effects[0].size,
+        session.windows()[0].panes()[0].size
+    );
     assert_eq!(session.window_groups().len(), 1);
     assert_eq!(session.active_window().unwrap().id, default_window);
     assert_eq!(
@@ -456,15 +465,25 @@ fn kill_group_removes_owned_windows_and_preserves_remaining_group() {
         .unwrap_err();
     assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
 
-    let removed = session
-        .kill_group(&primary, Some(group_id.as_str()), true)
+    let transition = session
+        .kill_group_transition(&primary, Some(group_id.as_str()), true)
         .unwrap();
 
-    let removed_ids = removed
+    let removed_ids = transition
+        .windows
         .into_iter()
         .map(|window| window.id)
         .collect::<Vec<_>>();
     assert_eq!(removed_ids, vec![first_group_window, second_group_window]);
+    assert_eq!(transition.effects.len(), 1);
+    assert_eq!(
+        transition.effects[0].pane_id,
+        session.windows()[0].panes()[0].id
+    );
+    assert_eq!(
+        transition.effects[0].size,
+        session.windows()[0].panes()[0].size
+    );
     assert_eq!(session.window_groups().len(), 1);
     assert_eq!(session.active_window().unwrap().id, default_window);
 }
