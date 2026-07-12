@@ -12,12 +12,16 @@ pub mod history;
 pub mod mouse;
 /// Pane-facing compatibility profiles and terminfo selection policy.
 pub mod profile;
+/// Pane-facing terminal protocol event contracts.
+pub mod protocol;
 /// Restorable terminal mode and parser state contracts.
 pub mod state;
 /// Styled terminal-cell contracts produced by terminal emulation.
 pub mod style;
 
 pub use mouse::{MouseButton, MouseEvent, MouseEventKind, MouseModifiers, parse_sgr_mouse};
+
+pub use protocol::TerminalOscEvent;
 
 pub use history::{
     DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer, HistoryConfigError,

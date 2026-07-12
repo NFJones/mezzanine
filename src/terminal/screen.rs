@@ -11,7 +11,7 @@ use super::{
 };
 
 pub use mez_terminal::{
-    GraphicRendition, TerminalColor, TerminalCursorState, TerminalModeState,
+    GraphicRendition, TerminalColor, TerminalCursorState, TerminalModeState, TerminalOscEvent,
     TerminalSavedDecPrivateMode, TerminalSavedState, TerminalStyleSpan, TerminalStyledLine,
     tracked_dec_private_mode,
 };
@@ -366,124 +366,6 @@ pub(super) enum ParserState {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     DcsEscape,
-}
-
-/// Carries Terminal Osc Event state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TerminalOscEvent {
-    /// Represents the Title Changed case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    TitleChanged {
-        /// Stores the title value for this data structure.
-        ///
-        /// The field is part of structured state exchanged across this module
-        /// boundary and should remain aligned with the owning type invariant.
-        title: String,
-    },
-    /// Represents the Clipboard Set case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    ClipboardSet {
-        /// Stores the selection value for this data structure.
-        ///
-        /// The field is part of structured state exchanged across this module
-        /// boundary and should remain aligned with the owning type invariant.
-        selection: String,
-        /// Stores the content value for this data structure.
-        ///
-        /// The field is part of structured state exchanged across this module
-        /// boundary and should remain aligned with the owning type invariant.
-        content: String,
-    },
-    /// Represents the Shell Prompt Start case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    ShellPromptStart,
-    /// Represents the Shell Prompt End case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    ShellPromptEnd,
-    /// Represents the Shell Command Output Start case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    ShellCommandOutputStart,
-    /// Represents the Shell Command Finished case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    ShellCommandFinished {
-        /// Stores the exit code value for this data structure.
-        ///
-        /// The field is part of structured state exchanged across this module
-        /// boundary and should remain aligned with the owning type invariant.
-        exit_code: Option<i32>,
-    },
-    /// Represents the Shell Transaction Start case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    ShellTransactionStart {
-        /// Stores the marker value for this data structure.
-        ///
-        /// The field is part of structured state exchanged across this module
-        /// boundary and should remain aligned with the owning type invariant.
-        marker: String,
-        /// Stores the turn id value for this data structure.
-        ///
-        /// The field is part of structured state exchanged across this module
-        /// boundary and should remain aligned with the owning type invariant.
-        turn_id: String,
-        /// Stores the agent id value for this data structure.
-        ///
-        /// The field is part of structured state exchanged across this module
-        /// boundary and should remain aligned with the owning type invariant.
-        agent_id: String,
-        /// Stores the pane id value for this data structure.
-        ///
-        /// The field is part of structured state exchanged across this module
-        /// boundary and should remain aligned with the owning type invariant.
-        pane_id: String,
-    },
-    /// Represents the Shell Transaction End case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    ShellTransactionEnd {
-        /// Stores the marker value for this data structure.
-        ///
-        /// The field is part of structured state exchanged across this module
-        /// boundary and should remain aligned with the owning type invariant.
-        marker: String,
-        /// Stores the turn id value for this data structure.
-        ///
-        /// The field is part of structured state exchanged across this module
-        /// boundary and should remain aligned with the owning type invariant.
-        turn_id: String,
-        /// Stores the agent id value for this data structure.
-        ///
-        /// The field is part of structured state exchanged across this module
-        /// boundary and should remain aligned with the owning type invariant.
-        agent_id: String,
-        /// Stores the pane id value for this data structure.
-        ///
-        /// The field is part of structured state exchanged across this module
-        /// boundary and should remain aligned with the owning type invariant.
-        pane_id: String,
-        /// Stores the exit code value for this data structure.
-        ///
-        /// The field is part of structured state exchanged across this module
-        /// boundary and should remain aligned with the owning type invariant.
-        exit_code: i32,
-    },
 }
 
 /// Runs the parse mez shell transaction osc operation for this subsystem.
