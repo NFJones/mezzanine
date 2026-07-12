@@ -560,9 +560,7 @@ impl RuntimeSessionService {
             }
         }
 
-        if !self.external_effects_use_adapter() {
-            self.persist_or_defer_registry_update()?;
-        }
+        self.persist_or_defer_registry_update()?;
         Ok((report, pane_input_effects))
     }
 
