@@ -6,7 +6,8 @@
 //! same clipping behavior.
 
 use super::super::runtime_fit_status_line;
-use crate::terminal::{TerminalStyleSpan, terminal_grapheme_width, terminal_graphemes};
+use crate::terminal::{terminal_grapheme_width, terminal_graphemes};
+use mez_terminal::TerminalStyleSpan;
 
 /// Replaces a fixed-width terminal-cell range with text.
 ///

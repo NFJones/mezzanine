@@ -1,6 +1,6 @@
 //! Shared terminal-test assertions used by multiple behavior modules.
 
-use crate::terminal::{TerminalColor, TerminalStyledLine};
+use mez_terminal::{TerminalColor, TerminalStyledLine};
 use unicode_width::UnicodeWidthStr;
 
 pub(super) fn display_column_for_fragment(line: &str, needle: &str) -> usize {

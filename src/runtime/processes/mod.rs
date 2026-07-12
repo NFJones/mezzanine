@@ -44,7 +44,8 @@ use crate::process::PaneProcess;
 use crate::runtime::{
     PaneEvent, ProcessEvent, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition,
 };
-use crate::terminal::{TerminalStyledLine, parse_mez_shell_transaction_osc};
+use crate::terminal::parse_mez_shell_transaction_osc;
+use mez_terminal::TerminalStyledLine;
 
 use output_filter::*;
 use transactions::*;

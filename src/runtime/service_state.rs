@@ -32,7 +32,8 @@ use crate::error::MezErrorKind;
 use crate::layout::PaneTitleSource;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
 use crate::runtime::record_browser::RuntimeRecordBrowser;
-use crate::terminal::{CopyPosition, PaneAgentStatusField, TerminalEmojiWidth, TerminalStyleSpan};
+use crate::terminal::{CopyPosition, PaneAgentStatusField, TerminalEmojiWidth};
+use mez_terminal::TerminalStyleSpan;
 use secrecy::ExposeSecret;
 
 // Runtime data types, connection tables, and provider/MCP registries.

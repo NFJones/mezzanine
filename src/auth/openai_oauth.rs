@@ -20,7 +20,8 @@ use sha2::Digest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::error::{MezError, MezErrorKind, Result};
-use crate::terminal::{TerminalColor, UiTheme};
+use crate::terminal::UiTheme;
+use mez_terminal::TerminalColor;
 
 /// Defines the DEFAULT ISSUER const used by this subsystem.
 ///

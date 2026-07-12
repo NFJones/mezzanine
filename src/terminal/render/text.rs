@@ -587,7 +587,7 @@ mod tests {
         set_agent_wrap_column_cap, terminal_grapheme_width_for_emoji_width, terminal_text_width,
         wrap_agent_log_text,
     };
-    use crate::terminal::{GraphicRendition, TerminalStyleSpan, TerminalStyledLine};
+    use mez_terminal::{GraphicRendition, TerminalStyleSpan, TerminalStyledLine};
 
     /// Verifies agent log wrapping uses the pane width until the default cap
     /// applies, so very wide terminals do not create unbounded transcript rows.
