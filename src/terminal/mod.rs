@@ -170,7 +170,7 @@ pub use theme::{
 };
 
 use client_loop::borrow_raw_fd;
-use keys::{MAX_OSC_STRING_BYTES, parse_key_chord_bytes};
+use keys::parse_key_chord_bytes;
 pub(crate) use render::{
     DEFAULT_AGENT_WRAP_COLUMN_CAP, TerminalEmojiWidth, agent_log_wrap_width, agent_wrap_column_cap,
     set_agent_wrap_column_cap, set_terminal_emoji_width, terminal_grapheme_width,

@@ -43,12 +43,6 @@ pub const MEZZANINE_TERMINFO_NAMES: &[&str] = &["mez-256color", "mezzanine-256co
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const TERMINFO_FALLBACK_ORDER: &[&str] = &["screen-256color", "screen", "vt100", "dumb"];
-/// Defines the MAX OSC STRING BYTES const used by this subsystem.
-///
-/// Keeping this value documented makes the contract explicit at the module
-/// boundary and avoids relying on call-site inference.
-pub(super) const MAX_OSC_STRING_BYTES: usize = 4096;
-
 /// Carries Key Code state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move

@@ -4,6 +4,12 @@
 //! interpret them as multiplexer or product effects, but those policies remain
 //! outside this crate.
 
+/// Maximum bytes retained while parsing one operating-system-command payload.
+///
+/// Parsers should continue consuming an oversized sequence through its
+/// terminator while discarding bytes beyond this bound.
+pub const MAX_OSC_STRING_BYTES: usize = 4096;
+
 /// A structured event produced by an operating-system-command sequence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TerminalOscEvent {

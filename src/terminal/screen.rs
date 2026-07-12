@@ -5,15 +5,14 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AGENT_COPY_SKIP_LINE, BTreeMap, DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer,
-    MAX_OSC_STRING_BYTES, MezError, Result, Size, terminal_char_width, terminal_grapheme_width,
-    terminal_graphemes, terminal_text_width,
+    AGENT_COPY_SKIP_LINE, BTreeMap, DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer, MezError, Result,
+    Size, terminal_char_width, terminal_grapheme_width, terminal_graphemes, terminal_text_width,
 };
 
 pub use mez_terminal::{
-    GraphicRendition, TerminalColor, TerminalCursorState, TerminalModeState, TerminalOscEvent,
-    TerminalSavedDecPrivateMode, TerminalSavedState, TerminalStyleSpan, TerminalStyledLine,
-    tracked_dec_private_mode,
+    GraphicRendition, MAX_OSC_STRING_BYTES, TerminalColor, TerminalCursorState, TerminalModeState,
+    TerminalOscEvent, TerminalSavedDecPrivateMode, TerminalSavedState, TerminalStyleSpan,
+    TerminalStyledLine, tracked_dec_private_mode,
 };
 
 // Terminal screen parser, OSC events, and alternate-screen state.

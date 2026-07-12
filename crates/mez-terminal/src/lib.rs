@@ -27,7 +27,7 @@ pub use mouse::{MouseButton, MouseEvent, MouseEventKind, MouseModifiers, parse_s
 
 pub use geometry::{TerminalSize, TerminalSizeError};
 
-pub use protocol::TerminalOscEvent;
+pub use protocol::{MAX_OSC_STRING_BYTES, TerminalOscEvent};
 
 pub use history::{
     DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer, HistoryConfigError,
