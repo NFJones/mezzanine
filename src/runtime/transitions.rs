@@ -1,11 +1,10 @@
-//! Typed event and side-effect model for the async runtime migration.
+//! Typed event and side-effect model for the async runtime boundary.
 //!
-//! The current live runtime still exposes compatibility request methods that
-//! call into `RuntimeSessionService` synchronously. This module defines the
-//! event vocabulary that the Tokio-native runtime will use as those callers are
-//! migrated. Keeping these types separate from the compatibility request enum
-//! prevents the async refactor from growing another ad hoc command channel and
-//! gives tests a stable shape for event ordering before production I/O is moved.
+//! `RuntimeSessionService` remains the serialized synchronous state owner, while
+//! Tokio adapters deliver typed events and execute the ordered side effects
+//! returned by transitions. Keeping this vocabulary independent of actor
+//! request transport prevents ad hoc command channels and gives tests a stable
+//! shape for event ordering across synchronous and asynchronous adapters.
 
 use crate::agent::{AgentTurnExecution, ModelResponse};
 use crate::audit::AuditRetentionPolicy;
