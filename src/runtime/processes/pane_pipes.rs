@@ -21,7 +21,7 @@ impl RuntimeSessionService {
         if bytes.is_empty() {
             return Ok(());
         }
-        let use_external_effect_adapter = self.external_effects_use_adapter();
+        let use_external_effect_adapter = self.pane_pipe_effects_use_adapter;
         let Some(pipe) = self.active_pane_pipes.get_mut(pane_id) else {
             return Ok(());
         };
@@ -67,7 +67,7 @@ impl RuntimeSessionService {
         path: PathBuf,
     ) -> Result<String> {
         let _ = self.stop_active_pane_pipe(pane_id.as_str());
-        let pipe = if self.external_effects_use_adapter() {
+        let pipe = if self.pane_pipe_effects_use_adapter {
             ActivePanePipe::deferred_file(pane_id.clone(), path)
         } else {
             ActivePanePipe::file(pane_id.clone(), path)?
@@ -94,7 +94,7 @@ impl RuntimeSessionService {
         command: String,
     ) -> Result<String> {
         let _ = self.stop_active_pane_pipe(pane_id.as_str());
-        let pipe = if self.external_effects_use_adapter() {
+        let pipe = if self.pane_pipe_effects_use_adapter {
             ActivePanePipe::deferred_command(pane_id.clone(), self.session.shell.path(), command)?
         } else {
             ActivePanePipe::command(pane_id.clone(), self.session.shell.path(), command)?

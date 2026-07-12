@@ -1887,6 +1887,8 @@ pub struct RuntimeSessionService {
     /// This ownership is explicit because config reloads may replace the writer
     /// after the async actor has started.
     pub(super) audit_effects_use_adapter: bool,
+    /// Whether pane-pipe process and persistence work is owned by adapters.
+    pub(super) pane_pipe_effects_use_adapter: bool,
     /// Stores the paste buffers value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
