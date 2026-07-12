@@ -13,8 +13,9 @@ use crate::ids::{AgentId, ClientId};
 use crate::layout::Size;
 use crate::registry::SessionRegistry;
 use crate::runtime::RuntimeRegistryUpdatePlan;
-use crate::terminal::{AttachedTerminalOutputModes, TerminalStyleSpan};
+use crate::terminal::AttachedTerminalOutputModes;
 use crate::transcript::{AgentTranscriptStore, TranscriptEntry};
+use mez_terminal::TerminalStyleSpan;
 use std::path::PathBuf;
 
 /// Source of a runtime event entering the single-owner session actor.

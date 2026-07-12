@@ -383,7 +383,7 @@ fn rendered_cursor(
     let screen = screens.get(&active_pane.id.to_string());
     let cursor = screen
         .map(TerminalScreen::cursor_state)
-        .unwrap_or(crate::terminal::TerminalCursorState { row: 0, column: 0 });
+        .unwrap_or(mez_terminal::TerminalCursorState { row: 0, column: 0 });
     let cursor_visible = screen.map(TerminalScreen::cursor_visible).unwrap_or(true);
     let row = window_frame_top_offset
         .saturating_add(usize::from(geometry.row))

@@ -9,7 +9,8 @@ use unicode_segmentation::UnicodeSegmentation;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::error::{MezError, Result};
-use crate::terminal::{CopyPosition, TerminalStyleSpan, TerminalStyledLine};
+use crate::terminal::CopyPosition;
+use mez_terminal::{TerminalStyleSpan, TerminalStyledLine};
 
 /// Default maximum display-cell width for Mezzanine-owned agent log rows.
 pub(crate) const DEFAULT_AGENT_WRAP_COLUMN_CAP: usize = 120;

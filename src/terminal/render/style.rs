@@ -4,7 +4,8 @@
 //! generation, contrast helpers, and style-span coalescing used by terminal
 //! frame, footer, and prompt rendering.
 
-use crate::terminal::{TerminalColor, TerminalStyleSpan, UiTheme};
+use crate::terminal::UiTheme;
+use mez_terminal::{TerminalColor, TerminalStyleSpan};
 
 /// Returns a theme-relative harmonious ramp for active agent status animation.
 pub(super) fn agent_status_running_gradient_palette(ui_theme: &UiTheme) -> [TerminalColor; 3] {
