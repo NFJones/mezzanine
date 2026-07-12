@@ -1891,6 +1891,8 @@ pub struct RuntimeSessionService {
     pub(super) pane_pipe_effects_use_adapter: bool,
     /// Whether agent transcript entries are persisted by an adapter.
     pub(super) transcript_effects_use_adapter: bool,
+    /// Whether session-registry updates are persisted by an adapter.
+    pub(super) registry_effects_use_adapter: bool,
     /// Stores the paste buffers value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
