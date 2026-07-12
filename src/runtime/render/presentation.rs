@@ -4509,6 +4509,7 @@ impl RuntimeSessionService {
         bytes: &[u8],
         _context: &str,
     ) -> Result<()> {
+        screen.set_wrap_continuation_prefix(AGENT_TERMINAL_MESSAGE_PREFIX);
         if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| screen.feed(bytes))).is_err() {
             return Ok(());
         }

@@ -78,10 +78,6 @@ fn dec_special_graphics_char(ch: char) -> Option<char> {
     })
 }
 
-/// Display-only gutter prefix used for pane-local Mezzanine agent transcript
-/// lines.
-const AGENT_TRANSCRIPT_GUTTER_PREFIX: &str = "▐ ";
-
 /// One styled terminal cell from a display-only prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct StyledPrefixCell {
@@ -578,6 +574,12 @@ pub struct TerminalScreen {
     /// Entries are kept parallel to `cells` and `renditions`; `None` means copy
     /// mode should use the presented line text.
     pub(super) line_copy_texts: Vec<Option<String>>,
+    /// Optional styled line prefix repeated on soft-wrapped continuation rows.
+    ///
+    /// The prefix is presentation policy supplied by the product layer. The
+    /// terminal parser recognizes it only when the first physical row carries
+    /// explicit styling, so ordinary pane output remains unaffected.
+    pub(super) wrap_continuation_prefix: Option<String>,
     /// Stores the cursor value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -767,6 +769,7 @@ impl TerminalScreen {
             renditions: blank_renditions(size, GraphicRendition::default()),
             line_wraps: vec![false; usize::from(size.rows)],
             line_copy_texts: vec![None; usize::from(size.rows)],
+            wrap_continuation_prefix: None,
             cursor: Cursor { row: 0, column: 0 },
             cursor_visible: true,
             autowrap_enabled: true,
@@ -804,6 +807,16 @@ impl TerminalScreen {
             shift_out: false,
             utf8_tail: Vec::new(),
         })
+    }
+
+    /// Configures a styled prefix to repeat on soft-wrapped continuation rows.
+    ///
+    /// An empty prefix disables the policy. Callers must write the same prefix
+    /// with a non-default rendition at the start of the logical line for the
+    /// screen to recognize it.
+    pub fn set_wrap_continuation_prefix(&mut self, prefix: impl Into<String>) {
+        let prefix = prefix.into();
+        self.wrap_continuation_prefix = (!prefix.is_empty()).then_some(prefix);
     }
 
     /// Runs the feed operation for this subsystem.
@@ -980,8 +993,13 @@ impl TerminalScreen {
             && (self.cursor.row >= new_rows || self.last_significant_row() >= Some(new_rows));
         let source_rows = self.current_visible_rows();
         let cursor = cursor_logical_position(&source_rows, self.cursor.row, self.cursor.column);
-        let logical_lines = merge_wrapped_physical_lines(&source_rows);
-        let physical_rows = reflow_logical_lines(&logical_lines, usize::from(size.columns));
+        let logical_lines =
+            merge_wrapped_physical_lines(&source_rows, self.wrap_continuation_prefix.as_deref());
+        let physical_rows = reflow_logical_lines(
+            &logical_lines,
+            usize::from(size.columns),
+            self.wrap_continuation_prefix.as_deref(),
+        );
         let visible_start = if preserve_bottom || physical_rows.len() > new_rows {
             physical_rows.len().saturating_sub(new_rows)
         } else {
@@ -1016,6 +1034,7 @@ impl TerminalScreen {
                 logical_line,
                 logical_column,
                 usize::from(size.columns),
+                self.wrap_continuation_prefix.as_deref(),
             );
             self.cursor.row = absolute_row.saturating_sub(visible_start).min(max_row);
             self.cursor.column = column.min(max_column);
@@ -1209,8 +1228,13 @@ impl TerminalScreen {
             && (self.cursor.row >= new_rows || self.last_significant_row() >= Some(new_rows));
         let source_rows = self.current_visible_rows();
         let cursor = cursor_logical_position(&source_rows, self.cursor.row, self.cursor.column);
-        let logical_lines = merge_wrapped_physical_lines(&source_rows);
-        let physical_rows = reflow_logical_lines(&logical_lines, usize::from(size.columns));
+        let logical_lines =
+            merge_wrapped_physical_lines(&source_rows, self.wrap_continuation_prefix.as_deref());
+        let physical_rows = reflow_logical_lines(
+            &logical_lines,
+            usize::from(size.columns),
+            self.wrap_continuation_prefix.as_deref(),
+        );
         let visible_start = if preserve_bottom || physical_rows.len() > new_rows {
             physical_rows.len().saturating_sub(new_rows)
         } else {
@@ -1249,6 +1273,7 @@ impl TerminalScreen {
                 logical_line,
                 logical_column,
                 usize::from(size.columns),
+                self.wrap_continuation_prefix.as_deref(),
             );
             self.cursor.row = absolute_row.saturating_sub(visible_start).min(max_row);
             self.cursor.column = column.min(max_column);
@@ -2554,14 +2579,14 @@ impl TerminalScreen {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn wrap_to_next_line(&mut self) {
-        let agent_gutter_prefix = self.current_agent_wrap_gutter_prefix();
+        let continuation_prefix = self.current_wrap_continuation_prefix();
         if let Some(wraps) = self.line_wraps.get_mut(self.cursor.row) {
             *wraps = true;
         }
         self.newline();
         self.wrap_pending = false;
-        if let Some(prefix) = agent_gutter_prefix {
-            self.write_agent_wrap_gutter_prefix(&prefix);
+        if let Some(prefix) = continuation_prefix {
+            self.write_wrap_continuation_prefix(&prefix);
         }
     }
 
@@ -3145,26 +3170,31 @@ impl TerminalScreen {
         usize::from(self.size.columns.saturating_sub(1))
     }
 
-    /// Returns the styled agent gutter prefix for the current wrapped logical
-    /// line when the cursor is wrapping an agent transcript row.
-    fn current_agent_wrap_gutter_prefix(&self) -> Option<Vec<StyledPrefixCell>> {
-        if usize::from(self.size.columns) <= agent_gutter_prefix_width() {
+    /// Returns the configured styled prefix for the current wrapped logical
+    /// line when the first physical row matches the configured policy.
+    fn current_wrap_continuation_prefix(&self) -> Option<Vec<StyledPrefixCell>> {
+        let prefix = self.wrap_continuation_prefix.as_deref()?;
+        if usize::from(self.size.columns) <= terminal_text_width(prefix) {
             return None;
         }
         let mut row = self.cursor.row.min(self.cells.len().saturating_sub(1));
         while row > 0 && self.line_wraps.get(row.saturating_sub(1)).copied() == Some(true) {
             row = row.saturating_sub(1);
         }
-        self.agent_gutter_prefix_from_row(row)
+        self.wrap_continuation_prefix_from_row(row, prefix)
     }
 
-    /// Reads the styled agent gutter prefix from one visible row.
-    fn agent_gutter_prefix_from_row(&self, row: usize) -> Option<Vec<StyledPrefixCell>> {
+    /// Reads the configured styled continuation prefix from one visible row.
+    fn wrap_continuation_prefix_from_row(
+        &self,
+        row: usize,
+        configured_prefix: &str,
+    ) -> Option<Vec<StyledPrefixCell>> {
         let cells = self.cells.get(row)?;
         let renditions = self.renditions.get(row)?;
         let mut column = 0usize;
         let mut prefix = Vec::new();
-        for expected in AGENT_TRANSCRIPT_GUTTER_PREFIX.chars() {
+        for expected in configured_prefix.chars() {
             let width = terminal_char_width(expected);
             let cell = cells.get(column)?;
             if width == 0 || cell.continuation || cell.text != expected.to_string() {
@@ -3180,9 +3210,9 @@ impl TerminalScreen {
         styled_prefix_is_non_default(&prefix).then_some(prefix)
     }
 
-    /// Writes a display-only agent gutter prefix at the cursor after a soft
+    /// Writes a display-only continuation prefix at the cursor after a soft
     /// wrap without changing the current SGR state for the wrapped content.
-    fn write_agent_wrap_gutter_prefix(&mut self, prefix: &[StyledPrefixCell]) {
+    fn write_wrap_continuation_prefix(&mut self, prefix: &[StyledPrefixCell]) {
         if prefix_width(prefix) >= usize::from(self.size.columns) {
             return;
         }
@@ -3358,18 +3388,24 @@ fn write_styled_line_to_row(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn merge_wrapped_physical_lines(rows: &[PhysicalStyledLine]) -> Vec<TerminalStyledLine> {
+fn merge_wrapped_physical_lines(
+    rows: &[PhysicalStyledLine],
+    continuation_prefix: Option<&str>,
+) -> Vec<TerminalStyledLine> {
     let mut logical_lines = Vec::new();
     let mut current: Option<TerminalStyledLine> = None;
-    let mut current_has_agent_gutter = false;
+    let mut current_has_continuation_prefix = false;
     for row in rows {
         let starts_logical_line = current.is_none();
         if starts_logical_line {
-            current_has_agent_gutter = agent_gutter_prefix_from_styled_line(&row.line).is_some();
+            current_has_continuation_prefix = continuation_prefix.is_some_and(|prefix| {
+                continuation_prefix_from_styled_line(&row.line, prefix).is_some()
+            });
         }
         let current_line = current.get_or_insert_with(|| TerminalStyledLine::plain(String::new()));
-        let source_line = if !starts_logical_line && current_has_agent_gutter {
-            strip_agent_gutter_prefix_from_styled_line(&row.line)
+        let source_line = if !starts_logical_line && current_has_continuation_prefix {
+            continuation_prefix
+                .and_then(|prefix| strip_continuation_prefix_from_styled_line(&row.line, prefix))
                 .unwrap_or_else(|| row.line.clone())
         } else {
             row.line.clone()
@@ -3381,7 +3417,7 @@ fn merge_wrapped_physical_lines(rows: &[PhysicalStyledLine]) -> Vec<TerminalStyl
                     .take()
                     .unwrap_or_else(|| TerminalStyledLine::plain("")),
             );
-            current_has_agent_gutter = false;
+            current_has_continuation_prefix = false;
         }
     }
     if let Some(line) = current {
@@ -3420,24 +3456,30 @@ fn append_styled_line(target: &mut TerminalStyledLine, source: &TerminalStyledLi
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn reflow_logical_lines(lines: &[TerminalStyledLine], columns: usize) -> Vec<PhysicalStyledLine> {
+fn reflow_logical_lines(
+    lines: &[TerminalStyledLine],
+    columns: usize,
+    continuation_prefix: Option<&str>,
+) -> Vec<PhysicalStyledLine> {
     let columns = columns.max(1);
     let mut rows = Vec::new();
     for line in lines {
-        reflow_one_logical_line(line, columns, &mut rows);
+        reflow_one_logical_line(line, columns, continuation_prefix, &mut rows);
     }
     rows
 }
 
-/// Reflows one logical line into physical rows, preserving Mezzanine agent
-/// gutters on every soft-wrapped continuation row.
+/// Reflows one logical line into physical rows, preserving a configured
+/// styled prefix on every soft-wrapped continuation row.
 fn reflow_one_logical_line(
     line: &TerminalStyledLine,
     columns: usize,
+    continuation_prefix: Option<&str>,
     rows: &mut Vec<PhysicalStyledLine>,
 ) {
-    let agent_gutter_prefix =
-        agent_gutter_prefix_from_styled_line(line).filter(|prefix| prefix_width(prefix) < columns);
+    let continuation_prefix = continuation_prefix
+        .and_then(|prefix| continuation_prefix_from_styled_line(line, prefix))
+        .filter(|prefix| prefix_width(prefix) < columns);
     let mut source_column = 0usize;
     let mut current = TerminalStyledLine::plain(String::new());
     current.copy_text = line.copy_text.clone();
@@ -3455,7 +3497,7 @@ fn reflow_one_logical_line(
             });
             current = TerminalStyledLine::plain(String::new());
             current_width = 0;
-            if let Some(prefix) = agent_gutter_prefix.as_deref() {
+            if let Some(prefix) = continuation_prefix.as_deref() {
                 push_styled_prefix(&mut current, prefix);
                 current_width = prefix_width(prefix);
             }
@@ -3471,14 +3513,6 @@ fn reflow_one_logical_line(
     });
 }
 
-/// Returns the display width of the agent transcript gutter prefix.
-fn agent_gutter_prefix_width() -> usize {
-    AGENT_TRANSCRIPT_GUTTER_PREFIX
-        .chars()
-        .map(terminal_char_width)
-        .sum()
-}
-
 /// Returns the display width occupied by a styled prefix.
 fn prefix_width(prefix: &[StyledPrefixCell]) -> usize {
     prefix.iter().map(|cell| cell.width).sum()
@@ -3491,14 +3525,15 @@ fn push_styled_prefix(line: &mut TerminalStyledLine, prefix: &[StyledPrefixCell]
     }
 }
 
-/// Extracts the styled Mezzanine agent gutter prefix from a styled line.
-fn agent_gutter_prefix_from_styled_line(
+/// Extracts a configured styled continuation prefix from a styled line.
+fn continuation_prefix_from_styled_line(
     line: &TerminalStyledLine,
+    configured_prefix: &str,
 ) -> Option<Vec<StyledPrefixCell>> {
     let mut source_column = 0usize;
     let mut line_chars = line.text.chars();
     let mut prefix = Vec::new();
-    for expected in AGENT_TRANSCRIPT_GUTTER_PREFIX.chars() {
+    for expected in configured_prefix.chars() {
         let ch = line_chars.next()?;
         let width = terminal_char_width(ch);
         if ch != expected || width == 0 {
@@ -3514,17 +3549,15 @@ fn agent_gutter_prefix_from_styled_line(
     Some(prefix).filter(|prefix| styled_prefix_is_non_default(prefix))
 }
 
-/// Removes a display-only Mezzanine agent gutter from a wrapped continuation
-/// line before wrapped rows are merged back into their logical line.
-fn strip_agent_gutter_prefix_from_styled_line(
+/// Removes a configured display-only prefix from a wrapped continuation line
+/// before wrapped rows are merged back into their logical line.
+fn strip_continuation_prefix_from_styled_line(
     line: &TerminalStyledLine,
+    configured_prefix: &str,
 ) -> Option<TerminalStyledLine> {
-    let prefix = agent_gutter_prefix_from_styled_line(line)?;
+    let prefix = continuation_prefix_from_styled_line(line, configured_prefix)?;
     let prefix_width = prefix_width(&prefix);
-    let text = line
-        .text
-        .strip_prefix(AGENT_TRANSCRIPT_GUTTER_PREFIX)?
-        .to_string();
+    let text = line.text.strip_prefix(configured_prefix)?.to_string();
     let style_spans = line
         .style_spans
         .iter()
@@ -3661,22 +3694,31 @@ fn physical_position_for_logical_cursor(
     logical_line: usize,
     logical_column: usize,
     columns: usize,
+    continuation_prefix: Option<&str>,
 ) -> (usize, usize) {
     let columns = columns.max(1);
     let row_offset = logical_lines
         .iter()
         .take(logical_line)
-        .map(|line| physical_row_count_for_line(line, columns))
+        .map(|line| physical_row_count_for_line(line, columns, continuation_prefix))
         .sum::<usize>();
-    let (line_row, column) =
-        physical_position_in_line(logical_lines.get(logical_line), logical_column, columns);
+    let (line_row, column) = physical_position_in_line(
+        logical_lines.get(logical_line),
+        logical_column,
+        columns,
+        continuation_prefix,
+    );
     (row_offset.saturating_add(line_row), column)
 }
 
 /// Returns the physical row count for one logical line after reflow.
-fn physical_row_count_for_line(line: &TerminalStyledLine, columns: usize) -> usize {
+fn physical_row_count_for_line(
+    line: &TerminalStyledLine,
+    columns: usize,
+    continuation_prefix: Option<&str>,
+) -> usize {
     let mut rows = Vec::new();
-    reflow_one_logical_line(line, columns.max(1), &mut rows);
+    reflow_one_logical_line(line, columns.max(1), continuation_prefix, &mut rows);
     rows.len().max(1)
 }
 
@@ -3686,12 +3728,14 @@ fn physical_position_in_line(
     line: Option<&TerminalStyledLine>,
     logical_column: usize,
     columns: usize,
+    continuation_prefix: Option<&str>,
 ) -> (usize, usize) {
     let Some(line) = line else {
         return (0, 0);
     };
-    let agent_gutter_prefix =
-        agent_gutter_prefix_from_styled_line(line).filter(|prefix| prefix_width(prefix) < columns);
+    let continuation_prefix = continuation_prefix
+        .and_then(|prefix| continuation_prefix_from_styled_line(line, prefix))
+        .filter(|prefix| prefix_width(prefix) < columns);
     let mut row = 0usize;
     let mut source_column = 0usize;
     let mut current_width = 0usize;
@@ -3705,7 +3749,7 @@ fn physical_position_in_line(
         }
         if current_width > 0 && current_width.saturating_add(width) > columns {
             row = row.saturating_add(1);
-            current_width = agent_gutter_prefix
+            current_width = continuation_prefix
                 .as_deref()
                 .map(prefix_width)
                 .unwrap_or(0);
@@ -3716,7 +3760,7 @@ fn physical_position_in_line(
     while source_column < logical_column {
         if current_width >= columns {
             row = row.saturating_add(1);
-            current_width = agent_gutter_prefix
+            current_width = continuation_prefix
                 .as_deref()
                 .map(prefix_width)
                 .unwrap_or(0);

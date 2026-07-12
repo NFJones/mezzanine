@@ -158,6 +158,7 @@ fn terminal_screen_agent_gutter_wraps_emoji_variation_status_glyphs() {
     assert_eq!(terminal_text_width("e\u{301}"), 1);
 
     let mut screen = TerminalScreen::new(Size::new(13, 4).unwrap(), 10).unwrap();
+    screen.set_wrap_continuation_prefix("▐ ");
 
     screen.feed("\x1b[31m▐ mez> \x1b[0mabc✔️d".as_bytes());
 

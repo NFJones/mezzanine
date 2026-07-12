@@ -75,6 +75,7 @@ fn terminal_screen_resize_reflows_and_restores_soft_wrapped_content() {
 #[test]
 fn terminal_screen_soft_wraps_agent_transcript_rows_with_gutter() {
     let mut screen = TerminalScreen::new(Size::new(12, 4).unwrap(), 10).unwrap();
+    screen.set_wrap_continuation_prefix("▐ ");
 
     screen.feed("\x1b[31m▐ mez> \x1b[0mabcdefghi".as_bytes());
 
@@ -104,6 +105,7 @@ fn terminal_screen_does_not_agent_gutter_wrap_unstyled_pane_output() {
 #[test]
 fn terminal_screen_reflows_agent_transcript_rows_with_gutter() {
     let mut screen = TerminalScreen::new(Size::new(12, 5).unwrap(), 10).unwrap();
+    screen.set_wrap_continuation_prefix("▐ ");
     screen.feed("\x1b[31m▐ mez> \x1b[0mabcdefghi".as_bytes());
 
     screen.resize(Size::new(16, 5).unwrap());
@@ -193,6 +195,7 @@ fn terminal_screen_width_resize_reflows_only_live_viewport() {
 #[test]
 fn terminal_screen_resize_counts_agent_gutters_when_restoring_cursor() {
     let mut screen = TerminalScreen::new(Size::new(12, 6).unwrap(), 10).unwrap();
+    screen.set_wrap_continuation_prefix("▐ ");
     screen.feed("\x1b[31m▐ mez> \x1b[0mabcdefghijklmnopqrst\r\nnext".as_bytes());
 
     screen.resize(Size::new(10, 6).unwrap());
