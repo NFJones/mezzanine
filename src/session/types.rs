@@ -4,7 +4,7 @@
 //! session container. Behavior is implemented in focused sibling modules.
 
 use crate::ids::{ClientId, IdFactory, ObserverRequestId, SessionId, WindowGroupId, WindowId};
-use crate::layout::{Size, Window};
+use crate::layout::{LayoutNode, LayoutPolicy, PaneGeometry, Size, Window};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -44,6 +44,103 @@ impl SessionShell {
     pub fn used_fallback(&self) -> bool {
         self.used_fallback
     }
+}
+
+/// Dependency-neutral session data decoded by a product persistence adapter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionRestoreInput {
+    /// Stable session identity to restore.
+    pub session_id: SessionId,
+    /// User-visible session name.
+    pub name: String,
+    /// Restored lifecycle state.
+    pub state: RestoredSessionState,
+    /// Authoritative attached-terminal dimensions.
+    pub authoritative_size: Size,
+    /// Stable active-window identity, when recorded.
+    pub active_window_id: Option<WindowId>,
+    /// Restored window topology in index order.
+    pub windows: Vec<RestoredWindow>,
+    /// Restored window-group topology in index order.
+    pub window_groups: Vec<RestoredWindowGroup>,
+}
+
+/// Lifecycle state accepted by session restoration without persistence coupling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestoredSessionState {
+    /// Running session state.
+    Running,
+    /// Detached session state.
+    Detached,
+    /// Empty session state.
+    Empty,
+    /// Stopping session state.
+    Stopping,
+    /// Failed session state.
+    Failed,
+}
+
+/// One decoded window accepted by session restoration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoredWindow {
+    /// Stable window identity.
+    pub id: WindowId,
+    /// Contiguous window index.
+    pub index: usize,
+    /// User-visible window name.
+    pub name: String,
+    /// Whether the window was active.
+    pub active: bool,
+    /// Window dimensions.
+    pub size: Size,
+    /// Decoded layout policy.
+    pub layout_policy: LayoutPolicy,
+    /// Decoded layout tree, when recorded.
+    pub layout_root: Option<LayoutNode>,
+    /// Restored panes in index order.
+    pub panes: Vec<RestoredPane>,
+}
+
+/// One decoded pane accepted by session restoration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoredPane {
+    /// Stable pane identity.
+    pub id: crate::ids::PaneId,
+    /// Contiguous pane index.
+    pub index: usize,
+    /// User-visible pane title.
+    pub title: String,
+    /// Whether the pane was active.
+    pub active: bool,
+    /// Pane dimensions.
+    pub size: Size,
+    /// Stored pane rectangle, when available.
+    pub geometry: Option<PaneGeometry>,
+    /// Last observed working directory.
+    pub current_working_directory: Option<String>,
+    /// Last observed agent readiness state.
+    pub readiness_state: String,
+    /// Whether the alternate screen was active.
+    pub alternate_screen_active: bool,
+}
+
+/// One decoded window group accepted by session restoration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoredWindowGroup {
+    /// Stable group identity.
+    pub id: WindowGroupId,
+    /// Contiguous group index.
+    pub index: usize,
+    /// User-visible group name.
+    pub name: String,
+    /// Ordered member windows.
+    pub window_ids: Vec<WindowId>,
+    /// Active member window, when recorded.
+    pub active_window_id: Option<WindowId>,
+    /// Previously active member window, when recorded.
+    pub last_active_window_id: Option<WindowId>,
+    /// Whether the group was active.
+    pub active: bool,
 }
 
 /// Carries Client Role state for this subsystem.
