@@ -126,9 +126,7 @@ impl RuntimeSessionService {
                 terminal_size.rows
             ),
         )?;
-        if !self.external_effects_use_adapter() {
-            self.persist_or_defer_registry_update()?;
-        }
+        self.persist_or_defer_registry_update()?;
         Ok(())
     }
 
@@ -374,9 +372,7 @@ impl RuntimeSessionService {
                     json_escape(&reason)
                 ),
             )?;
-            if !self.external_effects_use_adapter() {
-                self.persist_or_defer_registry_update()?;
-            }
+            self.persist_or_defer_registry_update()?;
             return Ok(true);
         }
 
