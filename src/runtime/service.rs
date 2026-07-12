@@ -311,6 +311,7 @@ impl RuntimeSessionService {
             external_effect_mode: RuntimeExternalEffectMode::Inline,
             audit_effects_use_adapter: false,
             pane_pipe_effects_use_adapter: false,
+            transcript_effects_use_adapter: false,
             paste_buffers: PasteBuffers::default_limit(),
             active_paste_buffer: None,
             host_clipboard: HostClipboard::system(),
@@ -524,6 +525,11 @@ impl RuntimeSessionService {
     /// Assigns pane-pipe process and persistence work to external adapters.
     pub(crate) fn use_pane_pipe_effect_adapter(&mut self) {
         self.pane_pipe_effects_use_adapter = true;
+    }
+
+    /// Assigns agent transcript persistence to the external effect adapter.
+    pub(crate) fn use_transcript_effect_adapter(&mut self) {
+        self.transcript_effects_use_adapter = true;
     }
 
     /// Returns whether transitions must queue external work for an adapter.
