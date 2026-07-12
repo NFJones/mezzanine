@@ -1882,6 +1882,11 @@ pub struct RuntimeSessionService {
     ///
     /// The async actor enables this once; synchronous compatibility callers leave it disabled.
     pub(super) external_effect_mode: RuntimeExternalEffectMode,
+    /// Whether audit writes are emitted for an adapter instead of written inline.
+    ///
+    /// This ownership is explicit because config reloads may replace the writer
+    /// after the async actor has started.
+    pub(super) audit_effects_use_adapter: bool,
     /// Stores the paste buffers value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

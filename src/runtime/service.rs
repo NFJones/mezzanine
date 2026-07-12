@@ -309,6 +309,7 @@ impl RuntimeSessionService {
             pane_exit_records: BTreeMap::new(),
             active_pane_pipes: BTreeMap::new(),
             external_effect_mode: RuntimeExternalEffectMode::Inline,
+            audit_effects_use_adapter: false,
             paste_buffers: PasteBuffers::default_limit(),
             active_paste_buffer: None,
             host_clipboard: HostClipboard::system(),
@@ -506,6 +507,14 @@ impl RuntimeSessionService {
     /// Enables or disables deferred registry persistence for async actor owners.
     pub(crate) fn use_external_effect_adapter(&mut self) {
         self.external_effect_mode = RuntimeExternalEffectMode::Adapter;
+    }
+
+    /// Assigns audit persistence to the external effect adapter.
+    ///
+    /// Actor owners call this explicitly so writers installed by later config
+    /// reloads retain adapter ownership without consulting the global mode.
+    pub(crate) fn use_audit_effect_adapter(&mut self) {
+        self.audit_effects_use_adapter = true;
         if let Some(audit_log) = self.audit_log.as_mut() {
             audit_log.set_defer_writes(true);
         }
@@ -2127,7 +2136,7 @@ impl RuntimeSessionService {
             self.queued_audit_effects
                 .extend(pending.into_iter().map(audit_persistence_effect));
         }
-        audit_log.set_defer_writes(self.external_effects_use_adapter());
+        audit_log.set_defer_writes(self.audit_effects_use_adapter);
         self.audit_log = Some(audit_log);
     }
 

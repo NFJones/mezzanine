@@ -132,6 +132,51 @@ fn runtime_applies_audit_log_from_config_layers() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies that an adapter-owned runtime keeps audit persistence deferred
+/// when a live configuration reload installs a replacement audit writer. The
+/// ownership decision belongs to the actor boundary rather than the global
+/// external-effect compatibility mode.
+#[test]
+fn runtime_preserves_audit_adapter_ownership_across_config_reload() {
+    let mut service = test_runtime_service();
+    let root = temp_root("runtime-audit-adapter-reload");
+    let audit_path = root.join("audit.jsonl");
+    service.set_config_root(root.clone());
+    service.use_audit_effect_adapter();
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[audit]\nenabled = true\npath = \"audit.jsonl\"\nrequired = true\n".to_string(),
+        }])
+        .unwrap();
+
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 40).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let output = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"audit-adapter-reload","method":"agent/shell/command","params":{"idempotency_key":"audit-adapter-reload","input":"/approval full-access"}}"#,
+        &primary,
+    );
+
+    assert!(output.contains("changed=true"), "{output}");
+    assert!(!audit_path.exists());
+    let transition = service.drain_audit_persistence_transition();
+    assert_eq!(transition.side_effects.len(), 1);
+    assert!(matches!(
+        &transition.side_effects[0],
+        RuntimeSideEffect::PersistAuditLog { path, .. } if path == &audit_path
+    ));
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies that invalid audit retention configuration fails before replacing
 /// the runtime audit writer. A zero-day retention window would immediately
 /// discard useful audit history, so the config layer is rejected instead of
