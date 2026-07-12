@@ -1,9 +1,9 @@
 //! Regression tests for terminal presentation copy mode behavior.
 
-use crate::terminal::screen::TerminalColor;
 use crate::terminal::{
     CopyMode, CopyPosition, PasteBuffers, SearchDirection, Size, TerminalScreen,
 };
+use mez_terminal::TerminalColor;
 
 /// Verifies copy mode starts at live view and pages through normal history.
 ///

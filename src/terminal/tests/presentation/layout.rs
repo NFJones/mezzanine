@@ -2,7 +2,6 @@
 
 use crate::ids::IdFactory;
 use crate::layout::{PaneGeometry, SplitDirection};
-use crate::terminal::screen::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 use crate::terminal::tests::fixtures::display_column_for_fragment;
 use crate::terminal::{
     BTreeMap, ClientViewRole, DEFAULT_PANE_FRAME_TEMPLATE,
@@ -14,6 +13,7 @@ use crate::terminal::{
     draw_window_from_screens, pane_render_region_size_for_geometry, render_attached_client_view,
     render_window, render_window_with_pane_frame_template,
 };
+use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 use unicode_width::UnicodeWidthStr;
 
 pub(super) fn window_from_test_geometries(size: Size, geometries: Vec<PaneGeometry>) -> Window {

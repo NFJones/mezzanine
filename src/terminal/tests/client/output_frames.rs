@@ -5,7 +5,7 @@ use crate::terminal::client_loop::{
     AttachedTerminalOutputModes, encode_attached_terminal_output_frame_with_keypad_transition,
     encode_attached_terminal_output_frame_with_styles,
 };
-use crate::terminal::screen::{GraphicRendition, TerminalColor, TerminalStyleSpan};
+use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 
 /// Verifies that attached-terminal frames suppress the host cursor, reset
 /// coordinate-affecting terminal modes, enable host mouse reporting, clear

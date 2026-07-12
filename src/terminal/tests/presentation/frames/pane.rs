@@ -2,7 +2,6 @@
 
 use crate::ids::IdFactory;
 use crate::layout::{PaneGeometry, SplitDirection};
-use crate::terminal::screen::TerminalColor;
 use crate::terminal::tests::fixtures::display_column_for_fragment;
 use crate::terminal::{
     BTreeMap, ClientViewRole, DEFAULT_PANE_FRAME_TEMPLATE, PaneAgentStatusField, PaneRenderInput,
@@ -11,6 +10,7 @@ use crate::terminal::{
     pane_frame_agent_status_pillbox_cells, render_attached_client_view,
     render_window_with_pane_frame_template, rendered_pane_geometries,
 };
+use mez_terminal::TerminalColor;
 
 /// Verifies render pane frame uses named template fields.
 ///

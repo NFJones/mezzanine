@@ -5,12 +5,12 @@ use crate::terminal::client_loop::{
     compose_terminal_output_style_spans, encode_attached_terminal_output_frame_with_styles,
     encode_attached_terminal_output_update_frame_with_styles,
 };
-use crate::terminal::screen::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 use crate::terminal::tests::fixtures::{display_column_for_fragment, styled_line_rendition_at};
 use crate::terminal::{
     ClientViewRole, CopyPosition, RenderedClientView, Size, TerminalCursorStyle, TerminalScreen,
     UiTheme,
 };
+use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 
 /// Verifies that stable-size attached-terminal redraws are encoded as row
 /// updates instead of clearing the full viewport. This reduces foreground TTY

@@ -1,16 +1,12 @@
-//! Transitional product facade for terminal screen contracts.
+//! Product-owned decoding for Mezzanine shell integration events.
 //!
-//! The terminal parser and screen state live in `mez-terminal`. This facade
-//! preserves existing product imports while Mezzanine-specific shell
-//! integration decoding remains owned by the composition crate.
+//! The terminal parser and screen state live in `mez-terminal`. This module
+//! only translates generic shell-integration payloads into product transaction
+//! semantics.
 
 use std::collections::BTreeMap;
 
-pub use mez_terminal::{
-    AlternateScreenState, GraphicRendition, TerminalColor, TerminalCursorState, TerminalModeState,
-    TerminalOscEvent, TerminalSavedDecPrivateMode, TerminalSavedState, TerminalScreen,
-    TerminalStyleSpan, TerminalStyledLine, tracked_dec_private_mode,
-};
+use mez_terminal::TerminalOscEvent;
 
 /// Decodes one OSC 133 payload into product shell-transaction semantics.
 pub(crate) fn parse_mez_shell_transaction_osc(payload: &str) -> Option<TerminalOscEvent> {

@@ -2,7 +2,6 @@
 
 use crate::ids::IdFactory;
 use crate::layout::SplitDirection;
-use crate::terminal::screen::TerminalColor;
 use crate::terminal::tests::fixtures::{
     display_column_for_fragment, test_color_is_grayscale, test_contrast_ratio,
 };
@@ -15,6 +14,7 @@ use crate::terminal::{
     render_attached_client_view, render_readline_prompt_status_row, resolve_ui_theme,
     terminal_text_width,
 };
+use mez_terminal::TerminalColor;
 use unicode_width::UnicodeWidthStr;
 
 /// Verifies pane-local agent prompt rendering preserves the right divider when

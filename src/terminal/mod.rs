@@ -115,7 +115,12 @@ pub use keys::{
     PasteBufferTarget, TERMINFO_FALLBACK_ORDER, TerminalInputClassification, WindowFocusTarget,
     classify_terminal_input, key_chord_input_bytes, parse_key_chord_notation,
 };
-pub use mez_terminal::{HistoryBuffer, HistoryConfigError};
+pub use mez_terminal::{
+    AlternateScreenState, GraphicRendition, HistoryBuffer, HistoryConfigError, TerminalColor,
+    TerminalCursorState, TerminalModeState, TerminalOscEvent, TerminalSavedDecPrivateMode,
+    TerminalSavedState, TerminalScreen, TerminalStyleSpan, TerminalStyledLine,
+    tracked_dec_private_mode,
+};
 pub use mouse::{
     CopyModeKeyAction, MouseAction, MouseBorderCell, MouseButton, MouseEvent, MouseEventKind,
     MouseModifiers, MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MousePaneRegion,
@@ -156,11 +161,6 @@ pub use render::{
     window_frame_pillbox_cells, window_group_frame_pillbox_cells,
 };
 pub(crate) use screen::parse_mez_shell_transaction_osc;
-pub use screen::{
-    AlternateScreenState, GraphicRendition, TerminalColor, TerminalCursorState, TerminalModeState,
-    TerminalOscEvent, TerminalSavedDecPrivateMode, TerminalSavedState, TerminalScreen,
-    TerminalStyleSpan, TerminalStyledLine, tracked_dec_private_mode,
-};
 pub use theme::{
     BUILTIN_UI_THEME_NAMES, DEFAULT_UI_THEME_NAME, UI_COLOR_SLOT_NAMES, UiColorPair, UiTheme,
     UiThemeColors, UiThemeDefinition, builtin_ui_theme_definition, deepforest_ui_theme,

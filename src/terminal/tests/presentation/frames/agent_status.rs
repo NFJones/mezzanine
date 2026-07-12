@@ -2,7 +2,6 @@
 
 use crate::ids::IdFactory;
 use crate::layout::SplitDirection;
-use crate::terminal::screen::TerminalColor;
 use crate::terminal::tests::fixtures::display_column_for_fragment;
 use crate::terminal::{
     BTreeMap, BUILTIN_UI_THEME_NAMES, ClientViewRole, DEFAULT_PANE_FRAME_TEMPLATE, PaneRenderInput,
@@ -10,6 +9,7 @@ use crate::terminal::{
     TerminalFrameRenderOptions, TerminalPaneFrameContext, Window, builtin_ui_theme_definition,
     render_attached_client_view, render_window_with_pane_frame_template, resolve_ui_theme,
 };
+use mez_terminal::TerminalColor;
 
 /// Verifies that the built-in pane frame shows agent model, reasoning, and
 /// state status on the right side only while the pane is in agent mode.
