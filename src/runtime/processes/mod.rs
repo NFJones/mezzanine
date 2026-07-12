@@ -627,7 +627,7 @@ impl RuntimeSessionService {
             &descriptor.pane_id,
             &self.terminal_term,
         )?;
-        let shell = self.session.shell.clone();
+        let shell: crate::shell::ResolvedShell = self.session.shell.clone().into();
         let primary_pid = self.pane_processes.spawn_for_pane_with_start_directory(
             descriptor.pane_id.as_str(),
             &shell,

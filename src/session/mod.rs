@@ -42,7 +42,7 @@ mod windows;
 
 pub use types::{
     Client, ClientRole, ClientState, ClientTerminalDescriptor, ObserverDecisionState,
-    ObserverRequest, Session, SessionState, WindowGroup,
+    ObserverRequest, Session, SessionShell, SessionState, WindowGroup,
 };
 pub use windows::{
     BreakPaneTransition, JoinPaneTransition, KillGroupTransition, KillWindowTransition,

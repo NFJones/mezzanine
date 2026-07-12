@@ -5,8 +5,46 @@
 
 use crate::ids::{ClientId, IdFactory, ObserverRequestId, SessionId, WindowGroupId, WindowId};
 use crate::layout::{Size, Window};
-use crate::shell::ResolvedShell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+
+/// Shell launch metadata retained by the session domain.
+///
+/// Shell discovery and validation remain product responsibilities. The session
+/// stores only the resolved launch path and descriptive snapshot metadata that
+/// process adapters need after construction or restoration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionShell {
+    path: PathBuf,
+    source: String,
+    used_fallback: bool,
+}
+
+impl SessionShell {
+    /// Creates neutral shell launch metadata from product-resolved values.
+    pub fn new(path: PathBuf, source: impl Into<String>, used_fallback: bool) -> Self {
+        Self {
+            path,
+            source: source.into(),
+            used_fallback,
+        }
+    }
+
+    /// Returns the resolved executable path used for pane processes.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Returns the stable descriptive source name used by snapshots.
+    pub fn source_name(&self) -> &str {
+        &self.source
+    }
+
+    /// Returns whether shell resolution selected the fallback executable.
+    pub fn used_fallback(&self) -> bool {
+        self.used_fallback
+    }
+}
 
 /// Carries Client Role state for this subsystem.
 ///
@@ -371,7 +409,7 @@ pub struct Session {
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub shell: ResolvedShell,
+    pub shell: SessionShell,
     /// Stores the config generation value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

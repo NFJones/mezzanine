@@ -8,14 +8,13 @@ use crate::ids::{IdFactory, PaneId, SessionId, StableId, WindowGroupId, WindowId
 use crate::layout::{
     LayoutPolicy, Pane, PaneGeometry, PaneTitleSource, RestoredWindowLayout, Size, Window,
 };
-use crate::shell::ResolvedShell;
 use crate::snapshot::{
     SessionSnapshotPayload, SnapshotSessionState, WindowGroupSnapshotPayload, WindowSnapshotPayload,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::time::current_unix_seconds;
-use super::types::{PaneStateMetadata, Session, SessionState, WindowGroup};
+use super::types::{PaneStateMetadata, Session, SessionShell, SessionState, WindowGroup};
 
 /// Carries freshly allocated layout state rebuilt from a snapshot payload.
 type FreshSnapshotLayout = (
@@ -186,9 +185,10 @@ impl Session {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn from_snapshot_payload(
-        shell: ResolvedShell,
+        shell: impl Into<SessionShell>,
         payload: &SessionSnapshotPayload,
     ) -> Result<Self> {
+        let shell = shell.into();
         payload.validate()?;
         let session_id = SessionId::parse('$', payload.session_id.clone()).ok_or_else(|| {
             MezError::invalid_args("snapshot payload contains an invalid session id")

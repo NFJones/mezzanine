@@ -212,7 +212,7 @@ impl RuntimeSessionService {
         }
         let kind = if request.method == "snapshot/resume" {
             RuntimeSnapshotControlAsyncWorkKind::Resume {
-                shell: self.session.shell.clone(),
+                shell: self.session.shell.clone().into(),
             }
         } else {
             RuntimeSnapshotControlAsyncWorkKind::Dispatch {

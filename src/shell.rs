@@ -84,6 +84,27 @@ impl ResolvedShell {
     }
 }
 
+impl From<ResolvedShell> for crate::session::SessionShell {
+    fn from(shell: ResolvedShell) -> Self {
+        let source = match shell.source() {
+            ShellSource::ShellEnv => "shell-env",
+            ShellSource::FallbackBinSh => "fallback-bin-sh",
+        };
+        crate::session::SessionShell::new(shell.path().to_path_buf(), source, shell.used_fallback())
+    }
+}
+
+impl From<crate::session::SessionShell> for ResolvedShell {
+    fn from(shell: crate::session::SessionShell) -> Self {
+        let source = if shell.used_fallback() {
+            ShellSource::FallbackBinSh
+        } else {
+            ShellSource::ShellEnv
+        };
+        Self::new(shell.path().to_path_buf(), source)
+    }
+}
+
 /// Runs the resolve shell from process operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

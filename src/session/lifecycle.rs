@@ -6,12 +6,11 @@
 use crate::error::{MezError, Result};
 use crate::ids::{ClientId, IdFactory};
 use crate::layout::{Size, Window};
-use crate::shell::ResolvedShell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::time::current_unix_seconds;
 use super::types::{
-    Client, ObserverRequest, PaneStateMetadata, Session, SessionState, WindowGroup,
+    Client, ObserverRequest, PaneStateMetadata, Session, SessionShell, SessionState, WindowGroup,
 };
 
 impl Session {
@@ -20,7 +19,8 @@ impl Session {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn new_default(shell: ResolvedShell, size: Size) -> Self {
+    pub fn new_default(shell: impl Into<SessionShell>, size: Size) -> Self {
+        let shell = shell.into();
         let mut ids = IdFactory::default();
         let id = ids.session();
         let now = current_unix_seconds();

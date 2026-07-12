@@ -82,7 +82,8 @@ fn runtime_new_window_spawn_failure_rolls_back_window_creation() {
     service.session.shell = ResolvedShell::new(
         PathBuf::from("/tmp/mez-runtime-missing-shell-new-window"),
         ShellSource::FallbackBinSh,
-    );
+    )
+    .into();
 
     let error = service
         .create_window_with_pane_process(&primary, "bad", true, None)
@@ -120,7 +121,8 @@ fn runtime_split_spawn_failure_rolls_back_layout_creation() {
     service.session.shell = ResolvedShell::new(
         PathBuf::from("/tmp/mez-runtime-missing-shell-split"),
         ShellSource::FallbackBinSh,
-    );
+    )
+    .into();
 
     let error = service
         .split_pane_with_process(&primary, SplitDirection::Vertical, None)
@@ -158,7 +160,8 @@ fn runtime_terminal_command_split_spawn_failure_rolls_back_layout_creation() {
     service.session.shell = ResolvedShell::new(
         PathBuf::from("/tmp/mez-runtime-missing-shell-command-split"),
         ShellSource::FallbackBinSh,
-    );
+    )
+    .into();
 
     let error = service
         .execute_terminal_command(&primary, "split-window")

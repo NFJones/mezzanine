@@ -8,7 +8,6 @@ use crate::layout::LayoutPolicy;
 use crate::message::MessageServiceSnapshot;
 use crate::process::PaneExitStatus;
 use crate::session::{Session, SessionState};
-use crate::shell::ShellSource;
 use mez_terminal::{
     GraphicRendition, TerminalColor, TerminalCursorState, TerminalModeState,
     TerminalSavedDecPrivateMode, TerminalSavedState, TerminalStyleSpan, tracked_dec_private_mode,
@@ -1381,20 +1380,8 @@ fn payload_approval_request_mut<'a>(
 fn shell_metadata_from_session(session: &Session) -> SnapshotShellMetadata {
     SnapshotShellMetadata {
         path: session.shell.path().display().to_string(),
-        source: shell_source_name(session.shell.source()).to_string(),
+        source: session.shell.source_name().to_string(),
         used_fallback: session.shell.used_fallback(),
-    }
-}
-
-/// Runs the shell source name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn shell_source_name(source: &ShellSource) -> &'static str {
-    match source {
-        ShellSource::ShellEnv => "shell-env",
-        ShellSource::FallbackBinSh => "fallback-bin-sh",
     }
 }
 
