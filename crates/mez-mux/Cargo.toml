@@ -1,0 +1,12 @@
+[package]
+name = "mez-mux"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+mez-core = { path = "../mez-core" }
+mez-terminal = { path = "../mez-terminal" }

@@ -1,14 +1,14 @@
 # Default recipe builds in release mode
 default:
-    cargo build --all-targets --all-features --release
+    cargo build --workspace --all-targets --all-features --release
 
 # Build (debug)
 build:
-    cargo build --all-targets --all-features
+    cargo build --workspace --all-targets --all-features
 
 # Build (release)
 build-release:
-    cargo build --all-targets --all-features --release
+    cargo build --workspace --all-targets --all-features --release
 
 # Install mez
 install:
@@ -16,11 +16,11 @@ install:
 
 # Run (release by default)
 run *args:
-    cargo run --release -- {{args}}
+    cargo run -p mezzanine --release -- {{args}}
 
 # Type-check without building artifacts
 check:
-    cargo check --all-targets --all-features
+    cargo check --workspace --all-targets --all-features
 
 # Format with rustfmt
 fmt:
@@ -28,11 +28,15 @@ fmt:
 
 # Lint with clippy and deny warnings
 clippy:
-    cargo clippy --all-targets --all-features -- -D warnings
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 # Run tests
 test:
-    cargo test --all-targets --all-features
+    cargo test --workspace --all-targets --all-features
+
+# Reject forbidden dependencies between Mezzanine workspace crates
+architecture:
+    python3 scripts/check-workspace-dependencies.py
 
 # Clean build artifacts
 clean:

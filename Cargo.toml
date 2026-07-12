@@ -1,3 +1,13 @@
+[workspace]
+members = [
+    ".",
+    "crates/mez-agent",
+    "crates/mez-core",
+    "crates/mez-mux",
+    "crates/mez-terminal",
+]
+resolver = "3"
+
 [package]
 name = "mezzanine"
 version = "0.1.0"
@@ -8,6 +18,10 @@ name = "mez"
 path = "src/main.rs"
 
 [dependencies]
+mez-agent = { path = "crates/mez-agent" }
+mez-core = { path = "crates/mez-core" }
+mez-mux = { path = "crates/mez-mux" }
+mez-terminal = { path = "crates/mez-terminal" }
 clap = { version = "4", default-features = false, features = ["std", "help", "usage", "derive"] }
 futures-util = "0.3"
 base64 = "0.22"

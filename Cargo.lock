@@ -1359,6 +1359,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "mez-agent"
+version = "0.1.0"
+dependencies = [
+ "mez-core",
+]
+
+[[package]]
+name = "mez-core"
+version = "0.1.0"
+
+[[package]]
+name = "mez-mux"
+version = "0.1.0"
+dependencies = [
+ "mez-core",
+ "mez-terminal",
+]
+
+[[package]]
+name = "mez-terminal"
+version = "0.1.0"
+dependencies = [
+ "mez-core",
+]
+
+[[package]]
 name = "mezzanine"
 version = "0.1.0"
 dependencies = [
@@ -1368,6 +1394,10 @@ dependencies = [
  "futures-util",
  "include_dir",
  "keyring-core",
+ "mez-agent",
+ "mez-core",
+ "mez-mux",
+ "mez-terminal",
  "portable-pty",
  "pulldown-cmark",
  "rand 0.10.1",

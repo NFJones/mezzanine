@@ -13,7 +13,9 @@ reference documentation.
   agent actions, and [Configuration reference](configuration-reference.md) for
   exact configuration fields and defaults.
 - **Contributors**: use [AGENTS.md](../AGENTS.md) for repository workflow,
-  testing, and handoff requirements.
+  testing, and handoff requirements, and
+  [Workspace architecture](workspace-architecture.md) for package ownership and
+  dependency direction.
 - **Specification readers**: use [SPEC.md](../SPEC.md) as the normative source
   for behavior, especially configuration, agent capabilities, shell commands,
   permissions, and persistence.
@@ -28,6 +30,8 @@ reference documentation.
 - [agent-skills-and-commands.md](agent-skills-and-commands.md): the three
   interactive command surfaces, explicit skill usage, and common operator
   workflows.
+- [workspace-architecture.md](workspace-architecture.md): workspace package
+  ownership, allowed dependency edges, and extraction rules.
 - [examples/config.toml](examples/config.toml): the generated baseline config
   example.
 
