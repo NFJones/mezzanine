@@ -4,11 +4,11 @@
 //! zoom state, and layout policy application for a single window.
 
 use super::{
-    IdFactory, LayoutNode, LayoutPolicy, MIN_PANE_COLUMNS, MIN_PANE_ROWS, MezError, Pane,
-    PaneGeometry, PaneId, PaneNavigationDirection, PaneSizeSpec, PaneTitleSource, ResizeDirection,
-    RestoredWindowLayout, Result, Size, SplitDirection, Window, WindowId, WindowNameSource,
-    even_grid_dimensions, pane_matches_target, percent_size_for_axis, range_overlap_u16,
-    split_dimension_evenly, split_size, split_size_with_spec,
+    IdFactory, LayoutNode, LayoutPolicy, MIN_PANE_COLUMNS, MIN_PANE_ROWS, MezError, MuxErrorKind,
+    Pane, PaneGeometry, PaneId, PaneNavigationDirection, PaneSizeSpec, PaneTitleSource,
+    ResizeDirection, RestoredWindowLayout, Result, Size, SplitDirection, Window, WindowId,
+    WindowNameSource, even_grid_dimensions, pane_matches_target, percent_size_for_axis,
+    range_overlap_u16, split_dimension_evenly, split_size, split_size_with_spec,
 };
 
 impl Window {
@@ -470,9 +470,7 @@ impl Window {
                 .panes
                 .iter()
                 .position(|pane| pane_matches_target(pane, target))
-                .ok_or_else(|| {
-                    MezError::new(crate::error::MezErrorKind::NotFound, "pane not found")
-                }),
+                .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "pane not found")),
             None => {
                 if self.panes.is_empty() {
                     Err(MezError::invalid_state("window has no active pane"))
@@ -682,7 +680,7 @@ impl Window {
     /// reference each restored pane once and reproduce the restored rectangles.
     /// Legacy payloads without a tree build a tree from restored rectangles or,
     /// when those are absent, from the old deterministic rectangle inference.
-    pub(crate) fn from_restored_parts_with_layout(
+    pub fn from_restored_parts_with_layout(
         id: WindowId,
         index: usize,
         name: impl Into<String>,
@@ -791,9 +789,7 @@ impl Window {
                 .panes
                 .iter()
                 .position(|pane| pane_matches_target(pane, target))
-                .ok_or_else(|| {
-                    MezError::new(crate::error::MezErrorKind::NotFound, "pane not found")
-                })?,
+                .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "pane not found"))?,
             None => self.active_pane_index,
         };
 
@@ -848,9 +844,7 @@ impl Window {
                 .panes
                 .iter()
                 .position(|pane| pane_matches_target(pane, target))
-                .ok_or_else(|| {
-                    MezError::new(crate::error::MezErrorKind::NotFound, "pane not found")
-                })?,
+                .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "pane not found"))?,
             None => self.active_pane_index,
         };
         self.resize_pane_at_index(index, size)

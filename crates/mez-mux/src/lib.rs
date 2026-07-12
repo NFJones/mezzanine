@@ -7,5 +7,6 @@
 //! effect-driven mux boundaries are extracted from the root package.
 
 mod error;
+pub mod layout;
 
 pub use error::{MuxError, MuxErrorKind, Result};

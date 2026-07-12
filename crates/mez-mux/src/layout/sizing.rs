@@ -13,13 +13,13 @@ use super::{
 /// The value is intentionally larger than the hard pane minimum. It keeps
 /// terminal-oriented panes wide enough for readable command output while the
 /// layout engine decides whether to spend extra space on rows or columns.
-pub(crate) const EVEN_GRID_TARGET_COLUMNS: u16 = 40;
+pub const EVEN_GRID_TARGET_COLUMNS: u16 = 40;
 
 /// Preferred height for one pane in an automatically balanced grid layout.
 ///
 /// This gives stacked panes enough scroll context to remain useful without
 /// preventing compact terminals from falling back to the hard pane minimum.
-pub(crate) const EVEN_GRID_TARGET_ROWS: u16 = 8;
+pub const EVEN_GRID_TARGET_ROWS: u16 = 8;
 
 /// Runs the split size operation for this subsystem.
 ///
@@ -309,11 +309,7 @@ pub(crate) fn even_grid_dimensions(size: Size, pane_count: usize) -> (usize, usi
 }
 
 /// Estimates the smallest pane produced by a self-rebalancing layout policy.
-pub(crate) fn even_layout_minimum_pane_size(
-    policy: LayoutPolicy,
-    size: Size,
-    pane_count: usize,
-) -> Size {
+pub fn even_layout_minimum_pane_size(policy: LayoutPolicy, size: Size, pane_count: usize) -> Size {
     let pane_count = pane_count.max(1);
     match policy {
         LayoutPolicy::Tiled | LayoutPolicy::EvenVertical => Size {

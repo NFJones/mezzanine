@@ -387,11 +387,11 @@ impl WindowNameSource {
 }
 
 /// Snapshot-provided layout metadata used while restoring a window.
-pub(crate) struct RestoredWindowLayout {
+pub struct RestoredWindowLayout {
     /// Complete pane rectangles restored from snapshot metadata.
-    pub(crate) pane_geometries: Option<Vec<PaneGeometry>>,
+    pub pane_geometries: Option<Vec<PaneGeometry>>,
     /// Recursive split tree restored from snapshot metadata.
-    pub(crate) layout_root: Option<LayoutNode>,
+    pub layout_root: Option<LayoutNode>,
     /// Active layout policy restored for later layout cycling and mutation.
-    pub(crate) layout_policy: LayoutPolicy,
+    pub layout_policy: LayoutPolicy,
 }

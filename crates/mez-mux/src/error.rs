@@ -58,6 +58,12 @@ impl MuxError {
     }
 }
 
+impl From<mez_terminal::TerminalSizeError> for MuxError {
+    fn from(error: mez_terminal::TerminalSizeError) -> Self {
+        Self::invalid_args(error.message())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{MuxError, MuxErrorKind};

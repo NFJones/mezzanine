@@ -246,7 +246,7 @@ fn split_with_size_spec_rejects_cross_axis_conflict_without_mutation() {
         )
         .unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert_eq!(error.kind(), crate::MuxErrorKind::InvalidArgs);
     assert_eq!(window.panes().len(), 1);
     assert_eq!(
         window.pane_geometries(),
@@ -852,5 +852,5 @@ fn restored_window_rejects_overlapping_stored_geometry() {
     )
     .unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert_eq!(error.kind(), crate::MuxErrorKind::InvalidArgs);
 }
