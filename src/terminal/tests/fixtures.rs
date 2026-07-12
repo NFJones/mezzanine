@@ -18,7 +18,7 @@ pub(super) fn display_column_for_fragment(line: &str, needle: &str) -> usize {
 pub(super) fn styled_line_rendition_at(
     line: &TerminalStyledLine,
     column: usize,
-) -> crate::terminal::GraphicRendition {
+) -> mez_terminal::GraphicRendition {
     line.style_spans
         .iter()
         .rev()

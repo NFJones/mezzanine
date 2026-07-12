@@ -96,7 +96,7 @@ pub(super) fn ordered_copy_positions(
 /// on duplicated control-flow logic.
 pub(super) fn copy_selection_rendition(
     ui_theme: &crate::terminal::UiTheme,
-) -> crate::terminal::GraphicRendition {
+) -> mez_terminal::GraphicRendition {
     let mut rendition = ui_theme.colors.copy_selection.rendition();
     rendition.inverse = true;
     rendition

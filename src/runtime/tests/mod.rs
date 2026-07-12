@@ -62,7 +62,7 @@ const EXPECTED_MARKDOWN_TABLE_ALTERNATE_ROW_FOREGROUND: TerminalColor =
 fn styled_line_rendition_at(
     line: &TerminalStyledLine,
     column: usize,
-) -> crate::terminal::GraphicRendition {
+) -> mez_terminal::GraphicRendition {
     line.style_spans
         .iter()
         .rev()

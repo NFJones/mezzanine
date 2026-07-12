@@ -191,13 +191,13 @@ fn attached_terminal_output_update_rewrites_rows_when_glyph_width_changes() {
 fn attached_terminal_output_update_repaints_trailing_prompt_padding_after_text_change() {
     let previous_lines = vec!["      ".to_string()];
     let current_lines = vec!["alpha ".to_string()];
-    let prompt_span = crate::terminal::TerminalStyleSpan {
+    let prompt_span = mez_terminal::TerminalStyleSpan {
         start: 0,
         length: 6,
-        rendition: crate::terminal::GraphicRendition {
-            foreground: Some(crate::terminal::TerminalColor::Rgb(255, 255, 255)),
-            background: Some(crate::terminal::TerminalColor::Rgb(37, 40, 39)),
-            ..crate::terminal::GraphicRendition::default()
+        rendition: mez_terminal::GraphicRendition {
+            foreground: Some(mez_terminal::TerminalColor::Rgb(255, 255, 255)),
+            background: Some(mez_terminal::TerminalColor::Rgb(37, 40, 39)),
+            ..mez_terminal::GraphicRendition::default()
         },
     };
     let previous_spans = vec![vec![prompt_span]];
@@ -234,13 +234,13 @@ fn attached_terminal_output_update_repaints_trailing_prompt_padding_after_text_c
 fn attached_terminal_output_update_rewrites_fully_styled_prompt_continuation_rows() {
     let previous_lines = vec!["      alpha     ".to_string()];
     let current_lines = vec!["      omega     ".to_string()];
-    let prompt_span = crate::terminal::TerminalStyleSpan {
+    let prompt_span = mez_terminal::TerminalStyleSpan {
         start: 0,
         length: 16,
-        rendition: crate::terminal::GraphicRendition {
-            foreground: Some(crate::terminal::TerminalColor::Rgb(255, 255, 255)),
-            background: Some(crate::terminal::TerminalColor::Rgb(37, 40, 39)),
-            ..crate::terminal::GraphicRendition::default()
+        rendition: mez_terminal::GraphicRendition {
+            foreground: Some(mez_terminal::TerminalColor::Rgb(255, 255, 255)),
+            background: Some(mez_terminal::TerminalColor::Rgb(37, 40, 39)),
+            ..mez_terminal::GraphicRendition::default()
         },
     };
     let previous_spans = vec![vec![prompt_span]];

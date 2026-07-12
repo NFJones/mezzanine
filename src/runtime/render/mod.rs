@@ -514,7 +514,7 @@ mod tests {
         );
         assert!(lines[0].style_spans.iter().any(|span| {
             span.start >= 2
-                && span.rendition.foreground == Some(crate::terminal::TerminalColor::Rgb(1, 2, 3))
+                && span.rendition.foreground == Some(mez_terminal::TerminalColor::Rgb(1, 2, 3))
         }));
     }
 
@@ -846,8 +846,7 @@ mod tests {
             addition.style_spans.iter().any(|span| {
                 span.start == 0
                     && span.length == addition.display.chars().count()
-                    && span.rendition.foreground
-                        == Some(crate::terminal::TerminalColor::Rgb(1, 2, 3))
+                    && span.rendition.foreground == Some(mez_terminal::TerminalColor::Rgb(1, 2, 3))
             }),
             "{addition:?}"
         );
@@ -855,8 +854,7 @@ mod tests {
             deletion.style_spans.iter().any(|span| {
                 span.start == 0
                     && span.length == deletion.display.chars().count()
-                    && span.rendition.foreground
-                        == Some(crate::terminal::TerminalColor::Rgb(4, 5, 6))
+                    && span.rendition.foreground == Some(mez_terminal::TerminalColor::Rgb(4, 5, 6))
             }),
             "{deletion:?}"
         );
@@ -866,11 +864,11 @@ mod tests {
                     && matches!(
                         span.rendition.foreground,
                         Some(
-                            crate::terminal::TerminalColor::Rgb(10, 11, 12)
-                                | crate::terminal::TerminalColor::Rgb(13, 14, 15)
-                                | crate::terminal::TerminalColor::Rgb(16, 17, 18)
-                                | crate::terminal::TerminalColor::Rgb(19, 20, 21)
-                                | crate::terminal::TerminalColor::Rgb(22, 23, 24)
+                            mez_terminal::TerminalColor::Rgb(10, 11, 12)
+                                | mez_terminal::TerminalColor::Rgb(13, 14, 15)
+                                | mez_terminal::TerminalColor::Rgb(16, 17, 18)
+                                | mez_terminal::TerminalColor::Rgb(19, 20, 21)
+                                | mez_terminal::TerminalColor::Rgb(22, 23, 24)
                         )
                     )
             }),
@@ -882,11 +880,11 @@ mod tests {
                     || matches!(
                         span.rendition.foreground,
                         Some(
-                            crate::terminal::TerminalColor::Rgb(10, 11, 12)
-                                | crate::terminal::TerminalColor::Rgb(13, 14, 15)
-                                | crate::terminal::TerminalColor::Rgb(16, 17, 18)
-                                | crate::terminal::TerminalColor::Rgb(19, 20, 21)
-                                | crate::terminal::TerminalColor::Rgb(22, 23, 24)
+                            mez_terminal::TerminalColor::Rgb(10, 11, 12)
+                                | mez_terminal::TerminalColor::Rgb(13, 14, 15)
+                                | mez_terminal::TerminalColor::Rgb(16, 17, 18)
+                                | mez_terminal::TerminalColor::Rgb(19, 20, 21)
+                                | mez_terminal::TerminalColor::Rgb(22, 23, 24)
                         )
                     )
             }),

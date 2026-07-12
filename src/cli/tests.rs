@@ -2800,11 +2800,11 @@ fn terminal_step_response_line_style_spans_parse_color_and_attributes() {
     assert!(spans[0][0].rendition.strikethrough);
     assert_eq!(
         spans[0][0].rendition.foreground,
-        Some(crate::terminal::TerminalColor::Rgb(1, 2, 3))
+        Some(mez_terminal::TerminalColor::Rgb(1, 2, 3))
     );
     assert_eq!(
         spans[0][0].rendition.background,
-        Some(crate::terminal::TerminalColor::Indexed(4))
+        Some(mez_terminal::TerminalColor::Indexed(4))
     );
 }
 

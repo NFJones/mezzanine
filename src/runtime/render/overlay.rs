@@ -656,11 +656,11 @@ fn list_themes_markdown_overlay_preserves_actions_and_preview_colors() {
     assert_eq!(preview_spans.len(), 5, "{content:?}");
     assert_eq!(
         preview_spans[0].rendition.foreground,
-        Some(crate::terminal::TerminalColor::Rgb(0x11, 0x11, 0x11))
+        Some(mez_terminal::TerminalColor::Rgb(0x11, 0x11, 0x11))
     );
     assert_eq!(
         preview_spans[4].rendition.foreground,
-        Some(crate::terminal::TerminalColor::Rgb(0x55, 0x55, 0x55))
+        Some(mez_terminal::TerminalColor::Rgb(0x55, 0x55, 0x55))
     );
 }
 
@@ -2640,7 +2640,7 @@ pub(super) fn runtime_pane_agent_selector_rendition(
     field: PaneAgentStatusField,
     active: bool,
     ui_theme: &crate::terminal::UiTheme,
-) -> crate::terminal::GraphicRendition {
+) -> mez_terminal::GraphicRendition {
     let pair = if active {
         match field {
             PaneAgentStatusField::Model => ui_theme.colors.agent_model,
@@ -2655,11 +2655,11 @@ pub(super) fn runtime_pane_agent_selector_rendition(
         ui_theme.colors.display_overlay
     };
     let pair_rendition = pair.rendition();
-    crate::terminal::GraphicRendition {
+    mez_terminal::GraphicRendition {
         foreground: pair_rendition.foreground,
         background: pair_rendition.background,
         bold: active,
-        ..crate::terminal::GraphicRendition::default()
+        ..mez_terminal::GraphicRendition::default()
     }
 }
 
