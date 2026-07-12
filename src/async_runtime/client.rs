@@ -7,18 +7,17 @@
 use super::{
     AgentCompactionEvent, AgentProviderEvent, AgentRememberEvent, AgentTurnLedger, AgentTurnRunner,
     AsyncAgentProviderPollReport, AsyncAgentProviderServiceConfig, AsyncAttachedTerminalIo,
-    AsyncAttachedTerminalLoopRequest, AsyncAttachedTerminalPaneIoMode, AsyncRuntimeService,
-    AsyncRuntimeServiceExit, AsyncRuntimeSessionHandle, AsyncTerminalIoFuture,
-    AsyncTerminalOutputWriteReport, AttachedTerminalClientLoopReport, AttachedTerminalFdReadiness,
-    AttachedTerminalFdRole, ClientStatusLine, DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,
+    AsyncAttachedTerminalLoopRequest, AsyncRuntimeService, AsyncRuntimeServiceExit,
+    AsyncRuntimeSessionHandle, AsyncTerminalIoFuture, AsyncTerminalOutputWriteReport,
+    AttachedTerminalClientLoopReport, AttachedTerminalFdReadiness, AttachedTerminalFdRole,
+    ClientStatusLine, DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,
     DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES, MezError, MouseAction, Result,
     RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentRememberDispatch, RuntimeEvent,
     RuntimeEventBatch, RuntimeLifecycleState, RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind,
     TerminalClientLoopAction, empty_attached_terminal_loop_report,
     is_terminal_runtime_lifecycle_state, merge_attached_terminal_loop_report,
-    run_async_attached_terminal_client_loop,
-    run_async_attached_terminal_client_loop_deferred_pane_io, sleep,
+    run_async_attached_terminal_client_loop, sleep,
 };
 use crate::agent::{
     ActionResult, ActionStatus, AgentActionPayload, AgentTurnExecution, AgentTurnRecord,
@@ -123,58 +122,8 @@ where
     I: AsyncAttachedTerminalIo,
     S: FnMut(u64) -> Result<Option<ClientStatusLine>>,
 {
-    run_async_attached_terminal_client_service_with_pane_io_mode(
-        handle,
-        io,
-        request,
-        service_config,
-        AsyncAttachedTerminalPaneIoMode::Inline,
-        status_provider,
-    )
-    .await
-}
-
-/// Runs an attached-terminal service whose primary pane input is queued for
-/// async pane process workers.
-pub async fn run_async_attached_terminal_client_service_deferred_pane_io<I, S>(
-    handle: &AsyncRuntimeSessionHandle,
-    io: &mut I,
-    request: AsyncAttachedTerminalLoopRequest,
-    service_config: AsyncAttachedTerminalClientServiceConfig,
-    status_provider: S,
-) -> Result<AsyncAttachedTerminalClientServiceReport>
-where
-    I: AsyncAttachedTerminalIo,
-    S: FnMut(u64) -> Result<Option<ClientStatusLine>>,
-{
-    run_async_attached_terminal_client_service_with_pane_io_mode(
-        handle,
-        io,
-        request,
-        service_config,
-        AsyncAttachedTerminalPaneIoMode::Deferred,
-        status_provider,
-    )
-    .await
-}
-
-/// Runs the run async attached terminal client service with pane io mode operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-async fn run_async_attached_terminal_client_service_with_pane_io_mode<I, S>(
-    handle: &AsyncRuntimeSessionHandle,
-    io: &mut I,
-    mut request: AsyncAttachedTerminalLoopRequest,
-    service_config: AsyncAttachedTerminalClientServiceConfig,
-    pane_io_mode: AsyncAttachedTerminalPaneIoMode,
-    mut status_provider: S,
-) -> Result<AsyncAttachedTerminalClientServiceReport>
-where
-    I: AsyncAttachedTerminalIo,
-    S: FnMut(u64) -> Result<Option<ClientStatusLine>>,
-{
+    let mut request = request;
+    let mut status_provider = status_provider;
     service_config.validate()?;
     let mut lifecycle_watcher = handle.lifecycle_state_watcher();
     let mut report = AsyncAttachedTerminalClientServiceReport {
@@ -279,26 +228,13 @@ where
 
         let iteration_offset = report.loop_report.iterations;
         let mut prepolled_io = PrepolledAttachedTerminalIo::new(io, readiness);
-        let batch = match pane_io_mode {
-            AsyncAttachedTerminalPaneIoMode::Inline => {
-                run_async_attached_terminal_client_loop(
-                    handle,
-                    &mut prepolled_io,
-                    request.clone(),
-                    |iteration| status_provider(iteration_offset.saturating_add(iteration)),
-                )
-                .await?
-            }
-            AsyncAttachedTerminalPaneIoMode::Deferred => {
-                run_async_attached_terminal_client_loop_deferred_pane_io(
-                    handle,
-                    &mut prepolled_io,
-                    request.clone(),
-                    |iteration| status_provider(iteration_offset.saturating_add(iteration)),
-                )
-                .await?
-            }
-        };
+        let batch = run_async_attached_terminal_client_loop(
+            handle,
+            &mut prepolled_io,
+            request.clone(),
+            |iteration| status_provider(iteration_offset.saturating_add(iteration)),
+        )
+        .await?;
         report.batches = report.batches.saturating_add(1);
         let batch_output_frames = batch.output_frames;
         let should_finish =

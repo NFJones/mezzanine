@@ -23,7 +23,7 @@ use crate::async_runtime::{
     AsyncRuntimeDaemonListeners, AsyncRuntimeService, AsyncRuntimeServiceExit,
     AsyncRuntimeSessionActor, ClientEvent, DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,
     RuntimeEvent, RuntimeEventBatch, build_async_runtime_daemon_services,
-    run_async_attached_terminal_client_service_deferred_pane_io, supervise_async_runtime_services,
+    run_async_attached_terminal_client_service, supervise_async_runtime_services,
 };
 use crate::auth::{
     AuthMethod, AuthPaths, AuthStore, OpenAiProviderCredential,

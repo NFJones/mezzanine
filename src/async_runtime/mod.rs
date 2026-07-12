@@ -132,7 +132,6 @@ pub use client::{
     AsyncAttachedTerminalClientServiceConfig, AsyncAttachedTerminalClientServiceReport,
     build_async_attached_terminal_client_service, run_async_agent_provider_service,
     run_async_attached_terminal_client_service,
-    run_async_attached_terminal_client_service_deferred_pane_io,
 };
 pub use config::{
     AsyncAgentProviderPollReport, AsyncAgentProviderServiceConfig, AsyncControlInputResult,
@@ -179,11 +178,7 @@ pub use supervisor::{
     DEFAULT_ASYNC_EVENT_LIMIT_PER_CONNECTION, DEFAULT_ASYNC_IDLE_CLEANUP_INTERVAL,
     DEFAULT_ASYNC_RUNTIME_COMMAND_BUFFER, supervise_async_runtime_services,
 };
-pub use terminal::{
-    AsyncAttachedTerminalLoopRequest, AsyncAttachedTerminalPaneIoMode,
-    run_async_attached_terminal_client_loop,
-    run_async_attached_terminal_client_loop_deferred_pane_io,
-};
+pub use terminal::{AsyncAttachedTerminalLoopRequest, run_async_attached_terminal_client_loop};
 #[cfg(test)]
 pub use terminal_io::SyncAttachedTerminalIoAdapter;
 pub use terminal_io::{

@@ -57,15 +57,6 @@ pub struct AsyncAttachedTerminalLoopRequest {
     pub loop_config: AttachedTerminalClientLoopConfig,
 }
 
-/// Pane I/O application mode for attached terminal input.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AsyncAttachedTerminalPaneIoMode {
-    /// Apply pane input directly through the synchronous process manager.
-    Inline,
-    /// Queue pane input as side effects for async pane process workers.
-    Deferred,
-}
-
 /// Maximum time one attached-terminal loop step may spend in an awaited
 /// terminal, render, flush, or pane-I/O boundary before returning control.
 const ASYNC_ATTACHED_TERMINAL_STEP_TIMEOUT: Duration = Duration::from_millis(250);
@@ -290,54 +281,7 @@ where
     I: AsyncAttachedTerminalIo,
     S: FnMut(u64) -> Result<Option<ClientStatusLine>>,
 {
-    run_async_attached_terminal_client_loop_with_pane_io_mode(
-        handle,
-        io,
-        request,
-        AsyncAttachedTerminalPaneIoMode::Inline,
-        status_provider,
-    )
-    .await
-}
-
-/// Runs an attached terminal client loop that queues pane input for async pane
-/// process workers instead of writing through the compatibility manager path.
-pub async fn run_async_attached_terminal_client_loop_deferred_pane_io<I, S>(
-    handle: &AsyncRuntimeSessionHandle,
-    io: &mut I,
-    request: AsyncAttachedTerminalLoopRequest,
-    status_provider: S,
-) -> Result<AttachedTerminalClientLoopReport>
-where
-    I: AsyncAttachedTerminalIo,
-    S: FnMut(u64) -> Result<Option<ClientStatusLine>>,
-{
-    run_async_attached_terminal_client_loop_with_pane_io_mode(
-        handle,
-        io,
-        request,
-        AsyncAttachedTerminalPaneIoMode::Deferred,
-        status_provider,
-    )
-    .await
-}
-
-/// Runs the run async attached terminal client loop with pane io mode operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-async fn run_async_attached_terminal_client_loop_with_pane_io_mode<I, S>(
-    handle: &AsyncRuntimeSessionHandle,
-    io: &mut I,
-    request: AsyncAttachedTerminalLoopRequest,
-    pane_io_mode: AsyncAttachedTerminalPaneIoMode,
-    mut status_provider: S,
-) -> Result<AttachedTerminalClientLoopReport>
-where
-    I: AsyncAttachedTerminalIo,
-    S: FnMut(u64) -> Result<Option<ClientStatusLine>>,
-{
+    let mut status_provider = status_provider;
     if request.loop_config.max_iterations == 0 {
         return Err(MezError::invalid_args(
             "attached terminal client loop max_iterations must be greater than zero",
@@ -462,22 +406,11 @@ where
             && request.primary_client_id.as_ref() == Some(&request.client_id);
         let primary_step_application = if apply_primary_step_before_output {
             let primary_client_id = request.client_id.clone();
-            let application_result = match pane_io_mode {
-                AsyncAttachedTerminalPaneIoMode::Inline => {
-                    await_attached_terminal_step(
-                        "inline pane I/O apply",
-                        handle.apply_attached_terminal_step_plan(primary_client_id, step.clone()),
-                    )
-                    .await
-                }
-                AsyncAttachedTerminalPaneIoMode::Deferred => {
-                    await_attached_terminal_step(
-                        "deferred pane I/O apply",
-                        handle.apply_attached_terminal_step_plan(primary_client_id, step.clone()),
-                    )
-                    .await
-                }
-            };
+            let application_result = await_attached_terminal_step(
+                "pane I/O apply",
+                handle.apply_attached_terminal_step_plan(primary_client_id, step.clone()),
+            )
+            .await;
             Some(match application_result {
                 Ok(application) => application,
                 Err(error) => {
@@ -552,28 +485,11 @@ where
             && !step.actions.is_empty()
             && let Some(primary_client_id) = request.primary_client_id.as_ref()
         {
-            let application_result = match pane_io_mode {
-                AsyncAttachedTerminalPaneIoMode::Inline => {
-                    await_attached_terminal_step(
-                        "inline pane I/O apply",
-                        handle.apply_attached_terminal_step_plan(
-                            primary_client_id.clone(),
-                            step.clone(),
-                        ),
-                    )
-                    .await
-                }
-                AsyncAttachedTerminalPaneIoMode::Deferred => {
-                    await_attached_terminal_step(
-                        "deferred pane I/O apply",
-                        handle.apply_attached_terminal_step_plan(
-                            primary_client_id.clone(),
-                            step.clone(),
-                        ),
-                    )
-                    .await
-                }
-            };
+            let application_result = await_attached_terminal_step(
+                "pane I/O apply",
+                handle.apply_attached_terminal_step_plan(primary_client_id.clone(), step.clone()),
+            )
+            .await;
             Some(match application_result {
                 Ok(application) => application,
                 Err(error) => {

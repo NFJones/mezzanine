@@ -17,7 +17,7 @@ use super::{
     TerminalClientLoopConfig, Write, auxiliary_socket_path_for_control_socket, bind_control_socket,
     build_async_runtime_daemon_services, current_unix_seconds, default_trust_database_path, fs, io,
     json_escape, load_runtime_config_layers, resolve_shell,
-    run_async_attached_terminal_client_service_deferred_pane_io, selected_socket_path,
+    run_async_attached_terminal_client_service, selected_socket_path,
     supervise_async_runtime_services, terminal_size_from_fd_or_environment, write_json_or_plain,
 };
 use crate::ids::SessionId;
@@ -1066,7 +1066,7 @@ pub(super) fn build_foreground_attached_primary_client_service(
             let mut terminal_guard =
                 AsyncAttachedTerminalPresentationGuard::new(input_fd, output_fd, None)?;
             terminal_guard.enter_presentation().await?;
-            let run_result = run_async_attached_terminal_client_service_deferred_pane_io(
+            let run_result = run_async_attached_terminal_client_service(
                 &handle,
                 terminal_guard.io_mut(),
                 AsyncAttachedTerminalLoopRequest {

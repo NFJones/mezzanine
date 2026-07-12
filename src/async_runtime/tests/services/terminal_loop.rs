@@ -186,7 +186,7 @@ async fn async_attached_terminal_loop_can_defer_pane_input_to_worker() {
     };
 
     let client = async {
-        let report = run_async_attached_terminal_client_loop_deferred_pane_io(
+        let report = run_async_attached_terminal_client_loop(
             &handle,
             &mut io,
             AsyncAttachedTerminalLoopRequest {
@@ -358,7 +358,7 @@ async fn async_attached_terminal_loop_preserves_large_deferred_paste_across_read
     };
 
     let client = async {
-        let report = run_async_attached_terminal_client_loop_deferred_pane_io(
+        let report = run_async_attached_terminal_client_loop(
             &handle,
             &mut io,
             AsyncAttachedTerminalLoopRequest {

@@ -34,7 +34,7 @@ async fn async_attached_terminal_service_can_defer_pane_input_to_worker() {
     };
 
     let client = async {
-        let report = run_async_attached_terminal_client_service_deferred_pane_io(
+        let report = run_async_attached_terminal_client_service(
             &handle,
             &mut io,
             AsyncAttachedTerminalLoopRequest {
@@ -109,7 +109,7 @@ async fn async_attached_terminal_service_routes_input_while_output_is_pending() 
     );
 
     let client = async {
-        let report = run_async_attached_terminal_client_service_deferred_pane_io(
+        let report = run_async_attached_terminal_client_service(
             &handle,
             &mut io,
             AsyncAttachedTerminalLoopRequest {
