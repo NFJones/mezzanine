@@ -6,8 +6,12 @@
 //! outside this boundary. The initial empty facade allows those responsibilities
 //! to be separated in place before production modules move across packages.
 
+/// Pane-facing terminal mouse protocol types and parser.
+pub mod mouse;
 /// Pane-facing compatibility profiles and terminfo selection policy.
 pub mod profile;
+
+pub use mouse::{MouseButton, MouseEvent, MouseEventKind, MouseModifiers, parse_sgr_mouse};
 
 pub use profile::{
     CapabilitySupport, DEFAULT_TERMINAL_PROFILE_NAME, DecPrivateModeCapabilities,

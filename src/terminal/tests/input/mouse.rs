@@ -3,7 +3,7 @@
 use crate::terminal::{
     CopyPosition, KeyBindings, MouseAction, MouseButton, MouseEvent, MouseEventKind,
     MouseModifiers, MousePolicy, TerminalInputClassification, classify_mouse_event,
-    classify_terminal_input, parse_sgr_mouse,
+    classify_terminal_input,
 };
 
 /// Verifies classifies mouse sequences as terminal input.
@@ -29,30 +29,6 @@ fn classifies_mouse_sequences_as_terminal_input() {
     );
 }
 
-/// Verifies parses sgr mouse press drag release and scroll.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
-#[test]
-fn parses_sgr_mouse_press_drag_release_and_scroll() {
-    let press = parse_sgr_mouse(b"\x1b[<0;12;5M").unwrap().unwrap();
-    assert_eq!(press.kind, MouseEventKind::Press);
-    assert_eq!(press.button, MouseButton::Left);
-    assert_eq!(press.column, 11);
-    assert_eq!(press.row, 4);
-
-    let drag = parse_sgr_mouse(b"\x1b[<32;12;6M").unwrap().unwrap();
-    assert_eq!(drag.kind, MouseEventKind::Drag);
-
-    let release = parse_sgr_mouse(b"\x1b[<0;12;6m").unwrap().unwrap();
-    assert_eq!(release.kind, MouseEventKind::Release);
-
-    let scroll = parse_sgr_mouse(b"\x1b[<65;12;6M").unwrap().unwrap();
-    assert_eq!(scroll.kind, MouseEventKind::Scroll);
-    assert_eq!(scroll.button, MouseButton::WheelDown);
-}
-
 /// Verifies malformed SGR mouse packets with extra fields are rejected.
 ///
 /// SGR mouse packets must contain exactly `code;column;row` before the final
@@ -61,7 +37,6 @@ fn parses_sgr_mouse_press_drag_release_and_scroll() {
 /// regression protects the parser boundary and the higher-level key classifier.
 #[test]
 fn rejects_sgr_mouse_packets_with_extra_fields() {
-    assert!(parse_sgr_mouse(b"\x1b[<0;12;5;999M").unwrap().is_none());
     assert!(
         !matches!(
             classify_terminal_input(b"\x1b[<0;12;5;999M", &KeyBindings::default()).unwrap(),

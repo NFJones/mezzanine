@@ -717,74 +717,31 @@ pub enum CopyModeKeyAction {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub fn parse_sgr_mouse(input: &[u8]) -> Result<Option<MouseEvent>> {
-    let text = match std::str::from_utf8(input) {
-        Ok(text) => text,
-        Err(_) => return Ok(None),
-    };
-    let Some(rest) = text.strip_prefix("\u{1b}[<") else {
-        return Ok(None);
-    };
-    let final_byte = match rest.chars().last() {
-        Some(c @ ('M' | 'm')) => c,
-        _ => return Ok(None),
-    };
-    let body = &rest[..rest.len().saturating_sub(final_byte.len_utf8())];
-    let fields = body.split(';').collect::<Vec<_>>();
-    if fields.len() != 3 {
-        return Ok(None);
-    }
-    let Ok(code) = fields[0].parse::<u16>() else {
-        return Ok(None);
-    };
-    let Ok(column) = fields[1].parse::<u16>() else {
-        return Ok(None);
-    };
-    let Ok(row) = fields[2].parse::<u16>() else {
-        return Ok(None);
-    };
-    if column == 0 || row == 0 {
-        return Ok(None);
-    }
-
-    let modifiers = MouseModifiers {
-        shift: code & 4 != 0,
-        alt: code & 8 != 0,
-        ctrl: code & 16 != 0,
-    };
-    let drag = code & 32 != 0;
-    let wheel = code & 64 != 0;
-    let base = code & 0b11;
-    let button = if wheel {
-        match base {
-            0 => MouseButton::WheelUp,
-            1 => MouseButton::WheelDown,
-            other => MouseButton::Other(64 + other),
-        }
-    } else {
-        match base {
-            0 => MouseButton::Left,
-            1 => MouseButton::Middle,
-            2 => MouseButton::Right,
-            other => MouseButton::Other(other),
-        }
-    };
-    let kind = if wheel {
-        MouseEventKind::Scroll
-    } else if final_byte == 'm' {
-        MouseEventKind::Release
-    } else if drag {
-        MouseEventKind::Drag
-    } else {
-        MouseEventKind::Press
-    };
-
-    Ok(Some(MouseEvent {
-        kind,
-        button,
-        column: column.saturating_sub(1),
-        row: row.saturating_sub(1),
-        modifiers,
-    }))
+    Ok(
+        mez_terminal::parse_sgr_mouse(input).map(|event| MouseEvent {
+            kind: match event.kind {
+                mez_terminal::MouseEventKind::Press => MouseEventKind::Press,
+                mez_terminal::MouseEventKind::Release => MouseEventKind::Release,
+                mez_terminal::MouseEventKind::Drag => MouseEventKind::Drag,
+                mez_terminal::MouseEventKind::Scroll => MouseEventKind::Scroll,
+            },
+            button: match event.button {
+                mez_terminal::MouseButton::Left => MouseButton::Left,
+                mez_terminal::MouseButton::Middle => MouseButton::Middle,
+                mez_terminal::MouseButton::Right => MouseButton::Right,
+                mez_terminal::MouseButton::WheelUp => MouseButton::WheelUp,
+                mez_terminal::MouseButton::WheelDown => MouseButton::WheelDown,
+                mez_terminal::MouseButton::Other(code) => MouseButton::Other(code),
+            },
+            column: event.column,
+            row: event.row,
+            modifiers: MouseModifiers {
+                shift: event.modifiers.shift,
+                alt: event.modifiers.alt,
+                ctrl: event.modifiers.ctrl,
+            },
+        }),
+    )
 }
 
 /// Runs the classify mouse event operation for this subsystem.
