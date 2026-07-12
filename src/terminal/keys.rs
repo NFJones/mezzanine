@@ -23,11 +23,6 @@ pub const DEFAULT_HISTORY_ROTATE_LINES: usize = 1_000;
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_PASTE_BUFFER_LIMIT_BYTES: usize = 1_048_576;
-/// Defines the DEFAULT TERMINAL PROFILE NAME const used by this subsystem.
-///
-/// Keeping this value documented makes the contract explicit at the module
-/// boundary and avoids relying on call-site inference.
-pub const DEFAULT_TERMINAL_PROFILE_NAME: &str = "xterm-compatible";
 /// Defines the DEFAULT PANE TERM const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module

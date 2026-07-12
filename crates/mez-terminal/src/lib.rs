@@ -5,3 +5,18 @@
 //! frames, overlays, attached-client policy, and agent presentation remain
 //! outside this boundary. The initial empty facade allows those responsibilities
 //! to be separated in place before production modules move across packages.
+
+/// Pane-facing compatibility profiles and terminfo selection policy.
+pub mod profile;
+
+pub use profile::{
+    CapabilitySupport, DEFAULT_TERMINAL_PROFILE_NAME, DecPrivateModeCapabilities,
+    MEZZANINE_TERMINFO_PROFILES, SaveRestoreCapabilities, SgrCapabilities,
+    TERMINFO_FALLBACK_PROFILES, TerminalCapabilities, TerminalCompatibilityProfile,
+    TerminalDiagnostic, TerminalDiagnosticSeverity, TerminalProfile, TerminalProfileError,
+    TerminfoCapabilityProfile, TerminfoSelection, TerminfoSource, select_installed_terminfo,
+    select_terminfo, terminal_profile_named,
+};
+
+#[cfg(test)]
+mod tests;

@@ -1,6 +1,6 @@
 //! Regression tests for terminal profiles behavior.
 
-use crate::terminal::{
+use crate::{
     CapabilitySupport, DEFAULT_TERMINAL_PROFILE_NAME, TerminalDiagnosticSeverity, TerminalProfile,
     TerminfoSource, select_installed_terminfo, select_terminfo, terminal_profile_named,
 };
@@ -97,8 +97,8 @@ fn terminal_profile_lookup_uses_stable_names() {
     assert_eq!(profile.profile, TerminalProfile::XtermCompatible);
     assert_eq!(profile.name, DEFAULT_TERMINAL_PROFILE_NAME);
     assert_eq!(
-        terminal_profile_named("ansi").unwrap_err().kind(),
-        crate::error::MezErrorKind::InvalidArgs
+        terminal_profile_named("ansi").unwrap_err().message(),
+        "unknown terminal compatibility profile ansi"
     );
 }
 
