@@ -10,8 +10,12 @@
 pub mod mouse;
 /// Pane-facing compatibility profiles and terminfo selection policy.
 pub mod profile;
+/// Styled terminal-cell contracts produced by terminal emulation.
+pub mod style;
 
 pub use mouse::{MouseButton, MouseEvent, MouseEventKind, MouseModifiers, parse_sgr_mouse};
+
+pub use style::{GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalStyledLine};
 
 pub use profile::{
     CapabilitySupport, DEFAULT_TERMINAL_PROFILE_NAME, DecPrivateModeCapabilities,
