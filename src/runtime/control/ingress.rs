@@ -65,9 +65,7 @@ impl RuntimeSessionService {
             offset += consumed;
         }
         self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
-        if !self.external_effects_use_adapter() {
-            self.persist_or_defer_registry_update()?;
-        }
+        self.persist_or_defer_registry_update()?;
         Ok((output, offset))
     }
 
@@ -108,9 +106,7 @@ impl RuntimeSessionService {
             offset += consumed;
         }
         self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
-        if !self.external_effects_use_adapter() {
-            self.persist_or_defer_registry_update()?;
-        }
+        self.persist_or_defer_registry_update()?;
         Ok((output, offset))
     }
 
@@ -140,9 +136,7 @@ impl RuntimeSessionService {
             offset += consumed;
         }
         self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
-        if !self.external_effects_use_adapter() {
-            self.persist_or_defer_registry_update()?;
-        }
+        self.persist_or_defer_registry_update()?;
         Ok((output, offset))
     }
 
