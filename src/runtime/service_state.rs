@@ -492,22 +492,6 @@ pub(super) struct RuntimeAgentPatchRecord {
     pub error_message: Option<String>,
 }
 
-/// Selects whether external effects execute inline or through an adapter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RuntimeExternalEffectMode {
-    /// Compatibility callers execute supported effects inline.
-    Inline,
-    /// Runtime transitions queue external work for an effect adapter.
-    Adapter,
-}
-
-impl RuntimeExternalEffectMode {
-    /// Returns whether external work must be emitted for an adapter.
-    pub(super) const fn uses_adapter(self) -> bool {
-        matches!(self, Self::Adapter)
-    }
-}
-
 /// Carries Runtime Lifecycle State state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -1878,10 +1862,6 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) active_pane_pipes: BTreeMap<String, ActivePanePipe>,
-    /// Whether blocking external effects are queued for an adapter instead of run inline.
-    ///
-    /// The async actor enables this once; synchronous compatibility callers leave it disabled.
-    pub(super) external_effect_mode: RuntimeExternalEffectMode,
     /// Whether audit writes are emitted for an adapter instead of written inline.
     ///
     /// This ownership is explicit because config reloads may replace the writer
@@ -1895,6 +1875,8 @@ pub struct RuntimeSessionService {
     pub(super) registry_effects_use_adapter: bool,
     /// Whether configuration writes are persisted by an adapter.
     pub(super) config_effects_use_adapter: bool,
+    /// Whether non-blocking program hooks execute through an adapter.
+    pub(super) hook_effects_use_adapter: bool,
     /// Stores the paste buffers value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

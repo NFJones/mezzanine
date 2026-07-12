@@ -4,7 +4,6 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::service_state::RuntimeExternalEffectMode;
 use crate::terminal::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
 
 use super::{
@@ -308,12 +307,12 @@ impl RuntimeSessionService {
             foreground_title_idle_sync_polls: 0,
             pane_exit_records: BTreeMap::new(),
             active_pane_pipes: BTreeMap::new(),
-            external_effect_mode: RuntimeExternalEffectMode::Inline,
             audit_effects_use_adapter: false,
             pane_pipe_effects_use_adapter: false,
             transcript_effects_use_adapter: false,
             registry_effects_use_adapter: false,
             config_effects_use_adapter: false,
+            hook_effects_use_adapter: false,
             paste_buffers: PasteBuffers::default_limit(),
             active_paste_buffer: None,
             host_clipboard: HostClipboard::system(),
@@ -508,11 +507,6 @@ impl RuntimeSessionService {
         self.session_registry = Some(registry);
     }
 
-    /// Enables or disables deferred registry persistence for async actor owners.
-    pub(crate) fn use_external_effect_adapter(&mut self) {
-        self.external_effect_mode = RuntimeExternalEffectMode::Adapter;
-    }
-
     /// Assigns audit persistence to the external effect adapter.
     ///
     /// Actor owners call this explicitly so writers installed by later config
@@ -544,9 +538,9 @@ impl RuntimeSessionService {
         self.config_effects_use_adapter = true;
     }
 
-    /// Returns whether transitions must queue external work for an adapter.
-    pub(super) const fn external_effects_use_adapter(&self) -> bool {
-        self.external_effect_mode.uses_adapter()
+    /// Assigns non-blocking program-hook execution to the external effect adapter.
+    pub(crate) fn use_hook_effect_adapter(&mut self) {
+        self.hook_effects_use_adapter = true;
     }
 
     /// Applies a resize-debounce timer after the adapter validates its key.
