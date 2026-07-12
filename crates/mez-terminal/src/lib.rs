@@ -16,6 +16,8 @@ pub mod mouse;
 pub mod profile;
 /// Pane-facing terminal protocol event contracts.
 pub mod protocol;
+/// Configuration errors for one emulated terminal screen.
+pub mod screen;
 /// Restorable terminal mode and parser state contracts.
 pub mod state;
 /// Styled terminal-cell contracts produced by terminal emulation.
@@ -28,6 +30,8 @@ pub use mouse::{MouseButton, MouseEvent, MouseEventKind, MouseModifiers, parse_s
 pub use geometry::{TerminalSize, TerminalSizeError};
 
 pub use protocol::{MAX_OSC_STRING_BYTES, TerminalOscEvent};
+
+pub use screen::TerminalScreenConfigError;
 
 pub use history::{
     DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer, HistoryConfigError,

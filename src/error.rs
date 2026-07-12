@@ -20,6 +20,12 @@ impl From<mez_terminal::TerminalSizeError> for MezError {
     }
 }
 
+impl From<mez_terminal::TerminalScreenConfigError> for MezError {
+    fn from(error: mez_terminal::TerminalScreenConfigError) -> Self {
+        Self::invalid_args(error.message())
+    }
+}
+
 /// Carries Mez Error Kind state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move

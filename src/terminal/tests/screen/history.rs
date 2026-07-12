@@ -91,6 +91,27 @@ fn terminal_screen_relimits_history_buffer() {
     );
 }
 
+/// Verifies screen history configuration failures retain terminal-owned diagnostics.
+///
+/// This regression protects the compatibility boundary so screen construction
+/// and live history updates do not depend on the product error aggregate.
+#[test]
+fn terminal_screen_reports_terminal_owned_history_configuration_errors() {
+    let size = Size::new(8, 2).unwrap();
+    let constructor_error = TerminalScreen::new(size, 0).unwrap_err();
+    assert_eq!(
+        constructor_error.message(),
+        "history buffer limit must be greater than zero"
+    );
+
+    let mut screen = TerminalScreen::new(size, 4).unwrap();
+    let update_error = screen.set_history_rotate_lines(0).unwrap_err();
+    assert_eq!(
+        update_error.message(),
+        "history buffer rotation line count must be greater than zero"
+    );
+}
+
 /// Verifies default history limit matches spec.
 ///
 /// This regression scenario documents the behavior being protected so a

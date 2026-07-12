@@ -5,14 +5,14 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    BTreeMap, DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer, MezError, Result, Size,
-    terminal_char_width, terminal_grapheme_width, terminal_graphemes, terminal_text_width,
+    BTreeMap, DEFAULT_HISTORY_ROTATE_LINES, HistoryBuffer, Size, terminal_char_width,
+    terminal_grapheme_width, terminal_graphemes, terminal_text_width,
 };
 
 pub use mez_terminal::{
     GraphicRendition, MAX_OSC_STRING_BYTES, TerminalColor, TerminalCursorState, TerminalModeState,
-    TerminalOscEvent, TerminalSavedDecPrivateMode, TerminalSavedState, TerminalStyleSpan,
-    TerminalStyledLine, tracked_dec_private_mode,
+    TerminalOscEvent, TerminalSavedDecPrivateMode, TerminalSavedState, TerminalScreenConfigError,
+    TerminalStyleSpan, TerminalStyledLine, tracked_dec_private_mode,
 };
 
 // Terminal screen parser, OSC events, and alternate-screen state.
@@ -751,7 +751,10 @@ impl TerminalScreen {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn new(size: Size, history_limit: usize) -> Result<Self> {
+    pub fn new(
+        size: Size,
+        history_limit: usize,
+    ) -> std::result::Result<Self, TerminalScreenConfigError> {
         Self::new_with_history_config(size, history_limit, DEFAULT_HISTORY_ROTATE_LINES)
     }
 
@@ -761,7 +764,7 @@ impl TerminalScreen {
         size: Size,
         history_limit: usize,
         history_rotate_lines: usize,
-    ) -> Result<Self> {
+    ) -> std::result::Result<Self, TerminalScreenConfigError> {
         Ok(Self {
             size,
             cells: blank_cells(size),
@@ -796,8 +799,7 @@ impl TerminalScreen {
             saved_dec_private_modes: BTreeMap::new(),
             scroll_region: None,
             alternate: AlternateScreenState::new(),
-            history: HistoryBuffer::new_with_rotation(history_limit, history_rotate_lines)
-                .map_err(|error| MezError::invalid_args(error.message()))?,
+            history: HistoryBuffer::new_with_rotation(history_limit, history_rotate_lines)?,
             normal_viewport_detached_from_history: false,
             activity_events: 0,
             bell_events: 0,
@@ -1627,17 +1629,21 @@ impl TerminalScreen {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn set_history_limit(&mut self, limit: usize) -> Result<()> {
-        self.history
-            .set_limit(limit)
-            .map_err(|error| MezError::invalid_args(error.message()))
+    pub fn set_history_limit(
+        &mut self,
+        limit: usize,
+    ) -> std::result::Result<(), TerminalScreenConfigError> {
+        self.history.set_limit(limit).map_err(Into::into)
     }
 
     /// Updates the history rotation batch size.
-    pub fn set_history_rotate_lines(&mut self, rotate_lines: usize) -> Result<()> {
+    pub fn set_history_rotate_lines(
+        &mut self,
+        rotate_lines: usize,
+    ) -> std::result::Result<(), TerminalScreenConfigError> {
         self.history
             .set_rotate_lines(rotate_lines)
-            .map_err(|error| MezError::invalid_args(error.message()))
+            .map_err(Into::into)
     }
 
     /// Runs the clear history operation for this subsystem.
