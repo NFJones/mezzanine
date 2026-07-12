@@ -179,7 +179,7 @@ impl AsyncAttachedTerminalIo for FakeAttachedTerminalLoopIo {
     fn write_styled_output_with_modes<'a>(
         &'a mut self,
         lines: &'a [String],
-        line_style_spans: &'a [Vec<crate::terminal::TerminalStyleSpan>],
+        line_style_spans: &'a [Vec<mez_terminal::TerminalStyleSpan>],
         modes: AttachedTerminalOutputModes,
     ) -> super::AsyncTerminalIoFuture<'a, usize> {
         Box::pin(async move {
@@ -321,7 +321,7 @@ impl AsyncAttachedTerminalIo for FakeResizingAttachedTerminalLoopIo {
     fn write_styled_output_with_modes<'a>(
         &'a mut self,
         lines: &'a [String],
-        line_style_spans: &'a [Vec<crate::terminal::TerminalStyleSpan>],
+        line_style_spans: &'a [Vec<mez_terminal::TerminalStyleSpan>],
         modes: AttachedTerminalOutputModes,
     ) -> super::AsyncTerminalIoFuture<'a, usize> {
         Box::pin(async move {
@@ -433,7 +433,7 @@ impl AsyncAttachedTerminalIo for IdleAsyncAttachedTerminalLoopIo {
     fn write_styled_output_with_modes<'a>(
         &'a mut self,
         lines: &'a [String],
-        _line_style_spans: &'a [Vec<crate::terminal::TerminalStyleSpan>],
+        _line_style_spans: &'a [Vec<mez_terminal::TerminalStyleSpan>],
         _modes: AttachedTerminalOutputModes,
     ) -> super::AsyncTerminalIoFuture<'a, usize> {
         Box::pin(async move {
@@ -514,7 +514,7 @@ impl AsyncAttachedTerminalIo for InvalidatingIdleAsyncAttachedTerminalLoopIo {
     fn write_styled_output_with_modes<'a>(
         &'a mut self,
         lines: &'a [String],
-        _line_style_spans: &'a [Vec<crate::terminal::TerminalStyleSpan>],
+        _line_style_spans: &'a [Vec<mez_terminal::TerminalStyleSpan>],
         _modes: AttachedTerminalOutputModes,
     ) -> super::AsyncTerminalIoFuture<'a, usize> {
         Box::pin(async move {
@@ -610,7 +610,7 @@ impl AsyncAttachedTerminalIo for SupersedablePendingOutputIo {
     fn write_styled_output_with_modes<'a>(
         &'a mut self,
         lines: &'a [String],
-        _line_style_spans: &'a [Vec<crate::terminal::TerminalStyleSpan>],
+        _line_style_spans: &'a [Vec<mez_terminal::TerminalStyleSpan>],
         _modes: AttachedTerminalOutputModes,
     ) -> super::AsyncTerminalIoFuture<'a, usize> {
         Box::pin(async move {

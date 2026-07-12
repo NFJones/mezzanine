@@ -254,7 +254,7 @@ async fn async_attached_terminal_loop_times_out_stalled_readiness_poll() {
         fn write_styled_output_with_modes<'a>(
             &'a mut self,
             _lines: &'a [String],
-            _line_style_spans: &'a [Vec<crate::terminal::TerminalStyleSpan>],
+            _line_style_spans: &'a [Vec<mez_terminal::TerminalStyleSpan>],
             _modes: AttachedTerminalOutputModes,
         ) -> AsyncTerminalIoFuture<'a, usize> {
             Box::pin(async {

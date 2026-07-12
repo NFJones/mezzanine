@@ -215,7 +215,7 @@ async fn queue_and_flush_async_attached_terminal_output<I>(
     client_id: ClientId,
     schedule_render_timers: bool,
     lines: Vec<String>,
-    line_style_spans: Vec<Vec<crate::terminal::TerminalStyleSpan>>,
+    line_style_spans: Vec<Vec<mez_terminal::TerminalStyleSpan>>,
     modes: AttachedTerminalOutputModes,
 ) -> Result<super::AsyncClientOutputFlushServiceReport>
 where
