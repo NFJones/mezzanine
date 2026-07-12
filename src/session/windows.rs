@@ -948,13 +948,32 @@ impl Session {
         primary_client_id: &ClientId,
         size: Size,
     ) -> Result<()> {
+        self.resize_authoritative_terminal_transition(primary_client_id, size)?;
+        Ok(())
+    }
+
+    /// Updates the primary terminal size and returns all resulting pane-size effects.
+    pub fn resize_authoritative_terminal_transition(
+        &mut self,
+        primary_client_id: &ClientId,
+        size: Size,
+    ) -> Result<Vec<PaneResizeEffect>> {
         self.require_primary(primary_client_id)?;
         self.authoritative_size = size;
         for window in &mut self.windows {
             window.resize_window(size)?;
         }
+        let effects = self
+            .windows
+            .iter()
+            .flat_map(|window| window.panes())
+            .map(|pane| PaneResizeEffect {
+                pane_id: pane.id.clone(),
+                size: pane.size,
+            })
+            .collect();
         self.record_event();
-        Ok(())
+        Ok(effects)
     }
 
     /// Runs the set pane live state operation for this subsystem.

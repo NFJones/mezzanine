@@ -661,32 +661,39 @@ impl RuntimeSessionService {
             let Some(primary_pid) = self.primary_pid_for_live_pane_process(pane_id) else {
                 continue;
             };
+            let process_size = self
+                .session
+                .windows()
+                .iter()
+                .find(|window| window.id == descriptor.window_id)
+                .and_then(|window| self.pane_process_size_for(window, pane_id))
+                .unwrap_or(effect.size);
             if self.pane_processes.contains_pane(pane_id) {
-                self.pane_processes.resize_pane(pane_id, effect.size)?;
+                self.pane_processes.resize_pane(pane_id, process_size)?;
             } else if self.pane_process_is_adapter_owned(pane_id) {
                 self.queued_pane_resize_effects.insert(
                     pane_id.to_string(),
                     RuntimeSideEffect::ResizePane {
                         pane_id: pane_id.to_string(),
-                        size: effect.size,
+                        size: process_size,
                     },
                 );
             }
             if let Some(screen) = self.pane_screens.get_mut(descriptor.pane_id.as_str()) {
-                screen.resize(effect.size);
+                screen.resize(process_size);
             }
             if let Some(screen) = self
                 .pane_transaction_osc_screens
                 .get_mut(descriptor.pane_id.as_str())
             {
-                screen.resize(effect.size);
+                screen.resize(process_size);
             }
             let update = PaneResizeUpdate {
                 session_id: self.session.id.to_string(),
                 window_id: descriptor.window_id.to_string(),
                 pane_id: descriptor.pane_id.to_string(),
                 primary_pid,
-                size: effect.size,
+                size: process_size,
                 registry_update: self.registry_update_plan(),
             };
             self.append_pane_resize_event(&update)?;
@@ -704,11 +711,12 @@ impl RuntimeSessionService {
     ) -> Result<Vec<PaneResizeUpdate>> {
         self.require_live()?;
         validate_pane_size_for_resize(size)?;
-        self.session
-            .resize_authoritative_terminal(primary_client_id, size)?;
+        let effects = self
+            .session
+            .resize_authoritative_terminal_transition(primary_client_id, size)?;
         self.mouse_resize_drag_state = None;
         self.refresh_active_copy_mode_viewports()?;
-        let updates = self.sync_tracked_pty_sizes()?;
+        let updates = self.sync_pane_resize_effects(&effects)?;
         self.append_lifecycle_event(
             EventKind::PaneChanged,
             format!(

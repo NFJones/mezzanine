@@ -924,6 +924,36 @@ fn pane_geometry_transition_describes_resulting_pane_sizes() {
     assert_eq!(effect_sizes, resulting_sizes);
 }
 
+/// Verifies authoritative terminal resize reports pane sizes across all windows.
+///
+/// Product adapters use this complete transition to resize every tracked PTY
+/// and terminal surface without re-reading the session layout.
+#[test]
+fn authoritative_terminal_resize_transition_describes_all_panes() {
+    let mut session = test_session();
+    let primary = session.attach_primary("primary", true).unwrap();
+    session
+        .split_active_pane(&primary, SplitDirection::Vertical)
+        .unwrap();
+    session.new_window(&primary, "second", true).unwrap();
+
+    let effects = session
+        .resize_authoritative_terminal_transition(&primary, Size::new(100, 30).unwrap())
+        .unwrap();
+
+    let resulting_sizes = session
+        .windows()
+        .iter()
+        .flat_map(|window| window.panes())
+        .map(|pane| (pane.id.clone(), pane.size))
+        .collect::<Vec<_>>();
+    let effect_sizes = effects
+        .into_iter()
+        .map(|effect| (effect.pane_id, effect.size))
+        .collect::<Vec<_>>();
+    assert_eq!(effect_sizes, resulting_sizes);
+}
+
 /// Verifies primary can swap panes in active window.
 ///
 /// This regression scenario documents the behavior being protected so a
