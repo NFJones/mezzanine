@@ -94,7 +94,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                     )),
                     RuleDecision::Prompt
                         if self.permissions.approval_policy
-                            == crate::permissions::ApprovalPolicy::AutoAllow
+                            == mez_agent::ApprovalPolicy::AutoAllow
                             && action_supports_auto_allow(action) =>
                     {
                         let reason = action_auto_allow_reason(action);
@@ -167,7 +167,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                     )),
                     RuleDecision::Prompt
                         if self.permissions.approval_policy
-                            == crate::permissions::ApprovalPolicy::AutoAllow
+                            == mez_agent::ApprovalPolicy::AutoAllow
                             && action_supports_auto_allow(action) =>
                     {
                         let reason = action_auto_allow_reason(action);
@@ -269,8 +269,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
             } => {
                 let policy_allowed = action_prompt_gate_satisfied_by_policy(self.permissions);
                 let auto_allowed = !policy_allowed
-                    && self.permissions.approval_policy
-                        == crate::permissions::ApprovalPolicy::AutoAllow
+                    && self.permissions.approval_policy == mez_agent::ApprovalPolicy::AutoAllow
                     && action_supports_auto_allow(action);
                 if !policy_allowed && !auto_allowed {
                     return Ok(ActionResult::blocked(
@@ -322,8 +321,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                     approval_required && action_prompt_gate_satisfied_by_policy(self.permissions);
                 let auto_allowed = approval_required
                     && !policy_allowed
-                    && self.permissions.approval_policy
-                        == crate::permissions::ApprovalPolicy::AutoAllow
+                    && self.permissions.approval_policy == mez_agent::ApprovalPolicy::AutoAllow
                     && action_supports_auto_allow(action);
                 if approval_required && !policy_allowed && !auto_allowed {
                     return Ok(ActionResult::blocked(
@@ -449,7 +447,7 @@ fn action_auto_allow_reason(action: &AgentAction) -> String {
 /// prompt without user interaction.
 fn action_prompt_gate_satisfied_by_policy(permissions: &PermissionPolicy) -> bool {
     permissions.approval_bypass()
-        || permissions.approval_policy == crate::permissions::ApprovalPolicy::FullAccess
+        || permissions.approval_policy == mez_agent::ApprovalPolicy::FullAccess
 }
 
 /// Builds structured approval metadata for actions accepted by policy rather

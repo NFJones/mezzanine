@@ -13,9 +13,9 @@ use secrecy::{ExposeSecret, SecretString};
 use crate::auth::AuthStore;
 use crate::error::{MezError, Result};
 use crate::mcp::{McpRegistry, McpToolCallPlan, McpToolCallResponse};
-use crate::permissions::{PathScopes, PermissionPolicy, RuleDecision, SessionApprovalStore};
+use crate::permissions::{PathScopes, PermissionPolicy, SessionApprovalStore};
 use crate::transcript::{AgentTranscriptStore, TranscriptEntry, TranscriptRole};
-use mez_agent::McpPromptTool;
+use mez_agent::{McpPromptTool, RuleDecision};
 
 /// Exposes the actions module boundary.
 ///

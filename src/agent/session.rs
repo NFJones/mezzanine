@@ -909,7 +909,7 @@ pub(super) fn agent_shell_permissions_display(policy: &PermissionPolicy) -> Stri
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn permission_preset_name(preset: crate::permissions::PermissionPreset) -> &'static str {
+pub(super) fn permission_preset_name(preset: mez_agent::PermissionPreset) -> &'static str {
     preset.as_str()
 }
 
@@ -918,7 +918,7 @@ pub(super) fn permission_preset_name(preset: crate::permissions::PermissionPrese
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn approval_policy_name(policy: crate::permissions::ApprovalPolicy) -> &'static str {
+pub(super) fn approval_policy_name(policy: mez_agent::ApprovalPolicy) -> &'static str {
     policy.as_str()
 }
 
