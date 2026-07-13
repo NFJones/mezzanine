@@ -8,9 +8,11 @@
 use super::{AgentContext, ContextBlock, ContextSourceKind};
 use crate::agent::validate_non_empty;
 use crate::error::Result;
-use crate::scheduler::{AgentScheduler, runnable_agent_ids};
 use mez_agent::instructions::DiscoveredInstructionFile;
-use mez_agent::{McpPromptServer, McpPromptSummary, McpPromptTool, MemoryContextRecord};
+use mez_agent::{
+    AgentScheduler, McpPromptServer, McpPromptSummary, McpPromptTool, MemoryContextRecord,
+    runnable_agent_ids,
+};
 
 /// Appends selected memory records to provider-bound context.
 ///

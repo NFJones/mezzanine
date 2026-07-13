@@ -400,7 +400,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
 
 /// Returns a delegated subagent scope violation for one local action.
 fn subagent_scope_violation(
-    scope: &crate::subagent::SubagentScopeDeclaration,
+    scope: &mez_agent::SubagentScopeDeclaration,
     action: &AgentAction,
     policy_command: &str,
 ) -> Result<Option<String>> {

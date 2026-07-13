@@ -37,7 +37,7 @@ use super::recovery::{
     summarize_provider_failure_execution,
 };
 use super::{AgentTurnExecution, turn_state_from_action_results};
-use crate::subagent::SubagentScopeDeclaration;
+use mez_agent::SubagentScopeDeclaration;
 
 /// Maximum number of ephemeral provider retries after a MAAP validation error.
 ///
