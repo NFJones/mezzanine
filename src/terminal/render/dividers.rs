@@ -5,7 +5,8 @@
 //! and styled/plain divider canvas writes.
 
 use crate::layout::{PaneGeometry, Window};
-use crate::terminal::{GraphicRendition, MouseBorderCell, TerminalStyleSpan, UiTheme};
+use crate::terminal::{GraphicRendition, TerminalStyleSpan, UiTheme};
+use mez_mux::input::MouseBorderCell;
 
 pub use mez_mux::presentation::pane_frame_merges_into_divider;
 use mez_mux::presentation::{PaneDividerCell, pane_divider_cells};

@@ -6,9 +6,7 @@
 
 use super::{CopyPosition, Result};
 
-pub use mez_mux::input::{
-    MouseBorderCell, MousePaneRegion, MousePolicy, MouseWindowFrameCell, MouseWindowGroupFrameCell,
-};
+pub use mez_mux::input::MousePolicy;
 pub use mez_terminal::{MouseButton, MouseEvent, MouseEventKind, MouseModifiers};
 
 // Mouse event parsing and policy classification.

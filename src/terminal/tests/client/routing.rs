@@ -3,12 +3,14 @@
 use crate::terminal::{
     AttachedTerminalFdReadiness, AttachedTerminalFdRole, BTreeMap, ClientStatusKind,
     ClientStatusLine, ClientViewRole, CopyModeKeyAction, CopyPosition, KeyChord, KeyCode,
-    MouseAction, MouseBorderCell, MousePaneAgentSelectorCell, MousePaneAgentStatusCell,
-    MousePaneRegion, MouseWindowActionFrameCell, MouseWindowFrameCell, MouseWindowGroupFrameCell,
+    MouseAction, MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MouseWindowActionFrameCell,
     MuxAction, PaneAgentStatusField, RenderedClientView, Size, TerminalClientLoopAction,
     TerminalClientLoopConfig, TerminalCursorStyle, TerminalFdInterest, TerminalScreen, UiTheme,
     Window, WindowFrameAction, draw_window_from_screens, plan_attached_terminal_client_step,
     route_client_input, route_client_input_actions,
+};
+use mez_mux::input::{
+    MouseBorderCell, MousePaneRegion, MouseWindowFrameCell, MouseWindowGroupFrameCell,
 };
 use unicode_width::UnicodeWidthStr;
 

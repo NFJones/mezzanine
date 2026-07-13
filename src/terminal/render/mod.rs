@@ -7,12 +7,12 @@
 use super::{
     AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, BTreeMap, ClientStatusKind, ClientStatusLine,
     ClientViewRole, CopyPosition, GraphicRendition, MezError, MousePaneAgentStatusCell,
-    MouseWindowActionFrameCell, MouseWindowFrameCell, MouseWindowGroupFrameCell,
-    PaneAgentStatusField, PaneGeometry, PaneRenderInput, ReadlinePromptRegion, RenderedClientView,
-    Result, Size, TerminalClientLoopConfig, TerminalFrameContext, TerminalPaneFrameContext,
-    TerminalScreen, TerminalStyleSpan, TerminalStyledLine, UiColorPair, UiTheme, Window,
-    WindowFrameAction,
+    MouseWindowActionFrameCell, PaneAgentStatusField, PaneGeometry, PaneRenderInput,
+    ReadlinePromptRegion, RenderedClientView, Result, Size, TerminalClientLoopConfig,
+    TerminalFrameContext, TerminalPaneFrameContext, TerminalScreen, TerminalStyleSpan,
+    TerminalStyledLine, UiColorPair, UiTheme, Window, WindowFrameAction,
 };
+use mez_mux::input::{MouseWindowFrameCell, MouseWindowGroupFrameCell};
 use mez_mux::presentation::{
     TerminalFramePosition, TerminalFrameStyle, TerminalWindowFrameContext,
     TerminalWindowGroupFrameContext, TerminalWindowStatusContext,

@@ -120,9 +120,8 @@ pub use mez_terminal::{
     TerminalSavedState, TerminalScreen, TerminalStyleSpan, TerminalStyledLine,
 };
 pub use mouse::{
-    CopyModeKeyAction, MouseAction, MouseBorderCell, MouseButton, MouseEvent, MouseEventKind,
-    MouseModifiers, MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MousePaneRegion,
-    MousePolicy, MouseWindowActionFrameCell, MouseWindowFrameCell, MouseWindowGroupFrameCell,
+    CopyModeKeyAction, MouseAction, MouseButton, MouseEvent, MouseEventKind, MouseModifiers,
+    MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MousePolicy, MouseWindowActionFrameCell,
     PaneAgentStatusField, WindowFrameAction, WindowFrameCommandKind, classify_mouse_event,
     parse_sgr_mouse,
 };

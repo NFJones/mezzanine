@@ -4,6 +4,8 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+use mez_mux::input::{MouseBorderCell, MousePaneRegion, MouseWindowFrameCell};
+
 use super::service_state::{
     RunningShellTransactionKind, RuntimeDisplayOverlay, RuntimeDisplayOverlaySearchMatch,
     RuntimeDisplayOverlaySelection, RuntimeDisplayOverlaySelectionKind, RuntimeMouseClickState,
@@ -12,11 +14,11 @@ use super::service_state::{
 use super::{
     AgentShellVisibility, AgentTurnRecord, AgentTurnState, AttachedClientStepApplication,
     AttachedTerminalClientStepPlan, ClientViewRole, CopyMode, CopyModeKeyAction, EventKind,
-    MezError, MouseAction, MouseBorderCell, MousePaneRegion, MouseSelectionDragState,
-    MouseWindowActionFrameCell, MouseWindowFrameCell, MuxAction, ObserverDecisionState,
-    PaneDescriptor, PaneGeometry, PaneInputDispatch, PaneNavigationDirection, PasteBufferTarget,
-    ReadlineInputDecoder, ReadlineOutcome, ReadlinePrompt, ReadlinePromptKind, RenderedClientView,
-    Result, RuntimeAgentModifiedFileSummary, RuntimeAgentPromptInput, RuntimeSessionService,
+    MezError, MouseAction, MouseSelectionDragState, MouseWindowActionFrameCell, MuxAction,
+    ObserverDecisionState, PaneDescriptor, PaneGeometry, PaneInputDispatch,
+    PaneNavigationDirection, PasteBufferTarget, ReadlineInputDecoder, ReadlineOutcome,
+    ReadlinePrompt, ReadlinePromptKind, RenderedClientView, Result,
+    RuntimeAgentModifiedFileSummary, RuntimeAgentPromptInput, RuntimeSessionService,
     RuntimeSideEffect, Size, SplitDirection, TerminalClientLoopAction, TerminalClientLoopConfig,
     TerminalFrameContext, TerminalScreen, WindowFocusTarget, WindowFrameAction,
     agent_prompt_reserved_line_count, current_unix_millis, current_unix_seconds, json_escape,

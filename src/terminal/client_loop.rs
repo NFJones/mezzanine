@@ -2961,7 +2961,7 @@ fn set_mouse_region_active_at(config: &mut TerminalClientLoopConfig, column: usi
 /// on duplicated control-flow logic.
 fn application_mouse_forwarding_bytes(
     event: MouseEvent,
-    region: &super::MousePaneRegion,
+    region: &mez_mux::input::MousePaneRegion,
 ) -> Option<Vec<u8>> {
     let local_column = event.column.checked_sub(region.column)?.saturating_add(1);
     let local_row = event.row.checked_sub(region.row)?.saturating_add(1);

@@ -875,7 +875,7 @@ impl RuntimeSessionService {
     fn active_window_group_mouse_frame_cells(
         &self,
         frame_context: &TerminalFrameContext,
-    ) -> Vec<crate::terminal::MouseWindowGroupFrameCell> {
+    ) -> Vec<mez_mux::input::MouseWindowGroupFrameCell> {
         let Some(window) = self.session.active_window() else {
             return Vec::new();
         };
