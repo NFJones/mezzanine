@@ -11,7 +11,7 @@ use super::{
     MODEL_CONTEXT_BLOCK_LIMIT_BYTES, MODEL_CONTEXT_COMPACTED_PREFIX, ModelContextCompactionReport,
     model_context_block_header,
 };
-use crate::error::Result;
+use mez_agent::AgentContextResult;
 use std::collections::HashSet;
 
 /// Compacts provider-bound context blocks after a trigger has fired.
@@ -24,7 +24,7 @@ use std::collections::HashSet;
 pub fn compact_model_context_for_budget(
     context: AgentContext,
     context_budget_words: usize,
-) -> Result<(AgentContext, ModelContextCompactionReport)> {
+) -> AgentContextResult<(AgentContext, ModelContextCompactionReport)> {
     compact_model_context_for_budget_with_retained_tail_percent(
         context,
         context_budget_words,
@@ -37,7 +37,7 @@ pub fn compact_model_context_for_budget_with_retained_tail_percent(
     context: AgentContext,
     context_budget_words: usize,
     retained_tail_percent: usize,
-) -> Result<(AgentContext, ModelContextCompactionReport)> {
+) -> AgentContextResult<(AgentContext, ModelContextCompactionReport)> {
     let blocks = prepare_model_context_blocks(context.blocks);
     let (blocks, report) =
         compact_model_context_blocks(&blocks, context_budget_words, true, retained_tail_percent);

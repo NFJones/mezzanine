@@ -4,10 +4,8 @@
 //! context block storage: model messages, model profiles and overrides,
 //! selected-profile metadata, request envelopes, and profile selection helpers.
 
-use super::super::validate_non_empty;
 use super::{AllowedActionSet, ContextSourceKind, ModelInteractionKind};
-use crate::error::Result;
-use mez_agent::McpPromptTool;
+use mez_agent::{AgentContextResult, McpPromptTool, validate_context_required};
 
 /// Fallback context window when the model profile does not carry one.
 const MODEL_CONTEXT_FALLBACK_WINDOW_TOKENS: usize = 128 * 1024;
@@ -544,8 +542,8 @@ pub struct ModelRequest {
 pub fn select_model_profile(
     overrides: &ModelProfileOverrides,
     configured_default: &str,
-) -> Result<SelectedModelProfile> {
-    validate_non_empty("configured default model profile", configured_default)?;
+) -> AgentContextResult<SelectedModelProfile> {
+    validate_context_required("configured default model profile", configured_default)?;
     let candidates = [
         (
             overrides.subagent_profile.as_deref(),
@@ -574,7 +572,7 @@ pub fn select_model_profile(
     ];
     for (profile, source) in candidates {
         if let Some(profile) = profile {
-            validate_non_empty("model profile override", profile)?;
+            validate_context_required("model profile override", profile)?;
             return Ok(SelectedModelProfile {
                 profile: profile.to_string(),
                 source,

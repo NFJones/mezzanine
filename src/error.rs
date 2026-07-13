@@ -57,6 +57,12 @@ impl From<mez_agent::SchedulerError> for MezError {
     }
 }
 
+impl From<mez_agent::AgentContextError> for MezError {
+    fn from(error: mez_agent::AgentContextError) -> Self {
+        Self::invalid_args(error.message())
+    }
+}
+
 impl From<mez_mux::MuxError> for MezError {
     fn from(error: mez_mux::MuxError) -> Self {
         match error.kind() {

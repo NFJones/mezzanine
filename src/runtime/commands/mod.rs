@@ -686,7 +686,7 @@ impl RuntimeSessionService {
                 content: format!("Response style preference for this pane: {style}."),
             });
         }
-        AgentContext::new(context.blocks)
+        Ok(AgentContext::new(context.blocks)?)
     }
 
     /// Runs the start agent prompt turn operation for this subsystem.

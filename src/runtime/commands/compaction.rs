@@ -809,13 +809,13 @@ pub(super) fn runtime_model_compact_memory_content(
 pub(super) fn runtime_compaction_context_without_transcript_blocks(
     context: AgentContext,
 ) -> Result<AgentContext> {
-    AgentContext::new(
+    Ok(AgentContext::new(
         context
             .blocks
             .into_iter()
             .filter(|block| !runtime_context_block_is_transcript_replay(block))
             .collect(),
-    )
+    )?)
 }
 
 /// Returns true when a context block is raw transcript replay.

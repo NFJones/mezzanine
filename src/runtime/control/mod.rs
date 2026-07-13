@@ -326,7 +326,7 @@ impl RuntimeSessionService {
             .iter()
             .map(mez_agent::MemoryContextRecord::from)
             .collect::<Vec<_>>();
-        append_memory_context(context, &prompt_memory_records, 1)
+        Ok(append_memory_context(context, &prompt_memory_records, 1)?)
     }
 
     /// Formats loaded skill context with runtime-only additions where needed.

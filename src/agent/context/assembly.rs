@@ -6,7 +6,7 @@
 
 use super::super::{
     AgentPromptProfile, AgentTurnRecord, ProviderTranscriptEvent,
-    build_agent_system_prompt_with_repository_instructions, role_for_source, validate_non_empty,
+    build_agent_system_prompt_with_repository_instructions, role_for_source,
 };
 use super::evidence::prepare_model_context_blocks;
 use super::skills::constrain_skill_actions_for_loaded_context;
@@ -16,7 +16,10 @@ use super::{
     ModelMessageRole, ModelProfile, ModelRequest, model_context_block_header,
 };
 use crate::error::Result;
-use mez_agent::{McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer};
+use mez_agent::{
+    McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer,
+    validate_context_required,
+};
 
 /// Runs the assemble model request operation for this subsystem.
 ///
@@ -47,9 +50,9 @@ pub fn assemble_model_request_with_retained_tail_percent(
     context: &AgentContext,
     _retained_tail_percent: usize,
 ) -> Result<ModelRequest> {
-    validate_non_empty("model provider", &profile.provider)?;
-    validate_non_empty("model", &profile.model)?;
-    validate_non_empty("turn_id", &turn.turn_id)?;
+    validate_context_required("model provider", &profile.provider)?;
+    validate_context_required("model", &profile.model)?;
+    validate_context_required("turn_id", &turn.turn_id)?;
 
     let blocks = prepare_model_context_blocks(context.blocks.clone());
     let repository_instruction_blocks = blocks

@@ -6,12 +6,10 @@
 //! ordering contracts used before provider request assembly.
 
 use super::{AgentContext, ContextBlock, ContextSourceKind};
-use crate::agent::validate_non_empty;
-use crate::error::Result;
 use mez_agent::instructions::DiscoveredInstructionFile;
 use mez_agent::{
-    AgentScheduler, McpPromptServer, McpPromptSummary, McpPromptTool, MemoryContextRecord,
-    runnable_agent_ids,
+    AgentContextResult, AgentScheduler, McpPromptServer, McpPromptSummary, McpPromptTool,
+    MemoryContextRecord, runnable_agent_ids, validate_context_required,
 };
 
 /// Appends selected memory records to provider-bound context.
@@ -23,7 +21,7 @@ pub fn append_memory_context(
     mut context: AgentContext,
     records: &[MemoryContextRecord],
     max_records: usize,
-) -> Result<AgentContext> {
+) -> AgentContextResult<AgentContext> {
     if max_records == 0 || records.is_empty() {
         return Ok(context);
     }
@@ -62,7 +60,7 @@ const MCP_INTEGRATIONS_CONTEXT_LABEL: &str = "mcp integrations";
 pub fn append_mcp_context(
     mut context: AgentContext,
     summary: &McpPromptSummary,
-) -> Result<AgentContext> {
+) -> AgentContextResult<AgentContext> {
     context.blocks.retain(|block| !is_mcp_context_block(block));
     let invocation = explicit_mcp_invocation_summary(&context, summary);
     if invocation.available_servers.is_empty()
@@ -86,7 +84,7 @@ pub fn invoked_mcp_tools_for_context(
 fn append_filtered_mcp_context(
     mut context: AgentContext,
     summary: &McpPromptSummary,
-) -> Result<AgentContext> {
+) -> AgentContextResult<AgentContext> {
     if summary.available_servers.is_empty()
         && summary.available_tools.is_empty()
         && summary.unavailable_servers.is_empty()
@@ -449,7 +447,7 @@ pub fn append_project_guidance_context(
     mut context: AgentContext,
     files: &[DiscoveredInstructionFile],
     max_files: usize,
-) -> Result<AgentContext> {
+) -> AgentContextResult<AgentContext> {
     if max_files == 0 || files.is_empty() {
         return Ok(context);
     }
@@ -468,8 +466,8 @@ pub fn append_project_guidance_context(
     });
 
     for file in selected_files.iter().take(max_files) {
-        validate_non_empty("project instruction path", &file.path)?;
-        validate_non_empty("project instruction scope", &file.scope_root)?;
+        validate_context_required("project instruction path", &file.path)?;
+        validate_context_required("project instruction scope", &file.scope_root)?;
         if file.content.is_empty() {
             continue;
         }
@@ -518,7 +516,7 @@ pub fn set_project_guidance_context(
     mut context: AgentContext,
     files: &[DiscoveredInstructionFile],
     max_files: usize,
-) -> Result<AgentContext> {
+) -> AgentContextResult<AgentContext> {
     context
         .blocks
         .retain(|block| block.source != ContextSourceKind::ProjectGuidance);
@@ -531,7 +529,7 @@ pub fn set_project_guidance_context(
 /// actions are planned or executed. Models receive explicit action results for
 /// denials or blocked approvals instead of raw approval-mode labels that can be
 /// mistaken for user-facing task constraints.
-pub fn append_permission_policy_context(context: AgentContext) -> Result<AgentContext> {
+pub fn append_permission_policy_context(context: AgentContext) -> AgentContextResult<AgentContext> {
     Ok(context)
 }
 
@@ -542,7 +540,7 @@ pub fn append_permission_policy_context(context: AgentContext) -> Result<AgentCo
 pub fn append_scheduler_context(
     mut context: AgentContext,
     scheduler: &AgentScheduler,
-) -> Result<AgentContext> {
+) -> AgentContextResult<AgentContext> {
     context.blocks.retain(|block| {
         block.source != ContextSourceKind::Policy || block.label != "scheduler state"
     });

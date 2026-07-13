@@ -4,7 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::{MezError, Result, validate_non_empty};
+use mez_agent::{AgentContextError, AgentContextResult, validate_context_required};
 
 mod appenders;
 mod assembly;
@@ -406,14 +406,14 @@ impl AgentContext {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn new(blocks: Vec<ContextBlock>) -> Result<Self> {
+    pub fn new(blocks: Vec<ContextBlock>) -> AgentContextResult<Self> {
         if blocks.is_empty() {
-            return Err(MezError::invalid_args(
+            return Err(AgentContextError::new(
                 "agent context must contain at least one context block",
             ));
         }
         for block in &blocks {
-            validate_non_empty("context label", &block.label)?;
+            validate_context_required("context label", &block.label)?;
         }
         Ok(Self { blocks })
     }
