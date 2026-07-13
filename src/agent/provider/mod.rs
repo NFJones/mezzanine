@@ -5,12 +5,11 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AgentCapability, AllowedAction, AllowedActionSet, AuthStore, BTreeMap, ExposeSecret, MaapBatch,
+    AgentCapability, AllowedAction, AllowedActionSet, BTreeMap, ExposeSecret, MaapBatch,
     McpPromptTool, MezError, ModelInteractionKind, ModelMessageRole, ModelRequest,
     ProviderTranscriptEvent, Result, SecretString, parse_fenced_maap_action_batch_for_turn,
     parse_maap_action_batch_json_for_turn, validate_non_empty,
 };
-use crate::auth::{AuthCredentialKind, AuthMetadata};
 use std::future::Future;
 use std::pin::Pin;
 
@@ -58,8 +57,9 @@ pub use mez_agent::{
     AgentContextUsageSnapshot, CLAUDE_CODE_API, DEEPSEEK_CHAT_COMPLETIONS_API,
     DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ModelTokenUsage,
     ModelTokenUsageKey, OPENAI_CHAT_COMPLETIONS_API, OPENAI_RESPONSES_API,
-    ProviderApiCompatibility, ProviderAuthMetadata, ProviderCredentialKind, ProviderHttpRequest,
-    ProviderHttpResponse, ProviderModelCatalog, ProviderModelInfo,
+    ProviderApiCompatibility, ProviderAuthMetadata, ProviderCredentialKind,
+    ProviderCredentialSource, ProviderHttpRequest, ProviderHttpResponse, ProviderModelCatalog,
+    ProviderModelInfo,
 };
 pub use mez_agent::{ProviderQuotaUsage, provider_quota_usage_from_headers};
 use openai_chat_completions::OpenAiChatCompletionsDialect;
@@ -439,7 +439,7 @@ impl<T> OpenAiResponsesProvider<T> {
 /// on duplicated control-flow logic.
 #[cfg(test)]
 pub fn openai_provider_from_auth_store_with_transport<T>(
-    auth_store: &AuthStore,
+    auth_store: &dyn ProviderCredentialSource<Error = MezError, Credential = SecretString>,
     transport: T,
 ) -> Result<OpenAiResponsesProvider<T>> {
     openai_provider_from_auth_store_with_options(
@@ -456,7 +456,7 @@ pub fn openai_provider_from_auth_store_with_transport<T>(
 /// the configured provider base URL. ChatGPT browser/device credentials use the
 /// ChatGPT backend and carry the persisted ChatGPT account id header.
 pub fn openai_provider_from_auth_store_with_options<T>(
-    auth_store: &AuthStore,
+    auth_store: &dyn ProviderCredentialSource<Error = MezError, Credential = SecretString>,
     base_url_override: Option<&str>,
     timeout_ms: u64,
     transport: T,
@@ -487,7 +487,7 @@ pub type OpenAiCompatibleChatCompletionsProvider<T> =
 /// options. Browser/device credentials continue to target the ChatGPT backend
 /// and do not expose the OpenAI-compatible model catalog.
 pub fn openai_provider_from_auth_store_with_provider_options<T>(
-    auth_store: &AuthStore,
+    auth_store: &dyn ProviderCredentialSource<Error = MezError, Credential = SecretString>,
     base_url_override: Option<&str>,
     provider_options: &BTreeMap<String, String>,
     timeout_ms: u64,
@@ -508,7 +508,7 @@ pub fn openai_provider_from_auth_store_with_provider_options<T>(
 /// The configured provider name scopes credentials and request guards, while
 /// the compatibility layer reuses the OpenAI Responses wire implementation.
 pub fn openai_responses_provider_from_auth_store_with_provider_options<T>(
-    auth_store: &AuthStore,
+    auth_store: &dyn ProviderCredentialSource<Error = MezError, Credential = SecretString>,
     provider_name: &str,
     base_url_override: Option<&str>,
     provider_options: &BTreeMap<String, String>,
@@ -520,7 +520,7 @@ pub fn openai_responses_provider_from_auth_store_with_provider_options<T>(
         .map(openai_responses_endpoint_for_base_url)
         .transpose()?
         .unwrap_or_else(|| OPENAI_RESPONSES_ENDPOINT.to_string());
-    let Some(metadata) = auth_store.read_metadata_for_provider(provider_name)? else {
+    let Some(metadata) = auth_store.provider_auth_metadata(provider_name)? else {
         return OpenAiResponsesProvider::without_auth(
             endpoint,
             timeout_ms,
@@ -530,10 +530,9 @@ pub fn openai_responses_provider_from_auth_store_with_provider_options<T>(
         )
         .and_then(|provider| provider.with_provider_id(provider_name));
     };
-    let metadata = provider_auth_metadata(&metadata);
     match metadata.credential_kind {
         ProviderCredentialKind::ApiKey => {
-            let credential = auth_store.provider_secret(provider_name)?;
+            let credential = auth_store.provider_credential(provider_name)?;
             OpenAiResponsesProvider::with_endpoint_and_headers(
                 credential,
                 endpoint,
@@ -549,7 +548,7 @@ pub fn openai_responses_provider_from_auth_store_with_provider_options<T>(
                     "OpenAI Responses-compatible provider `{provider_name}` cannot use ChatGPT browser credentials"
                 )));
             }
-            let credential = auth_store.provider_secret(provider_name)?;
+            let credential = auth_store.provider_credential(provider_name)?;
             let account_id = metadata.account_id.ok_or_else(|| {
                 MezError::invalid_state(
                     "OpenAI ChatGPT login is missing a ChatGPT account id; run `mez auth login` again",
@@ -578,7 +577,7 @@ pub fn openai_responses_provider_from_auth_store_with_provider_options<T>(
 /// DeepSeek only supports direct API-key authentication. Endpoint overrides
 /// are expanded to the provider's documented Chat Completions endpoint.
 pub fn deepseek_provider_from_auth_store_with_provider_options<T>(
-    auth_store: &AuthStore,
+    auth_store: &dyn ProviderCredentialSource<Error = MezError, Credential = SecretString>,
     base_url_override: Option<&str>,
     timeout_ms: u64,
     transport: T,
@@ -597,17 +596,14 @@ pub fn deepseek_provider_from_auth_store_with_provider_options<T>(
 /// The configured provider name scopes credentials and request guards, while
 /// the compatibility layer reuses the DeepSeek Chat Completions wire dialect.
 pub fn deepseek_chat_completions_provider_from_auth_store_with_provider_options<T>(
-    auth_store: &AuthStore,
+    auth_store: &dyn ProviderCredentialSource<Error = MezError, Credential = SecretString>,
     provider_name: &str,
     base_url_override: Option<&str>,
     timeout_ms: u64,
     transport: T,
 ) -> Result<DeepSeekChatCompletionsProvider<T>> {
-    let mut provider = if auth_store
-        .read_metadata_for_provider(provider_name)?
-        .is_some()
-    {
-        let credential = auth_store.provider_secret(provider_name)?;
+    let mut provider = if auth_store.provider_auth_metadata(provider_name)?.is_some() {
+        let credential = auth_store.provider_credential(provider_name)?;
         DeepSeekChatCompletionsProvider::new(credential, transport)?
     } else {
         DeepSeekChatCompletionsProvider::without_auth(transport)?
@@ -628,7 +624,7 @@ pub fn deepseek_chat_completions_provider_from_auth_store_with_provider_options<
 /// Claude providers can coexist without falling back to the literal
 /// `anthropic` provider id.
 pub fn anthropic_provider_from_auth_store_with_provider_options<T>(
-    auth_store: &AuthStore,
+    auth_store: &dyn ProviderCredentialSource<Error = MezError, Credential = SecretString>,
     provider_name: &str,
     base_url_override: Option<&str>,
     provider_options: &BTreeMap<String, String>,
@@ -636,18 +632,17 @@ pub fn anthropic_provider_from_auth_store_with_provider_options<T>(
     transport: T,
 ) -> Result<AnthropicMessagesProvider<T>> {
     let dialect = AnthropicMessagesDialect::from_provider_options(provider_options)?;
-    let Some(metadata) = auth_store.read_metadata_for_provider(provider_name)? else {
+    let Some(metadata) = auth_store.provider_auth_metadata(provider_name)? else {
         return Err(MezError::invalid_state(format!(
             "Anthropic provider `{provider_name}` requires an authenticated API key"
         )));
     };
-    let metadata = provider_auth_metadata(&metadata);
     if metadata.credential_kind != ProviderCredentialKind::ApiKey {
         return Err(MezError::invalid_state(format!(
             "Anthropic provider `{provider_name}` requires API-key credentials"
         )));
     }
-    let credential = auth_store.provider_secret(provider_name)?;
+    let credential = auth_store.provider_credential(provider_name)?;
     let mut provider = AnthropicMessagesProvider::with_optional_auth_and_dialect(
         Some(credential),
         transport,
@@ -669,7 +664,7 @@ pub fn anthropic_provider_from_auth_store_with_provider_options<T>(
 /// contract. Endpoint overrides are expanded to `/chat/completions` using the
 /// same compatibility rules as the DeepSeek adapter.
 pub fn openai_compatible_provider_from_auth_store_with_provider_options<T>(
-    auth_store: &AuthStore,
+    auth_store: &dyn ProviderCredentialSource<Error = MezError, Credential = SecretString>,
     provider_name: &str,
     base_url_override: Option<&str>,
     provider_options: &BTreeMap<String, String>,
@@ -677,11 +672,8 @@ pub fn openai_compatible_provider_from_auth_store_with_provider_options<T>(
     transport: T,
 ) -> Result<OpenAiCompatibleChatCompletionsProvider<T>> {
     let dialect = OpenAiChatCompletionsDialect::from_provider_options(provider_options)?;
-    let api_key = if auth_store
-        .read_metadata_for_provider(provider_name)?
-        .is_some()
-    {
-        Some(auth_store.provider_secret(provider_name)?)
+    let api_key = if auth_store.provider_auth_metadata(provider_name)?.is_some() {
+        Some(auth_store.provider_credential(provider_name)?)
     } else {
         None
     };
@@ -728,19 +720,6 @@ fn openai_direct_api_extra_headers(
         headers.insert(OPENAI_PROJECT_HEADER.to_string(), project_id);
     }
     headers
-}
-
-/// Adapts product-owned persisted auth metadata into the non-secret provider
-/// routing contract consumed by model-provider construction.
-fn provider_auth_metadata(metadata: &AuthMetadata) -> ProviderAuthMetadata {
-    ProviderAuthMetadata {
-        credential_kind: match metadata.credential_kind {
-            AuthCredentialKind::ApiKey => ProviderCredentialKind::ApiKey,
-            AuthCredentialKind::ChatGpt => ProviderCredentialKind::ChatGpt,
-        },
-        account_id: metadata.account_id.clone(),
-        organization_id: metadata.organization_id.clone(),
-    }
 }
 
 /// Returns a non-empty provider option value from the first supported key.

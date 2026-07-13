@@ -71,6 +71,35 @@ pub use types::{
     ProviderEntitlementPlan, ProviderEntitlementValidation, selected_auth_method_from_flags,
 };
 
+impl mez_agent::ProviderCredentialSource for AuthStore {
+    type Error = crate::error::MezError;
+    type Credential = secrecy::SecretString;
+
+    /// Adapts persisted product metadata into the provider-neutral routing
+    /// contract without exposing credential-store details to the agent crate.
+    fn provider_auth_metadata(
+        &self,
+        provider: &str,
+    ) -> Result<Option<mez_agent::ProviderAuthMetadata>, Self::Error> {
+        self.read_metadata_for_provider(provider).map(|metadata| {
+            metadata.map(|metadata| mez_agent::ProviderAuthMetadata {
+                credential_kind: match metadata.credential_kind {
+                    AuthCredentialKind::ApiKey => mez_agent::ProviderCredentialKind::ApiKey,
+                    AuthCredentialKind::ChatGpt => mez_agent::ProviderCredentialKind::ChatGpt,
+                },
+                account_id: metadata.account_id,
+                organization_id: metadata.organization_id,
+            })
+        })
+    }
+
+    /// Retrieves one provider credential through the product-owned secret
+    /// store while presenting only the narrow agent credential-source port.
+    fn provider_credential(&self, provider: &str) -> Result<Self::Credential, Self::Error> {
+        self.provider_secret(provider)
+    }
+}
+
 #[cfg(test)]
 use types::SECRET_TOOL_PROGRAM;
 

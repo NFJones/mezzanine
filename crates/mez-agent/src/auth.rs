@@ -60,6 +60,26 @@ impl ProviderAuthMetadata {
     }
 }
 
+/// Supplies provider authentication metadata and credentials to provider adapters.
+///
+/// Product composition crates implement this port so provider construction does
+/// not depend on a concrete credential store or persistence format.
+pub trait ProviderCredentialSource {
+    /// Product-owned lookup failure returned without erasing diagnostic context.
+    type Error;
+    /// Secret-bearing credential value consumed by the provider adapter.
+    type Credential;
+
+    /// Returns secret-safe routing metadata when the provider is authenticated.
+    fn provider_auth_metadata(
+        &self,
+        provider: &str,
+    ) -> Result<Option<ProviderAuthMetadata>, Self::Error>;
+
+    /// Returns the secret credential for one authenticated provider.
+    fn provider_credential(&self, provider: &str) -> Result<Self::Credential, Self::Error>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ProviderAuthMetadata, ProviderCredentialKind};
