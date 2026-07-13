@@ -11,10 +11,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
-use crate::error::{MezError, Result};
 use mez_agent::{
-    DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, ProviderHttpRequest, ProviderHttpResponse,
-    ProviderSseTerminalDetector,
+    DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, ProviderHttpError, ProviderHttpRequest,
+    ProviderHttpResponse, ProviderHttpResult, ProviderSseTerminalDetector,
 };
 
 /// Defines the Provider Http Transport behavior contract for this subsystem.
@@ -28,7 +27,7 @@ pub trait ProviderHttpTransport {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn send(&self, request: &ProviderHttpRequest) -> Result<ProviderHttpResponse>;
+    fn send(&self, request: &ProviderHttpRequest) -> ProviderHttpResult<ProviderHttpResponse>;
 }
 
 /// Defines the Async Provider Http Transport behavior contract for this subsystem.
@@ -44,7 +43,7 @@ pub trait AsyncProviderHttpTransport: Send + Sync {
     fn send_async<'a>(
         &'a self,
         request: &'a ProviderHttpRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<ProviderHttpResponse>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>>;
 }
 
 /// Default provider TCP/TLS connection timeout.
@@ -114,9 +113,9 @@ fn provider_http_response_read_error(
     status_code: u16,
     content_encoding: &str,
     error: reqwest::Error,
-) -> MezError {
+) -> ProviderHttpError {
     let source_chain = provider_http_error_source_chain(&error);
-    MezError::invalid_state(format!(
+    ProviderHttpError::invalid_state(format!(
         "provider HTTP response read failed (status {status_code}, \
          content-encoding {content_encoding}, timeout {}, decode {}, source {source_chain}): \
          {error}",
@@ -134,7 +133,7 @@ fn provider_http_response_read_error(
 async fn provider_http_read_chunk_with_timeout(
     response: &mut reqwest::Response,
     timeout_ms: u64,
-) -> Result<std::result::Result<Option<Vec<u8>>, reqwest::Error>> {
+) -> ProviderHttpResult<std::result::Result<Option<Vec<u8>>, reqwest::Error>> {
     let timeout = Duration::from_millis(timeout_ms.max(1));
     let chunk = tokio::time::timeout(timeout, response.chunk())
         .await
@@ -143,8 +142,8 @@ async fn provider_http_read_chunk_with_timeout(
 }
 
 /// Builds the deterministic error used when provider response progress stalls.
-fn provider_http_response_stalled_error(timeout_ms: u64) -> MezError {
-    MezError::invalid_state(format!(
+fn provider_http_response_stalled_error(timeout_ms: u64) -> ProviderHttpError {
+    ProviderHttpError::invalid_state(format!(
         "provider HTTP response read stalled for {timeout_ms}ms while waiting for body chunk"
     ))
 }
@@ -173,20 +172,23 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
     fn send_async<'a>(
         &'a self,
         request: &'a ProviderHttpRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<ProviderHttpResponse>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = ProviderHttpResult<ProviderHttpResponse>> + Send + 'a>> {
         Box::pin(async move {
             let method = request.method.parse::<reqwest::Method>().map_err(|_| {
-                MezError::invalid_args(format!(
+                ProviderHttpError::invalid_args(format!(
                     "unsupported provider HTTP method {}",
                     request.method
                 ))
             })?;
             let mut headers = reqwest::header::HeaderMap::new();
             for (name, value) in &request.headers {
-                let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())
-                    .map_err(|_| MezError::invalid_args("provider HTTP header name is invalid"))?;
-                let value = reqwest::header::HeaderValue::from_str(value)
-                    .map_err(|_| MezError::invalid_args("provider HTTP header value is invalid"))?;
+                let name =
+                    reqwest::header::HeaderName::from_bytes(name.as_bytes()).map_err(|_| {
+                        ProviderHttpError::invalid_args("provider HTTP header name is invalid")
+                    })?;
+                let value = reqwest::header::HeaderValue::from_str(value).map_err(|_| {
+                    ProviderHttpError::invalid_args("provider HTTP header value is invalid")
+                })?;
                 headers.insert(name, value);
             }
             apply_provider_transport_default_headers(&mut headers);
@@ -194,7 +196,9 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
             let client = provider_http_client_builder(request.timeout_ms)
                 .build()
                 .map_err(|error| {
-                    MezError::invalid_state(format!("provider HTTP client setup failed: {error}"))
+                    ProviderHttpError::invalid_state(format!(
+                        "provider HTTP client setup failed: {error}"
+                    ))
                 })?;
             let mut response = client
                 .request(method, &request.url)
@@ -203,7 +207,9 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                 .send()
                 .await
                 .map_err(|error| {
-                    MezError::invalid_state(format!("provider HTTP request failed: {error}"))
+                    ProviderHttpError::invalid_state(format!(
+                        "provider HTTP request failed: {error}"
+                    ))
                 })?;
             let status_code = response.status().as_u16();
             let mut response_headers = response
@@ -254,7 +260,7 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                     };
                 if body.len().saturating_add(chunk.len()) > response_limit {
                     if request.max_response_bytes.is_none() {
-                        return Err(MezError::invalid_state(
+                        return Err(ProviderHttpError::invalid_state(
                             "provider HTTP response exceeds configured limit",
                         ));
                     }
@@ -277,7 +283,7 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
                 String::from_utf8_lossy(&body).into_owned()
             } else {
                 String::from_utf8(body).map_err(|_| {
-                    MezError::invalid_state("provider HTTP response body is not UTF-8")
+                    ProviderHttpError::invalid_state("provider HTTP response body is not UTF-8")
                 })?
             };
             Ok(ProviderHttpResponse {

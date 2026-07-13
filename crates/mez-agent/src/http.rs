@@ -6,6 +6,61 @@
 
 use std::collections::BTreeMap;
 
+/// Stable failure categories exposed by provider HTTP transports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderHttpErrorKind {
+    /// The assembled request cannot be represented by the concrete transport.
+    InvalidArgs,
+    /// The transport could not complete or decode the provider exchange.
+    InvalidState,
+}
+
+/// Provider-neutral failure returned by an HTTP transport adapter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderHttpError {
+    kind: ProviderHttpErrorKind,
+    message: String,
+}
+
+impl ProviderHttpError {
+    /// Builds a request-validation failure.
+    pub fn invalid_args(message: impl Into<String>) -> Self {
+        Self {
+            kind: ProviderHttpErrorKind::InvalidArgs,
+            message: message.into(),
+        }
+    }
+
+    /// Builds a transport or response-decoding failure.
+    pub fn invalid_state(message: impl Into<String>) -> Self {
+        Self {
+            kind: ProviderHttpErrorKind::InvalidState,
+            message: message.into(),
+        }
+    }
+
+    /// Returns the stable failure category.
+    pub fn kind(&self) -> ProviderHttpErrorKind {
+        self.kind
+    }
+
+    /// Returns the bounded caller-facing diagnostic.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl std::fmt::Display for ProviderHttpError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ProviderHttpError {}
+
+/// Result returned by provider-neutral HTTP transport boundaries.
+pub type ProviderHttpResult<T> = Result<T, ProviderHttpError>;
+
 /// Maximum provider response body retained by the shared transport.
 pub const DEFAULT_PROVIDER_MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -276,8 +331,9 @@ fn sse_data_lines_equal(block: &str, target: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ProviderHttpRequest,
-        ProviderHttpResponse, ProviderSseTerminalDetector, parse_sse_events,
+        DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ProviderHttpError,
+        ProviderHttpErrorKind, ProviderHttpRequest, ProviderHttpResponse,
+        ProviderSseTerminalDetector, parse_sse_events,
     };
     use std::collections::BTreeMap;
 
@@ -303,6 +359,19 @@ mod tests {
         };
         assert_eq!(response.status_code, 200);
         assert_eq!(response.body, "ok");
+    }
+
+    #[test]
+    /// Verifies provider HTTP failures preserve request-validation and
+    /// transport-state categories without depending on product errors.
+    fn provider_http_errors_preserve_stable_categories() {
+        let invalid_args = ProviderHttpError::invalid_args("bad method");
+        let invalid_state = ProviderHttpError::invalid_state("read stalled");
+
+        assert_eq!(invalid_args.kind(), ProviderHttpErrorKind::InvalidArgs);
+        assert_eq!(invalid_args.message(), "bad method");
+        assert_eq!(invalid_state.kind(), ProviderHttpErrorKind::InvalidState);
+        assert_eq!(invalid_state.message(), "read stalled");
     }
 
     /// Verifies syntax-level parsing preserves event names and joins multiple

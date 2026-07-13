@@ -24,7 +24,7 @@ use super::{
     ContextSourceKind, ContextStability, DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME,
     DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME,
     DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MaapBatch, MarkerToken,
-    McpActionExecutor, MezError, ModelMessage, ModelMessageRole, ModelProfile,
+    McpActionExecutor, ModelMessage, ModelMessageRole, ModelProfile,
     ModelProfileOverrideSource, ModelProfileOverrides, ModelProvider, ModelRequest, ModelResponse,
     ModelTokenUsage, OPENAI_MAAP_FUNCTION_TOOL_NAME, OPENAI_MODELS_ENDPOINT,
     OPENAI_RESPONSES_ENDPOINT, OpenAiResponsesProvider, PaneReadinessOverrideStore,
@@ -201,7 +201,10 @@ impl ProviderHttpTransport for FakeProviderHttpTransport {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn send(&self, request: &ProviderHttpRequest) -> Result<ProviderHttpResponse> {
+    fn send(
+        &self,
+        request: &ProviderHttpRequest,
+    ) -> mez_agent::ProviderHttpResult<ProviderHttpResponse> {
         self.requests.borrow_mut().push(request.clone());
         Ok(self.response.clone())
     }
@@ -234,12 +237,14 @@ impl SequencedFakeProviderHttpTransport {
 
 impl ProviderHttpTransport for SequencedFakeProviderHttpTransport {
     /// Records one request and returns the next queued provider response.
-    fn send(&self, request: &ProviderHttpRequest) -> Result<ProviderHttpResponse> {
+    fn send(
+        &self,
+        request: &ProviderHttpRequest,
+    ) -> mez_agent::ProviderHttpResult<ProviderHttpResponse> {
         self.requests.borrow_mut().push(request.clone());
-        self.responses
-            .borrow_mut()
-            .pop_front()
-            .ok_or_else(|| MezError::invalid_state("fake provider response queue is empty"))
+        self.responses.borrow_mut().pop_front().ok_or_else(|| {
+            mez_agent::ProviderHttpError::invalid_state("fake provider response queue is empty")
+        })
     }
 }
 
@@ -271,7 +276,11 @@ impl AsyncProviderHttpTransport for AsyncFakeProviderHttpTransport {
         &'a self,
         request: &'a ProviderHttpRequest,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<ProviderHttpResponse>> + Send + 'a>,
+        Box<
+            dyn std::future::Future<Output = mez_agent::ProviderHttpResult<ProviderHttpResponse>>
+                + Send
+                + 'a,
+        >,
     > {
         Box::pin(async move {
             self.requests.lock().unwrap().push(request.clone());
