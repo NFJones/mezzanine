@@ -105,13 +105,13 @@ pub use keys::{
     DEFAULT_PANE_TERM, DEFAULT_PASTE_BUFFER_LIMIT_BYTES, MEZZANINE_TERMINFO_NAMES,
     TERMINFO_FALLBACK_ORDER,
 };
-pub use mez_mux::theme::{
+pub(crate) use mez_mux::theme::{
     BUILTIN_UI_THEME_NAMES, DEFAULT_UI_THEME_NAME, UI_COLOR_SLOT_NAMES, UiColorPair, UiTheme,
-    UiThemeColors, UiThemeDefinition, builtin_ui_theme_definition, deepforest_ui_theme,
-    default_ui_theme, is_builtin_ui_theme, parse_hex_color, resolve_ui_theme,
-    ui_theme_list_table_header, ui_theme_list_table_row, ui_theme_preview_fields,
-    valid_color_alias_name,
+    UiThemeDefinition, builtin_ui_theme_definition, parse_hex_color, resolve_ui_theme,
+    ui_theme_list_table_header, ui_theme_list_table_row, valid_color_alias_name,
 };
+#[cfg(test)]
+pub(crate) use mez_mux::theme::{deepforest_ui_theme, default_ui_theme};
 pub use mez_terminal::{
     GraphicRendition, TerminalColor, TerminalCursorState, TerminalModeState, TerminalOscEvent,
     TerminalSavedState, TerminalScreen, TerminalStyleSpan, TerminalStyledLine,
