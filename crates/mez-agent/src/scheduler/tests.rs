@@ -2,7 +2,7 @@
 
 use super::{
     AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ScheduledWork, ScheduledWorkKind,
-    SchedulerCancellation,
+    SchedulerCancellation, SchedulerErrorKind,
 };
 
 /// Runs the work operation for this subsystem.
@@ -144,7 +144,7 @@ fn scheduler_can_cancel_queued_or_running_turns() {
     assert_eq!(scheduler.snapshot().running, 0);
 
     let error = scheduler.cancel("missing").unwrap_err();
-    assert_eq!(error.kind(), crate::error::MezErrorKind::NotFound);
+    assert_eq!(error.kind(), SchedulerErrorKind::NotFound);
 }
 
 /// Verifies that turns blocked on user interaction retain scheduler capacity

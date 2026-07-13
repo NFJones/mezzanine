@@ -14,6 +14,19 @@ use thiserror::Error;
 /// boundary and avoids relying on call-site inference.
 pub type Result<T> = std::result::Result<T, MezError>;
 
+impl From<mez_agent::SchedulerError> for MezError {
+    fn from(error: mez_agent::SchedulerError) -> Self {
+        match error.kind() {
+            mez_agent::SchedulerErrorKind::InvalidArgs => Self::invalid_args(error.message()),
+            mez_agent::SchedulerErrorKind::InvalidState => Self::invalid_state(error.message()),
+            mez_agent::SchedulerErrorKind::Conflict => Self::conflict(error.message()),
+            mez_agent::SchedulerErrorKind::NotFound => {
+                Self::new(MezErrorKind::NotFound, error.message())
+            }
+        }
+    }
+}
+
 impl From<mez_mux::MuxError> for MezError {
     fn from(error: mez_mux::MuxError) -> Self {
         match error.kind() {

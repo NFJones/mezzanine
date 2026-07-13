@@ -34,6 +34,8 @@ pub mod provider_error;
 pub mod provider_transcript;
 /// Dependency-neutral provider quota accounting contracts.
 pub mod quota;
+/// Provider-independent agent scheduling policy and queue state.
+pub mod scheduler;
 /// Dependency-neutral agent slash-command registry and parsing.
 pub mod slash;
 /// Provider-independent subagent cooperation and scope contracts.
@@ -64,6 +66,11 @@ pub use provider_error::{
 };
 pub use provider_transcript::{PROVIDER_TRANSCRIPT_EVENT_MARKER, ProviderTranscriptEvent};
 pub use quota::{ProviderQuotaUsage, provider_quota_usage_from_headers};
+pub use scheduler::{
+    AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, RunningWork, ScheduledWork, ScheduledWorkKind,
+    SchedulerCancellation, SchedulerError, SchedulerErrorKind, SchedulerResult, SchedulerSnapshot,
+    runnable_agent_ids,
+};
 pub use slash::{
     SlashCommandEffect, SlashCommandInvocation, SlashCommandParseError, SlashCommandSpec,
     baseline_slash_commands, parse_slash_command,

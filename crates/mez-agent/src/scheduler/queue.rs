@@ -6,8 +6,7 @@
 
 use std::collections::VecDeque;
 
-use crate::error::{MezError, MezErrorKind, Result};
-
+use super::error::{SchedulerError, SchedulerErrorKind, SchedulerResult};
 use super::policy::validate_work;
 use super::types::{
     AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, RunningWork, ScheduledWork, ScheduledWorkKind,
@@ -18,9 +17,9 @@ impl AgentScheduler {
     /// Creates an empty scheduler with the provided concurrency limit.
     ///
     /// Returns an invalid-arguments error when the limit is zero.
-    pub fn new(max_concurrent_agents: usize) -> Result<Self> {
+    pub fn new(max_concurrent_agents: usize) -> SchedulerResult<Self> {
         if max_concurrent_agents == 0 {
-            return Err(MezError::invalid_args(
+            return Err(SchedulerError::invalid_args(
                 "max concurrent agents must be greater than zero",
             ));
         }
@@ -48,9 +47,12 @@ impl AgentScheduler {
     /// Updates the concurrency limit without cancelling already running work.
     ///
     /// Returns an invalid-arguments error when the new limit is zero.
-    pub fn set_max_concurrent_agents(&mut self, max_concurrent_agents: usize) -> Result<()> {
+    pub fn set_max_concurrent_agents(
+        &mut self,
+        max_concurrent_agents: usize,
+    ) -> SchedulerResult<()> {
         if max_concurrent_agents == 0 {
-            return Err(MezError::invalid_args(
+            return Err(SchedulerError::invalid_args(
                 "max concurrent agents must be greater than zero",
             ));
         }
@@ -62,7 +64,7 @@ impl AgentScheduler {
     ///
     /// Returns an error when the work is malformed or when another queued or
     /// running turn already uses the same turn id.
-    pub fn enqueue(&mut self, work: ScheduledWork) -> Result<()> {
+    pub fn enqueue(&mut self, work: ScheduledWork) -> SchedulerResult<()> {
         validate_work(&work)?;
         if self
             .queued
@@ -77,7 +79,7 @@ impl AgentScheduler {
                 .iter()
                 .any(|blocked| blocked.turn_id == work.turn_id)
         {
-            return Err(MezError::conflict(
+            return Err(SchedulerError::conflict(
                 "scheduled turn id is already queued, running, or blocked",
             ));
         }
@@ -101,12 +103,12 @@ impl AgentScheduler {
     /// Marks a running turn complete and removes it from active scheduler state.
     ///
     /// Returns a not-found error when no running turn has the requested id.
-    pub fn complete(&mut self, turn_id: &str) -> Result<RunningWork> {
+    pub fn complete(&mut self, turn_id: &str) -> SchedulerResult<RunningWork> {
         let index = self
             .running
             .iter()
             .position(|running| running.turn_id == turn_id)
-            .ok_or_else(|| MezError::new(MezErrorKind::NotFound, "turn not found"))?;
+            .ok_or_else(|| SchedulerError::new(SchedulerErrorKind::NotFound, "turn not found"))?;
         Ok(self.running.remove(index))
     }
 
@@ -116,12 +118,12 @@ impl AgentScheduler {
     /// Blocked work still participates in agent and pane exclusivity checks so a
     /// waiting turn cannot be bypassed by another shell-capable turn that would
     /// write to the same pane.
-    pub fn block_running(&mut self, turn_id: &str) -> Result<RunningWork> {
+    pub fn block_running(&mut self, turn_id: &str) -> SchedulerResult<RunningWork> {
         let index = self
             .running
             .iter()
             .position(|running| running.turn_id == turn_id)
-            .ok_or_else(|| MezError::new(MezErrorKind::NotFound, "turn not found"))?;
+            .ok_or_else(|| SchedulerError::new(SchedulerErrorKind::NotFound, "turn not found"))?;
         let work = self.running.remove(index);
         self.blocked.push(work.clone());
         Ok(work)
@@ -132,12 +134,12 @@ impl AgentScheduler {
     /// Approved continuations are resumptions of already-started user work. The
     /// scheduler reserves capacity while work is blocked so resuming cannot
     /// exceed the configured concurrency limit.
-    pub fn resume_blocked(&mut self, turn_id: &str) -> Result<RunningWork> {
+    pub fn resume_blocked(&mut self, turn_id: &str) -> SchedulerResult<RunningWork> {
         let index = self
             .blocked
             .iter()
             .position(|blocked| blocked.turn_id == turn_id)
-            .ok_or_else(|| MezError::new(MezErrorKind::NotFound, "turn not found"))?;
+            .ok_or_else(|| SchedulerError::new(SchedulerErrorKind::NotFound, "turn not found"))?;
         let work = self.blocked.remove(index);
         self.running.push(work.clone());
         Ok(work)
@@ -147,14 +149,16 @@ impl AgentScheduler {
     ///
     /// Returns the cancelled work and whether it had already started, or a
     /// not-found error when the turn id is unknown.
-    pub fn cancel(&mut self, turn_id: &str) -> Result<SchedulerCancellation> {
+    pub fn cancel(&mut self, turn_id: &str) -> SchedulerResult<SchedulerCancellation> {
         if let Some(index) = self
             .queued
             .iter()
             .position(|queued| queued.turn_id == turn_id)
         {
             let work = self.queued.remove(index).ok_or_else(|| {
-                MezError::invalid_state("queued scheduler work disappeared during cancellation")
+                SchedulerError::invalid_state(
+                    "queued scheduler work disappeared during cancellation",
+                )
             })?;
             return Ok(SchedulerCancellation::Queued(work));
         }
@@ -175,7 +179,10 @@ impl AgentScheduler {
             return Ok(SchedulerCancellation::Blocked(self.blocked.remove(index)));
         }
 
-        Err(MezError::new(MezErrorKind::NotFound, "turn not found"))
+        Err(SchedulerError::new(
+            SchedulerErrorKind::NotFound,
+            "turn not found",
+        ))
     }
 
     /// Returns queue and running counters without exposing mutable scheduler
