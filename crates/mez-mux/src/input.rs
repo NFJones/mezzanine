@@ -172,6 +172,142 @@ pub fn parse_key_chord_notation(notation: &str) -> Result<KeyChord> {
     Ok(KeyChord { code, modifiers })
 }
 
+/// Decodes the first supported terminal key sequence from `input`.
+///
+/// Returns the decoded chord and number of consumed bytes, or `None` when the
+/// input is empty, incomplete, or not one of the supported terminal sequences.
+pub fn parse_key_chord_bytes(input: &[u8]) -> Option<(KeyChord, usize)> {
+    if input.is_empty() {
+        return None;
+    }
+    let first = input[0];
+    match first {
+        0x01..=0x1a => Some((
+            KeyChord::ctrl(KeyCode::Char(char::from(b'a' + first - 1))),
+            1,
+        )),
+        b'\x1b' => parse_escape_key_chord_bytes(input),
+        b' '..=b'~' => Some((KeyChord::new(KeyCode::Char(char::from(first))), 1)),
+        _ => None,
+    }
+}
+
+fn parse_escape_key_chord_bytes(input: &[u8]) -> Option<(KeyChord, usize)> {
+    if let Some(parsed) = parse_csi_key_chord_bytes(input) {
+        return Some(parsed);
+    }
+    if let Some(parsed) = parse_ss3_key_chord_bytes(input) {
+        return Some(parsed);
+    }
+
+    let second = *input.get(1)?;
+    if second.is_ascii_graphic() || second == b' ' {
+        return Some((KeyChord::alt(KeyCode::Char(char::from(second))), 2));
+    }
+    None
+}
+
+fn parse_csi_key_chord_bytes(input: &[u8]) -> Option<(KeyChord, usize)> {
+    if !input.starts_with(b"\x1b[") {
+        return None;
+    }
+    let final_index = input
+        .iter()
+        .enumerate()
+        .skip(2)
+        .find_map(|(index, byte)| (b'@'..=b'~').contains(byte).then_some(index))?;
+    let final_byte = input[final_index];
+    let params = std::str::from_utf8(&input[2..final_index]).ok()?;
+
+    let (code, modifiers) = match final_byte {
+        b'A' | b'B' | b'C' | b'D' => {
+            let modifiers = xterm_csi_modifier(params, 1)?;
+            (arrow_key_code(final_byte)?, modifiers)
+        }
+        b'H' | b'F' => {
+            let modifiers = xterm_csi_modifier(params, 1)?;
+            (home_end_key_code(final_byte)?, modifiers)
+        }
+        b'~' => {
+            let mut parts = params.split(';');
+            let key_number = parts.next()?.parse::<u16>().ok()?;
+            let code = match key_number {
+                1 | 7 => KeyCode::Home,
+                4 | 8 => KeyCode::End,
+                5 => KeyCode::PageUp,
+                6 => KeyCode::PageDown,
+                _ => return None,
+            };
+            let modifiers = parts
+                .next()
+                .and_then(|part| part.parse::<u16>().ok())
+                .map(xterm_modifier_value)
+                .unwrap_or_default();
+            (code, modifiers)
+        }
+        _ => return None,
+    };
+
+    Some((KeyChord { code, modifiers }, final_index + 1))
+}
+
+fn parse_ss3_key_chord_bytes(input: &[u8]) -> Option<(KeyChord, usize)> {
+    if input.len() < 3 || !input.starts_with(b"\x1bO") {
+        return None;
+    }
+    let code = arrow_key_code(input[2]).or_else(|| home_end_key_code(input[2]))?;
+    Some((KeyChord::new(code), 3))
+}
+
+fn arrow_key_code(final_byte: u8) -> Option<KeyCode> {
+    match final_byte {
+        b'A' => Some(KeyCode::Up),
+        b'B' => Some(KeyCode::Down),
+        b'C' => Some(KeyCode::Right),
+        b'D' => Some(KeyCode::Left),
+        _ => None,
+    }
+}
+
+fn home_end_key_code(final_byte: u8) -> Option<KeyCode> {
+    match final_byte {
+        b'H' => Some(KeyCode::Home),
+        b'F' => Some(KeyCode::End),
+        _ => None,
+    }
+}
+
+fn xterm_csi_modifier(params: &str, default_key_number: u16) -> Option<KeyModifiers> {
+    if params.is_empty() {
+        return Some(KeyModifiers::default());
+    }
+
+    let mut parts = params.split(';');
+    let key_number = parts
+        .next()
+        .filter(|part| !part.is_empty())
+        .and_then(|part| part.parse::<u16>().ok())
+        .unwrap_or(default_key_number);
+    if key_number != default_key_number {
+        return None;
+    }
+    let modifier = parts
+        .next()
+        .and_then(|part| part.parse::<u16>().ok())
+        .map(xterm_modifier_value)
+        .unwrap_or_default();
+    Some(modifier)
+}
+
+fn xterm_modifier_value(value: u16) -> KeyModifiers {
+    let flags = value.saturating_sub(1);
+    KeyModifiers {
+        shift: flags & 1 != 0,
+        alt: flags & 2 != 0,
+        ctrl: flags & 4 != 0,
+    }
+}
+
 fn unmodified_special_key_bytes(code: KeyCode) -> Option<&'static [u8]> {
     match code {
         KeyCode::Up => Some(b"\x1bOA"),
@@ -307,5 +443,48 @@ mod tests {
             KeyChord::parse("DefinitelyNotAKey").unwrap_err().kind(),
             MuxErrorKind::InvalidArgs
         );
+    }
+
+    /// Verifies terminal byte decoding recognizes control, CSI, SS3, and Alt sequences.
+    #[test]
+    fn decodes_supported_terminal_key_sequences() {
+        assert_eq!(
+            parse_key_chord_bytes(b"\x01"),
+            Some((KeyChord::ctrl(KeyCode::Char('a')), 1))
+        );
+        assert_eq!(
+            parse_key_chord_bytes(b"\x1b[1;7A"),
+            Some((
+                KeyChord {
+                    code: KeyCode::Up,
+                    modifiers: KeyModifiers {
+                        ctrl: true,
+                        alt: true,
+                        shift: false,
+                    },
+                },
+                6,
+            ))
+        );
+        assert_eq!(
+            parse_key_chord_bytes(b"\x1bOF"),
+            Some((KeyChord::new(KeyCode::End), 3))
+        );
+        assert_eq!(
+            parse_key_chord_bytes(b"\x1b-"),
+            Some((KeyChord::alt(KeyCode::Char('-')), 2))
+        );
+    }
+
+    /// Verifies incomplete escape input preserves the established Alt-key fallback.
+    #[test]
+    fn preserves_incomplete_terminal_key_sequence_fallbacks() {
+        assert_eq!(parse_key_chord_bytes(b""), None);
+        assert_eq!(parse_key_chord_bytes(b"\x1b"), None);
+        assert_eq!(
+            parse_key_chord_bytes(b"\x1b[1;"),
+            Some((KeyChord::alt(KeyCode::Char('[')), 2))
+        );
+        assert_eq!(parse_key_chord_bytes(b"\xff"), None);
     }
 }
