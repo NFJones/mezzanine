@@ -4,6 +4,7 @@
 //! product configuration. Provider construction, credentials, transports, and
 //! product error conversion remain in the Mezzanine composition crate.
 
+use sha2::Digest;
 use std::fmt;
 
 /// Result type returned while assembling one provider request.
@@ -102,6 +103,36 @@ pub struct OpenAiPromptCacheDiagnostics {
     pub cacheable_prefix_bytes: usize,
     /// SHA-256 of the stable cacheable prompt prefix material Mezzanine can observe.
     pub cacheable_prefix_sha256: String,
+}
+
+/// Builds a stable, non-secret OpenAI prompt-cache routing key.
+///
+/// The key intentionally includes provider compatibility identity and prompt
+/// lineage while excluding the model and rendered prompt text. This keeps
+/// related requests in one provider cache namespace without making the key a
+/// substitute for the provider's exact-prefix matching.
+pub fn openai_prompt_cache_key(provider: &str, lineage_id: Option<&str>) -> String {
+    let mut material = String::new();
+    material.push_str("mezzanine\n");
+    material.push_str("prompt_profile=");
+    material.push_str(crate::AGENT_PROMPT_PROFILE_NAME);
+    material.push('\n');
+    material.push_str("prompt_version=");
+    material.push_str(&crate::AGENT_PROMPT_PROFILE_VERSION.to_string());
+    material.push('\n');
+    material.push_str("provider=");
+    material.push_str(provider);
+    material.push('\n');
+    material.push_str("lineage_id=");
+    material.push_str(lineage_id.unwrap_or("lineage-unknown"));
+    material.push('\n');
+    material.push_str("cache_family=responses-routing-v4\n");
+    let digest = sha2::Sha256::digest(material.as_bytes());
+    let digest_hex = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("mez-{}", &digest_hex[..32])
 }
 
 /// Result type returned while decoding one provider response.
@@ -535,9 +566,28 @@ mod request_assembly_tests {
         CHATGPT_RESPONSES_ENDPOINT, OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT,
         ProviderEndpointErrorKind, ProviderRequestAssemblyError, ProviderRequestAssemblyErrorKind,
         ProviderResponseError, ProviderResponseErrorKind,
-        openai_models_endpoint_for_responses_endpoint, openai_responses_endpoint_for_base_url,
-        validate_provider_request_required,
+        openai_models_endpoint_for_responses_endpoint, openai_prompt_cache_key,
+        openai_responses_endpoint_for_base_url, validate_provider_request_required,
     };
+
+    /// OpenAI prompt-cache routing keys follow provider and lineage identity
+    /// while deliberately ignoring model identity and rendered prompt text.
+    #[test]
+    fn openai_prompt_cache_keys_use_provider_and_lineage_namespace() {
+        let inherited = openai_prompt_cache_key("openai", Some("lineage-parent"));
+        let resumed = openai_prompt_cache_key("openai", Some("lineage-parent"));
+        let fresh = openai_prompt_cache_key("openai", Some("lineage-fresh"));
+        let compatible_provider = openai_prompt_cache_key("deepseek", Some("lineage-parent"));
+        let unknown_a = openai_prompt_cache_key("openai", None);
+        let unknown_b = openai_prompt_cache_key("openai", None);
+
+        assert_eq!(inherited, resumed);
+        assert_ne!(inherited, fresh);
+        assert_ne!(inherited, compatible_provider);
+        assert_eq!(unknown_a, unknown_b);
+        assert!(inherited.starts_with("mez-"));
+        assert_eq!(inherited.len(), "mez-".len() + 32);
+    }
 
     /// Provider request validation preserves invalid-argument diagnostics for
     /// required fields and accepts substantive values.

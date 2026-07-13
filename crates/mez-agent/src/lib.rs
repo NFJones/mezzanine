@@ -94,9 +94,9 @@ pub use provider::{
     ProviderModelCatalogParseError, ProviderModelInfo, ProviderRequestAssemblyError,
     ProviderRequestAssemblyErrorKind, ProviderRequestAssemblyResult, ProviderResponseError,
     ProviderResponseErrorKind, ProviderResponseResult, openai_default_reasoning_levels_for_model,
-    openai_models_endpoint_for_responses_endpoint, openai_responses_endpoint_for_base_url,
-    parse_openai_models_http_body_with, provider_catalog_reasoning_levels, resolve_provider_api,
-    validate_provider_request_required,
+    openai_models_endpoint_for_responses_endpoint, openai_prompt_cache_key,
+    openai_responses_endpoint_for_base_url, parse_openai_models_http_body_with,
+    provider_catalog_reasoning_levels, resolve_provider_api, validate_provider_request_required,
 };
 pub use provider_diagnostics::{
     ProviderMalformedOutputError, provider_error_detail, provider_failure_event_json,

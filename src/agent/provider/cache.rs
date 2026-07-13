@@ -8,12 +8,12 @@ use super::OPENAI_MAAP_FUNCTION_TOOL_NAME;
 use super::openai_request::openai_responses_request_control_shape_with_stream;
 use super::schema::openai_maap_action_batch_tools;
 use crate::agent::{
-    AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, ContextSourceKind,
-    ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest, ProviderTranscriptEvent,
+    ContextSourceKind, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest,
+    ProviderTranscriptEvent,
 };
 use mez_agent::{
     OpenAiPromptCacheDiagnostics, ProviderRequestAssemblyError, ProviderRequestAssemblyResult,
-    validate_provider_request_required,
+    openai_prompt_cache_key as provider_prompt_cache_key, validate_provider_request_required,
 };
 use sha2::Digest;
 
@@ -364,27 +364,10 @@ pub(super) fn openai_response_format(request: &ModelRequest) -> Option<serde_jso
 
 /// Builds a stable, non-secret OpenAI prompt-cache routing key for a request.
 pub(super) fn openai_prompt_cache_key(request: &ModelRequest) -> String {
-    let mut material = String::new();
-    material.push_str("mezzanine\n");
-    material.push_str("prompt_profile=");
-    material.push_str(AGENT_PROMPT_PROFILE_NAME);
-    material.push('\n');
-    material.push_str("prompt_version=");
-    material.push_str(&AGENT_PROMPT_PROFILE_VERSION.to_string());
-    material.push('\n');
-    material.push_str("provider=");
-    material.push_str(&request.provider);
-    material.push('\n');
-    material.push_str("lineage_id=");
-    material.push_str(
-        request
-            .prompt_cache_lineage_id
-            .as_deref()
-            .unwrap_or("lineage-unknown"),
-    );
-    material.push('\n');
-    material.push_str("cache_family=responses-routing-v4\n");
-    format!("mez-{}", &sha256_hex(material.as_bytes())[..32])
+    provider_prompt_cache_key(
+        &request.provider,
+        request.prompt_cache_lineage_id.as_deref(),
+    )
 }
 
 /// Maps Mezzanine latency preferences to OpenAI Responses service tiers.
