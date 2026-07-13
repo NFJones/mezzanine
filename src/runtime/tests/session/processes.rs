@@ -332,7 +332,7 @@ fn runtime_service_ignores_stale_process_exit_with_mismatched_primary_pid() {
         .apply_pane_process_exit_event(
             &started.pane_id,
             stale_primary_pid,
-            crate::process::PaneExitStatus {
+            mez_mux::process::PaneExitStatus {
                 code: Some(0),
                 signal: None,
                 success: true,
@@ -383,7 +383,7 @@ fn runtime_service_ignores_late_pane_output_after_exit_event() {
         .apply_pane_process_exit_event(
             &started.pane_id,
             started.primary_pid,
-            crate::process::PaneExitStatus {
+            mez_mux::process::PaneExitStatus {
                 code: Some(0),
                 signal: None,
                 success: true,
@@ -728,7 +728,7 @@ fn runtime_pane_program_title_stays_sticky_until_foreground_process_changes() {
 
     service
         .apply_pane_process_output(
-            crate::process::PaneProcessOutput {
+            mez_mux::process::PaneProcessOutput {
                 pane_id: "%1".to_string(),
                 primary_pid,
                 bytes: b"\x1b]2;editing notes\x07".to_vec(),
@@ -761,7 +761,7 @@ fn runtime_pane_program_title_stays_sticky_until_foreground_process_changes() {
 
     service
         .apply_pane_process_output(
-            crate::process::PaneProcessOutput {
+            mez_mux::process::PaneProcessOutput {
                 pane_id: "%1".to_string(),
                 primary_pid,
                 bytes: b"\x1b]2;editing tests\x07".to_vec(),

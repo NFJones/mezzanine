@@ -21,7 +21,7 @@ fn runtime_deferred_foreground_paste_stays_ordered_and_exits_copy_mode() {
     );
     service.ensure_active_copy_mode("%1").unwrap();
 
-    let input = vec![b'x'; crate::process::PTY_INPUT_WRITE_CHUNK_BYTES * 2 + 17];
+    let input = vec![b'x'; mez_mux::process::PTY_INPUT_WRITE_CHUNK_BYTES * 2 + 17];
     let (report, deferred) = service
         .apply_attached_terminal_step_transition(
             &primary,

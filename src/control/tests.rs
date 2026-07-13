@@ -2283,7 +2283,7 @@ fn pane_capture_embeds_supplied_exit_status() {
         primary_pid: None,
         process_state: Some("exited".to_string()),
         readiness_state: None,
-        exit_status: Some(crate::process::PaneExitStatus {
+        exit_status: Some(mez_mux::process::PaneExitStatus {
             code: Some(7),
             signal: None,
             success: false,

@@ -5,7 +5,7 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{current_rfc3339_seconds, effective_uid};
-use crate::process::PaneExitStatus;
+use mez_mux::process::PaneExitStatus;
 use mez_terminal::TerminalStyleSpan;
 
 // Control protocol data types and capabilities.

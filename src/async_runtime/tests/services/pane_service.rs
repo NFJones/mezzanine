@@ -56,9 +56,9 @@ async fn async_pane_process_service_defers_large_input_remainders() {
         assert_eq!(
             backend.writes,
             vec![
-                large_input[..crate::process::PTY_INPUT_WRITE_CHUNK_BYTES].to_vec(),
-                large_input[crate::process::PTY_INPUT_WRITE_CHUNK_BYTES
-                    ..crate::process::PTY_INPUT_WRITE_CHUNK_BYTES * 2]
+                large_input[..mez_mux::process::PTY_INPUT_WRITE_CHUNK_BYTES].to_vec(),
+                large_input[mez_mux::process::PTY_INPUT_WRITE_CHUNK_BYTES
+                    ..mez_mux::process::PTY_INPUT_WRITE_CHUNK_BYTES * 2]
                     .to_vec()
             ]
         );

@@ -628,7 +628,7 @@ fn session_snapshot_payload_preserves_terminal_and_transcript_refs() {
             g1_dec_special_graphics: false,
             shift_out: false,
         },
-        exit_status: Some(crate::process::PaneExitStatus {
+        exit_status: Some(mez_mux::process::PaneExitStatus {
             code: Some(7),
             signal: None,
             success: false,

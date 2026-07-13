@@ -20,9 +20,9 @@ use super::{
 use crate::agent::{AgentShellCommandOutcome, execute_agent_shell_command};
 use crate::layout::LayoutNode;
 use crate::permissions::builtin_rules;
-use crate::process::PaneExitStatus;
 use crate::session::ClientTerminalDescriptor;
 use crate::terminal::{DEFAULT_HISTORY_LIMIT, DEFAULT_PANE_TERM, TerminalFrameContext};
+use mez_mux::process::PaneExitStatus;
 use std::collections::BTreeMap;
 
 // Control state serialization helpers.

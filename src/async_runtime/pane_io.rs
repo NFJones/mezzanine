@@ -412,7 +412,7 @@ impl AsyncPaneProcessIo for AsyncPtyPaneProcessIo {
                         }
                     };
                 match guard.try_io(|inner| {
-                    crate::process::write_pty_fd_nonblocking_io(
+                    mez_mux::process::write_pty_fd_nonblocking_io(
                         inner.get_ref().fd.as_raw_fd(),
                         &bytes[written..],
                     )
@@ -1812,7 +1812,9 @@ where
                 if bytes.is_empty() {
                     continue;
                 }
-                let chunk_len = bytes.len().min(crate::process::PTY_INPUT_WRITE_CHUNK_BYTES);
+                let chunk_len = bytes
+                    .len()
+                    .min(mez_mux::process::PTY_INPUT_WRITE_CHUNK_BYTES);
                 let event = driver.write_input_event(&bytes[..chunk_len]).await;
                 if let RuntimeEvent::Pane(PaneEvent::InputWritten { bytes: written, .. }) = &event
                     && *written > 0

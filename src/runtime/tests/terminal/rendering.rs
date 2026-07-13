@@ -95,7 +95,7 @@ fn runtime_frame_context_uses_known_pane_exit_status() {
     service.pane_exit_records.insert(
         pane_id.clone(),
         PaneExitRecord {
-            exit_status: crate::process::PaneExitStatus {
+            exit_status: mez_mux::process::PaneExitStatus {
                 code: Some(7),
                 signal: None,
                 success: false,

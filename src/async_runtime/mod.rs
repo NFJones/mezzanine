@@ -32,7 +32,6 @@ use crate::layout::Size;
 use crate::message::{
     DeliveryCursor, FanoutBatch, MessageConnection, delivery_batch_json, encode_mmp_body,
 };
-use crate::process::{PaneExitStatus, PaneProcess};
 use crate::runtime::{
     AttachedClientStepApplication, RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
@@ -49,6 +48,7 @@ use crate::terminal::{
     compose_client_presentation_with_styles, plan_attached_terminal_client_step,
     plan_attached_terminal_client_step_with_host_paste_buffer,
 };
+use mez_mux::process::{PaneExitStatus, PaneProcess};
 
 /// Exposes the actor module boundary.
 ///

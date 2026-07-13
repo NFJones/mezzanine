@@ -128,10 +128,6 @@ use crate::permissions::{
     compare_approval_policy_authority, compare_permission_preset_authority, exact_command_sha256,
     normalize_exact_command_text,
 };
-use crate::process::{
-    ExitedPaneProcess, PaneExitStatus, PaneProcessManager, PaneProcessOutput,
-    shell_command_from_argv,
-};
 use crate::project::{
     ProjectTrustRecord, ProjectTrustStore, TrustDecision, default_trust_database_path,
     discover_existing_overlays, discover_project_root,
@@ -173,6 +169,10 @@ use crate::transcript::{
 use mez_mux::input::{
     KeyBindings, KeyChord, KeyCode, MuxAction, PaneFocusDirection, WindowFocusTarget,
     key_chord_input_bytes,
+};
+use mez_mux::process::{
+    ExitedPaneProcess, PaneExitStatus, PaneProcessManager, PaneProcessOutput,
+    shell_command_from_argv,
 };
 
 /// Exposes the agent module boundary.

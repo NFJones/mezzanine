@@ -115,7 +115,6 @@ pub mod permissions;
 ///
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
-pub mod process;
 /// Exposes the project module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

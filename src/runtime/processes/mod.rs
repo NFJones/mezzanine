@@ -40,11 +40,11 @@ use crate::agent::{
     apply_patch_transaction_phase, bootstrap_script_for_classification, parse_bootstrap_env_output,
     readiness_probe_command_for_classification,
 };
-use crate::process::PaneProcess;
 use crate::runtime::{
     PaneEvent, ProcessEvent, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition,
 };
 use crate::terminal::parse_mez_shell_transaction_osc;
+use mez_mux::process::PaneProcess;
 use mez_terminal::TerminalStyledLine;
 
 use output_filter::*;
@@ -628,7 +628,7 @@ impl RuntimeSessionService {
             &self.terminal_term,
         )?;
         let launch =
-            crate::process::PaneProcessLaunch::new(self.session.shell.path().to_path_buf());
+            mez_mux::process::PaneProcessLaunch::new(self.session.shell.path().to_path_buf());
         let primary_pid = self.pane_processes.spawn_for_pane_with_start_directory(
             descriptor.pane_id.as_str(),
             &launch,

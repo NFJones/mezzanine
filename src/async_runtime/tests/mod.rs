@@ -46,12 +46,12 @@ use crate::event::EventAudience;
 use crate::hooks::{HookEvent, HookExecutionPlan, HookOnFailure};
 use crate::ids::{AgentId, ClientId, IdFactory};
 use crate::message::MessageConnection;
-use crate::process::{PaneProcessLaunch, spawn_pane_process};
 use crate::registry::SessionRegistry;
 use crate::runtime::{
     RuntimeLifecycleState, RuntimeSessionService, current_effective_uid, pane_environment,
 };
 use crate::terminal::{AttachedTerminalClientStepPlan, AttachedTerminalOutputModes};
+use mez_mux::process::{PaneProcessLaunch, spawn_pane_process};
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
