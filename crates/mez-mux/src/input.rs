@@ -5,6 +5,10 @@
 //! Mezzanine until those responsibilities can move without importing runtime,
 //! mouse-presentation, or agent behavior.
 
+use std::collections::BTreeMap;
+
+use mez_terminal::{MouseEvent, parse_sgr_mouse};
+
 use crate::{MuxError, Result};
 
 /// One logical key accepted by multiplexer input bindings.
@@ -701,6 +705,77 @@ pub struct MousePolicy {
     pub copy_mode_active: bool,
 }
 
+/// One routing decision produced from attached-client terminal input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalInputClassification {
+    /// Forward the original bytes to the focused pane.
+    ForwardToPane,
+    /// Enter multiplexer prefix-key mode.
+    PrefixKeyMode,
+    /// Consume an unbound chord following the multiplexer prefix.
+    UnboundPrefix(KeyChord),
+    /// Run a product-configured command binding.
+    CommandBinding(String),
+    /// Route a decoded terminal mouse event through mux mouse policy.
+    Mouse(MouseEvent),
+    /// Run a built-in multiplexer action.
+    Mux(MuxAction),
+}
+
+/// Classifies one attached-client terminal input sequence using mux bindings.
+pub fn classify_terminal_input(
+    input: &[u8],
+    bindings: &KeyBindings,
+) -> Result<TerminalInputClassification> {
+    classify_terminal_input_with_command_bindings(input, bindings, &BTreeMap::new())
+}
+
+/// Classifies terminal input with additional product-configured commands.
+pub fn classify_terminal_input_with_command_bindings(
+    input: &[u8],
+    bindings: &KeyBindings,
+    command_bindings: &BTreeMap<KeyChord, String>,
+) -> Result<TerminalInputClassification> {
+    if input.starts_with(b"\x1b[<")
+        && let Some(event) = parse_sgr_mouse(input)
+    {
+        return Ok(TerminalInputClassification::Mouse(event));
+    }
+
+    let Some((first, first_len)) = parse_key_chord_bytes(input) else {
+        return Ok(TerminalInputClassification::ForwardToPane);
+    };
+
+    if first == bindings.escape {
+        if first_len == input.len() {
+            return Ok(TerminalInputClassification::PrefixKeyMode);
+        }
+        let remaining = &input[first_len..];
+        let Some((second, second_len)) = parse_key_chord_bytes(remaining) else {
+            return Ok(TerminalInputClassification::UnboundPrefix(first));
+        };
+        if second_len != remaining.len() {
+            return Ok(TerminalInputClassification::UnboundPrefix(second));
+        }
+        if let Some(command) = command_bindings.get(&second) {
+            return Ok(TerminalInputClassification::CommandBinding(
+                command.to_string(),
+            ));
+        }
+        return Ok(classify_prefix_binding(second, bindings)
+            .map(TerminalInputClassification::Mux)
+            .unwrap_or(TerminalInputClassification::UnboundPrefix(second)));
+    }
+
+    if first_len != input.len() {
+        return Ok(TerminalInputClassification::ForwardToPane);
+    }
+
+    Ok(classify_direct_binding(first, bindings)
+        .map(TerminalInputClassification::Mux)
+        .unwrap_or(TerminalInputClassification::ForwardToPane))
+}
+
 /// Configurable key chords that bypass or enter multiplexer prefix routing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyBindings {
@@ -946,5 +1021,38 @@ mod tests {
             Some((KeyChord::alt(KeyCode::Char('[')), 2))
         );
         assert_eq!(parse_key_chord_bytes(b"\xff"), None);
+    }
+
+    /// Verifies classification preserves mouse decoding and malformed mouse fallback behavior.
+    #[test]
+    fn classifies_terminal_mouse_input() {
+        let bindings = KeyBindings::default();
+
+        assert!(matches!(
+            classify_terminal_input(b"\x1b[<0;3;4M", &bindings).unwrap(),
+            TerminalInputClassification::Mouse(event) if event.column == 2 && event.row == 3
+        ));
+        assert_eq!(
+            classify_terminal_input(b"\x1b[<malformed", &bindings).unwrap(),
+            TerminalInputClassification::ForwardToPane
+        );
+    }
+
+    /// Verifies prefix and configured command routing remain owned by the mux classifier.
+    #[test]
+    fn classifies_prefix_and_command_bindings() {
+        let bindings = KeyBindings::default();
+        let command_chord = KeyChord::new(KeyCode::Char('g'));
+        let command_bindings = BTreeMap::from([(command_chord, "display-message".to_owned())]);
+
+        assert_eq!(
+            classify_terminal_input(b"\x01", &bindings).unwrap(),
+            TerminalInputClassification::PrefixKeyMode
+        );
+        assert_eq!(
+            classify_terminal_input_with_command_bindings(b"\x01g", &bindings, &command_bindings,)
+                .unwrap(),
+            TerminalInputClassification::CommandBinding("display-message".to_owned())
+        );
     }
 }
