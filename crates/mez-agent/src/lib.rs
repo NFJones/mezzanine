@@ -34,6 +34,8 @@ pub mod provider_error;
 pub mod provider_transcript;
 /// Dependency-neutral provider quota accounting contracts.
 pub mod quota;
+/// Dependency-neutral agent slash-command registry and parsing.
+pub mod slash;
 
 pub use accounting::{AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsageKey};
 pub use auth::{ProviderAuthMetadata, ProviderCredentialKind};
@@ -60,6 +62,10 @@ pub use provider_error::{
 };
 pub use provider_transcript::{PROVIDER_TRANSCRIPT_EVENT_MARKER, ProviderTranscriptEvent};
 pub use quota::{ProviderQuotaUsage, provider_quota_usage_from_headers};
+pub use slash::{
+    SlashCommandEffect, SlashCommandInvocation, SlashCommandParseError, SlashCommandSpec,
+    baseline_slash_commands, parse_slash_command,
+};
 
 /// Maximum number of issue records a model-authored query may request.
 pub const MAX_ISSUE_QUERY_LIMIT: u64 = 200;

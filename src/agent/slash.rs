@@ -8,105 +8,15 @@ use super::session::approval_policy_name;
 use super::{
     AgentLogLevel, AgentShellStore, AgentShellVisibility, McpRegistry, MezError, PermissionPolicy,
     Result, agent_shell_help_display, agent_shell_mcp_display, agent_shell_permissions_display,
-    agent_shell_status_display, validate_non_empty,
+    agent_shell_status_display,
 };
 use crate::error::MezErrorKind;
+use mez_agent::parse_slash_command as parse_agent_slash_command;
+pub use mez_agent::{
+    SlashCommandEffect, SlashCommandInvocation, SlashCommandSpec, baseline_slash_commands,
+};
 
 // Agent shell slash command registry and dispatch.
-
-/// Carries Slash Command Effect state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SlashCommandEffect {
-    /// Represents the Read Only case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    ReadOnly,
-    /// Represents the Policy Mutation case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    PolicyMutation,
-    /// Represents the Credential Mutation case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    CredentialMutation,
-    /// Represents the Session Mutation case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    SessionMutation,
-    /// Represents the File Mutation case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    FileMutation,
-    /// Represents the Background Job Mutation case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    BackgroundJobMutation,
-}
-
-/// Carries Slash Command Spec state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SlashCommandSpec {
-    /// Stores the name value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub name: &'static str,
-    /// Stores the aliases value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub aliases: &'static [&'static str],
-    /// Stores the effect value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub effect: SlashCommandEffect,
-    /// Stores the queueable while running value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub queueable_while_running: bool,
-}
-
-/// Carries Slash Command Invocation state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SlashCommandInvocation {
-    /// Stores the name value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub name: String,
-    /// Stores the args value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub args: String,
-    /// Stores the effect value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub effect: SlashCommandEffect,
-    /// Stores the queueable while running value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub queueable_while_running: bool,
-}
 
 /// Carries Agent Shell Command Outcome state for this subsystem.
 ///
@@ -169,117 +79,13 @@ pub enum AgentShellCommandOutcome {
     },
 }
 
-/// Runs the baseline slash commands operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
-    vec![
-        slash("help", &[], SlashCommandEffect::ReadOnly, true),
-        slash(
-            "permissions",
-            &["approvals"],
-            SlashCommandEffect::PolicyMutation,
-            true,
-        ),
-        slash("approval", &[], SlashCommandEffect::PolicyMutation, true),
-        slash("approve", &[], SlashCommandEffect::PolicyMutation, true),
-        slash("trust", &[], SlashCommandEffect::PolicyMutation, true),
-        slash("list-sessions", &[], SlashCommandEffect::ReadOnly, true),
-        slash("list-macros", &[], SlashCommandEffect::ReadOnly, true),
-        slash("list-skills", &[], SlashCommandEffect::ReadOnly, true),
-        slash(
-            "sync-builtin-skills",
-            &[],
-            SlashCommandEffect::FileMutation,
-            true,
-        ),
-        slash(
-            "list-modified-files",
-            &[],
-            SlashCommandEffect::ReadOnly,
-            true,
-        ),
-        slash(
-            "copy-context",
-            &["dump-agent-context", "dump-context"],
-            SlashCommandEffect::SessionMutation,
-            true,
-        ),
-        slash(
-            "copy-trace-log",
-            &[],
-            SlashCommandEffect::SessionMutation,
-            true,
-        ),
-        slash(
-            "copy-patches",
-            &[],
-            SlashCommandEffect::SessionMutation,
-            true,
-        ),
-        slash("clear", &[], SlashCommandEffect::SessionMutation, false),
-        slash("compact", &[], SlashCommandEffect::SessionMutation, false),
-        slash("copy", &[], SlashCommandEffect::SessionMutation, true),
-        slash("diff", &[], SlashCommandEffect::ReadOnly, true),
-        slash("directive", &[], SlashCommandEffect::SessionMutation, true),
-        slash("exit", &["quit"], SlashCommandEffect::SessionMutation, true),
-        slash("init", &[], SlashCommandEffect::FileMutation, true),
-        slash("logout", &[], SlashCommandEffect::CredentialMutation, true),
-        slash("list-mcp", &[], SlashCommandEffect::ReadOnly, true),
-        slash("issue", &[], SlashCommandEffect::SessionMutation, true),
-        slash("show-issues", &[], SlashCommandEffect::ReadOnly, true),
-        slash("memory", &[], SlashCommandEffect::PolicyMutation, true),
-        slash("show-memories", &[], SlashCommandEffect::ReadOnly, true),
-        slash("remember", &[], SlashCommandEffect::SessionMutation, false),
-        slash("model", &[], SlashCommandEffect::PolicyMutation, true),
-        slash("thinking", &[], SlashCommandEffect::PolicyMutation, true),
-        slash("latency", &[], SlashCommandEffect::PolicyMutation, true),
-        slash("routing", &[], SlashCommandEffect::PolicyMutation, true),
-        slash("personality", &[], SlashCommandEffect::PolicyMutation, true),
-        slash("loop", &[], SlashCommandEffect::SessionMutation, false),
-        slash("stop", &[], SlashCommandEffect::BackgroundJobMutation, true),
-        slash("fork", &[], SlashCommandEffect::SessionMutation, false),
-        slash("resume", &[], SlashCommandEffect::SessionMutation, false),
-        slash("new", &[], SlashCommandEffect::SessionMutation, false),
-        slash("status", &[], SlashCommandEffect::ReadOnly, true),
-        slash("debug-config", &[], SlashCommandEffect::ReadOnly, true),
-        slash("statusline", &[], SlashCommandEffect::SessionMutation, true),
-        slash("title", &[], SlashCommandEffect::SessionMutation, true),
-        slash("log-level", &[], SlashCommandEffect::SessionMutation, true),
-    ]
-}
-
 /// Runs the parse slash command operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommandInvocation>> {
-    let trimmed = input.trim();
-    let Some(stripped) = trimmed.strip_prefix('/') else {
-        return Ok(None);
-    };
-    let (name, args) = if let Some(index) = stripped.find(char::is_whitespace) {
-        (&stripped[..index], stripped[index..].trim())
-    } else {
-        (stripped, "")
-    };
-    validate_non_empty("slash command", name)?;
-    let specs = baseline_slash_commands();
-    let Some(spec) = specs
-        .iter()
-        .find(|spec| spec.name == name || spec.aliases.contains(&name))
-    else {
-        return Err(MezError::invalid_args("unknown slash command"));
-    };
-    Ok(Some(SlashCommandInvocation {
-        name: spec.name.to_string(),
-        args: args.to_string(),
-        effect: spec.effect,
-        queueable_while_running: spec.queueable_while_running,
-    }))
+    parse_agent_slash_command(input).map_err(|error| MezError::invalid_args(error.to_string()))
 }
 
 /// Runs the execute agent shell command operation for this subsystem.
@@ -679,24 +485,5 @@ fn agent_shell_command_error_outcome(input: &str, error: &MezError) -> AgentShel
     AgentShellCommandOutcome::Display {
         command,
         body: format!("agent command error: {}", error.message()),
-    }
-}
-
-/// Runs the slash operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn slash(
-    name: &'static str,
-    aliases: &'static [&'static str],
-    effect: SlashCommandEffect,
-    queueable_while_running: bool,
-) -> SlashCommandSpec {
-    SlashCommandSpec {
-        name,
-        aliases,
-        effect,
-        queueable_while_running,
     }
 }
