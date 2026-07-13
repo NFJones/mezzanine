@@ -17,7 +17,10 @@ use super::super::{
 use super::{
     TERMINAL_COMMAND_LIVE_OVERRIDE_LAYER, runtime_expand_user_path, runtime_positional_args,
 };
-use mez_mux::theme::{BUILTIN_UI_THEME_NAMES, UI_COLOR_SLOT_NAMES};
+use mez_mux::theme::{
+    BUILTIN_UI_THEME_NAMES, UI_COLOR_SLOT_NAMES, ui_theme_list_table_header,
+    ui_theme_list_table_row,
+};
 use std::collections::BTreeMap;
 
 /// Runs the runtime show options command operation for this subsystem.
@@ -556,11 +559,11 @@ pub(in crate::runtime) fn runtime_list_themes_command(
     custom_theme_names.sort();
     custom_theme_names.dedup();
 
-    let mut lines = vec![crate::terminal::ui_theme_list_table_header()];
+    let mut lines = vec![ui_theme_list_table_header()];
     for theme in BUILTIN_UI_THEME_NAMES {
         let definition = builtin_ui_theme_definition(theme)
             .ok_or_else(|| MezError::config(format!("built-in theme `{theme}` is unavailable")))?;
-        lines.push(crate::terminal::ui_theme_list_table_row(
+        lines.push(ui_theme_list_table_row(
             theme,
             "builtin",
             *theme == service.ui_theme.name,
@@ -573,7 +576,7 @@ pub(in crate::runtime) fn runtime_list_themes_command(
             .filter(|theme| !BUILTIN_UI_THEME_NAMES.contains(&theme.as_str()))
             .map(|theme| {
                 let definition = runtime_theme_definition_for_selection(service, theme)?;
-                Ok(crate::terminal::ui_theme_list_table_row(
+                Ok(ui_theme_list_table_row(
                     theme,
                     "config",
                     theme == &service.ui_theme.name,

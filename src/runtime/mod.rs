@@ -152,7 +152,7 @@ use crate::terminal::{
     TerminalCursorStyle, TerminalFrameContext, TerminalOscEvent, TerminalScreen, UiTheme,
     UiThemeDefinition, WindowFrameAction, agent_prompt_reserved_line_count,
     builtin_ui_theme_definition, pane_border_cells_for_geometries, render_attached_client_view,
-    rendered_pane_geometries, resolve_ui_theme, route_client_input_actions, valid_color_alias_name,
+    rendered_pane_geometries, resolve_ui_theme, route_client_input_actions,
     window_frame_action_pillbox_cells, window_frame_pillbox_cells,
 };
 use crate::transcript::{
@@ -173,6 +173,7 @@ use mez_mux::process::{
 };
 use mez_mux::readline::ReadlineOutcome;
 use mez_mux::session::{ClientRole, ClientState, ObserverDecisionState, Session};
+use mez_mux::theme::valid_color_alias_name;
 
 /// Exposes the agent module boundary.
 ///

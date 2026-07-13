@@ -7,7 +7,7 @@
 //! input dispatch and frame composition.
 
 use super::*;
-use crate::terminal::parse_hex_color;
+use mez_mux::theme::parse_hex_color;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Render placement for an open pane agent status selector.
