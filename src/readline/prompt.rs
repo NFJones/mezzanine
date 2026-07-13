@@ -431,13 +431,3 @@ impl ReadlinePrompt {
         }
     }
 }
-
-impl From<bool> for ReadlineOutcome {
-    fn from(changed: bool) -> Self {
-        if changed {
-            ReadlineOutcome::Edited
-        } else {
-            ReadlineOutcome::Noop
-        }
-    }
-}

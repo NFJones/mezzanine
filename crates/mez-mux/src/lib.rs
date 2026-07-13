@@ -9,6 +9,7 @@
 mod error;
 pub mod layout;
 pub mod process;
+pub mod readline;
 pub mod session;
 
 pub use error::{MuxError, MuxErrorKind, Result};

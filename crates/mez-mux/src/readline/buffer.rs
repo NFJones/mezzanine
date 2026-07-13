@@ -5,21 +5,124 @@
 
 use std::collections::BTreeSet;
 
-use super::types::{
-    DEFAULT_READLINE_HISTORY_LIMIT, READLINE_PASTE_BLOCK_THRESHOLD_BYTES, ReadlineBuffer,
-    ReadlineEdit, ReadlineOutcome, ReadlinePasteBlock,
-};
 use unicode_width::UnicodeWidthChar;
+
+/// Default number of submitted prompt entries retained by a readline buffer.
+pub const DEFAULT_READLINE_HISTORY_LIMIT: usize = 1000;
+/// Minimum pasted text byte count rendered as one collapsed prompt block.
+const READLINE_PASTE_BLOCK_THRESHOLD_BYTES: usize = 1024;
 
 const READLINE_PASTE_BLOCK_MARKER_BASE: u32 = 0xf0000;
 const READLINE_PASTE_BLOCK_THRESHOLD_LINES: usize = 6;
+
+/// A normalized editing command for a readline-style prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadlineEdit {
+    /// Insert one character.
+    Insert(char),
+    /// Insert a text fragment.
+    InsertText(String),
+    /// Move one character left.
+    MoveLeft,
+    /// Move one character right.
+    MoveRight,
+    /// Move left by one shell-style word.
+    MoveWordLeft,
+    /// Move right by one shell-style word.
+    MoveWordRight,
+    /// Move to the beginning of the logical line.
+    MoveHome,
+    /// Move to the end of the logical line.
+    MoveEnd,
+    /// Move to the beginning of the editable buffer.
+    MoveBufferStart,
+    /// Move to the end of the editable buffer.
+    MoveBufferEnd,
+    /// Move to the previous prompt row or history entry.
+    MoveRowUpOrHistoryPrevious,
+    /// Move to the next prompt row or history entry.
+    MoveRowDownOrHistoryNext,
+    /// Delete the character before the cursor.
+    Backspace,
+    /// Delete the character under the cursor.
+    DeleteForward,
+    /// Delete the shell-style word before the cursor.
+    KillWordLeft,
+    /// Delete the shell-style word after the cursor.
+    KillWordRight,
+    /// Delete text before the cursor.
+    KillToStart,
+    /// Delete text after the cursor.
+    KillToEnd,
+    /// Recall the previous history entry.
+    HistoryPrevious,
+    /// Recall the next history entry.
+    HistoryNext,
+    /// Search backward through history.
+    HistorySearchBackward,
+    /// Submit the editable text.
+    Submit,
+}
+
+/// The observable result of applying an editing command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReadlineOutcome {
+    /// The editable state changed.
+    Edited,
+    /// Text was submitted.
+    Submitted(String),
+    /// Raw text was submitted with a collapsed display representation.
+    SubmittedWithDisplay {
+        /// Exact submitted text.
+        text: String,
+        /// Human-readable collapsed display text.
+        display: String,
+    },
+    /// The prompt was cancelled.
+    Cancelled,
+    /// End-of-input was requested.
+    Eof,
+    /// No editable state changed.
+    Noop,
+}
+
+impl From<bool> for ReadlineOutcome {
+    /// Converts whether an edit changed state into its observable outcome.
+    fn from(changed: bool) -> Self {
+        if changed { Self::Edited } else { Self::Noop }
+    }
+}
+
+/// Editable line state with bounded submission history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReadlineBuffer {
+    line: String,
+    cursor: usize,
+    history: Vec<String>,
+    history_limit: usize,
+    history_cursor: Option<usize>,
+    history_entry_cursor_navigation: bool,
+    vertical_navigation_column: Option<usize>,
+    draft_before_history: String,
+    paste_blocks: Vec<ReadlinePasteBlock>,
+    next_paste_block_id: u32,
+    draft_before_history_paste_blocks: Vec<ReadlinePasteBlock>,
+    draft_before_history_next_paste_block_id: u32,
+}
+
+/// One large pasted payload collapsed in prompt rendering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReadlinePasteBlock {
+    marker: char,
+    content: String,
+}
 
 /// Returns the shell-style word range surrounding a character column.
 ///
 /// Columns are counted in Unicode scalar values so terminal copy-mode callers
 /// can share readline delimiter rules without depending on prompt buffer byte
 /// cursors. Whitespace columns select an empty range at the clicked column.
-pub(crate) fn readline_word_column_range(text: &str, column: usize) -> (usize, usize) {
+pub fn readline_word_column_range(text: &str, column: usize) -> (usize, usize) {
     let chars = text.chars().collect::<Vec<_>>();
     if chars.is_empty() {
         return (0, 0);
@@ -632,11 +735,7 @@ impl ReadlineBuffer {
     /// # Parameters
     /// - `query`: Search text to match. Empty queries match any history entry.
     /// - `before`: Exclusive upper-bound index for the search.
-    pub(super) fn history_substring_match_before(
-        &self,
-        query: &str,
-        before: usize,
-    ) -> Option<usize> {
+    pub fn history_substring_match_before(&self, query: &str, before: usize) -> Option<usize> {
         let mut index = before.min(self.history.len());
         while index > 0 {
             index -= 1;
@@ -653,7 +752,7 @@ impl ReadlineBuffer {
     /// # Parameters
     /// - `query`: Search text to match. Empty queries match any history entry.
     /// - `after`: Exclusive lower-bound index for the search.
-    pub(super) fn history_substring_match_after(&self, query: &str, after: usize) -> Option<usize> {
+    pub fn history_substring_match_after(&self, query: &str, after: usize) -> Option<usize> {
         let start = after.saturating_add(1);
         (start..self.history.len())
             .find(|index| history_entry_contains_query_substring(&self.history[*index], query))
@@ -665,7 +764,7 @@ impl ReadlineBuffer {
     /// - `index`: History entry index to load.
     /// - `draft_line`: Prompt text to restore when history navigation returns
     ///   beyond the newest match.
-    pub(super) fn load_history_search_match(&mut self, index: usize, draft_line: &str) -> bool {
+    pub fn load_history_search_match(&mut self, index: usize, draft_line: &str) -> bool {
         if self.history.get(index).is_none() {
             return false;
         }
@@ -681,7 +780,7 @@ impl ReadlineBuffer {
     /// # Parameters
     /// - `draft_line`: Prompt text to restore.
     /// - `draft_cursor`: Cursor byte offset to restore.
-    pub(super) fn restore_history_search_draft(&mut self, draft_line: &str, draft_cursor: usize) {
+    pub fn restore_history_search_draft(&mut self, draft_line: &str, draft_cursor: usize) {
         self.set_line_and_cursor(draft_line.to_string(), draft_cursor);
     }
 

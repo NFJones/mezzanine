@@ -9,7 +9,6 @@
 ///
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
-mod buffer;
 /// Exposes the decoder module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -32,14 +31,14 @@ mod prompt_loop;
 /// declaration makes the boundary available to the crate.
 mod types;
 
-pub(crate) use buffer::readline_word_column_range;
 pub use decoder::apply_readline_terminal_input;
+pub(crate) use mez_mux::readline::readline_word_column_range;
+pub use mez_mux::readline::{
+    DEFAULT_READLINE_HISTORY_LIMIT, ReadlineBuffer, ReadlineEdit, ReadlineOutcome,
+};
 #[cfg(test)]
 pub use prompt_loop::run_readline_prompt_loop;
-pub use types::{
-    DEFAULT_READLINE_HISTORY_LIMIT, ReadlineBuffer, ReadlineEdit, ReadlineInputDecoder,
-    ReadlineOutcome, ReadlinePrompt, ReadlinePromptKind,
-};
+pub use types::{ReadlineInputDecoder, ReadlinePrompt, ReadlinePromptKind};
 #[cfg(test)]
 pub use types::{ReadlinePromptLoopConfig, ReadlinePromptLoopIo, ReadlinePromptLoopReport};
 

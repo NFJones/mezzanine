@@ -1379,6 +1379,7 @@ dependencies = [
  "rustix",
  "shlex",
  "thiserror 2.0.18",
+ "unicode-width",
 ]
 
 [[package]]
