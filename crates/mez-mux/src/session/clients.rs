@@ -3,8 +3,8 @@
 //! Client methods enforce primary exclusivity, observer approval visibility,
 //! control-client role restrictions, and detach semantics.
 
+use crate::{MuxError as MezError, MuxErrorKind, Result};
 use mez_core::{ClientId, ObserverRequestId};
-use mez_mux::{MuxError as MezError, MuxErrorKind, Result};
 
 use super::time::current_unix_seconds;
 use super::types::{
@@ -443,7 +443,7 @@ impl Session {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(crate) fn require_primary(&self, client_id: &ClientId) -> Result<()> {
+    pub fn require_primary(&self, client_id: &ClientId) -> Result<()> {
         if self.primary_client_id.as_ref() == Some(client_id) {
             Ok(())
         } else {

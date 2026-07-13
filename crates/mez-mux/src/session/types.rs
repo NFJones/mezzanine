@@ -3,8 +3,8 @@
 //! These types describe clients, observer requests, session state, and the core
 //! session container. Behavior is implemented in focused sibling modules.
 
+use crate::layout::{LayoutNode, LayoutPolicy, PaneGeometry, Size, Window};
 use mez_core::{ClientId, IdFactory, ObserverRequestId, SessionId, WindowGroupId, WindowId};
-use mez_mux::layout::{LayoutNode, LayoutPolicy, PaneGeometry, Size, Window};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 

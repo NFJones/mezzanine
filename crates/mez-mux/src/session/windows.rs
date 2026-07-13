@@ -4,12 +4,12 @@
 //! kills, layout cycling, window reordering, live-state updates, and
 //! active-window bookkeeping calls.
 
-use mez_core::{ClientId, PaneId, WindowGroupId, WindowId};
-use mez_mux::layout::{
+use crate::layout::{
     LayoutPolicy, Pane, PaneGeometry, PaneNavigationDirection, PaneSizeSpec, PaneTitleSource, Size,
     SplitDirection, Window,
 };
-use mez_mux::{MuxError as MezError, MuxErrorKind, Result};
+use crate::{MuxError as MezError, MuxErrorKind, Result};
+use mez_core::{ClientId, PaneId, WindowGroupId, WindowId};
 
 use super::targets::JoinDestination;
 use super::time::current_unix_seconds;
@@ -150,7 +150,7 @@ impl Session {
     ///
     /// This bypasses client authorization only; callers must already be trusted
     /// runtime paths acting on behalf of the live session.
-    pub(crate) fn new_window_in_group_session_owned(
+    pub fn new_window_in_group_session_owned(
         &mut self,
         group_id: &WindowGroupId,
         name: impl Into<String>,
@@ -258,7 +258,7 @@ impl Session {
     }
 
     /// Renames a generated window for session-owned orchestration.
-    pub(crate) fn rename_window_generated_session_owned(
+    pub fn rename_window_generated_session_owned(
         &mut self,
         target: &str,
         name: impl Into<String>,
@@ -283,7 +283,7 @@ impl Session {
     }
 
     /// Marks a window name as generated for session-owned orchestration.
-    pub(crate) fn mark_window_name_generated_session_owned(&mut self, target: &str) -> Result<()> {
+    pub fn mark_window_name_generated_session_owned(&mut self, target: &str) -> Result<()> {
         let index = self.window_index_or_active(Some(target))?;
         self.windows[index].mark_name_generated();
         self.record_event();
@@ -648,7 +648,7 @@ impl Session {
     }
 
     /// Splits a pane in a target window for session-owned orchestration.
-    pub(crate) fn split_pane_in_window_select_session_owned(
+    pub fn split_pane_in_window_select_session_owned(
         &mut self,
         window_id: &WindowId,
         direction: SplitDirection,
@@ -974,7 +974,7 @@ impl Session {
     }
 
     /// Applies a window layout policy for session-owned orchestration.
-    pub(crate) fn set_window_layout_policy_session_owned(
+    pub fn set_window_layout_policy_session_owned(
         &mut self,
         window_id: &WindowId,
         policy: LayoutPolicy,
@@ -1574,7 +1574,7 @@ impl Session {
     }
 
     /// Removes a pane for session-owned orchestration.
-    pub(crate) fn kill_pane_session_owned(
+    pub fn kill_pane_session_owned(
         &mut self,
         target: Option<&str>,
         force: bool,
@@ -1698,7 +1698,7 @@ impl Session {
 
     /// Forces session shutdown from the runtime supervisor without requiring an
     /// attached primary client.
-    pub(crate) fn force_supervisor_shutdown(&mut self) {
+    pub fn force_supervisor_shutdown(&mut self) {
         let now = current_unix_seconds();
         for client in &mut self.clients {
             if client.state == ClientState::Attached {

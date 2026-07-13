@@ -3,8 +3,8 @@
 //! Targeting centralizes window and pane lookup by id, index, and name, plus
 //! shared helper state updates used by client and window operations.
 
+use crate::{MuxError as MezError, MuxErrorKind, Result};
 use mez_core::{PaneId, WindowId};
-use mez_mux::{MuxError as MezError, MuxErrorKind, Result};
 
 use super::time::current_unix_seconds;
 use super::types::{Session, SessionState};
@@ -94,7 +94,7 @@ impl Session {
     }
 
     /// Returns windows in the active group in user-facing order.
-    pub fn active_group_windows(&self) -> Vec<&mez_mux::layout::Window> {
+    pub fn active_group_windows(&self) -> Vec<&crate::layout::Window> {
         self.active_group_window_indexes()
             .iter()
             .filter_map(|index| self.windows.get(*index))

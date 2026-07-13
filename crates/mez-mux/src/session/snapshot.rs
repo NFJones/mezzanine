@@ -3,9 +3,9 @@
 //! Restore validates snapshot structure, reconstructs windows and panes, and
 //! advances the id factory beyond restored identifiers.
 
+use crate::layout::{Pane, PaneTitleSource, RestoredWindowLayout, Window};
+use crate::{MuxError as MezError, Result};
 use mez_core::IdFactory;
-use mez_mux::layout::{Pane, PaneTitleSource, RestoredWindowLayout, Window};
-use mez_mux::{MuxError as MezError, Result};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::time::current_unix_seconds;
