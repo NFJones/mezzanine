@@ -100,7 +100,6 @@ pub use fd::{
     TerminalClientLoopConfig, TerminalCursorStyle, TerminalFdInterest, TerminalFrameContext,
     TerminalPaneFrameContext, TerminalRawModeGuard, read_attached_terminal_size,
 };
-pub(crate) use keys::classify_terminal_input_with_command_bindings;
 pub use keys::{
     DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, DEFAULT_MEZZANINE_TERMINFO,
     DEFAULT_PANE_TERM, DEFAULT_PASTE_BUFFER_LIMIT_BYTES, GroupFocusTarget, KeyBindings, KeyChord,
@@ -160,7 +159,6 @@ pub use render::{
 pub(crate) use screen::parse_mez_shell_transaction_osc;
 
 use client_loop::borrow_raw_fd;
-use keys::parse_key_chord_bytes;
 pub(crate) use render::{
     DEFAULT_AGENT_WRAP_COLUMN_CAP, TerminalEmojiWidth, agent_log_wrap_width, agent_wrap_column_cap,
     set_agent_wrap_column_cap, set_terminal_emoji_width, terminal_grapheme_width,

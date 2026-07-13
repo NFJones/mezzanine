@@ -4,7 +4,10 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use mez_mux::input::{MouseBorderCell, MousePaneRegion, MouseWindowFrameCell};
+use mez_mux::input::{
+    MouseBorderCell, MousePaneRegion, MouseWindowFrameCell, MuxAction, PasteBufferTarget,
+    WindowFocusTarget, key_chord_input_bytes,
+};
 
 use super::service_state::{
     RunningShellTransactionKind, RuntimeDisplayOverlay, RuntimeDisplayOverlaySearchMatch,
@@ -14,15 +17,14 @@ use super::service_state::{
 use super::{
     AgentShellVisibility, AgentTurnRecord, AgentTurnState, AttachedClientStepApplication,
     AttachedTerminalClientStepPlan, ClientViewRole, CopyMode, CopyModeKeyAction, EventKind,
-    MezError, MouseAction, MouseSelectionDragState, MouseWindowActionFrameCell, MuxAction,
+    MezError, MouseAction, MouseSelectionDragState, MouseWindowActionFrameCell,
     ObserverDecisionState, PaneDescriptor, PaneGeometry, PaneInputDispatch,
-    PaneNavigationDirection, PasteBufferTarget, ReadlineInputDecoder, ReadlineOutcome,
-    ReadlinePrompt, ReadlinePromptKind, RenderedClientView, Result,
-    RuntimeAgentModifiedFileSummary, RuntimeAgentPromptInput, RuntimeSessionService,
-    RuntimeSideEffect, Size, SplitDirection, TerminalClientLoopAction, TerminalClientLoopConfig,
-    TerminalFrameContext, TerminalScreen, WindowFocusTarget, WindowFrameAction,
-    agent_prompt_reserved_line_count, current_unix_millis, current_unix_seconds, json_escape,
-    key_chord_input_bytes, mouse_action_name, mux_action_command_prompt_prefill, mux_action_name,
+    PaneNavigationDirection, ReadlineInputDecoder, ReadlineOutcome, ReadlinePrompt,
+    ReadlinePromptKind, RenderedClientView, Result, RuntimeAgentModifiedFileSummary,
+    RuntimeAgentPromptInput, RuntimeSessionService, RuntimeSideEffect, Size, SplitDirection,
+    TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFrameContext, TerminalScreen,
+    WindowFrameAction, agent_prompt_reserved_line_count, current_unix_millis, current_unix_seconds,
+    json_escape, mouse_action_name, mux_action_command_prompt_prefill, mux_action_name,
     pane_border_cells_for_geometries, pane_content_size_for_geometry,
     pane_frame_merges_into_divider, pane_navigation_direction,
     pane_render_region_size_for_geometry, parse_command_sequence, render_attached_client_view,

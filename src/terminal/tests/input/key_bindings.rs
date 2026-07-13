@@ -88,7 +88,7 @@ fn parses_key_binding_notation_for_default_surface() {
 /// than a panic hazard.
 #[test]
 fn rejects_empty_key_chord_input() {
-    assert_eq!(crate::terminal::parse_key_chord_bytes(b""), None);
+    assert_eq!(mez_mux::input::parse_key_chord_bytes(b""), None);
 }
 
 /// Verifies classifies default direct mux key bindings.

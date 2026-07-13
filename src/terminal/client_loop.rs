@@ -7,7 +7,6 @@
 use std::io::ErrorKind;
 use std::time::{Duration, Instant};
 
-use super::keys::classify_prefix_binding;
 use super::mouse::mouse_copy_position;
 #[cfg(test)]
 use super::{
@@ -16,12 +15,15 @@ use super::{
 };
 use super::{
     AttachedTerminalFdReadiness, AttachedTerminalFdRole, BorrowedFd, CopyModeKeyAction, KeyChord,
-    KeyCode, MezError, MouseAction, MouseEvent, MousePolicy, MuxAction, RawFd, Result, Size,
-    TerminalClientLoopConfig, TerminalColor, TerminalCursorStyle, TerminalInputClassification,
-    TerminalStyleSpan, WindowFocusTarget, classify_mouse_event,
-    classify_terminal_input_with_command_bindings, compose_client_presentation_with_styles,
-    key_chord_input_bytes, parse_key_chord_bytes, parse_sgr_mouse, terminal_grapheme_width,
+    MezError, MouseAction, MouseEvent, RawFd, Result, Size, TerminalClientLoopConfig,
+    TerminalColor, TerminalCursorStyle, TerminalStyleSpan, classify_mouse_event,
+    compose_client_presentation_with_styles, parse_sgr_mouse, terminal_grapheme_width,
     terminal_graphemes, terminal_text_width,
+};
+use mez_mux::input::{
+    KeyCode, MousePolicy, MuxAction, TerminalInputClassification, WindowFocusTarget,
+    classify_prefix_binding, classify_terminal_input_with_command_bindings, key_chord_input_bytes,
+    parse_key_chord_bytes,
 };
 
 // Attached terminal loop planning and I/O abstraction.

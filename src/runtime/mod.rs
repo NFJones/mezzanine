@@ -156,12 +156,11 @@ use crate::subagent::{
 use crate::terminal::{
     AttachedTerminalClientStepPlan, ClientViewRole, CopyMode, CopyModeKeyAction, CopyPosition,
     DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, DEFAULT_PANE_TERM, DEFAULT_UI_THEME_NAME,
-    HostClipboard, HostClipboardCommand, KeyBindings, KeyChord, KeyCode, MouseAction,
-    MouseWindowActionFrameCell, MuxAction, PaneFocusDirection, PasteBuffer, PasteBufferTarget,
+    HostClipboard, HostClipboardCommand, MouseAction, MouseWindowActionFrameCell, PasteBuffer,
     PasteBuffers, RenderedClientView, SearchDirection, TerminalClientLoopAction,
     TerminalClientLoopConfig, TerminalCursorStyle, TerminalFrameContext, TerminalOscEvent,
-    TerminalScreen, UiTheme, UiThemeDefinition, WindowFocusTarget, WindowFrameAction,
-    agent_prompt_reserved_line_count, builtin_ui_theme_definition, key_chord_input_bytes,
+    TerminalScreen, UiTheme, UiThemeDefinition, WindowFrameAction,
+    agent_prompt_reserved_line_count, builtin_ui_theme_definition,
     pane_border_cells_for_geometries, pane_content_size_for_geometry,
     pane_frame_merges_into_divider, pane_render_region_size_for_geometry,
     render_attached_client_view, rendered_pane_geometries, rendered_window_body_size,
@@ -170,6 +169,10 @@ use crate::terminal::{
 };
 use crate::transcript::{
     AgentSessionMetadata, AgentTranscriptStore, TranscriptEntry, TranscriptRole,
+};
+use mez_mux::input::{
+    KeyBindings, KeyChord, KeyCode, MuxAction, PaneFocusDirection, WindowFocusTarget,
+    key_chord_input_bytes,
 };
 
 /// Exposes the agent module boundary.
