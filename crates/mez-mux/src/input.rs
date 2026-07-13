@@ -11,6 +11,70 @@ use mez_terminal::{MouseEvent, parse_sgr_mouse};
 
 use crate::{MuxError, Result};
 
+/// A zero-based terminal cell occupied by a mux-managed pane border.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MouseBorderCell {
+    /// The zero-based rendered terminal column for the border cell.
+    pub column: u16,
+    /// The zero-based rendered terminal row for the border cell.
+    pub row: u16,
+}
+
+/// A zero-based terminal cell occupied by a rendered window-frame pill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MouseWindowFrameCell {
+    /// The zero-based rendered terminal column for the frame cell.
+    pub column: u16,
+    /// The zero-based rendered terminal row for the frame cell.
+    pub row: u16,
+    /// The session window index targeted by this frame cell.
+    pub window_index: usize,
+}
+
+/// A zero-based terminal cell occupied by a rendered window-group pill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MouseWindowGroupFrameCell {
+    /// The zero-based rendered terminal column for the frame cell.
+    pub column: u16,
+    /// The zero-based rendered terminal row for the frame cell.
+    pub row: u16,
+    /// The session group index targeted by this frame cell.
+    pub group_index: usize,
+}
+
+/// A rendered pane content rectangle with pane-local mouse ownership state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MousePaneRegion {
+    /// Stable pane identity for targeted mouse forwarding.
+    pub pane_id: String,
+    /// The zero-based rendered terminal column where pane content starts.
+    pub column: u16,
+    /// The zero-based rendered terminal row where pane content starts.
+    pub row: u16,
+    /// The rendered pane content width in terminal cells.
+    pub columns: u16,
+    /// The rendered pane content height in terminal cells.
+    pub rows: u16,
+    /// Whether the pane application has enabled SGR mouse reporting.
+    pub application_sgr_mouse_mode: bool,
+    /// Whether the pane application has enabled any tracked mouse reporting.
+    pub application_mouse_mode: bool,
+    /// Whether this pane currently owns copy-mode mouse handling.
+    pub copy_mode_active: bool,
+    /// Whether this pane is currently focused.
+    pub active: bool,
+}
+
+impl MousePaneRegion {
+    /// Returns whether a rendered terminal cell lies inside this pane's content.
+    pub fn contains(&self, column: u16, row: u16) -> bool {
+        column >= self.column
+            && column < self.column.saturating_add(self.columns)
+            && row >= self.row
+            && row < self.row.saturating_add(self.rows)
+    }
+}
+
 /// One logical key accepted by multiplexer input bindings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum KeyCode {
