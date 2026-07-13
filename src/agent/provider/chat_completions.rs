@@ -7,7 +7,6 @@
 //! `ChatCompletionsDialect` implementation so DeepSeek behavior does not become
 //! the default for every OpenAI-compatible backend.
 
-use super::catalog::provider_catalog_reasoning_levels;
 use super::errors::{openai_provider_error_detail, openai_provider_failure_json};
 use super::{
     AsyncModelProvider, AsyncProviderHttpTransport, DEFAULT_PROVIDER_TIMEOUT_MS, ExposeSecret,
@@ -17,6 +16,7 @@ use super::{
 };
 #[cfg(test)]
 use super::{ModelProvider, ProviderHttpTransport};
+use mez_agent::provider_catalog_reasoning_levels;
 use std::future::Future;
 use std::pin::Pin;
 

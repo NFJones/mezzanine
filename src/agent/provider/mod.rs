@@ -31,11 +31,7 @@ use anthropic::AnthropicMessagesDialect;
 pub use cache::openai_prompt_cache_diagnostics_for_request;
 #[cfg(test)]
 pub(crate) use cache::openai_stable_prefix_material_for_request;
-use catalog::provider_catalog_reasoning_levels;
-pub use catalog::{
-    openai_default_reasoning_levels_for_model, openai_models_endpoint_for_responses_endpoint,
-    openai_responses_endpoint_for_base_url, parse_openai_models_http_body,
-};
+pub use catalog::parse_openai_models_http_body;
 pub use chat_completions::ChatCompletionsProvider;
 pub use claude_code::ClaudeCodeProvider;
 use deepseek::DeepSeekChatCompletionsDialect;
@@ -65,6 +61,10 @@ pub use mez_agent::{
 pub use mez_agent::{ProviderQuotaUsage, provider_quota_usage_from_headers};
 #[cfg(test)]
 use mez_agent::{maap_mcp_call_action_schema_for_tool, normalize_openai_strict_schema};
+pub use mez_agent::{
+    openai_default_reasoning_levels_for_model, openai_models_endpoint_for_responses_endpoint,
+    openai_responses_endpoint_for_base_url, provider_catalog_reasoning_levels,
+};
 use openai_chat_completions::OpenAiChatCompletionsDialect;
 pub use openai_request::openai_responses_request_body;
 use openai_request::openai_responses_request_body_with_stream;
