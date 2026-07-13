@@ -6,105 +6,15 @@
 
 use include_dir::{Dir, include_dir};
 
-use super::{McpPromptSummary, Result, validate_non_empty};
+use super::{Result, validate_non_empty};
 use crate::MezError;
-
-// Agent system prompt profile construction.
-
-/// Defines the AGENT PROMPT PROFILE NAME const used by this subsystem.
-///
-/// Keeping this value documented makes the contract explicit at the module
-/// boundary and avoids relying on call-site inference.
-pub const AGENT_PROMPT_PROFILE_NAME: &str = "default";
-/// Defines the AGENT PROMPT PROFILE VERSION const used by this subsystem.
-///
-/// Keeping this value documented makes the contract explicit at the module
-/// boundary and avoids relying on call-site inference.
-pub const AGENT_PROMPT_PROFILE_VERSION: u32 = 30;
+pub use mez_agent::{AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptProfile};
 
 /// Embedded static system-prompt fragments owned by this module.
 static SYSTEM_PROMPTS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/agent/prompt/system");
 
 /// Embedded provider-specific prompt fragments owned by this module.
 static PROVIDER_PROMPTS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/agent/prompt/providers");
-
-/// Carries Agent Prompt Profile state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentPromptProfile {
-    /// Stores the agent id value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub agent_id: String,
-    /// Stores the pane id value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub pane_id: String,
-    /// Stores the provider kind for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub provider: Option<String>,
-    /// Stores the cooperation mode value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub cooperation_mode: Option<String>,
-    /// Stores the read scopes value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub read_scopes: Vec<String>,
-    /// Stores the write scopes value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub write_scopes: Vec<String>,
-    /// Stores the mcp summary value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub mcp_summary: McpPromptSummary,
-}
-
-impl AgentPromptProfile {
-    /// Runs the default for operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn default_for(agent_id: impl Into<String>, pane_id: impl Into<String>) -> Self {
-        Self {
-            agent_id: agent_id.into(),
-            pane_id: pane_id.into(),
-            provider: None,
-            cooperation_mode: None,
-            read_scopes: Vec::new(),
-            write_scopes: Vec::new(),
-            mcp_summary: McpPromptSummary {
-                available_servers: Vec::new(),
-                available_tools: Vec::new(),
-                unavailable_servers: Vec::new(),
-            },
-        }
-    }
-
-    /// Sets the provider kind on this profile.
-    pub fn with_provider(mut self, provider: impl Into<String>) -> Self {
-        self.provider = Some(provider.into());
-        self
-    }
-
-    /// Sets the MCP prompt summary on this profile.
-    pub fn with_mcp_summary(mut self, summary: McpPromptSummary) -> Self {
-        self.mcp_summary = summary;
-        self
-    }
-}
 
 /// Runs the build agent system prompt operation for this subsystem.
 ///
