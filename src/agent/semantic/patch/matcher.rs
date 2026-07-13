@@ -38,7 +38,7 @@ pub(super) fn apply_patch_hunks_to_file(
     for hunk in hunks {
         let hunk_match = find_hunk_position(&file, hunk, cursor)
             .map_err(|problem| apply_patch_hunk_mismatch_error(path, &file, hunk, problem))?;
-        let replacement = hunk.replacement_lines(&file, &hunk_match)?;
+        let replacement = replacement_lines(hunk, &file, &hunk_match)?;
         let replacement_len = replacement.len();
         file.lines.splice(
             hunk_match.position..hunk_match.position + hunk_match.span_len(),
@@ -49,103 +49,101 @@ pub(super) fn apply_patch_hunks_to_file(
     Ok(file)
 }
 
-impl MezPatchHunk {
-    fn replacement_lines(
-        &self,
-        file: &ApplyPatchTextFile,
-        hunk_match: &ApplyPatchHunkMatch,
-    ) -> Result<Vec<String>> {
-        let mut old_index = 0usize;
-        let mut next_source_offset = 0usize;
-        let mut lines = Vec::new();
-        let gap_policies = self.old_line_gap_policies();
-        for line in &self.lines {
-            match line {
-                MezPatchHunkLine::Context(_) => {
-                    let gap_policy = *gap_policies
-                        .get(old_index)
-                        .unwrap_or(&ApplyPatchBlankGapPolicy::Disallow);
-                    let offset = *hunk_match.old_line_offsets.get(old_index).ok_or_else(|| {
+fn replacement_lines(
+    hunk: &MezPatchHunk,
+    file: &ApplyPatchTextFile,
+    hunk_match: &ApplyPatchHunkMatch,
+) -> Result<Vec<String>> {
+    let mut old_index = 0usize;
+    let mut next_source_offset = 0usize;
+    let mut lines = Vec::new();
+    let gap_policies = old_line_gap_policies(hunk);
+    for line in &hunk.lines {
+        match line {
+            MezPatchHunkLine::Context(_) => {
+                let gap_policy = *gap_policies
+                    .get(old_index)
+                    .unwrap_or(&ApplyPatchBlankGapPolicy::Disallow);
+                let offset = *hunk_match.old_line_offsets.get(old_index).ok_or_else(|| {
+                    MezError::invalid_args(
+                        "apply_patch: internal hunk replacement range was invalid",
+                    )
+                })?;
+                append_skipped_blank_context_lines(
+                    &mut lines,
+                    file,
+                    hunk_match.position,
+                    next_source_offset,
+                    offset,
+                    gap_policy,
+                )?;
+                let source = file
+                    .lines
+                    .get(hunk_match.position + offset)
+                    .ok_or_else(|| {
                         MezError::invalid_args(
                             "apply_patch: internal hunk replacement range was invalid",
                         )
                     })?;
-                    append_skipped_blank_context_lines(
-                        &mut lines,
-                        file,
-                        hunk_match.position,
-                        next_source_offset,
-                        offset,
-                        gap_policy,
-                    )?;
-                    let source = file
-                        .lines
-                        .get(hunk_match.position + offset)
-                        .ok_or_else(|| {
-                            MezError::invalid_args(
-                                "apply_patch: internal hunk replacement range was invalid",
-                            )
-                        })?;
-                    lines.push(source.clone());
-                    old_index += 1;
-                    next_source_offset = offset.saturating_add(1);
-                }
-                MezPatchHunkLine::Remove(_) => {
-                    let gap_policy = *gap_policies
-                        .get(old_index)
-                        .unwrap_or(&ApplyPatchBlankGapPolicy::Disallow);
-                    let offset = *hunk_match.old_line_offsets.get(old_index).ok_or_else(|| {
-                        MezError::invalid_args(
-                            "apply_patch: internal hunk replacement range was invalid",
-                        )
-                    })?;
-                    append_skipped_blank_context_lines(
-                        &mut lines,
-                        file,
-                        hunk_match.position,
-                        next_source_offset,
-                        offset,
-                        gap_policy,
-                    )?;
-                    next_source_offset = offset.saturating_add(1);
-                    old_index += 1;
-                }
-                MezPatchHunkLine::Add(text) => lines.push(text.clone()),
+                lines.push(source.clone());
+                old_index += 1;
+                next_source_offset = offset.saturating_add(1);
             }
+            MezPatchHunkLine::Remove(_) => {
+                let gap_policy = *gap_policies
+                    .get(old_index)
+                    .unwrap_or(&ApplyPatchBlankGapPolicy::Disallow);
+                let offset = *hunk_match.old_line_offsets.get(old_index).ok_or_else(|| {
+                    MezError::invalid_args(
+                        "apply_patch: internal hunk replacement range was invalid",
+                    )
+                })?;
+                append_skipped_blank_context_lines(
+                    &mut lines,
+                    file,
+                    hunk_match.position,
+                    next_source_offset,
+                    offset,
+                    gap_policy,
+                )?;
+                next_source_offset = offset.saturating_add(1);
+                old_index += 1;
+            }
+            MezPatchHunkLine::Add(text) => lines.push(text.clone()),
         }
-        Ok(lines)
     }
+    Ok(lines)
+}
 
-    fn old_line_gap_policies(&self) -> Vec<ApplyPatchBlankGapPolicy> {
-        let mut policies = Vec::with_capacity(self.old.len());
-        let mut previous_old_kind = None;
-        for line in &self.lines {
-            match line {
-                MezPatchHunkLine::Context(_) => {
-                    let policy = match previous_old_kind {
-                        Some(MezPatchOldLineKind::Context | MezPatchOldLineKind::Remove) => {
-                            ApplyPatchBlankGapPolicy::Preserve
-                        }
-                        _ => ApplyPatchBlankGapPolicy::Disallow,
-                    };
-                    policies.push(policy);
-                    previous_old_kind = Some(MezPatchOldLineKind::Context);
-                }
-                MezPatchHunkLine::Remove(_) => {
-                    let policy = match previous_old_kind {
-                        Some(MezPatchOldLineKind::Context | MezPatchOldLineKind::Remove) => {
-                            ApplyPatchBlankGapPolicy::Delete
-                        }
-                        _ => ApplyPatchBlankGapPolicy::Disallow,
-                    };
-                    policies.push(policy);
-                    previous_old_kind = Some(MezPatchOldLineKind::Remove);
-                }
-                MezPatchHunkLine::Add(_) => {}
+fn old_line_gap_policies(hunk: &MezPatchHunk) -> Vec<ApplyPatchBlankGapPolicy> {
+    let mut policies = Vec::with_capacity(hunk.old.len());
+    let mut previous_old_kind = None;
+    for line in &hunk.lines {
+        match line {
+            MezPatchHunkLine::Context(_) => {
+                let policy = match previous_old_kind {
+                    Some(MezPatchOldLineKind::Context | MezPatchOldLineKind::Remove) => {
+                        ApplyPatchBlankGapPolicy::Preserve
+                    }
+                    _ => ApplyPatchBlankGapPolicy::Disallow,
+                };
+                policies.push(policy);
+                previous_old_kind = Some(MezPatchOldLineKind::Context);
             }
+            MezPatchHunkLine::Remove(_) => {
+                let policy = match previous_old_kind {
+                    Some(MezPatchOldLineKind::Context | MezPatchOldLineKind::Remove) => {
+                        ApplyPatchBlankGapPolicy::Delete
+                    }
+                    _ => ApplyPatchBlankGapPolicy::Disallow,
+                };
+                policies.push(policy);
+                previous_old_kind = Some(MezPatchOldLineKind::Remove);
+            }
+            MezPatchHunkLine::Add(_) => {}
         }
-        policies
     }
+    policies
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -817,7 +815,7 @@ fn find_hunk_position(
         return find_unanchored_hunk_position(
             &file.lines,
             &hunk.old,
-            &hunk.old_line_gap_policies(),
+            &old_line_gap_policies(hunk),
             cursor,
             hunk.range_hint,
         );
@@ -865,7 +863,7 @@ fn find_hunk_position(
         match find_hunk_position_in_ranges(
             &file.lines,
             &hunk.old,
-            &hunk.old_line_gap_policies(),
+            &old_line_gap_policies(hunk),
             &structural_ranges,
             hunk.range_hint,
             ApplyPatchSearchScope::StructuralAnchorScope,
@@ -894,7 +892,7 @@ fn find_hunk_position(
     find_hunk_position_in_ranges(
         &file.lines,
         &hunk.old,
-        &hunk.old_line_gap_policies(),
+        &old_line_gap_policies(hunk),
         &ranges,
         hunk.range_hint,
         ApplyPatchSearchScope::OrderedAnchorRange,

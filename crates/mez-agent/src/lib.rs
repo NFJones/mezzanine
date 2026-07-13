@@ -38,6 +38,8 @@ pub mod provider_transcript;
 pub mod quota;
 /// Provider-independent agent scheduling policy and queue state.
 pub mod scheduler;
+/// Deterministic semantic-patch parsing and path validation.
+pub mod semantic_patch;
 /// Dependency-neutral agent slash-command registry and parsing.
 pub mod slash;
 /// Provider-independent subagent cooperation and scope contracts.
