@@ -5,11 +5,11 @@ use crate::layout::{PaneGeometry, SplitDirection};
 use crate::terminal::tests::fixtures::display_column_for_fragment;
 use crate::terminal::{
     BTreeMap, ClientViewRole, DEFAULT_PANE_FRAME_TEMPLATE, PaneAgentStatusField, PaneRenderInput,
-    Size, TerminalClientLoopConfig, TerminalFrameContext, TerminalFramePosition,
-    TerminalFrameRenderOptions, TerminalFrameStyle, TerminalPaneFrameContext, Window,
-    pane_frame_agent_status_pillbox_cells, render_attached_client_view,
-    render_window_with_pane_frame_template, rendered_pane_geometries,
+    Size, TerminalClientLoopConfig, TerminalFrameContext, TerminalFrameRenderOptions,
+    TerminalPaneFrameContext, Window, pane_frame_agent_status_pillbox_cells,
+    render_attached_client_view, render_window_with_pane_frame_template, rendered_pane_geometries,
 };
+use mez_mux::presentation::{TerminalFramePosition, TerminalFrameStyle};
 use mez_terminal::TerminalColor;
 
 /// Verifies render pane frame uses named template fields.

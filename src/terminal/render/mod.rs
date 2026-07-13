@@ -9,10 +9,13 @@ use super::{
     ClientViewRole, CopyPosition, GraphicRendition, MezError, MousePaneAgentStatusCell,
     MouseWindowActionFrameCell, MouseWindowFrameCell, MouseWindowGroupFrameCell,
     PaneAgentStatusField, PaneGeometry, PaneRenderInput, ReadlinePromptRegion, RenderedClientView,
-    Result, Size, TerminalClientLoopConfig, TerminalFrameContext, TerminalFramePosition,
-    TerminalFrameStyle, TerminalPaneFrameContext, TerminalScreen, TerminalStyleSpan,
-    TerminalStyledLine, TerminalWindowFrameContext, TerminalWindowGroupFrameContext,
-    TerminalWindowStatusContext, UiColorPair, UiTheme, Window, WindowFrameAction,
+    Result, Size, TerminalClientLoopConfig, TerminalFrameContext, TerminalPaneFrameContext,
+    TerminalScreen, TerminalStyleSpan, TerminalStyledLine, UiColorPair, UiTheme, Window,
+    WindowFrameAction,
+};
+use mez_mux::presentation::{
+    TerminalFramePosition, TerminalFrameStyle, TerminalWindowFrameContext,
+    TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
 };
 
 // Client view composition and pane/window rendering.

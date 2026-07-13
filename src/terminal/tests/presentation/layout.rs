@@ -7,11 +7,14 @@ use crate::terminal::{
     BTreeMap, ClientViewRole, DEFAULT_PANE_FRAME_TEMPLATE,
     DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE, DEFAULT_WINDOW_FRAME_TEMPLATE, PaneRenderInput,
     RenderedClientView, Size, TerminalClientLoopConfig, TerminalCursorStyle, TerminalFrameContext,
-    TerminalFramePosition, TerminalFrameRenderOptions, TerminalPaneFrameContext, TerminalScreen,
-    TerminalWindowFrameContext, TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
-    UiTheme, Window, apply_client_view_offset, compose_client_presentation,
-    draw_window_from_screens, pane_render_region_size_for_geometry, render_attached_client_view,
-    render_window, render_window_with_pane_frame_template,
+    TerminalFrameRenderOptions, TerminalPaneFrameContext, TerminalScreen, UiTheme, Window,
+    apply_client_view_offset, compose_client_presentation, draw_window_from_screens,
+    pane_render_region_size_for_geometry, render_attached_client_view, render_window,
+    render_window_with_pane_frame_template,
+};
+use mez_mux::presentation::{
+    TerminalFramePosition, TerminalWindowFrameContext, TerminalWindowGroupFrameContext,
+    TerminalWindowStatusContext,
 };
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 use unicode_width::UnicodeWidthStr;

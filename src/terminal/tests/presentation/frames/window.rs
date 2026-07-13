@@ -5,10 +5,12 @@ use crate::layout::SplitDirection;
 use crate::terminal::{
     BTreeMap, ClientViewRole, DEFAULT_PANE_FRAME_TEMPLATE,
     DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE, DEFAULT_WINDOW_FRAME_TEMPLATE, PaneRenderInput,
-    Size, TerminalClientLoopConfig, TerminalFrameContext, TerminalFramePosition,
-    TerminalFrameRenderOptions, TerminalWindowFrameContext, TerminalWindowStatusContext, Window,
+    Size, TerminalClientLoopConfig, TerminalFrameContext, TerminalFrameRenderOptions, Window,
     WindowFrameAction, render_attached_client_view, render_window_with_pane_frame_template,
     window_frame_action_pillbox_cells,
+};
+use mez_mux::presentation::{
+    TerminalFramePosition, TerminalWindowFrameContext, TerminalWindowStatusContext,
 };
 use mez_terminal::TerminalColor;
 use unicode_width::UnicodeWidthStr;

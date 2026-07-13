@@ -71,7 +71,7 @@ pub struct TerminalFrameContext {
 pub type TerminalPaneFrameContext =
     mez_mux::presentation::TerminalPaneFrameContext<ReadlinePrompt, Vec<String>>;
 
-pub use mez_mux::presentation::{
+use mez_mux::presentation::{
     TerminalFramePosition, TerminalFrameStyle, TerminalWindowFrameContext,
     TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
 };

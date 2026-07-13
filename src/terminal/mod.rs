@@ -98,9 +98,7 @@ pub use fd::poll_attached_terminal_fd_readiness;
 pub use fd::{
     AttachedTerminalFd, AttachedTerminalFdReadiness, AttachedTerminalFdRole, PaneRenderInput,
     TerminalClientLoopConfig, TerminalCursorStyle, TerminalFdInterest, TerminalFrameContext,
-    TerminalFramePosition, TerminalFrameStyle, TerminalPaneFrameContext, TerminalRawModeGuard,
-    TerminalWindowFrameContext, TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
-    read_attached_terminal_size,
+    TerminalPaneFrameContext, TerminalRawModeGuard, read_attached_terminal_size,
 };
 pub(crate) use keys::classify_terminal_input_with_command_bindings;
 pub use keys::{
