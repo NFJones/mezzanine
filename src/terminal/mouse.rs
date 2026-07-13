@@ -7,130 +7,9 @@
 use super::{CopyPosition, Result};
 
 pub use mez_mux::input::MousePolicy;
+pub use mez_terminal::{MouseButton, MouseEvent, MouseEventKind, MouseModifiers};
 
 // Mouse event parsing and policy classification.
-
-/// Carries Mouse Button state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MouseButton {
-    /// Represents the Left case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Left,
-    /// Represents the Middle case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Middle,
-    /// Represents the Right case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Right,
-    /// Represents the Wheel Up case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    WheelUp,
-    /// Represents the Wheel Down case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    WheelDown,
-    /// Represents the Other case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Other(u16),
-}
-
-/// Carries Mouse Event Kind state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MouseEventKind {
-    /// Represents the Press case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Press,
-    /// Represents the Release case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Release,
-    /// Represents the Drag case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Drag,
-    /// Represents the Scroll case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Scroll,
-}
-
-/// Carries Mouse Modifiers state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MouseModifiers {
-    /// Stores the shift value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub shift: bool,
-    /// Stores the alt value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub alt: bool,
-    /// Stores the ctrl value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub ctrl: bool,
-}
-
-/// Carries Mouse Event state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MouseEvent {
-    /// Stores the kind value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub kind: MouseEventKind,
-    /// Stores the button value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub button: MouseButton,
-    /// Stores the column value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub column: u16,
-    /// Stores the row value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub row: u16,
-    /// Stores the modifiers value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub modifiers: MouseModifiers,
-}
 
 /// A zero-based terminal cell occupied by a mux-managed pane border.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -666,31 +545,7 @@ pub enum CopyModeKeyAction {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub fn parse_sgr_mouse(input: &[u8]) -> Result<Option<MouseEvent>> {
-    Ok(
-        mez_terminal::parse_sgr_mouse(input).map(|event| MouseEvent {
-            kind: match event.kind {
-                mez_terminal::MouseEventKind::Press => MouseEventKind::Press,
-                mez_terminal::MouseEventKind::Release => MouseEventKind::Release,
-                mez_terminal::MouseEventKind::Drag => MouseEventKind::Drag,
-                mez_terminal::MouseEventKind::Scroll => MouseEventKind::Scroll,
-            },
-            button: match event.button {
-                mez_terminal::MouseButton::Left => MouseButton::Left,
-                mez_terminal::MouseButton::Middle => MouseButton::Middle,
-                mez_terminal::MouseButton::Right => MouseButton::Right,
-                mez_terminal::MouseButton::WheelUp => MouseButton::WheelUp,
-                mez_terminal::MouseButton::WheelDown => MouseButton::WheelDown,
-                mez_terminal::MouseButton::Other(code) => MouseButton::Other(code),
-            },
-            column: event.column,
-            row: event.row,
-            modifiers: MouseModifiers {
-                shift: event.modifiers.shift,
-                alt: event.modifiers.alt,
-                ctrl: event.modifiers.ctrl,
-            },
-        }),
-    )
+    Ok(mez_terminal::parse_sgr_mouse(input))
 }
 
 /// Runs the classify mouse event operation for this subsystem.
