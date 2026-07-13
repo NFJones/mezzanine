@@ -32,7 +32,6 @@ mod prompt_loop;
 mod types;
 
 pub use mez_mux::readline::apply_readline_terminal_input;
-pub(crate) use mez_mux::readline::readline_word_column_range;
 pub use mez_mux::readline::{
     DEFAULT_READLINE_HISTORY_LIMIT, ReadlineBuffer, ReadlineEdit, ReadlineOutcome,
 };

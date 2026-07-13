@@ -6,11 +6,9 @@
 
 use super::{
     MezError, PasteBuffers, Result, TerminalScreen, TerminalStyledLine, char_count, line_slice,
-    terminal_grapheme_width, terminal_graphemes,
 };
-use crate::readline::readline_word_column_range;
+use mez_mux::copy::{CopyBuffer, normalize_selection, validate_position};
 pub use mez_mux::copy::{CopyPosition, SearchDirection};
-use mez_mux::copy::{normalize_selection, search_lines, validate_position};
 
 // Copy mode, selection, and search primitives.
 
@@ -40,7 +38,7 @@ pub struct CopyMode {
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) lines: Vec<String>,
+    buffer: CopyBuffer,
     /// Raw-copy lines used when presentation-only text differs from display.
     ///
     /// This remains parallel to `lines`; selections are navigated on displayed
@@ -55,27 +53,22 @@ pub struct CopyMode {
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) viewport_rows: usize,
     /// Stores the scroll top value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) scroll_top: usize,
     /// Stores the cursor value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) cursor: CopyPosition,
     /// Stores the selection value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) selection: Option<(CopyPosition, CopyPosition)>,
     /// Stores the selection anchor value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(super) selection_anchor: Option<CopyPosition>,
     /// Stores the alternate screen was active value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -107,14 +100,9 @@ impl CopyMode {
         let (scroll_top, cursor) = initial_copy_mode_view(screen, &lines, viewport_rows);
 
         Ok(Self {
-            lines,
+            buffer: CopyBuffer::new(lines, viewport_rows, scroll_top, cursor)?,
             copy_lines,
             styled_lines,
-            viewport_rows,
-            scroll_top,
-            cursor,
-            selection: None,
-            selection_anchor: None,
             alternate_screen_was_active: screen.alternate_screen_active(),
         })
     }
@@ -143,14 +131,9 @@ impl CopyMode {
             .collect::<Vec<_>>();
 
         Ok(Self {
-            lines,
+            buffer: CopyBuffer::new(lines, viewport_rows, 0, CopyPosition { line: 0, column: 0 })?,
             copy_lines,
             styled_lines,
-            viewport_rows,
-            scroll_top: 0,
-            cursor: CopyPosition { line: 0, column: 0 },
-            selection: None,
-            selection_anchor: None,
             alternate_screen_was_active: screen.alternate_screen_active(),
         })
     }
@@ -170,24 +153,22 @@ impl CopyMode {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn scroll_top(&self) -> usize {
-        self.scroll_top
+        self.buffer.scroll_top()
     }
 
     /// Returns the number of lines available in the copy-mode buffer.
     pub fn line_count(&self) -> usize {
-        self.lines.len()
+        self.buffer.line_count()
     }
 
     /// Returns the one-based end line visible at the bottom of the viewport.
     pub fn visible_end_line(&self) -> usize {
-        self.scroll_top
-            .saturating_add(self.viewport_rows)
-            .min(self.lines.len())
+        self.buffer.visible_end_line()
     }
 
     /// Returns whether the viewport is at the live bottom of the buffer.
     pub fn is_at_bottom(&self) -> bool {
-        self.scroll_top >= self.lines.len().saturating_sub(self.viewport_rows)
+        self.buffer.is_at_bottom()
     }
 
     /// Runs the visible lines operation for this subsystem.
@@ -196,43 +177,19 @@ impl CopyMode {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn visible_lines(&self) -> &[String] {
-        let end = self
-            .scroll_top
-            .saturating_add(self.viewport_rows)
-            .min(self.lines.len());
-        &self.lines[self.scroll_top..end]
+        self.buffer.visible_lines()
     }
 
     /// Returns the styled lines visible in the copy-mode viewport.
     pub fn visible_styled_lines(&self) -> &[TerminalStyledLine] {
-        let end = self
-            .scroll_top
-            .saturating_add(self.viewport_rows)
-            .min(self.styled_lines.len());
-        &self.styled_lines[self.scroll_top..end]
+        &self.styled_lines[self.scroll_top()..self.visible_end_line()]
     }
 
     /// Updates the copy-mode viewport height after a pane or window resize.
     pub fn resize_viewport_rows(&mut self, viewport_rows: usize) -> Result<()> {
-        if viewport_rows == 0 {
-            return Err(MezError::invalid_args(
-                "copy mode viewport must have at least one row",
-            ));
-        }
-        self.viewport_rows = viewport_rows;
-        self.scroll_top = self
-            .scroll_top
-            .min(self.lines.len().saturating_sub(self.viewport_rows));
-        self.cursor = self.clamp_position(self.cursor);
-        self.selection = self
-            .selection
-            .map(|(start, end)| (self.clamp_position(start), self.clamp_position(end)));
-        self.selection_anchor = self
-            .selection_anchor
-            .map(|anchor| self.clamp_position(anchor));
-        self.keep_cursor_visible();
-        self.update_keyboard_selection();
-        Ok(())
+        self.buffer
+            .resize_viewport_rows(viewport_rows)
+            .map_err(Into::into)
     }
 
     /// Runs the scroll by operation for this subsystem.
@@ -241,19 +198,7 @@ impl CopyMode {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn scroll_by(&mut self, delta: isize) {
-        let max_top = self.lines.len().saturating_sub(self.viewport_rows);
-        if delta.is_negative() {
-            self.scroll_top = self.scroll_top.saturating_sub(delta.unsigned_abs());
-        } else {
-            self.scroll_top = self.scroll_top.saturating_add(delta as usize).min(max_top);
-        }
-        self.cursor.line = self.cursor.line.clamp(
-            self.scroll_top,
-            self.scroll_top
-                .saturating_add(self.viewport_rows.saturating_sub(1))
-                .min(self.lines.len().saturating_sub(1)),
-        );
-        self.update_keyboard_selection();
+        self.buffer.scroll_by(delta);
     }
 
     /// Runs the page up operation for this subsystem.
@@ -262,11 +207,7 @@ impl CopyMode {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn page_up(&mut self) {
-        if self.scroll_top < self.viewport_rows {
-            self.scroll_to_top();
-        } else {
-            self.scroll_by(-(self.viewport_rows as isize));
-        }
+        self.buffer.page_up();
     }
 
     /// Runs the page down operation for this subsystem.
@@ -275,12 +216,7 @@ impl CopyMode {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn page_down(&mut self) {
-        let max_top = self.lines.len().saturating_sub(self.viewport_rows);
-        if max_top.saturating_sub(self.scroll_top) < self.viewport_rows {
-            self.scroll_to_bottom();
-        } else {
-            self.scroll_by(self.viewport_rows as isize);
-        }
+        self.buffer.page_down();
     }
 
     /// Runs the scroll to top operation for this subsystem.
@@ -289,10 +225,7 @@ impl CopyMode {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn scroll_to_top(&mut self) {
-        self.scroll_top = 0;
-        self.cursor.line = 0;
-        self.cursor.column = 0;
-        self.update_keyboard_selection();
+        self.buffer.scroll_to_top();
     }
 
     /// Runs the scroll to bottom operation for this subsystem.
@@ -301,14 +234,7 @@ impl CopyMode {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn scroll_to_bottom(&mut self) {
-        self.scroll_top = self.lines.len().saturating_sub(self.viewport_rows);
-        self.cursor.line = self.lines.len().saturating_sub(1);
-        self.cursor.column = self
-            .lines
-            .get(self.cursor.line)
-            .map(|line| char_count(line))
-            .unwrap_or_default();
-        self.update_keyboard_selection();
+        self.buffer.scroll_to_bottom();
     }
 
     /// Runs the cursor operation for this subsystem.
@@ -317,7 +243,7 @@ impl CopyMode {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn cursor(&self) -> CopyPosition {
-        self.cursor
+        self.buffer.cursor()
     }
 
     /// Clamps one copy position to the available copy-mode buffer.
@@ -325,11 +251,7 @@ impl CopyMode {
     /// # Parameters
     /// - `position`: Position to clamp.
     pub fn clamp_position(&self, position: CopyPosition) -> CopyPosition {
-        let line = position.line.min(self.lines.len().saturating_sub(1));
-        CopyPosition {
-            line,
-            column: position.column.min(self.line_width(line)),
-        }
+        self.buffer.clamp_position(position)
     }
 
     /// Runs the move cursor by operation for this subsystem.
@@ -338,135 +260,29 @@ impl CopyMode {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn move_cursor_by(&mut self, line_delta: isize, column_delta: isize) {
-        let max_line = self.lines.len().saturating_sub(1);
-        self.cursor.line = if line_delta.is_negative() {
-            self.cursor.line.saturating_sub(line_delta.unsigned_abs())
-        } else {
-            self.cursor
-                .line
-                .saturating_add(line_delta as usize)
-                .min(max_line)
-        };
-        self.cursor.column = self.cursor.column.min(self.line_width(self.cursor.line));
-        self.move_cursor_columns(column_delta);
-        self.keep_cursor_visible();
-        self.update_keyboard_selection();
-    }
-
-    /// Moves the cursor horizontally, overflowing left and right across line
-    /// boundaries the way readline-style cursor movement does.
-    fn move_cursor_columns(&mut self, column_delta: isize) {
-        if column_delta.is_negative() {
-            for _ in 0..column_delta.unsigned_abs() {
-                self.move_cursor_left_one();
-            }
-        } else {
-            for _ in 0..column_delta as usize {
-                self.move_cursor_right_one();
-            }
-        }
-    }
-
-    /// Moves the cursor one cell left, crossing to the previous line when the
-    /// cursor is already at the beginning of the current line.
-    fn move_cursor_left_one(&mut self) {
-        if self.cursor.column > 0 {
-            if let Some(line) = self.lines.get(self.cursor.line) {
-                if let Some((start, _)) =
-                    grapheme_at_column(line, self.cursor.column.saturating_sub(1))
-                {
-                    self.cursor.column = start;
-                } else {
-                    self.cursor.column = self.cursor.column.saturating_sub(1);
-                }
-            } else {
-                self.cursor.column = self.cursor.column.saturating_sub(1);
-            }
-        } else if self.cursor.line > 0 {
-            self.cursor.line = self.cursor.line.saturating_sub(1);
-            self.cursor.column = self.line_width(self.cursor.line);
-        }
-    }
-
-    /// Moves the cursor one cell right, crossing to the next line when the
-    /// cursor is already at the end of the current line.
-    fn move_cursor_right_one(&mut self) {
-        let line_width = self.line_width(self.cursor.line);
-        if self.cursor.column < line_width {
-            if let Some(line) = self.lines.get(self.cursor.line) {
-                if let Some((start, width)) = grapheme_at_column(line, self.cursor.column) {
-                    self.cursor.column = start.saturating_add(width);
-                } else {
-                    self.cursor.column = self.cursor.column.saturating_add(1);
-                }
-            } else {
-                self.cursor.column = self.cursor.column.saturating_add(1);
-            }
-        } else if self.cursor.line.saturating_add(1) < self.lines.len() {
-            self.cursor.line = self.cursor.line.saturating_add(1);
-            self.cursor.column = 0;
-        }
-    }
-
-    /// Returns the width of one copy-mode line in terminal-cell columns.
-    fn line_width(&self, line: usize) -> usize {
-        self.lines
-            .get(line)
-            .map(|line| char_count(line))
-            .unwrap_or_default()
-    }
-
-    /// Scrolls the viewport just enough to keep the cursor visible.
-    fn keep_cursor_visible(&mut self) {
-        if self.cursor.line < self.scroll_top {
-            self.scroll_top = self.cursor.line;
-        } else {
-            let bottom = self.scroll_top.saturating_add(self.viewport_rows);
-            if self.cursor.line >= bottom {
-                self.scroll_top = self
-                    .cursor
-                    .line
-                    .saturating_sub(self.viewport_rows.saturating_sub(1));
-            }
-        }
+        self.buffer.move_cursor_by(line_delta, column_delta);
     }
 
     /// Moves the copy-mode cursor to the beginning of the current line.
     pub fn move_cursor_to_line_start(&mut self) {
-        self.cursor.column = 0;
-        self.update_keyboard_selection();
+        self.buffer.move_cursor_to_line_start();
     }
 
     /// Moves the copy-mode cursor to the end of the current line.
     pub fn move_cursor_to_line_end(&mut self) {
-        self.cursor.column = self
-            .lines
-            .get(self.cursor.line)
-            .map(|line| char_count(line))
-            .unwrap_or_default();
-        self.update_keyboard_selection();
+        self.buffer.move_cursor_to_line_end();
     }
 
     /// Moves the copy-mode cursor to the previous word boundary on the current
     /// line, matching readline-style modified horizontal movement.
     pub fn move_cursor_word_left(&mut self) {
-        self.cursor.column = self
-            .lines
-            .get(self.cursor.line)
-            .map(|line| previous_word_column(line, self.cursor.column))
-            .unwrap_or_default();
-        self.update_keyboard_selection();
+        self.buffer.move_cursor_word_left();
     }
 
     /// Moves the copy-mode cursor to the next word boundary on the current
     /// line, matching readline-style modified horizontal movement.
     pub fn move_cursor_word_right(&mut self) {
-        self.cursor.column = self
-            .lines
-            .get(self.cursor.line)
-            .map(|line| next_word_column(line, self.cursor.column))
-            .unwrap_or_default();
-        self.update_keyboard_selection();
+        self.buffer.move_cursor_word_right();
     }
 
     /// Runs the begin keyboard selection operation for this subsystem.
@@ -475,8 +291,7 @@ impl CopyMode {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn begin_keyboard_selection(&mut self) {
-        self.selection_anchor = Some(self.cursor);
-        self.selection = Some((self.cursor, self.cursor));
+        self.buffer.begin_keyboard_selection();
     }
 
     /// Runs the search operation for this subsystem.
@@ -489,27 +304,7 @@ impl CopyMode {
         query: &str,
         direction: SearchDirection,
     ) -> Result<Option<CopyPosition>> {
-        if query.is_empty() {
-            return Err(MezError::invalid_args(
-                "copy mode search query must not be empty",
-            ));
-        }
-
-        let found = search_lines(&self.lines, self.scroll_top, query, direction);
-
-        if let Some((position, width)) = found {
-            self.scroll_top = position.line.min(self.lines.len().saturating_sub(1));
-            self.selection = Some((
-                position,
-                CopyPosition {
-                    line: position.line,
-                    column: position.column.saturating_add(width),
-                },
-            ));
-            Ok(Some(position))
-        } else {
-            Ok(None)
-        }
+        self.buffer.search(query, direction).map_err(Into::into)
     }
 
     /// Runs the select range operation for this subsystem.
@@ -518,10 +313,7 @@ impl CopyMode {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn select_range(&mut self, start: CopyPosition, end: CopyPosition) -> Result<()> {
-        validate_position(&self.lines, start)?;
-        validate_position(&self.lines, end)?;
-        self.selection = Some((start, end));
-        Ok(())
+        self.buffer.select_range(start, end).map_err(Into::into)
     }
 
     /// Selects the readline-style word segment surrounding one copy position.
@@ -530,23 +322,7 @@ impl CopyMode {
     /// - `position`: Copy-mode position whose line and column identify the
     ///   clicked terminal cell.
     pub fn select_word_at(&mut self, position: CopyPosition) -> Result<()> {
-        let position = self.clamp_position(position);
-        let Some(line) = self.lines.get(position.line) else {
-            return Err(MezError::invalid_args(
-                "copy mode word selection line is invalid",
-            ));
-        };
-        let (start, end) = readline_word_column_range(line, position.column);
-        self.select_range(
-            CopyPosition {
-                line: position.line,
-                column: start,
-            },
-            CopyPosition {
-                line: position.line,
-                column: end,
-            },
-        )
+        self.buffer.select_word_at(position).map_err(Into::into)
     }
 
     /// Runs the clear selection operation for this subsystem.
@@ -555,8 +331,7 @@ impl CopyMode {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn clear_selection(&mut self) {
-        self.selection = None;
-        self.selection_anchor = None;
+        self.buffer.clear_selection();
     }
 
     /// Runs the selection operation for this subsystem.
@@ -565,7 +340,7 @@ impl CopyMode {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn selection(&self) -> Option<(CopyPosition, CopyPosition)> {
-        self.selection
+        self.buffer.selection()
     }
 
     /// Runs the copy selection operation for this subsystem.
@@ -574,12 +349,12 @@ impl CopyMode {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn copy_selection(&self) -> Result<String> {
-        let Some((start, end)) = self.selection else {
+        let Some((start, end)) = self.selection() else {
             return Ok(String::new());
         };
         let (start, end) = normalize_selection(start, end);
-        validate_position(&self.lines, start)?;
-        validate_position(&self.lines, end)?;
+        validate_position(self.buffer.lines(), start)?;
+        validate_position(self.buffer.lines(), end)?;
 
         let mut copied = Vec::new();
         let mut line = start.line;
@@ -595,7 +370,7 @@ impl CopyMode {
             let line_end = if line == end.line {
                 end.column
             } else {
-                char_count(&self.lines[line])
+                char_count(&self.buffer.lines()[line])
             };
             copied.push(self.copy_line_slice(line, line_start, line_end));
             line = line.saturating_add(1);
@@ -616,7 +391,7 @@ impl CopyMode {
         let (group_start, group_end) = self.markdown_source_group_bounds(line, copy_line);
         if line != group_start
             || !selection_fully_covers_markdown_source_group(
-                &self.lines,
+                self.buffer.lines(),
                 selection_start,
                 selection_end,
                 group_start,
@@ -654,7 +429,7 @@ impl CopyMode {
     /// Slices a displayed line unless the selection covers a full transformed
     /// presentation line with a non-markdown raw-copy override.
     fn copy_line_slice(&self, line: usize, start: usize, end: usize) -> String {
-        let Some(display_line) = self.lines.get(line) else {
+        let Some(display_line) = self.buffer.lines().get(line) else {
             return String::new();
         };
         let Some(copy_line) = self.copy_lines.get(line) else {
@@ -693,17 +468,6 @@ impl CopyMode {
     ) -> Result<()> {
         buffers.set(name, self.copy_selection()?)
     }
-
-    /// Runs the update keyboard selection operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn update_keyboard_selection(&mut self) {
-        if let Some(anchor) = self.selection_anchor {
-            self.selection = Some((anchor, self.cursor));
-        }
-    }
 }
 
 /// Returns whether a selection fully covers every rendered row of one markdown
@@ -735,19 +499,6 @@ fn selection_fully_covers_markdown_source_group(
 
 /// Finds the grapheme cluster covering a display column and returns its
 /// starting display column and total cell width.
-fn grapheme_at_column(line: &str, target: usize) -> Option<(usize, usize)> {
-    let mut col = 0usize;
-    for grapheme in terminal_graphemes(line) {
-        let width = terminal_grapheme_width(grapheme);
-        let next = col.saturating_add(width);
-        if target >= col && target < next {
-            return Some((col, width));
-        }
-        col = next;
-    }
-    None
-}
-
 /// Computes the initial copy-mode viewport and keyboard cursor from a pane
 /// screen. Copy mode opens over the live terminal view, so the keyboard cursor
 /// should begin at the same cell as the pane cursor rather than the first
@@ -793,64 +544,6 @@ fn initial_copy_mode_view(
             column: cursor_column,
         },
     )
-}
-
-/// Converts a display-column position on a line into its corresponding
-/// Unicode scalar index so `readline_word_column_range` can operate on it.
-fn display_column_to_scalar_index(line: &str, target_column: usize) -> usize {
-    let mut col = 0usize;
-    let mut scalar = 0usize;
-    for grapheme in terminal_graphemes(line) {
-        let width = terminal_grapheme_width(grapheme);
-        let next = col.saturating_add(width);
-        if target_column < next {
-            return scalar;
-        }
-        scalar += grapheme.chars().count();
-        col = next;
-    }
-    scalar
-}
-
-/// Converts a Unicode scalar index on a line back to its corresponding
-/// display column.
-fn scalar_index_to_display_column(line: &str, target_scalar: usize) -> usize {
-    let mut col = 0usize;
-    let mut scalar = 0usize;
-    for grapheme in terminal_graphemes(line) {
-        if scalar >= target_scalar {
-            break;
-        }
-        scalar += grapheme.chars().count();
-        col = col.saturating_add(terminal_grapheme_width(grapheme));
-    }
-    col
-}
-
-/// Returns the current line column reached by moving backward by one
-/// word-like segment.
-fn previous_word_column(line: &str, column: usize) -> usize {
-    let chars = line.chars().collect::<Vec<_>>();
-    let scalar = display_column_to_scalar_index(line, column);
-    let mut index = scalar.min(chars.len());
-    while index > 0 && chars[index.saturating_sub(1)].is_whitespace() {
-        index = index.saturating_sub(1);
-    }
-    let word_start = readline_word_column_range(line, index.saturating_sub(1)).0;
-    scalar_index_to_display_column(line, word_start)
-}
-
-/// Returns the current line column reached by moving forward by one word-like
-/// segment.
-fn next_word_column(line: &str, column: usize) -> usize {
-    let chars = line.chars().collect::<Vec<_>>();
-    let scalar = display_column_to_scalar_index(line, column);
-    let mut index = scalar.min(chars.len());
-    while index < chars.len() && chars[index].is_whitespace() {
-        index = index.saturating_add(1);
-    }
-    let word_end = readline_word_column_range(line, index).1;
-    scalar_index_to_display_column(line, word_end)
 }
 
 /// Decodes one markdown source-line copy marker into its source identity and
