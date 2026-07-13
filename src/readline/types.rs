@@ -171,13 +171,6 @@ pub trait ReadlinePromptLoopIo {
 /// Stateful terminal-input decoder for readline prompt surfaces.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReadlineInputDecoder {
-    /// Stores the pending value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) pending: Vec<u8>,
-    /// Whether the decoder is inside a host bracketed-paste payload.
-    pub(super) bracketed_paste_active: bool,
-    /// Bytes captured for the current host bracketed-paste payload.
-    pub(super) bracketed_paste: Vec<u8>,
+    /// Dependency-neutral terminal sequence decoder owned by `mez-mux`.
+    pub(super) inner: mez_mux::readline::ReadlineTerminalInputDecoder,
 }

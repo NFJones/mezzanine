@@ -10,12 +10,12 @@ use crate::selector::{
 };
 use std::path::PathBuf;
 
-use super::decoder::{
-    apply_readline_terminal_input, readline_input_is_ctrl_r, readline_input_is_ctrl_shift_r,
-};
 use super::types::{
     ReadlineBuffer, ReadlineEdit, ReadlineOutcome, ReadlinePrompt, ReadlinePromptKind,
     ReadlineReverseSearch,
+};
+use mez_mux::readline::{
+    apply_readline_terminal_input, readline_input_is_ctrl_r, readline_input_is_ctrl_shift_r,
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -140,7 +140,7 @@ impl ReadlinePrompt {
                 _ => {}
             }
         }
-        apply_readline_terminal_input(&mut self.buffer, input)
+        Ok(apply_readline_terminal_input(&mut self.buffer, input)?)
     }
 
     /// Reports whether the prompt is currently in incremental reverse search.
