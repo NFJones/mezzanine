@@ -5,8 +5,8 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{BTreeMap, MezError, Path, Result};
-use crate::instructions::{DiscoveredInstructionFile, parse_instruction_discovery_output};
 use base64::Engine;
+use mez_agent::instructions::{DiscoveredInstructionFile, parse_instruction_discovery_output};
 use sha2::Digest;
 
 // Shell transactions, quoting, tool discovery, environment signatures, and bootstrap.

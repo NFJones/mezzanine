@@ -29,21 +29,6 @@ pub struct InstructionDiscoveryPlan {
     pub max_bytes: usize,
 }
 
-/// One instruction file decoded from discovery command output.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DiscoveredInstructionFile {
-    /// Path emitted by the discovery command.
-    pub path: String,
-    /// Directory scope where the instruction file was found.
-    pub scope_root: String,
-    /// Full file size reported by the shell command.
-    pub bytes: usize,
-    /// Whether content was truncated to the configured byte limit.
-    pub truncated: bool,
-    /// Escaped and decoded file content.
-    pub content: String,
-}
-
 impl Default for InstructionDiscoveryConfig {
     /// Runs the default operation for this subsystem.
     ///
