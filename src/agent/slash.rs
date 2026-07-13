@@ -9,9 +9,9 @@ use super::{
     agent_shell_help_display, agent_shell_mcp_display, agent_shell_permissions_display,
     agent_shell_status_display,
 };
-use crate::error::MezErrorKind;
 use mez_agent::{
-    AgentShellMcpSummary, AgentShellPermissionSummary,
+    AgentShellMcpSummary, AgentShellPermissionSummary, AgentShellSessionError,
+    AgentShellSessionErrorKind, AgentShellSessionResult,
     parse_slash_command as parse_agent_slash_command,
 };
 pub use mez_agent::{
@@ -196,12 +196,14 @@ pub fn execute_agent_shell_command_with_context(
             if input.trim_start().starts_with('/')
                 && matches!(
                     error.kind(),
-                    MezErrorKind::InvalidArgs | MezErrorKind::Conflict | MezErrorKind::NotFound
+                    AgentShellSessionErrorKind::InvalidArgs
+                        | AgentShellSessionErrorKind::Conflict
+                        | AgentShellSessionErrorKind::NotFound
                 ) =>
         {
             Ok(Some(agent_shell_command_error_outcome(input, &error)))
         }
-        Err(error) => Err(error),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -215,8 +217,10 @@ fn execute_agent_shell_command_with_context_inner(
     pane_id: &str,
     input: &str,
     context: AgentShellRuntimeContext<'_>,
-) -> Result<Option<AgentShellCommandOutcome>> {
-    let Some(invocation) = parse_slash_command(input)? else {
+) -> AgentShellSessionResult<Option<AgentShellCommandOutcome>> {
+    let Some(invocation) = parse_agent_slash_command(input)
+        .map_err(|error| AgentShellSessionError::invalid_args(error.to_string()))?
+    else {
         return Ok(None);
     };
     if !invocation.queueable_while_running
@@ -225,7 +229,7 @@ fn execute_agent_shell_command_with_context_inner(
             .and_then(|session| session.running_turn_id.as_deref())
             .is_some()
     {
-        return Err(MezError::conflict(format!(
+        return Err(AgentShellSessionError::conflict(format!(
             "/{} cannot run while an agent turn is active in this pane",
             invocation.name
         )));
@@ -238,10 +242,7 @@ fn execute_agent_shell_command_with_context_inner(
         },
         "status" => {
             let session = store.get(pane_id).ok_or_else(|| {
-                MezError::new(
-                    crate::error::MezErrorKind::NotFound,
-                    "agent shell session not found for pane",
-                )
+                AgentShellSessionError::not_found("agent shell session not found for pane")
             })?;
             AgentShellCommandOutcome::Display {
                 command,
@@ -285,10 +286,7 @@ fn execute_agent_shell_command_with_context_inner(
             let requested = invocation.args.trim();
             let session = if requested.is_empty() || matches!(requested, "status" | "show") {
                 store.get(pane_id).ok_or_else(|| {
-                    MezError::new(
-                        crate::error::MezErrorKind::NotFound,
-                        "agent shell session not found for pane",
-                    )
+                    AgentShellSessionError::not_found("agent shell session not found for pane")
                 })?
             } else if matches!(requested, "clear" | "default" | "none") {
                 store.set_directive(pane_id, None)?
@@ -426,10 +424,7 @@ fn execute_agent_shell_command_with_context_inner(
             let requested = invocation.args.trim();
             if requested.is_empty() {
                 let session = store.get(pane_id).ok_or_else(|| {
-                    MezError::new(
-                        MezErrorKind::NotFound,
-                        "agent shell session not found for pane",
-                    )
+                    AgentShellSessionError::not_found("agent shell session not found for pane")
                 })?;
                 return Ok(Some(AgentShellCommandOutcome::Display {
                     command,
@@ -443,12 +438,14 @@ fn execute_agent_shell_command_with_context_inner(
             let mut args = requested.split_whitespace();
             let level_name = args.next().unwrap_or_default();
             if args.next().is_some() {
-                return Err(MezError::invalid_args(
+                return Err(AgentShellSessionError::invalid_args(
                     "log-level expects one of: normal, verbose, debug, trace",
                 ));
             }
             let level = AgentLogLevel::parse(level_name).ok_or_else(|| {
-                MezError::invalid_args("log-level expects one of: normal, verbose, debug, trace")
+                AgentShellSessionError::invalid_args(
+                    "log-level expects one of: normal, verbose, debug, trace",
+                )
             })?;
             let session = store.set_log_level(pane_id, level)?;
             AgentShellCommandOutcome::Mutated {
@@ -477,7 +474,10 @@ fn execute_agent_shell_command_with_context_inner(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn agent_shell_command_error_outcome(input: &str, error: &MezError) -> AgentShellCommandOutcome {
+fn agent_shell_command_error_outcome(
+    input: &str,
+    error: &AgentShellSessionError,
+) -> AgentShellCommandOutcome {
     let command = input
         .split_whitespace()
         .next()
