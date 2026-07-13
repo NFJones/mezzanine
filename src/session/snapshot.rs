@@ -14,7 +14,10 @@ use crate::snapshot::{
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::time::current_unix_seconds;
-use super::types::{PaneStateMetadata, Session, SessionShell, SessionState, WindowGroup};
+use super::types::{
+    PaneStateMetadata, RestoredSessionState, Session, SessionRestoreInput, SessionShell,
+    SessionState, WindowGroup,
+};
 
 /// Carries freshly allocated layout state rebuilt from a snapshot payload.
 type FreshSnapshotLayout = (
@@ -27,6 +30,163 @@ type FreshSnapshotLayout = (
 );
 
 impl Session {
+    /// Rebuilds a session from dependency-neutral data decoded by a product adapter.
+    pub fn from_restore_input(
+        shell: impl Into<SessionShell>,
+        input: SessionRestoreInput,
+    ) -> Result<Self> {
+        let shell = shell.into();
+        let restored_at = current_unix_seconds();
+        let mut restored_ids = vec![input.session_id.clone()];
+        let mut active_window_index = None;
+        let mut pane_state_metadata = BTreeMap::new();
+        let mut windows = Vec::with_capacity(input.windows.len());
+
+        for (expected_index, restored_window) in input.windows.into_iter().enumerate() {
+            if restored_window.index != expected_index {
+                return Err(MezError::invalid_args(
+                    "restored windows must be stored in contiguous index order",
+                ));
+            }
+            if restored_window.active && active_window_index.replace(expected_index).is_some() {
+                return Err(MezError::invalid_args(
+                    "restored session contains multiple active windows",
+                ));
+            }
+            restored_ids.push(restored_window.id.clone());
+
+            let mut panes = Vec::with_capacity(restored_window.panes.len());
+            let mut pane_geometries = Vec::with_capacity(restored_window.panes.len());
+            let mut has_complete_geometry = true;
+            for (expected_pane_index, restored_pane) in
+                restored_window.panes.into_iter().enumerate()
+            {
+                if restored_pane.index != expected_pane_index {
+                    return Err(MezError::invalid_args(
+                        "restored panes must be stored in contiguous index order",
+                    ));
+                }
+                restored_ids.push(restored_pane.id.clone());
+                pane_state_metadata.insert(
+                    restored_pane.id.to_string(),
+                    PaneStateMetadata {
+                        current_working_directory: restored_pane.current_working_directory,
+                        readiness_state: restored_pane.readiness_state,
+                        alternate_screen_active: restored_pane.alternate_screen_active,
+                    },
+                );
+                match restored_pane.geometry {
+                    Some(geometry) => pane_geometries.push(geometry),
+                    None => has_complete_geometry = false,
+                }
+                panes.push(Pane {
+                    id: restored_pane.id,
+                    index: restored_pane.index,
+                    title: restored_pane.title,
+                    title_source: PaneTitleSource::Explicit,
+                    size: restored_pane.size,
+                    active: restored_pane.active,
+                    live: false,
+                });
+            }
+
+            let mut window = Window::from_restored_parts_with_layout(
+                restored_window.id,
+                restored_window.index,
+                restored_window.name,
+                restored_window.size,
+                panes,
+                RestoredWindowLayout {
+                    pane_geometries: has_complete_geometry.then_some(pane_geometries),
+                    layout_root: restored_window.layout_root,
+                    layout_policy: restored_window.layout_policy,
+                },
+            )?;
+            window.created_at_unix_seconds = Some(restored_at);
+            windows.push(window);
+        }
+
+        if windows.is_empty() {
+            return Err(MezError::invalid_args(
+                "restored session must contain at least one window",
+            ));
+        }
+        let active_window_index = active_window_index.ok_or_else(|| {
+            MezError::invalid_args("restored session must contain exactly one active window")
+        })?;
+        if let Some(active_window_id) = input.active_window_id.as_ref()
+            && windows[active_window_index].id != *active_window_id
+        {
+            return Err(MezError::invalid_args(
+                "restored active_window_id does not match the active window",
+            ));
+        }
+
+        let mut active_group_index = None;
+        let mut window_groups = Vec::with_capacity(input.window_groups.len());
+        for (expected_index, restored_group) in input.window_groups.into_iter().enumerate() {
+            if restored_group.index != expected_index {
+                return Err(MezError::invalid_args(
+                    "restored window groups must be stored in contiguous index order",
+                ));
+            }
+            if restored_group.active && active_group_index.replace(expected_index).is_some() {
+                return Err(MezError::invalid_args(
+                    "restored session contains multiple active window groups",
+                ));
+            }
+            let first_window = restored_group.window_ids.first().cloned().ok_or_else(|| {
+                MezError::invalid_args("restored window group must contain at least one window")
+            })?;
+            let mut group = WindowGroup::new(
+                restored_group.id.clone(),
+                restored_group.index,
+                restored_group.name,
+                first_window,
+                Some(restored_at),
+            );
+            group.window_ids = restored_group.window_ids;
+            group.active_window_id = restored_group.active_window_id;
+            group.last_active_window_id = restored_group.last_active_window_id;
+            restored_ids.push(restored_group.id);
+            window_groups.push(group);
+        }
+        let active_group_index = active_group_index.ok_or_else(|| {
+            MezError::invalid_args("restored session must contain exactly one active window group")
+        })?;
+
+        Ok(Self {
+            ids: IdFactory::after_existing_ids(restored_ids.iter()),
+            id: input.session_id,
+            name: input.name,
+            state: match input.state {
+                RestoredSessionState::Running => SessionState::Running,
+                RestoredSessionState::Detached => SessionState::Detached,
+                RestoredSessionState::Empty => SessionState::Empty,
+                RestoredSessionState::Stopping => SessionState::Stopping,
+                RestoredSessionState::Failed => SessionState::Failed,
+            },
+            created_at_unix_seconds: restored_at,
+            updated_at_unix_seconds: restored_at,
+            last_attached_at_unix_seconds: None,
+            authoritative_size: input.authoritative_size,
+            shell,
+            config_generation: 0,
+            windows,
+            window_groups,
+            active_group_index,
+            last_active_group_index: None,
+            active_window_index,
+            last_active_window_index: None,
+            synchronized_window_ids: BTreeSet::new(),
+            pane_state_metadata,
+            clients: Vec::new(),
+            observers: Vec::new(),
+            primary_client_id: None,
+            next_event_id: 1,
+        })
+    }
+
     /// Replaces only the user-visible layout and pane metadata from a snapshot.
     ///
     /// Runtime `load-layout` uses this path when it should behave like a

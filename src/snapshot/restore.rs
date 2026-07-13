@@ -4,13 +4,166 @@
 //! actual session reconstruction to the session module.
 
 use crate::error::{MezError, Result};
-use crate::session::Session;
+use crate::ids::{PaneId, SessionId, WindowGroupId, WindowId};
+use crate::layout::{LayoutPolicy, PaneGeometry, Size};
+use crate::session::{
+    RestoredPane, RestoredSessionState, RestoredWindow, RestoredWindowGroup, Session,
+    SessionRestoreInput,
+};
 use crate::shell::ResolvedShell;
+use std::collections::BTreeMap;
 
 use super::types::{
     LayoutLoadPlan, SessionSnapshotPayload, SnapshotManifest, SnapshotRepository,
-    SnapshotRestoreResult, SnapshotRollbackPlan, SnapshotState,
+    SnapshotRestoreResult, SnapshotRollbackPlan, SnapshotSessionState, SnapshotState,
 };
+
+/// Decodes a validated product snapshot into dependency-neutral session data.
+fn session_restore_input(payload: &SessionSnapshotPayload) -> Result<SessionRestoreInput> {
+    payload.validate()?;
+    let session_id = SessionId::parse('$', payload.session_id.clone())
+        .ok_or_else(|| MezError::invalid_args("snapshot payload contains an invalid session id"))?;
+    let authoritative_size = Size::new(payload.authoritative_columns, payload.authoritative_rows)?;
+    let mut window_ids = BTreeMap::new();
+    let mut windows = Vec::with_capacity(payload.windows.len());
+
+    for window_payload in &payload.windows {
+        let id = WindowId::parse('@', window_payload.window_id.clone()).ok_or_else(|| {
+            MezError::invalid_args("snapshot payload contains an invalid window id")
+        })?;
+        window_ids.insert(window_payload.window_id.clone(), id.clone());
+        let panes = window_payload
+            .panes
+            .iter()
+            .map(|pane_payload| {
+                let id = PaneId::parse('%', pane_payload.pane_id.clone()).ok_or_else(|| {
+                    MezError::invalid_args("snapshot payload contains an invalid pane id")
+                })?;
+                Ok(RestoredPane {
+                    id,
+                    index: pane_payload.index,
+                    title: pane_payload.title.clone(),
+                    active: pane_payload.active,
+                    size: Size::new(pane_payload.columns, pane_payload.rows)?,
+                    geometry: pane_payload.geometry.as_ref().map(|geometry| PaneGeometry {
+                        index: pane_payload.index,
+                        column: geometry.column,
+                        row: geometry.row,
+                        columns: geometry.columns,
+                        rows: geometry.rows,
+                    }),
+                    current_working_directory: pane_payload.current_working_directory.clone(),
+                    readiness_state: pane_payload.readiness_state.clone(),
+                    alternate_screen_active: pane_payload.alternate_screen_active,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        windows.push(RestoredWindow {
+            id,
+            index: window_payload.index,
+            name: window_payload.name.clone(),
+            active: Some(window_payload.window_id.as_str()) == payload.active_window_id.as_deref()
+                || window_payload.active,
+            size: Size::new(window_payload.columns, window_payload.rows)?,
+            layout_policy: LayoutPolicy::from_name(&window_payload.layout_policy).ok_or_else(
+                || MezError::invalid_args("snapshot window layout policy is invalid"),
+            )?,
+            layout_root: window_payload
+                .layout_root
+                .as_ref()
+                .map(|root| root.to_layout_node(&window_payload.panes))
+                .transpose()?,
+            panes,
+        });
+    }
+
+    let active_window_id = payload
+        .active_window_id
+        .as_ref()
+        .map(|id| {
+            window_ids.get(id).cloned().ok_or_else(|| {
+                MezError::invalid_args("snapshot active_window_id references an unknown window")
+            })
+        })
+        .transpose()?;
+    let window_groups = if payload.window_groups.is_empty() {
+        let active_window_id = active_window_id
+            .clone()
+            .or_else(|| {
+                windows
+                    .iter()
+                    .find(|window| window.active)
+                    .map(|window| window.id.clone())
+            })
+            .ok_or_else(|| {
+                MezError::invalid_args("snapshot payload must contain exactly one active window")
+            })?;
+        vec![RestoredWindowGroup {
+            id: WindowGroupId::parse('g', "g1").ok_or_else(|| {
+                MezError::invalid_args("snapshot restore could not allocate default group id")
+            })?,
+            index: 0,
+            name: "0".to_string(),
+            window_ids: windows.iter().map(|window| window.id.clone()).collect(),
+            active_window_id: Some(active_window_id),
+            last_active_window_id: None,
+            active: true,
+        }]
+    } else {
+        payload
+            .window_groups
+            .iter()
+            .map(|group| {
+                let resolve_window = |id: &String| {
+                    window_ids.get(id).cloned().ok_or_else(|| {
+                        MezError::invalid_args("snapshot window group references an unknown window")
+                    })
+                };
+                Ok(RestoredWindowGroup {
+                    id: WindowGroupId::parse('g', group.group_id.clone()).ok_or_else(|| {
+                        MezError::invalid_args(
+                            "snapshot payload contains an invalid window group id",
+                        )
+                    })?,
+                    index: group.index,
+                    name: group.name.clone(),
+                    window_ids: group
+                        .window_ids
+                        .iter()
+                        .map(resolve_window)
+                        .collect::<Result<Vec<_>>>()?,
+                    active_window_id: group
+                        .active_window_id
+                        .as_ref()
+                        .map(resolve_window)
+                        .transpose()?,
+                    last_active_window_id: group
+                        .last_active_window_id
+                        .as_ref()
+                        .map(resolve_window)
+                        .transpose()?,
+                    active: group.active,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?
+    };
+
+    Ok(SessionRestoreInput {
+        session_id,
+        name: payload.name.clone(),
+        state: match payload.state {
+            SnapshotSessionState::Running => RestoredSessionState::Running,
+            SnapshotSessionState::Detached => RestoredSessionState::Detached,
+            SnapshotSessionState::Empty => RestoredSessionState::Empty,
+            SnapshotSessionState::Stopping => RestoredSessionState::Stopping,
+            SnapshotSessionState::Failed => RestoredSessionState::Failed,
+        },
+        authoritative_size,
+        active_window_id,
+        windows,
+        window_groups,
+    })
+}
 
 impl SnapshotRepository {
     /// Runs the resume plan operation for this subsystem.
@@ -83,7 +236,7 @@ impl SnapshotRepository {
             ));
         }
         let resume_plan = payload.resume_plan();
-        let session = Session::from_snapshot_payload(shell, payload)?;
+        let session = Session::from_restore_input(shell, session_restore_input(payload)?)?;
         Ok(SnapshotRestoreResult {
             session,
             resume_plan,
