@@ -12,8 +12,11 @@ use std::collections::BTreeSet;
 pub mod instructions;
 /// Dependency-neutral MCP prompt manifest records.
 pub mod mcp;
+/// Dependency-neutral provider quota accounting contracts.
+pub mod quota;
 
 pub use mcp::{McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer};
+pub use quota::{ProviderQuotaUsage, provider_quota_usage_from_headers};
 
 /// Maximum number of issue records a model-authored query may request.
 pub const MAX_ISSUE_QUERY_LIMIT: u64 = 200;

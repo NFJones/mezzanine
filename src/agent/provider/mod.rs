@@ -26,7 +26,6 @@ mod errors;
 mod http;
 mod openai_chat_completions;
 mod openai_request;
-mod quota;
 mod response;
 mod schema;
 use anthropic::AnthropicMessagesDialect;
@@ -60,10 +59,10 @@ pub use http::{
     AsyncProviderHttpTransport, DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS,
     ProviderHttpRequest, ProviderHttpResponse, ReqwestProviderHttpTransport,
 };
+pub use mez_agent::{ProviderQuotaUsage, provider_quota_usage_from_headers};
 use openai_chat_completions::OpenAiChatCompletionsDialect;
 pub use openai_request::openai_responses_request_body;
 use openai_request::openai_responses_request_body_with_stream;
-pub use quota::{ProviderQuotaUsage, provider_quota_usage_from_headers};
 pub use response::parse_openai_responses_http_body;
 use response::parse_openai_responses_provider_body;
 #[cfg(test)]

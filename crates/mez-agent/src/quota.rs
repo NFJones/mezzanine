@@ -1,8 +1,7 @@
-//! Provider quota accounting helpers.
+//! Provider quota accounting contracts.
 //!
-//! This module owns the provider rate-limit header parsing boundary. Provider
-//! adapters pass raw response headers in, and callers receive normalized quota
-//! usage buckets suitable for runtime status display and transcript metadata.
+//! This module owns provider rate-limit header parsing and the normalized
+//! quota records shared by provider adapters and product status displays.
 
 use std::collections::BTreeMap;
 
@@ -77,7 +76,7 @@ pub fn provider_quota_usage_from_headers(
     quotas
 }
 
-/// Parses the leading unsigned integer from a provider quota header.
+/// Parses an unsigned integer from one provider quota header.
 fn provider_header_u64(value: &str) -> Option<u64> {
     let value = value.trim();
     if let Ok(parsed) = value.parse::<u64>() {
@@ -94,5 +93,47 @@ fn provider_header_u64(value: &str) -> Option<u64> {
         normalized.parse::<u64>().ok()
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies provider quota headers become sorted normalized usage records
+    /// while preserving reset metadata and formatted percentages.
+    #[test]
+    fn provider_quota_headers_are_normalized() {
+        let quotas = provider_quota_usage_from_headers(&BTreeMap::from([
+            ("X-RateLimit-Limit-Tokens".to_string(), "2_000".to_string()),
+            (
+                "x-ratelimit-remaining-tokens".to_string(),
+                "1,000".to_string(),
+            ),
+            ("x-ratelimit-reset-tokens".to_string(), "10s".to_string()),
+        ]));
+
+        assert_eq!(quotas.len(), 1);
+        assert_eq!(quotas[0].name, "tokens");
+        assert_eq!(quotas[0].limit, 2_000);
+        assert_eq!(quotas[0].remaining, 1_000);
+        assert_eq!(quotas[0].used_percent_display(), "50.00%");
+        assert_eq!(quotas[0].reset.as_deref(), Some("10s"));
+    }
+
+    /// Verifies malformed or incomplete quota header groups are ignored so
+    /// provider-specific metadata cannot create misleading status entries.
+    #[test]
+    fn provider_quota_headers_require_valid_limit_and_remaining_values() {
+        let quotas = provider_quota_usage_from_headers(&BTreeMap::from([
+            ("x-ratelimit-limit-requests".to_string(), "100".to_string()),
+            (
+                "x-ratelimit-limit-tokens".to_string(),
+                "invalid".to_string(),
+            ),
+            ("x-ratelimit-remaining-tokens".to_string(), "50".to_string()),
+        ]));
+
+        assert!(quotas.is_empty());
     }
 }
