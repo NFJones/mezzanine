@@ -295,6 +295,94 @@ pub struct OpenAiPromptCacheDiagnostics {
     pub cacheable_prefix_sha256: String,
 }
 
+/// Builds non-model-visible OpenAI prompt-cache diagnostics from one rendered
+/// request and its provider-owned control values.
+///
+/// Product adapters remain responsible for selecting response formats, tools,
+/// tool choice, and request-control shape. This helper owns their canonical
+/// encoding and fingerprinting so cache diagnostics stay aligned with the
+/// provider renderer.
+pub fn openai_prompt_cache_diagnostics(
+    prompt_cache_key: String,
+    rendered: &OpenAiRenderedMessages,
+    response_format: &serde_json::Value,
+    tools: &serde_json::Value,
+    tool_choice: &serde_json::Value,
+    provider_request_shape: &serde_json::Value,
+) -> ProviderRequestAssemblyResult<OpenAiPromptCacheDiagnostics> {
+    let response_format_text =
+        openai_diagnostic_json(response_format, "OpenAI response-format diagnostics failed")?;
+    let tools_text = openai_diagnostic_json(tools, "OpenAI tools diagnostics failed")?;
+    let tool_choice_text =
+        openai_diagnostic_json(tool_choice, "OpenAI tool-choice diagnostics failed")?;
+    let stable_input_text = openai_diagnostic_json(
+        &rendered.stable_input,
+        "OpenAI stable-input diagnostics failed",
+    )?;
+    let volatile_input_text = openai_diagnostic_json(
+        &rendered.volatile_input,
+        "OpenAI volatile-input diagnostics failed",
+    )?;
+    let stable_prompt_prefix = openai_stable_prefix_material(rendered)?;
+    let provider_request_shape = openai_diagnostic_json(
+        provider_request_shape,
+        "OpenAI request-shape diagnostics failed",
+    )?;
+
+    let stable_prompt_prefix_sha256 = sha256_hex(stable_prompt_prefix.as_bytes());
+    Ok(OpenAiPromptCacheDiagnostics {
+        prompt_cache_key,
+        instructions_bytes: rendered.instructions.len(),
+        instructions_sha256: sha256_hex(rendered.instructions.as_bytes()),
+        response_format_bytes: response_format_text.len(),
+        response_format_sha256: sha256_hex(response_format_text.as_bytes()),
+        tools_bytes: tools_text.len(),
+        tools_sha256: sha256_hex(tools_text.as_bytes()),
+        tool_choice_bytes: tool_choice_text.len(),
+        tool_choice_sha256: sha256_hex(tool_choice_text.as_bytes()),
+        stable_input_bytes: stable_input_text.len(),
+        stable_input_sha256: sha256_hex(stable_input_text.as_bytes()),
+        volatile_input_bytes: volatile_input_text.len(),
+        volatile_input_sha256: sha256_hex(volatile_input_text.as_bytes()),
+        stable_prompt_prefix_bytes: stable_prompt_prefix.len(),
+        stable_prompt_prefix_sha256: stable_prompt_prefix_sha256.clone(),
+        provider_request_shape_bytes: provider_request_shape.len(),
+        provider_request_shape_sha256: sha256_hex(provider_request_shape.as_bytes()),
+        cacheable_prefix_bytes: stable_prompt_prefix.len(),
+        cacheable_prefix_sha256: stable_prompt_prefix_sha256,
+    })
+}
+
+/// Returns canonical provider-visible stable-prefix material.
+pub fn openai_stable_prefix_material(
+    rendered: &OpenAiRenderedMessages,
+) -> ProviderRequestAssemblyResult<String> {
+    openai_diagnostic_json(
+        &serde_json::json!({
+            "cache_family": "responses-prefix-v2",
+            "instructions": rendered.instructions,
+            "stable_input": rendered.stable_input,
+        }),
+        "OpenAI stable prompt-prefix diagnostics failed",
+    )
+}
+
+/// Encodes one diagnostic JSON value with a stable failure prefix.
+fn openai_diagnostic_json(
+    value: &impl serde::Serialize,
+    failure_prefix: &str,
+) -> ProviderRequestAssemblyResult<String> {
+    serde_json::to_string(value).map_err(|error| {
+        ProviderRequestAssemblyError::invalid_state(format!("{failure_prefix}: {error}"))
+    })
+}
+
+/// Encodes bytes as lower-case SHA-256 hexadecimal text.
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = sha2::Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 /// Builds a stable, non-secret OpenAI prompt-cache routing key.
 ///
 /// The key intentionally includes provider compatibility identity and prompt

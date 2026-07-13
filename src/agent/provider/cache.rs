@@ -10,13 +10,14 @@ use super::schema::openai_maap_action_batch_tools;
 use crate::agent::{
     ContextSourceKind, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest,
 };
+#[cfg(test)]
+use mez_agent::openai_stable_prefix_material;
 use mez_agent::{
-    OpenAiPromptCacheDiagnostics, OpenAiRenderedMessages, ProviderRequestAssemblyError,
-    ProviderRequestAssemblyResult, openai_auto_sizing_response_format,
-    openai_macro_judge_response_format, openai_prompt_cache_key as provider_prompt_cache_key,
+    OpenAiPromptCacheDiagnostics, OpenAiRenderedMessages, ProviderRequestAssemblyResult,
+    openai_auto_sizing_response_format, openai_macro_judge_response_format,
+    openai_prompt_cache_diagnostics, openai_prompt_cache_key as provider_prompt_cache_key,
     openai_render_messages, validate_provider_request_required,
 };
-use sha2::Digest;
 
 /// Renders request messages and captures canonical stable-prefix material.
 pub(super) fn openai_render_request_messages(
@@ -80,21 +81,11 @@ pub fn openai_prompt_cache_diagnostics_for_request_with_stream(
     validate_provider_request_required("OpenAI model", &request.model)?;
     let rendered = openai_render_request_messages(request)?;
     let response_format = openai_response_format(request).unwrap_or(serde_json::Value::Null);
-    let response_format_text = serde_json::to_string(&response_format).map_err(|error| {
-        ProviderRequestAssemblyError::invalid_state(format!(
-            "OpenAI response-format diagnostics failed: {error}"
-        ))
-    })?;
     let tools = if request.interaction_kind.expects_structured_json() {
         serde_json::json!([])
     } else {
         serde_json::json!(openai_maap_action_batch_tools(request))
     };
-    let tools_text = serde_json::to_string(&tools).map_err(|error| {
-        ProviderRequestAssemblyError::invalid_state(format!(
-            "OpenAI tools diagnostics failed: {error}"
-        ))
-    })?;
     let tool_choice = if request.interaction_kind.expects_structured_json() {
         serde_json::json!("none")
     } else {
@@ -103,61 +94,16 @@ pub fn openai_prompt_cache_diagnostics_for_request_with_stream(
             "name": OPENAI_MAAP_FUNCTION_TOOL_NAME
         })
     };
-    let tool_choice_text = serde_json::to_string(&tool_choice).map_err(|error| {
-        ProviderRequestAssemblyError::invalid_state(format!(
-            "OpenAI tool-choice diagnostics failed: {error}"
-        ))
-    })?;
-    let stable_input_text = serde_json::to_string(&rendered.stable_input).map_err(|error| {
-        ProviderRequestAssemblyError::invalid_state(format!(
-            "OpenAI stable-input diagnostics failed: {error}"
-        ))
-    })?;
-    let volatile_input_text = serde_json::to_string(&rendered.volatile_input).map_err(|error| {
-        ProviderRequestAssemblyError::invalid_state(format!(
-            "OpenAI volatile-input diagnostics failed: {error}"
-        ))
-    })?;
-    let stable_prompt_prefix =
-        openai_stable_prefix_material(&rendered.instructions, &rendered.stable_input).map_err(
-            |error| {
-                ProviderRequestAssemblyError::invalid_state(format!(
-                    "OpenAI stable prompt-prefix diagnostics failed: {error}"
-                ))
-            },
-        )?;
-    let provider_request_shape = serde_json::to_string(
-        &openai_responses_request_control_shape_with_stream(request, stream)?,
+    let provider_request_shape =
+        openai_responses_request_control_shape_with_stream(request, stream)?;
+    openai_prompt_cache_diagnostics(
+        openai_prompt_cache_key(request),
+        &rendered,
+        &response_format,
+        &tools,
+        &tool_choice,
+        &provider_request_shape,
     )
-    .map_err(|error| {
-        ProviderRequestAssemblyError::invalid_state(format!(
-            "OpenAI request-shape diagnostics failed: {error}"
-        ))
-    })?;
-
-    let stable_prompt_prefix_sha256 = sha256_hex(stable_prompt_prefix.as_bytes());
-    let provider_request_shape_sha256 = sha256_hex(provider_request_shape.as_bytes());
-    Ok(OpenAiPromptCacheDiagnostics {
-        prompt_cache_key: openai_prompt_cache_key(request),
-        instructions_bytes: rendered.instructions.len(),
-        instructions_sha256: sha256_hex(rendered.instructions.as_bytes()),
-        response_format_bytes: response_format_text.len(),
-        response_format_sha256: sha256_hex(response_format_text.as_bytes()),
-        tools_bytes: tools_text.len(),
-        tools_sha256: sha256_hex(tools_text.as_bytes()),
-        tool_choice_bytes: tool_choice_text.len(),
-        tool_choice_sha256: sha256_hex(tool_choice_text.as_bytes()),
-        stable_input_bytes: stable_input_text.len(),
-        stable_input_sha256: sha256_hex(stable_input_text.as_bytes()),
-        volatile_input_bytes: volatile_input_text.len(),
-        volatile_input_sha256: sha256_hex(volatile_input_text.as_bytes()),
-        stable_prompt_prefix_bytes: stable_prompt_prefix.len(),
-        stable_prompt_prefix_sha256: stable_prompt_prefix_sha256.clone(),
-        provider_request_shape_bytes: provider_request_shape.len(),
-        provider_request_shape_sha256,
-        cacheable_prefix_bytes: stable_prompt_prefix.len(),
-        cacheable_prefix_sha256: stable_prompt_prefix_sha256,
-    })
 }
 
 /// Returns canonical OpenAI stable-prefix material for tests and diagnostics.
@@ -166,29 +112,7 @@ pub(crate) fn openai_stable_prefix_material_for_request(
     request: &ModelRequest,
 ) -> ProviderRequestAssemblyResult<String> {
     let rendered = openai_render_request_messages(request)?;
-    openai_stable_prefix_material(&rendered.instructions, &rendered.stable_input).map_err(|error| {
-        ProviderRequestAssemblyError::invalid_state(format!(
-            "OpenAI stable prefix material encoding failed: {error}"
-        ))
-    })
-}
-
-/// Builds canonical provider-visible stable-prefix material.
-fn openai_stable_prefix_material(
-    instructions: &str,
-    stable_input: &[serde_json::Value],
-) -> serde_json::Result<String> {
-    serde_json::to_string(&serde_json::json!({
-        "cache_family": "responses-prefix-v2",
-        "instructions": instructions,
-        "stable_input": stable_input,
-    }))
-}
-
-/// Encodes bytes as lower-case SHA-256 hexadecimal text.
-fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = sha2::Sha256::digest(bytes);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    openai_stable_prefix_material(&rendered)
 }
 
 #[cfg(test)]
