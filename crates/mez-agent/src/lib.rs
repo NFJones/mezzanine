@@ -24,6 +24,8 @@ pub mod mcp;
 pub mod prompt;
 /// Provider-neutral API compatibility contracts.
 pub mod provider;
+/// Provider failure retry and recovery classification.
+pub mod provider_error;
 /// Provider-native transcript continuity contracts.
 pub mod provider_transcript;
 /// Dependency-neutral provider quota accounting contracts.
@@ -43,6 +45,9 @@ pub use provider::{
     OPENAI_CHAT_COMPLETIONS_API, OPENAI_RESPONSES_API, ProviderApiCompatibility,
     ProviderApiCompatibilityError, ProviderCapabilities, ProviderModelCatalog, ProviderModelInfo,
     resolve_provider_api,
+};
+pub use provider_error::{
+    ProviderErrorKind, ProviderErrorRetryClass, classify_provider_error_retry,
 };
 pub use provider_transcript::{PROVIDER_TRANSCRIPT_EVENT_MARKER, ProviderTranscriptEvent};
 pub use quota::{ProviderQuotaUsage, provider_quota_usage_from_headers};

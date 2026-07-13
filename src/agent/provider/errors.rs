@@ -5,6 +5,8 @@
 //! malformed model-output diagnostics.
 
 use crate::error::MezError;
+pub(crate) use mez_agent::ProviderErrorRetryClass;
+use mez_agent::{ProviderErrorKind, classify_provider_error_retry};
 
 /// Runs the openai provider error detail operation for this subsystem.
 ///
@@ -71,23 +73,6 @@ pub(super) fn openai_provider_failure_event_json(value: &serde_json::Value) -> S
     serde_json::Value::Object(object).to_string()
 }
 
-/// Shared retry/recovery class for provider failures.
-///
-/// Runtime provider execution and turn-runner recovery need the same coarse
-/// classification so context-limit recovery, output-limit recovery, transport
-/// retries, and terminal failure summaries do not drift apart.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ProviderErrorRetryClass {
-    /// The request exceeded the provider input context window.
-    ContextLimit,
-    /// The response exhausted the provider output-token budget.
-    OutputLimit,
-    /// The same request may be retried by the runtime without a terminal summary.
-    RetryableTransport,
-    /// The provider failure should be handled as a terminal turn failure.
-    NonRetryable,
-}
-
 /// Classifies one provider failure for runtime recovery and retry handling.
 ///
 /// The classifier preserves existing precedence: context-limit and
@@ -111,43 +96,19 @@ pub(crate) fn provider_error_retry_class_from_parts(
     message: &str,
     provider_failure_json: Option<&str>,
 ) -> ProviderErrorRetryClass {
-    if provider_error_is_context_limit_exceeded(message, provider_failure_json) {
-        return ProviderErrorRetryClass::ContextLimit;
-    }
-    if provider_error_is_output_limit_exceeded(message, provider_failure_json) {
-        return ProviderErrorRetryClass::OutputLimit;
-    }
-    if provider_error_is_transient_overload_or_unavailable(message, provider_failure_json) {
-        return ProviderErrorRetryClass::RetryableTransport;
-    }
-    if let Some(status_code) = provider_failure_status_code(provider_failure_json) {
-        if status_code == 400
-            && (message.contains("Unsupported") || message.contains("unsupported"))
-        {
-            return ProviderErrorRetryClass::NonRetryable;
-        }
-        if status_code == 429 || (500..=599).contains(&status_code) {
-            return ProviderErrorRetryClass::RetryableTransport;
-        }
-        if provider_error_invites_retry(message, provider_failure_json) {
-            return ProviderErrorRetryClass::RetryableTransport;
-        }
-        return ProviderErrorRetryClass::NonRetryable;
-    }
-    if kind == crate::error::MezErrorKind::Io {
-        return ProviderErrorRetryClass::RetryableTransport;
-    }
-    if kind != crate::error::MezErrorKind::InvalidState {
-        return ProviderErrorRetryClass::NonRetryable;
-    }
-    if message.contains("provider HTTP request failed")
-        || message.contains("provider HTTP response read failed")
-        || message.contains("provider HTTP response read stalled")
-        || provider_error_invites_retry(message, provider_failure_json)
-    {
-        ProviderErrorRetryClass::RetryableTransport
-    } else {
-        ProviderErrorRetryClass::NonRetryable
+    classify_provider_error_retry(provider_error_kind(kind), message, provider_failure_json)
+}
+
+fn provider_error_kind(kind: crate::error::MezErrorKind) -> ProviderErrorKind {
+    match kind {
+        crate::error::MezErrorKind::InvalidArgs => ProviderErrorKind::InvalidArgs,
+        crate::error::MezErrorKind::InvalidState => ProviderErrorKind::InvalidState,
+        crate::error::MezErrorKind::Config => ProviderErrorKind::Config,
+        crate::error::MezErrorKind::Io => ProviderErrorKind::Io,
+        crate::error::MezErrorKind::Conflict => ProviderErrorKind::Conflict,
+        crate::error::MezErrorKind::NotFound => ProviderErrorKind::NotFound,
+        crate::error::MezErrorKind::Forbidden => ProviderErrorKind::Forbidden,
+        crate::error::MezErrorKind::NotImplemented => ProviderErrorKind::NotImplemented,
     }
 }
 
@@ -188,228 +149,6 @@ pub(crate) fn provider_event_error_from_parts(
         error = error.with_provider_failure_json(failure_json.to_string());
     }
     error
-}
-
-/// Extracts an HTTP status code from provider failure diagnostics.
-fn provider_failure_status_code(provider_failure_json: Option<&str>) -> Option<u16> {
-    let value: serde_json::Value = serde_json::from_str(provider_failure_json?).ok()?;
-    let status_code = value.get("status_code")?.as_u64()?;
-    u16::try_from(status_code).ok()
-}
-
-/// Reports whether provider error text explicitly says the same request can be
-/// retried.
-///
-/// # Parameters
-/// - `message`: Primary provider error message attached to the runtime error.
-/// - `provider_failure_json`: Optional sanitized provider failure payload.
-pub(crate) fn provider_error_invites_retry(
-    message: &str,
-    provider_failure_json: Option<&str>,
-) -> bool {
-    if provider_error_text_invites_retry(message) {
-        return true;
-    }
-    let Some(provider_failure_json) = provider_failure_json else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(provider_failure_json) else {
-        return false;
-    };
-    [
-        "/error/message",
-        "/message",
-        "/body/error/message",
-        "/body/message",
-        "/response/error/message",
-    ]
-    .into_iter()
-    .filter_map(|pointer| value.pointer(pointer))
-    .filter_map(serde_json::Value::as_str)
-    .any(provider_error_text_invites_retry)
-}
-
-/// Reports whether provider diagnostics indicate a transient overload or
-/// temporary unavailability.
-///
-/// # Parameters
-/// - `message`: Primary provider error message attached to the runtime error.
-/// - `provider_failure_json`: Optional sanitized provider failure payload.
-pub(crate) fn provider_error_is_transient_overload_or_unavailable(
-    message: &str,
-    provider_failure_json: Option<&str>,
-) -> bool {
-    if provider_error_text_is_transient_overload_or_unavailable(message) {
-        return true;
-    }
-    let Some(provider_failure_json) = provider_failure_json else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(provider_failure_json) else {
-        return false;
-    };
-    [
-        "/error/type",
-        "/error/message",
-        "/message",
-        "/body/error/type",
-        "/body/error/message",
-        "/body/message",
-        "/response/error/type",
-        "/response/error/message",
-    ]
-    .into_iter()
-    .filter_map(|pointer| value.pointer(pointer))
-    .filter_map(serde_json::Value::as_str)
-    .any(provider_error_text_is_transient_overload_or_unavailable)
-}
-
-/// Reports whether provider diagnostics indicate the request exceeded the
-/// model's input context limit.
-///
-/// # Parameters
-/// - `message`: Primary provider error message attached to the runtime error.
-/// - `provider_failure_json`: Optional sanitized provider failure payload.
-pub(crate) fn provider_error_is_context_limit_exceeded(
-    message: &str,
-    provider_failure_json: Option<&str>,
-) -> bool {
-    if provider_error_text_is_context_limit_exceeded(message) {
-        return true;
-    }
-    let Some(provider_failure_json) = provider_failure_json else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(provider_failure_json) else {
-        return false;
-    };
-    [
-        "/error/code",
-        "/error/type",
-        "/error/message",
-        "/message",
-        "/body/error/code",
-        "/body/error/type",
-        "/body/error/message",
-        "/body/message",
-        "/response/error/code",
-        "/response/error/type",
-        "/response/error/message",
-        "/response/incomplete_details/reason",
-    ]
-    .into_iter()
-    .filter_map(|pointer| value.pointer(pointer))
-    .filter_map(serde_json::Value::as_str)
-    .any(provider_error_text_is_context_limit_exceeded)
-}
-
-/// Reports whether provider diagnostics indicate output generation exhausted
-/// the configured provider output-token budget.
-///
-/// # Parameters
-/// - `message`: Primary provider error message attached to the runtime error.
-/// - `provider_failure_json`: Optional sanitized provider failure payload.
-pub(crate) fn provider_error_is_output_limit_exceeded(
-    message: &str,
-    provider_failure_json: Option<&str>,
-) -> bool {
-    if provider_error_text_is_output_limit_exceeded(message) {
-        return true;
-    }
-    let Some(provider_failure_json) = provider_failure_json else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(provider_failure_json) else {
-        return false;
-    };
-    [
-        "/incomplete_details/reason",
-        "/response/incomplete_details/reason",
-        "/body/incomplete_details/reason",
-        "/body/response/incomplete_details/reason",
-        "/error/code",
-        "/error/message",
-        "/message",
-        "/body/error/code",
-        "/body/error/message",
-        "/body/message",
-        "/response/error/code",
-        "/response/error/message",
-    ]
-    .into_iter()
-    .filter_map(|pointer| value.pointer(pointer))
-    .filter_map(serde_json::Value::as_str)
-    .any(provider_error_text_is_output_limit_exceeded)
-}
-
-/// Reports whether one provider error message contains a retry invitation.
-///
-/// # Parameters
-/// - `text`: Provider error text to classify.
-fn provider_error_text_invites_retry(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    lower.contains("you can retry your request")
-        || lower.contains("you can retry the request")
-        || (lower.contains("an error occurred while processing your request")
-            && lower.contains("retry"))
-}
-
-/// Reports whether one provider error field indicates transient overload or
-/// temporary unavailability.
-///
-/// # Parameters
-/// - `text`: Provider diagnostic text to classify.
-fn provider_error_text_is_transient_overload_or_unavailable(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    lower.contains("api_error")
-        || lower.contains("timeout_error")
-        || lower.contains("rate_limit_error")
-        || lower.contains("overloaded_error")
-        || lower.contains("api overloaded")
-        || lower.contains("server overloaded")
-        || lower.contains("server is overloaded")
-        || lower.contains("temporarily unavailable")
-        || lower.contains("service unavailable")
-        || (lower.contains("overloaded") && lower.contains("try again"))
-}
-
-/// Reports whether one provider error field indicates an input context limit.
-///
-/// # Parameters
-/// - `text`: Provider diagnostic text or code to classify.
-fn provider_error_text_is_context_limit_exceeded(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    lower.contains("context_length_exceeded")
-        || lower.contains("context length exceeded")
-        || lower.contains("context_window_exceeded")
-        || lower.contains("model_context_window_exceeded")
-        || lower.contains("request_too_large")
-        || lower.contains("exceeds the context window")
-        || lower.contains("maximum context length")
-        || lower.contains("max context length")
-        || lower.contains("context window")
-        || lower.contains("prompt is too long")
-        || lower.contains("input is too large")
-        || lower.contains("input too large")
-        || lower.contains("too many input tokens")
-        || lower.contains("too many tokens")
-        || lower.contains("reduce the length of the messages")
-        || lower.contains("reduce the length of your input")
-        || lower.contains("request too large for the model")
-}
-
-/// Reports whether one provider error field indicates output-token exhaustion.
-///
-/// # Parameters
-/// - `text`: Provider diagnostic text or code to classify.
-fn provider_error_text_is_output_limit_exceeded(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    lower.contains("max_output_tokens")
-        || lower.contains("max_tokens")
-        || lower.contains("maximum output tokens")
-        || lower.contains("output token limit")
-        || lower.contains("output tokens limit")
-        || lower.contains("response output limit")
 }
 
 /// Runs the insert provider failure value operation for this subsystem.

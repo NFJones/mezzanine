@@ -164,10 +164,6 @@ pub(crate) use provider::{
     ProviderErrorRetryClass, provider_error_retry_class, provider_error_retry_class_from_parts,
     provider_event_error_from_parts, provider_event_error_kind,
 };
-#[cfg(test)]
-pub(crate) use provider::{
-    provider_error_is_context_limit_exceeded, provider_error_is_output_limit_exceeded,
-};
 pub use readiness::{
     BootstrapDecision, PaneReadinessOverride, PaneReadinessOverrideStore, PaneReadinessState,
     ReadinessDecision, ReadinessOverrideRevocation, decide_bootstrap_before_user_prompt,

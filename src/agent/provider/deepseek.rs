@@ -1521,10 +1521,10 @@ mod tests {
         let error = parse_deepseek_chat_completions_response_body(&body, &request).unwrap_err();
 
         assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
-        assert!(crate::agent::provider_error_is_output_limit_exceeded(
-            error.message(),
-            error.provider_failure_json()
-        ));
+        assert_eq!(
+            crate::agent::provider_error_retry_class(&error),
+            crate::agent::ProviderErrorRetryClass::OutputLimit
+        );
         assert_eq!(error.provider_raw_text(), Some(partial_json));
         let failure_json: serde_json::Value =
             serde_json::from_str(error.provider_failure_json().unwrap()).unwrap();

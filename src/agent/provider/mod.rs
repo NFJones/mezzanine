@@ -49,10 +49,6 @@ use errors::{
     openai_provider_error_detail, openai_provider_failure_json, provider_maap_parse_error,
 };
 #[cfg(test)]
-pub(crate) use errors::{
-    provider_error_is_context_limit_exceeded, provider_error_is_output_limit_exceeded,
-};
-#[cfg(test)]
 pub use http::ProviderHttpTransport;
 pub use http::{AsyncProviderHttpTransport, ReqwestProviderHttpTransport};
 #[cfg(test)]
