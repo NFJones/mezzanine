@@ -22,6 +22,7 @@ impl From<mez_mux::MuxError> for MezError {
             mez_mux::MuxErrorKind::Conflict => Self::conflict(error.message()),
             mez_mux::MuxErrorKind::NotFound => Self::new(MezErrorKind::NotFound, error.message()),
             mez_mux::MuxErrorKind::Forbidden => Self::forbidden(error.message()),
+            mez_mux::MuxErrorKind::Io => Self::new(MezErrorKind::Io, error.message()),
         }
     }
 }

@@ -114,7 +114,7 @@ fn argv_shell_command_quotes_each_argument_for_exec_semantics() {
 fn argv_shell_command_rejects_empty_program() {
     let error = shell_command_from_argv(&["".to_string()]).unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert_eq!(error.kind(), mez_mux::MuxErrorKind::InvalidArgs);
 }
 
 /// Verifies explicit command must not be empty.
@@ -126,7 +126,7 @@ fn argv_shell_command_rejects_empty_program() {
 fn explicit_command_must_not_be_empty() {
     let error = pane_command_plan(&test_shell(), Some(" ")).unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert_eq!(error.kind(), mez_mux::MuxErrorKind::InvalidArgs);
 }
 
 /// Verifies that pane output backlog buffering refuses chunks that would exceed
@@ -433,7 +433,7 @@ fn pane_process_manager_rejects_removing_running_process() {
         .unwrap();
 
     let error = manager.remove_exited(pane_id).unwrap_err();
-    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert_eq!(error.kind(), mez_mux::MuxErrorKind::InvalidState);
 
     let status = manager.wait_and_remove(pane_id).unwrap();
     assert!(status.success());
@@ -501,7 +501,7 @@ fn pane_process_manager_rejects_async_handoff_after_exit() {
 
     let error = manager.take_running_pane_process(pane_id).unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert_eq!(error.kind(), mez_mux::MuxErrorKind::InvalidState);
     manager.remove_exited(pane_id).unwrap();
 }
 
@@ -563,7 +563,7 @@ fn pane_process_manager_retains_process_when_termination_fails() {
         .terminate_pane_with_grace(pane_id, Duration::from_millis(10))
         .unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert_eq!(error.kind(), mez_mux::MuxErrorKind::InvalidState);
     assert!(manager.contains_pane(pane_id));
     assert_eq!(manager.primary_pid(pane_id), Some(pid));
 

@@ -7,7 +7,7 @@ use std::path::Path;
 
 use portable_pty::{CommandBuilder, native_pty_system};
 
-use crate::error::{MezError, Result};
+use mez_mux::{MuxError as MezError, Result};
 use mez_terminal::TerminalSize;
 
 use super::pane::{PaneProcess, configure_pty_master_nonblocking};
@@ -113,12 +113,10 @@ pub fn spawn_pane_process_with_start_directory(
     command.env("TERM", &environment.term);
     command.env("GIT_OPTIONAL_LOCKS", "0");
 
-    let child = pair.slave.spawn_command(command).map_err(|error| {
-        MezError::new(
-            crate::error::MezErrorKind::Io,
-            format!("failed to spawn pane process: {error}"),
-        )
-    })?;
+    let child = pair
+        .slave
+        .spawn_command(command)
+        .map_err(|error| MezError::io(format!("failed to spawn pane process: {error}")))?;
     drop(pair.slave);
 
     let primary_pid = child

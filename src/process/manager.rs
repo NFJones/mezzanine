@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::error::{MezError, Result};
+use mez_mux::{MuxError as MezError, MuxErrorKind, Result};
 use mez_terminal::TerminalSize;
 
 use super::pane::PaneProcess;
@@ -245,23 +245,18 @@ impl PaneProcessManager {
     /// existing exit-removal path so callers cannot accidentally skip lifecycle
     /// settlement.
     pub fn take_running_pane_process(&mut self, pane_id: &str) -> Result<PaneProcess> {
-        let process = self.processes.get(pane_id).ok_or_else(|| {
-            MezError::new(
-                crate::error::MezErrorKind::NotFound,
-                "pane process not found",
-            )
-        })?;
+        let process = self
+            .processes
+            .get(pane_id)
+            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "pane process not found"))?;
         if process.recorded_exit_status().is_some() {
             return Err(MezError::invalid_state(
                 "exited pane process cannot be handed to async process owner",
             ));
         }
-        self.processes.remove(pane_id).ok_or_else(|| {
-            MezError::new(
-                crate::error::MezErrorKind::NotFound,
-                "pane process not found",
-            )
-        })
+        self.processes
+            .remove(pane_id)
+            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "pane process not found"))
     }
 
     /// Inserts a process returned from a cancelled async owner back into the
@@ -309,12 +304,10 @@ impl PaneProcessManager {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn resize_pane(&self, pane_id: &str, size: TerminalSize) -> Result<()> {
-        let process = self.processes.get(pane_id).ok_or_else(|| {
-            MezError::new(
-                crate::error::MezErrorKind::NotFound,
-                "pane process not found",
-            )
-        })?;
+        let process = self
+            .processes
+            .get(pane_id)
+            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "pane process not found"))?;
         process.resize(size)
     }
 
@@ -324,12 +317,10 @@ impl PaneProcessManager {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn write_pane_input(&mut self, pane_id: &str, input: &[u8]) -> Result<()> {
-        let process = self.processes.get_mut(pane_id).ok_or_else(|| {
-            MezError::new(
-                crate::error::MezErrorKind::NotFound,
-                "pane process not found",
-            )
-        })?;
+        let process = self
+            .processes
+            .get_mut(pane_id)
+            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "pane process not found"))?;
         process.write_input(input)
     }
 
@@ -392,12 +383,10 @@ impl PaneProcessManager {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn remove_exited(&mut self, pane_id: &str) -> Result<()> {
-        let process = self.processes.get(pane_id).ok_or_else(|| {
-            MezError::new(
-                crate::error::MezErrorKind::NotFound,
-                "pane process not found",
-            )
-        })?;
+        let process = self
+            .processes
+            .get(pane_id)
+            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "pane process not found"))?;
         if process.recorded_exit_status().is_none() {
             return Err(MezError::invalid_state(
                 "pane process cannot be removed before it exits",
@@ -473,12 +462,10 @@ impl PaneProcessManager {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn wait_and_remove(&mut self, pane_id: &str) -> Result<PaneExitStatus> {
-        let mut process = self.processes.remove(pane_id).ok_or_else(|| {
-            MezError::new(
-                crate::error::MezErrorKind::NotFound,
-                "pane process not found",
-            )
-        })?;
+        let mut process = self
+            .processes
+            .remove(pane_id)
+            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "pane process not found"))?;
         process.wait()
     }
 

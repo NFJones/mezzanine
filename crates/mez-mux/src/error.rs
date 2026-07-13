@@ -22,6 +22,8 @@ pub enum MuxErrorKind {
     NotFound,
     /// The requesting client is not authorized to perform the mux operation.
     Forbidden,
+    /// A host I/O operation required by the mux failed.
+    Io,
 }
 
 /// Error returned by multiplexer-domain operations.
@@ -61,6 +63,11 @@ impl MuxError {
         Self::new(MuxErrorKind::Forbidden, message)
     }
 
+    /// Creates an I/O error.
+    pub fn io(message: impl Into<String>) -> Self {
+        Self::new(MuxErrorKind::Io, message)
+    }
+
     /// Returns this error's stable category.
     pub fn kind(&self) -> MuxErrorKind {
         self.kind
@@ -75,6 +82,12 @@ impl MuxError {
 impl From<mez_terminal::TerminalSizeError> for MuxError {
     fn from(error: mez_terminal::TerminalSizeError) -> Self {
         Self::invalid_args(error.message())
+    }
+}
+
+impl From<std::io::Error> for MuxError {
+    fn from(error: std::io::Error) -> Self {
+        Self::io(error.to_string())
     }
 }
 

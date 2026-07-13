@@ -1202,7 +1202,7 @@ pub(super) fn runtime_json_creation_command(body: &str) -> Result<Option<String>
                 })?;
                 argv.push(argument.to_string());
             }
-            shell_command_from_argv(&argv).map(Some)
+            Ok(shell_command_from_argv(&argv).map(Some)?)
         }
         _ => Err(MezError::invalid_args(
             "shell_command must be a string, string array, or null",

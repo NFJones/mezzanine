@@ -6,7 +6,7 @@
 use rustix::io::Errno;
 use rustix::process::{Pid, Signal, kill_process_group};
 
-use crate::error::{MezError, Result};
+use mez_mux::{MuxError as MezError, Result};
 
 /// Runs the send signal to pane process group operation for this subsystem.
 ///
@@ -25,14 +25,11 @@ pub(super) fn send_signal_to_pane_process_group(
     match kill_process_group(pid, signal) {
         Ok(()) => Ok(()),
         Err(Errno::SRCH) => Ok(()),
-        Err(error) => Err(MezError::new(
-            crate::error::MezErrorKind::Io,
-            format!(
-                "failed to send signal {} to pane process group {}: {error}",
-                signal.as_raw(),
-                process_group_leader
-            ),
-        )),
+        Err(error) => Err(MezError::io(format!(
+            "failed to send signal {} to pane process group {}: {error}",
+            signal.as_raw(),
+            process_group_leader
+        ))),
     }
 }
 

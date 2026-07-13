@@ -16,8 +16,8 @@ use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use rustix::io::{Errno, dup as rustix_dup, read as rustix_read, write as rustix_write};
 use rustix::process::Signal;
 
-use crate::error::{MezError, Result};
-use crate::layout::Size;
+use mez_mux::{MuxError as MezError, Result};
+use mez_terminal::TerminalSize;
 
 use super::pty::{PTY_IO_CHUNK_BYTES, pty_size};
 use super::signals::send_signal_to_pane_process_group;
@@ -217,7 +217,7 @@ impl PaneProcess {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn resize(&self, size: Size) -> Result<()> {
+    pub fn resize(&self, size: TerminalSize) -> Result<()> {
         self.master
             .resize(pty_size(size))
             .map_err(|error| MezError::invalid_state(format!("pane PTY resize failed: {error}")))

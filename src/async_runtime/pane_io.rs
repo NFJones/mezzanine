@@ -493,7 +493,7 @@ impl AsyncPaneProcessIo for AsyncPtyPaneProcessIo {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn resize<'a>(&'a mut self, size: Size) -> AsyncPaneIoFuture<'a, ()> {
-        Box::pin(async move { self.process.resize(size) })
+        Box::pin(async move { self.process.resize(size).map_err(Into::into) })
     }
 
     /// Runs the terminate operation for this subsystem.

@@ -754,8 +754,9 @@ impl RuntimeSessionService {
         self.require_live()?;
         let pane_id = pane_id.into();
         self.detached_pane_primary_pids.remove(&pane_id);
-        self.pane_processes
-            .insert_running_pane_process(pane_id, process)
+        Ok(self
+            .pane_processes
+            .insert_running_pane_process(pane_id, process)?)
     }
 
     /// Drains pane-worker I/O through the transport-neutral transition contract.
@@ -804,7 +805,7 @@ impl RuntimeSessionService {
             return Err(MezError::invalid_args("pane input must not be empty"));
         }
         if self.pane_processes.contains_pane(pane_id) {
-            return self.pane_processes.write_pane_input(pane_id, input);
+            return Ok(self.pane_processes.write_pane_input(pane_id, input)?);
         }
         if self.pane_process_is_adapter_owned(pane_id) {
             self.queued_pane_input_effects.push(if priority {
@@ -845,10 +846,10 @@ impl RuntimeSessionService {
         self.agent_subshell_panes.remove(pane_id);
         self.agent_subshell_command_exit_panes.remove(pane_id);
         if self.pane_processes.contains_pane(pane_id) {
-            return self
+            return Ok(self
                 .pane_processes
                 .terminate_pane(pane_id)
-                .map(|process| process.is_some());
+                .map(|process| process.is_some())?);
         }
         if self.detached_pane_primary_pids.remove(pane_id).is_some() {
             self.queued_pane_termination_effects.insert(
