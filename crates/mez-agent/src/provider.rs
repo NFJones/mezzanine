@@ -7,7 +7,10 @@
 use sha2::Digest;
 use std::fmt;
 
-use crate::{ContextSourceKind, ModelMessage, ModelMessageRole, ProviderTranscriptEvent};
+use crate::{
+    AllowedActionSet, ContextSourceKind, ModelInteractionKind, ModelMessage, ModelMessageRole,
+    ProviderTranscriptEvent,
+};
 
 /// Prefix used by local provider-context compaction summaries.
 const OPENAI_CONTEXT_COMPACTED_PREFIX: &str = "[context compacted]";
@@ -77,6 +80,30 @@ pub fn openai_render_messages(
         input,
         stable_input,
         volatile_input,
+    })
+}
+
+/// Builds the late controller instruction that exposes the active action surface.
+pub fn openai_allowed_action_surface_message(
+    interaction_kind: ModelInteractionKind,
+    allowed_actions: &AllowedActionSet,
+) -> Option<ModelMessage> {
+    if interaction_kind == ModelInteractionKind::AutoSizing {
+        return None;
+    }
+    let allowed_actions = allowed_actions.action_type_names().join(",");
+    Some(ModelMessage {
+        role: ModelMessageRole::Developer,
+        source: ContextSourceKind::RuntimeHint,
+        content: format!(
+            "[allowed action surface]\n\
+             interaction_kind={}\n\
+             allowed_actions={allowed_actions}\n\
+             active_function_tool={}\n\
+             Emit only action objects whose type appears in allowed_actions and is present in active_function_tool; disallowed action types are rejected.",
+            interaction_kind.as_str(),
+            MAAP_ACTION_BATCH_TOOL_NAME,
+        ),
     })
 }
 

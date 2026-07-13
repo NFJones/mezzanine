@@ -7,46 +7,26 @@
 use super::OPENAI_MAAP_FUNCTION_TOOL_NAME;
 use super::openai_request::openai_responses_request_control_shape_with_stream;
 use super::schema::openai_maap_action_batch_tools;
-use crate::agent::{
-    ContextSourceKind, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest,
-};
+use crate::agent::{ModelInteractionKind, ModelRequest};
+#[cfg(test)]
+use crate::agent::{ContextSourceKind, ModelMessage, ModelMessageRole};
 #[cfg(test)]
 use mez_agent::openai_stable_prefix_material;
 use mez_agent::{
     OpenAiPromptCacheDiagnostics, OpenAiRenderedMessages, ProviderRequestAssemblyResult,
-    openai_auto_sizing_response_format, openai_macro_judge_response_format,
-    openai_prompt_cache_diagnostics, openai_prompt_cache_key as provider_prompt_cache_key,
-    openai_render_messages, validate_provider_request_required,
+    openai_allowed_action_surface_message, openai_auto_sizing_response_format,
+    openai_macro_judge_response_format, openai_prompt_cache_diagnostics,
+    openai_prompt_cache_key as provider_prompt_cache_key, openai_render_messages,
+    validate_provider_request_required,
 };
 
 /// Renders request messages and captures canonical stable-prefix material.
 pub(super) fn openai_render_request_messages(
     request: &ModelRequest,
 ) -> ProviderRequestAssemblyResult<OpenAiRenderedMessages> {
-    let appended_message = openai_allowed_action_surface_message(request);
+    let appended_message =
+        openai_allowed_action_surface_message(request.interaction_kind, &request.allowed_actions);
     openai_render_messages(&request.messages, appended_message.as_ref())
-}
-
-/// Builds the late controller instruction that makes the current executable
-/// surface visible in model context.
-fn openai_allowed_action_surface_message(request: &ModelRequest) -> Option<ModelMessage> {
-    if request.interaction_kind == ModelInteractionKind::AutoSizing {
-        return None;
-    }
-    let allowed_actions = request.allowed_actions.action_type_names().join(",");
-    Some(ModelMessage {
-        role: ModelMessageRole::Developer,
-        source: ContextSourceKind::RuntimeHint,
-        content: format!(
-            "[allowed action surface]\n\
-             interaction_kind={}\n\
-             allowed_actions={allowed_actions}\n\
-             active_function_tool={}\n\
-             Emit only action objects whose type appears in allowed_actions and is present in active_function_tool; disallowed action types are rejected.",
-            request.interaction_kind.as_str(),
-            OPENAI_MAAP_FUNCTION_TOOL_NAME,
-        ),
-    })
 }
 
 /// Returns the OpenAI response-format field for special request modes.
