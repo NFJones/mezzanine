@@ -240,6 +240,8 @@ impl AllowedAction {
 pub struct AllowedActionSet {
     /// Stores the allowed action values.
     pub actions: BTreeSet<AllowedAction>,
+    /// Product-provided setting-path guidance for config-change actions.
+    config_change_setting_path_description: Option<String>,
 }
 
 impl AllowedActionSet {
@@ -295,7 +297,22 @@ impl AllowedActionSet {
     pub fn from_actions(actions: impl IntoIterator<Item = AllowedAction>) -> Self {
         Self {
             actions: actions.into_iter().collect(),
+            config_change_setting_path_description: None,
         }
+    }
+
+    /// Attaches product-specific setting-path guidance to this action surface.
+    pub fn with_config_change_setting_path_description(
+        mut self,
+        description: impl Into<String>,
+    ) -> Self {
+        self.config_change_setting_path_description = Some(description.into());
+        self
+    }
+
+    /// Returns product-specific config-change setting-path guidance, if set.
+    pub fn config_change_setting_path_description(&self) -> Option<&str> {
+        self.config_change_setting_path_description.as_deref()
     }
 
     /// Adds actions to the set.
@@ -306,6 +323,10 @@ impl AllowedActionSet {
     /// Adds all actions from another set.
     pub fn extend_set(&mut self, other: &AllowedActionSet) {
         self.actions.extend(other.actions.iter().copied());
+        if other.config_change_setting_path_description.is_some() {
+            self.config_change_setting_path_description =
+                other.config_change_setting_path_description.clone();
+        }
     }
 
     /// Removes one action from the exposed action surface.

@@ -93,10 +93,10 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
         diagnostics.response_format_sha256,
         "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
     );
-    assert_eq!(diagnostics.tools_bytes, 28_205);
+    assert_eq!(diagnostics.tools_bytes, 19_103);
     assert_eq!(
         diagnostics.tools_sha256,
-        "bc5657e5bf683cf9bec83de7a368bad4d803c208c259b7e100b96b0ce374e9eb"
+        "8f3fc2b63137b6701dbb3e17252b786a650b524de49c60f31d307df78fa47da4"
     );
     assert_eq!(diagnostics.tool_choice_bytes, 53);
     assert_eq!(
@@ -108,10 +108,10 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
         diagnostics.stable_prompt_prefix_sha256,
         "fb59fd2449bf99d2a17d9610db82a7204bc20f352ea5c06b15d000cfc1278573"
     );
-    assert_eq!(diagnostics.provider_request_shape_bytes, 28_416);
+    assert_eq!(diagnostics.provider_request_shape_bytes, 19_314);
     assert_eq!(
         diagnostics.provider_request_shape_sha256,
-        "f2408b6f5aeac8810535dc9df1e634c21f3e5653e9ae178c5393727bf963bf2f"
+        "4d4e5347d645e36269c1e194ec03d60aa49515a21f58551aef26751a8f556bc2"
     );
 }
 

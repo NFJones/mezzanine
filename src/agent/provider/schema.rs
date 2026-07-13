@@ -8,8 +8,10 @@ use super::{
     AgentCapability, AllowedAction, AllowedActionSet, McpPromptTool, ModelRequest,
     OPENAI_MAAP_FUNCTION_TOOL_NAME,
 };
-use crate::config::config_change_setting_path_description;
-use mez_agent::{CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_VALUE_DESCRIPTION};
+use mez_agent::{
+    CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_SETTING_PATH_DESCRIPTION,
+    CONFIG_CHANGE_VALUE_DESCRIPTION,
+};
 
 /// Legacy OpenAI MAAP function-tool surfaces.
 ///
@@ -136,6 +138,12 @@ fn openai_stable_schema_action_surface(request: &ModelRequest) -> AllowedActionS
         AllowedAction::IssueQuery,
         AllowedAction::IssueDelete,
     ]);
+    if let Some(description) = request
+        .allowed_actions
+        .config_change_setting_path_description()
+    {
+        actions = actions.with_config_change_setting_path_description(description);
+    }
     if request.allowed_actions.contains(AllowedAction::McpCall) {
         actions.extend([AllowedAction::McpCall]);
     }
@@ -323,7 +331,11 @@ fn maap_action_schema(
             AllowedAction::FetchUrl => action_schemas.push(maap_fetch_url_action_schema()),
             AllowedAction::SendMessage => action_schemas.push(maap_send_message_action_schema()),
             AllowedAction::SpawnAgent => action_schemas.push(maap_spawn_agent_action_schema()),
-            AllowedAction::ConfigChange => action_schemas.push(maap_config_change_action_schema()),
+            AllowedAction::ConfigChange => action_schemas.push(maap_config_change_action_schema(
+                allowed_actions
+                    .config_change_setting_path_description()
+                    .unwrap_or(CONFIG_CHANGE_SETTING_PATH_DESCRIPTION),
+            )),
             AllowedAction::MemorySearch => action_schemas.push(maap_memory_search_action_schema()),
             AllowedAction::MemoryStore => action_schemas.push(maap_memory_store_action_schema()),
             AllowedAction::IssueAdd => action_schemas.push(maap_issue_add_action_schema()),
@@ -921,7 +933,7 @@ fn maap_spawn_agent_action_schema() -> serde_json::Value {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn maap_config_change_action_schema() -> serde_json::Value {
+fn maap_config_change_action_schema(setting_path_description: &str) -> serde_json::Value {
     maap_action_object_schema(
         "config_change",
         [
@@ -930,7 +942,7 @@ fn maap_config_change_action_schema() -> serde_json::Value {
                 serde_json::json!({
                     "type": "string",
                     "minLength": 1,
-                    "description": config_change_setting_path_description()
+                    "description": setting_path_description
                 }),
             ),
             (

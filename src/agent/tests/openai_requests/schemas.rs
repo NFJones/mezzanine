@@ -490,7 +490,10 @@ fn openai_responses_request_body_describes_config_change_schema() {
     .unwrap();
     request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::ConfigChange);
+        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::ConfigChange)
+            .with_config_change_setting_path_description(
+                crate::config::config_change_setting_path_description(),
+            );
 
     let body = openai_responses_request_body(&request).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
