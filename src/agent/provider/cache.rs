@@ -370,20 +370,6 @@ pub(super) fn openai_prompt_cache_key(request: &ModelRequest) -> String {
     )
 }
 
-/// Maps Mezzanine latency preferences to OpenAI Responses service tiers.
-pub(super) fn openai_service_tier_for_latency_preference(
-    preference: Option<&str>,
-) -> ProviderRequestAssemblyResult<Option<&'static str>> {
-    match preference.map(str::trim).filter(|value| !value.is_empty()) {
-        Some("slow") | Some("default") => Ok(Some("default")),
-        None => Ok(None),
-        Some("fast") => Ok(Some("priority")),
-        Some(other) => Err(ProviderRequestAssemblyError::invalid_args(format!(
-            "OpenAI latency_preference must be slow, default, or fast, got {other:?}"
-        ))),
-    }
-}
-
 /// Returns non-model-visible OpenAI prompt-cache diagnostics for one request.
 pub fn openai_prompt_cache_diagnostics_for_request(
     request: &ModelRequest,

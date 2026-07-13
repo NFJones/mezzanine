@@ -135,6 +135,20 @@ pub fn openai_prompt_cache_key(provider: &str, lineage_id: Option<&str>) -> Stri
     format!("mez-{}", &digest_hex[..32])
 }
 
+/// Maps a provider-neutral latency preference to an OpenAI service tier.
+pub fn openai_service_tier_for_latency_preference(
+    preference: Option<&str>,
+) -> ProviderRequestAssemblyResult<Option<&'static str>> {
+    match preference.map(str::trim).filter(|value| !value.is_empty()) {
+        Some("slow") | Some("default") => Ok(Some("default")),
+        None => Ok(None),
+        Some("fast") => Ok(Some("priority")),
+        Some(other) => Err(ProviderRequestAssemblyError::invalid_args(format!(
+            "OpenAI latency_preference must be slow, default, or fast, got {other:?}"
+        ))),
+    }
+}
+
 /// Result type returned while decoding one provider response.
 pub type ProviderResponseResult<T> = Result<T, ProviderResponseError>;
 
@@ -567,7 +581,8 @@ mod request_assembly_tests {
         ProviderEndpointErrorKind, ProviderRequestAssemblyError, ProviderRequestAssemblyErrorKind,
         ProviderResponseError, ProviderResponseErrorKind,
         openai_models_endpoint_for_responses_endpoint, openai_prompt_cache_key,
-        openai_responses_endpoint_for_base_url, validate_provider_request_required,
+        openai_responses_endpoint_for_base_url, openai_service_tier_for_latency_preference,
+        validate_provider_request_required,
     };
 
     /// OpenAI prompt-cache routing keys follow provider and lineage identity
@@ -587,6 +602,26 @@ mod request_assembly_tests {
         assert_eq!(unknown_a, unknown_b);
         assert!(inherited.starts_with("mez-"));
         assert_eq!(inherited.len(), "mez-".len() + 32);
+    }
+
+    /// OpenAI service-tier selection accepts the documented latency values and
+    /// rejects unknown policy strings before request encoding.
+    #[test]
+    fn openai_service_tiers_follow_latency_preference() {
+        assert_eq!(
+            openai_service_tier_for_latency_preference(None).unwrap(),
+            None
+        );
+        assert_eq!(
+            openai_service_tier_for_latency_preference(Some("default")).unwrap(),
+            Some("default")
+        );
+        assert_eq!(
+            openai_service_tier_for_latency_preference(Some("fast")).unwrap(),
+            Some("priority")
+        );
+        let error = openai_service_tier_for_latency_preference(Some("turbo")).unwrap_err();
+        assert_eq!(error.kind(), ProviderRequestAssemblyErrorKind::InvalidArgs);
     }
 
     /// Provider request validation preserves invalid-argument diagnostics for

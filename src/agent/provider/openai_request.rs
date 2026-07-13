@@ -8,12 +8,12 @@
 use super::OPENAI_MAAP_FUNCTION_TOOL_NAME;
 use super::cache::{
     openai_prompt_cache_key, openai_render_request_messages, openai_response_format,
-    openai_service_tier_for_latency_preference,
 };
 use super::schema::openai_maap_action_batch_tools;
 use crate::agent::ModelRequest;
 use mez_agent::{
-    ProviderRequestAssemblyError, ProviderRequestAssemblyResult, validate_provider_request_required,
+    ProviderRequestAssemblyError, ProviderRequestAssemblyResult,
+    openai_service_tier_for_latency_preference, validate_provider_request_required,
 };
 
 /// Builds a non-streaming OpenAI Responses request body.
