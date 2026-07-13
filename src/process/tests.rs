@@ -2,14 +2,13 @@
 
 use super::pane::append_output_chunk_to_backlog;
 use super::{
-    PaneProcessManager, pane_command_plan, shell_command_from_argv, spawn_pane_process,
-    spawn_pane_process_with_start_directory,
+    PaneProcessLaunch, PaneProcessManager, pane_command_plan, shell_command_from_argv,
+    spawn_pane_process, spawn_pane_process_with_start_directory,
 };
 use crate::ids::IdFactory;
 use crate::layout::Size;
 use crate::runtime::PaneEnvironment;
 use crate::runtime::pane_environment;
-use crate::shell::{ResolvedShell, ShellSource};
 use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,8 +19,8 @@ use std::time::Duration;
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn test_shell() -> ResolvedShell {
-    ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh)
+fn test_shell() -> PaneProcessLaunch {
+    PaneProcessLaunch::new(PathBuf::from("/bin/sh"))
 }
 
 /// Runs the test environment operation for this subsystem.

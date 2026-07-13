@@ -155,9 +155,9 @@ async fn async_pane_process_driver_reports_polled_exit_once() {
 /// event.
 #[tokio::test]
 async fn async_pty_pane_process_io_bridges_live_portable_pty() {
-    let shell = resolve_shell(Some(OsString::from("/bin/sh"))).unwrap();
+    let launch = PaneProcessLaunch::new("/bin/sh".into());
     let process = spawn_pane_process(
-        &shell,
+        &launch,
         Some("/bin/sh -c 'printf async-bridge-output; sleep 5'"),
         &test_pane_environment(),
         Size::new(80, 24).unwrap(),
@@ -214,9 +214,9 @@ async fn async_pty_pane_process_io_bridges_live_portable_pty() {
 /// proven live-pane transport path.
 #[tokio::test]
 async fn async_pty_pane_process_io_preserves_full_screen_mode_bytes() {
-    let shell = resolve_shell(Some(OsString::from("/bin/sh"))).unwrap();
+    let launch = PaneProcessLaunch::new("/bin/sh".into());
     let process = spawn_pane_process(
-        &shell,
+        &launch,
         Some(
             "/bin/sh -c \"printf '\\033[?1049h\\033[?1004h\\033[H\\033[2Jmini-tui\\nready\\033[?1004l\\033[?1049l'\"",
         ),
@@ -444,9 +444,9 @@ async fn async_pane_process_driver_service_wakes_on_live_output_activity() {
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
         .build()
         .unwrap();
-    let shell = resolve_shell(Some(OsString::from("/bin/sh"))).unwrap();
+    let launch = PaneProcessLaunch::new("/bin/sh".into());
     let process = spawn_pane_process(
-        &shell,
+        &launch,
         Some("/bin/sh -c 'sleep 0.05; printf live-activity-output'"),
         &test_pane_environment(),
         Size::new(80, 24).unwrap(),

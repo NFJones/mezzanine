@@ -8,12 +8,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::error::{MezError, Result};
-use crate::layout::Size;
-use crate::shell::ResolvedShell;
+use mez_terminal::TerminalSize;
 
 use super::pane::PaneProcess;
 use super::spawn::{spawn_pane_process, spawn_pane_process_with_start_directory};
-use super::types::{ExitedPaneProcess, PaneExitStatus, PaneProcessEnvironment, PaneProcessOutput};
+use super::types::{
+    ExitedPaneProcess, PaneExitStatus, PaneProcessEnvironment, PaneProcessLaunch, PaneProcessOutput,
+};
 
 /// Defines the DEFAULT TERMINATION GRACE const used by this subsystem.
 ///
@@ -63,16 +64,16 @@ impl PaneProcessManager {
     pub fn spawn_for_pane(
         &mut self,
         pane_id: impl Into<String>,
-        shell: &ResolvedShell,
+        launch: &PaneProcessLaunch,
         explicit_command: Option<&str>,
         environment: &PaneProcessEnvironment,
-        size: Size,
+        size: TerminalSize,
     ) -> Result<u32> {
         let pane_id = pane_id.into();
         if self.processes.contains_key(&pane_id) {
             return Err(MezError::conflict("pane already has a primary process"));
         }
-        let process = spawn_pane_process(shell, explicit_command, environment, size)?;
+        let process = spawn_pane_process(launch, explicit_command, environment, size)?;
         let pid = process.primary_pid();
         self.processes.insert(pane_id, process);
         Ok(pid)
@@ -86,10 +87,10 @@ impl PaneProcessManager {
     pub fn spawn_for_pane_with_start_directory(
         &mut self,
         pane_id: impl Into<String>,
-        shell: &ResolvedShell,
+        launch: &PaneProcessLaunch,
         explicit_command: Option<&str>,
         environment: &PaneProcessEnvironment,
-        size: Size,
+        size: TerminalSize,
         start_directory: Option<&std::path::Path>,
     ) -> Result<u32> {
         let pane_id = pane_id.into();
@@ -97,7 +98,7 @@ impl PaneProcessManager {
             return Err(MezError::conflict("pane already has a primary process"));
         }
         let process = spawn_pane_process_with_start_directory(
-            shell,
+            launch,
             explicit_command,
             environment,
             size,
@@ -307,7 +308,7 @@ impl PaneProcessManager {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn resize_pane(&self, pane_id: &str, size: Size) -> Result<()> {
+    pub fn resize_pane(&self, pane_id: &str, size: TerminalSize) -> Result<()> {
         let process = self.processes.get(pane_id).ok_or_else(|| {
             MezError::new(
                 crate::error::MezErrorKind::NotFound,

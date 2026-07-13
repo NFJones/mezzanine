@@ -5,7 +5,7 @@
 
 use portable_pty::PtySize;
 
-use crate::layout::Size;
+use mez_terminal::TerminalSize;
 
 /// Defines the PTY IO CHUNK BYTES const used by this subsystem.
 ///
@@ -18,7 +18,7 @@ pub(super) const PTY_IO_CHUNK_BYTES: usize = 64 * 1024;
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn pty_size(size: Size) -> PtySize {
+pub(super) fn pty_size(size: TerminalSize) -> PtySize {
     PtySize {
         rows: size.rows,
         cols: size.columns,

@@ -627,10 +627,11 @@ impl RuntimeSessionService {
             &descriptor.pane_id,
             &self.terminal_term,
         )?;
-        let shell: crate::shell::ResolvedShell = self.session.shell.clone().into();
+        let launch =
+            crate::process::PaneProcessLaunch::new(self.session.shell.path().to_path_buf());
         let primary_pid = self.pane_processes.spawn_for_pane_with_start_directory(
             descriptor.pane_id.as_str(),
-            &shell,
+            &launch,
             explicit_command,
             &environment,
             descriptor.size,
@@ -664,7 +665,7 @@ impl RuntimeSessionService {
             );
         }
 
-        if shell.used_fallback() {
+        if self.session.shell.used_fallback() {
             self.append_lifecycle_event(
                 EventKind::Diagnostic,
                 format!(

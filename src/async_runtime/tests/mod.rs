@@ -46,7 +46,7 @@ use crate::event::EventAudience;
 use crate::hooks::{HookEvent, HookExecutionPlan, HookOnFailure};
 use crate::ids::{AgentId, ClientId, IdFactory};
 use crate::message::MessageConnection;
-use crate::process::spawn_pane_process;
+use crate::process::{PaneProcessLaunch, spawn_pane_process};
 use crate::registry::SessionRegistry;
 use crate::runtime::{
     RuntimeLifecycleState, RuntimeSessionService, current_effective_uid, pane_environment,

@@ -592,9 +592,9 @@ async fn async_pane_process_service_waits_for_live_output_before_exit() {
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(test_service())
         .build()
         .unwrap();
-    let shell = resolve_shell(Some(OsString::from("/bin/sh"))).unwrap();
+    let launch = PaneProcessLaunch::new("/bin/sh".into());
     let process = spawn_pane_process(
-        &shell,
+        &launch,
         Some("/bin/sh -c 'printf live-output-before-exit'"),
         &test_pane_environment(),
         Size::new(80, 24).unwrap(),

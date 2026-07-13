@@ -8,12 +8,11 @@ use std::path::Path;
 use portable_pty::{CommandBuilder, native_pty_system};
 
 use crate::error::{MezError, Result};
-use crate::layout::Size;
-use crate::shell::ResolvedShell;
+use mez_terminal::TerminalSize;
 
 use super::pane::{PaneProcess, configure_pty_master_nonblocking};
 use super::pty::pty_size;
-use super::types::{PaneCommandPlan, PaneProcessEnvironment};
+use super::types::{PaneCommandPlan, PaneProcessEnvironment, PaneProcessLaunch};
 
 /// Runs the pane command plan operation for this subsystem.
 ///
@@ -21,10 +20,10 @@ use super::types::{PaneCommandPlan, PaneProcessEnvironment};
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub fn pane_command_plan(
-    shell: &ResolvedShell,
+    launch: &PaneProcessLaunch,
     explicit_command: Option<&str>,
 ) -> Result<PaneCommandPlan> {
-    let program = shell.path().to_string_lossy().to_string();
+    let program = launch.program().to_string_lossy().to_string();
     let args = match explicit_command {
         Some(command) => {
             let command = command.trim();
@@ -73,12 +72,12 @@ pub fn shell_command_from_argv(argv: &[String]) -> Result<String> {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub fn spawn_pane_process(
-    shell: &ResolvedShell,
+    launch: &PaneProcessLaunch,
     explicit_command: Option<&str>,
     environment: &PaneProcessEnvironment,
-    size: Size,
+    size: TerminalSize,
 ) -> Result<PaneProcess> {
-    spawn_pane_process_with_start_directory(shell, explicit_command, environment, size, None)
+    spawn_pane_process_with_start_directory(launch, explicit_command, environment, size, None)
 }
 
 /// Opens a PTY and starts the resolved shell for a pane from an optional directory.
@@ -88,13 +87,13 @@ pub fn spawn_pane_process(
 /// `start_directory` is present, it must be an accessible directory and becomes
 /// the process working directory before the shell starts.
 pub fn spawn_pane_process_with_start_directory(
-    shell: &ResolvedShell,
+    launch: &PaneProcessLaunch,
     explicit_command: Option<&str>,
     environment: &PaneProcessEnvironment,
-    size: Size,
+    size: TerminalSize,
     start_directory: Option<&Path>,
 ) -> Result<PaneProcess> {
-    let plan = pane_command_plan(shell, explicit_command)?;
+    let plan = pane_command_plan(launch, explicit_command)?;
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(pty_size(size))

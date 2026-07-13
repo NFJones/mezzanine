@@ -3,6 +3,29 @@
 //! These structures describe command plans, process output, and normalized exit
 //! status without owning PTY or runtime resources.
 
+use std::path::{Path, PathBuf};
+
+/// Dependency-neutral executable selected for a pane process launch.
+///
+/// Product adapters remain responsible for discovering and classifying the
+/// user's shell; the process subsystem only consumes the selected path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneProcessLaunch {
+    program: PathBuf,
+}
+
+impl PaneProcessLaunch {
+    /// Creates a launch contract for the selected shell executable.
+    pub fn new(program: PathBuf) -> Self {
+        Self { program }
+    }
+
+    /// Returns the executable used to start the pane process.
+    pub fn program(&self) -> &Path {
+        &self.program
+    }
+}
+
 /// Environment values injected into a newly spawned pane process.
 ///
 /// Product adapters construct these values from runtime socket and session
