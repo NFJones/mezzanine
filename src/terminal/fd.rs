@@ -67,46 +67,9 @@ pub struct TerminalFrameContext {
     pub panes: BTreeMap<String, TerminalPaneFrameContext>,
 }
 
-/// Runtime metadata made available to pane frame template rendering.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TerminalPaneFrameContext {
-    /// Primary process id shown by `pane.primary_pid`.
-    pub primary_pid: Option<u32>,
-    /// Primary process name shown by `pane.process_name` when known.
-    pub process_name: Option<String>,
-    /// Primary process exit status shown by `pane.exit_status` when known.
-    pub exit_status: Option<String>,
-    /// Home-relative current working directory shown by `pane.pwd` when known.
-    pub current_working_directory: Option<String>,
-    /// Current pane interaction mode shown by `pane.mode`.
-    pub mode: Option<String>,
-    /// Agent identity associated with the pane, shown by `agent.id`.
-    pub agent_id: Option<String>,
-    /// Human-readable agent display name shown by `agent.name`.
-    pub agent_name: Option<String>,
-    /// Agent state shown by `agent.status`.
-    pub agent_status: Option<String>,
-    /// Active provider model name shown by `agent.model`.
-    pub agent_model: Option<String>,
-    /// Active reasoning profile or effort shown by `agent.reasoning`.
-    pub agent_reasoning: Option<String>,
-    /// Provider thinking-mode state shown by `agent.thinking`.
-    pub agent_thinking: Option<String>,
-    /// Pane-local routing state shown by `agent.routing`.
-    pub agent_routing: Option<String>,
-    /// Active latency preference shown by `agent.latency`.
-    pub agent_latency: Option<String>,
-    /// Active model preset name shown by `agent.preset`.
-    pub agent_preset: Option<String>,
-    /// Last known provider input context usage shown by `agent.context_usage`.
-    pub agent_context_usage: Option<String>,
-    /// Scrollback position shown by `history.position` when not at the live bottom.
-    pub history_position: Option<String>,
-    /// Current pane-local agent prompt buffer when the pane is in agent mode.
-    pub agent_prompt: Option<ReadlinePrompt>,
-    /// Pane-local agent progress and response lines shown above the prompt.
-    pub agent_display_lines: Vec<String>,
-}
+/// Product specialization of the mux-owned pane presentation input.
+pub type TerminalPaneFrameContext =
+    mez_mux::presentation::TerminalPaneFrameContext<ReadlinePrompt, Vec<String>>;
 
 pub use mez_mux::presentation::{
     TerminalFramePosition, TerminalFrameStyle, TerminalWindowFrameContext,
