@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use mez_mux::{MuxError as MezError, MuxErrorKind, Result};
+use crate::{MuxError as MezError, MuxErrorKind, Result};
 use mez_terminal::TerminalSize;
 
 use super::pane::PaneProcess;
@@ -38,7 +38,6 @@ pub struct PaneProcessManager {
     /// Runtime tests use this override to model hosts where the synchronous
     /// PTY foreground query is temporarily unavailable without replacing the
     /// live pane process handle.
-    #[cfg(test)]
     foreground_process_group_ids_for_test: BTreeMap<String, Option<u32>>,
 }
 
@@ -51,7 +50,6 @@ impl PaneProcessManager {
     pub fn new() -> Self {
         Self {
             processes: BTreeMap::new(),
-            #[cfg(test)]
             foreground_process_group_ids_for_test: BTreeMap::new(),
         }
     }
@@ -133,7 +131,7 @@ impl PaneProcessManager {
     /// This lets runtime tests model hosts where the primary shell pid and PTY
     /// foreground process group differ without depending on platform-specific
     /// job-control timing.
-    #[cfg(test)]
+    #[doc(hidden)]
     pub fn set_process_group_leader_for_test(&mut self, pane_id: &str, leader: Option<i32>) {
         if let Some(process) = self.processes.get_mut(pane_id) {
             process.process_group_leader = leader;
@@ -145,7 +143,7 @@ impl PaneProcessManager {
     /// This lets runtime tests model PTY backends where the pane shell process
     /// group differs from the primary pid while keeping the live process handle
     /// intact for foreground process-group queries.
-    #[cfg(test)]
+    #[doc(hidden)]
     pub fn set_primary_pid_for_test(&mut self, pane_id: &str, primary_pid: u32) {
         if let Some(process) = self.processes.get_mut(pane_id) {
             process.primary_pid = primary_pid;
@@ -156,7 +154,7 @@ impl PaneProcessManager {
     ///
     /// `None` models platforms or timing windows where `tcgetpgrp` cannot
     /// currently report a foreground process group for the PTY.
-    #[cfg(test)]
+    #[doc(hidden)]
     pub fn set_foreground_process_group_id_for_test(
         &mut self,
         pane_id: &str,
@@ -178,7 +176,6 @@ impl PaneProcessManager {
 
     /// Returns the foreground process-group id for a pane's PTY when available.
     pub fn foreground_process_group_id(&self, pane_id: &str) -> Option<u32> {
-        #[cfg(test)]
         if let Some(override_value) = self.foreground_process_group_ids_for_test.get(pane_id) {
             return *override_value;
         }

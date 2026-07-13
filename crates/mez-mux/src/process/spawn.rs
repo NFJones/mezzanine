@@ -7,7 +7,7 @@ use std::path::Path;
 
 use portable_pty::{CommandBuilder, native_pty_system};
 
-use mez_mux::{MuxError as MezError, Result};
+use crate::{MuxError as MezError, Result};
 use mez_terminal::TerminalSize;
 
 use super::pane::{PaneProcess, configure_pty_master_nonblocking};

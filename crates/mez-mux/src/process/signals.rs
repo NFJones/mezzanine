@@ -6,7 +6,7 @@
 use rustix::io::Errno;
 use rustix::process::{Pid, Signal, kill_process_group};
 
-use mez_mux::{MuxError as MezError, Result};
+use crate::{MuxError as MezError, Result};
 
 /// Runs the send signal to pane process group operation for this subsystem.
 ///

@@ -16,7 +16,7 @@ use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use rustix::io::{Errno, dup as rustix_dup, read as rustix_read, write as rustix_write};
 use rustix::process::Signal;
 
-use mez_mux::{MuxError as MezError, Result};
+use crate::{MuxError as MezError, Result};
 use mez_terminal::TerminalSize;
 
 use super::pty::{PTY_IO_CHUNK_BYTES, pty_size};
@@ -40,7 +40,8 @@ const PANE_INPUT_WRITE_STALL_TIMEOUT: Duration = Duration::from_secs(10);
 /// comfortably below common line-discipline and remote transport thresholds
 /// makes large paste and agent-action payloads observable as a sequence of
 /// bounded progress steps instead of one fragile all-or-nothing write.
-pub(crate) const PTY_INPUT_WRITE_CHUNK_BYTES: usize = 1024;
+#[doc(hidden)]
+pub const PTY_INPUT_WRITE_CHUNK_BYTES: usize = 1024;
 
 #[cfg(test)]
 mod tests {
@@ -423,7 +424,8 @@ impl PaneProcess {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(crate) fn send_signal_to_process_group(&mut self, signal: Signal) -> Result<()> {
+    #[doc(hidden)]
+    pub fn send_signal_to_process_group(&mut self, signal: Signal) -> Result<()> {
         if let Some(process_group_leader) = self.process_group_leader {
             send_signal_to_pane_process_group(process_group_leader, signal)
         } else if signal == Signal::KILL {
@@ -526,7 +528,8 @@ pub(super) fn read_pty_fd_nonblocking(fd: RawFd, max_bytes: usize) -> Result<Pty
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(crate) fn write_pty_fd_nonblocking_io(fd: RawFd, bytes: &[u8]) -> io::Result<usize> {
+#[doc(hidden)]
+pub fn write_pty_fd_nonblocking_io(fd: RawFd, bytes: &[u8]) -> io::Result<usize> {
     rustix_write(borrow_raw_pty_fd(fd), bytes).map_err(io::Error::from)
 }
 

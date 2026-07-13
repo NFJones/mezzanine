@@ -2,16 +2,13 @@
 
 use super::pane::append_output_chunk_to_backlog;
 use super::{
-    PaneProcessLaunch, PaneProcessManager, pane_command_plan, shell_command_from_argv,
-    spawn_pane_process, spawn_pane_process_with_start_directory,
+    PaneProcessEnvironment, PaneProcessLaunch, PaneProcessManager, pane_command_plan,
+    shell_command_from_argv, spawn_pane_process, spawn_pane_process_with_start_directory,
 };
-use crate::ids::IdFactory;
-use crate::layout::Size;
-use crate::runtime::PaneEnvironment;
-use crate::runtime::pane_environment;
+use mez_terminal::TerminalSize as Size;
 use std::collections::VecDeque;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// Runs the test shell operation for this subsystem.
@@ -28,15 +25,14 @@ fn test_shell() -> PaneProcessLaunch {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn test_environment() -> PaneEnvironment {
-    let mut ids = IdFactory::default();
-    pane_environment(
-        Path::new("/tmp/mez-1000/default.sock"),
-        &ids.session(),
-        &ids.window(),
-        &ids.pane(),
-    )
-    .unwrap()
+fn test_environment() -> PaneProcessEnvironment {
+    PaneProcessEnvironment {
+        mez: "/tmp/mez-1000/default.sock,$1,@1,%1,mez-pane".to_string(),
+        session: "$1".to_string(),
+        window: "@1".to_string(),
+        pane: "%1".to_string(),
+        term: "mez-pane".to_string(),
+    }
 }
 
 /// Runs the wait for manager output activity operation for this subsystem.
@@ -114,7 +110,7 @@ fn argv_shell_command_quotes_each_argument_for_exec_semantics() {
 fn argv_shell_command_rejects_empty_program() {
     let error = shell_command_from_argv(&["".to_string()]).unwrap_err();
 
-    assert_eq!(error.kind(), mez_mux::MuxErrorKind::InvalidArgs);
+    assert_eq!(error.kind(), crate::MuxErrorKind::InvalidArgs);
 }
 
 /// Verifies explicit command must not be empty.
@@ -126,7 +122,7 @@ fn argv_shell_command_rejects_empty_program() {
 fn explicit_command_must_not_be_empty() {
     let error = pane_command_plan(&test_shell(), Some(" ")).unwrap_err();
 
-    assert_eq!(error.kind(), mez_mux::MuxErrorKind::InvalidArgs);
+    assert_eq!(error.kind(), crate::MuxErrorKind::InvalidArgs);
 }
 
 /// Verifies that pane output backlog buffering refuses chunks that would exceed
@@ -317,7 +313,7 @@ fn pane_process_sets_term_from_environment() {
     let term = fs::read_to_string(&output).unwrap();
 
     assert!(status.success());
-    assert_eq!(term, crate::terminal::DEFAULT_PANE_TERM);
+    assert_eq!(term, "mez-pane");
     let _ = fs::remove_file(output);
 }
 
@@ -433,7 +429,7 @@ fn pane_process_manager_rejects_removing_running_process() {
         .unwrap();
 
     let error = manager.remove_exited(pane_id).unwrap_err();
-    assert_eq!(error.kind(), mez_mux::MuxErrorKind::InvalidState);
+    assert_eq!(error.kind(), crate::MuxErrorKind::InvalidState);
 
     let status = manager.wait_and_remove(pane_id).unwrap();
     assert!(status.success());
@@ -501,7 +497,7 @@ fn pane_process_manager_rejects_async_handoff_after_exit() {
 
     let error = manager.take_running_pane_process(pane_id).unwrap_err();
 
-    assert_eq!(error.kind(), mez_mux::MuxErrorKind::InvalidState);
+    assert_eq!(error.kind(), crate::MuxErrorKind::InvalidState);
     manager.remove_exited(pane_id).unwrap();
 }
 
@@ -563,7 +559,7 @@ fn pane_process_manager_retains_process_when_termination_fails() {
         .terminate_pane_with_grace(pane_id, Duration::from_millis(10))
         .unwrap_err();
 
-    assert_eq!(error.kind(), mez_mux::MuxErrorKind::InvalidState);
+    assert_eq!(error.kind(), crate::MuxErrorKind::InvalidState);
     assert!(manager.contains_pane(pane_id));
     assert_eq!(manager.primary_pid(pane_id), Some(pid));
 
