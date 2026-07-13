@@ -287,15 +287,13 @@ fn memory_context_accepts_sensitive_records_without_heuristic_rejection() {
         content: "do the task".to_string(),
     }])
     .unwrap();
-    let records = vec![MemoryRecord::new_with_defaults(
-        "secret",
-        MemoryScope::Global,
-        10,
-        10,
-        crate::memory::MemorySource::Agent,
-        9,
-        "api_key = sk-secret",
-    )];
+    let records = vec![MemoryContextRecord {
+        id: "secret".to_string(),
+        scope: MemoryContextScope::Global,
+        updated_at_unix_seconds: 10,
+        priority: 9,
+        content: "api_key = sk-secret".to_string(),
+    }];
 
     let context = append_memory_context(context, &records, 1).unwrap();
 
@@ -316,27 +314,23 @@ fn memory_context_appends_after_active_context_in_priority_order() {
     }])
     .unwrap();
     let records = vec![
-        MemoryRecord::new_with_defaults(
-            "low",
-            MemoryScope::Global,
-            10,
-            10,
-            crate::memory::MemorySource::User,
-            1,
-            "low priority",
-        ),
-        MemoryRecord::new_with_defaults(
-            "high",
-            MemoryScope::Pane {
+        MemoryContextRecord {
+            id: "low".to_string(),
+            scope: MemoryContextScope::Global,
+            updated_at_unix_seconds: 10,
+            priority: 1,
+            content: "low priority".to_string(),
+        },
+        MemoryContextRecord {
+            id: "high".to_string(),
+            scope: MemoryContextScope::Pane {
                 session_id: "$1".to_string(),
                 pane_id: "%1".to_string(),
             },
-            10,
-            20,
-            crate::memory::MemorySource::Agent,
-            9,
-            "high priority",
-        ),
+            updated_at_unix_seconds: 20,
+            priority: 9,
+            content: "high priority".to_string(),
+        },
     ];
 
     let context = append_memory_context(context, &records, 2).unwrap();

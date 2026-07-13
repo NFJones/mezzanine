@@ -322,7 +322,11 @@ impl RuntimeSessionService {
         let context = AgentContext::new(blocks)?;
         let context = append_permission_policy_context(context, &self.permission_policy)?;
         let context = append_scheduler_context(context, &self.agent_scheduler)?;
-        append_memory_context(context, &context_memory_records, 1)
+        let prompt_memory_records = context_memory_records
+            .iter()
+            .map(mez_agent::MemoryContextRecord::from)
+            .collect::<Vec<_>>();
+        append_memory_context(context, &prompt_memory_records, 1)
     }
 
     /// Formats loaded skill context with runtime-only additions where needed.
@@ -479,7 +483,10 @@ impl RuntimeSessionService {
         }
         let refreshed_context = append_memory_context(
             AgentContext::new(refreshed_blocks)?,
-            &context_memory_records,
+            &context_memory_records
+                .iter()
+                .map(mez_agent::MemoryContextRecord::from)
+                .collect::<Vec<_>>(),
             1,
         )?;
         let refreshed_blocks = refreshed_context.blocks;

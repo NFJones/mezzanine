@@ -8,11 +8,10 @@
 use super::{AgentContext, ContextBlock, ContextSourceKind};
 use crate::agent::validate_non_empty;
 use crate::error::Result;
-use crate::memory::{MemoryRecord, MemoryScope};
 use crate::permissions::PermissionPolicy;
 use crate::scheduler::{AgentScheduler, runnable_agent_ids};
 use mez_agent::instructions::DiscoveredInstructionFile;
-use mez_agent::{McpPromptServer, McpPromptSummary, McpPromptTool};
+use mez_agent::{McpPromptServer, McpPromptSummary, McpPromptTool, MemoryContextRecord};
 
 /// Appends selected memory records to provider-bound context.
 ///
@@ -21,7 +20,7 @@ use mez_agent::{McpPromptServer, McpPromptSummary, McpPromptTool};
 /// than the caller's maximum.
 pub fn append_memory_context(
     mut context: AgentContext,
-    records: &[MemoryRecord],
+    records: &[MemoryContextRecord],
     max_records: usize,
 ) -> Result<AgentContext> {
     if max_records == 0 || records.is_empty() {
@@ -41,14 +40,9 @@ pub fn append_memory_context(
             .then_with(|| left.id.cmp(&right.id))
     });
     for record in selected.iter().take(max_records) {
-        record.validate_for_persistence()?;
         context.blocks.push(ContextBlock {
             source: ContextSourceKind::Memory,
-            label: format!(
-                "memory {} ({})",
-                record.id,
-                memory_scope_summary(&record.scope)
-            ),
+            label: format!("memory {} ({})", record.id, record.scope.summary()),
             content: record.content.clone(),
         });
     }
@@ -692,25 +686,4 @@ fn block_should_precede_project_guidance(source: ContextSourceKind) -> bool {
             | ContextSourceKind::Configuration
             | ContextSourceKind::ProjectGuidance
     )
-}
-
-/// Returns a compact display label for one memory scope.
-fn memory_scope_summary(scope: &MemoryScope) -> String {
-    match scope {
-        MemoryScope::Global => "global".to_string(),
-        MemoryScope::Project { root } => format!("project {root}"),
-        MemoryScope::Session { session_id } => format!("session {session_id}"),
-        MemoryScope::Window {
-            session_id,
-            window_id,
-        } => format!("window {session_id}/{window_id}"),
-        MemoryScope::Pane {
-            session_id,
-            pane_id,
-        } => format!("pane {session_id}/{pane_id}"),
-        MemoryScope::Agent {
-            session_id,
-            agent_id,
-        } => format!("agent {session_id}/{agent_id}"),
-    }
 }

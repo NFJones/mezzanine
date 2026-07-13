@@ -20,6 +20,8 @@ pub mod http;
 pub mod instructions;
 /// Dependency-neutral MCP prompt manifest records.
 pub mod mcp;
+/// Prompt-facing memory context contracts.
+pub mod memory;
 /// Agent-facing permission identity contracts.
 pub mod permissions;
 /// Provider-neutral prompt profile contracts.
@@ -49,6 +51,7 @@ pub use http::{
     ProviderHttpResponse,
 };
 pub use mcp::{McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer};
+pub use memory::{MemoryContextRecord, MemoryContextScope};
 pub use permissions::{ApprovalPolicy, PermissionPreset, RuleDecision};
 pub use prompt::{AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptProfile};
 pub use provider::{

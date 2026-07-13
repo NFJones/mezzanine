@@ -232,6 +232,53 @@ pub struct MemoryRecord {
     pub content: String,
 }
 
+impl From<&MemoryRecord> for mez_agent::MemoryContextRecord {
+    /// Adapts one validated product memory record for prompt-context assembly.
+    fn from(record: &MemoryRecord) -> Self {
+        Self {
+            id: record.id.clone(),
+            scope: (&record.scope).into(),
+            updated_at_unix_seconds: record.updated_at_unix_seconds,
+            priority: record.priority,
+            content: record.content.clone(),
+        }
+    }
+}
+
+impl From<&MemoryScope> for mez_agent::MemoryContextScope {
+    /// Adapts product memory scope metadata without exposing persistence types.
+    fn from(scope: &MemoryScope) -> Self {
+        match scope {
+            MemoryScope::Global => Self::Global,
+            MemoryScope::Project { root } => Self::Project { root: root.clone() },
+            MemoryScope::Session { session_id } => Self::Session {
+                session_id: session_id.clone(),
+            },
+            MemoryScope::Window {
+                session_id,
+                window_id,
+            } => Self::Window {
+                session_id: session_id.clone(),
+                window_id: window_id.clone(),
+            },
+            MemoryScope::Pane {
+                session_id,
+                pane_id,
+            } => Self::Pane {
+                session_id: session_id.clone(),
+                pane_id: pane_id.clone(),
+            },
+            MemoryScope::Agent {
+                session_id,
+                agent_id,
+            } => Self::Agent {
+                session_id: session_id.clone(),
+                agent_id: agent_id.clone(),
+            },
+        }
+    }
+}
+
 /// Carries Session Memory Store state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
