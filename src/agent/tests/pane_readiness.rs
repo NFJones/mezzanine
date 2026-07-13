@@ -67,7 +67,7 @@ fn readiness_override_requires_warning_ack_and_is_one_epoch_only() {
     let error = store
         .mark_ready_for_epoch("%1", 7, "primary accepted uncertain shell boundary", false)
         .unwrap_err();
-    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert_eq!(error.kind(), mez_agent::ReadinessErrorKind::Forbidden);
     assert!(store.has_pending_probe("%1"));
 
     store

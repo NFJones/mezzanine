@@ -40,6 +40,8 @@ pub mod provider_error;
 pub mod provider_transcript;
 /// Dependency-neutral provider quota accounting contracts.
 pub mod quota;
+/// Provider-independent pane readiness state and override policy.
+pub mod readiness;
 /// Provider-independent agent scheduling policy and queue state.
 pub mod scheduler;
 /// Provider-neutral MAAP action-batch schema construction.
@@ -123,6 +125,11 @@ pub use provider_error::{
 };
 pub use provider_transcript::{PROVIDER_TRANSCRIPT_EVENT_MARKER, ProviderTranscriptEvent};
 pub use quota::{ProviderQuotaUsage, provider_quota_usage_from_headers};
+pub use readiness::{
+    BootstrapDecision, PaneReadinessOverride, PaneReadinessOverrideStore, PaneReadinessState,
+    ReadinessDecision, ReadinessError, ReadinessErrorKind, ReadinessOverrideRevocation,
+    ReadinessResult, decide_bootstrap_before_user_prompt, readiness_decision,
+};
 pub use scheduler::{
     AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, RunningWork, ScheduledWork, ScheduledWorkKind,
     SchedulerCancellation, SchedulerError, SchedulerErrorKind, SchedulerResult, SchedulerSnapshot,
