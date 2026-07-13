@@ -63,6 +63,8 @@ pub use mez_agent::{
     ProviderModelInfo,
 };
 pub use mez_agent::{ProviderQuotaUsage, provider_quota_usage_from_headers};
+#[cfg(test)]
+use mez_agent::{maap_mcp_call_action_schema_for_tool, normalize_openai_strict_schema};
 use openai_chat_completions::OpenAiChatCompletionsDialect;
 pub use openai_request::openai_responses_request_body;
 use openai_request::openai_responses_request_body_with_stream;
@@ -70,8 +72,6 @@ pub use response::parse_openai_responses_http_body;
 use response::parse_openai_responses_provider_body;
 #[cfg(test)]
 pub(crate) use response::parse_openai_responses_stream_body;
-#[cfg(test)]
-use schema::{maap_mcp_call_action_schema_for_tool, normalize_openai_strict_schema};
 
 pub use mez_agent::{
     CHATGPT_RESPONSES_ENDPOINT, OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT,

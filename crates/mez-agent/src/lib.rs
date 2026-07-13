@@ -42,6 +42,8 @@ pub mod provider_transcript;
 pub mod quota;
 /// Provider-independent agent scheduling policy and queue state.
 pub mod scheduler;
+/// Provider-neutral MAAP action-batch schema construction.
+pub mod schema;
 /// Deterministic semantic-patch parsing and path validation.
 pub mod semantic_patch;
 /// Dependency-neutral agent slash-command registry and parsing.
@@ -122,6 +124,11 @@ pub use scheduler::{
     AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, RunningWork, ScheduledWork, ScheduledWorkKind,
     SchedulerCancellation, SchedulerError, SchedulerErrorKind, SchedulerResult, SchedulerSnapshot,
     runnable_agent_ids,
+};
+pub use schema::{
+    OpenAiMaapToolSurface, maap_action_batch_schema, maap_current_action_batch_description,
+    maap_mcp_call_action_schema_for_tool, mcp_tool_manifest_for_description,
+    normalize_openai_strict_schema,
 };
 pub use slash::{
     SlashCommandEffect, SlashCommandInvocation, SlashCommandParseError, SlashCommandSpec,
