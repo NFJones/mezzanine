@@ -6,6 +6,8 @@
 
 use std::collections::BTreeMap;
 
+use crate::layout::{PaneGeometry, range_overlap_u16};
+
 /// Per-pane metadata consumed by mux frame and body presentation.
 ///
 /// Scalar fields are presentation-only values. The prompt and supplemental
@@ -129,6 +131,39 @@ pub enum TerminalFramePosition {
     Bottom,
 }
 
+/// Returns whether a pane frame should occupy an adjacent shared divider row.
+///
+/// Top frames merge into a horizontal divider immediately above the pane;
+/// bottom frames merge into one immediately below it. Keeping this geometry
+/// decision in the mux lets product renderers consume the result without
+/// owning split-layout policy.
+pub fn pane_frame_merges_into_divider(
+    geometry: &PaneGeometry,
+    geometries: &[PaneGeometry],
+    frame_position: TerminalFramePosition,
+) -> bool {
+    geometries.iter().any(|candidate| {
+        if candidate.index == geometry.index {
+            return false;
+        }
+        let shares_boundary = match frame_position {
+            TerminalFramePosition::Top => {
+                candidate.row.saturating_add(candidate.rows) == geometry.row
+            }
+            TerminalFramePosition::Bottom => {
+                geometry.row.saturating_add(geometry.rows) == candidate.row
+            }
+        };
+        shares_boundary
+            && range_overlap_u16(
+                geometry.column,
+                geometry.column.saturating_add(geometry.columns),
+                candidate.column,
+                candidate.column.saturating_add(candidate.columns),
+            ) > 0
+    })
+}
+
 /// Style applied to a rendered frame row when styled terminal output is used.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum TerminalFrameStyle {
@@ -145,7 +180,9 @@ pub enum TerminalFrameStyle {
 
 #[cfg(test)]
 mod tests {
-    use super::{TerminalFramePosition, TerminalFrameStyle};
+    use crate::layout::PaneGeometry;
+
+    use super::{TerminalFramePosition, TerminalFrameStyle, pane_frame_merges_into_divider};
 
     /// Verifies neutral frame contracts retain the product's established
     /// top-positioned and unstyled defaults after ownership moves to the mux.
@@ -153,5 +190,49 @@ mod tests {
     fn frame_contract_defaults_remain_stable() {
         assert_eq!(TerminalFramePosition::default(), TerminalFramePosition::Top);
         assert_eq!(TerminalFrameStyle::default(), TerminalFrameStyle::Default);
+    }
+
+    /// Verifies pane-frame placement consumes shared split geometry without
+    /// depending on product rendering, prompt state, or agent metadata.
+    #[test]
+    fn pane_frames_merge_only_with_adjacent_horizontal_dividers() {
+        let top = PaneGeometry {
+            index: 0,
+            column: 0,
+            row: 0,
+            columns: 20,
+            rows: 5,
+        };
+        let bottom = PaneGeometry {
+            index: 1,
+            column: 0,
+            row: 5,
+            columns: 20,
+            rows: 5,
+        };
+        let side = PaneGeometry {
+            index: 2,
+            column: 20,
+            row: 0,
+            columns: 20,
+            rows: 10,
+        };
+        let geometries = [top, bottom, side];
+
+        assert!(pane_frame_merges_into_divider(
+            &bottom,
+            &geometries,
+            TerminalFramePosition::Top,
+        ));
+        assert!(pane_frame_merges_into_divider(
+            &top,
+            &geometries,
+            TerminalFramePosition::Bottom,
+        ));
+        assert!(!pane_frame_merges_into_divider(
+            &top,
+            &geometries,
+            TerminalFramePosition::Top,
+        ));
     }
 }

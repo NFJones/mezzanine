@@ -8,8 +8,10 @@ use std::collections::BTreeMap;
 
 use crate::layout::{PaneGeometry, Window, range_overlap_u16};
 use crate::terminal::{
-    GraphicRendition, MouseBorderCell, TerminalFramePosition, TerminalStyleSpan, UiTheme,
+    GraphicRendition, MouseBorderCell, TerminalStyleSpan, UiTheme,
 };
+
+pub use mez_mux::presentation::pane_frame_merges_into_divider;
 
 use super::{TerminalRenderCell, pane_border_rendition, write_single_width_cell};
 
@@ -186,32 +188,6 @@ fn pane_divider_cells(
             glyph: connections.glyph(),
         })
         .collect()
-}
-
-/// Returns whether a pane geometry has a shared divider immediately above it.
-fn geometry_has_above_divider(geometry: &PaneGeometry, geometries: &[PaneGeometry]) -> bool {
-    geometries.iter().any(|candidate| {
-        candidate.index != geometry.index
-            && candidate.row.saturating_add(candidate.rows) == geometry.row
-            && range_overlap_u16(
-                geometry.column,
-                geometry.column.saturating_add(geometry.columns),
-                candidate.column,
-                candidate.column.saturating_add(candidate.columns),
-            ) > 0
-    })
-}
-
-/// Returns whether a pane frame should merge into an adjacent divider row.
-pub fn pane_frame_merges_into_divider(
-    geometry: &PaneGeometry,
-    geometries: &[PaneGeometry],
-    frame_position: TerminalFramePosition,
-) -> bool {
-    match frame_position {
-        TerminalFramePosition::Top => geometry_has_above_divider(geometry, geometries),
-        TerminalFramePosition::Bottom => geometry_has_bottom_divider(geometry, geometries),
-    }
 }
 
 /// Returns whether a pane geometry has a shared divider immediately below it.
