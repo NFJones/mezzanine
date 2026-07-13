@@ -4,14 +4,6 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-pub use mez_mux::input::{
-    GroupFocusTarget, KeyBindings, KeyChord, KeyCode, KeyModifiers, MuxAction, PaneFocusDirection,
-    PasteBufferTarget, TerminalInputClassification, WindowFocusTarget, classify_terminal_input,
-    key_chord_input_bytes, parse_key_chord_notation,
-};
-
-// Key chords, bindings, and input classification.
-
 /// Defines the DEFAULT HISTORY LIMIT const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module

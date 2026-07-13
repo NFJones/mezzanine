@@ -6,9 +6,8 @@ use crate::terminal::client_loop::{
     route_client_input_actions_with_host_paste_buffer,
     route_client_input_actions_with_host_paste_state,
 };
-use crate::terminal::{
-    MouseAction, MuxAction, PasteBufferTarget, TerminalClientLoopAction, TerminalClientLoopConfig,
-};
+use crate::terminal::{MouseAction, TerminalClientLoopAction, TerminalClientLoopConfig};
+use mez_mux::input::{MuxAction, PasteBufferTarget};
 
 /// Verifies host bracketed paste payloads are forwarded without interpreting
 /// bytes that look like Mezzanine prefix commands or mouse reports. Clipboard

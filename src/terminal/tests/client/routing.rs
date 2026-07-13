@@ -2,15 +2,16 @@
 
 use crate::terminal::{
     AttachedTerminalFdReadiness, AttachedTerminalFdRole, BTreeMap, ClientStatusKind,
-    ClientStatusLine, ClientViewRole, CopyModeKeyAction, CopyPosition, KeyChord, KeyCode,
-    MouseAction, MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MouseWindowActionFrameCell,
-    MuxAction, PaneAgentStatusField, RenderedClientView, Size, TerminalClientLoopAction,
+    ClientStatusLine, ClientViewRole, CopyModeKeyAction, CopyPosition, MouseAction,
+    MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MouseWindowActionFrameCell,
+    PaneAgentStatusField, RenderedClientView, Size, TerminalClientLoopAction,
     TerminalClientLoopConfig, TerminalCursorStyle, TerminalFdInterest, TerminalScreen, UiTheme,
     Window, WindowFrameAction, draw_window_from_screens, plan_attached_terminal_client_step,
     route_client_input, route_client_input_actions,
 };
 use mez_mux::input::{
-    MouseBorderCell, MousePaneRegion, MouseWindowFrameCell, MouseWindowGroupFrameCell,
+    KeyChord, KeyCode, MouseBorderCell, MousePaneRegion, MouseWindowFrameCell,
+    MouseWindowGroupFrameCell, MuxAction, key_chord_input_bytes,
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -914,7 +915,7 @@ fn client_loop_routes_copy_mode_keys_without_forwarding_to_pane() {
     );
     assert_eq!(
         route_client_input(
-            &crate::terminal::key_chord_input_bytes(KeyChord::parse("C-Up").unwrap()).unwrap(),
+            &key_chord_input_bytes(KeyChord::parse("C-Up").unwrap()).unwrap(),
             &config
         )
         .unwrap(),
@@ -922,7 +923,7 @@ fn client_loop_routes_copy_mode_keys_without_forwarding_to_pane() {
     );
     assert_eq!(
         route_client_input(
-            &crate::terminal::key_chord_input_bytes(KeyChord::parse("C-Down").unwrap()).unwrap(),
+            &key_chord_input_bytes(KeyChord::parse("C-Down").unwrap()).unwrap(),
             &config
         )
         .unwrap(),
@@ -938,7 +939,7 @@ fn client_loop_routes_copy_mode_keys_without_forwarding_to_pane() {
     );
     assert_eq!(
         route_client_input(
-            &crate::terminal::key_chord_input_bytes(KeyChord::parse("C-Home").unwrap()).unwrap(),
+            &key_chord_input_bytes(KeyChord::parse("C-Home").unwrap()).unwrap(),
             &config
         )
         .unwrap(),
@@ -950,7 +951,7 @@ fn client_loop_routes_copy_mode_keys_without_forwarding_to_pane() {
     );
     assert_eq!(
         route_client_input(
-            &crate::terminal::key_chord_input_bytes(KeyChord::parse("C-End").unwrap()).unwrap(),
+            &key_chord_input_bytes(KeyChord::parse("C-End").unwrap()).unwrap(),
             &config
         )
         .unwrap(),
@@ -958,7 +959,7 @@ fn client_loop_routes_copy_mode_keys_without_forwarding_to_pane() {
     );
     assert_eq!(
         route_client_input(
-            &crate::terminal::key_chord_input_bytes(KeyChord::parse("C-Left").unwrap()).unwrap(),
+            &key_chord_input_bytes(KeyChord::parse("C-Left").unwrap()).unwrap(),
             &config
         )
         .unwrap(),
@@ -966,7 +967,7 @@ fn client_loop_routes_copy_mode_keys_without_forwarding_to_pane() {
     );
     assert_eq!(
         route_client_input(
-            &crate::terminal::key_chord_input_bytes(KeyChord::parse("A-Right").unwrap()).unwrap(),
+            &key_chord_input_bytes(KeyChord::parse("A-Right").unwrap()).unwrap(),
             &config
         )
         .unwrap(),

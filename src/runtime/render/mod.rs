@@ -5,8 +5,8 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use mez_mux::input::{
-    MouseBorderCell, MousePaneRegion, MouseWindowFrameCell, MuxAction, PasteBufferTarget,
-    WindowFocusTarget, key_chord_input_bytes,
+    GroupFocusTarget, MouseBorderCell, MousePaneRegion, MouseWindowFrameCell, MuxAction,
+    PasteBufferTarget, WindowFocusTarget, key_chord_input_bytes,
 };
 
 use super::service_state::{
@@ -49,13 +49,12 @@ use crate::selector::{
     SelectorCandidate, SelectorCandidateKind, SelectorExtraCandidate, SelectorSurface,
 };
 use crate::terminal::{
-    CopyPosition, GraphicRendition, GroupFocusTarget, MousePaneAgentSelectorCell,
-    MousePaneAgentStatusCell, PaneAgentStatusField, TerminalStyleSpan, TerminalStyledLine, UiTheme,
-    WindowFrameCommandKind, compose_modal_display_overlay_lines,
-    compose_prompt_overlay_presentation_with_styles, modal_display_overlay_max_scroll,
-    modal_display_overlay_page_rows, pane_frame_agent_status_pillbox_cells,
-    terminal_grapheme_width, terminal_graphemes, terminal_text_width,
-    window_group_frame_pillbox_cells,
+    CopyPosition, GraphicRendition, MousePaneAgentSelectorCell, MousePaneAgentStatusCell,
+    PaneAgentStatusField, TerminalStyleSpan, TerminalStyledLine, UiTheme, WindowFrameCommandKind,
+    compose_modal_display_overlay_lines, compose_prompt_overlay_presentation_with_styles,
+    modal_display_overlay_max_scroll, modal_display_overlay_page_rows,
+    pane_frame_agent_status_pillbox_cells, terminal_grapheme_width, terminal_graphemes,
+    terminal_text_width, window_group_frame_pillbox_cells,
 };
 use crate::transcript::AgentPresentationEntry;
 use mez_mux::presentation::{

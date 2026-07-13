@@ -465,7 +465,7 @@ async fn async_attached_terminal_loop_renders_and_applies_primary_actions() {
         assert_eq!(
             report.actions,
             vec![TerminalClientLoopAction::ExecuteMux(MuxAction::FocusPane(
-                crate::terminal::PaneFocusDirection::Right
+                mez_mux::input::PaneFocusDirection::Right
             ))]
         );
         assert_eq!(report.output_frames, 2);

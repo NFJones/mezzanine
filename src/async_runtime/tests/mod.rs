@@ -67,11 +67,12 @@ use crate::session::{ClientState, Session};
 use crate::shell::resolve_shell;
 use crate::terminal::{
     AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopIo, AttachedTerminalFdReadiness,
-    AttachedTerminalFdRole, ClientStatusKind, ClientStatusLine, ClientViewRole, MuxAction,
+    AttachedTerminalFdRole, ClientStatusKind, ClientStatusLine, ClientViewRole,
     TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFdInterest, TerminalStyleSpan,
 };
 use crate::test_support::async_runtime::AsyncRuntimeActorFixture;
 use crate::transcript::AgentTranscriptStore;
+use mez_mux::input::MuxAction;
 
 /// Runs the test service operation for this subsystem.
 ///

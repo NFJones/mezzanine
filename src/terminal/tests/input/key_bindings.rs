@@ -1,8 +1,9 @@
 //! Regression tests for terminal input key bindings behavior.
 
-use crate::terminal::{
+use mez_mux::input::{
     GroupFocusTarget, KeyBindings, KeyChord, KeyCode, MuxAction, PaneFocusDirection,
     PasteBufferTarget, TerminalInputClassification, WindowFocusTarget, classify_terminal_input,
+    key_chord_input_bytes,
 };
 
 /// Verifies parses key binding notation for default surface.
@@ -39,23 +40,23 @@ fn parses_key_binding_notation_for_default_surface() {
         KeyChord::ctrl_alt(KeyCode::Up)
     );
     assert_eq!(
-        crate::terminal::key_chord_input_bytes(KeyChord::parse("C-a").unwrap()).unwrap(),
+        key_chord_input_bytes(KeyChord::parse("C-a").unwrap()).unwrap(),
         b"\x01"
     );
     assert_eq!(
-        crate::terminal::key_chord_input_bytes(KeyChord::parse("A--").unwrap()).unwrap(),
+        key_chord_input_bytes(KeyChord::parse("A--").unwrap()).unwrap(),
         b"\x1b-"
     );
     assert_eq!(
-        crate::terminal::key_chord_input_bytes(KeyChord::parse("C-A-PageDown").unwrap()).unwrap(),
+        key_chord_input_bytes(KeyChord::parse("C-A-PageDown").unwrap()).unwrap(),
         b"\x1b[6;7~"
     );
     assert_eq!(
-        crate::terminal::key_chord_input_bytes(KeyChord::parse("A-S-=").unwrap()).unwrap(),
+        key_chord_input_bytes(KeyChord::parse("A-S-=").unwrap()).unwrap(),
         b"\x1b+"
     );
     assert_eq!(
-        crate::terminal::key_chord_input_bytes(KeyChord::parse("C-A-S-PageUp").unwrap()).unwrap(),
+        key_chord_input_bytes(KeyChord::parse("C-A-S-PageUp").unwrap()).unwrap(),
         b"\x1b[5;8~"
     );
     assert_eq!(
@@ -64,11 +65,11 @@ fn parses_key_binding_notation_for_default_surface() {
     );
     assert_eq!(KeyChord::parse("End").unwrap(), KeyChord::new(KeyCode::End));
     assert_eq!(
-        crate::terminal::key_chord_input_bytes(KeyChord::parse("Home").unwrap()).unwrap(),
+        key_chord_input_bytes(KeyChord::parse("Home").unwrap()).unwrap(),
         b"\x1b[H"
     );
     assert_eq!(
-        crate::terminal::key_chord_input_bytes(KeyChord::parse("C-End").unwrap()).unwrap(),
+        key_chord_input_bytes(KeyChord::parse("C-End").unwrap()).unwrap(),
         b"\x1b[1;5F"
     );
     assert_eq!(

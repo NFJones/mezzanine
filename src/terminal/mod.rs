@@ -102,10 +102,8 @@ pub use fd::{
 };
 pub use keys::{
     DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, DEFAULT_MEZZANINE_TERMINFO,
-    DEFAULT_PANE_TERM, DEFAULT_PASTE_BUFFER_LIMIT_BYTES, GroupFocusTarget, KeyBindings, KeyChord,
-    KeyCode, KeyModifiers, MEZZANINE_TERMINFO_NAMES, MuxAction, PaneFocusDirection,
-    PasteBufferTarget, TERMINFO_FALLBACK_ORDER, TerminalInputClassification, WindowFocusTarget,
-    classify_terminal_input, key_chord_input_bytes, parse_key_chord_notation,
+    DEFAULT_PANE_TERM, DEFAULT_PASTE_BUFFER_LIMIT_BYTES, MEZZANINE_TERMINFO_NAMES,
+    TERMINFO_FALLBACK_ORDER,
 };
 pub use mez_mux::theme::{
     BUILTIN_UI_THEME_NAMES, DEFAULT_UI_THEME_NAME, UI_COLOR_SLOT_NAMES, UiColorPair, UiTheme,
@@ -120,7 +118,7 @@ pub use mez_terminal::{
 };
 pub use mouse::{
     CopyModeKeyAction, MouseAction, MouseButton, MouseEvent, MouseEventKind, MouseModifiers,
-    MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MousePolicy, MouseWindowActionFrameCell,
+    MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MouseWindowActionFrameCell,
     PaneAgentStatusField, WindowFrameAction, WindowFrameCommandKind, classify_mouse_event,
     parse_sgr_mouse,
 };

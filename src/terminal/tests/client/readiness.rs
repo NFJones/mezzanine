@@ -3,11 +3,12 @@
 use crate::terminal::fd::duration_to_timespec;
 use crate::terminal::{
     AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopIo, AttachedTerminalFd,
-    AttachedTerminalFdLoopIo, AttachedTerminalFdRole, ClientViewRole, Duration, MuxAction,
-    RenderedClientView, Size, TerminalClientLoopAction, TerminalClientLoopConfig,
-    TerminalCursorStyle, TerminalFdInterest, TerminalRawModeGuard, UiTheme,
-    poll_attached_terminal_fd_readiness, run_attached_terminal_client_loop,
+    AttachedTerminalFdLoopIo, AttachedTerminalFdRole, ClientViewRole, Duration, RenderedClientView,
+    Size, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalCursorStyle,
+    TerminalFdInterest, TerminalRawModeGuard, UiTheme, poll_attached_terminal_fd_readiness,
+    run_attached_terminal_client_loop,
 };
+use mez_mux::input::MuxAction;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;

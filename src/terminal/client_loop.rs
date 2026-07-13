@@ -14,14 +14,14 @@ use super::{
     read_attached_terminal_size, rustix_read, rustix_write,
 };
 use super::{
-    AttachedTerminalFdReadiness, AttachedTerminalFdRole, BorrowedFd, CopyModeKeyAction, KeyChord,
-    MezError, MouseAction, MouseEvent, RawFd, Result, Size, TerminalClientLoopConfig,
-    TerminalColor, TerminalCursorStyle, TerminalStyleSpan, classify_mouse_event,
+    AttachedTerminalFdReadiness, AttachedTerminalFdRole, BorrowedFd, CopyModeKeyAction, MezError,
+    MouseAction, MouseEvent, RawFd, Result, Size, TerminalClientLoopConfig, TerminalColor,
+    TerminalCursorStyle, TerminalStyleSpan, classify_mouse_event,
     compose_client_presentation_with_styles, parse_sgr_mouse, terminal_grapheme_width,
     terminal_graphemes, terminal_text_width,
 };
 use mez_mux::input::{
-    KeyCode, MousePolicy, MuxAction, TerminalInputClassification, WindowFocusTarget,
+    KeyChord, KeyCode, MousePolicy, MuxAction, TerminalInputClassification, WindowFocusTarget,
     classify_prefix_binding, classify_terminal_input_with_command_bindings, key_chord_input_bytes,
     parse_key_chord_bytes,
 };

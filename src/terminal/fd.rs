@@ -5,14 +5,15 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    BTreeMap, BorrowedFd, CopyPosition, Errno, KeyBindings, KeyChord, MezError,
-    MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MouseWindowActionFrameCell,
-    OptionalActions, RawFd, Result, Size, Termios, UiTheme, WindowFrameAction, borrow_raw_fd,
-    fcntl_getfl, tcgetattr, tcgetwinsize, tcsetattr,
+    BTreeMap, BorrowedFd, CopyPosition, Errno, MezError, MousePaneAgentSelectorCell,
+    MousePaneAgentStatusCell, MouseWindowActionFrameCell, OptionalActions, RawFd, Result, Size,
+    Termios, UiTheme, WindowFrameAction, borrow_raw_fd, fcntl_getfl, tcgetattr, tcgetwinsize,
+    tcsetattr,
 };
 use crate::readline::ReadlinePrompt;
 use mez_mux::input::{
-    MouseBorderCell, MousePaneRegion, MousePolicy, MouseWindowFrameCell, MouseWindowGroupFrameCell,
+    KeyBindings, KeyChord, MouseBorderCell, MousePaneRegion, MousePolicy, MouseWindowFrameCell,
+    MouseWindowGroupFrameCell,
 };
 #[cfg(test)]
 use rustix::event::{PollFd as RustixPollFd, PollFlags, Timespec, poll as rustix_poll};
