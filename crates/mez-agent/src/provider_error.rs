@@ -25,6 +25,42 @@ pub enum ProviderErrorKind {
     NotImplemented,
 }
 
+impl ProviderErrorKind {
+    /// Returns the stable snake-case identifier used across provider worker
+    /// event channels.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidArgs => "invalid_args",
+            Self::InvalidState => "invalid_state",
+            Self::Config => "config",
+            Self::Io => "io",
+            Self::Conflict => "conflict",
+            Self::NotFound => "not_found",
+            Self::Forbidden => "forbidden",
+            Self::NotImplemented => "not_implemented",
+        }
+    }
+
+    /// Parses a stable provider worker event identifier.
+    ///
+    /// Both canonical snake-case identifiers and legacy Rust variant names
+    /// are accepted. Unknown identifiers return `None` so the product adapter
+    /// can apply its fail-closed error policy.
+    pub fn from_event_name(name: &str) -> Option<Self> {
+        match name {
+            "invalid_args" | "InvalidArgs" => Some(Self::InvalidArgs),
+            "invalid_state" | "InvalidState" => Some(Self::InvalidState),
+            "config" | "Config" => Some(Self::Config),
+            "io" | "Io" => Some(Self::Io),
+            "conflict" | "Conflict" => Some(Self::Conflict),
+            "not_found" | "NotFound" => Some(Self::NotFound),
+            "forbidden" | "Forbidden" => Some(Self::Forbidden),
+            "not_implemented" | "NotImplemented" => Some(Self::NotImplemented),
+            _ => None,
+        }
+    }
+}
+
 /// Shared retry/recovery class for provider failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderErrorRetryClass {
@@ -253,6 +289,40 @@ fn provider_error_text_is_output_limit_exceeded(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{ProviderErrorKind, ProviderErrorRetryClass, classify_provider_error_retry};
+
+    /// Verifies provider worker event identifiers remain stable while legacy
+    /// variant names continue to decode during rolling runtime transitions.
+    #[test]
+    fn provider_error_kinds_have_stable_event_names() {
+        let cases = [
+            (
+                ProviderErrorKind::InvalidArgs,
+                "invalid_args",
+                "InvalidArgs",
+            ),
+            (
+                ProviderErrorKind::InvalidState,
+                "invalid_state",
+                "InvalidState",
+            ),
+            (ProviderErrorKind::Config, "config", "Config"),
+            (ProviderErrorKind::Io, "io", "Io"),
+            (ProviderErrorKind::Conflict, "conflict", "Conflict"),
+            (ProviderErrorKind::NotFound, "not_found", "NotFound"),
+            (ProviderErrorKind::Forbidden, "forbidden", "Forbidden"),
+            (
+                ProviderErrorKind::NotImplemented,
+                "not_implemented",
+                "NotImplemented",
+            ),
+        ];
+        for (kind, canonical, legacy) in cases {
+            assert_eq!(kind.as_str(), canonical);
+            assert_eq!(ProviderErrorKind::from_event_name(canonical), Some(kind));
+            assert_eq!(ProviderErrorKind::from_event_name(legacy), Some(kind));
+        }
+        assert_eq!(ProviderErrorKind::from_event_name("unknown"), None);
+    }
 
     /// Verifies transport stalls remain retryable after classification moves
     /// below the product error-envelope adapter.

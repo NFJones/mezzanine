@@ -118,15 +118,16 @@ fn provider_error_kind(kind: crate::error::MezErrorKind) -> ProviderErrorKind {
 /// Keeping this parser beside provider retry classification and error-envelope
 /// construction prevents runtime and async-runtime copies from drifting.
 pub(crate) fn provider_event_error_kind(kind: &str) -> crate::error::MezErrorKind {
-    match kind {
-        "invalid_args" | "InvalidArgs" => crate::error::MezErrorKind::InvalidArgs,
-        "config" | "Config" => crate::error::MezErrorKind::Config,
-        "io" | "Io" => crate::error::MezErrorKind::Io,
-        "conflict" | "Conflict" => crate::error::MezErrorKind::Conflict,
-        "not_found" | "NotFound" => crate::error::MezErrorKind::NotFound,
-        "forbidden" | "Forbidden" => crate::error::MezErrorKind::Forbidden,
-        "not_implemented" | "NotImplemented" => crate::error::MezErrorKind::NotImplemented,
-        _ => crate::error::MezErrorKind::InvalidState,
+    match ProviderErrorKind::from_event_name(kind) {
+        Some(ProviderErrorKind::InvalidArgs) => crate::error::MezErrorKind::InvalidArgs,
+        Some(ProviderErrorKind::InvalidState) => crate::error::MezErrorKind::InvalidState,
+        Some(ProviderErrorKind::Config) => crate::error::MezErrorKind::Config,
+        Some(ProviderErrorKind::Io) => crate::error::MezErrorKind::Io,
+        Some(ProviderErrorKind::Conflict) => crate::error::MezErrorKind::Conflict,
+        Some(ProviderErrorKind::NotFound) => crate::error::MezErrorKind::NotFound,
+        Some(ProviderErrorKind::Forbidden) => crate::error::MezErrorKind::Forbidden,
+        Some(ProviderErrorKind::NotImplemented) => crate::error::MezErrorKind::NotImplemented,
+        None => crate::error::MezErrorKind::InvalidState,
     }
 }
 
