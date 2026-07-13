@@ -3,7 +3,74 @@
 //! This module owns the stable inputs used to assemble an agent system prompt.
 //! Prompt assets and product-specific assembly remain in the composition crate.
 
+use std::fmt;
+
 use crate::McpPromptSummary;
+
+/// Result type returned by provider-neutral prompt assembly contracts.
+pub type AgentPromptResult<T> = Result<T, AgentPromptError>;
+
+/// Stable categories for agent prompt assembly failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentPromptErrorKind {
+    /// A required provider-neutral prompt input was missing or malformed.
+    InvalidArgs,
+    /// A product-owned prompt asset was unavailable or invalid.
+    InvalidState,
+}
+
+/// A typed failure returned while validating or assembling an agent prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentPromptError {
+    kind: AgentPromptErrorKind,
+    message: String,
+}
+
+impl AgentPromptError {
+    /// Creates an invalid-argument prompt failure.
+    pub fn invalid_args(message: impl Into<String>) -> Self {
+        Self {
+            kind: AgentPromptErrorKind::InvalidArgs,
+            message: message.into(),
+        }
+    }
+
+    /// Creates an invalid-state prompt failure.
+    pub fn invalid_state(message: impl Into<String>) -> Self {
+        Self {
+            kind: AgentPromptErrorKind::InvalidState,
+            message: message.into(),
+        }
+    }
+
+    /// Returns the stable failure category.
+    pub fn kind(&self) -> AgentPromptErrorKind {
+        self.kind
+    }
+
+    /// Returns the diagnostic message without formatting the error.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for AgentPromptError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for AgentPromptError {}
+
+/// Validates one required prompt-profile field after trimming whitespace.
+pub fn validate_agent_prompt_required(field: &str, value: &str) -> AgentPromptResult<()> {
+    if value.trim().is_empty() {
+        return Err(AgentPromptError::invalid_args(format!(
+            "{field} must not be empty"
+        )));
+    }
+    Ok(())
+}
 
 /// Stable name of the default agent prompt profile.
 pub const AGENT_PROMPT_PROFILE_NAME: &str = "default";
@@ -63,7 +130,9 @@ impl AgentPromptProfile {
 
 #[cfg(test)]
 mod tests {
-    use super::AgentPromptProfile;
+    use super::{
+        AgentPromptError, AgentPromptErrorKind, AgentPromptProfile, validate_agent_prompt_required,
+    };
     use crate::{McpPromptServer, McpPromptSummary};
 
     #[test]
@@ -104,5 +173,17 @@ mod tests {
         assert_eq!(profile.pane_id, "%1");
         assert_eq!(profile.provider.as_deref(), Some("anthropic"));
         assert_eq!(profile.mcp_summary, summary);
+    }
+
+    #[test]
+    /// Verifies required prompt identity fields reject whitespace while prompt
+    /// asset failures retain their distinct invalid-state category.
+    fn prompt_errors_preserve_validation_and_asset_categories() {
+        let error = validate_agent_prompt_required("agent id", " \t ").unwrap_err();
+        assert_eq!(error.kind(), AgentPromptErrorKind::InvalidArgs);
+        assert_eq!(error.message(), "agent id must not be empty");
+
+        let error = AgentPromptError::invalid_state("prompt asset is missing");
+        assert_eq!(error.kind(), AgentPromptErrorKind::InvalidState);
     }
 }

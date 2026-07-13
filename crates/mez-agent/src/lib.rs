@@ -77,7 +77,10 @@ pub use memory::{MemoryContextRecord, MemoryContextScope};
 pub use permissions::{
     AgentShellPermissionSummary, ApprovalPolicy, PermissionPreset, RuleDecision,
 };
-pub use prompt::{AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptProfile};
+pub use prompt::{
+    AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptError,
+    AgentPromptErrorKind, AgentPromptProfile, AgentPromptResult, validate_agent_prompt_required,
+};
 pub use provider::{
     ANTHROPIC_MESSAGES_API, CLAUDE_CODE_API, DEEPSEEK_CHAT_COMPLETIONS_API,
     OPENAI_CHAT_COMPLETIONS_API, OPENAI_RESPONSES_API, ProviderApiCompatibility,

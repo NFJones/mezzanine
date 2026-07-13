@@ -63,6 +63,15 @@ impl From<mez_agent::AgentContextError> for MezError {
     }
 }
 
+impl From<mez_agent::AgentPromptError> for MezError {
+    fn from(error: mez_agent::AgentPromptError) -> Self {
+        match error.kind() {
+            mez_agent::AgentPromptErrorKind::InvalidArgs => Self::invalid_args(error.message()),
+            mez_agent::AgentPromptErrorKind::InvalidState => Self::invalid_state(error.message()),
+        }
+    }
+}
+
 impl From<mez_agent::AgentTurnLedgerError> for MezError {
     fn from(error: mez_agent::AgentTurnLedgerError) -> Self {
         match error.kind() {

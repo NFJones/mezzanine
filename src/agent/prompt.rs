@@ -6,9 +6,10 @@
 
 use include_dir::{Dir, include_dir};
 
-use super::{Result, validate_non_empty};
-use crate::MezError;
-pub use mez_agent::{AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptProfile};
+pub use mez_agent::{
+    AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptError, AgentPromptProfile,
+    AgentPromptResult, validate_agent_prompt_required,
+};
 
 /// Embedded static system-prompt fragments owned by this module.
 static SYSTEM_PROMPTS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/agent/prompt/system");
@@ -21,7 +22,7 @@ static PROVIDER_PROMPTS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/agent/p
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub fn build_agent_system_prompt(profile: &AgentPromptProfile) -> Result<String> {
+pub fn build_agent_system_prompt(profile: &AgentPromptProfile) -> AgentPromptResult<String> {
     build_agent_system_prompt_with_repository_instructions(profile, &[])
 }
 
@@ -35,9 +36,9 @@ pub fn build_agent_system_prompt(profile: &AgentPromptProfile) -> Result<String>
 pub fn build_agent_system_prompt_with_repository_instructions(
     profile: &AgentPromptProfile,
     repository_instruction_blocks: &[String],
-) -> Result<String> {
-    validate_non_empty("agent id", &profile.agent_id)?;
-    validate_non_empty("pane id", &profile.pane_id)?;
+) -> AgentPromptResult<String> {
+    validate_agent_prompt_required("agent id", &profile.agent_id)?;
+    validate_agent_prompt_required("pane id", &profile.pane_id)?;
 
     let mut prompt = String::new();
     push_section(&mut prompt, "1. Identity", &identity_prompt(profile)?);
@@ -115,12 +116,12 @@ pub fn build_agent_system_prompt_with_repository_instructions(
 }
 
 /// Returns one required system prompt fragment from the embedded asset tree.
-pub(super) fn system_prompt_fragment(path: &str) -> Result<&'static str> {
+pub(super) fn system_prompt_fragment(path: &str) -> AgentPromptResult<&'static str> {
     embedded_prompt_fragment(&SYSTEM_PROMPTS, "system", path)
 }
 
 /// Returns one required provider prompt fragment from the embedded asset tree.
-pub(super) fn provider_prompt_fragment(path: &str) -> Result<&'static str> {
+pub(super) fn provider_prompt_fragment(path: &str) -> AgentPromptResult<&'static str> {
     embedded_prompt_fragment(&PROVIDER_PROMPTS, "provider", path)
 }
 
@@ -129,14 +130,14 @@ fn embedded_prompt_fragment(
     dir: &'static Dir<'static>,
     kind: &str,
     path: &str,
-) -> Result<&'static str> {
+) -> AgentPromptResult<&'static str> {
     let file = dir.get_file(path).ok_or_else(|| {
-        MezError::invalid_state(format!(
+        AgentPromptError::invalid_state(format!(
             "embedded {kind} prompt fragment `{path}` is missing"
         ))
     })?;
     let contents = file.contents_utf8().ok_or_else(|| {
-        MezError::invalid_state(format!(
+        AgentPromptError::invalid_state(format!(
             "embedded {kind} prompt fragment `{path}` is not UTF-8"
         ))
     })?;
@@ -144,7 +145,7 @@ fn embedded_prompt_fragment(
 }
 
 /// Builds the persona and scope section of the provider-facing system prompt.
-pub(super) fn identity_prompt(_profile: &AgentPromptProfile) -> Result<String> {
+pub(super) fn identity_prompt(_profile: &AgentPromptProfile) -> AgentPromptResult<String> {
     Ok(system_prompt_fragment("identity.md")?
         .replace("{profile_name}", AGENT_PROMPT_PROFILE_NAME)
         .replace(
@@ -156,7 +157,7 @@ pub(super) fn identity_prompt(_profile: &AgentPromptProfile) -> Result<String> {
 /// Builds the repository-instruction section of the provider-facing prompt.
 pub(super) fn repository_instructions_prompt(
     repository_instruction_blocks: &[String],
-) -> Result<String> {
+) -> AgentPromptResult<String> {
     let mut prompt = system_prompt_fragment("repository_instructions.md")?.to_string();
     if !repository_instruction_blocks.is_empty() {
         prompt.push_str("\n\nEmbedded active repository instruction contents:");
@@ -187,7 +188,7 @@ pub(super) fn push_section(prompt: &mut String, title: &str, body: &str) {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn subagent_prompt(profile: &AgentPromptProfile) -> Result<String> {
+pub(super) fn subagent_prompt(profile: &AgentPromptProfile) -> AgentPromptResult<String> {
     let mut lines = vec![system_prompt_fragment("subagents.md")?.to_string()];
     if let Some(mode) = &profile.cooperation_mode {
         lines.push(format!(
@@ -204,7 +205,7 @@ pub(super) fn subagent_prompt(profile: &AgentPromptProfile) -> Result<String> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn mcp_prompt(profile: &AgentPromptProfile) -> Result<String> {
+pub(super) fn mcp_prompt(profile: &AgentPromptProfile) -> AgentPromptResult<String> {
     let _ = profile;
     Ok(system_prompt_fragment("mcp.md")?.to_string())
 }
