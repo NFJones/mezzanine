@@ -7,9 +7,9 @@ use crate::terminal::client_loop::{
 };
 use crate::terminal::tests::fixtures::{display_column_for_fragment, styled_line_rendition_at};
 use crate::terminal::{
-    ClientViewRole, CopyPosition, RenderedClientView, Size, TerminalCursorStyle, TerminalScreen,
-    UiTheme,
+    ClientViewRole, RenderedClientView, Size, TerminalCursorStyle, TerminalScreen, UiTheme,
 };
+use mez_mux::copy::CopyPosition;
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 
 /// Verifies that stable-size attached-terminal redraws are encoded as row

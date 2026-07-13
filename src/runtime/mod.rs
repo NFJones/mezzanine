@@ -145,14 +145,13 @@ use crate::subagent::{
     SubagentScopeDeclaration, SubagentSpawnRequest, builtin_subagent_profiles,
 };
 use crate::terminal::{
-    AttachedTerminalClientStepPlan, ClientViewRole, CopyMode, CopyModeKeyAction, CopyPosition,
+    AttachedTerminalClientStepPlan, ClientViewRole, CopyMode, CopyModeKeyAction,
     DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, DEFAULT_PANE_TERM, DEFAULT_UI_THEME_NAME,
     HostClipboard, HostClipboardCommand, MouseAction, MouseWindowActionFrameCell, PasteBuffer,
-    PasteBuffers, RenderedClientView, SearchDirection, TerminalClientLoopAction,
-    TerminalClientLoopConfig, TerminalCursorStyle, TerminalFrameContext, TerminalOscEvent,
-    TerminalScreen, UiTheme, UiThemeDefinition, WindowFrameAction,
-    agent_prompt_reserved_line_count, builtin_ui_theme_definition,
-    pane_border_cells_for_geometries, pane_content_size_for_geometry,
+    PasteBuffers, RenderedClientView, TerminalClientLoopAction, TerminalClientLoopConfig,
+    TerminalCursorStyle, TerminalFrameContext, TerminalOscEvent, TerminalScreen, UiTheme,
+    UiThemeDefinition, WindowFrameAction, agent_prompt_reserved_line_count,
+    builtin_ui_theme_definition, pane_border_cells_for_geometries, pane_content_size_for_geometry,
     pane_frame_merges_into_divider, pane_render_region_size_for_geometry,
     render_attached_client_view, rendered_pane_geometries, rendered_window_body_size,
     resolve_ui_theme, route_client_input_actions, valid_color_alias_name,
@@ -161,6 +160,7 @@ use crate::terminal::{
 use crate::transcript::{
     AgentSessionMetadata, AgentTranscriptStore, TranscriptEntry, TranscriptRole,
 };
+use mez_mux::copy::{CopyPosition, SearchDirection};
 use mez_mux::input::{
     KeyBindings, KeyChord, KeyCode, MuxAction, PaneFocusDirection, WindowFocusTarget,
     key_chord_input_bytes,

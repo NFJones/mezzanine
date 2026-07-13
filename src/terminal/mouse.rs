@@ -4,7 +4,8 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::{CopyPosition, Result};
+use super::Result;
+use mez_mux::copy::CopyPosition;
 
 use mez_mux::input::MousePolicy;
 pub use mez_terminal::{MouseButton, MouseEvent, MouseEventKind, MouseModifiers};

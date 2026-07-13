@@ -7,8 +7,9 @@
 use super::{
     MezError, PasteBuffers, Result, TerminalScreen, TerminalStyledLine, char_count, line_slice,
 };
-use mez_mux::copy::{CopyBuffer, normalize_selection, validate_position};
-pub use mez_mux::copy::{CopyPosition, SearchDirection};
+use mez_mux::copy::{
+    CopyBuffer, CopyPosition, SearchDirection, normalize_selection, validate_position,
+};
 
 // Copy mode, selection, and search primitives.
 

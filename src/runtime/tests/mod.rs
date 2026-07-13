@@ -35,13 +35,14 @@ use crate::scheduler::{ScheduledWork, ScheduledWorkKind};
 use crate::snapshot::SnapshotRepository;
 use crate::subagent::SubagentSpawnRequest;
 use crate::terminal::{
-    AttachedTerminalClientStepPlan, ClientViewRole, CopyPosition, DEFAULT_PANE_TERM, HostClipboard,
-    MouseAction, PaneAgentStatusField, TerminalClientLoopAction, TerminalClientLoopConfig,
-    TerminalColor, TerminalOscEvent, TerminalScreen, TerminalStyledLine, UI_COLOR_SLOT_NAMES,
+    AttachedTerminalClientStepPlan, ClientViewRole, DEFAULT_PANE_TERM, HostClipboard, MouseAction,
+    PaneAgentStatusField, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalColor,
+    TerminalOscEvent, TerminalScreen, TerminalStyledLine, UI_COLOR_SLOT_NAMES,
 };
 use crate::test_support::runtime::{RuntimeServiceFixture, SessionFixture};
 use crate::transcript::{AgentTranscriptStore, TranscriptEntry, TranscriptRole};
 use base64::Engine;
+use mez_mux::copy::CopyPosition;
 use mez_mux::input::{MuxAction, PaneFocusDirection};
 use mez_mux::session::{Session, SessionState};
 use std::cell::RefCell;

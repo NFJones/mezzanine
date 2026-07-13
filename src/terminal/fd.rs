@@ -5,12 +5,12 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    BTreeMap, BorrowedFd, CopyPosition, Errno, MezError, MousePaneAgentSelectorCell,
-    MousePaneAgentStatusCell, MouseWindowActionFrameCell, OptionalActions, RawFd, Result, Size,
-    Termios, UiTheme, WindowFrameAction, borrow_raw_fd, fcntl_getfl, tcgetattr, tcgetwinsize,
-    tcsetattr,
+    BTreeMap, BorrowedFd, Errno, MezError, MousePaneAgentSelectorCell, MousePaneAgentStatusCell,
+    MouseWindowActionFrameCell, OptionalActions, RawFd, Result, Size, Termios, UiTheme,
+    WindowFrameAction, borrow_raw_fd, fcntl_getfl, tcgetattr, tcgetwinsize, tcsetattr,
 };
 use crate::readline::ReadlinePrompt;
+use mez_mux::copy::CopyPosition;
 use mez_mux::input::{
     KeyBindings, KeyChord, MouseBorderCell, MousePaneRegion, MousePolicy, MouseWindowFrameCell,
     MouseWindowGroupFrameCell,

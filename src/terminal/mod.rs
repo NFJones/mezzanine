@@ -89,10 +89,10 @@ pub(crate) use client_loop::{
 pub(crate) use client_loop::{
     HostBracketedPasteBufferState, plan_attached_terminal_client_step_with_host_paste_buffer,
 };
+pub use copy::CopyMode;
 pub(crate) use copy::{
     AGENT_COPY_SKIP_LINE, AGENT_COPY_WRAP_CONTINUATION, encode_agent_copy_source_line,
 };
-pub use copy::{CopyMode, CopyPosition, SearchDirection};
 #[cfg(test)]
 pub use fd::poll_attached_terminal_fd_readiness;
 pub use fd::{

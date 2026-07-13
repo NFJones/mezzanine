@@ -155,7 +155,7 @@ pub struct RenderedClientView {
     /// Per-line non-default SGR style spans aligned to `lines`.
     pub line_style_spans: Vec<Vec<super::TerminalStyleSpan>>,
     /// Active copy-mode selection range, including submitted pager search matches.
-    pub selection: Option<(super::CopyPosition, super::CopyPosition)>,
+    pub selection: Option<(mez_mux::copy::CopyPosition, mez_mux::copy::CopyPosition)>,
     /// Stores the requires client scroll value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -2424,7 +2424,7 @@ fn route_mouse_event(
         && matches!(event.kind, super::MouseEventKind::Press)
     {
         return Ok(TerminalClientLoopAction::HandleMouse(
-            MouseAction::FocusPaneOnly(super::CopyPosition {
+            MouseAction::FocusPaneOnly(mez_mux::copy::CopyPosition {
                 line: usize::from(event.row),
                 column: usize::from(event.column),
             }),

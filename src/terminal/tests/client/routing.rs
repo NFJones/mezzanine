@@ -2,13 +2,14 @@
 
 use crate::terminal::{
     AttachedTerminalFdReadiness, AttachedTerminalFdRole, BTreeMap, ClientStatusKind,
-    ClientStatusLine, ClientViewRole, CopyModeKeyAction, CopyPosition, MouseAction,
-    MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MouseWindowActionFrameCell,
-    PaneAgentStatusField, RenderedClientView, Size, TerminalClientLoopAction,
-    TerminalClientLoopConfig, TerminalCursorStyle, TerminalFdInterest, TerminalScreen, UiTheme,
-    Window, WindowFrameAction, draw_window_from_screens, plan_attached_terminal_client_step,
-    route_client_input, route_client_input_actions,
+    ClientStatusLine, ClientViewRole, CopyModeKeyAction, MouseAction, MousePaneAgentSelectorCell,
+    MousePaneAgentStatusCell, MouseWindowActionFrameCell, PaneAgentStatusField, RenderedClientView,
+    Size, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalCursorStyle,
+    TerminalFdInterest, TerminalScreen, UiTheme, Window, WindowFrameAction,
+    draw_window_from_screens, plan_attached_terminal_client_step, route_client_input,
+    route_client_input_actions,
 };
+use mez_mux::copy::CopyPosition;
 use mez_mux::input::{
     KeyChord, KeyCode, MouseBorderCell, MousePaneRegion, MouseWindowFrameCell,
     MouseWindowGroupFrameCell, MuxAction, key_chord_input_bytes,

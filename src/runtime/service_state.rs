@@ -30,7 +30,8 @@ use super::{
 use crate::error::MezErrorKind;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
 use crate::runtime::record_browser::RuntimeRecordBrowser;
-use crate::terminal::{CopyPosition, PaneAgentStatusField, TerminalEmojiWidth};
+use crate::terminal::{PaneAgentStatusField, TerminalEmojiWidth};
+use mez_mux::copy::CopyPosition;
 use mez_mux::layout::PaneTitleSource;
 use mez_mux::presentation::{TerminalFramePosition, TerminalFrameStyle};
 use mez_terminal::TerminalStyleSpan;

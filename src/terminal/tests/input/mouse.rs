@@ -1,6 +1,7 @@
 //! Regression tests for terminal input mouse behavior.
 
-use crate::terminal::{CopyPosition, MouseAction, classify_mouse_event};
+use crate::terminal::{MouseAction, classify_mouse_event};
+use mez_mux::copy::CopyPosition;
 use mez_mux::input::{
     KeyBindings, MousePolicy, TerminalInputClassification, classify_terminal_input,
 };
