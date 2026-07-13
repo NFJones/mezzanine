@@ -128,7 +128,7 @@ use crate::project::{
     ProjectTrustRecord, ProjectTrustStore, TrustDecision, default_trust_database_path,
     discover_existing_overlays, discover_project_root,
 };
-use crate::readline::{ReadlineInputDecoder, ReadlineOutcome, ReadlinePrompt, ReadlinePromptKind};
+use crate::readline::{ReadlineInputDecoder, ReadlinePrompt, ReadlinePromptKind};
 use crate::registry::{SessionRecord, SessionRegistry};
 use crate::scheduler::{
     AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ScheduledWork, ScheduledWorkKind,
@@ -173,6 +173,7 @@ use mez_mux::process::{
     ExitedPaneProcess, PaneExitStatus, PaneProcessManager, PaneProcessOutput,
     shell_command_from_argv,
 };
+use mez_mux::readline::ReadlineOutcome;
 use mez_mux::session::{ClientRole, ClientState, ObserverDecisionState, Session};
 
 /// Exposes the agent module boundary.

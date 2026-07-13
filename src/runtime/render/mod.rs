@@ -44,7 +44,6 @@ use crate::agent::{
 };
 use crate::command::baseline_commands;
 use crate::mcp::McpServerStatus;
-use crate::readline::DEFAULT_READLINE_HISTORY_LIMIT;
 use crate::selector::{
     SelectorCandidate, SelectorCandidateKind, SelectorExtraCandidate, SelectorSurface,
 };
@@ -62,6 +61,7 @@ use mez_mux::presentation::{
     TerminalFramePosition, TerminalPaneFrameContext, TerminalWindowFrameContext,
     TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
 };
+use mez_mux::readline::DEFAULT_READLINE_HISTORY_LIMIT;
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 mod attached_step;

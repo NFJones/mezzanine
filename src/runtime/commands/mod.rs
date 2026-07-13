@@ -53,12 +53,12 @@ use crate::agent::{
 };
 use crate::auth::AuthCredentialKind;
 use crate::error::MezErrorKind;
-use crate::readline::ReadlineEdit;
 use crate::runtime::config::{
     runtime_default_models_for_provider, runtime_recommended_model_for_provider,
 };
 use crate::transcript::ConversationSummary;
 use base64::Engine;
+use mez_mux::readline::ReadlineEdit;
 use std::fs;
 
 mod approval;

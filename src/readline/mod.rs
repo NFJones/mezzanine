@@ -31,10 +31,8 @@ mod prompt_loop;
 /// declaration makes the boundary available to the crate.
 mod types;
 
-pub use mez_mux::readline::apply_readline_terminal_input;
-pub use mez_mux::readline::{
-    DEFAULT_READLINE_HISTORY_LIMIT, ReadlineBuffer, ReadlineEdit, ReadlineOutcome,
-};
+#[cfg(test)]
+pub use mez_mux::readline::{ReadlineBuffer, ReadlineEdit, ReadlineOutcome};
 #[cfg(test)]
 pub use prompt_loop::run_readline_prompt_loop;
 pub use types::{ReadlineInputDecoder, ReadlinePrompt, ReadlinePromptKind};
