@@ -28,9 +28,9 @@ mod openai_request;
 mod response;
 mod schema;
 use anthropic::AnthropicMessagesDialect;
+pub use cache::openai_prompt_cache_diagnostics_for_request;
 #[cfg(test)]
 pub(crate) use cache::openai_stable_prefix_material_for_request;
-pub use cache::{OpenAiPromptCacheDiagnostics, openai_prompt_cache_diagnostics_for_request};
 use catalog::provider_catalog_reasoning_levels;
 pub use catalog::{
     openai_default_reasoning_levels_for_model, openai_models_endpoint_for_responses_endpoint,
@@ -52,6 +52,7 @@ pub use http::ProviderHttpTransport;
 pub use http::{AsyncProviderHttpTransport, ReqwestProviderHttpTransport};
 #[cfg(test)]
 use mez_agent::ANTHROPIC_MESSAGES_API;
+pub use mez_agent::OpenAiPromptCacheDiagnostics;
 use mez_agent::resolve_provider_api;
 pub use mez_agent::{
     AgentContextUsageSnapshot, CLAUDE_CODE_API, DEEPSEEK_CHAT_COMPLETIONS_API,

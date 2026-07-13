@@ -88,9 +88,9 @@ pub use prompt::{
 pub use provider::{
     ANTHROPIC_MESSAGES_API, CHATGPT_RESPONSES_ENDPOINT, CLAUDE_CODE_API,
     DEEPSEEK_CHAT_COMPLETIONS_API, OPENAI_CHAT_COMPLETIONS_API, OPENAI_MODELS_ENDPOINT,
-    OPENAI_RESPONSES_API, OPENAI_RESPONSES_ENDPOINT, ProviderApiCompatibility,
-    ProviderApiCompatibilityError, ProviderCapabilities, ProviderEndpointError,
-    ProviderEndpointErrorKind, ProviderEndpointResult, ProviderModelCatalog,
+    OPENAI_RESPONSES_API, OPENAI_RESPONSES_ENDPOINT, OpenAiPromptCacheDiagnostics,
+    ProviderApiCompatibility, ProviderApiCompatibilityError, ProviderCapabilities,
+    ProviderEndpointError, ProviderEndpointErrorKind, ProviderEndpointResult, ProviderModelCatalog,
     ProviderModelCatalogParseError, ProviderModelInfo, ProviderRequestAssemblyError,
     ProviderRequestAssemblyErrorKind, ProviderRequestAssemblyResult, ProviderResponseError,
     ProviderResponseErrorKind, ProviderResponseResult, openai_default_reasoning_levels_for_model,

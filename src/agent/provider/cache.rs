@@ -12,55 +12,13 @@ use crate::agent::{
     ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest, ProviderTranscriptEvent,
 };
 use mez_agent::{
-    ProviderRequestAssemblyError, ProviderRequestAssemblyResult, validate_provider_request_required,
+    OpenAiPromptCacheDiagnostics, ProviderRequestAssemblyError, ProviderRequestAssemblyResult,
+    validate_provider_request_required,
 };
 use sha2::Digest;
 
 /// Prefix used by local provider-context compaction summaries.
 const OPENAI_CONTEXT_COMPACTED_PREFIX: &str = "[context compacted]";
-
-/// Non-model-visible fingerprints for diagnosing provider prompt-cache reuse.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpenAiPromptCacheDiagnostics {
-    /// Stable routing key sent to the OpenAI Responses API.
-    pub prompt_cache_key: String,
-    /// Bytes in the front-loaded OpenAI `instructions` field.
-    pub instructions_bytes: usize,
-    /// SHA-256 of the front-loaded OpenAI `instructions` field.
-    pub instructions_sha256: String,
-    /// Bytes in the OpenAI structured response format schema.
-    pub response_format_bytes: usize,
-    /// SHA-256 of the OpenAI structured response format schema.
-    pub response_format_sha256: String,
-    /// Bytes in the OpenAI `tools` list.
-    pub tools_bytes: usize,
-    /// SHA-256 of the OpenAI `tools` list.
-    pub tools_sha256: String,
-    /// Bytes in the OpenAI request-level `tool_choice` value.
-    pub tool_choice_bytes: usize,
-    /// SHA-256 of the OpenAI request-level `tool_choice` value.
-    pub tool_choice_sha256: String,
-    /// Bytes in the stable input prefix following system instructions.
-    pub stable_input_bytes: usize,
-    /// SHA-256 of the stable input prefix following system instructions.
-    pub stable_input_sha256: String,
-    /// Bytes in volatile input suffix material.
-    pub volatile_input_bytes: usize,
-    /// SHA-256 of volatile input suffix material.
-    pub volatile_input_sha256: String,
-    /// Bytes in provider-visible stable prompt-prefix material.
-    pub stable_prompt_prefix_bytes: usize,
-    /// SHA-256 of provider-visible stable prompt-prefix material.
-    pub stable_prompt_prefix_sha256: String,
-    /// Bytes in request-control shape material tracked outside the prompt prefix.
-    pub provider_request_shape_bytes: usize,
-    /// SHA-256 of request-control shape material tracked outside the prompt prefix.
-    pub provider_request_shape_sha256: String,
-    /// Bytes in the stable cacheable prompt prefix material Mezzanine can observe.
-    pub cacheable_prefix_bytes: usize,
-    /// SHA-256 of the stable cacheable prompt prefix material Mezzanine can observe.
-    pub cacheable_prefix_sha256: String,
-}
 
 /// Provider-specific rendering of Mezzanine model messages for OpenAI Responses.
 #[derive(Debug, Clone)]
