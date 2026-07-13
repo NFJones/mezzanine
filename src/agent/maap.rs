@@ -7,7 +7,12 @@
 use super::semantic::{apply_patch_touched_paths, try_convert_unified_diff_to_mez_patch};
 use super::shell::validate_agent_authored_shell_command;
 use super::{AgentCapability, AgentTurnRecord, BTreeSet, McpPromptTool, MezError, Result};
+use mez_agent::{IssueQueryValidation, IssueUpdateValidation};
 use serde_json::Value;
+
+fn validate_agent_contract(result: std::result::Result<(), String>) -> Result<()> {
+    result.map_err(MezError::invalid_args)
+}
 
 // MAAP action and result data structures.
 
@@ -841,11 +846,11 @@ impl AgentAction {
                 depends_on,
             } => {
                 validate_non_empty("issue kind", kind)?;
-                crate::issues::IssueKind::parse(kind)?;
-                crate::issues::validate_issue_title(title)?;
-                crate::issues::validate_issue_body(body.as_deref())?;
-                crate::issues::validate_issue_notes(notes.as_deref())?;
-                crate::issues::validate_issue_dependency_ids(None, depends_on)
+                validate_agent_contract(mez_agent::validate_issue_kind(kind))?;
+                validate_agent_contract(mez_agent::validate_issue_title(title))?;
+                validate_agent_contract(mez_agent::validate_issue_body(body.as_deref()))?;
+                validate_agent_contract(mez_agent::validate_issue_notes(notes.as_deref()))?;
+                validate_agent_contract(mez_agent::validate_issue_dependency_ids(depends_on))
             }
             AgentActionPayload::IssueUpdate {
                 id,
@@ -860,59 +865,29 @@ impl AgentAction {
                 clear_depends_on,
             } => {
                 validate_non_empty("issue id", id)?;
-                crate::issues::IssueUpdate {
-                    kind: kind
-                        .as_deref()
-                        .map(crate::issues::IssueKind::parse)
-                        .transpose()?,
-                    state: state
-                        .as_deref()
-                        .map(crate::issues::IssueState::parse)
-                        .transpose()?,
-                    title: title.clone(),
-                    body: body.clone(),
+                validate_agent_contract(mez_agent::validate_issue_update(IssueUpdateValidation {
+                    kind: kind.as_deref(),
+                    state: state.as_deref(),
+                    title: title.as_deref(),
+                    body: body.as_deref(),
                     clear_body: *clear_body,
-                    notes: notes.clone(),
+                    notes: notes.as_deref(),
                     clear_notes: *clear_notes,
-                    depends_on: depends_on.clone(),
+                    depends_on: depends_on.as_deref(),
                     clear_depends_on: *clear_depends_on,
-                }
-                .validate()
+                }))
             }
             AgentActionPayload::IssueQuery {
                 kind,
                 state,
                 text,
                 limit,
-            } => {
-                if let Some(kind) = kind {
-                    crate::issues::IssueKind::parse(kind)?;
-                }
-                if let Some(state) = state {
-                    crate::issues::IssueState::parse(state)?;
-                }
-                if let Some(text) = text
-                    && text.bytes().any(|byte| byte == 0)
-                {
-                    return Err(MezError::invalid_args(
-                        "issue query text must not contain NUL bytes",
-                    ));
-                }
-                if let Some(limit) = limit {
-                    if *limit == 0 {
-                        return Err(MezError::invalid_args(
-                            "issue query limit must be greater than zero",
-                        ));
-                    }
-                    if *limit > crate::issues::MAX_ISSUE_QUERY_LIMIT as u64 {
-                        return Err(MezError::invalid_args(format!(
-                            "issue query limit must be less than or equal to {}",
-                            crate::issues::MAX_ISSUE_QUERY_LIMIT
-                        )));
-                    }
-                }
-                Ok(())
-            }
+            } => validate_agent_contract(mez_agent::validate_issue_query(IssueQueryValidation {
+                kind: kind.as_deref(),
+                state: state.as_deref(),
+                text: text.as_deref(),
+                limit: *limit,
+            })),
             AgentActionPayload::IssueDelete { id } => validate_non_empty("issue id", id),
             AgentActionPayload::SendMessage {
                 recipient,
