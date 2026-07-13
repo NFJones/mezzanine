@@ -12,6 +12,8 @@ use std::collections::BTreeSet;
 pub mod accounting;
 /// Provider authentication routing contracts.
 pub mod auth;
+/// Model-facing live configuration mutation contracts.
+pub mod config_change;
 /// Provider-neutral HTTP request and response contracts.
 pub mod http;
 /// Dependency-neutral project instruction discovery records and parsing.
@@ -29,6 +31,7 @@ pub mod quota;
 
 pub use accounting::{AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsageKey};
 pub use auth::{ProviderAuthMetadata, ProviderCredentialKind};
+pub use config_change::{CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_VALUE_DESCRIPTION};
 pub use http::{
     DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ProviderHttpRequest,
     ProviderHttpResponse,

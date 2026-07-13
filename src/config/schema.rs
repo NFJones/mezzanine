@@ -42,11 +42,7 @@ pub const BASELINE_TOP_LEVEL_KEYS: &[&str] = &[
     "extensions",
 ];
 
-/// Provider-visible operation names for model-authored live config changes.
-pub const CONFIG_CHANGE_OPERATION_NAMES: &[&str] = &["set", "unset", "reset"];
-
-/// Provider-visible value guidance for model-authored live config changes.
-pub const CONFIG_CHANGE_VALUE_DESCRIPTION: &str = "For operation=set, provide a string containing one JSON scalar or string array accepted by config/set: JSON string, integer, boolean, or string array. Plain text is accepted as a JSON string. For operation=unset or reset, use null. reset removes the explicit override so the lower-precedence or default value becomes effective. Objects and null set-values are rejected.";
+pub use mez_agent::{CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_VALUE_DESCRIPTION};
 
 /// One provider-visible annotation for a supported live `config_change` path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

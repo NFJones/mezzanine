@@ -8,10 +8,8 @@ use super::{
     AgentCapability, AllowedAction, AllowedActionSet, McpPromptTool, ModelRequest,
     OPENAI_MAAP_FUNCTION_TOOL_NAME,
 };
-use crate::config::{
-    CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_VALUE_DESCRIPTION,
-    config_change_setting_path_description,
-};
+use crate::config::config_change_setting_path_description;
+use mez_agent::{CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_VALUE_DESCRIPTION};
 
 /// Legacy OpenAI MAAP function-tool surfaces.
 ///
