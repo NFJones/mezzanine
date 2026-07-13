@@ -134,11 +134,6 @@ pub mod registry;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 pub mod runtime;
-/// Exposes the scheduler module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-pub mod scheduler;
 /// Exposes the selector module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

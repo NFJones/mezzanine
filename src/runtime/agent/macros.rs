@@ -23,7 +23,7 @@ use crate::runtime::{
     AgentShellCommandOutcome, AgentShellRuntimeContext, RuntimeAgentPromptTurnStart,
     execute_agent_shell_command_with_context,
 };
-use crate::scheduler::{ScheduledWork, ScheduledWorkKind};
+use mez_agent::{ScheduledWork, ScheduledWorkKind};
 
 impl RuntimeSessionService {
     /// Builds the effective macro catalog for one pane.

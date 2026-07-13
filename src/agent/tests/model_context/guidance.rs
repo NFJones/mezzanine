@@ -246,7 +246,7 @@ fn scheduler_context_keeps_relevant_idle_state_compact() {
         content: "spawn subagents for this task".to_string(),
     }])
     .unwrap();
-    let scheduler = crate::scheduler::AgentScheduler::new(2).unwrap();
+    let scheduler = mez_agent::AgentScheduler::new(2).unwrap();
 
     let context = append_scheduler_context(context, &scheduler).unwrap();
     let scheduler_context = context
@@ -275,7 +275,7 @@ fn scheduler_context_omits_unrelated_idle_state() {
         content: "do the task".to_string(),
     }])
     .unwrap();
-    let scheduler = crate::scheduler::AgentScheduler::new(2).unwrap();
+    let scheduler = mez_agent::AgentScheduler::new(2).unwrap();
 
     let context = append_scheduler_context(context, &scheduler).unwrap();
 
@@ -310,13 +310,13 @@ fn scheduler_context_precedes_project_and_user_context_without_permission_contex
     .unwrap();
     let mut policy = PermissionPolicy::default();
     policy.set_approval_bypass(true);
-    let mut scheduler = crate::scheduler::AgentScheduler::new(2).unwrap();
+    let mut scheduler = mez_agent::AgentScheduler::new(2).unwrap();
     scheduler
-        .enqueue(crate::scheduler::ScheduledWork {
+        .enqueue(mez_agent::ScheduledWork {
             turn_id: "turn-queued".to_string(),
             agent_id: "agent-queued".to_string(),
             pane_id: Some("%1".to_string()),
-            kind: crate::scheduler::ScheduledWorkKind::ShellCapable,
+            kind: mez_agent::ScheduledWorkKind::ShellCapable,
         })
         .unwrap();
 

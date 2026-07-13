@@ -31,7 +31,6 @@ use super::{
 };
 use crate::MezError;
 use crate::agent::{AgentLogLevel, AgentShellCommandOutcome};
-use crate::scheduler::{ScheduledWork, ScheduledWorkKind};
 use crate::snapshot::SnapshotRepository;
 use crate::subagent::SubagentSpawnRequest;
 use crate::terminal::{
@@ -42,6 +41,7 @@ use crate::terminal::{
 use crate::test_support::runtime::{RuntimeServiceFixture, SessionFixture};
 use crate::transcript::{AgentTranscriptStore, TranscriptEntry, TranscriptRole};
 use base64::Engine;
+use mez_agent::{ScheduledWork, ScheduledWorkKind};
 use mez_mux::copy::CopyPosition;
 use mez_mux::input::{MuxAction, PaneFocusDirection};
 use mez_mux::session::{Session, SessionState};

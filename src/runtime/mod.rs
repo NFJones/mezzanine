@@ -130,9 +130,6 @@ use crate::project::{
 };
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt, ReadlinePromptKind};
 use crate::registry::{SessionRecord, SessionRegistry};
-use crate::scheduler::{
-    AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ScheduledWork, ScheduledWorkKind,
-};
 use crate::snapshot::{
     SessionSnapshotPayload, SnapshotAgentSession, SnapshotApprovalGrantMetadata,
     SnapshotApprovalRequestMetadata, SnapshotConfigDiagnostic, SnapshotConfigLayerMetadata,
@@ -158,6 +155,7 @@ use crate::terminal::{
 use crate::transcript::{
     AgentSessionMetadata, AgentTranscriptStore, TranscriptEntry, TranscriptRole,
 };
+use mez_agent::{AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ScheduledWork, ScheduledWorkKind};
 use mez_mux::copy::{CopyPosition, SearchDirection};
 use mez_mux::input::{
     KeyBindings, KeyChord, KeyCode, MuxAction, PaneFocusDirection, WindowFocusTarget,
