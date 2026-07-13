@@ -187,21 +187,6 @@ impl Session {
         })
     }
 
-    /// Replaces only the user-visible layout and pane metadata from a snapshot.
-    ///
-    /// Runtime `load-layout` uses this path when it should behave like a
-    /// user manually recreated the saved groups, windows, panes, titles, and
-    /// pane working directories. Session identity, clients, observers,
-    /// configuration generation, and other runtime-owned state are deliberately
-    /// retained so callers do not inherit snapshotted process or connection
-    /// state.
-    pub fn replace_layout_from_snapshot_payload(
-        &mut self,
-        payload: &SessionSnapshotPayload,
-    ) -> Result<()> {
-        self.replace_layout_from_restore_input(crate::snapshot::session_restore_input(payload)?)
-    }
-
     /// Replaces user-visible layout state from dependency-neutral restored data.
     ///
     /// Fresh live identifiers are allocated so loading a saved layout behaves
