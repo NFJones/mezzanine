@@ -18,10 +18,10 @@ use super::{
     target_or_active_pane, target_value_has_pane_shape, unix_seconds_to_rfc3339, window_by_id,
 };
 use crate::agent::{AgentShellCommandOutcome, execute_agent_shell_command};
-use crate::layout::LayoutNode;
 use crate::permissions::builtin_rules;
 use crate::session::ClientTerminalDescriptor;
 use crate::terminal::{DEFAULT_HISTORY_LIMIT, DEFAULT_PANE_TERM, TerminalFrameContext};
+use mez_mux::layout::LayoutNode;
 use mez_mux::process::PaneExitStatus;
 use std::collections::BTreeMap;
 
@@ -367,7 +367,7 @@ pub(super) fn window_panes_json(session: &Session, window: &Window) -> String {
 pub(super) fn pane_state_json(
     session: &Session,
     window: &Window,
-    pane: &crate::layout::Pane,
+    pane: &mez_mux::layout::Pane,
 ) -> String {
     let metadata = session.pane_state_metadata(pane.id.as_str());
     pane_state_json_with_runtime(
@@ -398,7 +398,7 @@ pub(super) fn pane_state_json(
 pub(super) fn pane_state_json_with_capture(
     session_id: &str,
     window: &Window,
-    pane: &crate::layout::Pane,
+    pane: &mez_mux::layout::Pane,
     source: &PaneCaptureSource,
 ) -> String {
     pane_state_json_with_runtime(
@@ -440,7 +440,7 @@ struct PaneRuntimeStateJsonFields<'a> {
 fn pane_state_json_with_runtime(
     session_id: &str,
     window: &Window,
-    pane: &crate::layout::Pane,
+    pane: &mez_mux::layout::Pane,
     runtime: PaneRuntimeStateJsonFields<'_>,
 ) -> String {
     let process_state = runtime.process_state.unwrap_or_else(|| {
@@ -517,7 +517,7 @@ fn layout_root_json(window: &Window) -> String {
 fn layout_node_json(
     node: &LayoutNode,
     window: &Window,
-    geometries: &[crate::layout::PaneGeometry],
+    geometries: &[mez_mux::layout::PaneGeometry],
 ) -> String {
     match node {
         LayoutNode::Pane { index } => {
@@ -528,7 +528,7 @@ fn layout_node_json(
                 .iter()
                 .find(|geometry| geometry.index == *index)
                 .copied()
-                .unwrap_or(crate::layout::PaneGeometry {
+                .unwrap_or(mez_mux::layout::PaneGeometry {
                     index: *index,
                     column: 0,
                     row: 0,
@@ -574,7 +574,7 @@ fn layout_node_json(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn layout_pane_geometry_json(geometry: &crate::layout::PaneGeometry) -> String {
+fn layout_pane_geometry_json(geometry: &mez_mux::layout::PaneGeometry) -> String {
     format!(
         r#"{{"column":{},"row":{},"columns":{},"rows":{}}}"#,
         geometry.column, geometry.row, geometry.columns, geometry.rows
@@ -628,7 +628,7 @@ pub(crate) fn frame_read_json_with_context(
 fn frame_read_fields(
     session: &Session,
     window: &Window,
-    pane: &crate::layout::Pane,
+    pane: &mez_mux::layout::Pane,
     frame_context: &TerminalFrameContext,
 ) -> Vec<(&'static str, String)> {
     let pane_context = frame_context.panes.get(pane.id.as_str());
@@ -786,7 +786,7 @@ fn frame_read_fields_json(fields: &[(&str, String)]) -> String {
 pub(super) fn frame_read_target<'a>(
     session: &'a Session,
     params: Option<&str>,
-) -> Result<(&'a Window, &'a crate::layout::Pane)> {
+) -> Result<(&'a Window, &'a mez_mux::layout::Pane)> {
     let Some(params) = params else {
         let window = session
             .active_window()
@@ -841,7 +841,7 @@ pub(super) fn client_json(session: &Session, client: &crate::session::Client) ->
     let terminal_descriptor = generic_client_terminal_descriptor(session, client);
     let terminal_size = terminal_descriptor
         .as_ref()
-        .map(|terminal| crate::layout::Size {
+        .map(|terminal| mez_mux::layout::Size {
             columns: terminal.columns,
             rows: terminal.rows,
         });
@@ -905,7 +905,7 @@ fn generic_client_terminal_descriptor(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn generic_size_object_json(size: Option<crate::layout::Size>) -> String {
+fn generic_size_object_json(size: Option<mez_mux::layout::Size>) -> String {
     size.map(|size| format!(r#"{{"columns":{},"rows":{}}}"#, size.columns, size.rows))
         .unwrap_or_else(|| "null".to_string())
 }
@@ -1357,7 +1357,7 @@ impl AgentTaskListFilter {
 pub(super) fn agent_state_json(
     session_id: &str,
     window: &Window,
-    pane: &crate::layout::Pane,
+    pane: &mez_mux::layout::Pane,
     visible: bool,
 ) -> String {
     agent_state_json_with_model_profile(session_id, window, pane, visible, "default")
@@ -1367,7 +1367,7 @@ pub(super) fn agent_state_json(
 pub(super) fn agent_state_json_with_model_profile(
     session_id: &str,
     _window: &Window,
-    pane: &crate::layout::Pane,
+    pane: &mez_mux::layout::Pane,
     visible: bool,
     model_profile: &str,
 ) -> String {
@@ -1389,7 +1389,7 @@ pub(super) fn agent_state_json_with_model_profile(
 /// on duplicated control-flow logic.
 pub(super) fn agent_state_json_with_shell_session(
     session_id: &str,
-    pane: &crate::layout::Pane,
+    pane: &mez_mux::layout::Pane,
     agent_session: &AgentShellSession,
 ) -> String {
     agent_state_json_with_shell_session_and_model_profile(
@@ -1403,7 +1403,7 @@ pub(super) fn agent_state_json_with_shell_session(
 /// Serializes a live agent shell session with an explicit model profile name.
 pub(super) fn agent_state_json_with_shell_session_and_model_profile(
     session_id: &str,
-    pane: &crate::layout::Pane,
+    pane: &mez_mux::layout::Pane,
     agent_session: &AgentShellSession,
     model_profile: &str,
 ) -> String {

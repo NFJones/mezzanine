@@ -4,9 +4,9 @@
 //! transcript references. They do not contain raw credentials or live processes.
 
 use crate::error::{MezError, Result};
-use crate::layout::LayoutPolicy;
 use crate::message::MessageServiceSnapshot;
 use crate::session::{Session, SessionState};
+use mez_mux::layout::LayoutPolicy;
 use mez_mux::process::PaneExitStatus;
 use mez_terminal::{
     GraphicRendition, TerminalColor, TerminalCursorState, TerminalModeState,

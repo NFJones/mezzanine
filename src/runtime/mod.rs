@@ -103,10 +103,6 @@ use crate::hooks::{
 };
 use crate::ids::{AgentId, ClientId, PaneId, SessionId, WindowId};
 use crate::instructions::DiscoveredInstructionFile;
-use crate::layout::{
-    MIN_PANE_COLUMNS, MIN_PANE_ROWS, PaneGeometry, PaneNavigationDirection, PaneSizeSpec,
-    ResizeAxis, ResizeDirection, Size, SplitDirection,
-};
 use crate::mcp::{
     McpApprovalSetting, McpExternalCapability, McpRegistry, McpServerKind, McpServerStatus,
     McpStartupPlan, McpStartupTransportPlan, McpStdioConnection, McpToolCallPlan,
@@ -169,6 +165,10 @@ use crate::transcript::{
 use mez_mux::input::{
     KeyBindings, KeyChord, KeyCode, MuxAction, PaneFocusDirection, WindowFocusTarget,
     key_chord_input_bytes,
+};
+use mez_mux::layout::{
+    MIN_PANE_COLUMNS, MIN_PANE_ROWS, PaneGeometry, PaneNavigationDirection, PaneSizeSpec,
+    ResizeAxis, ResizeDirection, Size, SplitDirection,
 };
 use mez_mux::process::{
     ExitedPaneProcess, PaneExitStatus, PaneProcessManager, PaneProcessOutput,

@@ -23,7 +23,6 @@ use super::{
 use crate::async_runtime::AsyncFakeAttachedTerminalIo;
 use crate::config::{DEFAULT_CONFIG_TOML, compose_effective_config};
 use crate::control::{decode_control_frame, encode_control_body};
-use crate::layout::Size;
 use crate::project::{ProjectTrustStore, TrustDecision};
 use crate::registry::SessionRegistry;
 use crate::registry::{RegistrySessionState, SessionRecord};
@@ -34,6 +33,7 @@ use crate::shell::resolve_shell;
 use crate::snapshot::{SnapshotKind, SnapshotRepository};
 use crate::snapshot::{SnapshotManifest, SnapshotPaneCapture, SnapshotState};
 use crate::terminal::{AttachedTerminalFdReadiness, AttachedTerminalFdRole, TerminalFdInterest};
+use mez_mux::layout::Size;
 use std::fs;
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
@@ -2563,7 +2563,7 @@ fn snapshot_resume_restores_local_session_shape() {
     );
     let primary = session.attach_primary("primary", true).unwrap();
     session
-        .split_active_pane(&primary, crate::layout::SplitDirection::Vertical)
+        .split_active_pane(&primary, mez_mux::layout::SplitDirection::Vertical)
         .unwrap();
     repository
         .create_from_session("snap-resume", Some("manual".to_string()), &session)
@@ -2611,7 +2611,7 @@ fn snapshot_resume_can_restart_restored_panes_with_explicit_command() {
     );
     let primary = session.attach_primary("primary", true).unwrap();
     session
-        .split_active_pane(&primary, crate::layout::SplitDirection::Vertical)
+        .split_active_pane(&primary, mez_mux::layout::SplitDirection::Vertical)
         .unwrap();
     repository
         .create_from_session("snap-restart", Some("manual".to_string()), &session)
@@ -3906,7 +3906,7 @@ fn snapshot_resume_latest_selects_newest_matching_snapshot() {
         .unwrap();
     let primary = session.attach_primary("primary", true).unwrap();
     session
-        .split_active_pane(&primary, crate::layout::SplitDirection::Vertical)
+        .split_active_pane(&primary, mez_mux::layout::SplitDirection::Vertical)
         .unwrap();
     repository
         .create_from_session("snap-z", Some("new".to_string()), &session)

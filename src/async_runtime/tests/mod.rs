@@ -61,7 +61,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc as StdArc, Mutex};
 use std::time::Instant;
 
-use crate::layout::Size;
 use crate::runtime::RuntimeEventConnectionTable;
 use crate::session::{ClientState, Session};
 use crate::shell::resolve_shell;
@@ -73,6 +72,7 @@ use crate::terminal::{
 use crate::test_support::async_runtime::AsyncRuntimeActorFixture;
 use crate::transcript::AgentTranscriptStore;
 use mez_mux::input::MuxAction;
+use mez_mux::layout::Size;
 
 /// Runs the test service operation for this subsystem.
 ///

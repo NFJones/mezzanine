@@ -191,7 +191,7 @@ pub(super) fn window_pillbox_rendition(
 pub(super) fn styled_pane_frame_line(
     window: &Window,
     width: usize,
-    pane: &crate::layout::Pane,
+    pane: &mez_mux::layout::Pane,
     frame_context: &TerminalFrameContext,
     template: &str,
     frame_style: TerminalFrameStyle,
@@ -512,7 +512,7 @@ pub(super) fn styled_frame_line_with_rendition(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn pane_frame_rendition(
-    pane: &crate::layout::Pane,
+    pane: &mez_mux::layout::Pane,
     frame_style: TerminalFrameStyle,
     ui_theme: &UiTheme,
 ) -> GraphicRendition {
@@ -657,7 +657,7 @@ pub(super) fn agent_display_overlay_targets<T>(
 /// on duplicated control-flow logic.
 pub(super) fn render_styled_pane_lines(
     window: &Window,
-    pane: &crate::layout::Pane,
+    pane: &mez_mux::layout::Pane,
     frame_context: &TerminalFrameContext,
     content: &[TerminalStyledLine],
     pane_frame: TerminalFrameRenderOptions<'_>,
@@ -752,7 +752,7 @@ pub(super) fn render_styled_pane_lines(
 /// on duplicated control-flow logic.
 pub(super) fn render_pane_lines(
     window: &Window,
-    pane: &crate::layout::Pane,
+    pane: &mez_mux::layout::Pane,
     frame_context: &TerminalFrameContext,
     content: &[String],
     pane_frame: TerminalFrameRenderOptions<'_>,
@@ -837,7 +837,7 @@ pub(super) fn render_pane_lines(
 /// on duplicated control-flow logic.
 pub(super) fn render_pane_frame_template(
     window: &Window,
-    pane: &crate::layout::Pane,
+    pane: &mez_mux::layout::Pane,
     frame_context: &TerminalFrameContext,
     template: &str,
 ) -> String {
@@ -868,7 +868,7 @@ pub(super) fn render_pane_frame_template(
 /// on duplicated control-flow logic.
 pub(super) fn render_pane_frame_text(
     window: &Window,
-    pane: &crate::layout::Pane,
+    pane: &mez_mux::layout::Pane,
     frame_context: &TerminalFrameContext,
     template: &str,
     width: usize,
@@ -975,7 +975,7 @@ pub(super) struct RenderedPaneFrameRightStatus {
 /// on duplicated control-flow logic.
 pub(super) fn pane_frame_row_layout(
     window: &Window,
-    pane: &crate::layout::Pane,
+    pane: &mez_mux::layout::Pane,
     frame_context: &TerminalFrameContext,
     template: &str,
     width: usize,
@@ -1072,7 +1072,7 @@ pub(super) fn pane_frame_left_pill_style_width(text_width: usize, available_widt
 /// pane-local agent state.
 pub(super) fn pane_frame_right_status(
     window: &Window,
-    pane: &crate::layout::Pane,
+    pane: &mez_mux::layout::Pane,
     frame_context: &TerminalFrameContext,
     template: &str,
 ) -> Option<RenderedPaneFrameRightStatus> {
@@ -1097,7 +1097,7 @@ pub(super) fn pane_frame_right_status(
 /// on duplicated control-flow logic.
 pub(super) fn pane_frame_right_aligned_values(
     window: &Window,
-    pane: &crate::layout::Pane,
+    pane: &mez_mux::layout::Pane,
     frame_context: &TerminalFrameContext,
     template: &str,
 ) -> Vec<PaneFrameRightValue> {
@@ -2148,7 +2148,7 @@ pub(super) fn window_frame_field_value(
 /// on duplicated control-flow logic.
 pub(super) fn pane_frame_field_value(
     window: &Window,
-    pane: &crate::layout::Pane,
+    pane: &mez_mux::layout::Pane,
     frame_context: &TerminalFrameContext,
     field: &str,
 ) -> String {
@@ -2373,7 +2373,7 @@ pub(super) fn write_pane_frame_layout_cells(
     column_start: usize,
     max_columns: usize,
     window: &Window,
-    pane: &crate::layout::Pane,
+    pane: &mez_mux::layout::Pane,
     frame_context: &TerminalFrameContext,
     template: &str,
 ) -> PaneFrameRowLayout {

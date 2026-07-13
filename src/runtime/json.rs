@@ -161,7 +161,7 @@ pub(super) fn runtime_agent_turn_state_json(started: &RuntimeAgentPromptTurnStar
 /// on duplicated control-flow logic.
 pub(super) fn runtime_subagent_state_json(
     session: &Session,
-    pane: &crate::layout::Pane,
+    pane: &mez_mux::layout::Pane,
     agent_id: &str,
     display_name: &str,
     spawn: &SubagentSpawnRequest,
@@ -681,7 +681,7 @@ pub(super) fn client_view_role_name(role: ClientViewRole) -> &'static str {
 pub(super) fn runtime_pane_by_id<'a>(
     session: &'a Session,
     pane_id: &str,
-) -> Result<(&'a crate::layout::Window, &'a crate::layout::Pane)> {
+) -> Result<(&'a mez_mux::layout::Window, &'a mez_mux::layout::Pane)> {
     session
         .windows()
         .iter()

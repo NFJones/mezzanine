@@ -1,7 +1,6 @@
 //! Regression tests for terminal presentation frames window behavior.
 
 use crate::ids::IdFactory;
-use crate::layout::SplitDirection;
 use crate::terminal::{
     BTreeMap, ClientViewRole, DEFAULT_PANE_FRAME_TEMPLATE,
     DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE, DEFAULT_WINDOW_FRAME_TEMPLATE, PaneRenderInput,
@@ -9,6 +8,7 @@ use crate::terminal::{
     WindowFrameAction, render_attached_client_view, render_window_with_pane_frame_template,
     window_frame_action_pillbox_cells,
 };
+use mez_mux::layout::SplitDirection;
 use mez_mux::presentation::{
     TerminalFramePosition, TerminalWindowFrameContext, TerminalWindowStatusContext,
 };

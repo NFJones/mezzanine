@@ -1,7 +1,6 @@
 //! Regression tests for terminal presentation frames agent status behavior.
 
 use crate::ids::IdFactory;
-use crate::layout::SplitDirection;
 use crate::terminal::tests::fixtures::display_column_for_fragment;
 use crate::terminal::{
     BTreeMap, BUILTIN_UI_THEME_NAMES, ClientViewRole, DEFAULT_PANE_FRAME_TEMPLATE, PaneRenderInput,
@@ -9,6 +8,7 @@ use crate::terminal::{
     TerminalPaneFrameContext, Window, builtin_ui_theme_definition, render_attached_client_view,
     render_window_with_pane_frame_template, resolve_ui_theme,
 };
+use mez_mux::layout::SplitDirection;
 use mez_mux::presentation::TerminalFramePosition;
 use mez_terminal::TerminalColor;
 

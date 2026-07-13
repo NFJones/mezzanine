@@ -20,8 +20,8 @@ use rustix::io::{read as rustix_read, write as rustix_write};
 use rustix::termios::{OptionalActions, Termios, tcgetattr, tcgetwinsize, tcsetattr};
 
 use crate::error::{MezError, Result};
-use crate::layout::{PaneGeometry, Size, Window};
 use crate::readline::ReadlinePrompt;
+use mez_mux::layout::{PaneGeometry, Size, Window};
 
 /// Exposes the client loop module boundary.
 ///

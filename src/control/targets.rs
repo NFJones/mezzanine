@@ -784,7 +784,7 @@ pub(super) fn window_id_for_target(session: &Session, target: Option<&str>) -> R
 pub(super) fn pane_by_id<'a>(
     session: &'a Session,
     pane_id: &str,
-) -> Result<(&'a Window, &'a crate::layout::Pane)> {
+) -> Result<(&'a Window, &'a mez_mux::layout::Pane)> {
     session
         .windows()
         .iter()
@@ -806,7 +806,7 @@ pub(super) fn pane_by_id<'a>(
 pub(super) fn target_or_active_pane<'a>(
     session: &'a Session,
     target: Option<&str>,
-) -> Result<(&'a Window, &'a crate::layout::Pane)> {
+) -> Result<(&'a Window, &'a mez_mux::layout::Pane)> {
     if let Some(target) = target {
         return pane_by_id(session, target);
     }

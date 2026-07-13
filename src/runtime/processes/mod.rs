@@ -1144,7 +1144,11 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn pane_process_size_for(&self, window: &crate::layout::Window, pane_id: &str) -> Option<Size> {
+    fn pane_process_size_for(
+        &self,
+        window: &mez_mux::layout::Window,
+        pane_id: &str,
+    ) -> Option<Size> {
         let pane = window
             .panes()
             .iter()
@@ -1158,7 +1162,7 @@ impl RuntimeSessionService {
         .ok()?;
         if window.zoomed_pane_id() == Some(&pane.id) {
             let body_size = rendered_window_body_size(display_size, window_frame_visible).ok()?;
-            let geometry = crate::layout::PaneGeometry {
+            let geometry = mez_mux::layout::PaneGeometry {
                 index: pane.index,
                 column: 0,
                 row: 0,

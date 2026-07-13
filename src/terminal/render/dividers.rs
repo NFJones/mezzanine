@@ -4,9 +4,9 @@
 //! divider cells, box-drawing glyph connection masks, mouse-border hit cells,
 //! and styled/plain divider canvas writes.
 
-use crate::layout::{PaneGeometry, Window};
 use crate::terminal::{GraphicRendition, TerminalStyleSpan, UiTheme};
 use mez_mux::input::MouseBorderCell;
+use mez_mux::layout::{PaneGeometry, Window};
 
 pub use mez_mux::presentation::pane_frame_merges_into_divider;
 use mez_mux::presentation::{PaneDividerCell, pane_divider_cells};
@@ -160,8 +160,8 @@ mod tests {
     use super::super::blank_render_cells;
     use super::*;
     use crate::ids::IdFactory;
-    use crate::layout::SplitDirection;
     use crate::terminal::{Size, Window};
+    use mez_mux::layout::SplitDirection;
 
     /// Verifies pane divider styling still uses the active border palette when
     /// a divider cell touches the active pane border.

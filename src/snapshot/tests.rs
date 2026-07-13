@@ -9,7 +9,6 @@ use super::{
     SnapshotRepository, SnapshotSessionState, SnapshotShellMetadata, SnapshotState,
     WindowSnapshotPayload,
 };
-use crate::layout::{LayoutNode, LayoutPolicy, Size, SplitDirection};
 use crate::message::{Envelope, MessageService, Recipient};
 use crate::session::Session;
 use crate::shell::{ResolvedShell, ShellSource};
@@ -17,6 +16,7 @@ use crate::terminal::{
     GraphicRendition, TerminalColor, TerminalCursorState, TerminalModeState, TerminalSavedState,
     TerminalStyleSpan,
 };
+use mez_mux::layout::{LayoutNode, LayoutPolicy, Size, SplitDirection};
 use mez_terminal::TerminalSavedDecPrivateMode;
 use std::fs;
 use std::path::PathBuf;
@@ -355,7 +355,7 @@ fn session_snapshot_payload_round_trips_and_builds_resume_plan() {
     );
     let primary = session.attach_primary("primary", true).unwrap();
     session
-        .split_active_pane(&primary, crate::layout::SplitDirection::Vertical)
+        .split_active_pane(&primary, mez_mux::layout::SplitDirection::Vertical)
         .unwrap();
     assert_eq!(
         session.cycle_layout(&primary).unwrap(),
@@ -766,7 +766,7 @@ fn snapshot_repository_restores_session_shape_from_payload() {
     );
     let primary = session.attach_primary("primary", true).unwrap();
     session
-        .split_active_pane(&primary, crate::layout::SplitDirection::Vertical)
+        .split_active_pane(&primary, mez_mux::layout::SplitDirection::Vertical)
         .unwrap();
     let state = repo
         .create_from_session("snap-restore", Some("manual".to_string()), &session)
@@ -1164,7 +1164,7 @@ fn snapshot_payload_rejects_invalid_pane_geometry() {
     );
     let primary = split_session.attach_primary("primary", true).unwrap();
     split_session
-        .split_active_pane(&primary, crate::layout::SplitDirection::Vertical)
+        .split_active_pane(&primary, mez_mux::layout::SplitDirection::Vertical)
         .unwrap();
     let mut payload = SessionSnapshotPayload::from_session(&split_session);
     payload.windows[0].panes[1].geometry = Some(SnapshotPaneGeometry {

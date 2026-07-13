@@ -5,8 +5,8 @@
 //! module converts pane geometry and drag state into concrete resize updates.
 
 use super::*;
-use crate::layout::range_overlap_u16;
 use crate::runtime::{MIN_PANE_COLUMNS, MIN_PANE_ROWS, MouseResizeDragState, PaneGeometry};
+use mez_mux::layout::range_overlap_u16;
 
 /// Carries the pane geometry update produced by one mouse resize drag step.
 #[derive(Debug, Clone, PartialEq, Eq)]

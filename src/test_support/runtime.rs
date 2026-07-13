@@ -3,11 +3,11 @@
 use std::path::PathBuf;
 
 use crate::ids::ClientId;
-use crate::layout::Size;
 use crate::runtime::RuntimeSessionService;
 use crate::session::Session;
 use crate::shell::{ResolvedShell, ShellSource};
 use crate::terminal::HostClipboard;
+use mez_mux::layout::Size;
 
 /// Builds sessions with the fallback POSIX shell used by most tests.
 #[derive(Debug, Clone)]

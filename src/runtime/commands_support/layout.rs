@@ -17,8 +17,8 @@ use crate::command::{
     runtime_pane_layout_plan_from_invocation,
 };
 use crate::control::ControlConnectionState;
-use crate::layout::SplitDirection;
 use crate::snapshot::{SnapshotRepository, SnapshotState};
+use mez_mux::layout::SplitDirection;
 
 /// Resolves typed snapshot command outcomes through the live runtime snapshot repository.
 pub(super) fn resolve_runtime_layout_command_outcome(
@@ -629,7 +629,7 @@ fn runtime_command_target_group<'a>(
 fn runtime_command_target_window<'a>(
     service: &'a RuntimeSessionService,
     target: Option<&str>,
-) -> Result<&'a crate::layout::Window> {
+) -> Result<&'a mez_mux::layout::Window> {
     match target {
         None => service
             .session

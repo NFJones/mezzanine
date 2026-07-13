@@ -16,9 +16,9 @@ use super::{
 use crate::auth::AuthPaths;
 use crate::config::ConfigPaths;
 use crate::ids::ClientId;
-use crate::layout::Size;
 use crate::session::{ClientState, Session};
 use crate::shell::{ResolvedShell, ShellSource};
+use mez_mux::layout::Size;
 use std::fs;
 use std::path::PathBuf;
 
@@ -505,9 +505,9 @@ fn typed_command_plan_parses_resize_pane_before_execution() {
             assert_eq!(target.as_deref(), Some("1"));
             assert_eq!(
                 spec,
-                crate::layout::PaneSizeSpec::Percent {
+                mez_mux::layout::PaneSizeSpec::Percent {
                     percent: 50,
-                    axis: crate::layout::ResizeAxis::Rows,
+                    axis: mez_mux::layout::ResizeAxis::Rows,
                 }
             );
         }

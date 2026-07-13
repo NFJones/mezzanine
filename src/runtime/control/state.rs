@@ -360,7 +360,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(super) fn runtime_window_state_json(&self, window: &crate::layout::Window) -> String {
+    pub(super) fn runtime_window_state_json(&self, window: &mez_mux::layout::Window) -> String {
         let created_at = self
             .window_created_at_unix_seconds
             .get(window.id.as_str())
@@ -398,8 +398,8 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(in crate::runtime) fn runtime_control_pane_state_json(
         &self,
-        window: &crate::layout::Window,
-        pane: &crate::layout::Pane,
+        window: &mez_mux::layout::Window,
+        pane: &mez_mux::layout::Pane,
     ) -> String {
         let primary_pid = self.primary_pid_for_live_pane_process(pane.id.as_str());
         let exit_status = self

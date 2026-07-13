@@ -134,7 +134,7 @@ impl RuntimeSessionService {
         primary_client_id: &crate::ids::ClientId,
         group_id: &crate::ids::WindowGroupId,
         name: impl Into<String>,
-        layout_policy: crate::layout::LayoutPolicy,
+        layout_policy: mez_mux::layout::LayoutPolicy,
         start_directory: Option<&Path>,
     ) -> Result<PaneProcessStart> {
         self.require_live()?;
@@ -155,7 +155,7 @@ impl RuntimeSessionService {
         &mut self,
         group_id: &crate::ids::WindowGroupId,
         name: impl Into<String>,
-        layout_policy: crate::layout::LayoutPolicy,
+        layout_policy: mez_mux::layout::LayoutPolicy,
         start_directory: Option<&Path>,
     ) -> Result<PaneProcessStart> {
         self.require_live()?;
@@ -174,7 +174,7 @@ impl RuntimeSessionService {
         primary_client_id: Option<&crate::ids::ClientId>,
         group_id: &crate::ids::WindowGroupId,
         name: impl Into<String>,
-        layout_policy: crate::layout::LayoutPolicy,
+        layout_policy: mez_mux::layout::LayoutPolicy,
         start_directory: Option<&Path>,
     ) -> Result<PaneProcessStart> {
         validate_runtime_start_directory(start_directory)?;

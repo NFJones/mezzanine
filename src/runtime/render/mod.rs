@@ -185,10 +185,10 @@ mod tests {
         wrap_agent_terminal_text, wrapped_prefixed_agent_terminal_lines,
     };
     use crate::agent::{AgentAction, AgentActionPayload};
-    use crate::layout::Size;
     use crate::terminal::{
         GraphicRendition, PaneAgentStatusField, TerminalStyleSpan, default_ui_theme,
     };
+    use mez_mux::layout::Size;
 
     /// Verifies normal-mode mutation result rendering treats patches as the
     /// only diff-producing file mutation operation.

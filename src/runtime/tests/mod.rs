@@ -105,9 +105,9 @@ pub(crate) fn effective_uid_for_tests() -> u32 {
 
 use crate::control::{decode_control_frame, encode_control_body};
 use crate::ids::IdFactory;
-use crate::layout::Size;
 use crate::registry::{RegistrySessionState, SessionRegistry};
 use crate::shell::{ResolvedShell, ShellSource};
+use mez_mux::layout::Size;
 use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};

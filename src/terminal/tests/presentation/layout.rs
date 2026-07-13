@@ -1,7 +1,6 @@
 //! Regression tests for terminal presentation layout behavior.
 
 use crate::ids::IdFactory;
-use crate::layout::{PaneGeometry, SplitDirection};
 use crate::terminal::tests::fixtures::display_column_for_fragment;
 use crate::terminal::{
     BTreeMap, ClientViewRole, DEFAULT_PANE_FRAME_TEMPLATE,
@@ -12,6 +11,7 @@ use crate::terminal::{
     pane_render_region_size_for_geometry, render_attached_client_view, render_window,
     render_window_with_pane_frame_template,
 };
+use mez_mux::layout::{PaneGeometry, SplitDirection};
 use mez_mux::presentation::{
     TerminalFramePosition, TerminalWindowFrameContext, TerminalWindowGroupFrameContext,
     TerminalWindowStatusContext,
@@ -56,7 +56,7 @@ fn client_loop_draws_window_from_live_pane_screens() {
     let mut ids = crate::ids::IdFactory::default();
     let mut window = Window::new(&mut ids, 0, "main", Size::new(20, 4).unwrap());
     window
-        .split_active(&mut ids, crate::layout::SplitDirection::Vertical)
+        .split_active(&mut ids, mez_mux::layout::SplitDirection::Vertical)
         .unwrap();
     let mut screens = BTreeMap::new();
     let body_size = |size: Size| Size::new(size.columns, size.rows - 1).unwrap();
@@ -240,7 +240,7 @@ fn client_view_offsets_style_spans_across_side_by_side_panes() {
     let mut ids = crate::ids::IdFactory::default();
     let mut window = Window::new(&mut ids, 0, "main", Size::new(8, 2).unwrap());
     window
-        .split_active(&mut ids, crate::layout::SplitDirection::Vertical)
+        .split_active(&mut ids, mez_mux::layout::SplitDirection::Vertical)
         .unwrap();
     let mut screens = BTreeMap::new();
     let mut left = TerminalScreen::new(window.panes()[0].size, 10).unwrap();

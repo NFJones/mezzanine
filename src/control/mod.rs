@@ -25,7 +25,6 @@ use crate::framing::{
     FrameContext, FrameOverflow, ProtocolFrame, decode_frame, encode_frame, render_frame_template,
 };
 use crate::ids::ClientId;
-use crate::layout::{PaneSizeSpec, ResizeAxis, ResizeDirection, SplitDirection, Window};
 use crate::mcp::{McpRegistry, McpServerKind, McpServerStatus};
 use crate::permissions::{
     ApprovalDecision, BlockedApprovalQueue, BlockedApprovalRequest, BlockedApprovalState,
@@ -33,6 +32,7 @@ use crate::permissions::{
 use crate::project::{ProjectTrustRecord, ProjectTrustStore, TrustDecision};
 use crate::session::{ClientRole, ClientState, ObserverDecisionState, Session, SessionState};
 use crate::snapshot::{LayoutLoadPlan, SnapshotKind, SnapshotRepository, SnapshotState};
+use mez_mux::layout::{PaneSizeSpec, ResizeAxis, ResizeDirection, SplitDirection, Window};
 
 /// Exposes the authz module boundary.
 ///

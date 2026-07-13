@@ -8,10 +8,10 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{MezError, Result};
-use crate::layout::{LayoutNode, Pane, SplitDirection};
 use crate::message::MessageServiceSnapshot;
 use crate::session::Session;
 use crate::terminal::{DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_WINDOW_FRAME_TEMPLATE};
+use mez_mux::layout::{LayoutNode, Pane, SplitDirection};
 use mez_mux::process::PaneExitStatus;
 use mez_terminal::{TerminalModeState, TerminalSavedState, TerminalStyleSpan};
 

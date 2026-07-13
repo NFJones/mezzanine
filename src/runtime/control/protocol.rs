@@ -141,14 +141,14 @@ pub(super) fn runtime_client_state_name(state: ClientState) -> &'static str {
 }
 
 /// Formats an optional terminal size object for control JSON.
-pub(super) fn runtime_size_object_json(size: Option<crate::layout::Size>) -> String {
+pub(super) fn runtime_size_object_json(size: Option<mez_mux::layout::Size>) -> String {
     size.map(|size| format!(r#"{{"columns":{},"rows":{}}}"#, size.columns, size.rows))
         .unwrap_or_else(|| "null".to_string())
 }
 
 /// Formats an optional terminal descriptor object for control JSON.
 pub(super) fn runtime_client_terminal_descriptor_json(
-    size: Option<crate::layout::Size>,
+    size: Option<mez_mux::layout::Size>,
     term: &str,
 ) -> String {
     size.map(|size| {

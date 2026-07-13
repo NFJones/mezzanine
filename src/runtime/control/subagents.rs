@@ -29,7 +29,7 @@ const SUBAGENT_BUCKET_MIN_ROWS: u16 = 4;
 #[derive(Debug, Clone, Copy)]
 struct RuntimeSubagentBucketLayout {
     /// Self-rebalancing policy to apply before the pane is added.
-    policy: crate::layout::LayoutPolicy,
+    policy: mez_mux::layout::LayoutPolicy,
     /// Split direction used for the immediate pane creation operation.
     split_direction: SplitDirection,
 }
@@ -37,7 +37,7 @@ struct RuntimeSubagentBucketLayout {
 impl Default for RuntimeSubagentBucketLayout {
     fn default() -> Self {
         Self {
-            policy: crate::layout::LayoutPolicy::EvenVertical,
+            policy: mez_mux::layout::LayoutPolicy::EvenVertical,
             split_direction: SplitDirection::Vertical,
         }
     }
@@ -50,7 +50,7 @@ impl Default for RuntimeSubagentBucketLayout {
 /// horizontal or grid layout that still satisfies the useful subagent pane
 /// floor. Returning `None` tells the caller to create another bucket window.
 fn runtime_subagent_bucket_layout(
-    size: crate::layout::Size,
+    size: mez_mux::layout::Size,
     pane_count: usize,
 ) -> Option<RuntimeSubagentBucketLayout> {
     if pane_count == 0 {
@@ -61,7 +61,7 @@ fn runtime_subagent_bucket_layout(
     }
 
     let vertical = runtime_subagent_layout_candidate(
-        crate::layout::LayoutPolicy::EvenVertical,
+        mez_mux::layout::LayoutPolicy::EvenVertical,
         size,
         pane_count,
     );
@@ -75,11 +75,15 @@ fn runtime_subagent_bucket_layout(
     [
         vertical,
         runtime_subagent_layout_candidate(
-            crate::layout::LayoutPolicy::EvenHorizontal,
+            mez_mux::layout::LayoutPolicy::EvenHorizontal,
             size,
             pane_count,
         ),
-        runtime_subagent_layout_candidate(crate::layout::LayoutPolicy::EvenGrid, size, pane_count),
+        runtime_subagent_layout_candidate(
+            mez_mux::layout::LayoutPolicy::EvenGrid,
+            size,
+            pane_count,
+        ),
     ]
     .into_iter()
     .flatten()
@@ -93,7 +97,7 @@ struct RuntimeSubagentLayoutCandidate {
     /// Layout that would be applied when this candidate wins.
     layout: RuntimeSubagentBucketLayout,
     /// Smallest pane this candidate would produce.
-    minimum_size: crate::layout::Size,
+    minimum_size: mez_mux::layout::Size,
 }
 
 /// Initial MMP status metadata for a freshly spawned subagent.
@@ -117,27 +121,30 @@ struct RuntimeSubagentInitialTaskStatus<'a> {
 impl RuntimeSubagentLayoutCandidate {
     /// Returns whether this candidate reaches the preferred terminal pane size.
     fn meets_preferred_size(self) -> bool {
-        self.minimum_size.columns >= crate::layout::EVEN_GRID_TARGET_COLUMNS
-            && self.minimum_size.rows >= crate::layout::EVEN_GRID_TARGET_ROWS
+        self.minimum_size.columns >= mez_mux::layout::EVEN_GRID_TARGET_COLUMNS
+            && self.minimum_size.rows >= mez_mux::layout::EVEN_GRID_TARGET_ROWS
     }
 
     /// Scores candidates by preferred fit, then pane utility and simplicity.
     fn score(self) -> (u8, u32, u32, u8) {
         let preferred_axes =
-            u8::from(self.minimum_size.columns >= crate::layout::EVEN_GRID_TARGET_COLUMNS)
-                + u8::from(self.minimum_size.rows >= crate::layout::EVEN_GRID_TARGET_ROWS);
+            u8::from(self.minimum_size.columns >= mez_mux::layout::EVEN_GRID_TARGET_COLUMNS)
+                + u8::from(self.minimum_size.rows >= mez_mux::layout::EVEN_GRID_TARGET_ROWS);
         let min_ratio = std::cmp::min(
             runtime_ratio_millis(
                 self.minimum_size.columns,
-                crate::layout::EVEN_GRID_TARGET_COLUMNS,
+                mez_mux::layout::EVEN_GRID_TARGET_COLUMNS,
             ),
-            runtime_ratio_millis(self.minimum_size.rows, crate::layout::EVEN_GRID_TARGET_ROWS),
+            runtime_ratio_millis(
+                self.minimum_size.rows,
+                mez_mux::layout::EVEN_GRID_TARGET_ROWS,
+            ),
         );
         let area =
             u32::from(self.minimum_size.columns).saturating_mul(u32::from(self.minimum_size.rows));
         let simple_axis = u8::from(!matches!(
             self.layout.policy,
-            crate::layout::LayoutPolicy::EvenGrid
+            mez_mux::layout::LayoutPolicy::EvenGrid
         ));
         (preferred_axes, min_ratio, area, simple_axis)
     }
@@ -145,11 +152,11 @@ impl RuntimeSubagentLayoutCandidate {
 
 /// Builds one candidate and rejects layouts that would make unusable panes.
 fn runtime_subagent_layout_candidate(
-    policy: crate::layout::LayoutPolicy,
-    size: crate::layout::Size,
+    policy: mez_mux::layout::LayoutPolicy,
+    size: mez_mux::layout::Size,
     pane_count: usize,
 ) -> Option<RuntimeSubagentLayoutCandidate> {
-    let minimum_size = crate::layout::even_layout_minimum_pane_size(policy, size, pane_count);
+    let minimum_size = mez_mux::layout::even_layout_minimum_pane_size(policy, size, pane_count);
     if minimum_size.columns < SUBAGENT_BUCKET_MIN_COLUMNS
         || minimum_size.rows < SUBAGENT_BUCKET_MIN_ROWS
     {
@@ -159,10 +166,10 @@ fn runtime_subagent_layout_candidate(
         layout: RuntimeSubagentBucketLayout {
             policy,
             split_direction: match policy {
-                crate::layout::LayoutPolicy::EvenHorizontal => SplitDirection::Horizontal,
-                crate::layout::LayoutPolicy::Tiled
-                | crate::layout::LayoutPolicy::EvenVertical
-                | crate::layout::LayoutPolicy::EvenGrid => SplitDirection::Vertical,
+                mez_mux::layout::LayoutPolicy::EvenHorizontal => SplitDirection::Horizontal,
+                mez_mux::layout::LayoutPolicy::Tiled
+                | mez_mux::layout::LayoutPolicy::EvenVertical
+                | mez_mux::layout::LayoutPolicy::EvenGrid => SplitDirection::Vertical,
             },
         },
         minimum_size,

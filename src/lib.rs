@@ -85,7 +85,6 @@ pub mod issues;
 ///
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
-pub mod layout;
 /// Exposes the macros module boundary.
 ///
 /// The nested module keeps agent macro discovery and parsing isolated while

@@ -4,10 +4,10 @@ use super::{
     PathBuf, RegistrySessionState, SessionRecord, SessionRegistry, records_to_json,
     resolve_session_record_target, session_record_index_aliases,
 };
-use crate::layout::Size;
 use crate::runtime::{effective_uid_for_tests, ensure_private_socket_directory};
 use crate::session::Session;
 use crate::shell::{ResolvedShell, ShellSource};
+use mez_mux::layout::Size;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::mpsc::{self, TryRecvError};

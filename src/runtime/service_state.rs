@@ -28,10 +28,10 @@ use super::{
     execute_streamable_http_exchange, mcp_tools_call_operation,
 };
 use crate::error::MezErrorKind;
-use crate::layout::PaneTitleSource;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
 use crate::runtime::record_browser::RuntimeRecordBrowser;
 use crate::terminal::{CopyPosition, PaneAgentStatusField, TerminalEmojiWidth};
+use mez_mux::layout::PaneTitleSource;
 use mez_mux::presentation::{TerminalFramePosition, TerminalFrameStyle};
 use mez_terminal::TerminalStyleSpan;
 use secrecy::ExposeSecret;

@@ -874,7 +874,7 @@ async fn async_agent_provider_service_does_not_serialize_provider_requests_acros
     let second_pane = service
         .split_pane_with_process(
             &primary,
-            crate::layout::SplitDirection::Vertical,
+            mez_mux::layout::SplitDirection::Vertical,
             Some("cat >/dev/null"),
         )
         .unwrap()

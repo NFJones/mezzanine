@@ -839,7 +839,7 @@ fn client_loop_draws_zoomed_pane_across_window_body() {
     let mut ids = crate::ids::IdFactory::default();
     let mut window = Window::new(&mut ids, 0, "main", Size::new(20, 4).unwrap());
     window
-        .split_active(&mut ids, crate::layout::SplitDirection::Vertical)
+        .split_active(&mut ids, mez_mux::layout::SplitDirection::Vertical)
         .unwrap();
     window.toggle_zoom_active();
     let mut screens = BTreeMap::new();

@@ -411,7 +411,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     fn overlay_copy_modes_on_view(
         &self,
-        window: &crate::layout::Window,
+        window: &mez_mux::layout::Window,
         view: &mut RenderedClientView,
     ) -> Result<()> {
         let mut deferred_cleanup = self.deferred_word_copy_cleanup.borrow_mut();
@@ -471,7 +471,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     fn pane_content_mouse_region(
         &self,
-        window: &crate::layout::Window,
+        window: &mez_mux::layout::Window,
         pane_index: usize,
     ) -> Option<(usize, usize, Size)> {
         let window_frame_visible = self.window_frames_enabled;
@@ -488,7 +488,7 @@ impl RuntimeSessionService {
         let body_size = rendered_window_body_size(display_size, window_frame_visible).ok()?;
         let geometries = if let Some(zoomed) = window.zoomed_pane_id() {
             let pane = window.panes().iter().find(|pane| &pane.id == zoomed)?;
-            vec![crate::layout::PaneGeometry {
+            vec![mez_mux::layout::PaneGeometry {
                 index: pane.index,
                 column: 0,
                 row: 0,
@@ -534,7 +534,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn copy_mode_overlay_region(
         &self,
-        window: &crate::layout::Window,
+        window: &mez_mux::layout::Window,
         pane_index: usize,
     ) -> Option<(usize, usize, Size)> {
         let (row, column, full_content_size) =

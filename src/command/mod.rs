@@ -18,11 +18,11 @@ use crate::config::{
 };
 use crate::error::{MezError, Result};
 use crate::ids::ClientId;
-use crate::layout::{
-    PaneNavigationDirection, PaneSizeSpec, ResizeAxis, ResizeDirection, SplitDirection,
-};
 use crate::session::Session;
 use mez_mux::input::{KeyBindings, KeyChord, KeyCode};
+use mez_mux::layout::{
+    PaneNavigationDirection, PaneSizeSpec, ResizeAxis, ResizeDirection, SplitDirection,
+};
 
 /// Builds stable `key=value` command output lines with a caller-selected separator.
 #[derive(Debug, Clone, PartialEq, Eq)]
