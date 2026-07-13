@@ -142,6 +142,19 @@ impl From<mez_agent::ProviderRequestAssemblyError> for MezError {
     }
 }
 
+impl From<mez_agent::ProviderEndpointError> for MezError {
+    fn from(error: mez_agent::ProviderEndpointError) -> Self {
+        match error.kind() {
+            mez_agent::ProviderEndpointErrorKind::InvalidArgs => {
+                Self::invalid_args(error.message())
+            }
+            mez_agent::ProviderEndpointErrorKind::InvalidState => {
+                Self::invalid_state(error.message())
+            }
+        }
+    }
+}
+
 impl From<mez_agent::ProviderResponseError> for MezError {
     fn from(error: mez_agent::ProviderResponseError) -> Self {
         let mut product_error = match error.kind() {

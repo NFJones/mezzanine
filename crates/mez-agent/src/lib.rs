@@ -86,12 +86,15 @@ pub use prompt::{
     AgentPromptErrorKind, AgentPromptProfile, AgentPromptResult, validate_agent_prompt_required,
 };
 pub use provider::{
-    ANTHROPIC_MESSAGES_API, CLAUDE_CODE_API, DEEPSEEK_CHAT_COMPLETIONS_API,
-    OPENAI_CHAT_COMPLETIONS_API, OPENAI_RESPONSES_API, ProviderApiCompatibility,
-    ProviderApiCompatibilityError, ProviderCapabilities, ProviderModelCatalog,
+    ANTHROPIC_MESSAGES_API, CHATGPT_RESPONSES_ENDPOINT, CLAUDE_CODE_API,
+    DEEPSEEK_CHAT_COMPLETIONS_API, OPENAI_CHAT_COMPLETIONS_API, OPENAI_MODELS_ENDPOINT,
+    OPENAI_RESPONSES_API, OPENAI_RESPONSES_ENDPOINT, ProviderApiCompatibility,
+    ProviderApiCompatibilityError, ProviderCapabilities, ProviderEndpointError,
+    ProviderEndpointErrorKind, ProviderEndpointResult, ProviderModelCatalog,
     ProviderModelCatalogParseError, ProviderModelInfo, ProviderRequestAssemblyError,
     ProviderRequestAssemblyErrorKind, ProviderRequestAssemblyResult, ProviderResponseError,
     ProviderResponseErrorKind, ProviderResponseResult, openai_default_reasoning_levels_for_model,
+    openai_models_endpoint_for_responses_endpoint, openai_responses_endpoint_for_base_url,
     parse_openai_models_http_body_with, provider_catalog_reasoning_levels, resolve_provider_api,
     validate_provider_request_required,
 };

@@ -138,6 +138,121 @@ pub fn validate_provider_request_required(
     Ok(())
 }
 
+/// Result type returned while deriving provider HTTP endpoints.
+pub type ProviderEndpointResult<T> = Result<T, ProviderEndpointError>;
+
+/// Stable categories for provider endpoint derivation failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderEndpointErrorKind {
+    /// A required endpoint input was empty or malformed.
+    InvalidArgs,
+    /// The credential-backed endpoint does not expose the requested API.
+    InvalidState,
+}
+
+/// A typed failure returned while deriving one provider endpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderEndpointError {
+    kind: ProviderEndpointErrorKind,
+    message: String,
+}
+
+impl ProviderEndpointError {
+    /// Creates an invalid-argument endpoint failure.
+    pub fn invalid_args(message: impl Into<String>) -> Self {
+        Self {
+            kind: ProviderEndpointErrorKind::InvalidArgs,
+            message: message.into(),
+        }
+    }
+
+    /// Creates an invalid-state endpoint failure.
+    pub fn invalid_state(message: impl Into<String>) -> Self {
+        Self {
+            kind: ProviderEndpointErrorKind::InvalidState,
+            message: message.into(),
+        }
+    }
+
+    /// Returns the stable endpoint failure category.
+    pub fn kind(&self) -> ProviderEndpointErrorKind {
+        self.kind
+    }
+
+    /// Returns the diagnostic message without formatting the error.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for ProviderEndpointError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ProviderEndpointError {}
+
+/// Default direct OpenAI Responses API endpoint used with API-key auth.
+pub const OPENAI_RESPONSES_ENDPOINT: &str = "https://api.openai.com/v1/responses";
+/// Default direct OpenAI model catalog endpoint used with API-key auth.
+pub const OPENAI_MODELS_ENDPOINT: &str = "https://api.openai.com/v1/models";
+/// Default ChatGPT browser-auth backend endpoint used with device credentials.
+pub const CHATGPT_RESPONSES_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex/responses";
+
+/// Derives an OpenAI Responses endpoint from a configured provider base URL.
+pub fn openai_responses_endpoint_for_base_url(base_url: &str) -> ProviderEndpointResult<String> {
+    if base_url.trim().is_empty() {
+        return Err(ProviderEndpointError::invalid_args(
+            "OpenAI provider base URL must not be empty",
+        ));
+    }
+    let base_url = base_url.trim().trim_end_matches('/');
+    if base_url == CHATGPT_RESPONSES_ENDPOINT
+        || base_url.starts_with("https://chatgpt.com/backend-api/codex/")
+    {
+        return Err(ProviderEndpointError::invalid_state(
+            "ChatGPT browser credentials do not expose an OpenAI-compatible base URL",
+        ));
+    }
+    if base_url.ends_with("/responses") {
+        return Ok(base_url.to_string());
+    }
+    if let Some(prefix) = base_url.strip_suffix("/models") {
+        return Ok(format!("{prefix}/responses"));
+    }
+    Ok(format!("{base_url}/responses"))
+}
+
+/// Derives an OpenAI model-catalog endpoint from a Responses endpoint.
+pub fn openai_models_endpoint_for_responses_endpoint(
+    endpoint: &str,
+) -> ProviderEndpointResult<String> {
+    if endpoint.trim().is_empty() {
+        return Err(ProviderEndpointError::invalid_args(
+            "OpenAI Responses endpoint must not be empty",
+        ));
+    }
+    let endpoint = endpoint.trim().trim_end_matches('/');
+    if endpoint == CHATGPT_RESPONSES_ENDPOINT
+        || endpoint.starts_with("https://chatgpt.com/backend-api/codex/")
+    {
+        return Err(ProviderEndpointError::invalid_state(
+            "ChatGPT browser credentials do not expose an OpenAI-compatible model catalog",
+        ));
+    }
+    if endpoint == OPENAI_RESPONSES_ENDPOINT {
+        return Ok(OPENAI_MODELS_ENDPOINT.to_string());
+    }
+    if let Some(prefix) = endpoint.strip_suffix("/responses") {
+        return Ok(format!("{prefix}/models"));
+    }
+    if endpoint.ends_with("/models") {
+        return Ok(endpoint.to_string());
+    }
+    Ok(format!("{endpoint}/models"))
+}
+
 /// API compatibility id for providers that speak the OpenAI Responses API.
 pub const OPENAI_RESPONSES_API: &str = "openai-responses";
 /// API compatibility id for providers that speak OpenAI-style Chat Completions.
@@ -374,8 +489,11 @@ impl std::error::Error for ProviderModelCatalogParseError {}
 #[cfg(test)]
 mod request_assembly_tests {
     use super::{
-        ProviderRequestAssemblyError, ProviderRequestAssemblyErrorKind, ProviderResponseError,
-        ProviderResponseErrorKind, validate_provider_request_required,
+        CHATGPT_RESPONSES_ENDPOINT, OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT,
+        ProviderEndpointErrorKind, ProviderRequestAssemblyError, ProviderRequestAssemblyErrorKind,
+        ProviderResponseError, ProviderResponseErrorKind,
+        openai_models_endpoint_for_responses_endpoint, openai_responses_endpoint_for_base_url,
+        validate_provider_request_required,
     };
 
     /// Provider request validation preserves invalid-argument diagnostics for
@@ -410,6 +528,37 @@ mod request_assembly_tests {
             error.provider_failure_json(),
             Some(r#"{"status_code":500}"#)
         );
+    }
+
+    /// OpenAI endpoint derivation preserves canonical defaults, normalizes
+    /// configured base URLs, and converts between Responses and Models paths.
+    #[test]
+    fn openai_endpoint_derivation_normalizes_compatible_urls() {
+        assert_eq!(
+            openai_responses_endpoint_for_base_url("https://api.openai.com/v1/").unwrap(),
+            OPENAI_RESPONSES_ENDPOINT
+        );
+        assert_eq!(
+            openai_responses_endpoint_for_base_url(OPENAI_MODELS_ENDPOINT).unwrap(),
+            OPENAI_RESPONSES_ENDPOINT
+        );
+        assert_eq!(
+            openai_models_endpoint_for_responses_endpoint("https://example.test/v1/responses")
+                .unwrap(),
+            "https://example.test/v1/models"
+        );
+    }
+
+    /// ChatGPT browser endpoints and empty inputs fail with stable categories
+    /// because they do not expose the direct OpenAI catalog/base-URL surface.
+    #[test]
+    fn openai_endpoint_derivation_rejects_incompatible_inputs() {
+        let empty = openai_responses_endpoint_for_base_url(" \t ").unwrap_err();
+        assert_eq!(empty.kind(), ProviderEndpointErrorKind::InvalidArgs);
+        let chatgpt =
+            openai_models_endpoint_for_responses_endpoint(CHATGPT_RESPONSES_ENDPOINT).unwrap_err();
+        assert_eq!(chatgpt.kind(), ProviderEndpointErrorKind::InvalidState);
+        assert!(chatgpt.message().contains("ChatGPT browser credentials"));
     }
 }
 

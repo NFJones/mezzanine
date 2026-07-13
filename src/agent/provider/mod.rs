@@ -72,10 +72,9 @@ pub(crate) use response::parse_openai_responses_stream_body;
 #[cfg(test)]
 use schema::{maap_mcp_call_action_schema_for_tool, normalize_openai_strict_schema};
 
-/// Default direct OpenAI Responses API endpoint used with API-key auth.
-pub const OPENAI_RESPONSES_ENDPOINT: &str = "https://api.openai.com/v1/responses";
-/// Default direct OpenAI model catalog endpoint used with API-key auth.
-pub const OPENAI_MODELS_ENDPOINT: &str = "https://api.openai.com/v1/models";
+pub use mez_agent::{
+    CHATGPT_RESPONSES_ENDPOINT, OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT,
+};
 /// Default DeepSeek Chat Completions API endpoint.
 pub const DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT: &str = "https://api.deepseek.com/chat/completions";
 /// Default DeepSeek models listing endpoint.
@@ -88,8 +87,6 @@ pub const ANTHROPIC_MESSAGES_ENDPOINT: &str = "https://api.anthropic.com/v1/mess
 pub const OPENAI_ORGANIZATION_HEADER: &str = "OpenAI-Organization";
 /// OpenAI project routing header for project-scoped API accounting.
 pub const OPENAI_PROJECT_HEADER: &str = "OpenAI-Project";
-/// Default ChatGPT browser-auth backend endpoint used with device credentials.
-pub const CHATGPT_RESPONSES_ENDPOINT: &str = "https://chatgpt.com/backend-api/codex/responses";
 /// ChatGPT account selection header required by ChatGPT-backed requests.
 pub const CHATGPT_ACCOUNT_ID_HEADER: &str = "ChatGPT-Account-ID";
 /// OpenAI function tool name used to carry one validated MAAP action batch.
