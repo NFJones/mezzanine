@@ -4,14 +4,16 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::session::approval_policy_name;
 use super::{
-    AgentLogLevel, AgentShellStore, AgentShellVisibility, McpRegistry, MezError, PermissionPolicy,
-    Result, agent_shell_help_display, agent_shell_mcp_display, agent_shell_permissions_display,
+    AgentLogLevel, AgentShellStore, AgentShellVisibility, MezError, Result,
+    agent_shell_help_display, agent_shell_mcp_display, agent_shell_permissions_display,
     agent_shell_status_display,
 };
 use crate::error::MezErrorKind;
-use mez_agent::parse_slash_command as parse_agent_slash_command;
+use mez_agent::{
+    AgentShellMcpSummary, AgentShellPermissionSummary,
+    parse_slash_command as parse_agent_slash_command,
+};
 pub use mez_agent::{
     SlashCommandEffect, SlashCommandInvocation, SlashCommandSpec, baseline_slash_commands,
 };
@@ -110,9 +112,9 @@ pub fn execute_agent_shell_command_with_mcp(
     store: &mut AgentShellStore,
     pane_id: &str,
     input: &str,
-    mcp_registry: Option<&McpRegistry>,
+    mcp_summary: Option<&AgentShellMcpSummary>,
 ) -> Result<Option<AgentShellCommandOutcome>> {
-    execute_agent_shell_command_with_runtime_context(store, pane_id, input, mcp_registry)
+    execute_agent_shell_command_with_runtime_context(store, pane_id, input, mcp_summary)
 }
 
 /// Runs the execute agent shell command with runtime context operation for this subsystem.
@@ -124,15 +126,15 @@ pub fn execute_agent_shell_command_with_runtime_context(
     store: &mut AgentShellStore,
     pane_id: &str,
     input: &str,
-    mcp_registry: Option<&McpRegistry>,
+    mcp_summary: Option<&AgentShellMcpSummary>,
 ) -> Result<Option<AgentShellCommandOutcome>> {
     execute_agent_shell_command_with_context(
         store,
         pane_id,
         input,
         AgentShellRuntimeContext {
-            mcp_registry,
-            permission_policy: None,
+            mcp_summary,
+            permission_summary: None,
         },
     )
 }
@@ -146,15 +148,15 @@ pub fn execute_agent_shell_command_with_permissions(
     store: &mut AgentShellStore,
     pane_id: &str,
     input: &str,
-    permission_policy: &PermissionPolicy,
+    permission_summary: &AgentShellPermissionSummary,
 ) -> Result<Option<AgentShellCommandOutcome>> {
     execute_agent_shell_command_with_context(
         store,
         pane_id,
         input,
         AgentShellRuntimeContext {
-            mcp_registry: None,
-            permission_policy: Some(permission_policy),
+            mcp_summary: None,
+            permission_summary: Some(permission_summary),
         },
     )
 }
@@ -169,12 +171,12 @@ pub struct AgentShellRuntimeContext<'a> {
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub mcp_registry: Option<&'a McpRegistry>,
+    pub mcp_summary: Option<&'a AgentShellMcpSummary>,
     /// Stores the permission policy value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub permission_policy: Option<&'a PermissionPolicy>,
+    pub permission_summary: Option<&'a AgentShellPermissionSummary>,
 }
 
 /// Runs the execute agent shell command with context operation for this subsystem.
@@ -322,10 +324,10 @@ fn execute_agent_shell_command_with_context_inner(
                 }
             }
         }
-        "permissions" => match context.permission_policy {
-            Some(policy) if invocation.args.is_empty() => AgentShellCommandOutcome::Display {
+        "permissions" => match context.permission_summary {
+            Some(summary) if invocation.args.is_empty() => AgentShellCommandOutcome::Display {
                 command,
-                body: agent_shell_permissions_display(policy),
+                body: agent_shell_permissions_display(*summary),
             },
             Some(_) => AgentShellCommandOutcome::RequiresRuntime {
                 command,
@@ -338,12 +340,12 @@ fn execute_agent_shell_command_with_context_inner(
                 reason: "permission inspection requires the live permission policy".to_string(),
             },
         },
-        "approval" => match context.permission_policy {
-            Some(policy) if invocation.args.is_empty() => AgentShellCommandOutcome::Display {
+        "approval" => match context.permission_summary {
+            Some(summary) if invocation.args.is_empty() => AgentShellCommandOutcome::Display {
                 command,
                 body: format!(
                     "approval_policy={} source=runtime-policy",
-                    approval_policy_name(policy.approval_policy)
+                    summary.approval_policy.as_str()
                 ),
             },
             Some(_) => AgentShellCommandOutcome::RequiresRuntime {
@@ -355,10 +357,10 @@ fn execute_agent_shell_command_with_context_inner(
                 reason: "approval mode inspection requires the live permission policy".to_string(),
             },
         },
-        "list-mcp" => match context.mcp_registry {
-            Some(registry) => AgentShellCommandOutcome::Display {
+        "list-mcp" => match context.mcp_summary {
+            Some(summary) => AgentShellCommandOutcome::Display {
                 command,
-                body: agent_shell_mcp_display(registry),
+                body: agent_shell_mcp_display(summary),
             },
             None => AgentShellCommandOutcome::RequiresRuntime {
                 command,

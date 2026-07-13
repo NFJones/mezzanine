@@ -59,9 +59,26 @@ pub enum RuleDecision {
     Allow,
 }
 
+/// Bounded permission state shown by agent-shell status commands.
+///
+/// Product command rules, path scopes, approval persistence, and enforcement
+/// remain outside the agent harness. This summary contains only the scalar
+/// values needed for user-visible permission and approval displays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentShellPermissionSummary {
+    /// Active baseline permission preset.
+    pub preset: PermissionPreset,
+    /// Active approval policy.
+    pub approval_policy: ApprovalPolicy,
+    /// Whether product policy currently bypasses fresh approval prompts.
+    pub approval_bypass: bool,
+    /// Number of configured product command rules.
+    pub command_rule_count: usize,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ApprovalPolicy, PermissionPreset, RuleDecision};
+    use super::{AgentShellPermissionSummary, ApprovalPolicy, PermissionPreset, RuleDecision};
 
     /// Verifies permission identities retain the stable names consumed by
     /// configuration, agent-shell status, and model-facing diagnostics.
@@ -88,5 +105,22 @@ mod tests {
             RuleDecision::Prompt.min(RuleDecision::Forbid),
             RuleDecision::Forbid
         );
+    }
+
+    #[test]
+    /// Verifies the shell summary carries only bounded display state rather
+    /// than product command rules, scopes, stores, or enforcement services.
+    fn agent_shell_permission_summary_preserves_display_fields() {
+        let summary = AgentShellPermissionSummary {
+            preset: PermissionPreset::Auto,
+            approval_policy: ApprovalPolicy::AutoAllow,
+            approval_bypass: true,
+            command_rule_count: 7,
+        };
+
+        assert_eq!(summary.preset.as_str(), "auto");
+        assert_eq!(summary.approval_policy.as_str(), "auto-allow");
+        assert!(summary.approval_bypass);
+        assert_eq!(summary.command_rule_count, 7);
     }
 }

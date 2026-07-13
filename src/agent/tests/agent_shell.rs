@@ -420,9 +420,10 @@ fn agent_shell_permissions_command_lists_injected_policy() {
     let mut policy = PermissionPolicy::default()
         .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
     policy.set_approval_bypass(true);
+    let summary = policy.agent_shell_summary();
 
     let display =
-        execute_agent_shell_command_with_permissions(&mut store, "%1", "/approvals", &policy)
+        execute_agent_shell_command_with_permissions(&mut store, "%1", "/approvals", &summary)
             .unwrap()
             .unwrap();
 
@@ -440,7 +441,7 @@ fn agent_shell_permissions_command_lists_injected_policy() {
         &mut store,
         "%1",
         "/permissions approval-policy ask",
-        &policy,
+        &summary,
     )
     .unwrap()
     .unwrap();

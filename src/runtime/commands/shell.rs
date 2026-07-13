@@ -234,13 +234,15 @@ impl RuntimeSessionService {
                 ));
             }
         }
+        let mcp_summary = self.mcp_registry.agent_shell_summary();
+        let permission_summary = self.permission_policy.agent_shell_summary();
         let outcome = match execute_agent_shell_command_with_context(
             &mut self.agent_shell_store,
             &pane_id,
             input,
             AgentShellRuntimeContext {
-                mcp_registry: Some(&self.mcp_registry),
-                permission_policy: Some(&self.permission_policy),
+                mcp_summary: Some(&mcp_summary),
+                permission_summary: Some(&permission_summary),
             },
         ) {
             Ok(outcome) => outcome,
@@ -788,13 +790,15 @@ impl RuntimeSessionService {
                 .await?;
         }
         self.persist_agent_prompt_history_entry(&pane_id, input, true)?;
+        let mcp_summary = self.mcp_registry.agent_shell_summary();
+        let permission_summary = self.permission_policy.agent_shell_summary();
         let outcome = match execute_agent_shell_command_with_context(
             &mut self.agent_shell_store,
             &pane_id,
             input,
             AgentShellRuntimeContext {
-                mcp_registry: Some(&self.mcp_registry),
-                permission_policy: Some(&self.permission_policy),
+                mcp_summary: Some(&mcp_summary),
+                permission_summary: Some(&permission_summary),
             },
         ) {
             Ok(outcome) => outcome,

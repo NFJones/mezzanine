@@ -11,7 +11,6 @@ use std::path::Path;
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::error::{MezError, Result};
-use crate::mcp::McpRegistry;
 use crate::permissions::{PathScopes, PermissionPolicy, SessionApprovalStore};
 use mez_agent::{McpPromptTool, RuleDecision};
 

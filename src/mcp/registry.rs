@@ -13,7 +13,10 @@ use super::types::{
     McpServerState, McpServerStatus, McpStartupPlan, McpStartupTransportPlan, McpToolCallPlan,
     McpToolCallRequest, McpToolEffects, McpToolState,
 };
-use mez_agent::{McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer};
+use mez_agent::{
+    AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellMcpToolSummary, McpPromptServer,
+    McpPromptSummary, McpPromptTool, McpPromptUnavailableServer,
+};
 
 /// Carries Mcp Registry state for this subsystem.
 ///
@@ -453,6 +456,120 @@ impl McpRegistry {
     /// on duplicated control-flow logic.
     pub fn list_servers(&self) -> Vec<&McpServerState> {
         self.servers.values().collect()
+    }
+
+    /// Projects live registry state into bounded agent-shell display records.
+    ///
+    /// Discovery, transports, credentials, approval enforcement, and execution
+    /// remain registry/runtime responsibilities and are not exposed here.
+    pub fn agent_shell_summary(&self) -> AgentShellMcpSummary {
+        let servers =
+            self.list_servers()
+                .into_iter()
+                .map(|server| {
+                    let session_blacklisted = server.status == McpServerStatus::Blacklisted;
+                    let blacklisted = session_blacklisted || server.blacklist_reason.is_some();
+                    let retryable = server.configured.enabled
+                        && matches!(
+                            server.status,
+                            McpServerStatus::Unavailable
+                                | McpServerStatus::Blacklisted
+                                | McpServerStatus::Failed
+                        );
+                    let state = if !server.configured.enabled {
+                        "disabled"
+                    } else {
+                        match server.status {
+                            McpServerStatus::Configured => "enabled",
+                            McpServerStatus::Starting => "starting",
+                            McpServerStatus::Available => "available",
+                            McpServerStatus::Unavailable => "unavailable",
+                            McpServerStatus::Blacklisted => "blacklisted",
+                            McpServerStatus::Failed => "failed",
+                        }
+                    };
+                    let status = match server.status {
+                        McpServerStatus::Configured => "configured",
+                        McpServerStatus::Starting => "starting",
+                        McpServerStatus::Available => "available",
+                        McpServerStatus::Unavailable => "unavailable",
+                        McpServerStatus::Blacklisted => "blacklisted",
+                        McpServerStatus::Failed => "failed",
+                    };
+                    let transport = match server.configured.kind {
+                        McpServerKind::Stdio => "stdio",
+                        McpServerKind::Http => "streamable-http",
+                    };
+                    let tools = server
+                        .tools
+                        .iter()
+                        .map(|tool| {
+                            let state = if !server.configured.tool_allowed_by_config(&tool.name) {
+                                "disabled"
+                            } else if tool.blacklisted {
+                                "blacklisted"
+                            } else if tool.available {
+                                "available"
+                            } else {
+                                "unavailable"
+                            };
+                            let approval = match tool.approval {
+                                McpApprovalSetting::Inherit => "inherit",
+                                McpApprovalSetting::Prompt => "prompt",
+                                McpApprovalSetting::Allow => "allow",
+                                McpApprovalSetting::Deny => "deny",
+                            };
+                            let mut effects = Vec::new();
+                            if tool.effects.reads_filesystem {
+                                effects.push("read-fs");
+                            }
+                            if tool.effects.mutates_filesystem {
+                                effects.push("mutate-fs");
+                            }
+                            if tool.effects.executes_processes {
+                                effects.push("execute-process");
+                            }
+                            if tool.effects.accesses_credentials {
+                                effects.push("credential-access");
+                            }
+                            if tool.effects.uses_network {
+                                effects.push("network");
+                            }
+                            if tool.effects.has_side_effects {
+                                effects.push("side-effects");
+                            }
+                            AgentShellMcpToolSummary {
+                                name: tool.name.clone(),
+                                state: state.to_string(),
+                                approval: approval.to_string(),
+                                permission_required: tool.permission_required,
+                                effects: if effects.is_empty() {
+                                    "none".to_string()
+                                } else {
+                                    effects.join(",")
+                                },
+                                description: tool.description.clone(),
+                            }
+                        })
+                        .collect();
+                    AgentShellMcpServerSummary {
+                        server_id: server.configured.id.clone(),
+                        display_name: server.configured.name.clone(),
+                        state: state.to_string(),
+                        status: status.to_string(),
+                        enabled: server.configured.enabled,
+                        transport: transport.to_string(),
+                        blacklisted,
+                        session_blacklisted,
+                        retryable,
+                        reason: server.blacklist_reason.clone().or_else(|| {
+                            (!server.configured.enabled).then(|| "disabled".to_string())
+                        }),
+                        tools,
+                    }
+                })
+                .collect();
+        AgentShellMcpSummary { servers }
     }
 
     /// Runs the server operation for this subsystem.

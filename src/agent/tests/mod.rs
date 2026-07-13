@@ -129,7 +129,8 @@ fn agent_shell_test_mcp_tool(name: &str) -> crate::mcp::McpToolState {
 fn agent_shell_test_mcp_body(registry: &McpRegistry) -> String {
     let mut store = AgentShellStore::default();
     store.enter_or_resume("%1").unwrap();
-    match execute_agent_shell_command_with_mcp(&mut store, "%1", "/list-mcp", Some(registry))
+    let summary = registry.agent_shell_summary();
+    match execute_agent_shell_command_with_mcp(&mut store, "%1", "/list-mcp", Some(&summary))
         .unwrap()
         .unwrap()
     {

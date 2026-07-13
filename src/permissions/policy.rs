@@ -337,6 +337,19 @@ impl PermissionPolicy {
         self.approval_bypass
     }
 
+    /// Projects the live product policy into bounded agent-shell display state.
+    ///
+    /// Command rules, path scopes, approval persistence, and enforcement stay
+    /// owned by Mezzanine; the agent shell receives only user-visible scalars.
+    pub fn agent_shell_summary(&self) -> mez_agent::AgentShellPermissionSummary {
+        mez_agent::AgentShellPermissionSummary {
+            preset: self.preset,
+            approval_policy: self.approval_policy,
+            approval_bypass: self.approval_bypass(),
+            command_rule_count: self.rules().len(),
+        }
+    }
+
     /// Runs the evaluate shell command operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

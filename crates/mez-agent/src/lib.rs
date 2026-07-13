@@ -53,11 +53,14 @@ pub use http::{
     ProviderHttpResponse,
 };
 pub use mcp::{
+    AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellMcpToolSummary,
     McpExecutionRequest, McpExecutionResponse, McpPromptServer, McpPromptSummary, McpPromptTool,
     McpPromptUnavailableServer,
 };
 pub use memory::{MemoryContextRecord, MemoryContextScope};
-pub use permissions::{ApprovalPolicy, PermissionPreset, RuleDecision};
+pub use permissions::{
+    AgentShellPermissionSummary, ApprovalPolicy, PermissionPreset, RuleDecision,
+};
 pub use prompt::{AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptProfile};
 pub use provider::{
     ANTHROPIC_MESSAGES_API, CLAUDE_CODE_API, DEEPSEEK_CHAT_COMPLETIONS_API,

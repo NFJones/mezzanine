@@ -1076,13 +1076,15 @@ impl RuntimeSessionService {
                 "a macro step is already in flight for this subagent; wait for it to complete before sending the next step",
             )?));
         }
+        let mcp_summary = self.mcp_registry.agent_shell_summary();
+        let permission_summary = self.permission_policy.agent_shell_summary();
         let parsed_command = execute_agent_shell_command_with_context(
             &mut self.agent_shell_store,
             child_pane_id,
             payload,
             AgentShellRuntimeContext {
-                mcp_registry: Some(&self.mcp_registry),
-                permission_policy: Some(&self.permission_policy),
+                mcp_summary: Some(&mcp_summary),
+                permission_summary: Some(&permission_summary),
             },
         );
         if matches!(

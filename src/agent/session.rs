@@ -4,14 +4,8 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::{
-    BTreeMap, McpRegistry, MezError, PermissionPolicy, Result, baseline_slash_commands,
-    validate_non_empty,
-};
-use crate::mcp::{
-    McpApprovalSetting, McpServerKind, McpServerState, McpServerStatus, McpToolEffects,
-    McpToolState,
-};
+use super::{BTreeMap, MezError, Result, baseline_slash_commands, validate_non_empty};
+use mez_agent::{AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellPermissionSummary};
 
 // Agent shell sessions, stores, and shell display helpers.
 
@@ -894,13 +888,13 @@ pub(super) fn agent_shell_status_display(session: &AgentShellSession) -> String 
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn agent_shell_permissions_display(policy: &PermissionPolicy) -> String {
+pub(super) fn agent_shell_permissions_display(summary: AgentShellPermissionSummary) -> String {
     format!(
         "preset={} approval_policy={} bypass={} command_rules={} source=runtime-policy",
-        permission_preset_name(policy.preset),
-        approval_policy_name(policy.approval_policy),
-        policy.approval_bypass(),
-        policy.rules().len()
+        permission_preset_name(summary.preset),
+        approval_policy_name(summary.approval_policy),
+        summary.approval_bypass,
+        summary.command_rule_count
     )
 }
 
@@ -927,23 +921,23 @@ pub(super) fn approval_policy_name(policy: mez_agent::ApprovalPolicy) -> &'stati
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn agent_shell_mcp_display(registry: &McpRegistry) -> String {
-    let server_states = registry.list_servers();
-    let tools = server_states
+pub(super) fn agent_shell_mcp_display(summary: &AgentShellMcpSummary) -> String {
+    let tools = summary
+        .servers
         .iter()
         .map(|server| server.tools.len())
         .sum::<usize>();
     let mut lines = Vec::new();
     lines.push("## MCP Servers".to_string());
     lines.push(String::new());
-    lines.push(format!("Servers: {}", server_states.len()));
+    lines.push(format!("Servers: {}", summary.servers.len()));
     lines.push(format!("Tools: {tools}"));
     lines.push("Source: runtime-mcp".to_string());
-    if server_states.is_empty() {
+    if summary.servers.is_empty() {
         lines.push(String::new());
         lines.push("No MCP servers are configured.".to_string());
     } else {
-        for server in server_states {
+        for server in &summary.servers {
             lines.push(String::new());
             agent_shell_mcp_server_lines(server, &mut lines);
         }
@@ -952,44 +946,33 @@ pub(super) fn agent_shell_mcp_display(registry: &McpRegistry) -> String {
 }
 
 /// Appends one MCP server as human-readable `/list-mcp` display lines.
-fn agent_shell_mcp_server_lines(server: &McpServerState, lines: &mut Vec<String>) {
-    let status = agent_shell_mcp_server_status_name(server.status);
-    let state = agent_shell_mcp_server_state_name(server);
-    let session_blacklisted = server.status == McpServerStatus::Blacklisted;
-    let blacklisted = session_blacklisted || server.blacklist_reason.is_some();
-    let retryable = server.configured.enabled
-        && matches!(
-            server.status,
-            McpServerStatus::Unavailable | McpServerStatus::Blacklisted | McpServerStatus::Failed
-        );
+fn agent_shell_mcp_server_lines(server: &AgentShellMcpServerSummary, lines: &mut Vec<String>) {
     lines.push(format!(
         "### `{}` - {}",
-        server.configured.id,
-        agent_shell_mcp_display_text(&server.configured.name)
+        server.server_id,
+        agent_shell_mcp_display_text(&server.display_name)
     ));
-    lines.push(format!("- State: {state}"));
-    lines.push(format!("- Status: {status}"));
-    lines.push(format!("- Enabled: {}", server.configured.enabled));
+    lines.push(format!("- State: {}", server.state));
+    lines.push(format!("- Status: {}", server.status));
+    lines.push(format!("- Enabled: {}", server.enabled));
+    lines.push(format!("- Transport: {}", server.transport));
+    lines.push(format!("- Blacklisted: {}", server.blacklisted));
     lines.push(format!(
-        "- Transport: {}",
-        agent_shell_mcp_server_kind_name(server.configured.kind)
+        "- Session blacklisted: {}",
+        server.session_blacklisted
     ));
-    lines.push(format!("- Blacklisted: {blacklisted}"));
-    lines.push(format!("- Session blacklisted: {session_blacklisted}"));
-    lines.push(format!("- Retryable: {retryable}"));
-    if let Some(reason) = server.blacklist_reason.as_deref() {
+    lines.push(format!("- Retryable: {}", server.retryable));
+    if let Some(reason) = server.reason.as_deref() {
         lines.push(format!(
             "- Reason: {}",
             agent_shell_mcp_display_text(reason)
         ));
-    } else if !server.configured.enabled {
-        lines.push("- Reason: disabled".to_string());
     }
     agent_shell_mcp_tool_lines(server, lines);
 }
 
 /// Appends one MCP server's tools as readable `/list-mcp` display lines.
-fn agent_shell_mcp_tool_lines(server: &McpServerState, lines: &mut Vec<String>) {
+fn agent_shell_mcp_tool_lines(server: &AgentShellMcpServerSummary, lines: &mut Vec<String>) {
     if server.tools.is_empty() {
         lines.push("- Tools: none".to_string());
         return;
@@ -1001,10 +984,10 @@ fn agent_shell_mcp_tool_lines(server: &McpServerState, lines: &mut Vec<String>) 
         lines.push(format!(
             "| `{}` | {} | {} | {} | {} | {} |",
             tool.name,
-            agent_shell_mcp_tool_state_name(server, tool),
-            agent_shell_mcp_approval_name(tool.approval),
+            tool.state,
+            tool.approval,
             tool.permission_required,
-            agent_shell_mcp_effects_summary(tool.effects),
+            tool.effects,
             agent_shell_mcp_display_text(&tool.description)
         ));
     }
@@ -1013,92 +996,6 @@ fn agent_shell_mcp_tool_lines(server: &McpServerState, lines: &mut Vec<String>) 
 /// Normalizes free-form MCP display text for single-line markdown output.
 fn agent_shell_mcp_display_text(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// Returns the normalized MCP transport kind name used in command output.
-fn agent_shell_mcp_server_kind_name(kind: McpServerKind) -> &'static str {
-    match kind {
-        McpServerKind::Stdio => "stdio",
-        McpServerKind::Http => "streamable-http",
-    }
-}
-
-/// Returns the user-facing MCP server state, with disabled config taking precedence.
-fn agent_shell_mcp_server_state_name(server: &McpServerState) -> &'static str {
-    if !server.configured.enabled {
-        return "disabled";
-    }
-    match server.status {
-        McpServerStatus::Configured => "enabled",
-        McpServerStatus::Starting => "starting",
-        McpServerStatus::Available => "available",
-        McpServerStatus::Unavailable => "unavailable",
-        McpServerStatus::Blacklisted => "blacklisted",
-        McpServerStatus::Failed => "failed",
-    }
-}
-
-/// Returns the normalized MCP status name used in command output.
-fn agent_shell_mcp_server_status_name(status: McpServerStatus) -> &'static str {
-    match status {
-        McpServerStatus::Configured => "configured",
-        McpServerStatus::Starting => "starting",
-        McpServerStatus::Available => "available",
-        McpServerStatus::Unavailable => "unavailable",
-        McpServerStatus::Blacklisted => "blacklisted",
-        McpServerStatus::Failed => "failed",
-    }
-}
-
-/// Returns the effective MCP tool state, with configured disables before runtime state.
-fn agent_shell_mcp_tool_state_name(server: &McpServerState, tool: &McpToolState) -> &'static str {
-    if !server.configured.tool_allowed_by_config(&tool.name) {
-        "disabled"
-    } else if tool.blacklisted {
-        "blacklisted"
-    } else if tool.available {
-        "available"
-    } else {
-        "unavailable"
-    }
-}
-
-/// Returns the normalized MCP approval setting name used in command output.
-fn agent_shell_mcp_approval_name(approval: McpApprovalSetting) -> &'static str {
-    match approval {
-        McpApprovalSetting::Inherit => "inherit",
-        McpApprovalSetting::Prompt => "prompt",
-        McpApprovalSetting::Allow => "allow",
-        McpApprovalSetting::Deny => "deny",
-    }
-}
-
-/// Summarizes MCP tool effects as a compact comma-separated command field.
-fn agent_shell_mcp_effects_summary(effects: McpToolEffects) -> String {
-    let mut names = Vec::new();
-    if effects.reads_filesystem {
-        names.push("read-fs");
-    }
-    if effects.mutates_filesystem {
-        names.push("mutate-fs");
-    }
-    if effects.executes_processes {
-        names.push("execute-process");
-    }
-    if effects.accesses_credentials {
-        names.push("credential-access");
-    }
-    if effects.uses_network {
-        names.push("network");
-    }
-    if effects.has_side_effects {
-        names.push("side-effects");
-    }
-    if names.is_empty() {
-        "none".to_string()
-    } else {
-        names.join(",")
-    }
 }
 
 /// Runs the agent shell visibility name operation for this subsystem.

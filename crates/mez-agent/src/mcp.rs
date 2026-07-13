@@ -87,9 +87,66 @@ pub struct McpExecutionResponse {
     pub is_error: bool,
 }
 
+/// Bounded live MCP state shown by the agent shell.
+///
+/// Product discovery, configuration, credentials, approval enforcement,
+/// transport ownership, and execution remain outside the agent harness.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentShellMcpSummary {
+    /// Configured servers in deterministic product-registry order.
+    pub servers: Vec<AgentShellMcpServerSummary>,
+}
+
+/// User-visible state for one configured MCP server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentShellMcpServerSummary {
+    /// Stable configured server identifier.
+    pub server_id: String,
+    /// Human-readable configured server name.
+    pub display_name: String,
+    /// Effective state after applying configuration and runtime status.
+    pub state: String,
+    /// Raw normalized runtime status.
+    pub status: String,
+    /// Whether the server is enabled by configuration.
+    pub enabled: bool,
+    /// Normalized transport name.
+    pub transport: String,
+    /// Whether configuration or runtime state marks the server unavailable.
+    pub blacklisted: bool,
+    /// Whether runtime state blacklisted the server for this session.
+    pub session_blacklisted: bool,
+    /// Whether retrying startup may restore availability.
+    pub retryable: bool,
+    /// Optional model-safe unavailability reason.
+    pub reason: Option<String>,
+    /// Tools discovered for this server.
+    pub tools: Vec<AgentShellMcpToolSummary>,
+}
+
+/// User-visible state for one discovered MCP tool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentShellMcpToolSummary {
+    /// Tool name advertised by the server.
+    pub name: String,
+    /// Effective availability state after configuration and runtime policy.
+    pub state: String,
+    /// Normalized approval setting.
+    pub approval: String,
+    /// Whether product policy requires permission enforcement.
+    pub permission_required: bool,
+    /// Compact comma-separated external-effect summary.
+    pub effects: String,
+    /// Model-safe tool description.
+    pub description: String,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{McpExecutionRequest, McpExecutionResponse};
+    use super::{
+        AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellMcpToolSummary,
+        McpExecutionRequest, McpExecutionResponse,
+    };
 
     #[test]
     /// Verifies MCP execution contracts preserve only the approved request and
@@ -114,5 +171,36 @@ mod tests {
             Some(r#"{"bytes":2}"#)
         );
         assert!(!response.is_error);
+    }
+
+    #[test]
+    /// Verifies agent-shell MCP summaries preserve bounded display fields
+    /// without exposing registry, transport, credential, or approval owners.
+    fn agent_shell_mcp_summary_preserves_display_fields() {
+        let summary = AgentShellMcpSummary {
+            servers: vec![AgentShellMcpServerSummary {
+                server_id: "filesystem".to_string(),
+                display_name: "Filesystem".to_string(),
+                state: "available".to_string(),
+                status: "available".to_string(),
+                enabled: true,
+                transport: "stdio".to_string(),
+                blacklisted: false,
+                session_blacklisted: false,
+                retryable: false,
+                reason: None,
+                tools: vec![AgentShellMcpToolSummary {
+                    name: "read_file".to_string(),
+                    state: "available".to_string(),
+                    approval: "inherit".to_string(),
+                    permission_required: true,
+                    effects: "read-fs".to_string(),
+                    description: "Read a file".to_string(),
+                }],
+            }],
+        };
+
+        assert_eq!(summary.servers[0].server_id, "filesystem");
+        assert_eq!(summary.servers[0].tools[0].effects, "read-fs");
     }
 }
