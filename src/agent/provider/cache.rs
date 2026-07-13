@@ -9,208 +9,21 @@ use super::openai_request::openai_responses_request_control_shape_with_stream;
 use super::schema::openai_maap_action_batch_tools;
 use crate::agent::{
     ContextSourceKind, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest,
-    ProviderTranscriptEvent,
 };
 use mez_agent::{
-    OpenAiPromptCacheDiagnostics, ProviderRequestAssemblyError, ProviderRequestAssemblyResult,
-    openai_auto_sizing_response_format, openai_current_action_result_entry_text,
-    openai_current_user_prompt_entry_text, openai_executed_result_entry_text,
-    openai_historical_action_result_entry_text, openai_historical_user_prompt_entry_text,
+    OpenAiPromptCacheDiagnostics, OpenAiRenderedMessages, ProviderRequestAssemblyError,
+    ProviderRequestAssemblyResult, openai_auto_sizing_response_format,
     openai_macro_judge_response_format, openai_prompt_cache_key as provider_prompt_cache_key,
-    validate_provider_request_required,
+    openai_render_messages, validate_provider_request_required,
 };
 use sha2::Digest;
-
-/// Prefix used by local provider-context compaction summaries.
-const OPENAI_CONTEXT_COMPACTED_PREFIX: &str = "[context compacted]";
-
-/// Provider-specific rendering of Mezzanine model messages for OpenAI Responses.
-#[derive(Debug, Clone)]
-pub(super) struct OpenAiRenderedMessages {
-    /// Joined Responses `instructions` value.
-    pub(super) instructions: String,
-    /// Responses `input` messages.
-    pub(super) input: Vec<serde_json::Value>,
-    /// Input messages included in the stable reusable prefix.
-    stable_input: Vec<serde_json::Value>,
-    /// Input messages that belong to the volatile suffix.
-    volatile_input: Vec<serde_json::Value>,
-}
 
 /// Renders request messages and captures canonical stable-prefix material.
 pub(super) fn openai_render_request_messages(
     request: &ModelRequest,
 ) -> ProviderRequestAssemblyResult<OpenAiRenderedMessages> {
-    let mut instructions = Vec::new();
-    let mut input = Vec::new();
-    let mut stable_input = Vec::new();
-    let mut volatile_input = Vec::new();
-    let mut stable_input_open = true;
-    for message in &request.messages {
-        if ProviderTranscriptEvent::from_transcript_content(&message.content).is_some() {
-            continue;
-        }
-        if openai_message_belongs_in_instructions(message) {
-            instructions.push(message.content.clone());
-            continue;
-        }
-
-        openai_push_input_message(
-            message,
-            &mut input,
-            &mut stable_input,
-            &mut volatile_input,
-            &mut stable_input_open,
-        );
-    }
-    if let Some(message) = openai_allowed_action_surface_message(request) {
-        openai_push_input_message(
-            &message,
-            &mut input,
-            &mut stable_input,
-            &mut volatile_input,
-            &mut stable_input_open,
-        );
-    }
-    if input.is_empty() {
-        return Err(ProviderRequestAssemblyError::invalid_args(
-            "OpenAI Responses request requires at least one user or tool input message",
-        ));
-    }
-    let instructions = instructions.join("\n\n");
-    Ok(OpenAiRenderedMessages {
-        instructions,
-        input,
-        stable_input,
-        volatile_input,
-    })
-}
-
-/// Adds one rendered input message to both provider input and cache diagnostics.
-fn openai_push_input_message(
-    message: &ModelMessage,
-    input: &mut Vec<serde_json::Value>,
-    stable_input: &mut Vec<serde_json::Value>,
-    volatile_input: &mut Vec<serde_json::Value>,
-    stable_input_open: &mut bool,
-) {
-    let value = openai_input_message_value(message);
-    if *stable_input_open && openai_message_stable_prefix_eligible(message) {
-        stable_input.push(value.clone());
-    } else {
-        *stable_input_open = false;
-        volatile_input.push(value.clone());
-    }
-    input.push(value);
-}
-
-/// Returns true when a message should be rendered into OpenAI `instructions`.
-fn openai_message_belongs_in_instructions(message: &ModelMessage) -> bool {
-    message.role == ModelMessageRole::System
-}
-
-/// Renders one non-instruction message into OpenAI Responses input shape.
-fn openai_input_message_value(message: &ModelMessage) -> serde_json::Value {
-    match message.role {
-        ModelMessageRole::Assistant => serde_json::json!({
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "output_text",
-                    "text": message.content
-                }
-            ]
-        }),
-        ModelMessageRole::Developer => serde_json::json!({
-            "role": "developer",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": message.content
-                }
-            ]
-        }),
-        ModelMessageRole::System => serde_json::json!({
-            "role": "system",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": message.content
-                }
-            ]
-        }),
-        ModelMessageRole::User => serde_json::json!({
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": openai_user_input_text(message)
-                }
-            ]
-        }),
-        ModelMessageRole::Tool => serde_json::json!({
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": openai_tool_result_input_text(message)
-                }
-            ]
-        }),
-    }
-}
-
-/// Renders user-role input with explicit current-turn or historical provenance.
-fn openai_user_input_text(message: &ModelMessage) -> String {
-    match message.source {
-        ContextSourceKind::Transcript | ContextSourceKind::TranscriptUser => {
-            openai_historical_user_prompt_entry_text(&message.content)
-        }
-        ContextSourceKind::UserInstruction => {
-            openai_current_user_prompt_entry_text(&message.content)
-        }
-        _ => message.content.clone(),
-    }
-}
-
-/// Renders Mezzanine tool/action evidence through an OpenAI-supported message
-/// role with explicit current-turn or historical provenance.
-fn openai_tool_result_input_text(message: &ModelMessage) -> String {
-    match message.source {
-        ContextSourceKind::ActionResult => {
-            openai_current_action_result_entry_text(&message.content)
-        }
-        ContextSourceKind::TranscriptTool => {
-            openai_historical_action_result_entry_text(&message.content)
-        }
-        _ => openai_executed_result_entry_text(&message.content),
-    }
-}
-
-/// Returns whether a rendered input message belongs in the reusable prefix.
-fn openai_message_stable_prefix_eligible(message: &ModelMessage) -> bool {
-    if openai_message_is_volatile_controller_state(message) {
-        return false;
-    }
-    match message.source {
-        ContextSourceKind::System
-        | ContextSourceKind::DeveloperInstruction
-        | ContextSourceKind::Configuration
-        | ContextSourceKind::ProjectGuidance
-        | ContextSourceKind::Memory
-        | ContextSourceKind::Transcript
-        | ContextSourceKind::TranscriptUser
-        | ContextSourceKind::TranscriptAssistant
-        | ContextSourceKind::TranscriptTool
-        | ContextSourceKind::CommittedEvidence => true,
-        ContextSourceKind::Policy => !message.content.starts_with("[scheduler state]\n"),
-        ContextSourceKind::UserInstruction
-        | ContextSourceKind::SkillInstruction
-        | ContextSourceKind::LocalMessage
-        | ContextSourceKind::RuntimeHint
-        | ContextSourceKind::EvidenceLedger
-        | ContextSourceKind::ActionResult => false,
-    }
+    let appended_message = openai_allowed_action_surface_message(request);
+    openai_render_messages(&request.messages, appended_message.as_ref())
 }
 
 /// Builds the late controller instruction that makes the current executable
@@ -233,31 +46,6 @@ fn openai_allowed_action_surface_message(request: &ModelRequest) -> Option<Model
             OPENAI_MAAP_FUNCTION_TOOL_NAME,
         ),
     })
-}
-
-/// Returns true for late controller state that should never enter the stable prefix.
-fn openai_message_is_volatile_controller_state(message: &ModelMessage) -> bool {
-    if openai_message_is_volatile_configuration_state(message) {
-        return true;
-    }
-    let content = message.content.trim_start();
-    content.starts_with("[capability ")
-        || content.starts_with("[capability decisions]")
-        || content.starts_with("[controller failure summary]")
-        || content.starts_with(OPENAI_CONTEXT_COMPACTED_PREFIX)
-}
-
-/// Returns true when a rendered configuration message carries volatile runtime
-/// identity that context ordering already excludes from the reusable prefix.
-fn openai_message_is_volatile_configuration_state(message: &ModelMessage) -> bool {
-    if message.source != ContextSourceKind::Configuration {
-        return false;
-    }
-    let content = message.content.trim_start();
-    content.starts_with("[session identity]")
-        || content.starts_with("[pane identity]")
-        || content.starts_with("[provider output-limit retry guidance]")
-        || content.starts_with("[environment signature for pane ")
 }
 
 /// Returns the OpenAI response-format field for special request modes.
@@ -406,7 +194,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::AllowedActionSet;
+    use crate::agent::{AllowedActionSet, ProviderTranscriptEvent};
 
     /// Verifies OpenAI request rendering ignores hidden provider-native
     /// transcript events.
