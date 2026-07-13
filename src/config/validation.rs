@@ -15,7 +15,7 @@ use super::{
     validate_known_schema_path, validate_mcp_server_path, validate_permission_value,
     validate_permissions_path, write_private_config_file, write_private_config_file_async,
 };
-use crate::terminal::{parse_hex_color, valid_color_alias_name};
+use mez_mux::theme::{parse_hex_color, valid_color_alias_name};
 
 // Config file and text validation entry points.
 

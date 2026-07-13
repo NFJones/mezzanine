@@ -11,7 +11,7 @@ use super::{
     plan_config_mutation, positional_args, validate_command_identifier,
 };
 use crate::config::parse_config_json_value;
-use crate::terminal::{
+use mez_mux::theme::{
     UI_COLOR_SLOT_NAMES, UiThemeDefinition, builtin_ui_theme_definition, resolve_ui_theme,
 };
 use serde_json::Value;

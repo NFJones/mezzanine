@@ -17,7 +17,7 @@ use super::super::{
 use super::{
     TERMINAL_COMMAND_LIVE_OVERRIDE_LAYER, runtime_expand_user_path, runtime_positional_args,
 };
-use crate::terminal::{BUILTIN_UI_THEME_NAMES, UI_COLOR_SLOT_NAMES};
+use mez_mux::theme::{BUILTIN_UI_THEME_NAMES, UI_COLOR_SLOT_NAMES};
 use std::collections::BTreeMap;
 
 /// Runs the runtime show options command operation for this subsystem.

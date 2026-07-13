@@ -666,14 +666,14 @@ pub(super) fn list_baseline_commands() -> String {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn list_default_themes() -> String {
-    let mut lines = vec![crate::terminal::ui_theme_list_table_header()];
-    lines.extend(crate::terminal::BUILTIN_UI_THEME_NAMES.iter().map(|theme| {
-        let definition = crate::terminal::builtin_ui_theme_definition(theme)
+    let mut lines = vec![mez_mux::theme::ui_theme_list_table_header()];
+    lines.extend(mez_mux::theme::BUILTIN_UI_THEME_NAMES.iter().map(|theme| {
+        let definition = mez_mux::theme::builtin_ui_theme_definition(theme)
             .expect("built-in theme names must resolve to definitions for list-themes output");
-        crate::terminal::ui_theme_list_table_row(
+        mez_mux::theme::ui_theme_list_table_row(
             theme,
             "builtin",
-            *theme == crate::terminal::DEFAULT_UI_THEME_NAME,
+            *theme == mez_mux::theme::DEFAULT_UI_THEME_NAME,
             &definition,
         )
     }));

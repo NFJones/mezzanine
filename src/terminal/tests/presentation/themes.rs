@@ -4,9 +4,9 @@ use crate::terminal::render::agent_prompt_input_rendition;
 use crate::terminal::tests::fixtures::{
     test_contrast_ratio, test_relative_luminance, test_rgb_channels,
 };
-use crate::terminal::{
-    BTreeMap, BUILTIN_UI_THEME_NAMES, UiColorPair, UiTheme, builtin_ui_theme_definition,
-    parse_hex_color, resolve_ui_theme,
+use crate::terminal::{BTreeMap, UiColorPair, UiTheme};
+use mez_mux::theme::{
+    BUILTIN_UI_THEME_NAMES, builtin_ui_theme_definition, parse_hex_color, resolve_ui_theme,
 };
 use mez_terminal::TerminalColor;
 use std::collections::BTreeSet;

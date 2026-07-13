@@ -904,7 +904,7 @@ fn mezzanine_argument_candidates(command: &str) -> Vec<SelectorCandidate> {
             candidates.extend(flag_candidates(&["--name"]));
         }
         "set-theme" => {
-            candidates.extend(value_candidates(crate::terminal::BUILTIN_UI_THEME_NAMES));
+            candidates.extend(value_candidates(mez_mux::theme::BUILTIN_UI_THEME_NAMES));
         }
         "agent-shell" => {
             candidates.extend(value_candidates(&["show", "hide", "toggle"]));

@@ -12,9 +12,9 @@ use crate::config::{
     CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_VALUE_DESCRIPTION, CURRENT_CONFIG_SCHEMA_VERSION,
     config_change_setting_path_annotations_markdown, config_change_setting_path_description,
 };
-use crate::terminal::UI_COLOR_SLOT_NAMES;
 use crate::{MezError, MezErrorKind, Result};
 use include_dir::{Dir, include_dir};
+use mez_mux::theme::UI_COLOR_SLOT_NAMES;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs;

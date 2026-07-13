@@ -106,9 +106,9 @@ pub use keys::{
     TERMINFO_FALLBACK_ORDER,
 };
 pub(crate) use mez_mux::theme::{
-    BUILTIN_UI_THEME_NAMES, DEFAULT_UI_THEME_NAME, UI_COLOR_SLOT_NAMES, UiColorPair, UiTheme,
-    UiThemeDefinition, builtin_ui_theme_definition, parse_hex_color, resolve_ui_theme,
-    ui_theme_list_table_header, ui_theme_list_table_row, valid_color_alias_name,
+    DEFAULT_UI_THEME_NAME, UiColorPair, UiTheme, UiThemeDefinition, builtin_ui_theme_definition,
+    parse_hex_color, resolve_ui_theme, ui_theme_list_table_header, ui_theme_list_table_row,
+    valid_color_alias_name,
 };
 #[cfg(test)]
 pub(crate) use mez_mux::theme::{deepforest_ui_theme, default_ui_theme};

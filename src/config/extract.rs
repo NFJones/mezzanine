@@ -13,7 +13,7 @@ use super::{
     SHELL_KEYS, SNAPSHOT_KEYS, SUBAGENT_PROFILE_KEYS, TERMINAL_KEYS, THEME_KEYS, WINDOW_FRAME_KEYS,
     exact_command_sha256, normalize_exact_command_text, parse_config_json_value_best_effort,
 };
-use crate::terminal::{UI_COLOR_SLOT_NAMES, valid_color_alias_name};
+use mez_mux::theme::{UI_COLOR_SLOT_NAMES, valid_color_alias_name};
 
 // Config path/value extraction and command-rule example validation.
 

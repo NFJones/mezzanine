@@ -3,13 +3,14 @@
 use crate::ids::IdFactory;
 use crate::terminal::tests::fixtures::display_column_for_fragment;
 use crate::terminal::{
-    BTreeMap, BUILTIN_UI_THEME_NAMES, ClientViewRole, DEFAULT_PANE_FRAME_TEMPLATE, PaneRenderInput,
-    Size, TerminalClientLoopConfig, TerminalFrameContext, TerminalFrameRenderOptions,
-    TerminalPaneFrameContext, Window, builtin_ui_theme_definition, render_attached_client_view,
-    render_window_with_pane_frame_template, resolve_ui_theme,
+    BTreeMap, ClientViewRole, DEFAULT_PANE_FRAME_TEMPLATE, PaneRenderInput, Size,
+    TerminalClientLoopConfig, TerminalFrameContext, TerminalFrameRenderOptions,
+    TerminalPaneFrameContext, Window, render_attached_client_view,
+    render_window_with_pane_frame_template,
 };
 use mez_mux::layout::SplitDirection;
 use mez_mux::presentation::TerminalFramePosition;
+use mez_mux::theme::{BUILTIN_UI_THEME_NAMES, builtin_ui_theme_definition, resolve_ui_theme};
 use mez_terminal::TerminalColor;
 
 /// Verifies that the built-in pane frame shows agent model, reasoning, and
