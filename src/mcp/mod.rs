@@ -80,6 +80,27 @@ pub use types::{
     McpToolEffects, McpToolListPagination, McpToolState, McpToolsListResponse,
 };
 
+impl From<&McpToolCallPlan> for mez_agent::McpExecutionRequest {
+    fn from(plan: &McpToolCallPlan) -> Self {
+        Self {
+            server_id: plan.server_id.clone(),
+            tool_name: plan.tool_name.clone(),
+            arguments_json: plan.arguments_json.clone(),
+            timeout_ms: plan.timeout_ms,
+        }
+    }
+}
+
+impl From<McpToolCallResponse> for mez_agent::McpExecutionResponse {
+    fn from(response: McpToolCallResponse) -> Self {
+        Self {
+            content_json: response.content_json,
+            structured_content_json: response.structured_content_json,
+            is_error: response.is_error,
+        }
+    }
+}
+
 #[cfg(test)]
 use stdio::read_bounded_protocol_line;
 

@@ -17,7 +17,7 @@ use super::super::{
 #[cfg(test)]
 use super::super::{ActionStatus, local_action_plan};
 #[cfg(test)]
-use super::super::{MarkerToken, McpToolCallPlan, Path};
+use super::super::{MarkerToken, McpExecutionRequest, Path};
 #[cfg(test)]
 use super::execution::{
     LocalActionExecutor, McpActionExecutor, PaneShellExecutor, PaneShellLocalExecutor,
@@ -714,7 +714,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
         mut plan_for_action: F,
     ) -> Result<AgentTurnExecution>
     where
-        F: FnMut(&AgentAction) -> Result<McpToolCallPlan>,
+        F: FnMut(&AgentAction) -> Result<McpExecutionRequest>,
     {
         let mut execution = self.run_turn(ledger, turn.clone(), context)?;
         if execution.terminal_state != AgentTurnState::Running {

@@ -441,7 +441,7 @@ fn turn_runner_executes_accepted_mcp_actions() {
     };
     let mut executor = FakeMcpActionExecutor {
         plans: Vec::new(),
-        response: McpToolCallResponse {
+        response: McpExecutionResponse {
             content_json: r#"[{"type":"text","text":"ok"}]"#.to_string(),
             structured_content_json: None,
             is_error: false,

@@ -12,7 +12,7 @@ use secrecy::{ExposeSecret, SecretString};
 
 use crate::auth::AuthStore;
 use crate::error::{MezError, Result};
-use crate::mcp::{McpRegistry, McpToolCallPlan, McpToolCallResponse};
+use crate::mcp::McpRegistry;
 use crate::permissions::{PathScopes, PermissionPolicy, SessionApprovalStore};
 use mez_agent::{McpPromptTool, RuleDecision};
 
@@ -120,8 +120,9 @@ pub use maap::{
     parse_maap_action_batch_json_for_turn,
 };
 pub use mez_agent::{
-    AgentTranscriptEntry, AgentTranscriptRole, PROVIDER_TRANSCRIPT_EVENT_MARKER,
-    ProviderTranscriptEvent, TranscriptContractError, TranscriptPersistence,
+    AgentTranscriptEntry, AgentTranscriptRole, McpExecutionRequest, McpExecutionResponse,
+    PROVIDER_TRANSCRIPT_EVENT_MARKER, ProviderTranscriptEvent, TranscriptContractError,
+    TranscriptPersistence,
 };
 pub use network::{
     NetworkActionPlan, execute_network_action_with_transport_async, network_action_plan,

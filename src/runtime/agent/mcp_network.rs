@@ -6,6 +6,7 @@
 //! facade.
 
 use super::*;
+use crate::agent::McpExecutionRequest;
 
 impl RuntimeSessionService {
     /// Runs the execute running mcp actions for turn operation for this subsystem.
@@ -524,6 +525,7 @@ impl RuntimeSessionService {
         }
         let call_id = format!("{}:{}", turn.turn_id, action.id);
         let environment = std::env::vars().collect::<BTreeMap<_, _>>();
+        let execution_request = McpExecutionRequest::from(&plan);
         let audit_log = self.audit_log.as_mut();
         let mut executor = RuntimeMcpActionExecutor {
             transports: &mut self.mcp_transports,
@@ -536,8 +538,14 @@ impl RuntimeSessionService {
                 id: turn.agent_id.clone(),
             },
             call_id,
+            plan: &plan,
         };
-        let result = match execute_mcp_action_through_runtime(turn, action, &plan, &mut executor) {
+        let result = match execute_mcp_action_through_runtime(
+            turn,
+            action,
+            &execution_request,
+            &mut executor,
+        ) {
             Ok(result) => result,
             Err(error) => {
                 let _ = self.mcp_registry.mark_unavailable(
@@ -618,6 +626,7 @@ impl RuntimeSessionService {
         }
         let call_id = format!("{}:{}", turn.turn_id, action.id);
         let environment = std::env::vars().collect::<BTreeMap<_, _>>();
+        let execution_request = McpExecutionRequest::from(&plan);
         let audit_log = self.audit_log.as_mut();
         let mut executor = RuntimeMcpActionExecutor {
             transports: &mut self.mcp_transports,
@@ -630,11 +639,12 @@ impl RuntimeSessionService {
                 id: turn.agent_id.clone(),
             },
             call_id,
+            plan: &plan,
         };
         let result = match execute_mcp_action_through_runtime_async(
             turn,
             action,
-            &plan,
+            &execution_request,
             &mut executor,
         )
         .await

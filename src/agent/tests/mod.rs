@@ -63,13 +63,16 @@ use super::{
 use super::{prompt, provider, semantic, shell};
 use crate::auth::{AuthStore, OpenAiProviderCredential};
 use crate::instructions::DiscoveredInstructionFile;
-use crate::mcp::{McpPromptTool, McpRegistry, McpToolCallPlan, McpToolCallResponse};
+use crate::mcp::{McpPromptTool, McpRegistry};
 use crate::permissions::{PathScopes, PermissionPolicy, SessionApprovalStore};
 use crate::test_support::agent::ActionBuilder;
 use crate::test_support::temp::TestTempDir;
 use crate::transcript::{AgentTranscriptStore, TranscriptRole as DurableTranscriptRole};
 use base64::Engine;
-use mez_agent::{AgentTranscriptRole as TranscriptRole, MemoryContextRecord, MemoryContextScope};
+use mez_agent::{
+    AgentTranscriptRole as TranscriptRole, McpExecutionRequest, McpExecutionResponse,
+    MemoryContextRecord, MemoryContextScope,
+};
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::Write;
@@ -286,12 +289,12 @@ struct FakeMcpActionExecutor {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    plans: Vec<McpToolCallPlan>,
+    plans: Vec<McpExecutionRequest>,
     /// Stores the response value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    response: McpToolCallResponse,
+    response: McpExecutionResponse,
 }
 
 impl McpActionExecutor for FakeMcpActionExecutor {
@@ -300,8 +303,8 @@ impl McpActionExecutor for FakeMcpActionExecutor {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn execute_mcp_call(&mut self, plan: &McpToolCallPlan) -> Result<McpToolCallResponse> {
-        self.plans.push(plan.clone());
+    fn execute_mcp_call(&mut self, request: &McpExecutionRequest) -> Result<McpExecutionResponse> {
+        self.plans.push(request.clone());
         Ok(self.response.clone())
     }
 }
@@ -596,15 +599,12 @@ fn apply_patch_write_error(cwd: &Path, patch: &str) -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn mcp_plan() -> McpToolCallPlan {
-    McpToolCallPlan {
+fn mcp_plan() -> McpExecutionRequest {
+    McpExecutionRequest {
         server_id: "state".to_string(),
         tool_name: "list".to_string(),
         arguments_json: r#"{"path":"."}"#.to_string(),
         timeout_ms: 1000,
-        approval_required: false,
-        audit_event_class: "external_integration",
-        effects: crate::mcp::McpToolEffects::none(),
     }
 }
 

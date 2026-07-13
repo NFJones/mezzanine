@@ -17,7 +17,7 @@ fn mcp_action_executor_maps_tool_errors_to_failed_results() {
     let plan = mcp_plan();
     let mut executor = FakeMcpActionExecutor {
         plans: Vec::new(),
-        response: McpToolCallResponse {
+        response: McpExecutionResponse {
             content_json: r#"[{"type":"text","text":"denied"}]"#.to_string(),
             structured_content_json: None,
             is_error: true,
@@ -44,7 +44,7 @@ fn mcp_action_executor_maps_tool_response_to_action_result() {
     let plan = mcp_plan();
     let mut executor = FakeMcpActionExecutor {
         plans: Vec::new(),
-        response: McpToolCallResponse {
+        response: McpExecutionResponse {
             content_json: r#"[{"type":"text","text":"ok"}]"#.to_string(),
             structured_content_json: Some(r#"{"items":1}"#.to_string()),
             is_error: false,

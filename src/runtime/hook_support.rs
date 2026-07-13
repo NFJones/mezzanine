@@ -8,11 +8,11 @@ use super::{
     AsyncMcpActionExecutor, AuditActor, AuditLog, AuditRecord, AuthStore, BTreeMap, ClientId,
     Command, DEFAULT_COMMAND_SHELL_CLASSIFICATION, Duration, EventKind, FocusedShellExecutor,
     FocusedShellHookOutput, HookEvent, HookExecutionPlan, HookExecutionResult, HookExecutionStatus,
-    HookFailure, HookFailureKind, MarkerToken, McpActionExecutor, McpToolCallPlan,
-    McpToolCallResponse, MezError, PaneDescriptor, Path, PendingFocusedShellHookContinuation,
-    PendingFocusedShellHookTransaction, Read, Result, RuleDecision, RuntimeHookPipelineBlock,
-    RuntimeMcpTransportSet, RuntimeSessionService, Stdio, current_unix_millis,
-    exact_command_sha256, json_escape,
+    HookFailure, HookFailureKind, MarkerToken, McpActionExecutor, McpExecutionRequest,
+    McpExecutionResponse, McpToolCallPlan, MezError, PaneDescriptor, Path,
+    PendingFocusedShellHookContinuation, PendingFocusedShellHookTransaction, Read, Result,
+    RuleDecision, RuntimeHookPipelineBlock, RuntimeMcpTransportSet, RuntimeSessionService, Stdio,
+    current_unix_millis, exact_command_sha256, json_escape,
 };
 use crate::agent::{posix_shell_history_suppression_finish, posix_shell_history_suppression_start};
 use wait_timeout::ChildExt;
@@ -157,62 +157,56 @@ pub(super) struct RuntimeFocusedShellPaneExecutor<'a> {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 pub(super) struct RuntimeMcpActionExecutor<'a> {
-    /// Stores the transports value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
+    /// Product-owned MCP transport connections.
     pub(super) transports: &'a mut RuntimeMcpTransportSet,
-    /// Stores the audit log value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
+    /// Optional product audit sink for the tool call.
     pub(super) audit_log: Option<&'a mut AuditLog>,
-    /// Stores the environment value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
+    /// Environment supplied to the product transport.
     pub(super) environment: BTreeMap<String, String>,
-    /// Stores the auth store value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
+    /// Optional product credential source for authenticated transports.
     pub(super) auth_store: Option<&'a AuthStore>,
-    /// Stores the session id value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
+    /// Session identity recorded in audit events.
     pub(super) session_id: String,
-    /// Stores the actor value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
+    /// Actor identity recorded in audit events.
     pub(super) actor: AuditActor,
-    /// Stores the call id value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
+    /// Stable call identity recorded in audit events.
     pub(super) call_id: String,
+    /// Approved product plan retaining audit, approval, and effect policy.
+    pub(super) plan: &'a McpToolCallPlan,
+}
+
+impl RuntimeMcpActionExecutor<'_> {
+    /// Confirms the agent request still matches the approved product plan.
+    fn validate_request(&self, request: &McpExecutionRequest) -> Result<()> {
+        if self.plan.server_id != request.server_id
+            || self.plan.tool_name != request.tool_name
+            || self.plan.arguments_json.trim() != request.arguments_json.trim()
+            || self.plan.timeout_ms != request.timeout_ms
+        {
+            return Err(MezError::invalid_args(
+                "MCP execution request does not match the approved product plan",
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl McpActionExecutor for RuntimeMcpActionExecutor<'_> {
-    /// Runs the execute mcp call operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn execute_mcp_call(&mut self, plan: &McpToolCallPlan) -> Result<McpToolCallResponse> {
+    /// Executes one approved MCP request through the product transport.
+    fn execute_mcp_call(&mut self, request: &McpExecutionRequest) -> Result<McpExecutionResponse> {
+        self.validate_request(request)?;
         if let Some(audit_log) = self.audit_log.as_mut() {
             audit_log.append(AuditRecord::mcp_call(
                 &self.session_id,
                 self.actor.clone(),
-                &plan.server_id,
-                &plan.tool_name,
+                &request.server_id,
+                &request.tool_name,
                 &self.call_id,
-                &plan.arguments_json,
+                &request.arguments_json,
                 "started",
             ))?;
         }
-        let result = self.transports.call_tool(plan, &self.environment);
+        let result = self.transports.call_tool(self.plan, &self.environment);
         let outcome = match &result {
             Ok(response) if response.is_error => "tool_error",
             Ok(_) => "succeeded",
@@ -222,41 +216,38 @@ impl McpActionExecutor for RuntimeMcpActionExecutor<'_> {
             audit_log.append(AuditRecord::mcp_call(
                 &self.session_id,
                 self.actor.clone(),
-                &plan.server_id,
-                &plan.tool_name,
+                &request.server_id,
+                &request.tool_name,
                 &self.call_id,
-                &plan.arguments_json,
+                &request.arguments_json,
                 outcome,
             ))?;
         }
-        result
+        result.map(Into::into)
     }
 }
 
 impl AsyncMcpActionExecutor for RuntimeMcpActionExecutor<'_> {
-    /// Runs the execute mcp call async operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// Executes one approved MCP request asynchronously through the product transport.
     async fn execute_mcp_call_async(
         &mut self,
-        plan: &McpToolCallPlan,
-    ) -> Result<McpToolCallResponse> {
+        request: &McpExecutionRequest,
+    ) -> Result<McpExecutionResponse> {
+        self.validate_request(request)?;
         if let Some(audit_log) = self.audit_log.as_mut() {
             audit_log.append(AuditRecord::mcp_call(
                 &self.session_id,
                 self.actor.clone(),
-                &plan.server_id,
-                &plan.tool_name,
+                &request.server_id,
+                &request.tool_name,
                 &self.call_id,
-                &plan.arguments_json,
+                &request.arguments_json,
                 "started",
             ))?;
         }
         let result = self
             .transports
-            .call_tool_async(plan, &self.environment, self.auth_store)
+            .call_tool_async(self.plan, &self.environment, self.auth_store)
             .await;
         let outcome = match &result {
             Ok(response) if response.is_error => "tool_error",
@@ -267,14 +258,14 @@ impl AsyncMcpActionExecutor for RuntimeMcpActionExecutor<'_> {
             audit_log.append(AuditRecord::mcp_call(
                 &self.session_id,
                 self.actor.clone(),
-                &plan.server_id,
-                &plan.tool_name,
+                &request.server_id,
+                &request.tool_name,
                 &self.call_id,
-                &plan.arguments_json,
+                &request.arguments_json,
                 outcome,
             ))?;
         }
-        result
+        result.map(Into::into)
     }
 }
 

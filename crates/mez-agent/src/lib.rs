@@ -52,7 +52,10 @@ pub use http::{
     DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ProviderHttpRequest,
     ProviderHttpResponse,
 };
-pub use mcp::{McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer};
+pub use mcp::{
+    McpExecutionRequest, McpExecutionResponse, McpPromptServer, McpPromptSummary, McpPromptTool,
+    McpPromptUnavailableServer,
+};
 pub use memory::{MemoryContextRecord, MemoryContextScope};
 pub use permissions::{ApprovalPolicy, PermissionPreset, RuleDecision};
 pub use prompt::{AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptProfile};

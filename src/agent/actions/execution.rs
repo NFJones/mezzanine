@@ -8,7 +8,7 @@
 use super::super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnRecord,
     DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, LocalActionPlan, MarkerToken,
-    McpToolCallPlan, McpToolCallResponse, MezError, Path, Result, ShellTransaction,
+    McpExecutionRequest, McpExecutionResponse, MezError, Path, Result, ShellTransaction,
     ShellTransactionOutputTransport, ToolDiscoveryCache, ToolInventory,
     action_content_blocks_from_json_or_text, action_text_content_blocks, json_escape,
     local_action_plan, tool_discovery_script,
@@ -388,7 +388,7 @@ pub trait McpActionExecutor {
     /// The function keeps parsing, state changes, and error propagation in the
     /// owning module so callers receive typed results instead of relying on
     /// duplicated control-flow logic.
-    fn execute_mcp_call(&mut self, plan: &McpToolCallPlan) -> Result<McpToolCallResponse>;
+    fn execute_mcp_call(&mut self, request: &McpExecutionRequest) -> Result<McpExecutionResponse>;
 }
 
 #[allow(async_fn_in_trait)]
@@ -404,8 +404,8 @@ pub trait AsyncMcpActionExecutor {
     /// duplicated control-flow logic.
     async fn execute_mcp_call_async(
         &mut self,
-        plan: &McpToolCallPlan,
-    ) -> Result<McpToolCallResponse>;
+        request: &McpExecutionRequest,
+    ) -> Result<McpExecutionResponse>;
 }
 
 /// Executes the `execute_shell_action_through_pane` operation for the owning subsystem.
@@ -569,7 +569,7 @@ fn patch_change_preview(patch: &str) -> String {
 pub fn execute_mcp_action_through_runtime(
     turn: &AgentTurnRecord,
     action: &AgentAction,
-    plan: &McpToolCallPlan,
+    plan: &McpExecutionRequest,
     executor: &mut impl McpActionExecutor,
 ) -> Result<ActionResult> {
     let AgentActionPayload::McpCall {
@@ -602,7 +602,7 @@ pub fn execute_mcp_action_through_runtime(
 pub async fn execute_mcp_action_through_runtime_async(
     turn: &AgentTurnRecord,
     action: &AgentAction,
-    plan: &McpToolCallPlan,
+    plan: &McpExecutionRequest,
     executor: &mut impl AsyncMcpActionExecutor,
 ) -> Result<ActionResult> {
     let AgentActionPayload::McpCall {
@@ -826,8 +826,8 @@ fn local_output_to_action_result_with_transport(
 pub(super) fn mcp_response_to_action_result(
     turn: &AgentTurnRecord,
     action: &AgentAction,
-    plan: &McpToolCallPlan,
-    response: McpToolCallResponse,
+    plan: &McpExecutionRequest,
+    response: McpExecutionResponse,
 ) -> Result<ActionResult> {
     let content_json = response.content_json.clone();
     let structured_payload = format!(
