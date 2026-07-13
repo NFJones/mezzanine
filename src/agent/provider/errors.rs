@@ -8,9 +8,7 @@ use crate::error::MezError;
 pub(crate) use mez_agent::ProviderErrorRetryClass;
 use mez_agent::{
     ProviderErrorKind, classify_provider_error_retry, provider_error_detail,
-    provider_failure_event_json, provider_failure_json,
-    provider_malformed_output_failure_json as agent_provider_malformed_output_failure_json,
-    provider_malformed_output_hint,
+    provider_failure_event_json, provider_failure_json, provider_malformed_output_error,
 };
 
 /// Runs the openai provider error detail operation for this subsystem.
@@ -109,40 +107,11 @@ pub(crate) fn provider_event_error_from_parts(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn provider_maap_parse_error(error: MezError, raw_text: &str) -> MezError {
-    MezError::new(
-        error.kind(),
-        provider_maap_parse_error_message(&error, raw_text),
-    )
-    .with_provider_raw_text(raw_text.to_string())
-    .with_provider_failure_json(provider_malformed_output_failure_json(&error, raw_text))
-}
-
-/// Runs the provider maap parse error message operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn provider_maap_parse_error_message(error: &MezError, raw_text: &str) -> String {
-    let mut message = format!("provider MAAP output is malformed: {}", error.message());
-    if let Some(hint) = provider_malformed_output_hint(raw_text) {
-        message.push_str("; ");
-        message.push_str(hint);
-    }
-    message
-}
-
-/// Runs the provider malformed output hint operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-/// Runs the provider malformed output failure json operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn provider_malformed_output_failure_json(error: &MezError, raw_text: &str) -> String {
-    agent_provider_malformed_output_failure_json(error.kind().into(), error.message(), raw_text)
+    let diagnostic =
+        provider_malformed_output_error(error.kind().into(), error.message(), raw_text);
+    MezError::new(error.kind(), diagnostic.message())
+        .with_provider_raw_text(diagnostic.raw_text().to_string())
+        .with_provider_failure_json(diagnostic.provider_failure_json().to_string())
 }
 
 #[cfg(test)]

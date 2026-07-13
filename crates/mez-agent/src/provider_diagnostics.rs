@@ -82,6 +82,68 @@ pub fn provider_malformed_output_hint(raw_text: &str) -> Option<&'static str> {
     None
 }
 
+/// A typed, bounded diagnostic for malformed model output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderMalformedOutputError {
+    kind: ProviderErrorKind,
+    message: String,
+    raw_text: String,
+    provider_failure_json: String,
+}
+
+impl ProviderMalformedOutputError {
+    /// Returns the stable provider failure category.
+    pub fn kind(&self) -> ProviderErrorKind {
+        self.kind
+    }
+
+    /// Returns the corrective diagnostic shown at the product boundary.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Returns the original provider output retained for diagnostics.
+    pub fn raw_text(&self) -> &str {
+        &self.raw_text
+    }
+
+    /// Returns the bounded structured failure payload.
+    pub fn provider_failure_json(&self) -> &str {
+        &self.provider_failure_json
+    }
+}
+
+impl std::fmt::Display for ProviderMalformedOutputError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ProviderMalformedOutputError {}
+
+/// Shapes one malformed provider result without depending on product errors.
+pub fn provider_malformed_output_error(
+    error_kind: ProviderErrorKind,
+    error_message: &str,
+    raw_text: &str,
+) -> ProviderMalformedOutputError {
+    let mut message = format!("provider MAAP output is malformed: {error_message}");
+    if let Some(hint) = provider_malformed_output_hint(raw_text) {
+        message.push_str("; ");
+        message.push_str(hint);
+    }
+    ProviderMalformedOutputError {
+        kind: error_kind,
+        message,
+        raw_text: raw_text.to_string(),
+        provider_failure_json: provider_malformed_output_failure_json(
+            error_kind,
+            error_message,
+            raw_text,
+        ),
+    }
+}
+
 /// Builds a bounded diagnostic payload for malformed model output.
 pub fn provider_malformed_output_failure_json(
     error_kind: ProviderErrorKind,
@@ -263,7 +325,8 @@ fn truncate_provider_failure_text(value: &str) -> String {
 mod tests {
     use super::{
         provider_error_detail, provider_failure_event_json, provider_failure_json,
-        provider_malformed_output_failure_json, provider_malformed_output_hint,
+        provider_malformed_output_error, provider_malformed_output_failure_json,
+        provider_malformed_output_hint,
     };
     use crate::ProviderErrorKind;
 
@@ -319,5 +382,30 @@ mod tests {
         assert_eq!(value["error"]["kind"], "invalid_args");
         assert_eq!(value["output"]["format"], "json");
         assert_eq!(value["output"]["bare_command_actions"], true);
+    }
+
+    #[test]
+    /// Verifies the typed malformed-output contract preserves corrective text,
+    /// raw provider output, and bounded structured diagnostics for adapters.
+    fn provider_malformed_output_error_preserves_adapter_diagnostics() {
+        let raw_text = r#"{"command":"cargo test"}"#;
+        let error = provider_malformed_output_error(
+            ProviderErrorKind::InvalidArgs,
+            "actions is required",
+            raw_text,
+        );
+
+        assert_eq!(error.kind(), ProviderErrorKind::InvalidArgs);
+        assert!(
+            error
+                .message()
+                .contains("provider MAAP output is malformed")
+        );
+        assert!(error.message().contains("expected a MAAP action batch"));
+        assert_eq!(error.raw_text(), raw_text);
+        let failure: serde_json::Value =
+            serde_json::from_str(error.provider_failure_json()).unwrap();
+        assert_eq!(failure["error"]["message"], "actions is required");
+        assert_eq!(failure["output"]["bare_command_object"], true);
     }
 }
