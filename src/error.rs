@@ -19,7 +19,9 @@ impl From<mez_mux::MuxError> for MezError {
         match error.kind() {
             mez_mux::MuxErrorKind::InvalidArgs => Self::invalid_args(error.message()),
             mez_mux::MuxErrorKind::InvalidState => Self::invalid_state(error.message()),
+            mez_mux::MuxErrorKind::Conflict => Self::conflict(error.message()),
             mez_mux::MuxErrorKind::NotFound => Self::new(MezErrorKind::NotFound, error.message()),
+            mez_mux::MuxErrorKind::Forbidden => Self::forbidden(error.message()),
         }
     }
 }

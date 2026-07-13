@@ -16,8 +16,12 @@ pub enum MuxErrorKind {
     InvalidArgs,
     /// The requested mutation is incompatible with current mux state.
     InvalidState,
+    /// The requested mutation conflicts with existing mux ownership or state.
+    Conflict,
     /// A requested pane, window, group, or client does not exist.
     NotFound,
+    /// The requesting client is not authorized to perform the mux operation.
+    Forbidden,
 }
 
 /// Error returned by multiplexer-domain operations.
@@ -45,6 +49,16 @@ impl MuxError {
     /// Creates an invalid-state error.
     pub fn invalid_state(message: impl Into<String>) -> Self {
         Self::new(MuxErrorKind::InvalidState, message)
+    }
+
+    /// Creates a conflict error.
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self::new(MuxErrorKind::Conflict, message)
+    }
+
+    /// Creates a forbidden error.
+    pub fn forbidden(message: impl Into<String>) -> Self {
+        Self::new(MuxErrorKind::Forbidden, message)
     }
 
     /// Returns this error's stable category.
