@@ -49,6 +49,44 @@ impl From<SemanticPatchParseError> for SemanticPatchPlanningError {
     }
 }
 
+/// Returns whether model-authored text contains a Mezzanine patch block.
+pub fn is_mez_patch_payload(patch: &str) -> bool {
+    let trimmed = patch.trim_start();
+    trimmed.starts_with("*** Begin Patch")
+        || (trimmed
+            .lines()
+            .next()
+            .is_some_and(|line| line.trim_start().starts_with("```"))
+            && trimmed.contains("*** Begin Patch"))
+        || (trimmed.lines().next().is_some_and(|line| {
+            let line = line.trim();
+            line.starts_with("<<")
+                || line.starts_with("apply_patch <<")
+                || line.starts_with("apply_patch<<")
+        }) && trimmed.contains("*** Begin Patch"))
+}
+
+/// Validates the provider-facing semantic-patch payload contract.
+pub fn validate_apply_patch_payload(patch: &str) -> SemanticPatchPlanningResult<()> {
+    if patch.trim().is_empty() {
+        return Err(SemanticPatchPlanningError::invalid_args(
+            "patch must not be empty",
+        ));
+    }
+    if !is_mez_patch_payload(patch) {
+        return Err(SemanticPatchPlanningError::invalid_args(
+            "apply_patch requires Mezzanine patch blocks starting with *** Begin Patch; use shell_command with git apply for raw unified diffs",
+        ));
+    }
+    if !patch.lines().any(|line| line.trim() == "*** End Patch") {
+        return Err(SemanticPatchPlanningError::invalid_args(
+            "apply_patch Mezzanine patch blocks must end with *** End Patch",
+        ));
+    }
+    let _ = parse_mez_patch(patch)?;
+    Ok(())
+}
+
 /// A deterministic semantic-patch syntax or path-validation failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SemanticPatchParseError {
@@ -759,7 +797,25 @@ fn clean_mez_patch_path(raw: &str) -> SemanticPatchResult<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_mez_hunk_header_line;
+    use super::{is_mez_hunk_header_line, is_mez_patch_payload, validate_apply_patch_payload};
+
+    /// Verifies provider-facing patch validation accepts canonical and wrapped
+    /// Mezzanine patch blocks while rejecting unified diffs and unterminated
+    /// semantic patches before any local execution is planned.
+    #[test]
+    fn provider_patch_payload_validation_uses_semantic_patch_contract() {
+        let canonical = "*** Begin Patch\n*** Add File: example.txt\n+hello\n*** End Patch";
+        let fenced = format!("```text\n{canonical}\n```");
+
+        assert!(is_mez_patch_payload(canonical));
+        assert!(validate_apply_patch_payload(canonical).is_ok());
+        assert!(validate_apply_patch_payload(&fenced).is_ok());
+        assert!(validate_apply_patch_payload("--- a/example.txt\n+++ b/example.txt").is_err());
+        assert!(
+            validate_apply_patch_payload("*** Begin Patch\n*** Add File: example.txt\n+hello")
+                .is_err()
+        );
+    }
 
     /// Verifies whitespace-indented hunk headers are still recognized as hunk
     /// headers. Model-authored patches can arrive inside uniformly indented

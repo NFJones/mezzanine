@@ -130,6 +130,7 @@ pub use schema::{
     maap_mcp_call_action_schema_for_tool, mcp_tool_manifest_for_description,
     normalize_openai_strict_schema,
 };
+pub use semantic_patch::{is_mez_patch_payload, validate_apply_patch_payload};
 pub use slash::{
     SlashCommandEffect, SlashCommandInvocation, SlashCommandParseError, SlashCommandSpec,
     baseline_slash_commands, parse_slash_command,

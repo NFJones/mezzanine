@@ -4,10 +4,13 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::semantic::{apply_patch_touched_paths, try_convert_unified_diff_to_mez_patch};
+use super::semantic::try_convert_unified_diff_to_mez_patch;
 use super::shell::validate_agent_authored_shell_command;
 use super::{AgentCapability, AgentTurnRecord, BTreeSet, McpPromptTool, MezError, Result};
-use mez_agent::{IssueQueryValidation, IssueUpdateValidation};
+use mez_agent::{
+    IssueQueryValidation, IssueUpdateValidation,
+    validate_apply_patch_payload as validate_agent_apply_patch_payload,
+};
 use serde_json::Value;
 
 fn validate_agent_contract(result: std::result::Result<(), String>) -> Result<()> {
@@ -790,7 +793,10 @@ impl AgentAction {
                 }
                 validate_agent_authored_shell_command(command)
             }
-            AgentActionPayload::ApplyPatch { patch, .. } => validate_apply_patch_payload(patch),
+            AgentActionPayload::ApplyPatch { patch, .. } => {
+                validate_agent_apply_patch_payload(patch)
+                    .map_err(|error| MezError::invalid_args(error.message()))
+            }
             AgentActionPayload::WebSearch { query, .. } => {
                 validate_non_empty("web search query", query)
             }
@@ -1062,41 +1068,6 @@ fn json_value_matches_schema_type(value: &Value, expected: &str) -> bool {
         "string" => value.is_string(),
         _ => false,
     }
-}
-
-/// Returns true when a model-authored patch uses Mezzanine's patch block format.
-pub(super) fn is_mez_patch_payload(patch: &str) -> bool {
-    let trimmed = patch.trim_start();
-    trimmed.starts_with("*** Begin Patch")
-        || (trimmed
-            .lines()
-            .next()
-            .is_some_and(|line| line.trim_start().starts_with("```"))
-            && trimmed.contains("*** Begin Patch"))
-        || (trimmed.lines().next().is_some_and(|line| {
-            let line = line.trim();
-            line.starts_with("<<")
-                || line.starts_with("apply_patch <<")
-                || line.starts_with("apply_patch<<")
-        }) && trimmed.contains("*** Begin Patch"))
-}
-
-/// Validates that a model-authored patch matches the Mezzanine semantic patch
-/// contract before any pane shell mutation can be dispatched.
-pub(super) fn validate_apply_patch_payload(patch: &str) -> Result<()> {
-    validate_non_empty("patch", patch)?;
-    if !is_mez_patch_payload(patch) {
-        return Err(MezError::invalid_args(
-            "apply_patch requires Mezzanine patch blocks starting with *** Begin Patch; use shell_command with git apply for raw unified diffs",
-        ));
-    }
-    if !patch.lines().any(|line| line.trim() == "*** End Patch") {
-        return Err(MezError::invalid_args(
-            "apply_patch Mezzanine patch blocks must end with *** End Patch",
-        ));
-    }
-    let _ = apply_patch_touched_paths(patch)?;
-    Ok(())
 }
 
 /// Parses the single fenced `mezzanine-action-json` action batch from model text.

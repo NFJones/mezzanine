@@ -6,10 +6,10 @@
 //! write transaction that applies verified bytes.
 
 use super::{LocalActionKind, LocalActionPlan};
-use crate::agent::maap::{is_mez_patch_payload, validate_apply_patch_payload};
 use crate::agent::shell::shell_quote;
 use mez_agent::semantic_patch::{
-    SemanticPatchPlanningError, SemanticPatchPlanningResult as Result,
+    SemanticPatchPlanningError, SemanticPatchPlanningResult as Result, is_mez_patch_payload,
+    validate_apply_patch_payload,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
