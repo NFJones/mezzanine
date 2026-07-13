@@ -6,6 +6,7 @@
 //! whole rendering pipeline.
 
 use super::*;
+use mez_mux::presentation::pane_canvas_placements;
 
 /// Runs the draw window from screens operation for this subsystem.
 ///
@@ -487,50 +488,6 @@ pub fn pane_content_size_for_geometry(
         pane_frames_enabled,
         pane_frame_position,
     ))
-}
-
-/// Bounded destination for one rendered pane inside the window body canvas.
-///
-/// Plain and styled renderers share the same geometry, clipping, and divider
-/// reservation rules. Keeping that placement calculation in one structure
-/// prevents their text and style-span pipelines from drifting apart.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PaneCanvasPlacement {
-    /// First destination row in the window body canvas.
-    row_start: usize,
-    /// First destination column in the window body canvas.
-    column_start: usize,
-    /// Number of pane rows visible in the destination canvas.
-    pane_rows: usize,
-    /// Number of pane columns visible in the destination canvas.
-    pane_columns: usize,
-}
-
-/// Computes the shared pane-to-canvas placements for plain and styled output.
-fn pane_canvas_placements(size: Size, geometries: &[PaneGeometry]) -> Vec<PaneCanvasPlacement> {
-    let rows = usize::from(size.rows);
-    let columns = usize::from(size.columns);
-    let mut placements = Vec::with_capacity(geometries.len());
-    for geometry in geometries {
-        let row_start = usize::from(geometry.row);
-        let column_start = usize::from(geometry.column);
-        if row_start >= rows || column_start >= columns {
-            continue;
-        }
-        let region_size =
-            pane_render_region_size_for_geometry(geometry, geometries).unwrap_or(Size {
-                columns: geometry.columns,
-                rows: geometry.rows,
-            });
-        placements.push(PaneCanvasPlacement {
-            row_start,
-            column_start,
-            pane_rows: usize::from(region_size.rows).min(rows.saturating_sub(row_start)),
-            pane_columns: usize::from(region_size.columns)
-                .min(columns.saturating_sub(column_start)),
-        });
-    }
-    placements
 }
 
 /// Runs the render panes by geometry operation for this subsystem.

@@ -246,6 +246,45 @@ pub fn pane_content_size_for_geometry(
     }
 }
 
+/// Bounded destination for one rendered pane inside a window-body canvas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaneCanvasPlacement {
+    /// First destination row in the window body canvas.
+    pub row_start: usize,
+    /// First destination column in the window body canvas.
+    pub column_start: usize,
+    /// Number of pane rows visible in the destination canvas.
+    pub pane_rows: usize,
+    /// Number of pane columns visible in the destination canvas.
+    pub pane_columns: usize,
+}
+
+/// Computes pane-to-canvas placements with divider reservations and clipping.
+pub fn pane_canvas_placements(
+    size: TerminalSize,
+    geometries: &[PaneGeometry],
+) -> Vec<PaneCanvasPlacement> {
+    let rows = usize::from(size.rows);
+    let columns = usize::from(size.columns);
+    let mut placements = Vec::with_capacity(geometries.len());
+    for geometry in geometries {
+        let row_start = usize::from(geometry.row);
+        let column_start = usize::from(geometry.column);
+        if row_start >= rows || column_start >= columns {
+            continue;
+        }
+        let region_size = pane_render_region_size_for_geometry(geometry, geometries);
+        placements.push(PaneCanvasPlacement {
+            row_start,
+            column_start,
+            pane_rows: usize::from(region_size.rows).min(rows.saturating_sub(row_start)),
+            pane_columns: usize::from(region_size.columns)
+                .min(columns.saturating_sub(column_start)),
+        });
+    }
+    placements
+}
+
 /// Returns whether a pane frame should occupy an adjacent shared divider row.
 ///
 /// Top frames merge into a horizontal divider immediately above the pane;
@@ -563,10 +602,10 @@ mod tests {
     use crate::layout::PaneGeometry;
 
     use super::{
-        TerminalFramePosition, TerminalFrameStyle, pane_content_size_for_geometry,
-        pane_divider_cells, pane_divider_glyph, pane_frame_merges_into_divider,
-        pane_render_region_size_for_geometry, place_group_frame, place_window_frame,
-        rendered_window_body_size,
+        TerminalFramePosition, TerminalFrameStyle, pane_canvas_placements,
+        pane_content_size_for_geometry, pane_divider_cells, pane_divider_glyph,
+        pane_frame_merges_into_divider, pane_render_region_size_for_geometry, place_group_frame,
+        place_window_frame, rendered_window_body_size,
     };
 
     /// Verifies neutral frame contracts retain the product's established
@@ -634,6 +673,23 @@ mod tests {
         assert_eq!(
             pane_content_size_for_geometry(&left, &geometries, true, TerminalFramePosition::Top,),
             TerminalSize::new(9, 3).unwrap()
+        );
+        assert_eq!(
+            pane_canvas_placements(TerminalSize::new(15, 4).unwrap(), &geometries),
+            [
+                super::PaneCanvasPlacement {
+                    row_start: 0,
+                    column_start: 0,
+                    pane_rows: 4,
+                    pane_columns: 9,
+                },
+                super::PaneCanvasPlacement {
+                    row_start: 0,
+                    column_start: 10,
+                    pane_rows: 4,
+                    pane_columns: 5,
+                },
+            ]
         );
     }
 
