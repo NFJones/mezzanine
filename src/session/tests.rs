@@ -768,7 +768,8 @@ fn session_restores_layout_from_snapshot_payload_and_seeds_ids() {
         }],
     };
 
-    let mut session = Session::from_snapshot_payload(shell, &payload).unwrap();
+    let restore_input = crate::snapshot::session_restore_input(&payload).unwrap();
+    let mut session = Session::from_restore_input(shell, restore_input).unwrap();
 
     assert_eq!(session.id.as_str(), "$4");
     assert_eq!(session.name, "restored");

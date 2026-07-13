@@ -12,9 +12,10 @@ use super::*;
 fn runtime_service_restarts_restored_panes_drain_initial_prompt_output() {
     let original = test_session();
     let payload = crate::snapshot::SessionSnapshotPayload::from_session(&original);
-    let restored = Session::from_snapshot_payload(
+    let restore_input = crate::snapshot::session_restore_input(&payload).unwrap();
+    let restored = Session::from_restore_input(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
-        &payload,
+        restore_input,
     )
     .unwrap();
     let pane_id = restored
@@ -71,9 +72,10 @@ fn runtime_service_restarts_restored_panes_drain_initial_prompt_output_for_each_
         Some(fast_cwd.to_string_lossy().into_owned());
     payload.windows[0].panes[1].current_working_directory =
         Some(slow_cwd.to_string_lossy().into_owned());
-    let restored = Session::from_snapshot_payload(
+    let restore_input = crate::snapshot::session_restore_input(&payload).unwrap();
+    let restored = Session::from_restore_input(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
-        &payload,
+        restore_input,
     )
     .unwrap();
     let pane_ids = restored

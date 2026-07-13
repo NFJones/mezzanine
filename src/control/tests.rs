@@ -1061,7 +1061,8 @@ fn generic_pane_state_serializes_restored_snapshot_metadata() {
             }],
         }],
     };
-    let mut session = Session::from_snapshot_payload(shell, &payload).unwrap();
+    let restore_input = crate::snapshot::session_restore_input(&payload).unwrap();
+    let mut session = Session::from_restore_input(shell, restore_input).unwrap();
     let primary = session.attach_primary("primary", true).unwrap();
 
     let response = dispatch_control_request(

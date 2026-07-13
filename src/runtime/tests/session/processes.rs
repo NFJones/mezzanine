@@ -429,9 +429,10 @@ fn runtime_service_restarts_restored_panes_with_fresh_primary_pids() {
         .split_active_pane(&primary, SplitDirection::Vertical)
         .unwrap();
     let payload = crate::snapshot::SessionSnapshotPayload::from_session(&original);
-    let restored = Session::from_snapshot_payload(
+    let restore_input = crate::snapshot::session_restore_input(&payload).unwrap();
+    let restored = Session::from_restore_input(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
-        &payload,
+        restore_input,
     )
     .unwrap();
     assert!(
@@ -495,9 +496,10 @@ fn runtime_service_restarts_restored_panes_with_rendered_process_sizes() {
         .split_active_pane(&primary, SplitDirection::Vertical)
         .unwrap();
     let payload = crate::snapshot::SessionSnapshotPayload::from_session(&original);
-    let restored = Session::from_snapshot_payload(
+    let restore_input = crate::snapshot::session_restore_input(&payload).unwrap();
+    let restored = Session::from_restore_input(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
-        &payload,
+        restore_input,
     )
     .unwrap();
     let restored_pane_sizes: Vec<Size> = restored
@@ -555,9 +557,10 @@ fn runtime_service_restarts_restored_panes_from_home_when_saved_cwd_fails() {
     payload.windows[0].panes[0].title = "saved-pane".to_string();
     payload.windows[0].panes[0].current_working_directory =
         Some(inaccessible_cwd.to_string_lossy().into_owned());
-    let restored = Session::from_snapshot_payload(
+    let restore_input = crate::snapshot::session_restore_input(&payload).unwrap();
+    let restored = Session::from_restore_input(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
-        &payload,
+        restore_input,
     )
     .unwrap();
     let pane_id = restored.active_window().unwrap().active_pane().id.clone();
