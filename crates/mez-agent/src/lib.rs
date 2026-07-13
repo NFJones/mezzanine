@@ -22,6 +22,8 @@ pub mod context;
 pub mod http;
 /// Dependency-neutral project instruction discovery records and parsing.
 pub mod instructions;
+/// Provider-independent local-action execution plans.
+pub mod local_action;
 /// Dependency-neutral MCP prompt manifest records.
 pub mod mcp;
 /// Prompt-facing memory context contracts.
@@ -81,6 +83,7 @@ pub use http::{
     ProviderHttpErrorKind, ProviderHttpRequest, ProviderHttpResponse, ProviderHttpResult,
     ProviderSseTerminalDetector, SseEvent, SseParseError, parse_sse_events, parse_sse_events_with,
 };
+pub use local_action::{LocalActionKind, LocalActionPlan};
 pub use mcp::{
     AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellMcpToolSummary,
     McpExecutionRequest, McpExecutionResponse, McpPromptServer, McpPromptSummary, McpPromptTool,
