@@ -4,14 +4,11 @@
 //! divider cells, box-drawing glyph connection masks, mouse-border hit cells,
 //! and styled/plain divider canvas writes.
 
-use std::collections::BTreeMap;
-
 use crate::layout::{PaneGeometry, Window, range_overlap_u16};
-use crate::terminal::{
-    GraphicRendition, MouseBorderCell, TerminalStyleSpan, UiTheme,
-};
+use crate::terminal::{GraphicRendition, MouseBorderCell, TerminalStyleSpan, UiTheme};
 
 pub use mez_mux::presentation::pane_frame_merges_into_divider;
+use mez_mux::presentation::{PaneDividerCell, pane_divider_cells};
 
 use super::{TerminalRenderCell, pane_border_rendition, write_single_width_cell};
 
@@ -29,92 +26,6 @@ pub fn pane_border_cells_for_geometries(
         .collect()
 }
 
-/// Carries one pane-divider cell and the glyph selected for its connection mask.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PaneDividerCell {
-    /// Terminal column for the divider cell.
-    column: u16,
-    /// Terminal row for the divider cell.
-    row: u16,
-    /// Box-drawing glyph rendered into this cell.
-    glyph: char,
-}
-
-/// Directional strokes that meet in one mux-managed pane divider cell.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct PaneDividerConnections {
-    /// Whether a stroke leaves this cell upward.
-    up: bool,
-    /// Whether a stroke leaves this cell downward.
-    down: bool,
-    /// Whether a stroke leaves this cell leftward.
-    left: bool,
-    /// Whether a stroke leaves this cell rightward.
-    right: bool,
-    /// Whether this cell belongs to a vertical segment.
-    vertical: bool,
-    /// Whether this cell belongs to a horizontal segment.
-    horizontal: bool,
-}
-
-impl PaneDividerConnections {
-    /// Records a vertical divider stroke through this cell.
-    fn add_vertical(&mut self, up: bool, down: bool) {
-        self.vertical = true;
-        self.up |= up;
-        self.down |= down;
-    }
-
-    /// Records a horizontal divider stroke through this cell.
-    fn add_horizontal(&mut self, left: bool, right: bool) {
-        self.horizontal = true;
-        self.left |= left;
-        self.right |= right;
-    }
-
-    /// Returns whether this cell belongs to a vertical divider segment.
-    fn has_vertical(&self) -> bool {
-        self.vertical
-    }
-
-    /// Returns whether this cell belongs to a horizontal divider segment.
-    fn has_horizontal(&self) -> bool {
-        self.horizontal
-    }
-
-    /// Chooses the thin box-drawing glyph that matches the recorded strokes.
-    fn glyph(self) -> char {
-        let mut up = self.up;
-        let mut down = self.down;
-        let mut left = self.left;
-        let mut right = self.right;
-        if self.vertical && !up && !down {
-            up = true;
-            down = true;
-        }
-        if self.horizontal && !left && !right {
-            left = true;
-            right = true;
-        }
-        match (up, down, left, right) {
-            (true, true, true, true) => '\u{253c}',
-            (true, true, true, false) => '\u{2524}',
-            (true, true, false, true) => '\u{251c}',
-            (true, false, true, true) => '\u{2534}',
-            (false, true, true, true) => '\u{252c}',
-            (true, false, false, true) => '\u{2514}',
-            (true, false, true, false) => '\u{2518}',
-            (false, true, false, true) => '\u{250c}',
-            (false, true, true, false) => '\u{2510}',
-            (true, true, false, false) => '\u{2502}',
-            (false, false, true, true) => '\u{2500}',
-            (true, false, false, false) | (false, true, false, false) => '\u{2502}',
-            (false, false, true, false) | (false, false, false, true) => '\u{2500}',
-            (false, false, false, false) => ' ',
-        }
-    }
-}
-
 /// Returns the box-drawing glyph for an explicit divider-connection mask.
 ///
 /// This test helper keeps the glyph contract covered independently from any
@@ -122,72 +33,7 @@ impl PaneDividerConnections {
 /// same connection mask from pane geometry.
 #[cfg(test)]
 pub(crate) fn pane_divider_glyph_for_test(up: bool, down: bool, left: bool, right: bool) -> char {
-    PaneDividerConnections {
-        up,
-        down,
-        left,
-        right,
-        vertical: up || down,
-        horizontal: left || right,
-    }
-    .glyph()
-}
-
-/// Builds pane-divider cells from neighboring pane geometry.
-fn pane_divider_cells(
-    geometries: &[PaneGeometry],
-    include_horizontal: bool,
-) -> Vec<PaneDividerCell> {
-    if geometries.len() < 2 {
-        return Vec::new();
-    }
-    let mut cells = BTreeMap::new();
-    for (index, first) in geometries.iter().enumerate() {
-        for second in geometries.iter().skip(index.saturating_add(1)) {
-            let first_right = first.column.saturating_add(first.columns);
-            let second_right = second.column.saturating_add(second.columns);
-            let first_bottom = first.row.saturating_add(first.rows);
-            let second_bottom = second.row.saturating_add(second.rows);
-
-            if first_right == second.column || second_right == first.column {
-                let boundary = first_right.min(second_right).saturating_sub(1);
-                let start = first.row.max(second.row);
-                let end = first_bottom.min(second_bottom);
-                for row in start..end {
-                    insert_vertical_divider_cell(
-                        &mut cells,
-                        boundary,
-                        row,
-                        row > start,
-                        row.saturating_add(1) < end,
-                    );
-                }
-            }
-            if include_horizontal && (first_bottom == second.row || second_bottom == first.row) {
-                let boundary = first_bottom.min(second_bottom).saturating_sub(1);
-                let start = first.column.max(second.column);
-                let end = first_right.min(second_right);
-                for column in start..end {
-                    insert_horizontal_divider_cell(
-                        &mut cells,
-                        column,
-                        boundary,
-                        column > start,
-                        column.saturating_add(1) < end,
-                    );
-                }
-            }
-        }
-    }
-    connect_touching_divider_cells(&mut cells);
-    cells
-        .into_iter()
-        .map(|((column, row), connections)| PaneDividerCell {
-            column,
-            row,
-            glyph: connections.glyph(),
-        })
-        .collect()
+    mez_mux::presentation::pane_divider_glyph(up, down, left, right)
 }
 
 /// Returns whether a pane geometry has a shared divider immediately below it.
@@ -224,129 +70,6 @@ pub(super) fn geometry_has_right_divider(
                 candidate.row.saturating_add(candidate.rows),
             ) > 0
     })
-}
-
-/// Inserts one cell from a vertical divider segment.
-fn insert_vertical_divider_cell(
-    cells: &mut BTreeMap<(u16, u16), PaneDividerConnections>,
-    column: u16,
-    row: u16,
-    up: bool,
-    down: bool,
-) {
-    cells
-        .entry((column, row))
-        .or_default()
-        .add_vertical(up, down);
-}
-
-/// Inserts one cell from a horizontal divider segment.
-fn insert_horizontal_divider_cell(
-    cells: &mut BTreeMap<(u16, u16), PaneDividerConnections>,
-    column: u16,
-    row: u16,
-    left: bool,
-    right: bool,
-) {
-    cells
-        .entry((column, row))
-        .or_default()
-        .add_horizontal(left, right);
-}
-
-/// Connects divider cells that touch because neighboring panes share a seam.
-fn connect_touching_divider_cells(cells: &mut BTreeMap<(u16, u16), PaneDividerConnections>) {
-    let snapshot = cells.clone();
-    for (&(column, row), connections) in &snapshot {
-        if connections.has_vertical() {
-            if let Some(below_row) = row.checked_add(1) {
-                let below = (column, below_row);
-                if snapshot
-                    .get(&below)
-                    .is_some_and(PaneDividerConnections::has_vertical)
-                {
-                    if let Some(current) = cells.get_mut(&(column, row)) {
-                        current.down = true;
-                    }
-                    if let Some(neighbor) = cells.get_mut(&below) {
-                        neighbor.up = true;
-                    }
-                }
-            }
-            if column > 0 {
-                let left = (column.saturating_sub(1), row);
-                if snapshot
-                    .get(&left)
-                    .is_some_and(PaneDividerConnections::has_horizontal)
-                {
-                    if let Some(current) = cells.get_mut(&(column, row)) {
-                        current.left = true;
-                    }
-                    if let Some(neighbor) = cells.get_mut(&left) {
-                        neighbor.right = true;
-                    }
-                }
-            }
-            if let Some(right_column) = column.checked_add(1) {
-                let right = (right_column, row);
-                if snapshot
-                    .get(&right)
-                    .is_some_and(PaneDividerConnections::has_horizontal)
-                {
-                    if let Some(current) = cells.get_mut(&(column, row)) {
-                        current.right = true;
-                    }
-                    if let Some(neighbor) = cells.get_mut(&right) {
-                        neighbor.left = true;
-                    }
-                }
-            }
-        }
-        if connections.has_horizontal() {
-            if let Some(right_column) = column.checked_add(1) {
-                let right = (right_column, row);
-                if snapshot
-                    .get(&right)
-                    .is_some_and(PaneDividerConnections::has_horizontal)
-                {
-                    if let Some(current) = cells.get_mut(&(column, row)) {
-                        current.right = true;
-                    }
-                    if let Some(neighbor) = cells.get_mut(&right) {
-                        neighbor.left = true;
-                    }
-                }
-            }
-            if row > 0 {
-                let above = (column, row.saturating_sub(1));
-                if snapshot
-                    .get(&above)
-                    .is_some_and(PaneDividerConnections::has_vertical)
-                {
-                    if let Some(current) = cells.get_mut(&(column, row)) {
-                        current.up = true;
-                    }
-                    if let Some(neighbor) = cells.get_mut(&above) {
-                        neighbor.down = true;
-                    }
-                }
-            }
-            if let Some(below_row) = row.checked_add(1) {
-                let below = (column, below_row);
-                if snapshot
-                    .get(&below)
-                    .is_some_and(PaneDividerConnections::has_vertical)
-                {
-                    if let Some(current) = cells.get_mut(&(column, row)) {
-                        current.down = true;
-                    }
-                    if let Some(neighbor) = cells.get_mut(&below) {
-                        neighbor.up = true;
-                    }
-                }
-            }
-        }
-    }
 }
 
 /// Writes pane-divider glyphs into a plain text canvas.
