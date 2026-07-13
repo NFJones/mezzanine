@@ -199,9 +199,15 @@ impl Session {
         &mut self,
         payload: &SessionSnapshotPayload,
     ) -> Result<()> {
-        let restored = Self::from_snapshot_payload(self.shell.clone(), payload)?;
+        self.replace_layout_from_restore_input(crate::snapshot::session_restore_input(payload)?)
+    }
 
-        self.authoritative_size = restored.authoritative_size;
+    /// Replaces user-visible layout state from dependency-neutral restored data.
+    ///
+    /// Fresh live identifiers are allocated so loading a saved layout behaves
+    /// like recreating its groups, windows, and panes in the current session.
+    pub fn replace_layout_from_restore_input(&mut self, input: SessionRestoreInput) -> Result<()> {
+        let authoritative_size = input.authoritative_size;
         let (
             windows,
             window_groups,
@@ -209,11 +215,13 @@ impl Session {
             active_group_index,
             last_active_group_index,
             pane_state_metadata,
-        ) = self.layout_from_snapshot_with_fresh_ids(payload)?;
+        ) = self.layout_from_restore_input_with_fresh_ids(input)?;
+
+        self.authoritative_size = authoritative_size;
         self.windows = windows;
         self.window_groups = window_groups;
         self.active_window_index = active_window_index;
-        self.last_active_window_index = restored.last_active_window_index;
+        self.last_active_window_index = None;
         self.active_group_index = active_group_index;
         self.last_active_group_index = last_active_group_index;
         self.pane_state_metadata = pane_state_metadata;
@@ -221,79 +229,76 @@ impl Session {
         Ok(())
     }
 
-    /// Rebuilds snapshot layout metadata using identifiers allocated by the
-    /// live session.
-    fn layout_from_snapshot_with_fresh_ids(
+    /// Rebuilds neutral restored layout metadata with live-session identifiers.
+    fn layout_from_restore_input_with_fresh_ids(
         &mut self,
-        payload: &SessionSnapshotPayload,
+        input: SessionRestoreInput,
     ) -> Result<FreshSnapshotLayout> {
-        payload.validate()?;
-        let mut snapshot_to_live_window_ids = BTreeMap::new();
+        let mut restored_to_live_window_ids = BTreeMap::new();
         let mut active_window_index = None;
         let mut pane_state_metadata = BTreeMap::new();
-        let mut windows = Vec::with_capacity(payload.windows.len());
+        let mut windows = Vec::with_capacity(input.windows.len());
         let restored_at = current_unix_seconds();
 
-        for (expected_index, window_payload) in payload.windows.iter().enumerate() {
-            if window_payload.index != expected_index {
+        for (expected_index, restored_window) in input.windows.into_iter().enumerate() {
+            if restored_window.index != expected_index {
                 return Err(MezError::invalid_args(
-                    "snapshot windows must be stored in contiguous index order",
+                    "restored windows must be stored in contiguous index order",
+                ));
+            }
+            if restored_window.active && active_window_index.replace(expected_index).is_some() {
+                return Err(MezError::invalid_args(
+                    "restored session contains multiple active windows",
                 ));
             }
             let window_id = self.ids.window();
-            snapshot_to_live_window_ids.insert(window_payload.window_id.clone(), window_id.clone());
-            let window_is_active = Some(window_payload.window_id.as_str())
-                == payload.active_window_id.as_deref()
-                || window_payload.active;
-            if window_is_active && active_window_index.replace(expected_index).is_some() {
-                return Err(MezError::invalid_args(
-                    "snapshot payload contains multiple active windows",
-                ));
-            }
+            restored_to_live_window_ids.insert(restored_window.id.to_string(), window_id.clone());
 
-            let mut panes = Vec::with_capacity(window_payload.panes.len());
-            for (expected_pane_index, pane_payload) in window_payload.panes.iter().enumerate() {
-                if pane_payload.index != expected_pane_index {
+            let mut panes = Vec::with_capacity(restored_window.panes.len());
+            let mut pane_geometries = Vec::with_capacity(restored_window.panes.len());
+            let mut has_complete_geometry = true;
+            for (expected_pane_index, restored_pane) in
+                restored_window.panes.into_iter().enumerate()
+            {
+                if restored_pane.index != expected_pane_index {
                     return Err(MezError::invalid_args(
-                        "snapshot panes must be stored in contiguous index order",
+                        "restored panes must be stored in contiguous index order",
                     ));
                 }
                 let pane_id = self.ids.pane();
                 pane_state_metadata.insert(
                     pane_id.to_string(),
                     PaneStateMetadata {
-                        current_working_directory: pane_payload.current_working_directory.clone(),
-                        readiness_state: pane_payload.readiness_state.clone(),
-                        alternate_screen_active: pane_payload.alternate_screen_active,
+                        current_working_directory: restored_pane.current_working_directory,
+                        readiness_state: restored_pane.readiness_state,
+                        alternate_screen_active: restored_pane.alternate_screen_active,
                     },
                 );
+                match restored_pane.geometry {
+                    Some(geometry) => pane_geometries.push(geometry),
+                    None => has_complete_geometry = false,
+                }
                 panes.push(Pane {
                     id: pane_id,
-                    index: pane_payload.index,
-                    title: pane_payload.title.clone(),
+                    index: restored_pane.index,
+                    title: restored_pane.title,
                     title_source: PaneTitleSource::Explicit,
-                    size: Size::new(pane_payload.columns, pane_payload.rows)?,
-                    active: pane_payload.active,
+                    size: restored_pane.size,
+                    active: restored_pane.active,
                     live: false,
                 });
             }
 
-            let pane_geometries = restored_pane_geometries(window_payload);
-            let layout_root = restored_layout_root(window_payload)?;
-            let layout_policy =
-                LayoutPolicy::from_name(&window_payload.layout_policy).ok_or_else(|| {
-                    MezError::invalid_args("snapshot window layout policy is invalid")
-                })?;
             let mut window = Window::from_restored_parts_with_layout(
                 window_id,
-                window_payload.index,
-                window_payload.name.clone(),
-                Size::new(window_payload.columns, window_payload.rows)?,
+                restored_window.index,
+                restored_window.name,
+                restored_window.size,
                 panes,
                 RestoredWindowLayout {
-                    pane_geometries,
-                    layout_root,
-                    layout_policy,
+                    pane_geometries: has_complete_geometry.then_some(pane_geometries),
+                    layout_root: restored_window.layout_root,
+                    layout_policy: restored_window.layout_policy,
                 },
             )?;
             window.created_at_unix_seconds = Some(restored_at);
@@ -302,39 +307,91 @@ impl Session {
 
         if windows.is_empty() {
             return Err(MezError::invalid_args(
-                "snapshot payload must contain at least one window",
+                "restored session must contain at least one window",
             ));
         }
         let active_window_index = active_window_index.ok_or_else(|| {
-            MezError::invalid_args("snapshot payload must contain exactly one active window")
+            MezError::invalid_args("restored session must contain exactly one active window")
         })?;
-        if let Some(active_window_id) = payload.active_window_id.as_deref()
-            && windows[active_window_index].id.as_str()
-                != snapshot_to_live_window_ids
-                    .get(active_window_id)
-                    .map(WindowId::as_str)
-                    .unwrap_or_default()
-        {
-            return Err(MezError::invalid_args(
-                "snapshot active_window_id does not match the active window",
-            ));
-        }
 
-        let (window_groups, active_group_index, last_active_group_index) =
-            restored_window_groups_with_fresh_ids(
-                payload,
-                &windows,
-                active_window_index,
-                &snapshot_to_live_window_ids,
-                &mut self.ids,
-            )?;
+        let mut active_group_index = None;
+        let mut window_groups = Vec::with_capacity(input.window_groups.len());
+        for (expected_index, restored_group) in input.window_groups.into_iter().enumerate() {
+            if restored_group.index != expected_index {
+                return Err(MezError::invalid_args(
+                    "restored window groups must be stored in contiguous index order",
+                ));
+            }
+            if restored_group.active && active_group_index.replace(expected_index).is_some() {
+                return Err(MezError::invalid_args(
+                    "restored session contains multiple active window groups",
+                ));
+            }
+            let window_ids = restored_group
+                .window_ids
+                .iter()
+                .map(|id| {
+                    restored_to_live_window_ids
+                        .get(id.as_str())
+                        .cloned()
+                        .ok_or_else(|| {
+                            MezError::invalid_args(
+                                "restored window group references an unknown window",
+                            )
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let first_window = window_ids.first().cloned().ok_or_else(|| {
+                MezError::invalid_args("restored window group must contain at least one window")
+            })?;
+            let mut group = WindowGroup::new(
+                self.ids.window_group(),
+                restored_group.index,
+                restored_group.name,
+                first_window,
+                Some(restored_at),
+            );
+            group.window_ids = window_ids;
+            group.active_window_id = restored_group
+                .active_window_id
+                .as_ref()
+                .map(|id| {
+                    restored_to_live_window_ids
+                        .get(id.as_str())
+                        .cloned()
+                        .ok_or_else(|| {
+                            MezError::invalid_args(
+                                "restored window group references an unknown active window",
+                            )
+                        })
+                })
+                .transpose()?;
+            group.last_active_window_id = restored_group
+                .last_active_window_id
+                .as_ref()
+                .map(|id| {
+                    restored_to_live_window_ids
+                        .get(id.as_str())
+                        .cloned()
+                        .ok_or_else(|| {
+                            MezError::invalid_args(
+                                "restored window group references an unknown last active window",
+                            )
+                        })
+                })
+                .transpose()?;
+            window_groups.push(group);
+        }
+        let active_group_index = active_group_index.ok_or_else(|| {
+            MezError::invalid_args("restored session must contain exactly one active window group")
+        })?;
 
         Ok((
             windows,
             window_groups,
             active_window_index,
             active_group_index,
-            last_active_group_index,
+            None,
             pane_state_metadata,
         ))
     }
@@ -539,104 +596,6 @@ fn restored_window_groups(
         MezError::invalid_args("snapshot payload must contain exactly one active window group")
     })?;
     Ok((groups, active_group_index, None))
-}
-
-/// Restores saved window groups while remapping snapshot window identifiers to
-/// freshly allocated live identifiers.
-fn restored_window_groups_with_fresh_ids(
-    payload: &SessionSnapshotPayload,
-    windows: &[Window],
-    active_window_index: usize,
-    snapshot_to_live_window_ids: &BTreeMap<String, WindowId>,
-    ids: &mut IdFactory,
-) -> Result<(Vec<WindowGroup>, usize, Option<usize>)> {
-    if payload.window_groups.is_empty() {
-        let group_id = ids.window_group();
-        let mut default_group = WindowGroup::new(
-            group_id,
-            0,
-            "0",
-            windows[active_window_index].id.clone(),
-            Some(current_unix_seconds()),
-        );
-        default_group.window_ids = windows.iter().map(|window| window.id.clone()).collect();
-        default_group.active_window_id = Some(windows[active_window_index].id.clone());
-        return Ok((vec![default_group], 0, None));
-    }
-
-    let mut active_group_index = None;
-    let mut groups = Vec::with_capacity(payload.window_groups.len());
-    for (expected_index, group_payload) in payload.window_groups.iter().enumerate() {
-        if group_payload.index != expected_index {
-            return Err(MezError::invalid_args(
-                "snapshot window groups must be stored in contiguous index order",
-            ));
-        }
-        let group = restored_window_group_with_fresh_ids(
-            group_payload,
-            snapshot_to_live_window_ids,
-            ids.window_group(),
-            current_unix_seconds(),
-        )?;
-        if group_payload.active && active_group_index.replace(expected_index).is_some() {
-            return Err(MezError::invalid_args(
-                "snapshot payload contains multiple active window groups",
-            ));
-        }
-        groups.push(group);
-    }
-    let active_group_index = active_group_index.ok_or_else(|| {
-        MezError::invalid_args("snapshot payload must contain exactly one active window group")
-    })?;
-    Ok((groups, active_group_index, None))
-}
-
-/// Converts one snapshot window group into a live group with a fresh group id
-/// and remapped live window ids.
-fn restored_window_group_with_fresh_ids(
-    group_payload: &WindowGroupSnapshotPayload,
-    snapshot_to_live_window_ids: &BTreeMap<String, WindowId>,
-    group_id: WindowGroupId,
-    restored_at: u64,
-) -> Result<WindowGroup> {
-    let window_ids = group_payload
-        .window_ids
-        .iter()
-        .map(|window_id| restored_live_window_id(snapshot_to_live_window_ids, window_id))
-        .collect::<Result<Vec<_>>>()?;
-    let first_window = window_ids.first().cloned().ok_or_else(|| {
-        MezError::invalid_args("snapshot window group must contain at least one window")
-    })?;
-    let mut group = WindowGroup::new(
-        group_id,
-        group_payload.index,
-        group_payload.name.clone(),
-        first_window,
-        Some(restored_at),
-    );
-    group.window_ids = window_ids;
-    group.active_window_id = group_payload
-        .active_window_id
-        .as_deref()
-        .map(|window_id| restored_live_window_id(snapshot_to_live_window_ids, window_id))
-        .transpose()?;
-    group.last_active_window_id = group_payload
-        .last_active_window_id
-        .as_deref()
-        .map(|window_id| restored_live_window_id(snapshot_to_live_window_ids, window_id))
-        .transpose()?;
-    Ok(group)
-}
-
-/// Finds the fresh live window id assigned to one snapshot window reference.
-fn restored_live_window_id(
-    snapshot_to_live_window_ids: &BTreeMap<String, WindowId>,
-    window_id: &str,
-) -> Result<WindowId> {
-    snapshot_to_live_window_ids
-        .get(window_id)
-        .cloned()
-        .ok_or_else(|| MezError::invalid_args("snapshot window group references an unknown window"))
 }
 
 /// Converts one validated snapshot window group into a live session group.

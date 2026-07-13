@@ -19,7 +19,9 @@ use super::types::{
 };
 
 /// Decodes a validated product snapshot into dependency-neutral session data.
-fn session_restore_input(payload: &SessionSnapshotPayload) -> Result<SessionRestoreInput> {
+pub(crate) fn session_restore_input(
+    payload: &SessionSnapshotPayload,
+) -> Result<SessionRestoreInput> {
     payload.validate()?;
     let session_id = SessionId::parse('$', payload.session_id.clone())
         .ok_or_else(|| MezError::invalid_args("snapshot payload contains an invalid session id"))?;

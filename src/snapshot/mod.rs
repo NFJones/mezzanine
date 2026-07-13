@@ -29,6 +29,7 @@ mod repository;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod restore;
+pub(crate) use restore::session_restore_input;
 /// Exposes the types module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
