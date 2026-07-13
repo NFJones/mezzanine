@@ -55,17 +55,15 @@ pub(crate) use errors::{
 };
 #[cfg(test)]
 pub use http::ProviderHttpTransport;
-pub use http::{
-    AsyncProviderHttpTransport, DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS,
-    ProviderHttpRequest, ProviderHttpResponse, ReqwestProviderHttpTransport,
-};
+pub use http::{AsyncProviderHttpTransport, ReqwestProviderHttpTransport};
 #[cfg(test)]
 use mez_agent::ANTHROPIC_MESSAGES_API;
 use mez_agent::resolve_provider_api;
 pub use mez_agent::{
-    AgentContextUsageSnapshot, CLAUDE_CODE_API, DEEPSEEK_CHAT_COMPLETIONS_API, ModelTokenUsage,
+    AgentContextUsageSnapshot, CLAUDE_CODE_API, DEEPSEEK_CHAT_COMPLETIONS_API,
+    DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ModelTokenUsage,
     ModelTokenUsageKey, OPENAI_CHAT_COMPLETIONS_API, OPENAI_RESPONSES_API,
-    ProviderApiCompatibility,
+    ProviderApiCompatibility, ProviderHttpRequest, ProviderHttpResponse,
 };
 pub use mez_agent::{ProviderQuotaUsage, provider_quota_usage_from_headers};
 use openai_chat_completions::OpenAiChatCompletionsDialect;

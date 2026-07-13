@@ -10,6 +10,8 @@ use std::collections::BTreeSet;
 
 /// Provider-neutral model token accounting contracts.
 pub mod accounting;
+/// Provider-neutral HTTP request and response contracts.
+pub mod http;
 /// Dependency-neutral project instruction discovery records and parsing.
 pub mod instructions;
 /// Dependency-neutral MCP prompt manifest records.
@@ -22,6 +24,10 @@ pub mod provider;
 pub mod quota;
 
 pub use accounting::{AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsageKey};
+pub use http::{
+    DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ProviderHttpRequest,
+    ProviderHttpResponse,
+};
 pub use mcp::{McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer};
 pub use prompt::{AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptProfile};
 pub use provider::{

@@ -5,11 +5,11 @@
 //! accumulation and provider token-usage extraction.
 
 use super::errors::openai_provider_failure_event_json;
-use super::http::DEFAULT_PROVIDER_MAX_RESPONSE_BYTES;
 use super::schema::OpenAiMaapToolSurface;
 use super::{ModelTokenUsage, OPENAI_MAAP_FUNCTION_TOOL_NAME};
 use crate::error::{MezError, Result};
 use crate::sse::parse_sse_events_with;
+use mez_agent::DEFAULT_PROVIDER_MAX_RESPONSE_BYTES;
 use std::collections::BTreeMap;
 
 /// Maximum native function-call argument bytes accepted from OpenAI responses.

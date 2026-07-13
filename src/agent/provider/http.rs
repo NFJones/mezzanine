@@ -1,8 +1,9 @@
 //! Provider HTTP transport boundary.
 //!
-//! This module owns request/response transport types, reqwest-backed I/O,
-//! response-size bounds, and transport-specific tests. Provider-specific
-//! request construction and response parsing remain in the parent module.
+//! This module owns reqwest-backed I/O and transport-specific tests.
+//! Provider-neutral request/response values and response bounds live in
+//! `mez-agent`; provider-specific construction and parsing remain in the
+//! parent module.
 
 use std::collections::BTreeMap;
 use std::error::Error as StdError;
@@ -11,62 +12,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use crate::error::{MezError, Result};
-
-/// Carries Provider Http Request state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderHttpRequest {
-    /// Stores the method value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub method: String,
-    /// Stores the url value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub url: String,
-    /// Stores the headers value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub headers: BTreeMap<String, String>,
-    /// Stores the body value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub body: String,
-    /// Stores the timeout ms value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub timeout_ms: u64,
-    /// Optional maximum response-body bytes retained by the shared HTTP
-    /// transport before returning a bounded partial body.
-    pub max_response_bytes: Option<usize>,
-}
-
-/// Carries Provider Http Response state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderHttpResponse {
-    /// Stores the status code value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub status_code: u16,
-    /// Stores non-secret response headers returned by the provider transport.
-    pub headers: BTreeMap<String, String>,
-    /// Stores the body value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub body: String,
-}
+use mez_agent::{DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, ProviderHttpRequest, ProviderHttpResponse};
 
 /// Defines the Provider Http Transport behavior contract for this subsystem.
 ///
@@ -98,17 +44,6 @@ pub trait AsyncProviderHttpTransport: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<ProviderHttpResponse>> + Send + 'a>>;
 }
 
-/// Defines the DEFAULT PROVIDER MAX RESPONSE BYTES const used by this subsystem.
-///
-/// Keeping this value documented makes the contract explicit at the module
-/// boundary and avoids relying on call-site inference.
-pub const DEFAULT_PROVIDER_MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-/// Default provider response timeout for long-running model calls.
-///
-/// This timeout is used as a per-read stall timeout, not as a whole-request
-/// deadline, because model reasoning and streaming responses can legitimately
-/// take several minutes before the final body is complete.
-pub const DEFAULT_PROVIDER_TIMEOUT_MS: u64 = 30 * 60 * 1000;
 /// Default provider TCP/TLS connection timeout.
 const DEFAULT_PROVIDER_CONNECT_TIMEOUT_MS: u64 = 30 * 1000;
 /// Carries Reqwest Provider Http Transport state for this subsystem.
