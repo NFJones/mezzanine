@@ -4,8 +4,9 @@
 //! context block storage: model messages, model profiles and overrides,
 //! selected-profile metadata, request envelopes, and profile selection helpers.
 
-use super::{AllowedActionSet, ContextSourceKind, ModelInteractionKind};
+use super::{AllowedActionSet, ModelInteractionKind};
 use mez_agent::{AgentContextResult, McpPromptTool, validate_context_required};
+pub use mez_agent::{ModelMessage, ModelMessageRole};
 
 /// Fallback context window when the model profile does not carry one.
 const MODEL_CONTEXT_FALLBACK_WINDOW_TOKENS: usize = 128 * 1024;
@@ -26,62 +27,6 @@ const OPENAI_STANDARD_GPT5_CONTEXT_WINDOW_TOKENS: usize = 400_000;
 const OPENAI_CODEX_SPARK_CONTEXT_WINDOW_TOKENS: usize = 128_000;
 /// Documented context window for DeepSeek V4 model families.
 const DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS: usize = 1_000_000;
-
-/// Carries Model Message Role state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ModelMessageRole {
-    /// Represents the System case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    System,
-    /// Represents the Developer case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Developer,
-    /// Represents the User case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    User,
-    /// Represents the Assistant case for this enumeration.
-    ///
-    /// Prior assistant messages must keep their role when replayed so the
-    /// model can distinguish user instructions from earlier model output.
-    Assistant,
-    /// Represents the Tool case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Tool,
-}
-
-/// Carries Model Message state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModelMessage {
-    /// Stores the role value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub role: ModelMessageRole,
-    /// Stores the source value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub source: ContextSourceKind,
-    /// Stores the content value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub content: String,
-}
 
 /// Carries Model Profile state for this subsystem.
 ///

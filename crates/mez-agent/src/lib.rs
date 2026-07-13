@@ -65,7 +65,8 @@ pub use config_change::{
 };
 pub use context::{
     AgentContextError, AgentContextResult, AgentRequestAssemblyError,
-    AgentRequestAssemblyErrorKind, AgentRequestAssemblyResult, validate_context_required,
+    AgentRequestAssemblyErrorKind, AgentRequestAssemblyResult, ContextSourceKind, ModelMessage,
+    ModelMessageRole, validate_context_required,
 };
 pub use http::{
     DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ProviderHttpError,

@@ -9,6 +9,75 @@ use std::fmt;
 
 use crate::{AgentPromptError, AgentPromptErrorKind};
 
+/// Identifies the provenance and stability class of one model-context value.
+///
+/// Providers use this contract to preserve role provenance, choose stable
+/// prompt-cache prefixes, and keep volatile controller state out of reusable
+/// request material without depending on product runtime types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextSourceKind {
+    /// Product system instructions.
+    System,
+    /// The active user-authored instruction.
+    UserInstruction,
+    /// Explicitly loaded skill instructions.
+    SkillInstruction,
+    /// Developer-authored instructions.
+    DeveloperInstruction,
+    /// Runtime policy context.
+    Policy,
+    /// Product configuration context.
+    Configuration,
+    /// A local agent-to-agent message.
+    LocalMessage,
+    /// Runtime-generated controller guidance or state.
+    RuntimeHint,
+    /// Repository or project guidance.
+    ProjectGuidance,
+    /// Retrieved durable memory context.
+    Memory,
+    /// A legacy or role-neutral transcript entry.
+    Transcript,
+    /// A prior user-authored transcript entry.
+    TranscriptUser,
+    /// A prior assistant-authored transcript entry.
+    TranscriptAssistant,
+    /// A prior tool or action transcript entry.
+    TranscriptTool,
+    /// A compact ledger of evidence already gathered in the active turn.
+    EvidenceLedger,
+    /// Immutable evidence promoted from settled turn actions.
+    CommittedEvidence,
+    /// A current-turn action result.
+    ActionResult,
+}
+
+/// Provider-independent role of one model message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelMessageRole {
+    /// System-level instructions.
+    System,
+    /// Developer-level instructions.
+    Developer,
+    /// User-authored input.
+    User,
+    /// Prior assistant output.
+    Assistant,
+    /// Tool or action evidence.
+    Tool,
+}
+
+/// Provider-independent message supplied to model request rendering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelMessage {
+    /// Provider-facing role of the message.
+    pub role: ModelMessageRole,
+    /// Provenance and stability class of the message.
+    pub source: ContextSourceKind,
+    /// Model-visible message content.
+    pub content: String,
+}
+
 /// Result type returned by deterministic agent-context operations.
 pub type AgentContextResult<T> = Result<T, AgentContextError>;
 
