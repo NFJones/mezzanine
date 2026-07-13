@@ -125,11 +125,11 @@ fn runtime_applies_frame_display_options_from_config_layers() {
     assert!(config.window_frames_enabled);
     assert_eq!(
         config.window_frame_position,
-        crate::terminal::TerminalFramePosition::Bottom
+        mez_mux::presentation::TerminalFramePosition::Bottom
     );
     assert_eq!(
         config.window_frame_style,
-        crate::terminal::TerminalFrameStyle::Inverse
+        mez_mux::presentation::TerminalFrameStyle::Inverse
     );
     assert_eq!(
         config.window_frame_template,
@@ -146,11 +146,11 @@ fn runtime_applies_frame_display_options_from_config_layers() {
     assert!(config.pane_frames_enabled);
     assert_eq!(
         config.pane_frame_position,
-        crate::terminal::TerminalFramePosition::Bottom
+        mez_mux::presentation::TerminalFramePosition::Bottom
     );
     assert_eq!(
         config.pane_frame_style,
-        crate::terminal::TerminalFrameStyle::Bold
+        mez_mux::presentation::TerminalFrameStyle::Bold
     );
     assert_eq!(config.pane_frame_template, "#{pane.index} #{agent.status}");
     assert_eq!(

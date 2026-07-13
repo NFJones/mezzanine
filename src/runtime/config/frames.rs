@@ -5,6 +5,8 @@
 //! separates terminal layout and input shortcut parsing from agent, provider,
 //! permission, and hook config domains.
 
+use mez_mux::presentation::{TerminalFramePosition, TerminalFrameStyle};
+
 use super::*;
 
 /// Runs the runtime pane frames enabled from config operation for this subsystem.
@@ -107,12 +109,8 @@ pub(in crate::runtime) fn runtime_pane_frame_template_from_config(root: &Value) 
 /// on duplicated control-flow logic.
 pub(in crate::runtime) fn runtime_window_frame_position_from_config(
     root: &Value,
-) -> Result<crate::terminal::TerminalFramePosition> {
-    runtime_frame_position_from_config(
-        root,
-        "window",
-        crate::terminal::TerminalFramePosition::Bottom,
-    )
+) -> Result<TerminalFramePosition> {
+    runtime_frame_position_from_config(root, "window", TerminalFramePosition::Bottom)
 }
 
 /// Runs the runtime pane frame position from config operation for this subsystem.
@@ -122,8 +120,8 @@ pub(in crate::runtime) fn runtime_window_frame_position_from_config(
 /// on duplicated control-flow logic.
 pub(in crate::runtime) fn runtime_pane_frame_position_from_config(
     root: &Value,
-) -> Result<crate::terminal::TerminalFramePosition> {
-    runtime_frame_position_from_config(root, "pane", crate::terminal::TerminalFramePosition::Top)
+) -> Result<TerminalFramePosition> {
+    runtime_frame_position_from_config(root, "pane", TerminalFramePosition::Top)
 }
 
 /// Runs the runtime window frame style from config operation for this subsystem.
@@ -133,7 +131,7 @@ pub(in crate::runtime) fn runtime_pane_frame_position_from_config(
 /// on duplicated control-flow logic.
 pub(in crate::runtime) fn runtime_window_frame_style_from_config(
     root: &Value,
-) -> Result<crate::terminal::TerminalFrameStyle> {
+) -> Result<TerminalFrameStyle> {
     runtime_frame_style_from_config(root, "window")
 }
 
@@ -144,7 +142,7 @@ pub(in crate::runtime) fn runtime_window_frame_style_from_config(
 /// on duplicated control-flow logic.
 pub(in crate::runtime) fn runtime_pane_frame_style_from_config(
     root: &Value,
-) -> Result<crate::terminal::TerminalFrameStyle> {
+) -> Result<TerminalFrameStyle> {
     runtime_frame_style_from_config(root, "pane")
 }
 
@@ -218,8 +216,8 @@ fn runtime_frame_template_from_config(
 fn runtime_frame_position_from_config(
     root: &Value,
     target: &str,
-    default: crate::terminal::TerminalFramePosition,
-) -> Result<crate::terminal::TerminalFramePosition> {
+    default: TerminalFramePosition,
+) -> Result<TerminalFramePosition> {
     let Some(frames) = runtime_json_object(root, "frames") else {
         return Ok(default);
     };
@@ -235,8 +233,8 @@ fn runtime_frame_position_from_config(
         )));
     };
     match position {
-        "top" | "border" => Ok(crate::terminal::TerminalFramePosition::Top),
-        "bottom" => Ok(crate::terminal::TerminalFramePosition::Bottom),
+        "top" | "border" => Ok(TerminalFramePosition::Top),
+        "bottom" => Ok(TerminalFramePosition::Bottom),
         _ => Err(MezError::config(format!(
             "frames.{target}.position must be top, bottom, or border"
         ))),
@@ -248,18 +246,15 @@ fn runtime_frame_position_from_config(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn runtime_frame_style_from_config(
-    root: &Value,
-    target: &str,
-) -> Result<crate::terminal::TerminalFrameStyle> {
+fn runtime_frame_style_from_config(root: &Value, target: &str) -> Result<TerminalFrameStyle> {
     let Some(frames) = runtime_json_object(root, "frames") else {
-        return Ok(crate::terminal::TerminalFrameStyle::Default);
+        return Ok(TerminalFrameStyle::Default);
     };
     let Some(frame) = frames.get(target).and_then(Value::as_object) else {
-        return Ok(crate::terminal::TerminalFrameStyle::Default);
+        return Ok(TerminalFrameStyle::Default);
     };
     let Some(value) = frame.get("style") else {
-        return Ok(crate::terminal::TerminalFrameStyle::Default);
+        return Ok(TerminalFrameStyle::Default);
     };
     let Some(style) = runtime_json_string(Some(value)) else {
         return Err(MezError::config(format!(
@@ -267,10 +262,10 @@ fn runtime_frame_style_from_config(
         )));
     };
     match style {
-        "default" => Ok(crate::terminal::TerminalFrameStyle::Default),
-        "bold" => Ok(crate::terminal::TerminalFrameStyle::Bold),
-        "underline" => Ok(crate::terminal::TerminalFrameStyle::Underline),
-        "inverse" | "reverse" => Ok(crate::terminal::TerminalFrameStyle::Inverse),
+        "default" => Ok(TerminalFrameStyle::Default),
+        "bold" => Ok(TerminalFrameStyle::Bold),
+        "underline" => Ok(TerminalFrameStyle::Underline),
+        "inverse" | "reverse" => Ok(TerminalFrameStyle::Inverse),
         _ => Err(MezError::config(format!(
             "frames.{target}.style must be default, bold, underline, or inverse"
         ))),

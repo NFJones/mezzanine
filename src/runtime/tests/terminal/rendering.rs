@@ -443,7 +443,7 @@ fn runtime_mouse_focus_targets_content_below_merged_top_pane_frame() {
     let mut service = test_runtime_service_with_size(Size::new(20, 8).unwrap());
     service.window_frames_enabled = false;
     service.pane_frames_enabled = true;
-    service.pane_frame_position = crate::terminal::TerminalFramePosition::Top;
+    service.pane_frame_position = mez_mux::presentation::TerminalFramePosition::Top;
     let primary = service
         .attach_primary("primary", true, Size::new(20, 8).unwrap(), 120)
         .unwrap();

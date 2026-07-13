@@ -4,6 +4,8 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+use mez_mux::presentation::{TerminalFramePosition, TerminalFrameStyle};
+
 use crate::terminal::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
 
 use super::{
@@ -333,16 +335,16 @@ impl RuntimeSessionService {
                 crate::terminal::DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE.to_string(),
             window_status_pill_definitions: BTreeMap::new(),
             window_status_pill_cache: std::cell::RefCell::new(RuntimeStatusPillCache::default()),
-            window_frame_position: crate::terminal::TerminalFramePosition::Bottom,
-            window_frame_style: crate::terminal::TerminalFrameStyle::Default,
+            window_frame_position: TerminalFramePosition::Bottom,
+            window_frame_style: TerminalFrameStyle::Default,
             window_frame_visible_fields: crate::terminal::DEFAULT_WINDOW_FRAME_VISIBLE_FIELDS
                 .iter()
                 .map(|field| (*field).to_string())
                 .collect(),
             pane_frames_enabled: true,
             pane_frame_template: crate::terminal::DEFAULT_PANE_FRAME_TEMPLATE.to_string(),
-            pane_frame_position: crate::terminal::TerminalFramePosition::Top,
-            pane_frame_style: crate::terminal::TerminalFrameStyle::Default,
+            pane_frame_position: TerminalFramePosition::Top,
+            pane_frame_style: TerminalFrameStyle::Default,
             pane_frame_visible_fields: crate::terminal::DEFAULT_PANE_FRAME_VISIBLE_FIELDS
                 .iter()
                 .map(|field| (*field).to_string())
