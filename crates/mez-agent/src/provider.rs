@@ -188,6 +188,36 @@ impl ProviderCapabilities {
     }
 }
 
+/// Describes one model returned by a provider catalog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderModelInfo {
+    /// Stable provider model identifier.
+    pub id: String,
+    /// Optional provider display label.
+    pub display_name: Option<String>,
+    /// Provider-supported reasoning levels.
+    pub reasoning_levels: Vec<String>,
+    /// Provider-reported or locally documented context-window size in tokens.
+    pub context_window_tokens: Option<usize>,
+    /// Provider-reported capability tags such as `tool_use`.
+    pub capabilities: Vec<String>,
+}
+
+/// Describes a normalized provider model-catalog response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderModelCatalog {
+    /// Configured provider identifier.
+    pub provider: String,
+    /// Secret-safe catalog source description.
+    pub source: String,
+    /// Models returned by the provider or product adapter.
+    pub models: Vec<ProviderModelInfo>,
+    /// Reasoning levels supported across the catalog.
+    pub reasoning_levels: Vec<String>,
+    /// Provider-reported quota usage for the catalog request.
+    pub quota_usage: Vec<crate::ProviderQuotaUsage>,
+}
+
 /// Failure to resolve a configured provider API compatibility.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderApiCompatibilityError {
@@ -231,7 +261,7 @@ pub fn resolve_provider_api(
 mod tests {
     use super::{
         ANTHROPIC_MESSAGES_API, ProviderApiCompatibility, ProviderApiCompatibilityError,
-        ProviderCapabilities, resolve_provider_api,
+        ProviderCapabilities, ProviderModelCatalog, ProviderModelInfo, resolve_provider_api,
     };
 
     #[test]
@@ -293,5 +323,28 @@ mod tests {
             ProviderCapabilities::for_kind("custom"),
             ProviderCapabilities::unsupported()
         );
+    }
+
+    #[test]
+    /// Verifies normalized model-catalog contracts preserve provider identity,
+    /// model capabilities, context limits, reasoning levels, and quota data.
+    fn provider_model_catalog_preserves_normalized_metadata() {
+        let catalog = ProviderModelCatalog {
+            provider: "provider".to_string(),
+            source: "remote".to_string(),
+            models: vec![ProviderModelInfo {
+                id: "model".to_string(),
+                display_name: Some("Model".to_string()),
+                reasoning_levels: vec!["high".to_string()],
+                context_window_tokens: Some(128_000),
+                capabilities: vec!["tool_use".to_string()],
+            }],
+            reasoning_levels: vec!["high".to_string()],
+            quota_usage: Vec::new(),
+        };
+
+        assert_eq!(catalog.provider, "provider");
+        assert_eq!(catalog.models[0].context_window_tokens, Some(128_000));
+        assert_eq!(catalog.models[0].capabilities, ["tool_use"]);
     }
 }

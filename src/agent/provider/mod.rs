@@ -34,9 +34,8 @@ pub(crate) use cache::openai_stable_prefix_material_for_request;
 pub use cache::{OpenAiPromptCacheDiagnostics, openai_prompt_cache_diagnostics_for_request};
 use catalog::provider_catalog_reasoning_levels;
 pub use catalog::{
-    ProviderModelCatalog, ProviderModelInfo, openai_default_reasoning_levels_for_model,
-    openai_models_endpoint_for_responses_endpoint, openai_responses_endpoint_for_base_url,
-    parse_openai_models_http_body,
+    openai_default_reasoning_levels_for_model, openai_models_endpoint_for_responses_endpoint,
+    openai_responses_endpoint_for_base_url, parse_openai_models_http_body,
 };
 pub use chat_completions::ChatCompletionsProvider;
 pub use claude_code::ClaudeCodeProvider;
@@ -63,7 +62,8 @@ pub use mez_agent::{
     AgentContextUsageSnapshot, CLAUDE_CODE_API, DEEPSEEK_CHAT_COMPLETIONS_API,
     DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ModelTokenUsage,
     ModelTokenUsageKey, OPENAI_CHAT_COMPLETIONS_API, OPENAI_RESPONSES_API,
-    ProviderApiCompatibility, ProviderHttpRequest, ProviderHttpResponse,
+    ProviderApiCompatibility, ProviderHttpRequest, ProviderHttpResponse, ProviderModelCatalog,
+    ProviderModelInfo,
 };
 pub use mez_agent::{ProviderQuotaUsage, provider_quota_usage_from_headers};
 use openai_chat_completions::OpenAiChatCompletionsDialect;

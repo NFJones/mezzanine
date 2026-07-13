@@ -6,67 +6,11 @@
 
 use super::{
     CHATGPT_RESPONSES_ENDPOINT, MezError, OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT,
-    ProviderQuotaUsage, Result, validate_non_empty,
+    Result, validate_non_empty,
 };
 use crate::agent::known_model_context_window_tokens;
 
-/// Carries Provider Model Info state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderModelInfo {
-    /// Stores the id value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub id: String,
-    /// Stores the display name value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub display_name: Option<String>,
-    /// Stores the reasoning levels value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub reasoning_levels: Vec<String>,
-    /// Provider-reported or locally documented context-window size in tokens.
-    pub context_window_tokens: Option<usize>,
-    /// Provider-reported capability tags for this model, such as LM Studio's
-    /// `tool_use` marker.
-    pub capabilities: Vec<String>,
-}
-
-/// Carries Provider Model Catalog state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderModelCatalog {
-    /// Stores the provider value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub provider: String,
-    /// Stores the source value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub source: String,
-    /// Stores the models value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub models: Vec<ProviderModelInfo>,
-    /// Stores the reasoning levels value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub reasoning_levels: Vec<String>,
-    /// Provider-reported quota usage percentages for the catalog request.
-    pub quota_usage: Vec<ProviderQuotaUsage>,
-}
+use mez_agent::ProviderModelInfo;
 
 /// Derives the OpenAI Responses endpoint from a configured provider base URL.
 ///
