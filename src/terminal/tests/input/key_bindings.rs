@@ -73,11 +73,11 @@ fn parses_key_binding_notation_for_default_surface() {
     );
     assert_eq!(
         KeyChord::parse("C-C-a").unwrap_err().kind(),
-        crate::error::MezErrorKind::InvalidArgs
+        mez_mux::MuxErrorKind::InvalidArgs
     );
     assert_eq!(
         KeyChord::parse("DefinitelyNotAKey").unwrap_err().kind(),
-        crate::error::MezErrorKind::InvalidArgs
+        mez_mux::MuxErrorKind::InvalidArgs
     );
 }
 

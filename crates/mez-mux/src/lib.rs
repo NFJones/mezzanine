@@ -8,6 +8,7 @@
 
 pub mod copy;
 mod error;
+pub mod input;
 pub mod layout;
 pub mod presentation;
 pub mod process;
