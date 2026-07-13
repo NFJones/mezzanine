@@ -910,10 +910,7 @@ pub(super) fn agent_shell_permissions_display(policy: &PermissionPolicy) -> Stri
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn permission_preset_name(preset: crate::permissions::PermissionPreset) -> &'static str {
-    match preset {
-        crate::permissions::PermissionPreset::ReadOnly => "read-only",
-        crate::permissions::PermissionPreset::Auto => "auto",
-    }
+    preset.as_str()
 }
 
 /// Runs the approval policy name operation for this subsystem.
@@ -922,11 +919,7 @@ pub(super) fn permission_preset_name(preset: crate::permissions::PermissionPrese
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn approval_policy_name(policy: crate::permissions::ApprovalPolicy) -> &'static str {
-    match policy {
-        crate::permissions::ApprovalPolicy::Ask => "ask",
-        crate::permissions::ApprovalPolicy::AutoAllow => "auto-allow",
-        crate::permissions::ApprovalPolicy::FullAccess => "full-access",
-    }
+    policy.as_str()
 }
 
 /// Runs the agent shell mcp display operation for this subsystem.

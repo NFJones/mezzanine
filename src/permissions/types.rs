@@ -26,46 +26,7 @@ use super::{
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_COMMAND_SHELL_CLASSIFICATION: &str = "unix-like";
 
-/// Carries Permission Preset state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PermissionPreset {
-    /// Represents the Read Only case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    ReadOnly,
-    /// Represents the Auto case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Auto,
-}
-
-/// Carries Approval Policy state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ApprovalPolicy {
-    /// Represents the Ask case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Ask,
-    /// Represents the Auto Allow case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    AutoAllow,
-    /// Represents the Full Access case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    FullAccess,
-}
+pub use mez_agent::{ApprovalPolicy, PermissionPreset};
 
 /// Carries Permission Authority Change state for this subsystem.
 ///
