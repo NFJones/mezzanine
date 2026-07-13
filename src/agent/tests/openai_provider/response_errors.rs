@@ -393,11 +393,17 @@ fn openai_response_parser_distinguishes_missing_and_zero_cached_tokens() {
 fn openai_response_parser_reports_api_errors_and_missing_text() {
     let error = parse_openai_responses_http_body(r#"{"error":{"message":"bad auth"}}"#, "gpt-test")
         .unwrap_err();
-    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert_eq!(
+        error.kind(),
+        mez_agent::ProviderResponseErrorKind::InvalidState
+    );
     assert!(error.message().contains("bad auth"));
 
     let missing =
         parse_openai_responses_http_body(r#"{"model":"gpt-test","output":[]}"#, "gpt-test")
             .unwrap_err();
-    assert_eq!(missing.kind(), crate::error::MezErrorKind::InvalidState);
+    assert_eq!(
+        missing.kind(),
+        mez_agent::ProviderResponseErrorKind::InvalidState
+    );
 }

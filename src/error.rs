@@ -142,6 +142,20 @@ impl From<mez_agent::ProviderRequestAssemblyError> for MezError {
     }
 }
 
+impl From<mez_agent::ProviderResponseError> for MezError {
+    fn from(error: mez_agent::ProviderResponseError) -> Self {
+        let mut product_error = match error.kind() {
+            mez_agent::ProviderResponseErrorKind::InvalidState => {
+                Self::invalid_state(error.message())
+            }
+        };
+        if let Some(failure_json) = error.provider_failure_json() {
+            product_error = product_error.with_provider_failure_json(failure_json.to_string());
+        }
+        product_error
+    }
+}
+
 impl From<mez_agent::ProviderModelCatalogParseError> for MezError {
     fn from(error: mez_agent::ProviderModelCatalogParseError) -> Self {
         Self::invalid_state(error.message())

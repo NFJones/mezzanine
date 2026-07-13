@@ -90,9 +90,10 @@ pub use provider::{
     OPENAI_CHAT_COMPLETIONS_API, OPENAI_RESPONSES_API, ProviderApiCompatibility,
     ProviderApiCompatibilityError, ProviderCapabilities, ProviderModelCatalog,
     ProviderModelCatalogParseError, ProviderModelInfo, ProviderRequestAssemblyError,
-    ProviderRequestAssemblyErrorKind, ProviderRequestAssemblyResult,
-    openai_default_reasoning_levels_for_model, parse_openai_models_http_body_with,
-    provider_catalog_reasoning_levels, resolve_provider_api, validate_provider_request_required,
+    ProviderRequestAssemblyErrorKind, ProviderRequestAssemblyResult, ProviderResponseError,
+    ProviderResponseErrorKind, ProviderResponseResult, openai_default_reasoning_levels_for_model,
+    parse_openai_models_http_body_with, provider_catalog_reasoning_levels, resolve_provider_api,
+    validate_provider_request_required,
 };
 pub use provider_diagnostics::{
     provider_error_detail, provider_failure_event_json, provider_failure_json,

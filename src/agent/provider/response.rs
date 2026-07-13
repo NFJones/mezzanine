@@ -7,8 +7,11 @@
 use super::errors::openai_provider_failure_event_json;
 use super::schema::OpenAiMaapToolSurface;
 use super::{ModelTokenUsage, OPENAI_MAAP_FUNCTION_TOOL_NAME};
-use crate::error::{MezError, Result};
-use mez_agent::{DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, parse_sse_events_with};
+use crate::error::Result;
+use mez_agent::{
+    DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, ProviderResponseError, ProviderResponseResult,
+    parse_sse_events_with,
+};
 use std::collections::BTreeMap;
 
 /// Maximum native function-call argument bytes accepted from OpenAI responses.
@@ -21,9 +24,9 @@ pub(super) fn parse_openai_responses_provider_body(
     stream: bool,
 ) -> Result<(String, String, ModelTokenUsage)> {
     if stream {
-        parse_openai_responses_stream_body(body, fallback_model)
+        parse_openai_responses_stream_body(body, fallback_model).map_err(Into::into)
     } else {
-        parse_openai_responses_http_body(body, fallback_model)
+        parse_openai_responses_http_body(body, fallback_model).map_err(Into::into)
     }
 }
 
@@ -31,16 +34,16 @@ pub(super) fn parse_openai_responses_provider_body(
 pub fn parse_openai_responses_http_body(
     body: &str,
     fallback_model: &str,
-) -> Result<(String, String, ModelTokenUsage)> {
+) -> ProviderResponseResult<(String, String, ModelTokenUsage)> {
     let value: serde_json::Value = serde_json::from_str(body).map_err(|error| {
-        MezError::invalid_state(format!("OpenAI response was not JSON: {error}"))
+        ProviderResponseError::invalid_state(format!("OpenAI response was not JSON: {error}"))
     })?;
     if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
         let message = error
             .get("message")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("OpenAI response contained an error");
-        return Err(MezError::invalid_state(message)
+        return Err(ProviderResponseError::invalid_state(message)
             .with_provider_failure_json(openai_provider_failure_event_json(&value)));
     }
     let model = value
@@ -57,7 +60,7 @@ pub fn parse_openai_responses_http_body(
         })
         .or_else(|| collect_openai_output_text(&value));
     let Some(raw_text) = raw_text else {
-        return Err(MezError::invalid_state(
+        return Err(ProviderResponseError::invalid_state(
             "OpenAI response did not contain text or MAAP function-call output",
         ));
     };
@@ -69,7 +72,7 @@ pub fn parse_openai_responses_http_body(
 pub fn parse_openai_responses_stream_body(
     body: &str,
     fallback_model: &str,
-) -> Result<(String, String, ModelTokenUsage)> {
+) -> ProviderResponseResult<(String, String, ModelTokenUsage)> {
     let mut model = None;
     let mut completed = false;
     let mut usage = ModelTokenUsage::default();
@@ -87,14 +90,16 @@ pub fn parse_openai_responses_stream_body(
                 return Ok(());
             }
             let value: serde_json::Value = serde_json::from_str(data).map_err(|error| {
-                MezError::invalid_state(format!("OpenAI stream event was not JSON: {error}"))
+                ProviderResponseError::invalid_state(format!(
+                    "OpenAI stream event was not JSON: {error}"
+                ))
             })?;
             if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
                 let message = error
                     .get("message")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("OpenAI stream contained an error");
-                return Err(MezError::invalid_state(message)
+                return Err(ProviderResponseError::invalid_state(message)
                     .with_provider_failure_json(openai_provider_failure_event_json(&value)));
             }
             let event_usage = openai_token_usage_from_response_value(&value);
@@ -165,17 +170,18 @@ pub fn parse_openai_responses_stream_body(
                     completed = true;
                 }
                 "response.failed" => {
-                    return Err(MezError::invalid_state(openai_stream_event_error_detail(
-                        &value,
-                        "OpenAI stream failed",
-                    ))
+                    return Err(ProviderResponseError::invalid_state(
+                        openai_stream_event_error_detail(&value, "OpenAI stream failed"),
+                    )
                     .with_provider_failure_json(openai_provider_failure_event_json(&value)));
                 }
                 "response.incomplete" => {
-                    return Err(MezError::invalid_state(openai_stream_event_error_detail(
-                        &value,
-                        "OpenAI stream returned an incomplete response",
-                    ))
+                    return Err(ProviderResponseError::invalid_state(
+                        openai_stream_event_error_detail(
+                            &value,
+                            "OpenAI stream returned an incomplete response",
+                        ),
+                    )
                     .with_provider_failure_json(openai_provider_failure_event_json(&value)));
                 }
                 "message" | "" => {
@@ -203,12 +209,12 @@ pub fn parse_openai_responses_stream_body(
         output_item_text
     };
     if raw_text.is_empty() {
-        return Err(MezError::invalid_state(
+        return Err(ProviderResponseError::invalid_state(
             "OpenAI stream did not contain text or MAAP function-call output",
         ));
     }
     if !completed && output_item_text_empty && function_calls.is_empty() {
-        return Err(MezError::invalid_state(
+        return Err(ProviderResponseError::invalid_state(
             "OpenAI stream closed before response.completed",
         ));
     }
@@ -319,7 +325,7 @@ struct OpenAiFunctionCallAccumulator {
 /// Collects native MAAP function-call arguments from a non-streaming response.
 fn collect_openai_maap_function_call_arguments(
     value: &serde_json::Value,
-) -> Result<Option<String>> {
+) -> ProviderResponseResult<Option<String>> {
     let Some(output) = value.get("output").and_then(serde_json::Value::as_array) else {
         return Ok(None);
     };
@@ -333,11 +339,13 @@ fn collect_openai_maap_function_call_arguments(
         })
         .map(|item| {
             let arguments = openai_function_call_arguments(item).ok_or_else(|| {
-                MezError::invalid_state("OpenAI MAAP function call did not contain arguments")
+                ProviderResponseError::invalid_state(
+                    "OpenAI MAAP function call did not contain arguments",
+                )
             })?;
             openai_function_call_arguments_string(arguments)
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<ProviderResponseResult<Vec<_>>>()?;
     one_openai_maap_function_call_arguments(arguments)
 }
 
@@ -346,7 +354,7 @@ fn collect_openai_maap_function_call_event_item(
     function_calls: &mut BTreeMap<u64, OpenAiFunctionCallAccumulator>,
     event: &serde_json::Value,
     item: &serde_json::Value,
-) -> Result<()> {
+) -> ProviderResponseResult<()> {
     if item.get("type").and_then(serde_json::Value::as_str) != Some("function_call") {
         return Ok(());
     }
@@ -366,7 +374,7 @@ fn collect_openai_maap_function_call_event_item(
 /// Collects the final MAAP arguments from completed streaming accumulators.
 fn collect_openai_maap_function_call_arguments_from_accumulators(
     function_calls: &BTreeMap<u64, OpenAiFunctionCallAccumulator>,
-) -> Result<Option<String>> {
+) -> ProviderResponseResult<Option<String>> {
     let arguments = function_calls
         .values()
         .filter(|call| {
@@ -408,7 +416,7 @@ fn openai_function_call_name_is_maap(name: &str) -> bool {
 fn push_openai_function_call_argument_delta(
     call: &mut OpenAiFunctionCallAccumulator,
     delta: &str,
-) -> Result<()> {
+) -> ProviderResponseResult<()> {
     if delta.is_empty() {
         return Ok(());
     }
@@ -425,22 +433,22 @@ fn push_openai_function_call_argument_delta(
 fn set_openai_function_call_complete_arguments(
     call: &mut OpenAiFunctionCallAccumulator,
     arguments: &str,
-) -> Result<()> {
+) -> ProviderResponseResult<()> {
     validate_openai_function_call_argument_size(arguments)?;
     call.complete_arguments = Some(arguments.to_string());
     Ok(())
 }
 
 /// Copies function-call arguments only after enforcing the provider cap.
-fn openai_function_call_arguments_string(arguments: &str) -> Result<String> {
+fn openai_function_call_arguments_string(arguments: &str) -> ProviderResponseResult<String> {
     validate_openai_function_call_argument_size(arguments)?;
     Ok(arguments.to_string())
 }
 
 /// Rejects oversized native MAAP argument buffers before they can dominate memory.
-fn validate_openai_function_call_argument_size(arguments: &str) -> Result<()> {
+fn validate_openai_function_call_argument_size(arguments: &str) -> ProviderResponseResult<()> {
     if arguments.len() > OPENAI_FUNCTION_CALL_ARGUMENT_LIMIT_BYTES {
-        return Err(MezError::invalid_state(format!(
+        return Err(ProviderResponseError::invalid_state(format!(
             "OpenAI MAAP function call arguments exceeded {} bytes",
             OPENAI_FUNCTION_CALL_ARGUMENT_LIMIT_BYTES
         )));
@@ -449,11 +457,13 @@ fn validate_openai_function_call_argument_size(arguments: &str) -> Result<()> {
 }
 
 /// Returns zero, one, or an error for collected native MAAP argument buffers.
-fn one_openai_maap_function_call_arguments(arguments: Vec<String>) -> Result<Option<String>> {
+fn one_openai_maap_function_call_arguments(
+    arguments: Vec<String>,
+) -> ProviderResponseResult<Option<String>> {
     match arguments.len() {
         0 => Ok(None),
         1 => Ok(arguments.into_iter().next()),
-        _ => Err(MezError::invalid_state(
+        _ => Err(ProviderResponseError::invalid_state(
             "OpenAI response contained multiple MAAP function calls in one turn",
         )),
     }

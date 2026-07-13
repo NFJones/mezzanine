@@ -61,6 +61,70 @@ impl fmt::Display for ProviderRequestAssemblyError {
 
 impl std::error::Error for ProviderRequestAssemblyError {}
 
+/// Result type returned while decoding one provider response.
+pub type ProviderResponseResult<T> = Result<T, ProviderResponseError>;
+
+/// Stable categories for provider response failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderResponseErrorKind {
+    /// Provider output was malformed, incomplete, or internally inconsistent.
+    InvalidState,
+}
+
+/// A typed failure returned while decoding one provider response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderResponseError {
+    kind: ProviderResponseErrorKind,
+    message: String,
+    provider_failure_json: Option<String>,
+}
+
+impl ProviderResponseError {
+    /// Creates an invalid-state response failure without provider diagnostics.
+    pub fn invalid_state(message: impl Into<String>) -> Self {
+        Self {
+            kind: ProviderResponseErrorKind::InvalidState,
+            message: message.into(),
+            provider_failure_json: None,
+        }
+    }
+
+    /// Attaches a sanitized provider failure payload to this error.
+    pub fn with_provider_failure_json(mut self, failure_json: impl Into<String>) -> Self {
+        self.provider_failure_json = Some(failure_json.into());
+        self
+    }
+
+    /// Returns the stable response failure category.
+    pub fn kind(&self) -> ProviderResponseErrorKind {
+        self.kind
+    }
+
+    /// Returns the diagnostic message without formatting the error.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Returns the optional sanitized provider failure payload.
+    pub fn provider_failure_json(&self) -> Option<&str> {
+        self.provider_failure_json.as_deref()
+    }
+}
+
+impl From<crate::SseParseError> for ProviderResponseError {
+    fn from(error: crate::SseParseError) -> Self {
+        Self::invalid_state(error.message())
+    }
+}
+
+impl fmt::Display for ProviderResponseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ProviderResponseError {}
+
 /// Validates one required provider request field.
 pub fn validate_provider_request_required(
     field: &str,
@@ -310,8 +374,8 @@ impl std::error::Error for ProviderModelCatalogParseError {}
 #[cfg(test)]
 mod request_assembly_tests {
     use super::{
-        ProviderRequestAssemblyError, ProviderRequestAssemblyErrorKind,
-        validate_provider_request_required,
+        ProviderRequestAssemblyError, ProviderRequestAssemblyErrorKind, ProviderResponseError,
+        ProviderResponseErrorKind, validate_provider_request_required,
     };
 
     /// Provider request validation preserves invalid-argument diagnostics for
@@ -331,6 +395,21 @@ mod request_assembly_tests {
         let error = ProviderRequestAssemblyError::invalid_state("encoding failed");
         assert_eq!(error.kind(), ProviderRequestAssemblyErrorKind::InvalidState);
         assert_eq!(error.to_string(), "encoding failed");
+    }
+
+    /// Provider response failures retain their stable category and optional
+    /// sanitized provider payload for conversion by the composition boundary.
+    #[test]
+    fn provider_response_errors_preserve_sanitized_failure_payloads() {
+        let error = ProviderResponseError::invalid_state("response failed")
+            .with_provider_failure_json(r#"{"status_code":500}"#);
+
+        assert_eq!(error.kind(), ProviderResponseErrorKind::InvalidState);
+        assert_eq!(error.message(), "response failed");
+        assert_eq!(
+            error.provider_failure_json(),
+            Some(r#"{"status_code":500}"#)
+        );
     }
 }
 
