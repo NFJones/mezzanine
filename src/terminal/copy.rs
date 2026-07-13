@@ -10,7 +10,7 @@ use super::{
     terminal_graphemes, validate_copy_position,
 };
 use crate::readline::readline_word_column_range;
-pub use mez_mux::copy::CopyPosition;
+pub use mez_mux::copy::{CopyPosition, SearchDirection};
 
 // Copy mode, selection, and search primitives.
 
@@ -28,24 +28,6 @@ pub(crate) const AGENT_COPY_WRAP_CONTINUATION: &str = "\u{1e}mez-copy-wrap-conti
 /// Encodes one markdown source-line identity with its raw copy text.
 pub(crate) fn encode_agent_copy_source_line(source_index: usize, copy_line: &str) -> String {
     format!("{AGENT_COPY_SOURCE_LINE_PREFIX}{source_index}:{copy_line}")
-}
-
-/// Carries Search Direction state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SearchDirection {
-    /// Represents the Forward case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Forward,
-    /// Represents the Backward case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Backward,
 }
 
 /// Carries Copy Mode state for this subsystem.
