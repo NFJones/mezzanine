@@ -18,6 +18,20 @@ pub const AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE: &str = "text/markdown; charse
 /// Canonical content type for diff model-authored user-facing text.
 pub const AGENT_OUTPUT_TEXT_DIFF_CONTENT_TYPE: &str = "text/x-diff; charset=utf-8";
 
+/// Returns whether a string satisfies the agent skill-name grammar.
+///
+/// Skill names are non-empty lowercase ASCII identifiers containing letters,
+/// digits, or hyphens, with at least one alphanumeric character.
+pub fn is_valid_skill_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && name
+            .bytes()
+            .any(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+}
+
 /// Normalizes the optional media type on a model-authored user-facing action.
 pub fn normalize_agent_output_content_type(content_type: Option<&str>) -> String {
     match content_type
@@ -749,7 +763,7 @@ impl AgentAction {
             AgentActionPayload::RequestSkills => Ok(()),
             AgentActionPayload::CallSkill { name, .. } => {
                 validate_non_empty("skill name", name)?;
-                if !crate::skills::is_valid_skill_name(name) {
+                if !is_valid_skill_name(name) {
                     return Err(MezError::invalid_args(
                         "call_skill name must contain only lowercase letters, digits, and hyphens",
                     ));

@@ -6,7 +6,7 @@
 //! it reads `SKILL.md` metadata for catalogs, loads full skill text only on
 //! explicit invocation, and never executes auxiliary skill files.
 
-use crate::agent::baseline_slash_commands;
+use crate::agent::{baseline_slash_commands, is_valid_skill_name};
 use crate::command::baseline_commands;
 use crate::config::{
     CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_VALUE_DESCRIPTION, CURRENT_CONFIG_SCHEMA_VERSION,
@@ -842,30 +842,16 @@ fn split_skill_front_matter(text: &str) -> std::result::Result<(&str, &str), Str
     Err("SKILL.md front matter is not closed".to_string())
 }
 
-/// Returns whether a string satisfies Mezzanine's skill-name grammar.
-///
-/// # Parameters
-/// - `name`: Candidate skill name.
-pub fn is_valid_skill_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        && name
-            .bytes()
-            .any(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         BUILTIN_ADD_DOC_SKILL_NAME, BUILTIN_ADD_ISSUES_SKILL_NAME, BUILTIN_ADD_RESEARCH_SKILL_NAME,
         BUILTIN_CREATE_MACRO_NAME, BUILTIN_CREATE_SKILL_NAME, BUILTIN_FIX_ISSUES_SKILL_NAME,
         BUILTIN_MEZ_REFERENCE_SKILL_NAME, BUILTIN_SKILL_PATH_PREFIX, ManagedBuiltinSkillSyncStatus,
-        SkillSource, discover_skill_catalog, is_valid_skill_name, load_skill_document,
-        parse_skill_prompt_invocation, skill_context_text, split_skill_front_matter,
-        sync_managed_builtin_skills,
+        SkillSource, discover_skill_catalog, load_skill_document, parse_skill_prompt_invocation,
+        skill_context_text, split_skill_front_matter, sync_managed_builtin_skills,
     };
+    use crate::agent::is_valid_skill_name;
     use std::fs;
     use std::path::{Path, PathBuf};
 
