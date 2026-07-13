@@ -14,7 +14,6 @@ use crate::auth::AuthStore;
 use crate::error::{MezError, Result};
 use crate::mcp::{McpRegistry, McpToolCallPlan, McpToolCallResponse};
 use crate::permissions::{PathScopes, PermissionPolicy, SessionApprovalStore};
-use crate::transcript::{AgentTranscriptStore, TranscriptEntry, TranscriptRole};
 use mez_agent::{McpPromptTool, RuleDecision};
 
 /// Exposes the actions module boundary.
@@ -120,7 +119,10 @@ pub use maap::{
     parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json,
     parse_maap_action_batch_json_for_turn,
 };
-pub use mez_agent::{PROVIDER_TRANSCRIPT_EVENT_MARKER, ProviderTranscriptEvent};
+pub use mez_agent::{
+    AgentTranscriptEntry, AgentTranscriptRole, PROVIDER_TRANSCRIPT_EVENT_MARKER,
+    ProviderTranscriptEvent, TranscriptContractError, TranscriptPersistence,
+};
 pub use network::{
     NetworkActionPlan, execute_network_action_with_transport_async, network_action_plan,
     network_action_structured_content_json, network_action_summary,

@@ -5,10 +5,10 @@
 //! shaping separate from the turn runner and shell/MCP action executors.
 
 use super::super::{
-    ActionResult, AgentAction, AgentActionPayload, AgentTranscriptStore, AgentTurnRecord,
-    AgentTurnState, ContextSourceKind, MaapBatch, MezError, ModelMessage, ModelMessageRole,
-    ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey, ProviderTranscriptEvent,
-    Result, TranscriptEntry, TranscriptRole,
+    ActionResult, AgentAction, AgentActionPayload, AgentTranscriptEntry, AgentTranscriptRole,
+    AgentTurnRecord, AgentTurnState, ContextSourceKind, MaapBatch, MezError, ModelMessage,
+    ModelMessageRole, ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey,
+    ProviderTranscriptEvent, Result, TranscriptPersistence,
 };
 use super::action_result_transcript_content;
 
@@ -56,7 +56,7 @@ pub fn transcript_entries_for_execution(
     created_at_unix_seconds: u64,
     turn: &AgentTurnRecord,
     execution: &AgentTurnExecution,
-) -> Result<Vec<TranscriptEntry>> {
+) -> Result<Vec<AgentTranscriptEntry>> {
     if first_sequence == 0 || created_at_unix_seconds == 0 {
         return Err(MezError::invalid_args(
             "transcript sequence and creation time must be non-zero",
@@ -68,11 +68,11 @@ pub fn transcript_entries_for_execution(
         let Some(content) = durable_request_transcript_content(message) else {
             continue;
         };
-        entries.push(TranscriptEntry {
+        entries.push(AgentTranscriptEntry {
             conversation_id: conversation_id.to_string(),
             sequence,
             created_at_unix_seconds,
-            role: TranscriptRole::User,
+            role: AgentTranscriptRole::User,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             pane_id: turn.pane_id.clone(),
@@ -81,11 +81,11 @@ pub fn transcript_entries_for_execution(
         sequence = sequence.saturating_add(1);
     }
     for event in provider_transcript_entries_for_execution(execution) {
-        entries.push(TranscriptEntry {
+        entries.push(AgentTranscriptEntry {
             conversation_id: conversation_id.to_string(),
             sequence,
             created_at_unix_seconds,
-            role: TranscriptRole::System,
+            role: AgentTranscriptRole::System,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             pane_id: turn.pane_id.clone(),
@@ -93,11 +93,11 @@ pub fn transcript_entries_for_execution(
         });
         sequence = sequence.saturating_add(1);
     }
-    entries.push(TranscriptEntry {
+    entries.push(AgentTranscriptEntry {
         conversation_id: conversation_id.to_string(),
         sequence,
         created_at_unix_seconds,
-        role: TranscriptRole::Assistant,
+        role: AgentTranscriptRole::Assistant,
         turn_id: turn.turn_id.clone(),
         agent_id: turn.agent_id.clone(),
         pane_id: turn.pane_id.clone(),
@@ -106,11 +106,11 @@ pub fn transcript_entries_for_execution(
     sequence = sequence.saturating_add(1);
 
     for result in &execution.action_results {
-        entries.push(TranscriptEntry {
+        entries.push(AgentTranscriptEntry {
             conversation_id: conversation_id.to_string(),
             sequence,
             created_at_unix_seconds,
-            role: TranscriptRole::Tool,
+            role: AgentTranscriptRole::Tool,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             pane_id: turn.pane_id.clone(),
@@ -119,7 +119,9 @@ pub fn transcript_entries_for_execution(
         sequence = sequence.saturating_add(1);
     }
     for entry in &entries {
-        entry.validate()?;
+        entry
+            .validate()
+            .map_err(|error| MezError::invalid_args(error.to_string()))?;
     }
     Ok(entries)
 }
@@ -524,13 +526,16 @@ fn bounded_transcript_field(value: &str) -> String {
 }
 
 /// Append a completed bounded turn execution to the durable transcript store.
-pub fn persist_turn_execution_transcript(
-    store: &AgentTranscriptStore,
+pub fn persist_turn_execution_transcript<P>(
+    store: &P,
     conversation_id: &str,
     created_at_unix_seconds: u64,
     turn: &AgentTurnRecord,
     execution: &AgentTurnExecution,
-) -> Result<Vec<TranscriptEntry>> {
+) -> Result<Vec<AgentTranscriptEntry>>
+where
+    P: TranscriptPersistence<Error = MezError>,
+{
     let first_sequence = next_transcript_sequence(store, conversation_id)?;
     let entries = transcript_entries_for_execution(
         conversation_id,
@@ -549,13 +554,9 @@ pub fn persist_turn_execution_transcript(
 ///
 /// Callers receive a typed result or error with context from the underlying
 /// runtime operation.
-pub fn next_transcript_sequence(
-    store: &AgentTranscriptStore,
-    conversation_id: &str,
-) -> Result<u64> {
-    match store.next_sequence(conversation_id) {
-        Ok(sequence) => Ok(sequence),
-        Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Ok(1),
-        Err(error) => Err(error),
-    }
+pub fn next_transcript_sequence<P>(store: &P, conversation_id: &str) -> Result<u64>
+where
+    P: TranscriptPersistence<Error = MezError>,
+{
+    Ok(store.next_sequence(conversation_id)?.unwrap_or(1))
 }

@@ -67,9 +67,9 @@ use crate::mcp::{McpPromptTool, McpRegistry, McpToolCallPlan, McpToolCallRespons
 use crate::permissions::{PathScopes, PermissionPolicy, SessionApprovalStore};
 use crate::test_support::agent::ActionBuilder;
 use crate::test_support::temp::TestTempDir;
-use crate::transcript::{AgentTranscriptStore, TranscriptRole};
+use crate::transcript::{AgentTranscriptStore, TranscriptRole as DurableTranscriptRole};
 use base64::Engine;
-use mez_agent::{MemoryContextRecord, MemoryContextScope};
+use mez_agent::{AgentTranscriptRole as TranscriptRole, MemoryContextRecord, MemoryContextScope};
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::Write;

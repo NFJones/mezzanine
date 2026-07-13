@@ -42,6 +42,8 @@ pub mod scheduler;
 pub mod slash;
 /// Provider-independent subagent cooperation and scope contracts.
 pub mod subagent;
+/// Provider-independent transcript projection and persistence contracts.
+pub mod transcript;
 
 pub use accounting::{AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsageKey};
 pub use auth::{ProviderAuthMetadata, ProviderCredentialKind};
@@ -79,6 +81,9 @@ pub use slash::{
     baseline_slash_commands, parse_slash_command,
 };
 pub use subagent::{CooperationMode, SubagentScopeDeclaration};
+pub use transcript::{
+    AgentTranscriptEntry, AgentTranscriptRole, TranscriptContractError, TranscriptPersistence,
+};
 
 /// Maximum number of issue records a model-authored query may request.
 pub const MAX_ISSUE_QUERY_LIMIT: u64 = 200;

@@ -147,7 +147,7 @@ fn turn_execution_persistence_appends_to_durable_transcript_store() {
     assert_eq!(second[0].sequence, first.len() as u64 + 1);
     assert_eq!(persisted.len(), first.len() + second.len());
     assert!(persisted.iter().any(|entry| {
-        entry.role == TranscriptRole::Tool && entry.content.contains("exit_code")
+        entry.role == DurableTranscriptRole::Tool && entry.content.contains("exit_code")
     }));
 }
 
