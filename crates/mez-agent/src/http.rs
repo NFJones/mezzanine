@@ -40,6 +40,110 @@ pub struct ProviderHttpResponse {
     pub body: String,
 }
 
+/// One parsed server-sent event block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SseEvent {
+    /// Optional event name from the last `event:` field in the block.
+    pub name: Option<String>,
+    /// Joined `data:` field payload with embedded newlines between lines.
+    pub data: String,
+}
+
+/// Syntax-level failure produced while parsing server-sent events.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SseParseError {
+    message: String,
+}
+
+impl SseParseError {
+    /// Returns the caller-supplied diagnostic for a body without data events.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl std::fmt::Display for SseParseError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SseParseError {}
+
+/// Parses SSE event blocks and dispatches each data-bearing event to a caller.
+///
+/// Empty blocks, comments, and blocks without `data:` fields are ignored. LF
+/// and CRLF input are accepted, while endpoint-specific completion and JSON
+/// policy remain with the caller.
+pub fn parse_sse_events_with<E, F>(
+    body: &str,
+    missing_message: &'static str,
+    mut on_event: F,
+) -> Result<(), E>
+where
+    E: From<SseParseError>,
+    F: FnMut(Option<&str>, &str) -> Result<(), E>,
+{
+    let mut saw_event = false;
+    let mut name = None;
+    let mut data = String::new();
+    let mut has_data = false;
+
+    for raw_line in body.split('\n') {
+        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+        if line.is_empty() {
+            if has_data {
+                saw_event = true;
+                on_event(name.as_deref(), data.as_str())?;
+            }
+            name = None;
+            data.clear();
+            has_data = false;
+            continue;
+        }
+        if line.starts_with(':') {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("event:") {
+            name = Some(value.trim().to_string());
+        } else if let Some(value) = line.strip_prefix("data:") {
+            if has_data {
+                data.push('\n');
+            }
+            data.push_str(value.trim_start());
+            has_data = true;
+        }
+    }
+
+    if has_data {
+        saw_event = true;
+        on_event(name.as_deref(), data.as_str())?;
+    }
+    if !saw_event {
+        return Err(SseParseError {
+            message: missing_message.to_string(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+/// Parses all data-bearing SSE event blocks from one complete response body.
+pub fn parse_sse_events(
+    body: &str,
+    missing_message: &'static str,
+) -> Result<Vec<SseEvent>, SseParseError> {
+    let mut events = Vec::new();
+    parse_sse_events_with(body, missing_message, |name, data| {
+        events.push(SseEvent {
+            name: name.map(str::to_string),
+            data: data.to_string(),
+        });
+        Ok(())
+    })?;
+    Ok(events)
+}
+
 /// Incrementally detects terminal events in a buffered provider SSE body.
 ///
 /// The detector scans each completed event block at most once. Product-owned
@@ -173,7 +277,7 @@ fn sse_data_lines_equal(block: &str, target: &str) -> bool {
 mod tests {
     use super::{
         DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ProviderHttpRequest,
-        ProviderHttpResponse, ProviderSseTerminalDetector,
+        ProviderHttpResponse, ProviderSseTerminalDetector, parse_sse_events,
     };
     use std::collections::BTreeMap;
 
@@ -199,6 +303,33 @@ mod tests {
         };
         assert_eq!(response.status_code, 200);
         assert_eq!(response.body, "ok");
+    }
+
+    /// Verifies syntax-level parsing preserves event names and joins multiple
+    /// `data:` fields while accepting CRLF framing and ignoring comments.
+    #[test]
+    fn parses_named_multiline_sse_events() {
+        let events = parse_sse_events(
+            ": comment\r\nevent: message\r\ndata: {\"a\":1}\r\ndata: {\"b\":2}\r\n\r\n",
+            "missing events",
+        )
+        .expect("SSE event should parse");
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].name.as_deref(), Some("message"));
+        assert_eq!(events[0].data, "{\"a\":1}\n{\"b\":2}");
+    }
+
+    /// Verifies complete-body parsing flushes a final data event even when the
+    /// peer closes immediately without a trailing blank-line separator.
+    #[test]
+    fn parses_unterminated_final_sse_event() {
+        let events = parse_sse_events("event: message\ndata: {\"done\":true}", "missing events")
+            .expect("SSE event should parse");
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].name.as_deref(), Some("message"));
+        assert_eq!(events[0].data, "{\"done\":true}");
     }
 
     /// Complete terminal failures are recognized so transports can preserve

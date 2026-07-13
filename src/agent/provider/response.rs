@@ -8,8 +8,7 @@ use super::errors::openai_provider_failure_event_json;
 use super::schema::OpenAiMaapToolSurface;
 use super::{ModelTokenUsage, OPENAI_MAAP_FUNCTION_TOOL_NAME};
 use crate::error::{MezError, Result};
-use crate::sse::parse_sse_events_with;
-use mez_agent::DEFAULT_PROVIDER_MAX_RESPONSE_BYTES;
+use mez_agent::{DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, parse_sse_events_with};
 use std::collections::BTreeMap;
 
 /// Maximum native function-call argument bytes accepted from OpenAI responses.

@@ -114,6 +114,12 @@ impl From<mez_agent::AgentShellSessionError> for MezError {
     }
 }
 
+impl From<mez_agent::SseParseError> for MezError {
+    fn from(error: mez_agent::SseParseError) -> Self {
+        Self::invalid_state(error.message())
+    }
+}
+
 impl From<mez_mux::MuxError> for MezError {
     fn from(error: mez_mux::MuxError) -> Self {
         match error.kind() {

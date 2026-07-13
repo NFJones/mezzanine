@@ -69,7 +69,8 @@ pub use context::{
 };
 pub use http::{
     DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ProviderHttpRequest,
-    ProviderHttpResponse, ProviderSseTerminalDetector,
+    ProviderHttpResponse, ProviderSseTerminalDetector, SseEvent, SseParseError, parse_sse_events,
+    parse_sse_events_with,
 };
 pub use mcp::{
     AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellMcpToolSummary,

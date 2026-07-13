@@ -18,7 +18,7 @@ use super::{
     parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
     provider_quota_usage_from_headers, validate_non_empty,
 };
-use crate::sse::parse_sse_events_with;
+use mez_agent::parse_sse_events_with;
 use std::collections::BTreeMap;
 
 /// Default Anthropic Messages API version used when provider options omit one.
