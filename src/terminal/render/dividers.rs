@@ -4,7 +4,7 @@
 //! divider cells, box-drawing glyph connection masks, mouse-border hit cells,
 //! and styled/plain divider canvas writes.
 
-use crate::layout::{PaneGeometry, Window, range_overlap_u16};
+use crate::layout::{PaneGeometry, Window};
 use crate::terminal::{GraphicRendition, MouseBorderCell, TerminalStyleSpan, UiTheme};
 
 pub use mez_mux::presentation::pane_frame_merges_into_divider;
@@ -34,42 +34,6 @@ pub fn pane_border_cells_for_geometries(
 #[cfg(test)]
 pub(crate) fn pane_divider_glyph_for_test(up: bool, down: bool, left: bool, right: bool) -> char {
     mez_mux::presentation::pane_divider_glyph(up, down, left, right)
-}
-
-/// Returns whether a pane geometry has a shared divider immediately below it.
-pub(super) fn geometry_has_bottom_divider(
-    geometry: &PaneGeometry,
-    geometries: &[PaneGeometry],
-) -> bool {
-    let bottom = geometry.row.saturating_add(geometry.rows);
-    geometries.iter().any(|candidate| {
-        candidate.index != geometry.index
-            && candidate.row == bottom
-            && range_overlap_u16(
-                geometry.column,
-                geometry.column.saturating_add(geometry.columns),
-                candidate.column,
-                candidate.column.saturating_add(candidate.columns),
-            ) > 0
-    })
-}
-
-/// Returns whether the geometry's right edge is occupied by a shared divider.
-pub(super) fn geometry_has_right_divider(
-    geometry: &PaneGeometry,
-    geometries: &[PaneGeometry],
-) -> bool {
-    let right = geometry.column.saturating_add(geometry.columns);
-    geometries.iter().any(|candidate| {
-        candidate.index != geometry.index
-            && candidate.column == right
-            && range_overlap_u16(
-                geometry.row,
-                geometry.row.saturating_add(geometry.rows),
-                candidate.row,
-                candidate.row.saturating_add(candidate.rows),
-            ) > 0
-    })
 }
 
 /// Writes pane-divider glyphs into a plain text canvas.

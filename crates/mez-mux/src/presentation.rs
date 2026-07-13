@@ -6,6 +6,8 @@
 
 use std::collections::BTreeMap;
 
+use mez_terminal::TerminalSize;
+
 use crate::layout::{PaneGeometry, range_overlap_u16};
 
 /// Per-pane metadata consumed by mux frame and body presentation.
@@ -161,6 +163,87 @@ pub fn place_group_frame<T>(lines: &mut Vec<T>, frame: T, authoritative_rows: u1
     let rows = usize::from(authoritative_rows);
     lines.insert(0, frame);
     lines.truncate(rows);
+}
+
+/// Returns the drawable window body after reserving a mux-managed frame row.
+pub fn rendered_window_body_size(size: TerminalSize, window_frames_enabled: bool) -> TerminalSize {
+    let rows = if window_frames_enabled {
+        size.rows.saturating_sub(1)
+    } else {
+        size.rows
+    };
+    TerminalSize {
+        columns: size.columns,
+        rows: rows.max(1),
+    }
+}
+
+/// Returns whether a pane has a shared horizontal divider immediately below it.
+pub fn geometry_has_bottom_divider(geometry: &PaneGeometry, geometries: &[PaneGeometry]) -> bool {
+    let bottom = geometry.row.saturating_add(geometry.rows);
+    geometries.iter().any(|candidate| {
+        candidate.index != geometry.index
+            && candidate.row == bottom
+            && range_overlap_u16(
+                geometry.column,
+                geometry.column.saturating_add(geometry.columns),
+                candidate.column,
+                candidate.column.saturating_add(candidate.columns),
+            ) > 0
+    })
+}
+
+/// Returns whether a pane has a shared vertical divider immediately to its right.
+pub fn geometry_has_right_divider(geometry: &PaneGeometry, geometries: &[PaneGeometry]) -> bool {
+    let right = geometry.column.saturating_add(geometry.columns);
+    geometries.iter().any(|candidate| {
+        candidate.index != geometry.index
+            && candidate.column == right
+            && range_overlap_u16(
+                geometry.row,
+                geometry.row.saturating_add(geometry.rows),
+                candidate.row,
+                candidate.row.saturating_add(candidate.rows),
+            ) > 0
+    })
+}
+
+/// Returns the visible pane region after reserving shared divider cells.
+pub fn pane_render_region_size_for_geometry(
+    geometry: &PaneGeometry,
+    geometries: &[PaneGeometry],
+) -> TerminalSize {
+    TerminalSize {
+        columns: geometry
+            .columns
+            .saturating_sub(u16::from(geometry_has_right_divider(geometry, geometries)))
+            .max(1),
+        rows: geometry
+            .rows
+            .saturating_sub(u16::from(geometry_has_bottom_divider(geometry, geometries)))
+            .max(1),
+    }
+}
+
+/// Returns the pane body size available after divider and frame reservations.
+pub fn pane_content_size_for_geometry(
+    geometry: &PaneGeometry,
+    geometries: &[PaneGeometry],
+    pane_frames_enabled: bool,
+    pane_frame_position: TerminalFramePosition,
+) -> TerminalSize {
+    let render_region = pane_render_region_size_for_geometry(geometry, geometries);
+    let frame_rows = if pane_frames_enabled
+        && !pane_frame_merges_into_divider(geometry, geometries, pane_frame_position)
+    {
+        1
+    } else {
+        0
+    };
+    TerminalSize {
+        columns: render_region.columns,
+        rows: render_region.rows.saturating_sub(frame_rows).max(1),
+    }
 }
 
 /// Returns whether a pane frame should occupy an adjacent shared divider row.
@@ -475,11 +558,15 @@ pub enum TerminalFrameStyle {
 
 #[cfg(test)]
 mod tests {
+    use mez_terminal::TerminalSize;
+
     use crate::layout::PaneGeometry;
 
     use super::{
-        TerminalFramePosition, TerminalFrameStyle, pane_divider_cells, pane_divider_glyph,
-        pane_frame_merges_into_divider, place_group_frame, place_window_frame,
+        TerminalFramePosition, TerminalFrameStyle, pane_content_size_for_geometry,
+        pane_divider_cells, pane_divider_glyph, pane_frame_merges_into_divider,
+        pane_render_region_size_for_geometry, place_group_frame, place_window_frame,
+        rendered_window_body_size,
     };
 
     /// Verifies neutral frame contracts retain the product's established
@@ -505,6 +592,49 @@ mod tests {
         let mut group = vec!["body-1", "body-2", "body-3"];
         place_group_frame(&mut group, "group", 3);
         assert_eq!(group, ["group", "body-1", "body-2"]);
+    }
+
+    /// Verifies mux-owned sizing reserves frame and divider cells while
+    /// retaining a positive body for narrow pane regions.
+    #[test]
+    fn pane_presentation_sizes_reserve_mux_owned_rows_and_columns() {
+        let size = TerminalSize::new(20, 10).unwrap();
+        assert_eq!(
+            rendered_window_body_size(size, true),
+            TerminalSize::new(20, 9).unwrap()
+        );
+
+        let left = PaneGeometry {
+            index: 0,
+            column: 0,
+            row: 0,
+            columns: 10,
+            rows: 5,
+        };
+        let right = PaneGeometry {
+            index: 1,
+            column: 10,
+            row: 0,
+            columns: 10,
+            rows: 5,
+        };
+        let bottom = PaneGeometry {
+            index: 2,
+            column: 0,
+            row: 5,
+            columns: 20,
+            rows: 5,
+        };
+        let geometries = [left, right, bottom];
+
+        assert_eq!(
+            pane_render_region_size_for_geometry(&left, &geometries),
+            TerminalSize::new(9, 4).unwrap()
+        );
+        assert_eq!(
+            pane_content_size_for_geometry(&left, &geometries, true, TerminalFramePosition::Top,),
+            TerminalSize::new(9, 3).unwrap()
+        );
     }
 
     /// Verifies pane-frame placement consumes shared split geometry without

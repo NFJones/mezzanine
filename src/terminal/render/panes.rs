@@ -436,12 +436,10 @@ pub(super) fn zoomed_pane_geometry(index: usize, size: Size) -> PaneGeometry {
 
 /// Returns the drawable window body after reserving mux-managed window frames.
 pub fn rendered_window_body_size(size: Size, window_frames_enabled: bool) -> Result<Size> {
-    let rows = if window_frames_enabled {
-        size.rows.saturating_sub(1)
-    } else {
-        size.rows
-    };
-    Size::new(size.columns, rows.max(1)).map_err(MezError::from)
+    Ok(mez_mux::presentation::rendered_window_body_size(
+        size,
+        window_frames_enabled,
+    ))
 }
 
 /// Runs the window body size operation for this subsystem.
@@ -467,15 +465,9 @@ pub fn pane_render_region_size_for_geometry(
     geometry: &PaneGeometry,
     geometries: &[PaneGeometry],
 ) -> Result<Size> {
-    let columns = geometry
-        .columns
-        .saturating_sub(u16::from(geometry_has_right_divider(geometry, geometries)))
-        .max(1);
-    let rows = geometry
-        .rows
-        .saturating_sub(u16::from(geometry_has_bottom_divider(geometry, geometries)))
-        .max(1);
-    Size::new(columns, rows).map_err(MezError::from)
+    Ok(mez_mux::presentation::pane_render_region_size_for_geometry(
+        geometry, geometries,
+    ))
 }
 
 /// Returns the pane body size available to the pane's PTY primary process.
@@ -489,16 +481,12 @@ pub fn pane_content_size_for_geometry(
     pane_frames_enabled: bool,
     pane_frame_position: TerminalFramePosition,
 ) -> Result<Size> {
-    let render_region = pane_render_region_size_for_geometry(geometry, geometries)?;
-    let frame_rows = if pane_frames_enabled
-        && !pane_frame_merges_into_divider(geometry, geometries, pane_frame_position)
-    {
-        1
-    } else {
-        0
-    };
-    let rows = render_region.rows.saturating_sub(frame_rows).max(1);
-    Size::new(render_region.columns, rows).map_err(MezError::from)
+    Ok(mez_mux::presentation::pane_content_size_for_geometry(
+        geometry,
+        geometries,
+        pane_frames_enabled,
+        pane_frame_position,
+    ))
 }
 
 /// Bounded destination for one rendered pane inside the window body canvas.

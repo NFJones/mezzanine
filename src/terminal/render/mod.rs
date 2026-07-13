@@ -28,8 +28,7 @@ mod text;
 #[cfg(test)]
 pub(crate) use dividers::pane_divider_glyph_for_test;
 use dividers::{
-    draw_pane_dividers, draw_styled_pane_dividers, geometry_has_bottom_divider,
-    geometry_has_right_divider, merged_pane_frame_boundary_style_spans,
+    draw_pane_dividers, draw_styled_pane_dividers, merged_pane_frame_boundary_style_spans,
 };
 pub use dividers::{pane_border_cells_for_geometries, pane_frame_merges_into_divider};
 use frame::{
