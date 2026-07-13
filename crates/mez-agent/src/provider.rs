@@ -694,6 +694,8 @@ impl std::error::Error for ProviderEndpointError {}
 
 /// Default direct OpenAI Responses API endpoint used with API-key auth.
 pub const OPENAI_RESPONSES_ENDPOINT: &str = "https://api.openai.com/v1/responses";
+/// Canonical provider tool name carrying one validated MAAP action batch.
+pub const MAAP_ACTION_BATCH_TOOL_NAME: &str = "submit_maap_action_batch";
 /// Default direct OpenAI model catalog endpoint used with API-key auth.
 pub const OPENAI_MODELS_ENDPOINT: &str = "https://api.openai.com/v1/models";
 /// Default ChatGPT browser-auth backend endpoint used with device credentials.
@@ -988,16 +990,23 @@ impl std::error::Error for ProviderModelCatalogParseError {}
 #[cfg(test)]
 mod request_assembly_tests {
     use super::{
-        CHATGPT_RESPONSES_ENDPOINT, OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT,
-        ProviderEndpointErrorKind, ProviderRequestAssemblyError, ProviderRequestAssemblyErrorKind,
-        ProviderResponseError, ProviderResponseErrorKind, openai_auto_sizing_response_format,
-        openai_current_action_result_entry_text, openai_current_user_prompt_entry_text,
-        openai_executed_result_entry_text, openai_historical_action_result_entry_text,
-        openai_historical_user_prompt_entry_text, openai_macro_judge_response_format,
-        openai_models_endpoint_for_responses_endpoint, openai_prompt_cache_key,
-        openai_request_options, openai_responses_endpoint_for_base_url,
+        CHATGPT_RESPONSES_ENDPOINT, MAAP_ACTION_BATCH_TOOL_NAME, OPENAI_MODELS_ENDPOINT,
+        OPENAI_RESPONSES_ENDPOINT, ProviderEndpointErrorKind, ProviderRequestAssemblyError,
+        ProviderRequestAssemblyErrorKind, ProviderResponseError, ProviderResponseErrorKind,
+        openai_auto_sizing_response_format, openai_current_action_result_entry_text,
+        openai_current_user_prompt_entry_text, openai_executed_result_entry_text,
+        openai_historical_action_result_entry_text, openai_historical_user_prompt_entry_text,
+        openai_macro_judge_response_format, openai_models_endpoint_for_responses_endpoint,
+        openai_prompt_cache_key, openai_request_options, openai_responses_endpoint_for_base_url,
         openai_service_tier_for_latency_preference, validate_provider_request_required,
     };
+
+    /// Provider adapters share one stable MAAP action-batch tool name so
+    /// request construction and response parsing cannot drift by provider.
+    #[test]
+    fn maap_action_batch_tool_name_is_stable() {
+        assert_eq!(MAAP_ACTION_BATCH_TOOL_NAME, "submit_maap_action_batch");
+    }
 
     /// OpenAI prompt-cache routing keys follow provider and lineage identity
     /// while deliberately ignoring model identity and rendered prompt text.

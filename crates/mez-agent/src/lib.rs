@@ -88,11 +88,11 @@ pub use prompt::{
 };
 pub use provider::{
     ANTHROPIC_MESSAGES_API, CHATGPT_RESPONSES_ENDPOINT, CLAUDE_CODE_API,
-    DEEPSEEK_CHAT_COMPLETIONS_API, OPENAI_CHAT_COMPLETIONS_API, OPENAI_MODELS_ENDPOINT,
-    OPENAI_RESPONSES_API, OPENAI_RESPONSES_ENDPOINT, OpenAiPromptCacheDiagnostics,
-    OpenAiRenderedMessages, OpenAiRequestOptions, ProviderApiCompatibility,
-    ProviderApiCompatibilityError, ProviderCapabilities, ProviderEndpointError,
-    ProviderEndpointErrorKind, ProviderEndpointResult, ProviderModelCatalog,
+    DEEPSEEK_CHAT_COMPLETIONS_API, MAAP_ACTION_BATCH_TOOL_NAME, OPENAI_CHAT_COMPLETIONS_API,
+    OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_API, OPENAI_RESPONSES_ENDPOINT,
+    OpenAiPromptCacheDiagnostics, OpenAiRenderedMessages, OpenAiRequestOptions,
+    ProviderApiCompatibility, ProviderApiCompatibilityError, ProviderCapabilities,
+    ProviderEndpointError, ProviderEndpointErrorKind, ProviderEndpointResult, ProviderModelCatalog,
     ProviderModelCatalogParseError, ProviderModelInfo, ProviderRequestAssemblyError,
     ProviderRequestAssemblyErrorKind, ProviderRequestAssemblyResult, ProviderResponseError,
     ProviderResponseErrorKind, ProviderResponseResult, openai_auto_sizing_response_format,

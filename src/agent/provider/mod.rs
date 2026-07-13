@@ -91,7 +91,7 @@ pub const OPENAI_PROJECT_HEADER: &str = "OpenAI-Project";
 /// ChatGPT account selection header required by ChatGPT-backed requests.
 pub const CHATGPT_ACCOUNT_ID_HEADER: &str = "ChatGPT-Account-ID";
 /// OpenAI function tool name used to carry one validated MAAP action batch.
-pub const OPENAI_MAAP_FUNCTION_TOOL_NAME: &str = "submit_maap_action_batch";
+pub use mez_agent::MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME;
 /// DeepSeek shim function tool name used for capability routing turns.
 pub const DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME: &str = "mez_decide_capability";
 /// DeepSeek shim function tool name used for response-only turns.
