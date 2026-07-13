@@ -1778,7 +1778,9 @@ pub fn pane_frame_agent_status_pillbox_cells(
                     .map(|size| size.columns)
                     .unwrap_or(geometry.columns),
             );
-            let row = pane_frame_row_for_geometry(geometry, geometries, position, row_offset);
+            let row = mez_mux::presentation::pane_frame_row_for_geometry(
+                geometry, geometries, position, row_offset,
+            );
             let fill = if pane_frame_merges_into_divider(geometry, geometries, position) {
                 pane_frame_fill_char(template)
             } else {
@@ -1822,32 +1824,6 @@ pub(super) fn pane_agent_status_field_from_frame_field(
         "policy.mode" => Some(PaneAgentStatusField::ApprovalPolicy),
         _ => None,
     }
-}
-
-/// Returns the rendered terminal row for a pane-frame status segment.
-pub(super) fn pane_frame_row_for_geometry(
-    geometry: &PaneGeometry,
-    geometries: &[PaneGeometry],
-    position: TerminalFramePosition,
-    row_offset: u16,
-) -> u16 {
-    if pane_frame_merges_into_divider(geometry, geometries, position) {
-        return row_offset.saturating_add(match position {
-            TerminalFramePosition::Top => geometry.row.saturating_sub(1),
-            TerminalFramePosition::Bottom => {
-                geometry.row.saturating_add(geometry.rows).saturating_sub(1)
-            }
-        });
-    }
-    row_offset.saturating_add(match position {
-        TerminalFramePosition::Top => geometry.row,
-        TerminalFramePosition::Bottom => {
-            let render_rows = pane_render_region_size_for_geometry(geometry, geometries)
-                .map(|size| size.rows)
-                .unwrap_or(geometry.rows);
-            geometry.row.saturating_add(render_rows).saturating_sub(1)
-        }
-    })
 }
 
 /// Returns rendered cells occupied by each default window-group pill.

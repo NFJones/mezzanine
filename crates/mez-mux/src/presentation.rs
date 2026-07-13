@@ -246,6 +246,33 @@ pub fn pane_content_size_for_geometry(
     }
 }
 
+/// Returns the rendered terminal row occupied by one pane frame.
+///
+/// Frames that merge into a shared horizontal divider use that divider row;
+/// standalone frames use the pane render region's top or bottom edge.
+pub fn pane_frame_row_for_geometry(
+    geometry: &PaneGeometry,
+    geometries: &[PaneGeometry],
+    position: TerminalFramePosition,
+    row_offset: u16,
+) -> u16 {
+    if pane_frame_merges_into_divider(geometry, geometries, position) {
+        return row_offset.saturating_add(match position {
+            TerminalFramePosition::Top => geometry.row.saturating_sub(1),
+            TerminalFramePosition::Bottom => {
+                geometry.row.saturating_add(geometry.rows).saturating_sub(1)
+            }
+        });
+    }
+    row_offset.saturating_add(match position {
+        TerminalFramePosition::Top => geometry.row,
+        TerminalFramePosition::Bottom => {
+            let render_rows = pane_render_region_size_for_geometry(geometry, geometries).rows;
+            geometry.row.saturating_add(render_rows).saturating_sub(1)
+        }
+    })
+}
+
 /// Bounded destination for one rendered pane inside a window-body canvas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PaneCanvasPlacement {
@@ -735,6 +762,23 @@ mod tests {
             &geometries,
             TerminalFramePosition::Top,
         ));
+        assert_eq!(
+            super::pane_frame_row_for_geometry(&bottom, &geometries, TerminalFramePosition::Top, 2,),
+            6
+        );
+        assert_eq!(
+            super::pane_frame_row_for_geometry(&top, &geometries, TerminalFramePosition::Bottom, 2,),
+            6
+        );
+        assert_eq!(
+            super::pane_frame_row_for_geometry(
+                &side,
+                &geometries,
+                TerminalFramePosition::Bottom,
+                2,
+            ),
+            11
+        );
     }
 
     /// Verifies mux divider composition selects stable line, corner, and
