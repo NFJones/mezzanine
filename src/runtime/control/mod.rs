@@ -320,7 +320,7 @@ impl RuntimeSessionService {
             content: prompt.to_string(),
         });
         let context = AgentContext::new(blocks)?;
-        let context = append_permission_policy_context(context, &self.permission_policy)?;
+        let context = append_permission_policy_context(context)?;
         let context = append_scheduler_context(context, &self.agent_scheduler)?;
         let prompt_memory_records = context_memory_records
             .iter()

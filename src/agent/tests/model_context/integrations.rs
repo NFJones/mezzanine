@@ -369,10 +369,7 @@ fn permission_context_is_not_model_visible() {
         content: "edit the file".to_string(),
     }])
     .unwrap();
-    let policy = PermissionPolicy::default()
-        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
-
-    let context = append_permission_policy_context(context, &policy).unwrap();
+    let context = append_permission_policy_context(context).unwrap();
 
     assert_eq!(context.blocks.len(), 1);
     assert_eq!(context.blocks[0].source, ContextSourceKind::UserInstruction);

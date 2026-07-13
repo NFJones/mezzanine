@@ -8,7 +8,6 @@
 use super::{AgentContext, ContextBlock, ContextSourceKind};
 use crate::agent::validate_non_empty;
 use crate::error::Result;
-use crate::permissions::PermissionPolicy;
 use crate::scheduler::{AgentScheduler, runnable_agent_ids};
 use mez_agent::instructions::DiscoveredInstructionFile;
 use mez_agent::{McpPromptServer, McpPromptSummary, McpPromptTool, MemoryContextRecord};
@@ -530,10 +529,7 @@ pub fn set_project_guidance_context(
 /// actions are planned or executed. Models receive explicit action results for
 /// denials or blocked approvals instead of raw approval-mode labels that can be
 /// mistaken for user-facing task constraints.
-pub fn append_permission_policy_context(
-    context: AgentContext,
-    _policy: &PermissionPolicy,
-) -> Result<AgentContext> {
+pub fn append_permission_policy_context(context: AgentContext) -> Result<AgentContext> {
     Ok(context)
 }
 

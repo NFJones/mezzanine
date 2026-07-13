@@ -320,7 +320,7 @@ fn scheduler_context_precedes_project_and_user_context_without_permission_contex
         })
         .unwrap();
 
-    let context = append_permission_policy_context(context, &policy).unwrap();
+    let context = append_permission_policy_context(context).unwrap();
     let context = append_scheduler_context(context, &scheduler).unwrap();
 
     assert_eq!(context.blocks[0].label, "scheduler state");
