@@ -5,13 +5,11 @@
 //! frames, pane dividers, transcript presentation, command and display overlays,
 //! and copy selection.
 
-use super::{
-    BTreeMap, GraphicRendition, MezError, Result, TerminalColor,
-    render::{
-        shifted_channel, terminal_color_contrast_ratio, terminal_color_relative_luminance,
-        terminal_color_rgb,
-    },
-};
+use std::collections::BTreeMap;
+
+use mez_terminal::{GraphicRendition, TerminalColor};
+
+use crate::{MuxError, Result};
 
 /// User-configurable color slots for Mezzanine-owned UI components.
 pub const UI_COLOR_SLOT_NAMES: &[&str] = &[
@@ -1526,6 +1524,51 @@ fn terminal_color_to_hex(color: TerminalColor) -> String {
     }
 }
 
+/// Returns RGB components for a true-color value.
+fn terminal_color_rgb(color: TerminalColor) -> Option<(u8, u8, u8)> {
+    match color {
+        TerminalColor::Rgb(red, green, blue) => Some((red, green, blue)),
+        TerminalColor::Indexed(_) => None,
+    }
+}
+
+/// Returns the WCAG contrast ratio between two true-color values.
+fn terminal_color_contrast_ratio(
+    foreground: TerminalColor,
+    background: TerminalColor,
+) -> Option<f64> {
+    let foreground_luminance = terminal_color_relative_luminance(foreground)?;
+    let background_luminance = terminal_color_relative_luminance(background)?;
+    let lighter = foreground_luminance.max(background_luminance);
+    let darker = foreground_luminance.min(background_luminance);
+    Some((lighter + 0.05) / (darker + 0.05))
+}
+
+/// Returns the relative luminance of a true-color value.
+fn terminal_color_relative_luminance(color: TerminalColor) -> Option<f64> {
+    let (red, green, blue) = terminal_color_rgb(color)?;
+    Some(
+        0.2126 * srgb_channel_to_linear(red)
+            + 0.7152 * srgb_channel_to_linear(green)
+            + 0.0722 * srgb_channel_to_linear(blue),
+    )
+}
+
+/// Converts one sRGB channel to linear-light space.
+fn srgb_channel_to_linear(channel: u8) -> f64 {
+    let normalized = f64::from(channel) / 255.0;
+    if normalized <= 0.03928 {
+        normalized / 12.92
+    } else {
+        ((normalized + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Shifts a color channel by a signed amount.
+fn shifted_channel(value: u8, shift: i32) -> u8 {
+    (i32::from(value) + shift).clamp(0, 255) as u8
+}
+
 /// Runs the resolve aliases operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -1535,12 +1578,12 @@ fn resolve_aliases(aliases: &BTreeMap<String, String>) -> Result<BTreeMap<String
     let mut resolved = BTreeMap::new();
     for (alias, value) in aliases {
         if !valid_color_alias_name(alias) {
-            return Err(MezError::config(format!(
+            return Err(MuxError::invalid_args(format!(
                 "theme alias `{alias}` must be an identifier"
             )));
         }
         let Some(color) = parse_hex_color(value) else {
-            return Err(MezError::config(format!(
+            return Err(MuxError::invalid_args(format!(
                 "theme.aliases.{alias} must be a #rgb or #rrggbb hex color"
             )));
         };
@@ -1579,9 +1622,9 @@ fn color_from_slot(
 ) -> Result<TerminalColor> {
     let value = colors
         .get(slot)
-        .ok_or_else(|| MezError::config(format!("theme.colors.{slot} is required")))?;
+        .ok_or_else(|| MuxError::invalid_args(format!("theme.colors.{slot} is required")))?;
     resolve_color_reference(value, aliases).ok_or_else(|| {
-        MezError::config(format!("theme.colors.{slot} must be a hex color or alias"))
+        MuxError::invalid_args(format!("theme.colors.{slot} must be a hex color or alias"))
     })
 }
 

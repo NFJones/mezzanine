@@ -48,7 +48,7 @@ pub fn runtime_ui_theme_from_config(root: &Value) -> Result<UiTheme> {
         definition.merge(runtime_theme_definition_from_value(theme, "theme")?);
     }
 
-    resolve_ui_theme(active, definition)
+    Ok(resolve_ui_theme(active, definition)?)
 }
 
 /// Runs the runtime theme definition from value operation for this subsystem.

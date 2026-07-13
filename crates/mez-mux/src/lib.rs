@@ -12,5 +12,6 @@ pub mod layout;
 pub mod process;
 pub mod readline;
 pub mod session;
+pub mod theme;
 
 pub use error::{MuxError, MuxErrorKind, Result};

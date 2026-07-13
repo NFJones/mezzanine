@@ -22,10 +22,7 @@ mod overlay;
 mod panes;
 mod prompt;
 mod style;
-pub(super) use style::{
-    shifted_channel, terminal_color_contrast_ratio, terminal_color_relative_luminance,
-    terminal_color_rgb,
-};
+
 mod text;
 
 #[cfg(test)]

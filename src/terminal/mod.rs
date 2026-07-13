@@ -68,11 +68,6 @@ mod render;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod screen;
-/// Exposes the theme module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-mod theme;
 
 pub(crate) use client_loop::route_client_input_actions;
 pub use client_loop::{
@@ -114,6 +109,13 @@ pub use keys::{
     KeyCode, KeyModifiers, MEZZANINE_TERMINFO_NAMES, MuxAction, PaneFocusDirection,
     PasteBufferTarget, TERMINFO_FALLBACK_ORDER, TerminalInputClassification, WindowFocusTarget,
     classify_terminal_input, key_chord_input_bytes, parse_key_chord_notation,
+};
+pub use mez_mux::theme::{
+    BUILTIN_UI_THEME_NAMES, DEFAULT_UI_THEME_NAME, UI_COLOR_SLOT_NAMES, UiColorPair, UiTheme,
+    UiThemeColors, UiThemeDefinition, builtin_ui_theme_definition, deepforest_ui_theme,
+    default_ui_theme, is_builtin_ui_theme, parse_hex_color, resolve_ui_theme,
+    ui_theme_list_table_header, ui_theme_list_table_row, ui_theme_preview_fields,
+    valid_color_alias_name,
 };
 pub use mez_terminal::{
     GraphicRendition, TerminalColor, TerminalCursorState, TerminalModeState, TerminalOscEvent,
@@ -159,13 +161,6 @@ pub use render::{
     window_frame_pillbox_cells, window_group_frame_pillbox_cells,
 };
 pub(crate) use screen::parse_mez_shell_transaction_osc;
-pub use theme::{
-    BUILTIN_UI_THEME_NAMES, DEFAULT_UI_THEME_NAME, UI_COLOR_SLOT_NAMES, UiColorPair, UiTheme,
-    UiThemeColors, UiThemeDefinition, builtin_ui_theme_definition, deepforest_ui_theme,
-    default_ui_theme, is_builtin_ui_theme, parse_hex_color, resolve_ui_theme,
-    ui_theme_list_table_header, ui_theme_list_table_row, ui_theme_preview_fields,
-    valid_color_alias_name,
-};
 
 use client_loop::borrow_raw_fd;
 use keys::parse_key_chord_bytes;
