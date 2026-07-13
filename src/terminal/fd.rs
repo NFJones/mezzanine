@@ -67,49 +67,6 @@ pub struct TerminalFrameContext {
     pub panes: BTreeMap<String, TerminalPaneFrameContext>,
 }
 
-/// Runtime fields available to the right side of the window status line.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TerminalWindowStatusContext {
-    /// Named-field template for the right status line.
-    pub template: String,
-    /// Home-relative active pane working directory shown by `pane.pwd`.
-    pub active_pane_working_directory: Option<String>,
-    /// Cached command-backed pill values keyed by configured pill name.
-    pub status_pills: BTreeMap<String, String>,
-    /// Human-readable system uptime shown by `system.uptime`.
-    pub system_uptime: String,
-    /// Human-readable local datetime shown by `datetime.local`.
-    pub datetime_local: String,
-}
-
-/// Runtime window metadata made available to default window-frame rendering.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TerminalWindowFrameContext {
-    /// Stable window identity.
-    pub id: String,
-    /// Display index in the session window list.
-    pub index: usize,
-    /// User-facing title or name for the window.
-    pub title: String,
-    /// Whether this window is currently focused.
-    pub active: bool,
-    /// Whether this window is dedicated to spawned subagent panes.
-    pub subagent: bool,
-}
-
-/// Runtime window-group metadata made available to group-frame rendering.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TerminalWindowGroupFrameContext {
-    /// Stable group identity.
-    pub id: String,
-    /// Display index in the session group list.
-    pub index: usize,
-    /// User-facing title or name for the group.
-    pub title: String,
-    /// Whether this group is currently focused.
-    pub active: bool,
-}
-
 /// Runtime metadata made available to pane frame template rendering.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TerminalPaneFrameContext {
@@ -151,7 +108,10 @@ pub struct TerminalPaneFrameContext {
     pub agent_display_lines: Vec<String>,
 }
 
-pub use mez_mux::presentation::{TerminalFramePosition, TerminalFrameStyle};
+pub use mez_mux::presentation::{
+    TerminalFramePosition, TerminalFrameStyle, TerminalWindowFrameContext,
+    TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
+};
 
 /// Cursor shape used when Mezzanine presents the active interactive surface.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
