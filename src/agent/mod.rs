@@ -51,7 +51,6 @@ mod provider;
 ///
 /// The nested module keeps hidden provider continuity payloads outside visible
 /// transcript rendering while allowing compatible providers to replay them.
-mod provider_transcript;
 /// Exposes the readiness module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -121,6 +120,7 @@ pub use maap::{
     parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json,
     parse_maap_action_batch_json_for_turn,
 };
+pub use mez_agent::{PROVIDER_TRANSCRIPT_EVENT_MARKER, ProviderTranscriptEvent};
 pub use network::{
     NetworkActionPlan, execute_network_action_with_transport_async, network_action_plan,
     network_action_structured_content_json, network_action_summary,
@@ -168,7 +168,6 @@ pub(crate) use provider::{
 pub(crate) use provider::{
     provider_error_is_context_limit_exceeded, provider_error_is_output_limit_exceeded,
 };
-pub use provider_transcript::{PROVIDER_TRANSCRIPT_EVENT_MARKER, ProviderTranscriptEvent};
 pub use readiness::{
     BootstrapDecision, PaneReadinessOverride, PaneReadinessOverrideStore, PaneReadinessState,
     ReadinessDecision, ReadinessOverrideRevocation, decide_bootstrap_before_user_prompt,

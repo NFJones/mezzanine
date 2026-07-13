@@ -1,6 +1,6 @@
 //! Provider-native transcript continuity events.
 //!
-//! The normal Mezzanine transcript is provider-neutral and user-visible. Some
+//! The normal product transcript is provider-neutral and user-visible. Some
 //! provider APIs also require opaque message fields to be replayed for
 //! multi-turn correctness. This module stores those fields as hidden system
 //! transcript entries and lets provider adapters opt into rendering them back

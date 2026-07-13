@@ -20,6 +20,8 @@ pub mod mcp;
 pub mod prompt;
 /// Provider-neutral API compatibility contracts.
 pub mod provider;
+/// Provider-native transcript continuity contracts.
+pub mod provider_transcript;
 /// Dependency-neutral provider quota accounting contracts.
 pub mod quota;
 
@@ -36,6 +38,7 @@ pub use provider::{
     ProviderApiCompatibilityError, ProviderCapabilities, ProviderModelCatalog, ProviderModelInfo,
     resolve_provider_api,
 };
+pub use provider_transcript::{PROVIDER_TRANSCRIPT_EVENT_MARKER, ProviderTranscriptEvent};
 pub use quota::{ProviderQuotaUsage, provider_quota_usage_from_headers};
 
 /// Maximum number of issue records a model-authored query may request.

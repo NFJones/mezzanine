@@ -9,3 +9,4 @@ path = "src/lib.rs"
 
 [dependencies]
 mez-core = { path = "../mez-core" }
+serde_json = "1"
