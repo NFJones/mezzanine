@@ -26,7 +26,7 @@ use super::{
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_COMMAND_SHELL_CLASSIFICATION: &str = "unix-like";
 
-pub use mez_agent::{ApprovalPolicy, PermissionPreset};
+pub use mez_agent::{ApprovalPolicy, PermissionPreset, RuleDecision};
 
 /// Carries Permission Authority Change state for this subsystem.
 ///
@@ -49,29 +49,6 @@ pub enum PermissionAuthorityChange {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     Broadening,
-}
-
-/// Carries Rule Decision state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum RuleDecision {
-    /// Represents the Forbid case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Forbid,
-    /// Represents the Prompt case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Prompt,
-    /// Represents the Allow case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Allow,
 }
 
 /// Carries Rule Match state for this subsystem.

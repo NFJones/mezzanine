@@ -41,7 +41,7 @@ pub use http::{
     ProviderHttpResponse,
 };
 pub use mcp::{McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer};
-pub use permissions::{ApprovalPolicy, PermissionPreset};
+pub use permissions::{ApprovalPolicy, PermissionPreset, RuleDecision};
 pub use prompt::{AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptProfile};
 pub use provider::{
     ANTHROPIC_MESSAGES_API, CLAUDE_CODE_API, DEEPSEEK_CHAT_COMPLETIONS_API,

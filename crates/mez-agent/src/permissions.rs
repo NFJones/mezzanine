@@ -45,9 +45,23 @@ impl ApprovalPolicy {
     }
 }
 
+/// Describes the ordered result of product permission enforcement.
+///
+/// Variant order is significant: combining decisions with `min` preserves
+/// the most restrictive result (`Forbid`, then `Prompt`, then `Allow`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RuleDecision {
+    /// The action must not proceed.
+    Forbid,
+    /// The action requires an approval decision.
+    Prompt,
+    /// The action may proceed without a fresh approval.
+    Allow,
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ApprovalPolicy, PermissionPreset};
+    use super::{ApprovalPolicy, PermissionPreset, RuleDecision};
 
     /// Verifies permission identities retain the stable names consumed by
     /// configuration, agent-shell status, and model-facing diagnostics.
@@ -58,5 +72,21 @@ mod tests {
         assert_eq!(ApprovalPolicy::Ask.as_str(), "ask");
         assert_eq!(ApprovalPolicy::AutoAllow.as_str(), "auto-allow");
         assert_eq!(ApprovalPolicy::FullAccess.as_str(), "full-access");
+    }
+
+    /// Verifies permission decisions retain their restrictive ordering because
+    /// product policy aggregation selects the minimum matching decision.
+    #[test]
+    fn permission_decisions_are_ordered_most_restrictive_first() {
+        assert!(RuleDecision::Forbid < RuleDecision::Prompt);
+        assert!(RuleDecision::Prompt < RuleDecision::Allow);
+        assert_eq!(
+            RuleDecision::Allow.min(RuleDecision::Prompt),
+            RuleDecision::Prompt
+        );
+        assert_eq!(
+            RuleDecision::Prompt.min(RuleDecision::Forbid),
+            RuleDecision::Forbid
+        );
     }
 }
