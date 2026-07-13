@@ -9,6 +9,8 @@ pub(crate) use mez_agent::ProviderErrorRetryClass;
 use mez_agent::{
     ProviderErrorKind, classify_provider_error_retry, provider_error_detail,
     provider_failure_event_json, provider_failure_json,
+    provider_malformed_output_failure_json as agent_provider_malformed_output_failure_json,
+    provider_malformed_output_hint,
 };
 
 /// Runs the openai provider error detail operation for this subsystem.
@@ -155,94 +157,17 @@ pub(super) fn provider_maap_parse_error_message(error: &MezError, raw_text: &str
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn provider_malformed_output_hint(raw_text: &str) -> Option<&'static str> {
-    let value = serde_json::from_str::<serde_json::Value>(raw_text).ok()?;
-    let object = value.as_object()?;
-    if provider_output_contains_bare_command_actions(object) {
-        return Some(
-            "provider returned bare command objects inside actions; expected each action to include type and required action-specific fields such as shell_command summary inside a MAAP action batch",
-        );
-    }
-    if object.contains_key("command") {
-        return Some(
-            "provider returned a bare command object; expected a MAAP action batch with an actions array",
-        );
-    }
-    if object.contains_key("type") && !object.contains_key("actions") {
-        return Some(
-            "provider returned a bare action object; expected a MAAP action batch envelope",
-        );
-    }
-    None
-}
-
-/// Runs the provider output contains bare command actions operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn provider_output_contains_bare_command_actions(
-    object: &serde_json::Map<String, serde_json::Value>,
-) -> bool {
-    object
-        .get("actions")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|actions| {
-            actions.iter().any(|action| {
-                action.as_object().is_some_and(|action_object| {
-                    action_object.contains_key("command") && !action_object.contains_key("type")
-                })
-            })
-        })
-}
-
 /// Runs the provider malformed output failure json operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn provider_malformed_output_failure_json(error: &MezError, raw_text: &str) -> String {
-    let parsed = serde_json::from_str::<serde_json::Value>(raw_text).ok();
-    let mut output = serde_json::json!({
-        "format": if parsed.is_some() { "json" } else { "text" },
-        "bytes": raw_text.len()
-    });
-    if let Some(serde_json::Value::Object(object)) = parsed {
-        let top_level_keys = object.keys().take(32).cloned().collect::<Vec<_>>();
-        output["top_level_keys"] = serde_json::json!(top_level_keys);
-        output["bare_command_object"] = serde_json::json!(object.contains_key("command"));
-        output["bare_action_object"] =
-            serde_json::json!(object.contains_key("type") && !object.contains_key("actions"));
-        output["bare_command_actions"] =
-            serde_json::json!(provider_output_contains_bare_command_actions(&object));
-    }
-    serde_json::json!({
-        "type": "malformed_model_output",
-        "error": {
-            "kind": provider_error_kind_name(error.kind()),
-            "message": error.message()
-        },
-        "output": output
-    })
-    .to_string()
-}
-
-/// Runs the provider error kind name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn provider_error_kind_name(kind: crate::error::MezErrorKind) -> &'static str {
-    match kind {
-        crate::error::MezErrorKind::InvalidArgs => "invalid_args",
-        crate::error::MezErrorKind::InvalidState => "invalid_state",
-        crate::error::MezErrorKind::Config => "config",
-        crate::error::MezErrorKind::Io => "io",
-        crate::error::MezErrorKind::Conflict => "conflict",
-        crate::error::MezErrorKind::NotFound => "not_found",
-        crate::error::MezErrorKind::Forbidden => "forbidden",
-        crate::error::MezErrorKind::NotImplemented => "not_implemented",
-    }
+    agent_provider_malformed_output_failure_json(
+        provider_error_kind(error.kind()),
+        error.message(),
+        raw_text,
+    )
 }
 
 #[cfg(test)]

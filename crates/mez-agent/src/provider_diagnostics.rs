@@ -4,6 +4,7 @@
 //! are safe to persist or pass across worker boundaries. It intentionally owns
 //! no transport, credential storage, or product error types.
 
+use crate::ProviderErrorKind;
 use serde_json::{Map, Value};
 
 const MAX_PROVIDER_FAILURE_TEXT_CHARS: usize = 4096;
@@ -57,6 +58,72 @@ pub fn provider_failure_event_json(value: &Value) -> String {
     let mut object = Map::new();
     insert_provider_failure_value(&mut object, value.clone());
     Value::Object(object).to_string()
+}
+
+/// Returns a focused correction for common malformed model-output shapes.
+pub fn provider_malformed_output_hint(raw_text: &str) -> Option<&'static str> {
+    let value = serde_json::from_str::<Value>(raw_text).ok()?;
+    let object = value.as_object()?;
+    if provider_output_contains_bare_command_actions(object) {
+        return Some(
+            "provider returned bare command objects inside actions; expected each action to include type and required action-specific fields such as shell_command summary inside a MAAP action batch",
+        );
+    }
+    if object.contains_key("command") {
+        return Some(
+            "provider returned a bare command object; expected a MAAP action batch with an actions array",
+        );
+    }
+    if object.contains_key("type") && !object.contains_key("actions") {
+        return Some(
+            "provider returned a bare action object; expected a MAAP action batch envelope",
+        );
+    }
+    None
+}
+
+/// Builds a bounded diagnostic payload for malformed model output.
+pub fn provider_malformed_output_failure_json(
+    error_kind: ProviderErrorKind,
+    error_message: &str,
+    raw_text: &str,
+) -> String {
+    let parsed = serde_json::from_str::<Value>(raw_text).ok();
+    let mut output = serde_json::json!({
+        "format": if parsed.is_some() { "json" } else { "text" },
+        "bytes": raw_text.len()
+    });
+    if let Some(Value::Object(object)) = parsed {
+        let top_level_keys = object.keys().take(32).cloned().collect::<Vec<_>>();
+        output["top_level_keys"] = serde_json::json!(top_level_keys);
+        output["bare_command_object"] = serde_json::json!(object.contains_key("command"));
+        output["bare_action_object"] =
+            serde_json::json!(object.contains_key("type") && !object.contains_key("actions"));
+        output["bare_command_actions"] =
+            serde_json::json!(provider_output_contains_bare_command_actions(&object));
+    }
+    serde_json::json!({
+        "type": "malformed_model_output",
+        "error": {
+            "kind": error_kind.as_str(),
+            "message": error_message
+        },
+        "output": output
+    })
+    .to_string()
+}
+
+fn provider_output_contains_bare_command_actions(object: &Map<String, Value>) -> bool {
+    object
+        .get("actions")
+        .and_then(Value::as_array)
+        .is_some_and(|actions| {
+            actions.iter().any(|action| {
+                action.as_object().is_some_and(|action_object| {
+                    action_object.contains_key("command") && !action_object.contains_key("type")
+                })
+            })
+        })
 }
 
 fn insert_provider_failure_value(object: &mut Map<String, Value>, value: Value) {
@@ -194,7 +261,11 @@ fn truncate_provider_failure_text(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{provider_error_detail, provider_failure_event_json, provider_failure_json};
+    use super::{
+        provider_error_detail, provider_failure_event_json, provider_failure_json,
+        provider_malformed_output_failure_json, provider_malformed_output_hint,
+    };
+    use crate::ProviderErrorKind;
 
     #[test]
     /// Verifies provider diagnostics preserve useful structured fields while
@@ -225,5 +296,28 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&output).unwrap();
 
         assert_eq!(value["body"]["items"].as_array().unwrap().len(), 32);
+    }
+
+    #[test]
+    /// Verifies malformed MAAP diagnostics identify common missing-envelope
+    /// shapes without depending on product error or action types.
+    fn provider_malformed_output_diagnostics_classify_bare_actions() {
+        let raw_text = r#"{"actions":[{"command":"cargo test"}]}"#;
+
+        assert!(
+            provider_malformed_output_hint(raw_text)
+                .unwrap()
+                .contains("bare command objects inside actions")
+        );
+        let output = provider_malformed_output_failure_json(
+            ProviderErrorKind::InvalidArgs,
+            "actions[0].type is required",
+            raw_text,
+        );
+        let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+
+        assert_eq!(value["error"]["kind"], "invalid_args");
+        assert_eq!(value["output"]["format"], "json");
+        assert_eq!(value["output"]["bare_command_actions"], true);
     }
 }

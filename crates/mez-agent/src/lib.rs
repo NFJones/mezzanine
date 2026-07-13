@@ -53,6 +53,7 @@ pub use provider::{
 };
 pub use provider_diagnostics::{
     provider_error_detail, provider_failure_event_json, provider_failure_json,
+    provider_malformed_output_failure_json, provider_malformed_output_hint,
 };
 pub use provider_error::{
     ProviderErrorKind, ProviderErrorRetryClass, classify_provider_error_retry,
