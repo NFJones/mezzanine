@@ -26,6 +26,8 @@ pub mod permissions;
 pub mod prompt;
 /// Provider-neutral API compatibility contracts.
 pub mod provider;
+/// Secret-safe provider failure diagnostic shaping.
+pub mod provider_diagnostics;
 /// Provider failure retry and recovery classification.
 pub mod provider_error;
 /// Provider-native transcript continuity contracts.
@@ -48,6 +50,9 @@ pub use provider::{
     OPENAI_CHAT_COMPLETIONS_API, OPENAI_RESPONSES_API, ProviderApiCompatibility,
     ProviderApiCompatibilityError, ProviderCapabilities, ProviderModelCatalog, ProviderModelInfo,
     resolve_provider_api,
+};
+pub use provider_diagnostics::{
+    provider_error_detail, provider_failure_event_json, provider_failure_json,
 };
 pub use provider_error::{
     ProviderErrorKind, ProviderErrorRetryClass, classify_provider_error_retry,

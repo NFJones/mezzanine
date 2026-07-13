@@ -6,7 +6,10 @@
 
 use crate::error::MezError;
 pub(crate) use mez_agent::ProviderErrorRetryClass;
-use mez_agent::{ProviderErrorKind, classify_provider_error_retry};
+use mez_agent::{
+    ProviderErrorKind, classify_provider_error_retry, provider_error_detail,
+    provider_failure_event_json, provider_failure_json,
+};
 
 /// Runs the openai provider error detail operation for this subsystem.
 ///
@@ -14,22 +17,7 @@ use mez_agent::{ProviderErrorKind, classify_provider_error_retry};
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn openai_provider_error_detail(body: &str) -> String {
-    if body.trim().is_empty() {
-        return "empty provider response".to_string();
-    }
-    let detail = serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|value| {
-            value
-                .pointer("/error/message")
-                .or_else(|| value.get("error_description"))
-                .or_else(|| value.get("message"))
-                .or_else(|| value.get("error"))
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| body.chars().take(240).collect());
-    redact_or_truncate_provider_failure_text(&detail)
+    provider_error_detail(body)
 }
 
 /// Runs the openai provider failure json operation for this subsystem.
@@ -38,28 +26,7 @@ pub(super) fn openai_provider_error_detail(body: &str) -> String {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn openai_provider_failure_json(status_code: Option<u16>, body: &str) -> String {
-    let trimmed = body.trim();
-    let mut object = serde_json::Map::new();
-    if let Some(status_code) = status_code {
-        object.insert(
-            "status_code".to_string(),
-            serde_json::Value::Number(serde_json::Number::from(u64::from(status_code))),
-        );
-    }
-    if trimmed.is_empty() {
-        object.insert(
-            "body_text".to_string(),
-            serde_json::Value::String(String::new()),
-        );
-    } else if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
-        insert_provider_failure_value(&mut object, value);
-    } else {
-        object.insert(
-            "body_text".to_string(),
-            serde_json::Value::String(truncate_provider_failure_text(trimmed)),
-        );
-    }
-    serde_json::Value::Object(object).to_string()
+    provider_failure_json(status_code, body)
 }
 
 /// Runs the openai provider failure event json operation for this subsystem.
@@ -68,9 +35,7 @@ pub(super) fn openai_provider_failure_json(status_code: Option<u16>, body: &str)
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn openai_provider_failure_event_json(value: &serde_json::Value) -> String {
-    let mut object = serde_json::Map::new();
-    insert_provider_failure_value(&mut object, value.clone());
-    serde_json::Value::Object(object).to_string()
+    provider_failure_event_json(value)
 }
 
 /// Classifies one provider failure for runtime recovery and retry handling.
@@ -157,189 +122,6 @@ pub(crate) fn provider_event_error_from_parts(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn insert_provider_failure_value(
-    object: &mut serde_json::Map<String, serde_json::Value>,
-    value: serde_json::Value,
-) {
-    let value = sanitize_provider_failure_value(value);
-    if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
-        object.insert("error".to_string(), error.clone());
-    } else if let Some(response_error) = value
-        .get("response")
-        .and_then(|response| response.get("error"))
-        .filter(|error| !error.is_null())
-    {
-        object.insert("error".to_string(), response_error.clone());
-        if let Some(response_id) = value
-            .get("response")
-            .and_then(|response| response.get("id"))
-            .and_then(serde_json::Value::as_str)
-        {
-            object.insert(
-                "response_id".to_string(),
-                serde_json::Value::String(response_id.to_string()),
-            );
-        }
-    } else if let Some(incomplete_details) = value
-        .get("response")
-        .and_then(|response| response.get("incomplete_details"))
-        .filter(|details| !details.is_null())
-    {
-        object.insert("incomplete_details".to_string(), incomplete_details.clone());
-    } else {
-        object.insert("body".to_string(), value);
-    }
-}
-
-/// Runs the sanitize provider failure value operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn sanitize_provider_failure_value(value: serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map) => serde_json::Value::Object(
-            map.into_iter()
-                .map(|(key, value)| {
-                    let value = if provider_failure_key_is_secret_like(&key) {
-                        serde_json::Value::String("[REDACTED]".to_string())
-                    } else {
-                        sanitize_provider_failure_value(value)
-                    };
-                    (key, value)
-                })
-                .collect(),
-        ),
-        serde_json::Value::Array(values) => serde_json::Value::Array(
-            values
-                .into_iter()
-                .take(32)
-                .map(sanitize_provider_failure_value)
-                .collect(),
-        ),
-        serde_json::Value::String(value) => {
-            serde_json::Value::String(redact_or_truncate_provider_failure_text(&value))
-        }
-        other => other,
-    }
-}
-
-/// Runs the redact or truncate provider failure text operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn redact_or_truncate_provider_failure_text(value: &str) -> String {
-    if provider_failure_text_contains_secret_like(value) {
-        "[REDACTED]".to_string()
-    } else {
-        truncate_provider_failure_text(value)
-    }
-}
-
-/// Runs the provider failure key is secret like operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn provider_failure_key_is_secret_like(key: &str) -> bool {
-    let key = key.to_ascii_lowercase();
-    key.contains("authorization")
-        || key.contains("api_key")
-        || key.contains("access_token")
-        || key.contains("refresh_token")
-        || key.contains("secret")
-        || key.contains("password")
-}
-
-/// Runs the provider failure text contains secret like operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn provider_failure_text_contains_secret_like(value: &str) -> bool {
-    value.contains("-----BEGIN")
-        || value
-            .split_whitespace()
-            .any(provider_failure_token_is_secret_like)
-}
-
-/// Runs the provider failure token is secret like operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn provider_failure_token_is_secret_like(token: &str) -> bool {
-    let token = token.trim_matches(|character: char| {
-        matches!(
-            character,
-            ',' | ';' | ':' | '.' | '!' | '?' | ')' | '(' | '[' | ']' | '{' | '}' | '"' | '\''
-        )
-    });
-    let lower = token.to_ascii_lowercase();
-    lower == "bearer"
-        || lower.starts_with("bearer=")
-        || lower.starts_with("sk-")
-        || lower.starts_with("sk_")
-        || lower.starts_with("sk-proj-")
-        || lower.starts_with("sk-ant-")
-        || lower.starts_with("xoxb-")
-        || lower.starts_with("ghp_")
-        || provider_failure_token_is_jwt_like(token)
-}
-
-/// Runs the provider failure token is jwt like operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn provider_failure_token_is_jwt_like(token: &str) -> bool {
-    let mut segments = token.split('.');
-    let Some(header) = segments.next() else {
-        return false;
-    };
-    let Some(payload) = segments.next() else {
-        return false;
-    };
-    let Some(signature) = segments.next() else {
-        return false;
-    };
-    segments.next().is_none()
-        && [header, payload, signature]
-            .into_iter()
-            .all(|segment| segment.len() >= 8 && segment.chars().all(is_base64_url_character))
-}
-
-/// Runs the is base64 url character operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn is_base64_url_character(character: char) -> bool {
-    character.is_ascii_alphanumeric() || character == '-' || character == '_'
-}
-
-/// Runs the truncate provider failure text operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn truncate_provider_failure_text(value: &str) -> String {
-    /// Defines the MAX PROVIDER FAILURE TEXT CHARS const used by this subsystem.
-    ///
-    /// Keeping this value documented makes the contract explicit at the module
-    /// boundary and avoids relying on call-site inference.
-    const MAX_PROVIDER_FAILURE_TEXT_CHARS: usize = 4096;
-    let mut output = value
-        .chars()
-        .take(MAX_PROVIDER_FAILURE_TEXT_CHARS)
-        .collect::<String>();
-    if value.chars().count() > MAX_PROVIDER_FAILURE_TEXT_CHARS {
-        output.push_str("...");
-    }
-    output
-}
-
 /// Runs the provider maap parse error operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
