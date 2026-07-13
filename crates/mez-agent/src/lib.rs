@@ -48,6 +48,8 @@ pub mod slash;
 pub mod subagent;
 /// Provider-independent transcript projection and persistence contracts.
 pub mod transcript;
+/// Provider-independent agent turn-ledger error contracts.
+pub mod turn;
 
 pub use accounting::{AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsageKey};
 pub use auth::{ProviderAuthMetadata, ProviderCredentialKind, ProviderCredentialSource};
@@ -97,6 +99,9 @@ pub use slash::{
 pub use subagent::{CooperationMode, SubagentScopeDeclaration, SubagentScopeEnforcement};
 pub use transcript::{
     AgentTranscriptEntry, AgentTranscriptRole, TranscriptContractError, TranscriptPersistence,
+};
+pub use turn::{
+    AgentTurnLedgerError, AgentTurnLedgerErrorKind, AgentTurnLedgerResult, validate_turn_required,
 };
 
 /// Maximum number of issue records a model-authored query may request.

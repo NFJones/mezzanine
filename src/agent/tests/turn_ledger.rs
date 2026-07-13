@@ -87,7 +87,7 @@ fn turn_ledger_serializes_turns_for_one_agent() {
 
     assert_eq!(
         error.unwrap_err().kind(),
-        crate::error::MezErrorKind::Conflict
+        mez_agent::AgentTurnLedgerErrorKind::Conflict
     );
 
     ledger

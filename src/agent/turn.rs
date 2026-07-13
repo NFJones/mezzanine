@@ -4,7 +4,8 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::{AgentTurnState, AgentTurnTrigger, MezError, Result, validate_non_empty};
+use super::{AgentTurnState, AgentTurnTrigger};
+use mez_agent::{AgentTurnLedgerError, AgentTurnLedgerResult, validate_turn_required};
 
 // Agent turn records and ledger.
 
@@ -114,16 +115,18 @@ impl AgentTurnLedger {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn queue_turn(&mut self, mut turn: AgentTurnRecord) -> Result<()> {
-        validate_non_empty("turn_id", &turn.turn_id)?;
-        validate_non_empty("agent_id", &turn.agent_id)?;
-        validate_non_empty("pane_id", &turn.pane_id)?;
+    pub fn queue_turn(&mut self, mut turn: AgentTurnRecord) -> AgentTurnLedgerResult<()> {
+        validate_turn_required("turn_id", &turn.turn_id)?;
+        validate_turn_required("agent_id", &turn.agent_id)?;
+        validate_turn_required("pane_id", &turn.pane_id)?;
         if self
             .turns
             .iter()
             .any(|existing| existing.turn_id == turn.turn_id)
         {
-            return Err(MezError::conflict("agent turn id already exists"));
+            return Err(AgentTurnLedgerError::conflict(
+                "agent turn id already exists",
+            ));
         }
         turn.state = AgentTurnState::Queued;
         self.turns.push(turn);
@@ -135,14 +138,14 @@ impl AgentTurnLedger {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn mark_turn_running(&mut self, turn_id: &str) -> Result<()> {
+    pub fn mark_turn_running(&mut self, turn_id: &str) -> AgentTurnLedgerResult<()> {
         let index = self
             .turns
             .iter()
             .position(|turn| turn.turn_id == turn_id)
-            .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "turn not found"))?;
+            .ok_or_else(|| AgentTurnLedgerError::not_found("turn not found"))?;
         if self.turns[index].state != AgentTurnState::Queued {
-            return Err(MezError::conflict("agent turn is not queued"));
+            return Err(AgentTurnLedgerError::conflict("agent turn is not queued"));
         }
         let agent_id = self.turns[index].agent_id.clone();
         if !self.allow_concurrent_turns
@@ -152,14 +155,14 @@ impl AgentTurnLedger {
                     && existing.turn_id != turn_id
             })
         {
-            return Err(MezError::conflict(
+            return Err(AgentTurnLedgerError::conflict(
                 "agent already has a running turn and concurrent turns are disabled",
             ));
         }
         let turn = self
             .turns
             .get_mut(index)
-            .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "turn not found"))?;
+            .ok_or_else(|| AgentTurnLedgerError::not_found("turn not found"))?;
         turn.state = AgentTurnState::Running;
         Ok(())
     }
@@ -169,25 +172,27 @@ impl AgentTurnLedger {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn start_turn(&mut self, mut turn: AgentTurnRecord) -> Result<()> {
+    pub fn start_turn(&mut self, mut turn: AgentTurnRecord) -> AgentTurnLedgerResult<()> {
         if !self.allow_concurrent_turns
             && self.turns.iter().any(|existing| {
                 existing.agent_id == turn.agent_id && existing.state == AgentTurnState::Running
             })
         {
-            return Err(MezError::conflict(
+            return Err(AgentTurnLedgerError::conflict(
                 "agent already has a running turn and concurrent turns are disabled",
             ));
         }
-        validate_non_empty("turn_id", &turn.turn_id)?;
-        validate_non_empty("agent_id", &turn.agent_id)?;
-        validate_non_empty("pane_id", &turn.pane_id)?;
+        validate_turn_required("turn_id", &turn.turn_id)?;
+        validate_turn_required("agent_id", &turn.agent_id)?;
+        validate_turn_required("pane_id", &turn.pane_id)?;
         if self
             .turns
             .iter()
             .any(|existing| existing.turn_id == turn.turn_id)
         {
-            return Err(MezError::conflict("agent turn id already exists"));
+            return Err(AgentTurnLedgerError::conflict(
+                "agent turn id already exists",
+            ));
         }
         turn.state = AgentTurnState::Running;
         self.turns.push(turn);
@@ -199,7 +204,11 @@ impl AgentTurnLedger {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn finish_turn(&mut self, turn_id: &str, state: AgentTurnState) -> Result<()> {
+    pub fn finish_turn(
+        &mut self,
+        turn_id: &str,
+        state: AgentTurnState,
+    ) -> AgentTurnLedgerResult<()> {
         if !matches!(
             state,
             AgentTurnState::Completed
@@ -207,7 +216,7 @@ impl AgentTurnLedger {
                 | AgentTurnState::Blocked
                 | AgentTurnState::Interrupted
         ) {
-            return Err(MezError::invalid_args(
+            return Err(AgentTurnLedgerError::invalid_args(
                 "finish_turn requires a terminal or blocked turn state",
             ));
         }
@@ -215,9 +224,11 @@ impl AgentTurnLedger {
             .turns
             .iter_mut()
             .find(|turn| turn.turn_id == turn_id)
-            .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "turn not found"))?;
+            .ok_or_else(|| AgentTurnLedgerError::not_found("turn not found"))?;
         if terminal_turn_state(turn.state) {
-            return Err(MezError::conflict("agent turn is already terminal"));
+            return Err(AgentTurnLedgerError::conflict(
+                "agent turn is already terminal",
+            ));
         }
         turn.state = state;
         self.enforce_retention();
@@ -229,14 +240,14 @@ impl AgentTurnLedger {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn resume_blocked_turn(&mut self, turn_id: &str) -> Result<()> {
+    pub fn resume_blocked_turn(&mut self, turn_id: &str) -> AgentTurnLedgerResult<()> {
         let turn = self
             .turns
             .iter_mut()
             .find(|turn| turn.turn_id == turn_id)
-            .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "turn not found"))?;
+            .ok_or_else(|| AgentTurnLedgerError::not_found("turn not found"))?;
         if turn.state != AgentTurnState::Blocked {
-            return Err(MezError::conflict("agent turn is not blocked"));
+            return Err(AgentTurnLedgerError::conflict("agent turn is not blocked"));
         }
         turn.state = AgentTurnState::Running;
         Ok(())
