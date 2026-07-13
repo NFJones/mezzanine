@@ -4,12 +4,11 @@
 //! Responses API calls, including native MAAP function-call argument
 //! accumulation and provider token-usage extraction.
 
-use super::errors::openai_provider_failure_event_json;
 use super::schema::OpenAiMaapToolSurface;
 use super::{ModelTokenUsage, OPENAI_MAAP_FUNCTION_TOOL_NAME};
 use mez_agent::{
     DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, ProviderResponseError, ProviderResponseResult,
-    parse_sse_events_with,
+    parse_sse_events_with, provider_failure_event_json as openai_provider_failure_event_json,
 };
 use std::collections::BTreeMap;
 

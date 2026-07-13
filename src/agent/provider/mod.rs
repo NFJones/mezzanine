@@ -36,12 +36,10 @@ pub use chat_completions::ChatCompletionsProvider;
 pub use claude_code::ClaudeCodeProvider;
 use deepseek::DeepSeekChatCompletionsDialect;
 pub use deepseek::build_deepseek_chat_completions_http_request;
+use errors::provider_maap_parse_error;
 pub(crate) use errors::{
     ProviderErrorRetryClass, provider_error_retry_class, provider_error_retry_class_from_parts,
     provider_event_error_from_parts, provider_event_error_kind,
-};
-use errors::{
-    openai_provider_error_detail, openai_provider_failure_json, provider_maap_parse_error,
 };
 #[cfg(test)]
 pub use http::ProviderHttpTransport;
@@ -49,7 +47,6 @@ pub use http::{AsyncProviderHttpTransport, ReqwestProviderHttpTransport};
 #[cfg(test)]
 use mez_agent::ANTHROPIC_MESSAGES_API;
 pub use mez_agent::OpenAiPromptCacheDiagnostics;
-use mez_agent::resolve_provider_api;
 pub use mez_agent::{
     AgentContextUsageSnapshot, CLAUDE_CODE_API, DEEPSEEK_CHAT_COMPLETIONS_API,
     DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ModelTokenUsage,
@@ -64,6 +61,10 @@ use mez_agent::{maap_mcp_call_action_schema_for_tool, normalize_openai_strict_sc
 pub use mez_agent::{
     openai_default_reasoning_levels_for_model, openai_models_endpoint_for_responses_endpoint,
     openai_responses_endpoint_for_base_url, provider_catalog_reasoning_levels,
+};
+use mez_agent::{
+    provider_error_detail as openai_provider_error_detail,
+    provider_failure_json as openai_provider_failure_json, resolve_provider_api,
 };
 use openai_chat_completions::OpenAiChatCompletionsDialect;
 pub use openai_request::openai_responses_request_body;

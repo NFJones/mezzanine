@@ -8,9 +8,7 @@
 //! auth-store construction.
 
 use super::chat_completions::ChatCompletionsDialect;
-use super::errors::{
-    openai_provider_failure_event_json, openai_provider_failure_json, provider_maap_parse_error,
-};
+use super::errors::provider_maap_parse_error;
 use super::schema::{maap_action_batch_schema, maap_current_action_batch_description};
 use super::{
     ANTHROPIC_MESSAGES_ENDPOINT, MezError, ModelRequest, ModelResponse, ModelTokenUsage,
@@ -18,7 +16,10 @@ use super::{
     parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
     provider_quota_usage_from_headers, validate_non_empty,
 };
-use mez_agent::parse_sse_events_with;
+use mez_agent::{
+    parse_sse_events_with, provider_failure_event_json as openai_provider_failure_event_json,
+    provider_failure_json as openai_provider_failure_json,
+};
 use std::collections::BTreeMap;
 
 /// Default Anthropic Messages API version used when provider options omit one.

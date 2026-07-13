@@ -7,36 +7,8 @@
 use crate::error::MezError;
 pub(crate) use mez_agent::ProviderErrorRetryClass;
 use mez_agent::{
-    ProviderErrorKind, classify_provider_error_retry, provider_error_detail,
-    provider_failure_event_json, provider_failure_json, provider_malformed_output_error,
+    ProviderErrorKind, classify_provider_error_retry, provider_malformed_output_error,
 };
-
-/// Runs the openai provider error detail operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn openai_provider_error_detail(body: &str) -> String {
-    provider_error_detail(body)
-}
-
-/// Runs the openai provider failure json operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn openai_provider_failure_json(status_code: Option<u16>, body: &str) -> String {
-    provider_failure_json(status_code, body)
-}
-
-/// Runs the openai provider failure event json operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn openai_provider_failure_event_json(value: &serde_json::Value) -> String {
-    provider_failure_event_json(value)
-}
 
 /// Classifies one provider failure for runtime recovery and retry handling.
 ///
