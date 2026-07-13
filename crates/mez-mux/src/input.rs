@@ -410,10 +410,76 @@ fn parse_key_code_notation(rest: &str, ctrl: bool) -> Result<KeyCode> {
     }
 }
 
+/// Configurable key chords that bypass or enter multiplexer prefix routing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyBindings {
+    /// Prefix chord that enters multiplexer key mode.
+    pub escape: KeyChord,
+    /// Optional direct vertical-split binding.
+    pub split_vertical: Option<KeyChord>,
+    /// Optional direct horizontal-split binding.
+    pub split_horizontal: Option<KeyChord>,
+    /// Optional direct new-window binding.
+    pub new_window: Option<KeyChord>,
+    /// Optional direct new-group binding.
+    pub new_group: Option<KeyChord>,
+    /// Optional direct agent-shell adapter binding.
+    pub agent_shell: Option<KeyChord>,
+    /// Optional direct upward pane-focus binding.
+    pub focus_up: Option<KeyChord>,
+    /// Optional direct downward pane-focus binding.
+    pub focus_down: Option<KeyChord>,
+    /// Optional direct leftward pane-focus binding.
+    pub focus_left: Option<KeyChord>,
+    /// Optional direct rightward pane-focus binding.
+    pub focus_right: Option<KeyChord>,
+    /// Optional direct previous-window binding.
+    pub focus_previous_window: Option<KeyChord>,
+    /// Optional direct next-window binding.
+    pub focus_next_window: Option<KeyChord>,
+    /// Optional direct previous-group binding.
+    pub focus_previous_group: Option<KeyChord>,
+    /// Optional direct next-group binding.
+    pub focus_next_group: Option<KeyChord>,
+}
+
+impl Default for KeyBindings {
+    fn default() -> Self {
+        Self {
+            escape: KeyChord::ctrl(KeyCode::Char('a')),
+            split_vertical: None,
+            split_horizontal: None,
+            new_window: None,
+            new_group: None,
+            agent_shell: None,
+            focus_up: None,
+            focus_down: None,
+            focus_left: None,
+            focus_right: None,
+            focus_previous_window: None,
+            focus_next_window: None,
+            focus_previous_group: None,
+            focus_next_group: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::MuxErrorKind;
+
+    /// Verifies mux-owned binding defaults preserve the established prefix and opt-in direct keys.
+    #[test]
+    fn key_binding_defaults_preserve_prefix_policy() {
+        let bindings = KeyBindings::default();
+
+        assert_eq!(bindings.escape, KeyChord::ctrl(KeyCode::Char('a')));
+        assert_eq!(bindings.split_vertical, None);
+        assert_eq!(bindings.new_window, None);
+        assert_eq!(bindings.agent_shell, None);
+        assert_eq!(bindings.focus_next_group, None);
+    }
 
     /// Verifies configuration notation preserves modifier aliases and pane-byte encoding.
     #[test]

@@ -7,7 +7,7 @@
 use super::{BTreeMap, MouseEvent, Result, parse_sgr_mouse};
 
 pub use mez_mux::input::{
-    KeyChord, KeyCode, KeyModifiers, key_chord_input_bytes, parse_key_chord_bytes,
+    KeyBindings, KeyChord, KeyCode, KeyModifiers, key_chord_input_bytes, parse_key_chord_bytes,
     parse_key_chord_notation,
 };
 
@@ -48,110 +48,6 @@ pub const MEZZANINE_TERMINFO_NAMES: &[&str] = &["mez-256color", "mezzanine-256co
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const TERMINFO_FALLBACK_ORDER: &[&str] = &["screen-256color", "screen", "vt100", "dumb"];
-/// Carries Key Bindings state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KeyBindings {
-    /// Stores the escape value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub escape: KeyChord,
-    /// Stores the split vertical value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub split_vertical: Option<KeyChord>,
-    /// Stores the split horizontal value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub split_horizontal: Option<KeyChord>,
-    /// Stores the new window value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub new_window: Option<KeyChord>,
-    /// Stores the new group value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub new_group: Option<KeyChord>,
-    /// Stores the agent shell value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub agent_shell: Option<KeyChord>,
-    /// Stores the focus up value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub focus_up: Option<KeyChord>,
-    /// Stores the focus down value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub focus_down: Option<KeyChord>,
-    /// Stores the focus left value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub focus_left: Option<KeyChord>,
-    /// Stores the focus right value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub focus_right: Option<KeyChord>,
-    /// Stores the focus previous window value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub focus_previous_window: Option<KeyChord>,
-    /// Stores the focus next window value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub focus_next_window: Option<KeyChord>,
-    /// Stores the focus previous group value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub focus_previous_group: Option<KeyChord>,
-    /// Stores the focus next group value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub focus_next_group: Option<KeyChord>,
-}
-
-impl Default for KeyBindings {
-    /// Runs the default operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn default() -> Self {
-        Self {
-            escape: KeyChord::ctrl(KeyCode::Char('a')),
-            split_vertical: None,
-            split_horizontal: None,
-            new_window: None,
-            new_group: None,
-            agent_shell: None,
-            focus_up: None,
-            focus_down: None,
-            focus_left: None,
-            focus_right: None,
-            focus_previous_window: None,
-            focus_next_window: None,
-            focus_previous_group: None,
-            focus_next_group: None,
-        }
-    }
-}
-
 /// Carries Pane Focus Direction state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
