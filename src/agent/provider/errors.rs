@@ -63,20 +63,7 @@ pub(crate) fn provider_error_retry_class_from_parts(
     message: &str,
     provider_failure_json: Option<&str>,
 ) -> ProviderErrorRetryClass {
-    classify_provider_error_retry(provider_error_kind(kind), message, provider_failure_json)
-}
-
-fn provider_error_kind(kind: crate::error::MezErrorKind) -> ProviderErrorKind {
-    match kind {
-        crate::error::MezErrorKind::InvalidArgs => ProviderErrorKind::InvalidArgs,
-        crate::error::MezErrorKind::InvalidState => ProviderErrorKind::InvalidState,
-        crate::error::MezErrorKind::Config => ProviderErrorKind::Config,
-        crate::error::MezErrorKind::Io => ProviderErrorKind::Io,
-        crate::error::MezErrorKind::Conflict => ProviderErrorKind::Conflict,
-        crate::error::MezErrorKind::NotFound => ProviderErrorKind::NotFound,
-        crate::error::MezErrorKind::Forbidden => ProviderErrorKind::Forbidden,
-        crate::error::MezErrorKind::NotImplemented => ProviderErrorKind::NotImplemented,
-    }
+    classify_provider_error_retry(kind.into(), message, provider_failure_json)
 }
 
 /// Converts a serialized provider-event error kind into a Mezzanine error kind.
@@ -85,17 +72,9 @@ fn provider_error_kind(kind: crate::error::MezErrorKind) -> ProviderErrorKind {
 /// Keeping this parser beside provider retry classification and error-envelope
 /// construction prevents runtime and async-runtime copies from drifting.
 pub(crate) fn provider_event_error_kind(kind: &str) -> crate::error::MezErrorKind {
-    match ProviderErrorKind::from_event_name(kind) {
-        Some(ProviderErrorKind::InvalidArgs) => crate::error::MezErrorKind::InvalidArgs,
-        Some(ProviderErrorKind::InvalidState) => crate::error::MezErrorKind::InvalidState,
-        Some(ProviderErrorKind::Config) => crate::error::MezErrorKind::Config,
-        Some(ProviderErrorKind::Io) => crate::error::MezErrorKind::Io,
-        Some(ProviderErrorKind::Conflict) => crate::error::MezErrorKind::Conflict,
-        Some(ProviderErrorKind::NotFound) => crate::error::MezErrorKind::NotFound,
-        Some(ProviderErrorKind::Forbidden) => crate::error::MezErrorKind::Forbidden,
-        Some(ProviderErrorKind::NotImplemented) => crate::error::MezErrorKind::NotImplemented,
-        None => crate::error::MezErrorKind::InvalidState,
-    }
+    ProviderErrorKind::from_event_name(kind)
+        .map(Into::into)
+        .unwrap_or(crate::error::MezErrorKind::InvalidState)
 }
 
 /// Builds a provider/runtime error envelope from serialized provider-event fields.
@@ -163,11 +142,7 @@ pub(super) fn provider_maap_parse_error_message(error: &MezError, raw_text: &str
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn provider_malformed_output_failure_json(error: &MezError, raw_text: &str) -> String {
-    agent_provider_malformed_output_failure_json(
-        provider_error_kind(error.kind()),
-        error.message(),
-        raw_text,
-    )
+    agent_provider_malformed_output_failure_json(error.kind().into(), error.message(), raw_text)
 }
 
 #[cfg(test)]

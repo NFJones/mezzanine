@@ -14,6 +14,36 @@ use thiserror::Error;
 /// boundary and avoids relying on call-site inference.
 pub type Result<T> = std::result::Result<T, MezError>;
 
+impl From<MezErrorKind> for mez_agent::ProviderErrorKind {
+    fn from(kind: MezErrorKind) -> Self {
+        match kind {
+            MezErrorKind::InvalidArgs => Self::InvalidArgs,
+            MezErrorKind::InvalidState => Self::InvalidState,
+            MezErrorKind::Config => Self::Config,
+            MezErrorKind::Io => Self::Io,
+            MezErrorKind::Conflict => Self::Conflict,
+            MezErrorKind::NotFound => Self::NotFound,
+            MezErrorKind::Forbidden => Self::Forbidden,
+            MezErrorKind::NotImplemented => Self::NotImplemented,
+        }
+    }
+}
+
+impl From<mez_agent::ProviderErrorKind> for MezErrorKind {
+    fn from(kind: mez_agent::ProviderErrorKind) -> Self {
+        match kind {
+            mez_agent::ProviderErrorKind::InvalidArgs => Self::InvalidArgs,
+            mez_agent::ProviderErrorKind::InvalidState => Self::InvalidState,
+            mez_agent::ProviderErrorKind::Config => Self::Config,
+            mez_agent::ProviderErrorKind::Io => Self::Io,
+            mez_agent::ProviderErrorKind::Conflict => Self::Conflict,
+            mez_agent::ProviderErrorKind::NotFound => Self::NotFound,
+            mez_agent::ProviderErrorKind::Forbidden => Self::Forbidden,
+            mez_agent::ProviderErrorKind::NotImplemented => Self::NotImplemented,
+        }
+    }
+}
+
 impl From<mez_agent::SchedulerError> for MezError {
     fn from(error: mez_agent::SchedulerError) -> Self {
         match error.kind() {
