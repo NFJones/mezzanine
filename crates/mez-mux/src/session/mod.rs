@@ -8,6 +8,8 @@ mod clients;
 mod lifecycle;
 mod snapshot;
 mod targets;
+#[cfg(test)]
+mod tests;
 mod time;
 mod types;
 mod windows;
