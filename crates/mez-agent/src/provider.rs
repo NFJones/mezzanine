@@ -69,6 +69,125 @@ impl ProviderApiCompatibility {
     }
 }
 
+/// Declares which request fields and features a provider supports.
+///
+/// Capability flags drive request construction, retry mutation, and fallback
+/// selection without depending on product configuration or transport types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderCapabilities {
+    /// Whether the provider accepts the OpenAI Responses API body shape.
+    pub supports_responses_api: bool,
+    /// Whether max_output_tokens is accepted by the provider.
+    pub supports_max_output_tokens: bool,
+    /// Whether reasoning effort controls are accepted.
+    pub supports_reasoning_controls: bool,
+    /// Whether provider thinking mode can be explicitly enabled or disabled.
+    pub supports_thinking_toggle: bool,
+    /// Whether the service_tier field is accepted.
+    pub supports_service_tier: bool,
+    /// Whether prompt cache retention is supported.
+    pub supports_prompt_cache_retention: bool,
+    /// Whether streaming (SSE) is supported.
+    pub supports_streaming: bool,
+    /// Whether function tool calling is supported.
+    pub supports_tool_calls: bool,
+    /// Whether the provider supports parallel tool calls.
+    pub supports_parallel_tool_calls: bool,
+}
+
+impl ProviderCapabilities {
+    /// Returns the capabilities for one API compatibility implementation.
+    pub fn for_api(api: ProviderApiCompatibility) -> Self {
+        match api {
+            ProviderApiCompatibility::OpenAiResponses => Self {
+                supports_responses_api: true,
+                supports_max_output_tokens: false,
+                supports_reasoning_controls: true,
+                supports_thinking_toggle: false,
+                supports_service_tier: true,
+                supports_prompt_cache_retention: false,
+                supports_streaming: true,
+                supports_tool_calls: true,
+                supports_parallel_tool_calls: true,
+            },
+            ProviderApiCompatibility::DeepSeekChatCompletions => Self {
+                supports_responses_api: false,
+                supports_max_output_tokens: true,
+                supports_reasoning_controls: true,
+                supports_thinking_toggle: true,
+                supports_service_tier: false,
+                supports_prompt_cache_retention: false,
+                supports_streaming: true,
+                supports_tool_calls: true,
+                supports_parallel_tool_calls: false,
+            },
+            ProviderApiCompatibility::OpenAiChatCompletions => Self {
+                supports_responses_api: false,
+                supports_max_output_tokens: true,
+                supports_reasoning_controls: false,
+                supports_thinking_toggle: false,
+                supports_service_tier: false,
+                supports_prompt_cache_retention: false,
+                supports_streaming: false,
+                supports_tool_calls: true,
+                supports_parallel_tool_calls: false,
+            },
+            ProviderApiCompatibility::AnthropicMessages => Self {
+                supports_responses_api: false,
+                supports_max_output_tokens: true,
+                supports_reasoning_controls: true,
+                supports_thinking_toggle: false,
+                supports_service_tier: false,
+                supports_prompt_cache_retention: false,
+                supports_streaming: true,
+                supports_tool_calls: true,
+                supports_parallel_tool_calls: false,
+            },
+            ProviderApiCompatibility::ClaudeCode => Self {
+                supports_responses_api: false,
+                supports_max_output_tokens: false,
+                supports_reasoning_controls: true,
+                supports_thinking_toggle: false,
+                supports_service_tier: false,
+                supports_prompt_cache_retention: false,
+                supports_streaming: false,
+                supports_tool_calls: false,
+                supports_parallel_tool_calls: false,
+            },
+        }
+    }
+
+    /// Returns the capabilities historically implied by one provider kind.
+    pub fn for_kind(kind: &str) -> Self {
+        ProviderApiCompatibility::default_for_kind(kind)
+            .map(Self::for_api)
+            .unwrap_or_else(Self::unsupported)
+    }
+
+    /// Returns capabilities for a provider kind plus optional API id.
+    pub fn for_provider_config(
+        kind: &str,
+        api: Option<&str>,
+    ) -> Result<Self, ProviderApiCompatibilityError> {
+        resolve_provider_api(kind, api).map(Self::for_api)
+    }
+
+    /// Returns a capability set that advertises no provider features.
+    fn unsupported() -> Self {
+        Self {
+            supports_responses_api: false,
+            supports_max_output_tokens: false,
+            supports_reasoning_controls: false,
+            supports_thinking_toggle: false,
+            supports_service_tier: false,
+            supports_prompt_cache_retention: false,
+            supports_streaming: false,
+            supports_tool_calls: false,
+            supports_parallel_tool_calls: false,
+        }
+    }
+}
+
 /// Failure to resolve a configured provider API compatibility.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderApiCompatibilityError {
@@ -112,7 +231,7 @@ pub fn resolve_provider_api(
 mod tests {
     use super::{
         ANTHROPIC_MESSAGES_API, ProviderApiCompatibility, ProviderApiCompatibilityError,
-        resolve_provider_api,
+        ProviderCapabilities, resolve_provider_api,
     };
 
     #[test]
@@ -148,6 +267,31 @@ mod tests {
             Err(ProviderApiCompatibilityError::MissingApiForKind(
                 "custom".to_string()
             ))
+        );
+    }
+
+    #[test]
+    /// Verifies provider feature classification follows the selected wire API
+    /// and rejects unsupported explicit configuration at the agent boundary.
+    fn provider_capabilities_follow_api_compatibility() {
+        let responses = ProviderCapabilities::for_api(ProviderApiCompatibility::OpenAiResponses);
+        assert!(responses.supports_responses_api);
+        assert!(responses.supports_service_tier);
+        assert!(responses.supports_parallel_tool_calls);
+
+        let deepseek = ProviderCapabilities::for_provider_config("deepseek", None).unwrap();
+        assert!(deepseek.supports_thinking_toggle);
+        assert!(!deepseek.supports_parallel_tool_calls);
+
+        assert_eq!(
+            ProviderCapabilities::for_provider_config("openai", Some("unknown")),
+            Err(ProviderApiCompatibilityError::UnsupportedApi(
+                "unknown".to_string()
+            ))
+        );
+        assert_eq!(
+            ProviderCapabilities::for_kind("custom"),
+            ProviderCapabilities::unsupported()
         );
     }
 }

@@ -27,7 +27,7 @@ pub use prompt::{AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentP
 pub use provider::{
     ANTHROPIC_MESSAGES_API, CLAUDE_CODE_API, DEEPSEEK_CHAT_COMPLETIONS_API,
     OPENAI_CHAT_COMPLETIONS_API, OPENAI_RESPONSES_API, ProviderApiCompatibility,
-    ProviderApiCompatibilityError, resolve_provider_api,
+    ProviderApiCompatibilityError, ProviderCapabilities, resolve_provider_api,
 };
 pub use quota::{ProviderQuotaUsage, provider_quota_usage_from_headers};
 
