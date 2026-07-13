@@ -4,8 +4,11 @@
 //! rendering, and runtime adapters. Product-specific copy-text normalization
 //! remains in the Mezzanine composition crate.
 
+use crate::readline::readline_word_column_range;
 use crate::{MuxError, Result};
-use mez_terminal::{terminal_emoji_width, terminal_text_width};
+use mez_terminal::{
+    terminal_emoji_width, terminal_grapheme_width, terminal_graphemes, terminal_text_width,
+};
 
 /// Identifies one terminal-cell position in a copy-mode buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -23,6 +26,430 @@ pub enum SearchDirection {
     Forward,
     /// Search toward earlier lines, wrapping to the end when needed.
     Backward,
+}
+
+/// Owns dependency-neutral copy-mode navigation and selection state.
+///
+/// Display styling and product-specific clipboard normalization remain in the
+/// composition crate; this type only tracks a line buffer, viewport, cursor,
+/// search results, and selection transitions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopyBuffer {
+    lines: Vec<String>,
+    viewport_rows: usize,
+    scroll_top: usize,
+    cursor: CopyPosition,
+    selection: Option<(CopyPosition, CopyPosition)>,
+    selection_anchor: Option<CopyPosition>,
+}
+
+impl CopyBuffer {
+    /// Creates navigation state for a copy buffer.
+    pub fn new(
+        lines: Vec<String>,
+        viewport_rows: usize,
+        scroll_top: usize,
+        cursor: CopyPosition,
+    ) -> Result<Self> {
+        if viewport_rows == 0 {
+            return Err(MuxError::invalid_args(
+                "copy mode viewport must have at least one row",
+            ));
+        }
+        let mut buffer = Self {
+            lines,
+            viewport_rows,
+            scroll_top,
+            cursor,
+            selection: None,
+            selection_anchor: None,
+        };
+        buffer.scroll_top = buffer
+            .scroll_top
+            .min(buffer.lines.len().saturating_sub(buffer.viewport_rows));
+        buffer.cursor = buffer.clamp_position(buffer.cursor);
+        buffer.keep_cursor_visible();
+        Ok(buffer)
+    }
+
+    /// Returns all display lines in the copy buffer.
+    pub fn lines(&self) -> &[String] {
+        &self.lines
+    }
+
+    /// Returns the zero-based first visible line.
+    pub fn scroll_top(&self) -> usize {
+        self.scroll_top
+    }
+
+    /// Returns the number of lines in the buffer.
+    pub fn line_count(&self) -> usize {
+        self.lines.len()
+    }
+
+    /// Returns the one-based line boundary at the bottom of the viewport.
+    pub fn visible_end_line(&self) -> usize {
+        self.scroll_top
+            .saturating_add(self.viewport_rows)
+            .min(self.lines.len())
+    }
+
+    /// Returns whether the viewport is at the live bottom of the buffer.
+    pub fn is_at_bottom(&self) -> bool {
+        self.scroll_top >= self.lines.len().saturating_sub(self.viewport_rows)
+    }
+
+    /// Returns the display lines visible in the viewport.
+    pub fn visible_lines(&self) -> &[String] {
+        &self.lines[self.scroll_top..self.visible_end_line()]
+    }
+
+    /// Updates the viewport height and clamps dependent state.
+    pub fn resize_viewport_rows(&mut self, viewport_rows: usize) -> Result<()> {
+        if viewport_rows == 0 {
+            return Err(MuxError::invalid_args(
+                "copy mode viewport must have at least one row",
+            ));
+        }
+        self.viewport_rows = viewport_rows;
+        self.scroll_top = self
+            .scroll_top
+            .min(self.lines.len().saturating_sub(self.viewport_rows));
+        self.cursor = self.clamp_position(self.cursor);
+        self.selection = self
+            .selection
+            .map(|(start, end)| (self.clamp_position(start), self.clamp_position(end)));
+        self.selection_anchor = self
+            .selection_anchor
+            .map(|anchor| self.clamp_position(anchor));
+        self.keep_cursor_visible();
+        self.update_keyboard_selection();
+        Ok(())
+    }
+
+    /// Scrolls the viewport by a signed line count.
+    pub fn scroll_by(&mut self, delta: isize) {
+        let max_top = self.lines.len().saturating_sub(self.viewport_rows);
+        if delta.is_negative() {
+            self.scroll_top = self.scroll_top.saturating_sub(delta.unsigned_abs());
+        } else {
+            self.scroll_top = self.scroll_top.saturating_add(delta as usize).min(max_top);
+        }
+        self.cursor.line = self.cursor.line.clamp(
+            self.scroll_top,
+            self.scroll_top
+                .saturating_add(self.viewport_rows.saturating_sub(1))
+                .min(self.lines.len().saturating_sub(1)),
+        );
+        self.update_keyboard_selection();
+    }
+
+    /// Scrolls one page toward the start of the buffer.
+    pub fn page_up(&mut self) {
+        if self.scroll_top < self.viewport_rows {
+            self.scroll_to_top();
+        } else {
+            self.scroll_by(-(self.viewport_rows as isize));
+        }
+    }
+
+    /// Scrolls one page toward the end of the buffer.
+    pub fn page_down(&mut self) {
+        let max_top = self.lines.len().saturating_sub(self.viewport_rows);
+        if max_top.saturating_sub(self.scroll_top) < self.viewport_rows {
+            self.scroll_to_bottom();
+        } else {
+            self.scroll_by(self.viewport_rows as isize);
+        }
+    }
+
+    /// Moves the viewport and cursor to the beginning of the buffer.
+    pub fn scroll_to_top(&mut self) {
+        self.scroll_top = 0;
+        self.cursor = CopyPosition { line: 0, column: 0 };
+        self.update_keyboard_selection();
+    }
+
+    /// Moves the viewport and cursor to the end of the buffer.
+    pub fn scroll_to_bottom(&mut self) {
+        self.scroll_top = self.lines.len().saturating_sub(self.viewport_rows);
+        self.cursor.line = self.lines.len().saturating_sub(1);
+        self.cursor.column = self.line_width(self.cursor.line);
+        self.update_keyboard_selection();
+    }
+
+    /// Returns the keyboard cursor position.
+    pub fn cursor(&self) -> CopyPosition {
+        self.cursor
+    }
+
+    /// Clamps one position to the available copy buffer.
+    pub fn clamp_position(&self, position: CopyPosition) -> CopyPosition {
+        let line = position.line.min(self.lines.len().saturating_sub(1));
+        CopyPosition {
+            line,
+            column: position.column.min(self.line_width(line)),
+        }
+    }
+
+    /// Moves the cursor by signed line and display-column deltas.
+    pub fn move_cursor_by(&mut self, line_delta: isize, column_delta: isize) {
+        let max_line = self.lines.len().saturating_sub(1);
+        self.cursor.line = if line_delta.is_negative() {
+            self.cursor.line.saturating_sub(line_delta.unsigned_abs())
+        } else {
+            self.cursor
+                .line
+                .saturating_add(line_delta as usize)
+                .min(max_line)
+        };
+        self.cursor.column = self.cursor.column.min(self.line_width(self.cursor.line));
+        self.move_cursor_columns(column_delta);
+        self.keep_cursor_visible();
+        self.update_keyboard_selection();
+    }
+
+    /// Moves the cursor to the beginning of its line.
+    pub fn move_cursor_to_line_start(&mut self) {
+        self.cursor.column = 0;
+        self.update_keyboard_selection();
+    }
+
+    /// Moves the cursor to the end of its line.
+    pub fn move_cursor_to_line_end(&mut self) {
+        self.cursor.column = self.line_width(self.cursor.line);
+        self.update_keyboard_selection();
+    }
+
+    /// Moves the cursor to the previous readline-style word boundary.
+    pub fn move_cursor_word_left(&mut self) {
+        self.cursor.column = self
+            .lines
+            .get(self.cursor.line)
+            .map(|line| previous_word_column(line, self.cursor.column))
+            .unwrap_or_default();
+        self.update_keyboard_selection();
+    }
+
+    /// Moves the cursor to the next readline-style word boundary.
+    pub fn move_cursor_word_right(&mut self) {
+        self.cursor.column = self
+            .lines
+            .get(self.cursor.line)
+            .map(|line| next_word_column(line, self.cursor.column))
+            .unwrap_or_default();
+        self.update_keyboard_selection();
+    }
+
+    /// Begins a keyboard selection at the current cursor.
+    pub fn begin_keyboard_selection(&mut self) {
+        self.selection_anchor = Some(self.cursor);
+        self.selection = Some((self.cursor, self.cursor));
+    }
+
+    /// Searches the buffer and selects the matching text.
+    pub fn search(
+        &mut self,
+        query: &str,
+        direction: SearchDirection,
+    ) -> Result<Option<CopyPosition>> {
+        if query.is_empty() {
+            return Err(MuxError::invalid_args(
+                "copy mode search query must not be empty",
+            ));
+        }
+        if let Some((position, width)) =
+            search_lines(&self.lines, self.scroll_top, query, direction)
+        {
+            self.scroll_top = position.line.min(self.lines.len().saturating_sub(1));
+            self.selection = Some((
+                position,
+                CopyPosition {
+                    line: position.line,
+                    column: position.column.saturating_add(width),
+                },
+            ));
+            Ok(Some(position))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Sets an explicit selection range.
+    pub fn select_range(&mut self, start: CopyPosition, end: CopyPosition) -> Result<()> {
+        validate_position(&self.lines, start)?;
+        validate_position(&self.lines, end)?;
+        self.selection = Some((start, end));
+        Ok(())
+    }
+
+    /// Selects the readline-style word surrounding one position.
+    pub fn select_word_at(&mut self, position: CopyPosition) -> Result<()> {
+        let position = self.clamp_position(position);
+        let Some(line) = self.lines.get(position.line) else {
+            return Err(MuxError::invalid_args(
+                "copy mode word selection line is invalid",
+            ));
+        };
+        let scalar = display_column_to_scalar_index(line, position.column);
+        let (start, end) = readline_word_column_range(line, scalar);
+        self.select_range(
+            CopyPosition {
+                line: position.line,
+                column: scalar_index_to_display_column(line, start),
+            },
+            CopyPosition {
+                line: position.line,
+                column: scalar_index_to_display_column(line, end),
+            },
+        )
+    }
+
+    /// Clears the current selection and keyboard anchor.
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+        self.selection_anchor = None;
+    }
+
+    /// Returns the current selection range.
+    pub fn selection(&self) -> Option<(CopyPosition, CopyPosition)> {
+        self.selection
+    }
+
+    fn line_width(&self, line: usize) -> usize {
+        self.lines
+            .get(line)
+            .map(|line| terminal_text_width(line, terminal_emoji_width()))
+            .unwrap_or_default()
+    }
+
+    fn move_cursor_columns(&mut self, column_delta: isize) {
+        if column_delta.is_negative() {
+            for _ in 0..column_delta.unsigned_abs() {
+                self.move_cursor_left_one();
+            }
+        } else {
+            for _ in 0..column_delta as usize {
+                self.move_cursor_right_one();
+            }
+        }
+    }
+
+    fn move_cursor_left_one(&mut self) {
+        if self.cursor.column > 0 {
+            self.cursor.column = self
+                .lines
+                .get(self.cursor.line)
+                .and_then(|line| grapheme_at_column(line, self.cursor.column.saturating_sub(1)))
+                .map(|(start, _)| start)
+                .unwrap_or_else(|| self.cursor.column.saturating_sub(1));
+        } else if self.cursor.line > 0 {
+            self.cursor.line = self.cursor.line.saturating_sub(1);
+            self.cursor.column = self.line_width(self.cursor.line);
+        }
+    }
+
+    fn move_cursor_right_one(&mut self) {
+        let line_width = self.line_width(self.cursor.line);
+        if self.cursor.column < line_width {
+            self.cursor.column = self
+                .lines
+                .get(self.cursor.line)
+                .and_then(|line| grapheme_at_column(line, self.cursor.column))
+                .map(|(start, width)| start.saturating_add(width))
+                .unwrap_or_else(|| self.cursor.column.saturating_add(1));
+        } else if self.cursor.line.saturating_add(1) < self.lines.len() {
+            self.cursor.line = self.cursor.line.saturating_add(1);
+            self.cursor.column = 0;
+        }
+    }
+
+    fn keep_cursor_visible(&mut self) {
+        if self.cursor.line < self.scroll_top {
+            self.scroll_top = self.cursor.line;
+        } else if self.cursor.line >= self.scroll_top.saturating_add(self.viewport_rows) {
+            self.scroll_top = self
+                .cursor
+                .line
+                .saturating_sub(self.viewport_rows.saturating_sub(1));
+        }
+    }
+
+    fn update_keyboard_selection(&mut self) {
+        if let Some(anchor) = self.selection_anchor {
+            self.selection = Some((anchor, self.cursor));
+        }
+    }
+}
+
+/// Finds the grapheme cluster covering a display column and returns its
+/// starting display column and total cell width.
+fn grapheme_at_column(line: &str, target: usize) -> Option<(usize, usize)> {
+    let mut col = 0usize;
+    for grapheme in terminal_graphemes(line) {
+        let width = terminal_grapheme_width(grapheme, terminal_emoji_width());
+        let next = col.saturating_add(width);
+        if target >= col && target < next {
+            return Some((col, width));
+        }
+        col = next;
+    }
+    None
+}
+
+/// Converts a display-column position into its corresponding Unicode scalar
+/// index so readline word-boundary behavior can operate on it.
+fn display_column_to_scalar_index(line: &str, target_column: usize) -> usize {
+    let mut col = 0usize;
+    let mut scalar = 0usize;
+    for grapheme in terminal_graphemes(line) {
+        let width = terminal_grapheme_width(grapheme, terminal_emoji_width());
+        let next = col.saturating_add(width);
+        if target_column < next {
+            return scalar;
+        }
+        scalar += grapheme.chars().count();
+        col = next;
+    }
+    scalar
+}
+
+/// Converts a Unicode scalar index back to its display column.
+fn scalar_index_to_display_column(line: &str, target_scalar: usize) -> usize {
+    let mut col = 0usize;
+    let mut scalar = 0usize;
+    for grapheme in terminal_graphemes(line) {
+        if scalar >= target_scalar {
+            break;
+        }
+        scalar += grapheme.chars().count();
+        col = col.saturating_add(terminal_grapheme_width(grapheme, terminal_emoji_width()));
+    }
+    col
+}
+
+/// Returns the display column reached by moving backward one word segment.
+fn previous_word_column(line: &str, column: usize) -> usize {
+    let chars = line.chars().collect::<Vec<_>>();
+    let scalar = display_column_to_scalar_index(line, column);
+    let mut index = scalar.min(chars.len());
+    while index > 0 && chars[index.saturating_sub(1)].is_whitespace() {
+        index = index.saturating_sub(1);
+    }
+    let word_start = readline_word_column_range(line, index.saturating_sub(1)).0;
+    scalar_index_to_display_column(line, word_start)
+}
+
+/// Returns the display column reached by moving forward one word segment.
+fn next_word_column(line: &str, column: usize) -> usize {
+    let chars = line.chars().collect::<Vec<_>>();
+    let scalar = display_column_to_scalar_index(line, column);
+    let mut index = scalar.min(chars.len());
+    while index < chars.len() && chars[index].is_whitespace() {
+        index = index.saturating_add(1);
+    }
+    let word_end = readline_word_column_range(line, index).1;
+    scalar_index_to_display_column(line, word_end)
 }
 
 /// Searches copy-buffer lines in the requested direction, wrapping once.
@@ -87,6 +514,66 @@ pub fn validate_position(lines: &[String], position: CopyPosition) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies the mux-owned copy buffer keeps Unicode cursor movement,
+    /// viewport scrolling, and keyboard selections synchronized.
+    #[test]
+    fn copy_buffer_owns_navigation_and_selection_state() {
+        let mut buffer = CopyBuffer::new(
+            vec![
+                "first".to_string(),
+                "中 target".to_string(),
+                "last".to_string(),
+            ],
+            2,
+            1,
+            CopyPosition { line: 1, column: 0 },
+        )
+        .unwrap();
+
+        buffer.begin_keyboard_selection();
+        buffer.move_cursor_by(0, 1);
+        assert_eq!(buffer.cursor(), CopyPosition { line: 1, column: 2 });
+        assert_eq!(
+            buffer.selection(),
+            Some((
+                CopyPosition { line: 1, column: 0 },
+                CopyPosition { line: 1, column: 2 }
+            ))
+        );
+
+        buffer.page_down();
+        assert!(buffer.is_at_bottom());
+        assert_eq!(
+            buffer.visible_lines(),
+            &["中 target".to_string(), "last".to_string()]
+        );
+    }
+
+    /// Verifies invalid viewport sizes and empty search queries retain
+    /// mux-owned invalid-argument errors at the copy-state boundary.
+    #[test]
+    fn copy_buffer_rejects_invalid_navigation_inputs() {
+        let error = CopyBuffer::new(
+            vec!["line".to_string()],
+            0,
+            0,
+            CopyPosition { line: 0, column: 0 },
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), crate::MuxErrorKind::InvalidArgs);
+
+        let mut buffer = CopyBuffer::new(
+            vec!["line".to_string()],
+            1,
+            0,
+            CopyPosition { line: 0, column: 0 },
+        )
+        .unwrap();
+        let error = buffer.search("", SearchDirection::Forward).unwrap_err();
+        assert_eq!(error.kind(), crate::MuxErrorKind::InvalidArgs);
+        assert_eq!(error.message(), "copy mode search query must not be empty");
+    }
 
     /// Verifies forward and backward searches wrap around the copy buffer while
     /// reporting terminal-cell columns rather than UTF-8 byte offsets.
