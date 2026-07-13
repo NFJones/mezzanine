@@ -160,6 +160,7 @@ impl RuntimeSessionService {
                     .session
                     .select_pane_global(caller_client_id, &approval.pane_id)
                 {
+                    let error = crate::error::MezError::from(error);
                     return runtime_json_rpc_error(&request.id, error.kind(), error.message());
                 }
                 if let Err(error) = self.enter_agent_mode_for_pane(&approval.pane_id) {

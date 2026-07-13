@@ -4,12 +4,12 @@
 //! kills, layout cycling, window reordering, live-state updates, and
 //! active-window bookkeeping calls.
 
-use crate::error::{MezError, Result};
-use crate::ids::{ClientId, PaneId, WindowGroupId, WindowId};
-use crate::layout::{
+use mez_core::{ClientId, PaneId, WindowGroupId, WindowId};
+use mez_mux::layout::{
     LayoutPolicy, Pane, PaneGeometry, PaneNavigationDirection, PaneSizeSpec, PaneTitleSource, Size,
     SplitDirection, Window,
 };
+use mez_mux::{MuxError as MezError, MuxErrorKind, Result};
 
 use super::targets::JoinDestination;
 use super::time::current_unix_seconds;
@@ -160,12 +160,7 @@ impl Session {
             .window_groups
             .iter()
             .position(|group| &group.id == group_id)
-            .ok_or_else(|| {
-                MezError::new(
-                    crate::error::MezErrorKind::NotFound,
-                    "window group not found",
-                )
-            })?;
+            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "window group not found"))?;
         let index = self.windows.len();
         let mut window = Window::new(&mut self.ids, index, name, self.authoritative_size);
         window.created_at_unix_seconds = Some(current_unix_seconds());
@@ -194,7 +189,7 @@ impl Session {
         primary_client_id: &ClientId,
         name: impl Into<String>,
         select: bool,
-    ) -> Result<(crate::ids::WindowGroupId, WindowId)> {
+    ) -> Result<(mez_core::WindowGroupId, WindowId)> {
         self.require_primary(primary_client_id)?;
         let name = name.into();
         let window_index = self.windows.len();
@@ -663,9 +658,7 @@ impl Session {
             .windows
             .iter_mut()
             .find(|window| &window.id == window_id)
-            .ok_or_else(|| {
-                MezError::new(crate::error::MezErrorKind::NotFound, "window not found")
-            })?;
+            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "window not found"))?;
         let pane_id = window
             .split_active_select(&mut self.ids, direction, select_new)?
             .id
@@ -990,9 +983,7 @@ impl Session {
             .windows
             .iter_mut()
             .find(|window| &window.id == window_id)
-            .ok_or_else(|| {
-                MezError::new(crate::error::MezErrorKind::NotFound, "window not found")
-            })?;
+            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "window not found"))?;
         let policy = window.set_layout_policy(policy);
         self.record_event();
         Ok(policy)
@@ -1605,7 +1596,7 @@ impl Session {
         let target_pane = window
             .panes()
             .get(pane_index)
-            .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "pane not found"))?;
+            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "pane not found"))?;
 
         if target_pane.live && !force {
             return Err(MezError::forbidden(

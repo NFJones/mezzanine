@@ -3,9 +3,9 @@
 use super::{
     ClientRole, ClientState, ClientTerminalDescriptor, ObserverDecisionState, Session, SessionState,
 };
-use crate::layout::{LayoutPolicy, PaneGeometry, PaneNavigationDirection, Size, SplitDirection};
 use crate::shell::{ResolvedShell, ShellSource};
 use crate::snapshot::{SessionSnapshotPayload, SnapshotPaneGeometry, SnapshotSessionState};
+use mez_mux::layout::{LayoutPolicy, PaneGeometry, PaneNavigationDirection, Size, SplitDirection};
 use std::path::PathBuf;
 
 /// Runs the test session operation for this subsystem.
@@ -73,7 +73,7 @@ fn primary_requires_interactive_terminal() {
 
     let error = session.attach_primary("client", false).unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert_eq!(error.kind(), mez_mux::MuxErrorKind::Forbidden);
 }
 
 /// Verifies primary attach preserves supplied terminal descriptor.
@@ -136,7 +136,7 @@ fn primary_attach_rejects_invalid_terminal_descriptor() {
         )
         .unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert_eq!(error.kind(), mez_mux::MuxErrorKind::InvalidArgs);
 }
 
 /// Verifies primary selection is atomic and requires interactive target.
@@ -175,7 +175,7 @@ fn primary_selection_is_atomic_and_requires_interactive_target() {
         .select_primary_client(Some(&first), &revoked_observer_client)
         .unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert_eq!(error.kind(), mez_mux::MuxErrorKind::Forbidden);
 }
 
 /// Verifies enforces single primary.
@@ -190,7 +190,7 @@ fn enforces_single_primary() {
 
     let error = session.attach_primary("second", true).unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::Conflict);
+    assert_eq!(error.kind(), mez_mux::MuxErrorKind::Conflict);
 }
 
 /// Verifies observer starts pending and approval sets visibility marker.
@@ -444,7 +444,7 @@ fn closing_last_window_in_group_closes_group() {
     );
 
     let error = session.kill_group(&primary, None, true).unwrap_err();
-    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert_eq!(error.kind(), mez_mux::MuxErrorKind::Forbidden);
 }
 
 /// Verifies kill-group removes all windows in the target group.
@@ -463,7 +463,7 @@ fn kill_group_removes_owned_windows_and_preserves_remaining_group() {
     let error = session
         .kill_group(&primary, Some(group_id.as_str()), false)
         .unwrap_err();
-    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert_eq!(error.kind(), mez_mux::MuxErrorKind::Forbidden);
 
     let transition = session
         .kill_group_transition(&primary, Some(group_id.as_str()), true)
@@ -657,7 +657,7 @@ fn primary_can_rename_and_kill_session_with_force() {
     assert_eq!(session.name, "work");
 
     let error = session.kill_session(&primary, false).unwrap_err();
-    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert_eq!(error.kind(), mez_mux::MuxErrorKind::Forbidden);
 
     session.kill_session(&primary, true).unwrap();
     assert_eq!(session.state, SessionState::Empty);
@@ -1246,7 +1246,7 @@ fn killing_live_pane_requires_force() {
         .unwrap();
 
     let error = session.kill_pane(&primary, Some("1"), false).unwrap_err();
-    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert_eq!(error.kind(), mez_mux::MuxErrorKind::Forbidden);
 
     let removed = session.kill_pane(&primary, Some("1"), true).unwrap();
     assert_eq!(removed.unwrap().index, 1);

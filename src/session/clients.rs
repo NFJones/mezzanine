@@ -3,8 +3,8 @@
 //! Client methods enforce primary exclusivity, observer approval visibility,
 //! control-client role restrictions, and detach semantics.
 
-use crate::error::{MezError, Result};
-use crate::ids::{ClientId, ObserverRequestId};
+use mez_core::{ClientId, ObserverRequestId};
+use mez_mux::{MuxError as MezError, MuxErrorKind, Result};
 
 use super::time::current_unix_seconds;
 use super::types::{
@@ -91,9 +91,7 @@ impl Session {
             .clients
             .iter()
             .position(|client| client.id.as_str() == target_client_id)
-            .ok_or_else(|| {
-                MezError::new(crate::error::MezErrorKind::NotFound, "client not found")
-            })?;
+            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "client not found"))?;
         if !self.clients[target_index].interactive {
             return Err(MezError::forbidden(
                 "primary client selection requires an interactive target client",
@@ -272,9 +270,7 @@ impl Session {
             .observers
             .iter_mut()
             .find(|observer| observer.id.as_str() == observer_id)
-            .ok_or_else(|| {
-                MezError::new(crate::error::MezErrorKind::NotFound, "observer not found")
-            })?;
+            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "observer not found"))?;
 
         let decided_at = current_unix_seconds();
         observer.state = ObserverDecisionState::Approved;
@@ -326,9 +322,7 @@ impl Session {
             .observers
             .iter_mut()
             .find(|observer| observer.id.as_str() == observer_id)
-            .ok_or_else(|| {
-                MezError::new(crate::error::MezErrorKind::NotFound, "observer not found")
-            })?;
+            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "observer not found"))?;
         let decided_at = current_unix_seconds();
         observer.state = ObserverDecisionState::Rejected;
         observer.decided_at_unix_seconds = Some(decided_at);
@@ -375,9 +369,7 @@ impl Session {
             .clients
             .iter_mut()
             .find(|client| client.id.as_str() == client_id)
-            .ok_or_else(|| {
-                MezError::new(crate::error::MezErrorKind::NotFound, "client not found")
-            })?;
+            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "client not found"))?;
         if client.role != ClientRole::Observer {
             return Err(MezError::invalid_args(
                 "revoke-observer requires an approved observer client",
@@ -418,9 +410,7 @@ impl Session {
             .clients
             .iter_mut()
             .find(|client| client.id.as_str() == client_id)
-            .ok_or_else(|| {
-                MezError::new(crate::error::MezErrorKind::NotFound, "client not found")
-            })?;
+            .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "client not found"))?;
         client.state = ClientState::Detached;
         client.last_seen_at_unix_seconds = Some(current_unix_seconds());
         self.record_event();

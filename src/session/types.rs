@@ -3,8 +3,8 @@
 //! These types describe clients, observer requests, session state, and the core
 //! session container. Behavior is implemented in focused sibling modules.
 
-use crate::ids::{ClientId, IdFactory, ObserverRequestId, SessionId, WindowGroupId, WindowId};
-use crate::layout::{LayoutNode, LayoutPolicy, PaneGeometry, Size, Window};
+use mez_core::{ClientId, IdFactory, ObserverRequestId, SessionId, WindowGroupId, WindowId};
+use mez_mux::layout::{LayoutNode, LayoutPolicy, PaneGeometry, Size, Window};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -105,7 +105,7 @@ pub struct RestoredWindow {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestoredPane {
     /// Stable pane identity.
-    pub id: crate::ids::PaneId,
+    pub id: mez_core::PaneId,
     /// Contiguous pane index.
     pub index: usize,
     /// User-visible pane title.

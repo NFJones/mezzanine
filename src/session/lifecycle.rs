@@ -3,9 +3,9 @@
 //! Lifecycle methods initialize the default in-memory model and expose immutable
 //! views while delegating clients, windows, and restore behavior to siblings.
 
-use crate::error::{MezError, Result};
-use crate::ids::{ClientId, IdFactory};
-use crate::layout::{Size, Window};
+use mez_core::{ClientId, IdFactory};
+use mez_mux::layout::{Size, Window};
+use mez_mux::{MuxError as MezError, Result};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::time::current_unix_seconds;

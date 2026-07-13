@@ -3,8 +3,8 @@
 //! Targeting centralizes window and pane lookup by id, index, and name, plus
 //! shared helper state updates used by client and window operations.
 
-use crate::error::{MezError, Result};
-use crate::ids::{PaneId, WindowId};
+use mez_core::{PaneId, WindowId};
+use mez_mux::{MuxError as MezError, MuxErrorKind, Result};
 
 use super::time::current_unix_seconds;
 use super::types::{Session, SessionState};
@@ -36,9 +36,9 @@ impl Session {
                     Ok(self.active_window_index)
                 }
             }
-            Some(target) => self.window_index_by_target(target).ok_or_else(|| {
-                MezError::new(crate::error::MezErrorKind::NotFound, "window not found")
-            }),
+            Some(target) => self
+                .window_index_by_target(target)
+                .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "window not found")),
         }
     }
 
@@ -94,7 +94,7 @@ impl Session {
     }
 
     /// Returns windows in the active group in user-facing order.
-    pub fn active_group_windows(&self) -> Vec<&crate::layout::Window> {
+    pub fn active_group_windows(&self) -> Vec<&mez_mux::layout::Window> {
         self.active_group_window_indexes()
             .iter()
             .filter_map(|index| self.windows.get(*index))
@@ -119,12 +119,9 @@ impl Session {
                     Ok(self.active_group_index)
                 }
             }
-            Some(target) => self.group_index_by_target(target).ok_or_else(|| {
-                MezError::new(
-                    crate::error::MezErrorKind::NotFound,
-                    "window group not found",
-                )
-            }),
+            Some(target) => self
+                .group_index_by_target(target)
+                .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "window group not found")),
         }
     }
 
@@ -215,9 +212,7 @@ impl Session {
                             .pane_index_by_id(target)
                             .map(|pane_index| (window_index, pane_index))
                     })
-                    .ok_or_else(|| {
-                        MezError::new(crate::error::MezErrorKind::NotFound, "pane not found")
-                    })
+                    .ok_or_else(|| MezError::new(MuxErrorKind::NotFound, "pane not found"))
             }
         }
     }
@@ -352,7 +347,7 @@ impl Session {
     pub(super) fn set_active_group_index(&mut self, index: usize) -> Result<()> {
         if index >= self.window_groups.len() {
             return Err(MezError::new(
-                crate::error::MezErrorKind::NotFound,
+                MuxErrorKind::NotFound,
                 "window group not found",
             ));
         }

@@ -234,15 +234,17 @@ impl RuntimeSessionService {
             .as_ref()
             .map(|event_log| event_log.latest_event_id().saturating_add(1))
         {
-            self.session
+            Ok(self
+                .session
                 .approve_observer_target_with_visible_from_event_id(
                     primary_client_id,
                     observer_id,
                     visible_from_event_id,
-                )
+                )?)
         } else {
-            self.session
-                .approve_observer_target(primary_client_id, observer_id)
+            Ok(self
+                .session
+                .approve_observer_target(primary_client_id, observer_id)?)
         }
     }
 

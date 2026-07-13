@@ -262,7 +262,7 @@ impl RuntimeSessionService {
         self.lifecycle_state = RuntimeLifecycleState::Stopping;
         if let Err(error) = self.session.kill_session(primary_client_id, force) {
             self.lifecycle_state = previous_state;
-            return Err(error);
+            return Err(error.into());
         }
         self.stop_all_active_pane_pipes();
         let terminated = self.terminate_all_runtime_pane_processes(force)?;

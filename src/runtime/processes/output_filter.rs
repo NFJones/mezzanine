@@ -1544,7 +1544,7 @@ impl RuntimeSessionService {
                 },
             );
         }
-        self.session.set_pane_title_from_program(pane_id, title)
+        Ok(self.session.set_pane_title_from_program(pane_id, title)?)
     }
 
     /// Restores the saved title mode when a program-title owner is no longer foreground.
@@ -1563,8 +1563,11 @@ impl RuntimeSessionService {
         let Some(state) = self.program_owned_pane_titles.remove(pane_id) else {
             return Ok(false);
         };
-        self.session
-            .restore_pane_title_state(pane_id, state.previous_title, state.previous_source)
+        Ok(self.session.restore_pane_title_state(
+            pane_id,
+            state.previous_title,
+            state.previous_source,
+        )?)
     }
 
     /// Applies foreground process metadata delivered by an async pane worker.
