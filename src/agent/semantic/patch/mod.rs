@@ -8,7 +8,9 @@
 use super::{LocalActionKind, LocalActionPlan};
 use crate::agent::maap::{is_mez_patch_payload, validate_apply_patch_payload};
 use crate::agent::shell::shell_quote;
-use crate::error::{MezError, Result};
+use mez_agent::semantic_patch::{
+    SemanticPatchPlanningError, SemanticPatchPlanningResult as Result,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod matcher;
@@ -107,7 +109,7 @@ pub fn apply_patch_write_plan_from_read_outputs(
     mez_apply_patch_write_plan(plan)
 }
 
-fn apply_patch_planned_failure(plan: &ApplyPatchPlan) -> MezError {
+fn apply_patch_planned_failure(plan: &ApplyPatchPlan) -> SemanticPatchPlanningError {
     let mut lines = Vec::new();
     if !plan.changes.is_empty() {
         let paths = plan
@@ -119,7 +121,7 @@ fn apply_patch_planned_failure(plan: &ApplyPatchPlan) -> MezError {
         lines.push(format!("apply_patch: applied path(s): {paths}"));
     }
     lines.extend(plan.errors.iter().cloned());
-    MezError::invalid_args(lines.join("\n"))
+    SemanticPatchPlanningError::invalid_args(lines.join("\n"))
 }
 
 fn apply_patch_planned_failure_shell_lines(plan: &ApplyPatchPlan) -> String {
@@ -198,14 +200,15 @@ pub fn apply_patch_error_plan(message: &str) -> LocalActionPlan {
 pub(super) fn apply_patch_plan(patch: &str, strip: Option<u64>) -> Result<LocalActionPlan> {
     let effective =
         try_convert_unified_diff_to_mez_patch(patch).unwrap_or_else(|| patch.to_string());
-    validate_apply_patch_payload(&effective)?;
+    validate_apply_patch_payload(&effective)
+        .map_err(|error| SemanticPatchPlanningError::invalid_args(error.message()))?;
     debug_assert!(is_mez_patch_payload(&effective));
     mez_apply_patch_read_plan(&effective, strip)
 }
 
 fn mez_apply_patch_read_plan(patch: &str, strip: Option<u64>) -> Result<LocalActionPlan> {
     if strip.is_some() {
-        return Err(MezError::invalid_args(
+        return Err(SemanticPatchPlanningError::invalid_args(
             "apply_patch strip is unsupported for Mezzanine patch blocks",
         ));
     }
@@ -240,7 +243,9 @@ fn mez_apply_patch_write_plan(plan: ApplyPatchPlan) -> Result<LocalActionPlan> {
 }
 
 fn apply_patch_parse_error<T>(message: &str) -> Result<T> {
-    Err(MezError::invalid_args(format!("apply_patch: {message}")))
+    Err(SemanticPatchPlanningError::invalid_args(format!(
+        "apply_patch: {message}"
+    )))
 }
 
 fn apply_mez_patch_to_snapshots(
@@ -263,7 +268,7 @@ fn apply_mez_patch_to_snapshots(
     let mut changes = Vec::new();
     for path in patch.touched_paths() {
         let snapshot = snapshots.get(&path).ok_or_else(|| {
-            MezError::invalid_args(format!(
+            SemanticPatchPlanningError::invalid_args(format!(
                 "apply_patch: missing remote snapshot for path: {path}"
             ))
         })?;

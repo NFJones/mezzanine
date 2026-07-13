@@ -12,6 +12,43 @@ use std::fmt;
 /// Result type returned by deterministic semantic-patch parsing.
 pub type SemanticPatchResult<T> = Result<T, SemanticPatchParseError>;
 
+/// Result type returned while planning one semantic patch against snapshots.
+pub type SemanticPatchPlanningResult<T> = Result<T, SemanticPatchPlanningError>;
+
+/// A semantic-patch snapshot, matching, or transaction-planning failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticPatchPlanningError {
+    message: String,
+}
+
+impl SemanticPatchPlanningError {
+    /// Creates a planning failure with a model-facing diagnostic.
+    pub fn invalid_args(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    /// Returns the stable model-facing diagnostic.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for SemanticPatchPlanningError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SemanticPatchPlanningError {}
+
+impl From<SemanticPatchParseError> for SemanticPatchPlanningError {
+    fn from(error: SemanticPatchParseError) -> Self {
+        Self::invalid_args(format!("apply_patch: {error}"))
+    }
+}
+
 /// A deterministic semantic-patch syntax or path-validation failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SemanticPatchParseError {

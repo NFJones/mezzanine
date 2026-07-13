@@ -168,6 +168,12 @@ impl From<mez_agent::semantic_patch::SemanticPatchParseError> for MezError {
     }
 }
 
+impl From<mez_agent::semantic_patch::SemanticPatchPlanningError> for MezError {
+    fn from(error: mez_agent::semantic_patch::SemanticPatchPlanningError) -> Self {
+        Self::invalid_args(error.message())
+    }
+}
+
 impl From<mez_mux::MuxError> for MezError {
     fn from(error: mez_mux::MuxError) -> Self {
         match error.kind() {

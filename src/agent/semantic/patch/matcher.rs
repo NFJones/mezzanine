@@ -7,7 +7,9 @@
 
 use super::parser::{MezPatchHunk, MezPatchHunkLine, MezPatchRangeHint};
 use super::snapshot::ApplyPatchTextFile;
-use crate::error::{MezError, Result};
+use mez_agent::semantic_patch::{
+    SemanticPatchPlanningError as MezError, SemanticPatchPlanningResult as Result,
+};
 
 /// Applies parsed update hunks to one text file.
 ///

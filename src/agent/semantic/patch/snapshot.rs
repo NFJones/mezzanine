@@ -10,8 +10,11 @@ use super::{
     APPLY_PATCH_FILE_BEGIN_MARKER, APPLY_PATCH_FILE_END_MARKER, APPLY_PATCH_READ_BEGIN_MARKER,
     APPLY_PATCH_READ_END_MARKER, apply_patch_parse_error,
 };
-use crate::error::{MezError, Result};
 use base64::Engine;
+use mez_agent::semantic_patch::{
+    SemanticPatchPlanningError, SemanticPatchPlanningError as MezError,
+    SemanticPatchPlanningResult as Result,
+};
 use std::collections::BTreeMap;
 
 /// One path snapshot emitted by the apply-patch read phase.
@@ -79,7 +82,9 @@ impl ApplyPatchTextFile {
     /// - `bytes`: Exact file bytes captured by the read phase.
     pub(super) fn from_bytes(path: &str, bytes: &[u8]) -> Result<Self> {
         let text = String::from_utf8(bytes.to_vec()).map_err(|_| {
-            MezError::invalid_args(format!("apply_patch: file is not valid UTF-8: {path}"))
+            SemanticPatchPlanningError::invalid_args(format!(
+                "apply_patch: file is not valid UTF-8: {path}"
+            ))
         })?;
         Ok(Self {
             lines: text.lines().map(ToString::to_string).collect(),
@@ -125,13 +130,17 @@ pub(super) fn parse_apply_patch_snapshot_output(
         .iter()
         .position(|line| *line == APPLY_PATCH_READ_BEGIN_MARKER)
         .ok_or_else(|| {
-            MezError::invalid_args("apply_patch: read phase did not emit a snapshot begin marker")
+            SemanticPatchPlanningError::invalid_args(
+                "apply_patch: read phase did not emit a snapshot begin marker",
+            )
         })?;
     let end = lines
         .iter()
         .rposition(|line| *line == APPLY_PATCH_READ_END_MARKER)
         .ok_or_else(|| {
-            MezError::invalid_args("apply_patch: read phase did not emit a snapshot end marker")
+            SemanticPatchPlanningError::invalid_args(
+                "apply_patch: read phase did not emit a snapshot end marker",
+            )
         })?;
     let mut index = begin + 1;
     let mut snapshots = BTreeMap::new();
@@ -148,7 +157,9 @@ pub(super) fn parse_apply_patch_snapshot_output(
             .get(index)
             .and_then(|line| line.strip_prefix("STATUS "))
             .ok_or_else(|| {
-                MezError::invalid_args("apply_patch: malformed remote snapshot status")
+                SemanticPatchPlanningError::invalid_args(
+                    "apply_patch: malformed remote snapshot status",
+                )
             })?;
         index += 1;
         let state = match status {
@@ -200,11 +211,15 @@ fn decode_apply_patch_snapshot_field(line: Option<&&str>, name: &str) -> Result<
     let encoded = line
         .and_then(|line| line.strip_prefix(&format!("{name} ")))
         .ok_or_else(|| {
-            MezError::invalid_args(format!("apply_patch: missing snapshot field {name}"))
+            SemanticPatchPlanningError::invalid_args(format!(
+                "apply_patch: missing snapshot field {name}"
+            ))
         })?;
     let bytes = decode_base64_bytes(encoded, name)?;
     String::from_utf8(bytes).map_err(|_| {
-        MezError::invalid_args(format!("apply_patch: snapshot field {name} is not UTF-8"))
+        SemanticPatchPlanningError::invalid_args(format!(
+            "apply_patch: snapshot field {name} is not UTF-8"
+        ))
     })
 }
 
@@ -217,7 +232,7 @@ fn decode_base64_bytes(encoded: &str, label: &str) -> Result<Vec<u8>> {
     base64::engine::general_purpose::STANDARD
         .decode(encoded.as_bytes())
         .map_err(|error| {
-            MezError::invalid_args(format!(
+            SemanticPatchPlanningError::invalid_args(format!(
                 "apply_patch: failed to decode {label} base64: {error}"
             ))
         })
