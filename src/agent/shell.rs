@@ -7,6 +7,7 @@
 use super::{BTreeMap, MezError, Path, Result};
 use base64::Engine;
 use mez_agent::instructions::{DiscoveredInstructionFile, parse_instruction_discovery_output};
+use mez_agent::{validate_resolved_shell_path, validate_shell_marker_token};
 use sha2::Digest;
 
 // Shell transactions, quoting, tool discovery, environment signatures, and bootstrap.
@@ -156,11 +157,7 @@ impl MarkerToken {
     /// on duplicated control-flow logic.
     pub fn new(token: impl Into<String>) -> Result<Self> {
         let token = token.into();
-        if token.len() < 32 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(MezError::invalid_args(
-                "marker token must contain at least 128 bits encoded as 32 or more hex characters",
-            ));
-        }
+        validate_shell_marker_token(&token)?;
         Ok(Self(token))
     }
 
@@ -566,11 +563,7 @@ impl ShellTransaction {
         shell_path: &Path,
         command: impl Into<String>,
     ) -> Result<Self> {
-        if !shell_path.is_absolute() {
-            return Err(MezError::invalid_args(
-                "shell transaction wrapper requires an absolute resolved shell path",
-            ));
-        }
+        validate_resolved_shell_path(shell_path)?;
         Ok(Self {
             marker,
             turn_id: turn_id.into(),

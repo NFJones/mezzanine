@@ -114,6 +114,16 @@ impl From<mez_agent::AgentShellSessionError> for MezError {
     }
 }
 
+impl From<mez_agent::AgentShellValidationError> for MezError {
+    fn from(error: mez_agent::AgentShellValidationError) -> Self {
+        match error.kind() {
+            mez_agent::AgentShellValidationErrorKind::InvalidArgs => {
+                Self::invalid_args(error.message())
+            }
+        }
+    }
+}
+
 impl From<mez_agent::ReadinessError> for MezError {
     fn from(error: mez_agent::ReadinessError) -> Self {
         match error.kind() {

@@ -144,7 +144,10 @@ pub use schema::{
     normalize_openai_strict_schema,
 };
 pub use semantic_patch::{is_mez_patch_payload, validate_apply_patch_payload};
-pub use shell::shell_quote;
+pub use shell::{
+    AgentShellValidationError, AgentShellValidationErrorKind, AgentShellValidationResult,
+    shell_quote, validate_resolved_shell_path, validate_shell_marker_token,
+};
 pub use slash::{
     SlashCommandEffect, SlashCommandInvocation, SlashCommandParseError, SlashCommandSpec,
     baseline_slash_commands, parse_slash_command,
