@@ -6,6 +6,8 @@
 
 use super::{CopyPosition, Result};
 
+pub use mez_mux::input::MousePolicy;
+
 // Mouse event parsing and policy classification.
 
 /// Carries Mouse Button state for this subsystem.
@@ -128,59 +130,6 @@ pub struct MouseEvent {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub modifiers: MouseModifiers,
-}
-
-/// Carries Mouse Policy state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct MousePolicy {
-    /// Stores the enabled value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub enabled: bool,
-    /// Stores the pane application mouse mode value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub pane_application_mouse_mode: bool,
-    /// Stores the pane sgr mouse mode value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub pane_sgr_mouse_mode: bool,
-    /// Stores the pane application cursor mode value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub pane_application_cursor_mode: bool,
-    /// Stores the pane application keypad mode value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub pane_application_keypad_mode: bool,
-    /// Stores the pane resize active value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub pane_resize_active: bool,
-    /// Stores the over pane border value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub over_pane_border: bool,
-    /// Stores the over window frame value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub over_window_frame: bool,
-    /// Stores the copy mode active value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub copy_mode_active: bool,
 }
 
 /// A zero-based terminal cell occupied by a mux-managed pane border.

@@ -678,6 +678,29 @@ pub enum MuxAction {
     ToggleAgentShell,
 }
 
+/// Host and pane state used to classify one mouse event at the mux boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MousePolicy {
+    /// Whether mouse handling is enabled for the attached client.
+    pub enabled: bool,
+    /// Whether the focused pane has enabled application mouse reporting.
+    pub pane_application_mouse_mode: bool,
+    /// Whether the focused pane has enabled SGR mouse reporting.
+    pub pane_sgr_mouse_mode: bool,
+    /// Whether the focused pane has enabled application cursor keys.
+    pub pane_application_cursor_mode: bool,
+    /// Whether the focused pane has enabled application keypad input.
+    pub pane_application_keypad_mode: bool,
+    /// Whether a pane-border resize interaction is active.
+    pub pane_resize_active: bool,
+    /// Whether the pointer is over a mux-managed pane border.
+    pub over_pane_border: bool,
+    /// Whether the pointer is over a mux-managed window frame.
+    pub over_window_frame: bool,
+    /// Whether copy mode currently owns mouse input.
+    pub copy_mode_active: bool,
+}
+
 /// Configurable key chords that bypass or enter multiplexer prefix routing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyBindings {
