@@ -5,7 +5,12 @@
 //! selected-profile metadata, request envelopes, and profile selection helpers.
 
 use super::{AllowedActionSet, ModelInteractionKind};
-use mez_agent::{AgentContextResult, McpPromptTool, validate_context_required};
+use mez_agent::{
+    AgentContextResult, McpPromptTool,
+    known_model_context_window_tokens as agent_known_model_context_window_tokens,
+    known_provider_model_context_window_tokens as agent_known_provider_model_context_window_tokens,
+    validate_context_required,
+};
 pub use mez_agent::{ModelMessage, ModelMessageRole};
 
 /// Fallback context window when the model profile does not carry one.
@@ -19,15 +24,6 @@ const MODEL_OUTPUT_LIMIT_RETRY_CEILING_TOKENS: usize = 32_768;
 const MODEL_CONTEXT_BUDGET_WORDS_PER_TOKEN_NUMERATOR: usize = 3;
 /// Conservative denominator for converting token context windows into word budgets.
 const MODEL_CONTEXT_BUDGET_WORDS_PER_TOKEN_DENOMINATOR: usize = 4;
-/// Documented context window for OpenAI frontier 1M-token model families.
-const OPENAI_FRONTIER_CONTEXT_WINDOW_TOKENS: usize = 1_050_000;
-/// Documented context window for OpenAI GPT-5 family 400K-token model families.
-const OPENAI_STANDARD_GPT5_CONTEXT_WINDOW_TOKENS: usize = 400_000;
-/// Documented context window for OpenAI GPT-5.3-Codex-Spark.
-const OPENAI_CODEX_SPARK_CONTEXT_WINDOW_TOKENS: usize = 128_000;
-/// Documented context window for DeepSeek V4 model families.
-const DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS: usize = 1_000_000;
-
 /// Carries Model Profile state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -209,74 +205,12 @@ impl ModelProfile {
 
 /// Returns known provider model context-window metadata for built-in providers.
 fn known_provider_model_context_window_tokens(provider: &str, model: &str) -> Option<usize> {
-    match provider.trim().to_ascii_lowercase().as_str() {
-        "openai" => openai_known_model_context_window_tokens(model),
-        "deepseek" => deepseek_known_model_context_window_tokens(model),
-        _ => known_model_context_window_tokens(model),
-    }
+    agent_known_provider_model_context_window_tokens(provider, model)
 }
 
 /// Returns documented context-window metadata based on model-family naming.
 pub fn known_model_context_window_tokens(model: &str) -> Option<usize> {
-    openai_known_model_context_window_tokens(model)
-        .or_else(|| anthropic_known_model_context_window_tokens(model))
-        .or_else(|| deepseek_known_model_context_window_tokens(model))
-}
-
-/// Returns documented context windows for OpenAI model families Mezzanine ships.
-fn openai_known_model_context_window_tokens(model: &str) -> Option<usize> {
-    let model = model.trim().to_ascii_lowercase();
-    if openai_model_matches_snapshot_family(&model, "gpt-5.3-codex-spark") {
-        return Some(OPENAI_CODEX_SPARK_CONTEXT_WINDOW_TOKENS);
-    }
-    if openai_model_matches_snapshot_family(&model, "gpt-5.5")
-        || openai_model_matches_snapshot_family(&model, "gpt-5.5-pro")
-        || openai_model_matches_snapshot_family(&model, "gpt-5.4")
-        || openai_model_matches_snapshot_family(&model, "gpt-5.4-pro")
-    {
-        return Some(OPENAI_FRONTIER_CONTEXT_WINDOW_TOKENS);
-    }
-    if openai_model_matches_snapshot_family(&model, "gpt-5.4-mini")
-        || openai_model_matches_snapshot_family(&model, "gpt-5.4-nano")
-        || openai_model_matches_snapshot_family(&model, "gpt-5.3-codex")
-        || openai_model_matches_snapshot_family(&model, "gpt-5.2")
-        || openai_model_matches_snapshot_family(&model, "gpt-5-codex")
-        || openai_model_matches_snapshot_family(&model, "gpt-5-mini")
-        || openai_model_matches_snapshot_family(&model, "gpt-5-nano")
-        || openai_model_matches_snapshot_family(&model, "gpt-5")
-    {
-        return Some(OPENAI_STANDARD_GPT5_CONTEXT_WINDOW_TOKENS);
-    }
-    None
-}
-
-/// Returns documented context windows for DeepSeek model families Mezzanine ships.
-fn anthropic_known_model_context_window_tokens(model: &str) -> Option<usize> {
-    let model = model.trim().to_ascii_lowercase();
-    match model.as_str() {
-        "claude-fable-5" | "claude-opus-4-8" | "claude-sonnet-4-6" => Some(1_000_000),
-        "claude-haiku-4-5" => Some(200_000),
-        "claude-haiku-4-5-20251001" => Some(200_000),
-        _ => None,
-    }
-}
-
-/// Returns documented context windows for DeepSeek model families Mezzanine ships.
-fn deepseek_known_model_context_window_tokens(model: &str) -> Option<usize> {
-    match model.trim().to_ascii_lowercase().as_str() {
-        "deepseek-v4-pro" | "deepseek-v4-flash" => Some(DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS),
-        _ => None,
-    }
-}
-
-/// Matches an exact model family or a dated model snapshot for that family.
-fn openai_model_matches_snapshot_family(model: &str, family: &str) -> bool {
-    model == family
-        || model
-            .strip_prefix(family)
-            .and_then(|suffix| suffix.strip_prefix('-'))
-            .and_then(|suffix| suffix.chars().next())
-            .is_some_and(|first| first.is_ascii_digit())
+    agent_known_model_context_window_tokens(model)
 }
 
 /// Carries Model Profile Overrides state for this subsystem.

@@ -6,9 +6,9 @@
 //! composition boundary.
 
 use super::Result;
-use crate::agent::known_model_context_window_tokens;
-
-use mez_agent::{ProviderModelInfo, parse_openai_models_http_body_with};
+use mez_agent::{
+    ProviderModelInfo, known_model_context_window_tokens, parse_openai_models_http_body_with,
+};
 
 /// Runs the parse openai models http body operation for this subsystem.
 ///

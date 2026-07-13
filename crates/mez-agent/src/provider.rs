@@ -993,6 +993,114 @@ pub struct ProviderModelCatalog {
     pub quota_usage: Vec<crate::ProviderQuotaUsage>,
 }
 
+/// Documented context window for OpenAI frontier 1M-token model families.
+const OPENAI_FRONTIER_CONTEXT_WINDOW_TOKENS: usize = 1_050_000;
+/// Documented context window for OpenAI GPT-5 family 400K-token model families.
+const OPENAI_STANDARD_GPT5_CONTEXT_WINDOW_TOKENS: usize = 400_000;
+/// Documented context window for OpenAI GPT-5.3-Codex-Spark.
+const OPENAI_CODEX_SPARK_CONTEXT_WINDOW_TOKENS: usize = 128_000;
+/// Documented context window for DeepSeek V4 model families.
+const DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS: usize = 1_000_000;
+
+/// Returns known context-window metadata for one built-in provider and model.
+pub fn known_provider_model_context_window_tokens(provider: &str, model: &str) -> Option<usize> {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "openai" => openai_known_model_context_window_tokens(model),
+        "deepseek" => deepseek_known_model_context_window_tokens(model),
+        _ => known_model_context_window_tokens(model),
+    }
+}
+
+/// Returns known context-window metadata based on built-in model-family names.
+pub fn known_model_context_window_tokens(model: &str) -> Option<usize> {
+    openai_known_model_context_window_tokens(model)
+        .or_else(|| anthropic_known_model_context_window_tokens(model))
+        .or_else(|| deepseek_known_model_context_window_tokens(model))
+}
+
+/// Returns documented context windows for OpenAI model families.
+fn openai_known_model_context_window_tokens(model: &str) -> Option<usize> {
+    let model = model.trim().to_ascii_lowercase();
+    if openai_model_matches_snapshot_family(&model, "gpt-5.3-codex-spark") {
+        return Some(OPENAI_CODEX_SPARK_CONTEXT_WINDOW_TOKENS);
+    }
+    if openai_model_matches_snapshot_family(&model, "gpt-5.5")
+        || openai_model_matches_snapshot_family(&model, "gpt-5.5-pro")
+        || openai_model_matches_snapshot_family(&model, "gpt-5.4")
+        || openai_model_matches_snapshot_family(&model, "gpt-5.4-pro")
+    {
+        return Some(OPENAI_FRONTIER_CONTEXT_WINDOW_TOKENS);
+    }
+    if openai_model_matches_snapshot_family(&model, "gpt-5.4-mini")
+        || openai_model_matches_snapshot_family(&model, "gpt-5.4-nano")
+        || openai_model_matches_snapshot_family(&model, "gpt-5.3-codex")
+        || openai_model_matches_snapshot_family(&model, "gpt-5.2")
+        || openai_model_matches_snapshot_family(&model, "gpt-5-codex")
+        || openai_model_matches_snapshot_family(&model, "gpt-5-mini")
+        || openai_model_matches_snapshot_family(&model, "gpt-5-nano")
+        || openai_model_matches_snapshot_family(&model, "gpt-5")
+    {
+        return Some(OPENAI_STANDARD_GPT5_CONTEXT_WINDOW_TOKENS);
+    }
+    None
+}
+
+/// Returns documented context windows for Anthropic model families.
+fn anthropic_known_model_context_window_tokens(model: &str) -> Option<usize> {
+    let model = model.trim().to_ascii_lowercase();
+    match model.as_str() {
+        "claude-fable-5" | "claude-opus-4-8" | "claude-sonnet-4-6" => Some(1_000_000),
+        "claude-haiku-4-5" | "claude-haiku-4-5-20251001" => Some(200_000),
+        _ => None,
+    }
+}
+
+/// Returns documented context windows for DeepSeek model families.
+fn deepseek_known_model_context_window_tokens(model: &str) -> Option<usize> {
+    match model.trim().to_ascii_lowercase().as_str() {
+        "deepseek-v4-pro" | "deepseek-v4-flash" => Some(DEEPSEEK_V4_CONTEXT_WINDOW_TOKENS),
+        _ => None,
+    }
+}
+
+/// Matches an exact OpenAI model family or one of its dated snapshots.
+fn openai_model_matches_snapshot_family(model: &str, family: &str) -> bool {
+    model == family
+        || model
+            .strip_prefix(family)
+            .and_then(|suffix| suffix.strip_prefix('-'))
+            .and_then(|suffix| suffix.chars().next())
+            .is_some_and(|first| first.is_ascii_digit())
+}
+
+#[cfg(test)]
+mod known_context_window_tests {
+    use super::{known_model_context_window_tokens, known_provider_model_context_window_tokens};
+
+    #[test]
+    /// Verifies built-in provider metadata recognizes exact model families,
+    /// dated snapshots, provider-specific routing, and unknown model names.
+    fn built_in_context_windows_cover_known_model_families() {
+        assert_eq!(
+            known_model_context_window_tokens("gpt-5.5"),
+            Some(1_050_000)
+        );
+        assert_eq!(
+            known_model_context_window_tokens("gpt-5.4-mini-2026-03-01"),
+            Some(400_000)
+        );
+        assert_eq!(
+            known_model_context_window_tokens("claude-haiku-4-5"),
+            Some(200_000)
+        );
+        assert_eq!(
+            known_provider_model_context_window_tokens("deepseek", "deepseek-v4-pro"),
+            Some(1_000_000)
+        );
+        assert_eq!(known_model_context_window_tokens("unknown"), None);
+    }
+}
+
 /// Failure to parse one provider model-catalog response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderModelCatalogParseError {
