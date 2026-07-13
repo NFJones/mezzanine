@@ -40,11 +40,140 @@ pub struct ProviderHttpResponse {
     pub body: String,
 }
 
+/// Incrementally detects terminal events in a buffered provider SSE body.
+///
+/// The detector scans each completed event block at most once. Product-owned
+/// transports can therefore decide whether a later read failure or stalled
+/// connection occurred after a complete provider response without coupling
+/// this protocol rule to a concrete HTTP client.
+#[derive(Debug, Default)]
+pub struct ProviderSseTerminalDetector {
+    scanned_bytes: usize,
+    terminal_seen: bool,
+}
+
+impl ProviderSseTerminalDetector {
+    /// Reports whether buffered SSE text contains a complete terminal event.
+    pub fn has_terminal_event(&mut self, body: &[u8]) -> bool {
+        if self.terminal_seen {
+            return true;
+        }
+        if self.scanned_bytes > body.len() {
+            self.scanned_bytes = 0;
+        }
+        while self.scanned_bytes < body.len() {
+            let remaining = &body[self.scanned_bytes..];
+            let Some((separator_index, separator_len)) = find_sse_block_separator(remaining) else {
+                break;
+            };
+            let block_end = self.scanned_bytes + separator_index;
+            let Ok(block) = std::str::from_utf8(&body[self.scanned_bytes..block_end]) else {
+                self.scanned_bytes = block_end + separator_len;
+                continue;
+            };
+            self.scanned_bytes = block_end + separator_len;
+            if sse_block_is_terminal(block) {
+                self.terminal_seen = true;
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// Locates the next complete SSE block separator without allocating.
+fn find_sse_block_separator(body: &[u8]) -> Option<(usize, usize)> {
+    let mut index = 0;
+    while index + 1 < body.len() {
+        match body[index] {
+            b'\n' if body[index + 1] == b'\n' => return Some((index, 2)),
+            b'\r'
+                if index + 3 < body.len()
+                    && body[index + 1] == b'\n'
+                    && body[index + 2] == b'\r'
+                    && body[index + 3] == b'\n' =>
+            {
+                return Some((index, 4));
+            }
+            _ => index += 1,
+        }
+    }
+    None
+}
+
+/// Reports whether one complete SSE event block is terminal.
+fn sse_block_is_terminal(block: &str) -> bool {
+    let mut event_name = None;
+    let mut data_start = None;
+    let mut data_end = None;
+    let mut data_line_count = 0usize;
+    for line in block.lines() {
+        if line.is_empty() || line.starts_with(':') {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("event:") {
+            event_name = Some(value.trim());
+        } else if let Some(value) = line.strip_prefix("data:") {
+            let data = value.trim_start();
+            let offset = data.as_ptr() as usize - block.as_ptr() as usize;
+            data_start.get_or_insert(offset);
+            data_end = Some(offset.saturating_add(data.len()));
+            data_line_count += 1;
+        }
+    }
+    let (Some(data_start), Some(data_end)) = (data_start, data_end) else {
+        return false;
+    };
+    let data = block[data_start..data_end].trim();
+    if data_line_count == 1 && data == "[DONE]" {
+        return true;
+    }
+    if data_line_count > 1 && sse_data_lines_equal(block, "[DONE]") {
+        return true;
+    }
+    let event_name_is_terminal = matches!(
+        event_name,
+        Some("response.completed" | "response.failed" | "response.incomplete")
+    );
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else {
+        return false;
+    };
+    event_name_is_terminal
+        || matches!(
+            value.get("type").and_then(serde_json::Value::as_str),
+            Some("response.completed" | "response.failed" | "response.incomplete")
+        )
+}
+
+/// Reports whether logically joined SSE data lines equal the target.
+fn sse_data_lines_equal(block: &str, target: &str) -> bool {
+    let mut target_remaining = target;
+    let mut first = true;
+    for line in block.lines() {
+        let Some(value) = line.strip_prefix("data:") else {
+            continue;
+        };
+        let data = value.trim_start();
+        if !first {
+            let Some(remaining) = target_remaining.strip_prefix('\n') else {
+                return false;
+            };
+            target_remaining = remaining;
+        }
+        let Some(remaining) = target_remaining.strip_prefix(data) else {
+            return false;
+        };
+        target_remaining = remaining;
+        first = false;
+    }
+    !first && target_remaining.is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ProviderHttpRequest,
-        ProviderHttpResponse,
+        ProviderHttpResponse, ProviderSseTerminalDetector,
     };
     use std::collections::BTreeMap;
 
@@ -70,5 +199,63 @@ mod tests {
         };
         assert_eq!(response.status_code, 200);
         assert_eq!(response.body, "ok");
+    }
+
+    /// Complete terminal failures are recognized so transports can preserve
+    /// provider diagnostics when a later body read fails.
+    #[test]
+    fn provider_sse_detects_terminal_failure_events() {
+        let body = format!(
+            "event: response.failed\ndata: {}\n\n",
+            serde_json::json!({
+                "type": "response.failed",
+                "response": {"error": {"message": "bad token"}}
+            })
+        );
+        let mut detector = ProviderSseTerminalDetector::default();
+
+        assert!(detector.has_terminal_event(body.as_bytes()));
+    }
+
+    /// Partial or invalid terminal JSON is not treated as a complete event.
+    #[test]
+    fn provider_sse_rejects_partial_terminal_json() {
+        let body = concat!(
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"output_text\":\"unterminated"
+        );
+        let delimited_but_invalid = concat!(
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"output_text\":\"unterminated\n\n"
+        );
+
+        assert!(!ProviderSseTerminalDetector::default().has_terminal_event(body.as_bytes()));
+        assert!(
+            !ProviderSseTerminalDetector::default()
+                .has_terminal_event(delimited_but_invalid.as_bytes())
+        );
+    }
+
+    /// Incremental scans retain progress and accept CRLF-delimited blocks.
+    #[test]
+    fn provider_sse_scans_incrementally_and_accepts_crlf() {
+        let mut detector = ProviderSseTerminalDetector::default();
+        let mut body = b"event: response.output_text.delta\n\
+            data: {\"type\":\"response.output_text.delta\",\"delta\":\"a\"}\n\n"
+            .to_vec();
+
+        assert!(!detector.has_terminal_event(&body));
+        let scanned_after_first_event = detector.scanned_bytes;
+        assert_eq!(scanned_after_first_event, body.len());
+
+        body.extend_from_slice(b"event: response.completed\n");
+        assert!(!detector.has_terminal_event(&body));
+        assert_eq!(detector.scanned_bytes, scanned_after_first_event);
+
+        body.extend_from_slice(b"data: {\"type\":\"response.completed\"}\n\n");
+        assert!(detector.has_terminal_event(&body));
+
+        let crlf = b"event: response.failed\r\ndata: {\"type\":\"response.failed\"}\r\n\r\n";
+        assert!(ProviderSseTerminalDetector::default().has_terminal_event(crlf));
     }
 }

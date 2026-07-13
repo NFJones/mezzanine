@@ -69,7 +69,7 @@ pub use context::{
 };
 pub use http::{
     DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ProviderHttpRequest,
-    ProviderHttpResponse,
+    ProviderHttpResponse, ProviderSseTerminalDetector,
 };
 pub use mcp::{
     AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellMcpToolSummary,
