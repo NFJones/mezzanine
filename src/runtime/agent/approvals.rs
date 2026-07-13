@@ -223,7 +223,11 @@ impl RuntimeSessionService {
                 };
                 let subagent_scope = self.subagent_scope_declaration_for_turn(turn);
                 if let Some(scope) = subagent_scope.as_ref()
-                    && let Some(_message) = scope.shell_command_violation(&plan.policy_command)?
+                    && let Some(_message) =
+                        crate::subagent::SubagentScopeEnforcement::shell_command_violation(
+                            scope,
+                            &plan.policy_command,
+                        )?
                 {
                     return Ok(false);
                 }
@@ -808,8 +812,11 @@ fn runtime_subagent_scope_violation(
 ) -> Result<Option<String>> {
     match &action.payload {
         crate::agent::AgentActionPayload::ApplyPatch { patch, .. } => {
-            scope.apply_patch_violation(patch)
+            crate::subagent::SubagentScopeEnforcement::apply_patch_violation(scope, patch)
         }
-        _ => scope.shell_command_violation(policy_command),
+        _ => crate::subagent::SubagentScopeEnforcement::shell_command_violation(
+            scope,
+            policy_command,
+        ),
     }
 }

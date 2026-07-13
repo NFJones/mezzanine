@@ -36,6 +36,8 @@ pub mod provider_transcript;
 pub mod quota;
 /// Dependency-neutral agent slash-command registry and parsing.
 pub mod slash;
+/// Provider-independent subagent cooperation and scope contracts.
+pub mod subagent;
 
 pub use accounting::{AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsageKey};
 pub use auth::{ProviderAuthMetadata, ProviderCredentialKind};
@@ -66,6 +68,7 @@ pub use slash::{
     SlashCommandEffect, SlashCommandInvocation, SlashCommandParseError, SlashCommandSpec,
     baseline_slash_commands, parse_slash_command,
 };
+pub use subagent::{CooperationMode, SubagentScopeDeclaration};
 
 /// Maximum number of issue records a model-authored query may request.
 pub const MAX_ISSUE_QUERY_LIMIT: u64 = 200;

@@ -2,7 +2,7 @@
 
 use super::{
     BuiltinSubagentRole, CooperationMode, ScopeRegistry, SubagentScopeDeclaration,
-    SubagentSpawnRequest, builtin_role_name, builtin_subagent_profiles,
+    SubagentScopeEnforcement, SubagentSpawnRequest, builtin_role_name, builtin_subagent_profiles,
 };
 
 /// Runs the request operation for this subsystem.

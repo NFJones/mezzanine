@@ -25,7 +25,7 @@ pub use types::{
     ActiveWriteScope, BuiltinSubagentRole, CooperationMode, SUBAGENT_FRIENDLY_NAMES, ScopeConflict,
     ScopeRegistry, SubagentProfile, SubagentScopeDeclaration, SubagentSpawnRequest,
 };
-pub use validation::{builtin_role_name, builtin_subagent_profiles};
+pub use validation::{SubagentScopeEnforcement, builtin_role_name, builtin_subagent_profiles};
 
 /// Exposes the tests module boundary.
 ///

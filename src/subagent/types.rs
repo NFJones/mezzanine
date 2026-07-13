@@ -5,6 +5,8 @@
 
 use std::collections::BTreeMap;
 
+pub use mez_agent::{CooperationMode, SubagentScopeDeclaration};
+
 use crate::permissions::PermissionPreset;
 
 /// Built-in human-readable subagent display names.
@@ -187,21 +189,6 @@ pub const SUBAGENT_FRIENDLY_NAMES: &[&str] = &[
     "Zoe",
 ];
 
-/// Declares how a subagent may interact with shared repository state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CooperationMode {
-    /// The subagent may read and inspect but must not write.
-    ExploreOnly,
-    /// The subagent owns the declared write scopes while it is active.
-    OwnedWrite,
-    /// The subagent may write after explicit coordination with peers.
-    CoordinatedWrite,
-    /// The subagent writes under a named serial lock.
-    SerialWrite,
-    /// The subagent may write without scope restrictions after user approval.
-    Unrestricted,
-}
-
 /// Built-in subagent roles understood by the harness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinSubagentRole {
@@ -270,21 +257,6 @@ pub struct SubagentProfile {
     pub default_read_scopes: Vec<String>,
     /// Default requested write scopes merged into spawn requests.
     pub default_write_scopes: Vec<String>,
-}
-
-/// Active scope restrictions inherited from a spawned subagent's parent.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SubagentScopeDeclaration {
-    /// Cooperation mode constraining the child agent.
-    pub cooperation_mode: CooperationMode,
-    /// Pane-shell current directory used to resolve relative effect paths.
-    pub current_directory: String,
-    /// Declared read scopes.
-    pub read_scopes: Vec<String>,
-    /// Declared write scopes.
-    pub write_scopes: Vec<String>,
-    /// Optional stricter permission preset selected by the profile.
-    pub permission_preset: Option<PermissionPreset>,
 }
 
 /// Registered active write ownership for one scope.

@@ -405,8 +405,13 @@ fn subagent_scope_violation(
     policy_command: &str,
 ) -> Result<Option<String>> {
     match &action.payload {
-        AgentActionPayload::ApplyPatch { patch, .. } => scope.apply_patch_violation(patch),
-        _ => scope.shell_command_violation(policy_command),
+        AgentActionPayload::ApplyPatch { patch, .. } => {
+            crate::subagent::SubagentScopeEnforcement::apply_patch_violation(scope, patch)
+        }
+        _ => crate::subagent::SubagentScopeEnforcement::shell_command_violation(
+            scope,
+            policy_command,
+        ),
     }
 }
 
