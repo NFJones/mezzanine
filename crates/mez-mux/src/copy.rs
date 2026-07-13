@@ -4,6 +4,7 @@
 //! rendering, and runtime adapters. Product-specific copy-text normalization
 //! remains in the Mezzanine composition crate.
 
+use crate::{MuxError, Result};
 use mez_terminal::{terminal_emoji_width, terminal_text_width};
 
 /// Identifies one terminal-cell position in a copy-mode buffer.
@@ -73,6 +74,16 @@ pub fn normalize_selection(start: CopyPosition, end: CopyPosition) -> (CopyPosit
     }
 }
 
+/// Validates that a copy position references an existing buffer line.
+pub fn validate_position(lines: &[String], position: CopyPosition) -> Result<()> {
+    if lines.get(position.line).is_none() {
+        return Err(MuxError::invalid_args(
+            "copy mode selection line is out of range",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,5 +121,26 @@ mod tests {
 
         assert_eq!(normalize_selection(earlier, later), (earlier, later));
         assert_eq!(normalize_selection(later, earlier), (earlier, later));
+    }
+
+    /// Verifies copy-position validation accepts existing lines and reports a
+    /// mux-owned invalid-argument error for positions outside the buffer.
+    #[test]
+    fn copy_position_validation_rejects_missing_lines() {
+        let lines = vec!["only line".to_string()];
+
+        assert!(
+            validate_position(
+                &lines,
+                CopyPosition {
+                    line: 0,
+                    column: 99
+                }
+            )
+            .is_ok()
+        );
+        let error = validate_position(&lines, CopyPosition { line: 1, column: 0 }).unwrap_err();
+        assert_eq!(error.kind(), crate::MuxErrorKind::InvalidArgs);
+        assert_eq!(error.message(), "copy mode selection line is out of range");
     }
 }

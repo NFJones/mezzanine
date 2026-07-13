@@ -8,8 +8,6 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::error::{MezError, Result};
-use crate::terminal::CopyPosition;
 use mez_terminal::{TerminalStyleSpan, TerminalStyledLine};
 
 /// Default maximum display-cell width for Mezzanine-owned agent log rows.
@@ -400,19 +398,6 @@ pub(super) fn clip_style_span(span: TerminalStyleSpan, width: usize) -> Option<T
         rendition: span.rendition,
     })
     .filter(|span| span.length > 0)
-}
-
-/// Validates that a copy-mode position references an existing rendered line.
-pub(in crate::terminal) fn validate_copy_position(
-    lines: &[String],
-    position: CopyPosition,
-) -> Result<()> {
-    if lines.get(position.line).is_none() {
-        return Err(MezError::invalid_args(
-            "copy mode selection line is out of range",
-        ));
-    }
-    Ok(())
 }
 
 /// Returns a display-column slice from one terminal line.

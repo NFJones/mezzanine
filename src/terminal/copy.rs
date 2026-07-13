@@ -6,11 +6,11 @@
 
 use super::{
     MezError, PasteBuffers, Result, TerminalScreen, TerminalStyledLine, char_count, line_slice,
-    terminal_grapheme_width, terminal_graphemes, validate_copy_position,
+    terminal_grapheme_width, terminal_graphemes,
 };
 use crate::readline::readline_word_column_range;
 pub use mez_mux::copy::{CopyPosition, SearchDirection};
-use mez_mux::copy::{normalize_selection, search_lines};
+use mez_mux::copy::{normalize_selection, search_lines, validate_position};
 
 // Copy mode, selection, and search primitives.
 
@@ -518,8 +518,8 @@ impl CopyMode {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn select_range(&mut self, start: CopyPosition, end: CopyPosition) -> Result<()> {
-        validate_copy_position(&self.lines, start)?;
-        validate_copy_position(&self.lines, end)?;
+        validate_position(&self.lines, start)?;
+        validate_position(&self.lines, end)?;
         self.selection = Some((start, end));
         Ok(())
     }
@@ -578,8 +578,8 @@ impl CopyMode {
             return Ok(String::new());
         };
         let (start, end) = normalize_selection(start, end);
-        validate_copy_position(&self.lines, start)?;
-        validate_copy_position(&self.lines, end)?;
+        validate_position(&self.lines, start)?;
+        validate_position(&self.lines, end)?;
 
         let mut copied = Vec::new();
         let mut line = start.line;
