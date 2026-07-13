@@ -62,8 +62,8 @@ pub use mez_agent::{
     AgentContextUsageSnapshot, CLAUDE_CODE_API, DEEPSEEK_CHAT_COMPLETIONS_API,
     DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ModelTokenUsage,
     ModelTokenUsageKey, OPENAI_CHAT_COMPLETIONS_API, OPENAI_RESPONSES_API,
-    ProviderApiCompatibility, ProviderHttpRequest, ProviderHttpResponse, ProviderModelCatalog,
-    ProviderModelInfo,
+    ProviderApiCompatibility, ProviderAuthMetadata, ProviderCredentialKind, ProviderHttpRequest,
+    ProviderHttpResponse, ProviderModelCatalog, ProviderModelInfo,
 };
 pub use mez_agent::{ProviderQuotaUsage, provider_quota_usage_from_headers};
 use openai_chat_completions::OpenAiChatCompletionsDialect;
@@ -534,8 +534,9 @@ pub fn openai_responses_provider_from_auth_store_with_provider_options<T>(
         )
         .and_then(|provider| provider.with_provider_id(provider_name));
     };
+    let metadata = provider_auth_metadata(&metadata);
     match metadata.credential_kind {
-        AuthCredentialKind::ApiKey => {
+        ProviderCredentialKind::ApiKey => {
             let credential = auth_store.provider_secret(provider_name)?;
             OpenAiResponsesProvider::with_endpoint_and_headers(
                 credential,
@@ -546,7 +547,7 @@ pub fn openai_responses_provider_from_auth_store_with_provider_options<T>(
             )
             .and_then(|provider| provider.with_provider_id(provider_name))
         }
-        AuthCredentialKind::ChatGpt => {
+        ProviderCredentialKind::ChatGpt => {
             if provider_name != "openai" {
                 return Err(MezError::invalid_state(format!(
                     "OpenAI Responses-compatible provider `{provider_name}` cannot use ChatGPT browser credentials"
@@ -644,7 +645,8 @@ pub fn anthropic_provider_from_auth_store_with_provider_options<T>(
             "Anthropic provider `{provider_name}` requires an authenticated API key"
         )));
     };
-    if metadata.credential_kind != AuthCredentialKind::ApiKey {
+    let metadata = provider_auth_metadata(&metadata);
+    if metadata.credential_kind != ProviderCredentialKind::ApiKey {
         return Err(MezError::invalid_state(format!(
             "Anthropic provider `{provider_name}` requires API-key credentials"
         )));
@@ -701,7 +703,7 @@ pub fn openai_compatible_provider_from_auth_store_with_provider_options<T>(
 
 /// Builds documented OpenAI REST routing headers for direct API-key requests.
 fn openai_direct_api_extra_headers(
-    metadata: &AuthMetadata,
+    metadata: &ProviderAuthMetadata,
     provider_options: &BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
     let mut headers = BTreeMap::new();
@@ -730,6 +732,19 @@ fn openai_direct_api_extra_headers(
         headers.insert(OPENAI_PROJECT_HEADER.to_string(), project_id);
     }
     headers
+}
+
+/// Adapts product-owned persisted auth metadata into the non-secret provider
+/// routing contract consumed by model-provider construction.
+fn provider_auth_metadata(metadata: &AuthMetadata) -> ProviderAuthMetadata {
+    ProviderAuthMetadata {
+        credential_kind: match metadata.credential_kind {
+            AuthCredentialKind::ApiKey => ProviderCredentialKind::ApiKey,
+            AuthCredentialKind::ChatGpt => ProviderCredentialKind::ChatGpt,
+        },
+        account_id: metadata.account_id.clone(),
+        organization_id: metadata.organization_id.clone(),
+    }
 }
 
 /// Returns a non-empty provider option value from the first supported key.

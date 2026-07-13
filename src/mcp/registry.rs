@@ -10,13 +10,10 @@ use crate::error::{MezError, Result};
 
 use super::types::{
     McpApprovalSetting, McpDiscoveredTool, McpEnvironmentPlan, McpServerConfig, McpServerKind,
-    McpServerState,
-    McpServerStatus, McpStartupPlan, McpStartupTransportPlan, McpToolCallPlan, McpToolCallRequest,
-    McpToolEffects, McpToolState,
+    McpServerState, McpServerStatus, McpStartupPlan, McpStartupTransportPlan, McpToolCallPlan,
+    McpToolCallRequest, McpToolEffects, McpToolState,
 };
-use mez_agent::{
-    McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer,
-};
+use mez_agent::{McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer};
 
 /// Carries Mcp Registry state for this subsystem.
 ///
