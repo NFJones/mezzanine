@@ -5,21 +5,25 @@
 //! formatting, and MAAP schema selection so the provider facade can stay
 //! focused on transport orchestration.
 
+use super::OPENAI_MAAP_FUNCTION_TOOL_NAME;
 use super::cache::{
     openai_prompt_cache_key, openai_render_request_messages, openai_response_format,
     openai_service_tier_for_latency_preference,
 };
 use super::schema::openai_maap_action_batch_tools;
-use super::{OPENAI_MAAP_FUNCTION_TOOL_NAME, validate_non_empty};
 use crate::agent::ModelRequest;
-use crate::error::{MezError, Result};
+use mez_agent::{
+    ProviderRequestAssemblyError, ProviderRequestAssemblyResult, validate_provider_request_required,
+};
 
 /// Builds a non-streaming OpenAI Responses request body.
 ///
 /// The returned JSON includes the rendered prompt, prompt-cache routing key,
 /// selected MAAP tool surface, response format, and provider-specific request
 /// options derived from the model profile.
-pub fn openai_responses_request_body(request: &ModelRequest) -> Result<String> {
+pub fn openai_responses_request_body(
+    request: &ModelRequest,
+) -> ProviderRequestAssemblyResult<String> {
     openai_responses_request_body_with_stream(request, false)
 }
 
@@ -31,15 +35,17 @@ pub fn openai_responses_request_body(request: &ModelRequest) -> Result<String> {
 pub(super) fn openai_responses_request_body_with_stream(
     request: &ModelRequest,
     stream: bool,
-) -> Result<String> {
-    validate_non_empty("OpenAI model", &request.model)?;
+) -> ProviderRequestAssemblyResult<String> {
+    validate_provider_request_required("OpenAI model", &request.model)?;
     let rendered = openai_render_request_messages(request)?;
     let mut body = openai_responses_request_control_shape_with_stream(request, stream)?;
     body["instructions"] = serde_json::json!(rendered.instructions);
     body["input"] = serde_json::json!(rendered.input);
     body["prompt_cache_key"] = serde_json::json!(openai_prompt_cache_key(request));
     serde_json::to_string(&body).map_err(|error| {
-        MezError::invalid_state(format!("OpenAI request encoding failed: {error}"))
+        ProviderRequestAssemblyError::invalid_state(format!(
+            "OpenAI request encoding failed: {error}"
+        ))
     })
 }
 
@@ -48,8 +54,8 @@ pub(super) fn openai_responses_request_body_with_stream(
 pub(super) fn openai_responses_request_control_shape_with_stream(
     request: &ModelRequest,
     stream: bool,
-) -> Result<serde_json::Value> {
-    validate_non_empty("OpenAI model", &request.model)?;
+) -> ProviderRequestAssemblyResult<serde_json::Value> {
+    validate_provider_request_required("OpenAI model", &request.model)?;
     let mut body = serde_json::json!({
         "model": request.model,
         "parallel_tool_calls": false,

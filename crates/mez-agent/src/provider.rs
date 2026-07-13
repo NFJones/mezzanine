@@ -6,6 +6,74 @@
 
 use std::fmt;
 
+/// Result type returned while assembling one provider request.
+pub type ProviderRequestAssemblyResult<T> = Result<T, ProviderRequestAssemblyError>;
+
+/// Stable categories for provider request-assembly failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderRequestAssemblyErrorKind {
+    /// A required provider request input was malformed.
+    InvalidArgs,
+    /// Provider request encoding or diagnostic construction failed.
+    InvalidState,
+}
+
+/// A typed failure returned while assembling one provider request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderRequestAssemblyError {
+    kind: ProviderRequestAssemblyErrorKind,
+    message: String,
+}
+
+impl ProviderRequestAssemblyError {
+    /// Creates an invalid-argument request assembly failure.
+    pub fn invalid_args(message: impl Into<String>) -> Self {
+        Self {
+            kind: ProviderRequestAssemblyErrorKind::InvalidArgs,
+            message: message.into(),
+        }
+    }
+
+    /// Creates an invalid-state request assembly failure.
+    pub fn invalid_state(message: impl Into<String>) -> Self {
+        Self {
+            kind: ProviderRequestAssemblyErrorKind::InvalidState,
+            message: message.into(),
+        }
+    }
+
+    /// Returns the stable request-assembly failure category.
+    pub fn kind(&self) -> ProviderRequestAssemblyErrorKind {
+        self.kind
+    }
+
+    /// Returns the diagnostic message without formatting the error.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for ProviderRequestAssemblyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ProviderRequestAssemblyError {}
+
+/// Validates one required provider request field.
+pub fn validate_provider_request_required(
+    field: &str,
+    value: &str,
+) -> ProviderRequestAssemblyResult<()> {
+    if value.trim().is_empty() {
+        return Err(ProviderRequestAssemblyError::invalid_args(format!(
+            "{field} must not be empty"
+        )));
+    }
+    Ok(())
+}
+
 /// API compatibility id for providers that speak the OpenAI Responses API.
 pub const OPENAI_RESPONSES_API: &str = "openai-responses";
 /// API compatibility id for providers that speak OpenAI-style Chat Completions.
@@ -238,6 +306,33 @@ impl fmt::Display for ProviderModelCatalogParseError {
 }
 
 impl std::error::Error for ProviderModelCatalogParseError {}
+
+#[cfg(test)]
+mod request_assembly_tests {
+    use super::{
+        ProviderRequestAssemblyError, ProviderRequestAssemblyErrorKind,
+        validate_provider_request_required,
+    };
+
+    /// Provider request validation preserves invalid-argument diagnostics for
+    /// required fields and accepts substantive values.
+    #[test]
+    fn provider_request_validation_rejects_empty_required_fields() {
+        assert!(validate_provider_request_required("OpenAI model", "gpt-5").is_ok());
+        let error = validate_provider_request_required("OpenAI model", " \t ").unwrap_err();
+        assert_eq!(error.kind(), ProviderRequestAssemblyErrorKind::InvalidArgs);
+        assert_eq!(error.message(), "OpenAI model must not be empty");
+    }
+
+    /// Provider request encoding failures retain their invalid-state category
+    /// for conversion by the product composition boundary.
+    #[test]
+    fn provider_request_encoding_errors_are_invalid_state() {
+        let error = ProviderRequestAssemblyError::invalid_state("encoding failed");
+        assert_eq!(error.kind(), ProviderRequestAssemblyErrorKind::InvalidState);
+        assert_eq!(error.to_string(), "encoding failed");
+    }
+}
 
 /// Parses an OpenAI-compatible model-catalog response.
 ///

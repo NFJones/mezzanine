@@ -129,6 +129,19 @@ impl From<mez_agent::ProviderHttpError> for MezError {
     }
 }
 
+impl From<mez_agent::ProviderRequestAssemblyError> for MezError {
+    fn from(error: mez_agent::ProviderRequestAssemblyError) -> Self {
+        match error.kind() {
+            mez_agent::ProviderRequestAssemblyErrorKind::InvalidArgs => {
+                Self::invalid_args(error.message())
+            }
+            mez_agent::ProviderRequestAssemblyErrorKind::InvalidState => {
+                Self::invalid_state(error.message())
+            }
+        }
+    }
+}
+
 impl From<mez_agent::ProviderModelCatalogParseError> for MezError {
     fn from(error: mez_agent::ProviderModelCatalogParseError) -> Self {
         Self::invalid_state(error.message())

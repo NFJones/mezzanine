@@ -4,14 +4,16 @@
 //! messages into Responses API `instructions` and `input` material. It also
 //! computes non-model-visible prompt-cache fingerprints used for diagnostics.
 
+use super::OPENAI_MAAP_FUNCTION_TOOL_NAME;
 use super::openai_request::openai_responses_request_control_shape_with_stream;
 use super::schema::openai_maap_action_batch_tools;
-use super::{OPENAI_MAAP_FUNCTION_TOOL_NAME, validate_non_empty};
 use crate::agent::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, ContextSourceKind,
     ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest, ProviderTranscriptEvent,
 };
-use crate::error::{MezError, Result};
+use mez_agent::{
+    ProviderRequestAssemblyError, ProviderRequestAssemblyResult, validate_provider_request_required,
+};
 use sha2::Digest;
 
 /// Prefix used by local provider-context compaction summaries.
@@ -76,7 +78,7 @@ pub(super) struct OpenAiRenderedMessages {
 /// Renders request messages and captures canonical stable-prefix material.
 pub(super) fn openai_render_request_messages(
     request: &ModelRequest,
-) -> Result<OpenAiRenderedMessages> {
+) -> ProviderRequestAssemblyResult<OpenAiRenderedMessages> {
     let mut instructions = Vec::new();
     let mut input = Vec::new();
     let mut stable_input = Vec::new();
@@ -109,7 +111,7 @@ pub(super) fn openai_render_request_messages(
         );
     }
     if input.is_empty() {
-        return Err(MezError::invalid_args(
+        return Err(ProviderRequestAssemblyError::invalid_args(
             "OpenAI Responses request requires at least one user or tool input message",
         ));
     }
@@ -430,12 +432,12 @@ pub(super) fn openai_prompt_cache_key(request: &ModelRequest) -> String {
 /// Maps Mezzanine latency preferences to OpenAI Responses service tiers.
 pub(super) fn openai_service_tier_for_latency_preference(
     preference: Option<&str>,
-) -> Result<Option<&'static str>> {
+) -> ProviderRequestAssemblyResult<Option<&'static str>> {
     match preference.map(str::trim).filter(|value| !value.is_empty()) {
         Some("slow") | Some("default") => Ok(Some("default")),
         None => Ok(None),
         Some("fast") => Ok(Some("priority")),
-        Some(other) => Err(MezError::invalid_args(format!(
+        Some(other) => Err(ProviderRequestAssemblyError::invalid_args(format!(
             "OpenAI latency_preference must be slow, default, or fast, got {other:?}"
         ))),
     }
@@ -444,7 +446,7 @@ pub(super) fn openai_service_tier_for_latency_preference(
 /// Returns non-model-visible OpenAI prompt-cache diagnostics for one request.
 pub fn openai_prompt_cache_diagnostics_for_request(
     request: &ModelRequest,
-) -> Result<OpenAiPromptCacheDiagnostics> {
+) -> ProviderRequestAssemblyResult<OpenAiPromptCacheDiagnostics> {
     openai_prompt_cache_diagnostics_for_request_with_stream(request, false)
 }
 
@@ -452,12 +454,12 @@ pub fn openai_prompt_cache_diagnostics_for_request(
 pub fn openai_prompt_cache_diagnostics_for_request_with_stream(
     request: &ModelRequest,
     stream: bool,
-) -> Result<OpenAiPromptCacheDiagnostics> {
-    validate_non_empty("OpenAI model", &request.model)?;
+) -> ProviderRequestAssemblyResult<OpenAiPromptCacheDiagnostics> {
+    validate_provider_request_required("OpenAI model", &request.model)?;
     let rendered = openai_render_request_messages(request)?;
     let response_format = openai_response_format(request).unwrap_or(serde_json::Value::Null);
     let response_format_text = serde_json::to_string(&response_format).map_err(|error| {
-        MezError::invalid_state(format!(
+        ProviderRequestAssemblyError::invalid_state(format!(
             "OpenAI response-format diagnostics failed: {error}"
         ))
     })?;
@@ -467,7 +469,9 @@ pub fn openai_prompt_cache_diagnostics_for_request_with_stream(
         serde_json::json!(openai_maap_action_batch_tools(request))
     };
     let tools_text = serde_json::to_string(&tools).map_err(|error| {
-        MezError::invalid_state(format!("OpenAI tools diagnostics failed: {error}"))
+        ProviderRequestAssemblyError::invalid_state(format!(
+            "OpenAI tools diagnostics failed: {error}"
+        ))
     })?;
     let tool_choice = if request.interaction_kind.expects_structured_json() {
         serde_json::json!("none")
@@ -478,18 +482,24 @@ pub fn openai_prompt_cache_diagnostics_for_request_with_stream(
         })
     };
     let tool_choice_text = serde_json::to_string(&tool_choice).map_err(|error| {
-        MezError::invalid_state(format!("OpenAI tool-choice diagnostics failed: {error}"))
+        ProviderRequestAssemblyError::invalid_state(format!(
+            "OpenAI tool-choice diagnostics failed: {error}"
+        ))
     })?;
     let stable_input_text = serde_json::to_string(&rendered.stable_input).map_err(|error| {
-        MezError::invalid_state(format!("OpenAI stable-input diagnostics failed: {error}"))
+        ProviderRequestAssemblyError::invalid_state(format!(
+            "OpenAI stable-input diagnostics failed: {error}"
+        ))
     })?;
     let volatile_input_text = serde_json::to_string(&rendered.volatile_input).map_err(|error| {
-        MezError::invalid_state(format!("OpenAI volatile-input diagnostics failed: {error}"))
+        ProviderRequestAssemblyError::invalid_state(format!(
+            "OpenAI volatile-input diagnostics failed: {error}"
+        ))
     })?;
     let stable_prompt_prefix =
         openai_stable_prefix_material(&rendered.instructions, &rendered.stable_input).map_err(
             |error| {
-                MezError::invalid_state(format!(
+                ProviderRequestAssemblyError::invalid_state(format!(
                     "OpenAI stable prompt-prefix diagnostics failed: {error}"
                 ))
             },
@@ -498,7 +508,9 @@ pub fn openai_prompt_cache_diagnostics_for_request_with_stream(
         &openai_responses_request_control_shape_with_stream(request, stream)?,
     )
     .map_err(|error| {
-        MezError::invalid_state(format!("OpenAI request-shape diagnostics failed: {error}"))
+        ProviderRequestAssemblyError::invalid_state(format!(
+            "OpenAI request-shape diagnostics failed: {error}"
+        ))
     })?;
 
     let stable_prompt_prefix_sha256 = sha256_hex(stable_prompt_prefix.as_bytes());
@@ -528,10 +540,12 @@ pub fn openai_prompt_cache_diagnostics_for_request_with_stream(
 
 /// Returns canonical OpenAI stable-prefix material for tests and diagnostics.
 #[cfg(test)]
-pub(crate) fn openai_stable_prefix_material_for_request(request: &ModelRequest) -> Result<String> {
+pub(crate) fn openai_stable_prefix_material_for_request(
+    request: &ModelRequest,
+) -> ProviderRequestAssemblyResult<String> {
     let rendered = openai_render_request_messages(request)?;
     openai_stable_prefix_material(&rendered.instructions, &rendered.stable_input).map_err(|error| {
-        MezError::invalid_state(format!(
+        ProviderRequestAssemblyError::invalid_state(format!(
             "OpenAI stable prefix material encoding failed: {error}"
         ))
     })
