@@ -12,7 +12,6 @@ mod compaction;
 mod evidence;
 mod model;
 mod skills;
-mod surface;
 
 pub use appenders::{
     append_mcp_context, append_memory_context, append_permission_policy_context,
@@ -24,13 +23,13 @@ pub use compaction::{
     compact_model_context_for_budget, compact_model_context_for_budget_with_retained_tail_percent,
     model_context_text_word_count,
 };
+pub use mez_agent::{AgentCapability, AllowedAction, AllowedActionSet, ModelInteractionKind};
 pub use model::{
     ModelMessage, ModelMessageRole, ModelProfile, ModelProfileOverrideSource,
     ModelProfileOverrides, ModelRequest, SelectedModelProfile, known_model_context_window_tokens,
     select_model_profile,
 };
 pub use skills::constrain_skill_actions_for_loaded_context;
-pub use surface::{AgentCapability, AllowedAction, AllowedActionSet, ModelInteractionKind};
 
 /// Maximum bytes from one context block copied into a provider request.
 const MODEL_CONTEXT_BLOCK_LIMIT_BYTES: usize = 128 * 1024;

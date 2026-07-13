@@ -48,6 +48,8 @@ pub mod semantic_patch;
 pub mod slash;
 /// Provider-independent subagent cooperation and scope contracts.
 pub mod subagent;
+/// Provider interaction and MAAP action-surface contracts.
+pub mod surface;
 /// Provider-independent transcript projection and persistence contracts.
 pub mod transcript;
 /// Provider-independent agent turn-ledger error contracts.
@@ -126,6 +128,7 @@ pub use slash::{
     baseline_slash_commands, parse_slash_command,
 };
 pub use subagent::{CooperationMode, SubagentScopeDeclaration, SubagentScopeEnforcement};
+pub use surface::{AgentCapability, AllowedAction, AllowedActionSet, ModelInteractionKind};
 pub use transcript::{
     AgentTranscriptEntry, AgentTranscriptRole, TranscriptContractError, TranscriptPersistence,
 };
