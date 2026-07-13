@@ -13,9 +13,10 @@ use crate::agent::{
 };
 use mez_agent::{
     OpenAiPromptCacheDiagnostics, ProviderRequestAssemblyError, ProviderRequestAssemblyResult,
-    openai_current_action_result_entry_text, openai_current_user_prompt_entry_text,
-    openai_executed_result_entry_text, openai_historical_action_result_entry_text,
-    openai_historical_user_prompt_entry_text, openai_prompt_cache_key as provider_prompt_cache_key,
+    openai_auto_sizing_response_format, openai_current_action_result_entry_text,
+    openai_current_user_prompt_entry_text, openai_executed_result_entry_text,
+    openai_historical_action_result_entry_text, openai_historical_user_prompt_entry_text,
+    openai_macro_judge_response_format, openai_prompt_cache_key as provider_prompt_cache_key,
     validate_provider_request_required,
 };
 use sha2::Digest;
@@ -257,74 +258,6 @@ fn openai_message_is_volatile_configuration_state(message: &ModelMessage) -> boo
         || content.starts_with("[pane identity]")
         || content.starts_with("[provider output-limit retry guidance]")
         || content.starts_with("[environment signature for pane ")
-}
-
-/// Builds the OpenAI structured-output schema for internal auto-sizing
-/// decisions.
-fn openai_auto_sizing_response_format() -> serde_json::Value {
-    serde_json::json!({
-        "type": "json_schema",
-        "name": "mezzanine_auto_sizing_decision",
-        "description": "Internal Mezzanine turn model and reasoning sizing decision.",
-        "strict": true,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "version": { "type": "integer", "enum": [1] },
-                "size": { "type": "string", "enum": ["small", "medium", "large"] },
-                "reasoning_effort": {
-                    "type": "string",
-                    "enum": ["low", "medium", "high", "xhigh"]
-                },
-                "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
-                "rationale": {
-                    "type": "string",
-                    "description": "Short non-secret explanation suitable for an agent status log."
-                }
-            },
-            "required": ["version", "size", "reasoning_effort", "confidence", "rationale"],
-            "additionalProperties": false
-        }
-    })
-}
-
-/// Builds the OpenAI structured-output schema for internal macro-step judge
-/// decisions.
-fn openai_macro_judge_response_format() -> serde_json::Value {
-    serde_json::json!({
-        "type": "json_schema",
-        "name": "mezzanine_macro_judge_decision",
-        "description": "Internal Mezzanine agent-macro step continuation decision.",
-        "strict": true,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "version": { "type": "integer", "enum": [1] },
-                "outcome": {
-                    "type": "string",
-                    "enum": [
-                        "continue",
-                        "continue_with_adapted_prompt",
-                        "stop_failure",
-                        "finish_success"
-                    ]
-                },
-                "step_success": { "type": "boolean" },
-                "rationale": { "type": "string", "minLength": 1 },
-                "adapted_prompt": { "type": ["string", "null"] },
-                "user_message": { "type": ["string", "null"] }
-            },
-            "required": [
-                "version",
-                "outcome",
-                "step_success",
-                "rationale",
-                "adapted_prompt",
-                "user_message"
-            ],
-            "additionalProperties": false
-        }
-    })
 }
 
 /// Returns the OpenAI response-format field for special request modes.

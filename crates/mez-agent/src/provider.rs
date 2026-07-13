@@ -216,6 +216,72 @@ pub fn openai_executed_result_entry_text(content: &str) -> String {
     )
 }
 
+/// Builds the OpenAI structured-output schema for internal auto-sizing decisions.
+pub fn openai_auto_sizing_response_format() -> serde_json::Value {
+    serde_json::json!({
+        "type": "json_schema",
+        "name": "mezzanine_auto_sizing_decision",
+        "description": "Internal Mezzanine turn model and reasoning sizing decision.",
+        "strict": true,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "size": { "type": "string", "enum": ["small", "medium", "large"] },
+                "reasoning_effort": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "xhigh"]
+                },
+                "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+                "rationale": {
+                    "type": "string",
+                    "description": "Short non-secret explanation suitable for an agent status log."
+                }
+            },
+            "required": ["version", "size", "reasoning_effort", "confidence", "rationale"],
+            "additionalProperties": false
+        }
+    })
+}
+
+/// Builds the OpenAI structured-output schema for macro-step judge decisions.
+pub fn openai_macro_judge_response_format() -> serde_json::Value {
+    serde_json::json!({
+        "type": "json_schema",
+        "name": "mezzanine_macro_judge_decision",
+        "description": "Internal Mezzanine agent-macro step continuation decision.",
+        "strict": true,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "outcome": {
+                    "type": "string",
+                    "enum": [
+                        "continue",
+                        "continue_with_adapted_prompt",
+                        "stop_failure",
+                        "finish_success"
+                    ]
+                },
+                "step_success": { "type": "boolean" },
+                "rationale": { "type": "string", "minLength": 1 },
+                "adapted_prompt": { "type": ["string", "null"] },
+                "user_message": { "type": ["string", "null"] }
+            },
+            "required": [
+                "version",
+                "outcome",
+                "step_success",
+                "rationale",
+                "adapted_prompt",
+                "user_message"
+            ],
+            "additionalProperties": false
+        }
+    })
+}
+
 /// Result type returned while decoding one provider response.
 pub type ProviderResponseResult<T> = Result<T, ProviderResponseError>;
 
@@ -646,9 +712,10 @@ mod request_assembly_tests {
     use super::{
         CHATGPT_RESPONSES_ENDPOINT, OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT,
         ProviderEndpointErrorKind, ProviderRequestAssemblyError, ProviderRequestAssemblyErrorKind,
-        ProviderResponseError, ProviderResponseErrorKind, openai_current_action_result_entry_text,
-        openai_current_user_prompt_entry_text, openai_executed_result_entry_text,
-        openai_historical_action_result_entry_text, openai_historical_user_prompt_entry_text,
+        ProviderResponseError, ProviderResponseErrorKind, openai_auto_sizing_response_format,
+        openai_current_action_result_entry_text, openai_current_user_prompt_entry_text,
+        openai_executed_result_entry_text, openai_historical_action_result_entry_text,
+        openai_historical_user_prompt_entry_text, openai_macro_judge_response_format,
         openai_models_endpoint_for_responses_endpoint, openai_prompt_cache_key,
         openai_request_options, openai_responses_endpoint_for_base_url,
         openai_service_tier_for_latency_preference, validate_provider_request_required,
@@ -726,6 +793,34 @@ mod request_assembly_tests {
         assert!(historical_result.contains("not a new current-turn action result"));
         assert!(generic_result.starts_with("[executed result]\n"));
         assert!(generic_result.contains("not a new user request"));
+    }
+
+    /// OpenAI internal response formats preserve the reviewed strict schemas
+    /// independently of product request assembly and interaction dispatch.
+    #[test]
+    fn openai_internal_response_formats_preserve_strict_contracts() {
+        let auto_sizing = openai_auto_sizing_response_format();
+        let macro_judge = openai_macro_judge_response_format();
+
+        assert_eq!(auto_sizing["name"], "mezzanine_auto_sizing_decision");
+        assert_eq!(auto_sizing["strict"], true);
+        assert_eq!(
+            auto_sizing["schema"]["properties"]["reasoning_effort"]["enum"],
+            serde_json::json!(["low", "medium", "high", "xhigh"])
+        );
+        assert_eq!(macro_judge["name"], "mezzanine_macro_judge_decision");
+        assert_eq!(macro_judge["strict"], true);
+        assert_eq!(
+            macro_judge["schema"]["required"],
+            serde_json::json!([
+                "version",
+                "outcome",
+                "step_success",
+                "rationale",
+                "adapted_prompt",
+                "user_message"
+            ])
+        );
     }
 
     /// Provider request validation preserves invalid-argument diagnostics for
