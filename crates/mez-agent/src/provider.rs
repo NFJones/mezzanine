@@ -149,6 +149,28 @@ pub fn openai_service_tier_for_latency_preference(
     }
 }
 
+/// Provider-owned optional controls for one OpenAI Responses request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenAiRequestOptions {
+    /// Non-empty reasoning effort forwarded to OpenAI.
+    pub reasoning_effort: Option<String>,
+    /// OpenAI service tier derived from the provider-neutral latency policy.
+    pub service_tier: Option<&'static str>,
+}
+
+/// Resolves provider-neutral request options into OpenAI wire policy.
+pub fn openai_request_options(
+    reasoning_effort: Option<&str>,
+    latency_preference: Option<&str>,
+) -> ProviderRequestAssemblyResult<OpenAiRequestOptions> {
+    Ok(OpenAiRequestOptions {
+        reasoning_effort: reasoning_effort
+            .filter(|effort| !effort.is_empty())
+            .map(str::to_string),
+        service_tier: openai_service_tier_for_latency_preference(latency_preference)?,
+    })
+}
+
 /// Result type returned while decoding one provider response.
 pub type ProviderResponseResult<T> = Result<T, ProviderResponseError>;
 
@@ -581,8 +603,8 @@ mod request_assembly_tests {
         ProviderEndpointErrorKind, ProviderRequestAssemblyError, ProviderRequestAssemblyErrorKind,
         ProviderResponseError, ProviderResponseErrorKind,
         openai_models_endpoint_for_responses_endpoint, openai_prompt_cache_key,
-        openai_responses_endpoint_for_base_url, openai_service_tier_for_latency_preference,
-        validate_provider_request_required,
+        openai_request_options, openai_responses_endpoint_for_base_url,
+        openai_service_tier_for_latency_preference, validate_provider_request_required,
     };
 
     /// OpenAI prompt-cache routing keys follow provider and lineage identity
@@ -622,6 +644,19 @@ mod request_assembly_tests {
         );
         let error = openai_service_tier_for_latency_preference(Some("turbo")).unwrap_err();
         assert_eq!(error.kind(), ProviderRequestAssemblyErrorKind::InvalidArgs);
+    }
+
+    /// OpenAI request-option resolution omits empty reasoning values and keeps
+    /// provider-neutral latency mapping outside product request assembly.
+    #[test]
+    fn openai_request_options_resolve_wire_policy() {
+        let options = openai_request_options(Some("high"), Some("fast")).unwrap();
+        assert_eq!(options.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(options.service_tier, Some("priority"));
+
+        let options = openai_request_options(Some(""), None).unwrap();
+        assert_eq!(options.reasoning_effort, None);
+        assert_eq!(options.service_tier, None);
     }
 
     /// Provider request validation preserves invalid-argument diagnostics for

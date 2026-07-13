@@ -12,8 +12,8 @@ use super::cache::{
 use super::schema::openai_maap_action_batch_tools;
 use crate::agent::ModelRequest;
 use mez_agent::{
-    ProviderRequestAssemblyError, ProviderRequestAssemblyResult,
-    openai_service_tier_for_latency_preference, validate_provider_request_required,
+    ProviderRequestAssemblyError, ProviderRequestAssemblyResult, openai_request_options,
+    validate_provider_request_required,
 };
 
 /// Builds a non-streaming OpenAI Responses request body.
@@ -67,16 +67,14 @@ pub(super) fn openai_responses_request_control_shape_with_stream(
             "format": response_format
         });
     }
-    if let Some(effort) = request
-        .reasoning_effort
-        .as_deref()
-        .filter(|effort| !effort.is_empty())
-    {
+    let options = openai_request_options(
+        request.reasoning_effort.as_deref(),
+        request.latency_preference.as_deref(),
+    )?;
+    if let Some(effort) = options.reasoning_effort {
         body["reasoning"] = serde_json::json!({ "effort": effort });
     }
-    if let Some(service_tier) =
-        openai_service_tier_for_latency_preference(request.latency_preference.as_deref())?
-    {
+    if let Some(service_tier) = options.service_tier {
         body["service_tier"] = serde_json::json!(service_tier);
     }
     if request.interaction_kind.expects_structured_json() {
