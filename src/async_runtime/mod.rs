@@ -38,7 +38,6 @@ use crate::runtime::{
     RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
     RuntimeSnapshotControlAsyncWorkKind, authorize_unix_peer_raw_fd, current_effective_uid,
 };
-use crate::session::ClientState;
 use crate::terminal::{
     AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopReport,
     AttachedTerminalClientStepPlan, AttachedTerminalFdReadiness, AttachedTerminalFdRole,
@@ -49,6 +48,7 @@ use crate::terminal::{
 };
 use mez_mux::layout::Size;
 use mez_mux::process::{PaneExitStatus, PaneProcess};
+use mez_mux::session::ClientState;
 
 /// Exposes the actor module boundary.
 ///

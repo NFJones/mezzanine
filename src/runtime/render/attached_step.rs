@@ -180,7 +180,7 @@ impl RuntimeSessionService {
             return Ok(RuntimeTransition::default());
         }
         let Some(client) = self.session.clients().iter().find(|client| {
-            client.id == *client_id && client.state == crate::session::ClientState::Attached
+            client.id == *client_id && client.state == mez_mux::session::ClientState::Attached
         }) else {
             return Ok(RuntimeTransition::default());
         };

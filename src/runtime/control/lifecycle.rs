@@ -293,7 +293,7 @@ impl RuntimeSessionService {
         self.session_approvals = Default::default();
 
         self.session = prepared_session;
-        self.session.state = crate::session::SessionState::Running;
+        self.session.state = mez_mux::session::SessionState::Running;
         let restored_at = current_unix_seconds();
         self.window_created_at_unix_seconds = self
             .session

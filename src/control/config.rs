@@ -17,7 +17,7 @@ use super::{
     project_trust_state_filter_from_params, reject_unknown_json_fields, require_idempotency_key,
     validate_config_file, validate_control_method_params_schema,
 };
-use crate::session::ClientTerminalDescriptor;
+use mez_mux::session::ClientTerminalDescriptor;
 
 // Project-trust and configuration control methods.
 

@@ -133,7 +133,6 @@ use crate::registry::{SessionRecord, SessionRegistry};
 use crate::scheduler::{
     AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ScheduledWork, ScheduledWorkKind,
 };
-use crate::session::{ClientRole, ClientState, ObserverDecisionState, Session};
 use crate::snapshot::{
     SessionSnapshotPayload, SnapshotAgentSession, SnapshotApprovalGrantMetadata,
     SnapshotApprovalRequestMetadata, SnapshotConfigDiagnostic, SnapshotConfigLayerMetadata,
@@ -174,6 +173,7 @@ use mez_mux::process::{
     ExitedPaneProcess, PaneExitStatus, PaneProcessManager, PaneProcessOutput,
     shell_command_from_argv,
 };
+use mez_mux::session::{ClientRole, ClientState, ObserverDecisionState, Session};
 
 /// Exposes the agent module boundary.
 ///

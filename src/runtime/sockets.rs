@@ -26,13 +26,13 @@ impl RuntimeLifecycleState {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(super) fn from_session_state(state: crate::session::SessionState) -> Self {
+    pub(super) fn from_session_state(state: mez_mux::session::SessionState) -> Self {
         match state {
-            crate::session::SessionState::Running => Self::Running,
-            crate::session::SessionState::Detached => Self::Detached,
-            crate::session::SessionState::Empty => Self::Killed,
-            crate::session::SessionState::Stopping => Self::Stopping,
-            crate::session::SessionState::Failed => Self::Failed,
+            mez_mux::session::SessionState::Running => Self::Running,
+            mez_mux::session::SessionState::Detached => Self::Detached,
+            mez_mux::session::SessionState::Empty => Self::Killed,
+            mez_mux::session::SessionState::Stopping => Self::Stopping,
+            mez_mux::session::SessionState::Failed => Self::Failed,
         }
     }
 }

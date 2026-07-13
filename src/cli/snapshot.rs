@@ -490,7 +490,7 @@ pub(super) fn pane_process_starts_json(starts: &[crate::runtime::PaneProcessStar
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn restored_session_json(session: &crate::session::Session) -> String {
+pub(super) fn restored_session_json(session: &mez_mux::session::Session) -> String {
     let window_count = session.windows().len();
     let pane_count = session
         .windows()
@@ -531,13 +531,13 @@ pub(super) fn snapshot_kind_name(kind: SnapshotKind) -> &'static str {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn session_state_name(state: crate::session::SessionState) -> &'static str {
+pub(super) fn session_state_name(state: mez_mux::session::SessionState) -> &'static str {
     match state {
-        crate::session::SessionState::Running => "running",
-        crate::session::SessionState::Detached => "detached",
-        crate::session::SessionState::Empty => "empty",
-        crate::session::SessionState::Stopping => "stopping",
-        crate::session::SessionState::Failed => "failed",
+        mez_mux::session::SessionState::Running => "running",
+        mez_mux::session::SessionState::Detached => "detached",
+        mez_mux::session::SessionState::Empty => "empty",
+        mez_mux::session::SessionState::Stopping => "stopping",
+        mez_mux::session::SessionState::Failed => "failed",
     }
 }
 

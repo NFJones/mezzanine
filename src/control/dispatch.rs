@@ -38,7 +38,7 @@ use super::{
     window_by_id, window_id_for_target, window_state_json, window_target_checked_resolved,
     windows_json_for_params,
 };
-use crate::session::ClientTerminalDescriptor;
+use mez_mux::session::ClientTerminalDescriptor;
 
 // Control dispatch entry points and dispatch internals.
 

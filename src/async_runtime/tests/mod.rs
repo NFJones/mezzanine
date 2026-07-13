@@ -62,7 +62,6 @@ use std::sync::{Arc as StdArc, Mutex};
 use std::time::Instant;
 
 use crate::runtime::RuntimeEventConnectionTable;
-use crate::session::{ClientState, Session};
 use crate::shell::resolve_shell;
 use crate::terminal::{
     AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopIo, AttachedTerminalFdReadiness,
@@ -73,6 +72,7 @@ use crate::test_support::async_runtime::AsyncRuntimeActorFixture;
 use crate::transcript::AgentTranscriptStore;
 use mez_mux::input::MuxAction;
 use mez_mux::layout::Size;
+use mez_mux::session::{ClientState, Session};
 
 /// Runs the test service operation for this subsystem.
 ///

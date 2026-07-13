@@ -5,12 +5,12 @@
 
 use crate::error::{MezError, Result};
 use crate::ids::{PaneId, SessionId, WindowGroupId, WindowId};
-use crate::session::{
+use crate::shell::ResolvedShell;
+use mez_mux::layout::{LayoutPolicy, PaneGeometry, Size};
+use mez_mux::session::{
     RestoredPane, RestoredSessionState, RestoredWindow, RestoredWindowGroup, Session,
     SessionRestoreInput,
 };
-use crate::shell::ResolvedShell;
-use mez_mux::layout::{LayoutPolicy, PaneGeometry, Size};
 use std::collections::BTreeMap;
 
 use super::types::{

@@ -319,7 +319,7 @@ impl RuntimeSessionService {
                     self.session
                         .clients()
                         .iter()
-                        .filter(|client| client.state == crate::session::ClientState::Attached)
+                        .filter(|client| client.state == mez_mux::session::ClientState::Attached)
                         .map(move |client| RuntimeSideEffect::RenderClient {
                             client_id: client.id.clone(),
                             reason,

@@ -699,7 +699,7 @@ async fn async_actor_applies_failed_shutdown_events() {
     );
     assert_eq!(
         exit.service.session().state,
-        crate::session::SessionState::Failed
+        mez_mux::session::SessionState::Failed
     );
     let events = exit
         .service

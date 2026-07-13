@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{MezError, Result};
 use crate::message::MessageServiceSnapshot;
-use crate::session::Session;
 use crate::terminal::{DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_WINDOW_FRAME_TEMPLATE};
 use mez_mux::layout::{LayoutNode, Pane, SplitDirection};
 use mez_mux::process::PaneExitStatus;
+use mez_mux::session::Session;
 use mez_terminal::{TerminalModeState, TerminalSavedState, TerminalStyleSpan};
 
 /// Carries Snapshot Kind state for this subsystem.

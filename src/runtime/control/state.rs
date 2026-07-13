@@ -250,7 +250,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(super) fn runtime_client_state_json(&self, client: &crate::session::Client) -> String {
+    pub(super) fn runtime_client_state_json(&self, client: &mez_mux::session::Client) -> String {
         let is_primary = self
             .session
             .primary_client_id()

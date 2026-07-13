@@ -19,10 +19,10 @@ use super::{
 };
 use crate::agent::{AgentShellCommandOutcome, execute_agent_shell_command};
 use crate::permissions::builtin_rules;
-use crate::session::ClientTerminalDescriptor;
 use crate::terminal::{DEFAULT_HISTORY_LIMIT, DEFAULT_PANE_TERM, TerminalFrameContext};
 use mez_mux::layout::LayoutNode;
 use mez_mux::process::PaneExitStatus;
+use mez_mux::session::ClientTerminalDescriptor;
 use std::collections::BTreeMap;
 
 // Control state serialization helpers.
@@ -837,7 +837,7 @@ pub(crate) fn clients_json(session: &Session) -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn client_json(session: &Session, client: &crate::session::Client) -> String {
+pub(super) fn client_json(session: &Session, client: &mez_mux::session::Client) -> String {
     let terminal_descriptor = generic_client_terminal_descriptor(session, client);
     let terminal_size = terminal_descriptor
         .as_ref()
@@ -882,7 +882,7 @@ fn client_requested_role_name(role: ClientRole) -> &'static str {
 /// on duplicated control-flow logic.
 fn generic_client_terminal_descriptor(
     session: &Session,
-    client: &crate::session::Client,
+    client: &mez_mux::session::Client,
 ) -> Option<ClientTerminalDescriptor> {
     if let Some(terminal) = client.terminal.as_ref() {
         return Some(terminal.clone());
@@ -2277,7 +2277,7 @@ pub(crate) fn observer_json(session: &Session, observer_id: &str) -> Result<Stri
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn observer_json_by_ref(observer: &crate::session::ObserverRequest) -> String {
+pub(super) fn observer_json_by_ref(observer: &mez_mux::session::ObserverRequest) -> String {
     let visible_from_event_id = observer
         .visible_from_event_id
         .map(|id| id.to_string())

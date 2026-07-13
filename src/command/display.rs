@@ -230,8 +230,8 @@ pub(super) fn choose_client_display(session: &Session) -> String {
 /// on duplicated control-flow logic.
 fn client_terminal_display(
     session: &Session,
-    client: &crate::session::Client,
-    observer: Option<&crate::session::ObserverRequest>,
+    client: &mez_mux::session::Client,
+    observer: Option<&mez_mux::session::ObserverRequest>,
 ) -> String {
     if session
         .primary_client_id()
@@ -268,7 +268,7 @@ fn client_terminal_display(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn client_approval_display(observer: Option<&crate::session::ObserverRequest>) -> String {
+fn client_approval_display(observer: Option<&mez_mux::session::ObserverRequest>) -> String {
     observer
         .map(|observer| format!("{}:{}", observer.id, observer_state_name(observer.state)))
         .unwrap_or_else(|| "none".to_string())
@@ -359,7 +359,7 @@ fn optional_unix_seconds(value: Option<u64>) -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn observer_terminal_display(observer: &crate::session::ObserverRequest) -> String {
+fn observer_terminal_display(observer: &mez_mux::session::ObserverRequest) -> String {
     observer
         .descriptor_terminal
         .as_ref()
@@ -393,12 +393,12 @@ fn json_escape(value: &str) -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn observer_actions(state: crate::session::ObserverDecisionState) -> &'static str {
+pub(super) fn observer_actions(state: mez_mux::session::ObserverDecisionState) -> &'static str {
     match state {
-        crate::session::ObserverDecisionState::Pending => "inspect,approve,reject",
-        crate::session::ObserverDecisionState::Approved => "inspect,revoke,detach",
-        crate::session::ObserverDecisionState::Rejected => "inspect",
-        crate::session::ObserverDecisionState::Revoked => "inspect",
+        mez_mux::session::ObserverDecisionState::Pending => "inspect,approve,reject",
+        mez_mux::session::ObserverDecisionState::Approved => "inspect,revoke,detach",
+        mez_mux::session::ObserverDecisionState::Rejected => "inspect",
+        mez_mux::session::ObserverDecisionState::Revoked => "inspect",
     }
 }
 
@@ -407,18 +407,18 @@ pub(super) fn observer_actions(state: crate::session::ObserverDecisionState) -> 
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn observer_action_commands(observer: &crate::session::ObserverRequest) -> String {
+fn observer_action_commands(observer: &mez_mux::session::ObserverRequest) -> String {
     match observer.state {
-        crate::session::ObserverDecisionState::Pending => format!(
+        mez_mux::session::ObserverDecisionState::Pending => format!(
             "approve-observer -t {}|reject-observer -t {}",
             observer.id, observer.id
         ),
-        crate::session::ObserverDecisionState::Approved => format!(
+        mez_mux::session::ObserverDecisionState::Approved => format!(
             "revoke-observer -t {}|detach-client -t {}",
             observer.client_id, observer.client_id
         ),
-        crate::session::ObserverDecisionState::Rejected
-        | crate::session::ObserverDecisionState::Revoked => "none".to_string(),
+        mez_mux::session::ObserverDecisionState::Rejected
+        | mez_mux::session::ObserverDecisionState::Revoked => "none".to_string(),
     }
 }
 
@@ -431,7 +431,7 @@ pub(super) fn list_current_session(session: &Session) -> String {
     let attached_clients = session
         .clients()
         .iter()
-        .filter(|client| client.state == crate::session::ClientState::Attached)
+        .filter(|client| client.state == mez_mux::session::ClientState::Attached)
         .count();
     format!(
         "{}:{}:state={}:created_at={}:last_attached_at={}:windows={}:clients={}:attached_clients={}:primary_available={}",
@@ -1364,13 +1364,13 @@ pub(super) fn mcp_status_plan_display(invocation: &CommandInvocation) -> Result<
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn client_role_name(role: crate::session::ClientRole) -> &'static str {
+pub(super) fn client_role_name(role: mez_mux::session::ClientRole) -> &'static str {
     match role {
-        crate::session::ClientRole::Primary => "primary",
-        crate::session::ClientRole::PendingObserver => "pending_observer",
-        crate::session::ClientRole::Observer => "observer",
-        crate::session::ClientRole::Agent => "agent",
-        crate::session::ClientRole::Automation => "automation",
+        mez_mux::session::ClientRole::Primary => "primary",
+        mez_mux::session::ClientRole::PendingObserver => "pending_observer",
+        mez_mux::session::ClientRole::Observer => "observer",
+        mez_mux::session::ClientRole::Agent => "agent",
+        mez_mux::session::ClientRole::Automation => "automation",
     }
 }
 
@@ -1379,13 +1379,13 @@ pub(super) fn client_role_name(role: crate::session::ClientRole) -> &'static str
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn client_state_name(state: crate::session::ClientState) -> &'static str {
+pub(super) fn client_state_name(state: mez_mux::session::ClientState) -> &'static str {
     match state {
-        crate::session::ClientState::Attached => "attached",
-        crate::session::ClientState::Pending => "pending",
-        crate::session::ClientState::Detached => "detached",
-        crate::session::ClientState::Revoked => "revoked",
-        crate::session::ClientState::Failed => "failed",
+        mez_mux::session::ClientState::Attached => "attached",
+        mez_mux::session::ClientState::Pending => "pending",
+        mez_mux::session::ClientState::Detached => "detached",
+        mez_mux::session::ClientState::Revoked => "revoked",
+        mez_mux::session::ClientState::Failed => "failed",
     }
 }
 
@@ -1394,12 +1394,12 @@ pub(super) fn client_state_name(state: crate::session::ClientState) -> &'static 
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn observer_state_name(state: crate::session::ObserverDecisionState) -> &'static str {
+pub(super) fn observer_state_name(state: mez_mux::session::ObserverDecisionState) -> &'static str {
     match state {
-        crate::session::ObserverDecisionState::Pending => "pending",
-        crate::session::ObserverDecisionState::Approved => "approved",
-        crate::session::ObserverDecisionState::Rejected => "rejected",
-        crate::session::ObserverDecisionState::Revoked => "revoked",
+        mez_mux::session::ObserverDecisionState::Pending => "pending",
+        mez_mux::session::ObserverDecisionState::Approved => "approved",
+        mez_mux::session::ObserverDecisionState::Rejected => "rejected",
+        mez_mux::session::ObserverDecisionState::Revoked => "revoked",
     }
 }
 
@@ -1408,12 +1408,12 @@ pub(super) fn observer_state_name(state: crate::session::ObserverDecisionState) 
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn session_state_name(state: crate::session::SessionState) -> &'static str {
+pub(super) fn session_state_name(state: mez_mux::session::SessionState) -> &'static str {
     match state {
-        crate::session::SessionState::Running => "running",
-        crate::session::SessionState::Detached => "detached",
-        crate::session::SessionState::Empty => "empty",
-        crate::session::SessionState::Stopping => "stopping",
-        crate::session::SessionState::Failed => "failed",
+        mez_mux::session::SessionState::Running => "running",
+        mez_mux::session::SessionState::Detached => "detached",
+        mez_mux::session::SessionState::Empty => "empty",
+        mez_mux::session::SessionState::Stopping => "stopping",
+        mez_mux::session::SessionState::Failed => "failed",
     }
 }

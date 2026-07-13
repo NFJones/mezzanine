@@ -144,11 +144,6 @@ pub mod scheduler;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 pub mod selector;
-/// Exposes the session module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-pub mod session;
 /// Exposes the shell module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

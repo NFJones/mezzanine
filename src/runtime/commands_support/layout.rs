@@ -601,7 +601,7 @@ pub(super) fn runtime_kill_group_command(
 fn runtime_command_target_group<'a>(
     service: &'a RuntimeSessionService,
     target: Option<&str>,
-) -> Result<&'a crate::session::WindowGroup> {
+) -> Result<&'a mez_mux::session::WindowGroup> {
     match target {
         None => service
             .session

@@ -270,7 +270,7 @@ impl RuntimeSessionService {
             .session
             .clients()
             .iter()
-            .filter(|client| client.state == crate::session::ClientState::Attached)
+            .filter(|client| client.state == mez_mux::session::ClientState::Attached)
             .count();
         let last_attached_at = self
             .session

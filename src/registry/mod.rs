@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::{MezError, Result};
 use crate::runtime::ensure_private_socket_directory;
-use crate::session::{Session, SessionState};
+use mez_mux::session::{Session, SessionState};
 
 /// Exposes the encoding module boundary.
 ///

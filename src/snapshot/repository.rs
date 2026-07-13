@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use tokio::io::AsyncWriteExt;
 
 use crate::error::{MezError, Result};
-use crate::session::Session;
+use mez_mux::session::Session;
 
 use super::encoding::{
     current_rfc3339_utc, has_manifest_control_character, set_private_dir_permissions,

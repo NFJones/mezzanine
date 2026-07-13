@@ -56,7 +56,6 @@ use crate::runtime::{
     bind_control_socket, default_socket_directory, prune_stale_socket_files_in_directory,
     runtime_effective_config_value, runtime_ui_theme_from_config, socket_path_for_name,
 };
-use crate::session::Session;
 use crate::shell::resolve_shell;
 use crate::snapshot::{
     LayoutLoadPlan, SessionSnapshotPayload, SnapshotKind, SnapshotRepository,
@@ -69,6 +68,7 @@ use crate::terminal::{
 };
 use crate::transcript::AgentTranscriptStore;
 use mez_mux::layout::Size;
+use mez_mux::session::Session;
 
 use self::mcp::load_primary_config_layers;
 

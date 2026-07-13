@@ -84,18 +84,22 @@ impl ResolvedShell {
     }
 }
 
-impl From<ResolvedShell> for crate::session::SessionShell {
+impl From<ResolvedShell> for mez_mux::session::SessionShell {
     fn from(shell: ResolvedShell) -> Self {
         let source = match shell.source() {
             ShellSource::ShellEnv => "shell-env",
             ShellSource::FallbackBinSh => "fallback-bin-sh",
         };
-        crate::session::SessionShell::new(shell.path().to_path_buf(), source, shell.used_fallback())
+        mez_mux::session::SessionShell::new(
+            shell.path().to_path_buf(),
+            source,
+            shell.used_fallback(),
+        )
     }
 }
 
-impl From<crate::session::SessionShell> for ResolvedShell {
-    fn from(shell: crate::session::SessionShell) -> Self {
+impl From<mez_mux::session::SessionShell> for ResolvedShell {
+    fn from(shell: mez_mux::session::SessionShell) -> Self {
         let source = if shell.used_fallback() {
             ShellSource::FallbackBinSh
         } else {

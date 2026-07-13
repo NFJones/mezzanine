@@ -16,9 +16,9 @@ use super::{
 use crate::auth::AuthPaths;
 use crate::config::ConfigPaths;
 use crate::ids::ClientId;
-use crate::session::{ClientState, Session};
 use crate::shell::{ResolvedShell, ShellSource};
 use mez_mux::layout::Size;
+use mez_mux::session::{ClientState, Session};
 use std::fs;
 use std::path::PathBuf;
 
@@ -257,7 +257,7 @@ fn list_commands_return_session_state() {
     let (mut session, primary) = test_session();
     let (observer_client, observer_request) = session.request_observer_with_terminal(
         "observer",
-        Some(crate::session::ClientTerminalDescriptor {
+        Some(mez_mux::session::ClientTerminalDescriptor {
             columns: 100,
             rows: 30,
             term: "xterm-256color".to_string(),

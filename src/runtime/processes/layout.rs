@@ -644,7 +644,7 @@ impl RuntimeSessionService {
         let effects = self
             .tracked_pane_descriptors()
             .into_iter()
-            .map(|descriptor| crate::session::PaneResizeEffect {
+            .map(|descriptor| mez_mux::session::PaneResizeEffect {
                 pane_id: descriptor.pane_id,
                 size: descriptor.size,
             })
@@ -655,7 +655,7 @@ impl RuntimeSessionService {
     /// Applies process-neutral session resize effects to product-owned PTYs and screens.
     pub(crate) fn sync_pane_resize_effects(
         &mut self,
-        effects: &[crate::session::PaneResizeEffect],
+        effects: &[mez_mux::session::PaneResizeEffect],
     ) -> Result<Vec<PaneResizeUpdate>> {
         let mut updates = Vec::new();
 

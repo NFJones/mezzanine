@@ -34,7 +34,6 @@ use crate::permissions::{
     BlockedApprovalQueue, BlockedApprovalRequest, BlockedApprovalState, builtin_rules,
 };
 use crate::project::ProjectTrustStore;
-use crate::session::Session;
 use crate::shell::{ResolvedShell, ShellSource};
 use crate::snapshot::{
     PaneSnapshotPayload, SessionSnapshotPayload, SnapshotFrameState, SnapshotPaneGeometry,
@@ -49,6 +48,7 @@ use crate::test_support::runtime::SessionFixture;
 use crate::test_support::temp::TestTempDir;
 use mez_mux::layout::SplitDirection;
 use mez_mux::layout::{LayoutPolicy, Size};
+use mez_mux::session::Session;
 use std::fs;
 use std::path::PathBuf;
 
@@ -2560,7 +2560,7 @@ fn dispatches_primary_client_selection_atomically() {
         session
             .clients()
             .iter()
-            .filter(|client| client.role == crate::session::ClientRole::Primary)
+            .filter(|client| client.role == mez_mux::session::ClientRole::Primary)
             .count(),
         1
     );

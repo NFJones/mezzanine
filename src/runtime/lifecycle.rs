@@ -11,7 +11,7 @@ use super::{
 use crate::runtime::{
     ClientEvent, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition, ShutdownEvent,
 };
-use crate::session::ClientTerminalDescriptor;
+use mez_mux::session::ClientTerminalDescriptor;
 
 // Session lifecycle, primary attachment, and kill handling.
 
@@ -74,7 +74,7 @@ impl RuntimeSessionService {
         let client_id =
             self.session
                 .attach_primary_with_terminal(name, interactive, Some(terminal))?;
-        self.session.state = crate::session::SessionState::Running;
+        self.session.state = mez_mux::session::SessionState::Running;
         self.lifecycle_state = RuntimeLifecycleState::Running;
         self.session
             .resize_authoritative_terminal(&client_id, terminal_size)?;
@@ -177,7 +177,7 @@ impl RuntimeSessionService {
             self.session
                 .clients()
                 .iter()
-                .filter(|client| client.state == crate::session::ClientState::Attached)
+                .filter(|client| client.state == mez_mux::session::ClientState::Attached)
                 .map(|client| RuntimeSideEffect::RenderClient {
                     client_id: client.id.clone(),
                     reason,
@@ -308,7 +308,7 @@ impl RuntimeSessionService {
             self.session
                 .clients()
                 .iter()
-                .filter(|client| client.state == crate::session::ClientState::Attached)
+                .filter(|client| client.state == mez_mux::session::ClientState::Attached)
                 .map(|client| RuntimeSideEffect::RenderClient {
                     client_id: client.id.clone(),
                     reason: RenderInvalidationReason::FullRedraw,
@@ -362,7 +362,7 @@ impl RuntimeSessionService {
             self.fail_agent_turns_for_pane_shutdown(&pane_ids, "runtime supervisor shutdown")?;
         }
         self.lifecycle_state = RuntimeLifecycleState::Stopping;
-        self.session.state = crate::session::SessionState::Stopping;
+        self.session.state = mez_mux::session::SessionState::Stopping;
 
         if !force {
             self.append_lifecycle_event(
@@ -442,7 +442,7 @@ impl RuntimeSessionService {
         };
         let terminated_mcp_servers = self.clear_runtime_mcp_transports();
         self.lifecycle_state = RuntimeLifecycleState::Failed;
-        self.session.state = crate::session::SessionState::Failed;
+        self.session.state = mez_mux::session::SessionState::Failed;
         self.append_lifecycle_event(
             EventKind::Diagnostic,
             format!(

@@ -30,9 +30,9 @@ use crate::permissions::{
     ApprovalDecision, BlockedApprovalQueue, BlockedApprovalRequest, BlockedApprovalState,
 };
 use crate::project::{ProjectTrustRecord, ProjectTrustStore, TrustDecision};
-use crate::session::{ClientRole, ClientState, ObserverDecisionState, Session, SessionState};
 use crate::snapshot::{LayoutLoadPlan, SnapshotKind, SnapshotRepository, SnapshotState};
 use mez_mux::layout::{PaneSizeSpec, ResizeAxis, ResizeDirection, SplitDirection, Window};
+use mez_mux::session::{ClientRole, ClientState, ObserverDecisionState, Session, SessionState};
 
 /// Exposes the authz module boundary.
 ///

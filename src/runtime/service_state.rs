@@ -603,7 +603,7 @@ pub(crate) enum RuntimeSnapshotControlAsyncWorkKind {
     /// Snapshot list/create/delete or plan-only resume dispatch.
     Dispatch {
         /// Session snapshot captured before the repository operation.
-        session: Box<crate::session::Session>,
+        session: Box<mez_mux::session::Session>,
         /// Owned snapshot context captured before the repository operation.
         context: Box<RuntimeSnapshotOwnedCreationContext>,
     },

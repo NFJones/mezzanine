@@ -5,9 +5,9 @@
 
 use crate::error::{MezError, Result};
 use crate::message::MessageServiceSnapshot;
-use crate::session::{Session, SessionState};
 use mez_mux::layout::LayoutPolicy;
 use mez_mux::process::PaneExitStatus;
+use mez_mux::session::{Session, SessionState};
 use mez_terminal::{
     GraphicRendition, TerminalColor, TerminalCursorState, TerminalModeState,
     TerminalSavedDecPrivateMode, TerminalSavedState, TerminalStyleSpan, tracked_dec_private_mode,
