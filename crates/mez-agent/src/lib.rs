@@ -10,6 +10,10 @@ use std::collections::BTreeSet;
 
 /// Dependency-neutral project instruction discovery records and parsing.
 pub mod instructions;
+/// Dependency-neutral MCP prompt manifest records.
+pub mod mcp;
+
+pub use mcp::{McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer};
 
 /// Maximum number of issue records a model-authored query may request.
 pub const MAX_ISSUE_QUERY_LIMIT: u64 = 200;

@@ -16,7 +16,7 @@ use super::{
     ModelMessageRole, ModelProfile, ModelRequest, model_context_block_header,
 };
 use crate::error::Result;
-use crate::mcp::{McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer};
+use mez_agent::{McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer};
 
 /// Runs the assemble model request operation for this subsystem.
 ///

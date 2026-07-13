@@ -11,7 +11,7 @@ use crate::agent::{
     AllowedActionSet, MaapBatch, ModelInteractionKind, ModelMessage, ModelProfile, ModelRequest,
     SayStatus,
 };
-use crate::mcp::McpPromptTool;
+use mez_agent::McpPromptTool;
 
 /// Builds a model profile with stable defaults for tests.
 #[derive(Debug, Clone)]

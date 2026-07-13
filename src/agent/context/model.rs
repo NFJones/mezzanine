@@ -7,7 +7,7 @@
 use super::super::validate_non_empty;
 use super::{AllowedActionSet, ContextSourceKind, ModelInteractionKind};
 use crate::error::Result;
-use crate::mcp::McpPromptTool;
+use mez_agent::McpPromptTool;
 
 /// Fallback context window when the model profile does not carry one.
 const MODEL_CONTEXT_FALLBACK_WINDOW_TOKENS: usize = 128 * 1024;

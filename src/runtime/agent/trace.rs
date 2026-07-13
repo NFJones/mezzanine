@@ -164,7 +164,7 @@ impl RuntimeSessionService {
         model_profile: &ModelProfile,
         turn: &AgentTurnRecord,
         context: &AgentContext,
-        available_mcp_tools: &[crate::mcp::McpPromptTool],
+        available_mcp_tools: &[mez_agent::McpPromptTool],
         memory_actions_enabled: bool,
         issue_actions_enabled: bool,
     ) {

@@ -9,10 +9,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::error::{MezError, Result};
 
 use super::types::{
-    McpApprovalSetting, McpDiscoveredTool, McpEnvironmentPlan, McpPromptServer, McpPromptSummary,
-    McpPromptTool, McpPromptUnavailableServer, McpServerConfig, McpServerKind, McpServerState,
+    McpApprovalSetting, McpDiscoveredTool, McpEnvironmentPlan, McpServerConfig, McpServerKind,
+    McpServerState,
     McpServerStatus, McpStartupPlan, McpStartupTransportPlan, McpToolCallPlan, McpToolCallRequest,
     McpToolEffects, McpToolState,
+};
+use mez_agent::{
+    McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer,
 };
 
 /// Carries Mcp Registry state for this subsystem.
