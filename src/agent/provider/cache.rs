@@ -13,7 +13,10 @@ use crate::agent::{
 };
 use mez_agent::{
     OpenAiPromptCacheDiagnostics, ProviderRequestAssemblyError, ProviderRequestAssemblyResult,
-    openai_prompt_cache_key as provider_prompt_cache_key, validate_provider_request_required,
+    openai_current_action_result_entry_text, openai_current_user_prompt_entry_text,
+    openai_executed_result_entry_text, openai_historical_action_result_entry_text,
+    openai_historical_user_prompt_entry_text, openai_prompt_cache_key as provider_prompt_cache_key,
+    validate_provider_request_required,
 };
 use sha2::Digest;
 
@@ -169,46 +172,17 @@ fn openai_user_input_text(message: &ModelMessage) -> String {
     }
 }
 
-/// Returns the provider-visible wrapper for replayed prior user prompts.
-fn openai_historical_user_prompt_entry_text(content: &str) -> String {
-    format!(
-        "[historical user prompt transcript entry]\n\
-         This is a prior user prompt replayed from the ordered conversation transcript. It is historical context only, not the active task unless the current user prompt explicitly asks about it.\n\
-         {content}"
-    )
-}
-
-/// Returns the provider-visible wrapper for the active user prompt.
-fn openai_current_user_prompt_entry_text(content: &str) -> String {
-    format!(
-        "[current user prompt]\n\
-         This is the latest user prompt and the active task for the current turn. Earlier transcript entries are historical context only unless this prompt asks about them.\n\
-         {content}"
-    )
-}
-
 /// Renders Mezzanine tool/action evidence through an OpenAI-supported message
 /// role with explicit current-turn or historical provenance.
 fn openai_tool_result_input_text(message: &ModelMessage) -> String {
     match message.source {
-        ContextSourceKind::ActionResult => format!(
-            "[current-turn executed result]\n\
-             This executed Mezzanine action output was produced in the current turn by the immediately preceding action batch. Use it as fresh evidence for the active task, not prior transcript history.\n\
-             {}",
-            message.content
-        ),
-        ContextSourceKind::TranscriptTool => format!(
-            "[historical executed result transcript entry]\n\
-             This is prior-turn Mezzanine action output replayed from the ordered conversation transcript. It is historical context only, not a new current-turn action result.\n\
-             {}",
-            message.content
-        ),
-        _ => format!(
-            "[executed result]\n\
-             This is executed Mezzanine action output, not a new user request.\n\
-             {}",
-            message.content
-        ),
+        ContextSourceKind::ActionResult => {
+            openai_current_action_result_entry_text(&message.content)
+        }
+        ContextSourceKind::TranscriptTool => {
+            openai_historical_action_result_entry_text(&message.content)
+        }
+        _ => openai_executed_result_entry_text(&message.content),
     }
 }
 

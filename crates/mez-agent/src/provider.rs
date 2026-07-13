@@ -171,6 +171,51 @@ pub fn openai_request_options(
     })
 }
 
+/// Wraps a replayed user prompt so providers treat it as inactive history.
+pub fn openai_historical_user_prompt_entry_text(content: &str) -> String {
+    format!(
+        "[historical user prompt transcript entry]\n\
+         This is a prior user prompt replayed from the ordered conversation transcript. It is historical context only, not the active task unless the current user prompt explicitly asks about it.\n\
+         {content}"
+    )
+}
+
+/// Wraps the latest user prompt so providers treat it as the active task.
+pub fn openai_current_user_prompt_entry_text(content: &str) -> String {
+    format!(
+        "[current user prompt]\n\
+         This is the latest user prompt and the active task for the current turn. Earlier transcript entries are historical context only unless this prompt asks about them.\n\
+         {content}"
+    )
+}
+
+/// Wraps an action result produced by the immediately preceding action batch.
+pub fn openai_current_action_result_entry_text(content: &str) -> String {
+    format!(
+        "[current-turn executed result]\n\
+         This executed Mezzanine action output was produced in the current turn by the immediately preceding action batch. Use it as fresh evidence for the active task, not prior transcript history.\n\
+         {content}"
+    )
+}
+
+/// Wraps a replayed action result so providers treat it as historical evidence.
+pub fn openai_historical_action_result_entry_text(content: &str) -> String {
+    format!(
+        "[historical executed result transcript entry]\n\
+         This is prior-turn Mezzanine action output replayed from the ordered conversation transcript. It is historical context only, not a new current-turn action result.\n\
+         {content}"
+    )
+}
+
+/// Wraps executed output whose current-turn or transcript provenance is unknown.
+pub fn openai_executed_result_entry_text(content: &str) -> String {
+    format!(
+        "[executed result]\n\
+         This is executed Mezzanine action output, not a new user request.\n\
+         {content}"
+    )
+}
+
 /// Result type returned while decoding one provider response.
 pub type ProviderResponseResult<T> = Result<T, ProviderResponseError>;
 
@@ -601,7 +646,9 @@ mod request_assembly_tests {
     use super::{
         CHATGPT_RESPONSES_ENDPOINT, OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT,
         ProviderEndpointErrorKind, ProviderRequestAssemblyError, ProviderRequestAssemblyErrorKind,
-        ProviderResponseError, ProviderResponseErrorKind,
+        ProviderResponseError, ProviderResponseErrorKind, openai_current_action_result_entry_text,
+        openai_current_user_prompt_entry_text, openai_executed_result_entry_text,
+        openai_historical_action_result_entry_text, openai_historical_user_prompt_entry_text,
         openai_models_endpoint_for_responses_endpoint, openai_prompt_cache_key,
         openai_request_options, openai_responses_endpoint_for_base_url,
         openai_service_tier_for_latency_preference, validate_provider_request_required,
@@ -657,6 +704,28 @@ mod request_assembly_tests {
         let options = openai_request_options(Some(""), None).unwrap();
         assert_eq!(options.reasoning_effort, None);
         assert_eq!(options.service_tier, None);
+    }
+
+    /// OpenAI provenance wrappers distinguish the active prompt and fresh
+    /// action evidence from replayed transcript entries and generic output.
+    #[test]
+    fn openai_provenance_wrappers_preserve_evidence_roles() {
+        let current_user = openai_current_user_prompt_entry_text("fix it");
+        let historical_user = openai_historical_user_prompt_entry_text("old request");
+        let current_result = openai_current_action_result_entry_text("fresh output");
+        let historical_result = openai_historical_action_result_entry_text("old output");
+        let generic_result = openai_executed_result_entry_text("output");
+
+        assert!(current_user.starts_with("[current user prompt]\n"));
+        assert!(current_user.contains("latest user prompt and the active task"));
+        assert!(historical_user.starts_with("[historical user prompt transcript entry]\n"));
+        assert!(historical_user.contains("historical context only, not the active task"));
+        assert!(current_result.starts_with("[current-turn executed result]\n"));
+        assert!(current_result.contains("immediately preceding action batch"));
+        assert!(historical_result.starts_with("[historical executed result transcript entry]\n"));
+        assert!(historical_result.contains("not a new current-turn action result"));
+        assert!(generic_result.starts_with("[executed result]\n"));
+        assert!(generic_result.contains("not a new user request"));
     }
 
     /// Provider request validation preserves invalid-argument diagnostics for
