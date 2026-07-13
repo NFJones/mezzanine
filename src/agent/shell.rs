@@ -1262,18 +1262,7 @@ end\n\
 set -e MEZ_FISH_PRIVATE_WAS_SET MEZ_FISH_PRIVATE_SAVED\n"
 }
 
-/// Runs the shell quote operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub fn shell_quote(value: &str) -> String {
-    if value.is_empty() {
-        return "''".to_string();
-    }
-    let escaped = value.replace('\'', "'\"'\"'");
-    format!("'{escaped}'")
-}
+pub use mez_agent::shell_quote;
 
 /// Validates model-authored shell input before Mezzanine wraps it for pane
 /// execution.

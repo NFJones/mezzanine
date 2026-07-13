@@ -46,6 +46,8 @@ pub mod scheduler;
 pub mod schema;
 /// Deterministic semantic-patch parsing and path validation.
 pub mod semantic_patch;
+/// Provider-independent shell-source construction helpers.
+pub mod shell;
 /// Dependency-neutral agent slash-command registry and parsing.
 pub mod slash;
 /// Provider-independent subagent cooperation and scope contracts.
@@ -131,6 +133,7 @@ pub use schema::{
     normalize_openai_strict_schema,
 };
 pub use semantic_patch::{is_mez_patch_payload, validate_apply_patch_payload};
+pub use shell::shell_quote;
 pub use slash::{
     SlashCommandEffect, SlashCommandInvocation, SlashCommandParseError, SlashCommandSpec,
     baseline_slash_commands, parse_slash_command,

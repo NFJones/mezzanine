@@ -6,11 +6,11 @@
 //! write transaction that applies verified bytes.
 
 use super::{LocalActionKind, LocalActionPlan};
-use crate::agent::shell::shell_quote;
 use mez_agent::semantic_patch::{
     SemanticPatchPlanningError, SemanticPatchPlanningResult as Result, is_mez_patch_payload,
     validate_apply_patch_payload,
 };
+use mez_agent::shell_quote;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod matcher;
