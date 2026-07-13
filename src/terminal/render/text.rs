@@ -402,79 +402,6 @@ pub(super) fn clip_style_span(span: TerminalStyleSpan, width: usize) -> Option<T
     .filter(|span| span.length > 0)
 }
 
-/// Searches forward from the requested line, wrapping to the top if needed.
-pub(in crate::terminal) fn search_forward(
-    lines: &[String],
-    start_line: usize,
-    query: &str,
-) -> Option<(CopyPosition, usize)> {
-    if lines.is_empty() {
-        return None;
-    }
-    for (line_index, line) in lines
-        .iter()
-        .enumerate()
-        .skip(start_line.min(lines.len() - 1))
-    {
-        if let Some(byte_index) = line.find(query) {
-            return Some((
-                CopyPosition {
-                    line: line_index,
-                    column: char_column_at_byte(line, byte_index),
-                },
-                char_count(query),
-            ));
-        }
-    }
-    for (line_index, line) in lines.iter().enumerate().take(start_line.min(lines.len())) {
-        if let Some(byte_index) = line.find(query) {
-            return Some((
-                CopyPosition {
-                    line: line_index,
-                    column: char_column_at_byte(line, byte_index),
-                },
-                char_count(query),
-            ));
-        }
-    }
-    None
-}
-
-/// Searches backward from the requested line, wrapping to the bottom if needed.
-pub(in crate::terminal) fn search_backward(
-    lines: &[String],
-    start_line: usize,
-    query: &str,
-) -> Option<(CopyPosition, usize)> {
-    if lines.is_empty() {
-        return None;
-    }
-    let start = start_line.min(lines.len() - 1);
-    for line_index in (0..=start).rev() {
-        if let Some(byte_index) = lines[line_index].rfind(query) {
-            return Some((
-                CopyPosition {
-                    line: line_index,
-                    column: char_column_at_byte(&lines[line_index], byte_index),
-                },
-                char_count(query),
-            ));
-        }
-    }
-    for line_index in ((start + 1)..lines.len()).rev() {
-        if let Some(byte_index) = lines[line_index].rfind(query) {
-            return Some((
-                CopyPosition {
-                    line: line_index,
-                    column: char_column_at_byte(&lines[line_index], byte_index),
-                },
-                char_count(query),
-            ));
-        }
-    }
-    None
-}
-
 /// Validates that a copy-mode position references an existing rendered line.
 pub(in crate::terminal) fn validate_copy_position(
     lines: &[String],
@@ -486,18 +413,6 @@ pub(in crate::terminal) fn validate_copy_position(
         ));
     }
     Ok(())
-}
-
-/// Orders a copy-mode selection range from earlier position to later position.
-pub(in crate::terminal) fn normalize_selection(
-    start: CopyPosition,
-    end: CopyPosition,
-) -> (CopyPosition, CopyPosition) {
-    if start <= end {
-        (start, end)
-    } else {
-        (end, start)
-    }
 }
 
 /// Returns a display-column slice from one terminal line.
@@ -527,11 +442,6 @@ pub(in crate::terminal) fn line_slice(line: &str, start: usize, end: usize) -> S
 /// Returns the terminal display column count for a value.
 pub(in crate::terminal) fn char_count(value: &str) -> usize {
     terminal_text_width(value)
-}
-
-/// Returns the terminal display column for a byte index inside a value.
-fn char_column_at_byte(value: &str, byte_index: usize) -> usize {
-    terminal_text_width(&value[..byte_index])
 }
 
 /// Returns the terminal display width of one Unicode scalar.

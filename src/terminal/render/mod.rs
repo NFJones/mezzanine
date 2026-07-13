@@ -85,10 +85,7 @@ pub(crate) use text::{
     overlay_fixed_column_style_spans, set_agent_wrap_column_cap, set_terminal_emoji_width,
     terminal_grapheme_width, terminal_graphemes, terminal_text_width, wrap_agent_log_lines,
 };
-pub(super) use text::{
-    char_count, line_slice, normalize_selection, search_backward, search_forward,
-    validate_copy_position,
-};
+pub(super) use text::{char_count, line_slice, validate_copy_position};
 
 use text::{
     TerminalRenderCell, blank_render_cells, blank_render_row, clip_style_span, collect_text_cells,

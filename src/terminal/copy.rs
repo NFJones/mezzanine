@@ -6,11 +6,11 @@
 
 use super::{
     MezError, PasteBuffers, Result, TerminalScreen, TerminalStyledLine, char_count, line_slice,
-    normalize_selection, search_backward, search_forward, terminal_grapheme_width,
-    terminal_graphemes, validate_copy_position,
+    terminal_grapheme_width, terminal_graphemes, validate_copy_position,
 };
 use crate::readline::readline_word_column_range;
 pub use mez_mux::copy::{CopyPosition, SearchDirection};
+use mez_mux::copy::{normalize_selection, search_lines};
 
 // Copy mode, selection, and search primitives.
 
@@ -495,10 +495,7 @@ impl CopyMode {
             ));
         }
 
-        let found = match direction {
-            SearchDirection::Forward => search_forward(&self.lines, self.scroll_top, query),
-            SearchDirection::Backward => search_backward(&self.lines, self.scroll_top, query),
-        };
+        let found = search_lines(&self.lines, self.scroll_top, query, direction);
 
         if let Some((position, width)) = found {
             self.scroll_top = position.line.min(self.lines.len().saturating_sub(1));
