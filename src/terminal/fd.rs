@@ -151,29 +151,7 @@ pub struct TerminalPaneFrameContext {
     pub agent_display_lines: Vec<String>,
 }
 
-/// Placement of a one-row terminal frame within its owning region.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum TerminalFramePosition {
-    /// Render the frame before region body content.
-    #[default]
-    Top,
-    /// Render the frame after region body content.
-    Bottom,
-}
-
-/// Style applied to a rendered frame row when styled terminal output is used.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum TerminalFrameStyle {
-    /// Leave frame text unstyled.
-    #[default]
-    Default,
-    /// Render the frame with bold/intense text.
-    Bold,
-    /// Render the frame with underline text.
-    Underline,
-    /// Render the frame with inverse video.
-    Inverse,
-}
+pub use mez_mux::presentation::{TerminalFramePosition, TerminalFrameStyle};
 
 /// Cursor shape used when Mezzanine presents the active interactive surface.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

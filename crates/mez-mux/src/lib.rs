@@ -9,6 +9,7 @@
 pub mod copy;
 mod error;
 pub mod layout;
+pub mod presentation;
 pub mod process;
 pub mod readline;
 pub mod session;
