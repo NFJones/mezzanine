@@ -126,6 +126,12 @@ impl From<mez_agent::ProviderModelCatalogParseError> for MezError {
     }
 }
 
+impl From<mez_agent::semantic_patch::SemanticPatchParseError> for MezError {
+    fn from(error: mez_agent::semantic_patch::SemanticPatchParseError) -> Self {
+        Self::invalid_args(format!("apply_patch: {error}"))
+    }
+}
+
 impl From<mez_mux::MuxError> for MezError {
     fn from(error: mez_mux::MuxError) -> Self {
         match error.kind() {
