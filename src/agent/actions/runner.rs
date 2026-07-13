@@ -11,8 +11,8 @@ use super::super::ModelProvider;
 use super::super::{
     ActionResult, AgentAction, AgentActionPayload, AgentContext, AgentTurnLedger, AgentTurnRecord,
     AgentTurnState, AllowedAction, AllowedActionSet, ContextSourceKind, McpPromptTool, MezError,
-    ModelInteractionKind, ModelProfile, ModelRequest, ModelTokenUsage, PathScopes,
-    PermissionPolicy, Result, SessionApprovalStore, assemble_model_request,
+    ModelInteractionKind, ModelProfile, ModelRequest, ModelTokenUsage, Result,
+    assemble_model_request,
 };
 #[cfg(test)]
 use super::super::{ActionStatus, local_action_plan};
@@ -288,11 +288,7 @@ pub struct AgentTurnRunner<'a, P> {
     /// Structured `model_profile` value carried by this API type.
     pub model_profile: ModelProfile,
     /// Structured `permissions` value carried by this API type.
-    pub permissions: &'a PermissionPolicy,
-    /// Structured `approvals` value carried by this API type.
-    pub approvals: &'a SessionApprovalStore,
-    /// Structured `path_scopes` value carried by this API type.
-    pub path_scopes: Option<&'a PathScopes>,
+    pub permissions: &'a dyn mez_agent::PermissionPlanning,
     /// Structured `subagent_scope` value carried by this API type.
     pub subagent_scope: Option<&'a SubagentScopeDeclaration>,
     /// Product adapter for shell and patch scope classification.

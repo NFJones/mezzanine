@@ -6,10 +6,9 @@
 //! planning separate from turn execution and recovery handling.
 
 use super::super::{
-    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnRecord, MezError,
-    PermissionPolicy, Result, RuleDecision, json_escape, local_action_plan, local_action_summary,
-    network_action_plan, network_action_structured_content_json, network_action_summary,
-    string_array_json,
+    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnRecord, MezError, Result,
+    RuleDecision, json_escape, local_action_plan, local_action_summary, network_action_plan,
+    network_action_structured_content_json, network_action_summary, string_array_json,
 };
 use super::{AgentTurnRunner, say_structured_content_json, shell_command_structured_content_json};
 
@@ -76,13 +75,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                         message,
                     );
                 }
-                match self
-                    .permissions
-                    .evaluate_shell_command_with_approvals_scoped(
-                        &plan.policy_command,
-                        self.approvals,
-                        self.path_scopes,
-                    ) {
+                match self.permissions.evaluate_command(&plan.policy_command) {
                     RuleDecision::Allow => Ok(ActionResult::running(
                         turn,
                         action,
@@ -97,7 +90,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                         )?),
                     )),
                     RuleDecision::Prompt
-                        if self.permissions.approval_policy
+                        if self.permissions.approval_policy()
                             == mez_agent::ApprovalPolicy::AutoAllow
                             && action_supports_auto_allow(action) =>
                     {
@@ -152,13 +145,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                         "network action plan was unavailable after network action match",
                     ));
                 };
-                match self
-                    .permissions
-                    .evaluate_shell_command_with_approvals_scoped(
-                        &plan.policy_command,
-                        self.approvals,
-                        self.path_scopes,
-                    ) {
+                match self.permissions.evaluate_command(&plan.policy_command) {
                     RuleDecision::Allow => Ok(ActionResult::running(
                         turn,
                         action,
@@ -170,7 +157,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                         )?),
                     )),
                     RuleDecision::Prompt
-                        if self.permissions.approval_policy
+                        if self.permissions.approval_policy()
                             == mez_agent::ApprovalPolicy::AutoAllow
                             && action_supports_auto_allow(action) =>
                     {
@@ -273,7 +260,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
             } => {
                 let policy_allowed = action_prompt_gate_satisfied_by_policy(self.permissions);
                 let auto_allowed = !policy_allowed
-                    && self.permissions.approval_policy == mez_agent::ApprovalPolicy::AutoAllow
+                    && self.permissions.approval_policy() == mez_agent::ApprovalPolicy::AutoAllow
                     && action_supports_auto_allow(action);
                 if !policy_allowed && !auto_allowed {
                     return Ok(ActionResult::blocked(
@@ -325,7 +312,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                     approval_required && action_prompt_gate_satisfied_by_policy(self.permissions);
                 let auto_allowed = approval_required
                     && !policy_allowed
-                    && self.permissions.approval_policy == mez_agent::ApprovalPolicy::AutoAllow
+                    && self.permissions.approval_policy() == mez_agent::ApprovalPolicy::AutoAllow
                     && action_supports_auto_allow(action);
                 if approval_required && !policy_allowed && !auto_allowed {
                     return Ok(ActionResult::blocked(
@@ -454,9 +441,9 @@ fn action_auto_allow_reason(action: &AgentAction) -> String {
 
 /// Returns true when the active runtime policy resolves a fresh approval
 /// prompt without user interaction.
-fn action_prompt_gate_satisfied_by_policy(permissions: &PermissionPolicy) -> bool {
+fn action_prompt_gate_satisfied_by_policy(permissions: &dyn mez_agent::PermissionPlanning) -> bool {
     permissions.approval_bypass()
-        || permissions.approval_policy == mez_agent::ApprovalPolicy::FullAccess
+        || permissions.approval_policy() == mez_agent::ApprovalPolicy::FullAccess
 }
 
 /// Builds structured approval metadata for actions accepted by policy rather
@@ -464,7 +451,7 @@ fn action_prompt_gate_satisfied_by_policy(permissions: &PermissionPolicy) -> boo
 fn action_policy_approval_json(
     action: &AgentAction,
     kind: &str,
-    permissions: &PermissionPolicy,
+    permissions: &dyn mez_agent::PermissionPlanning,
 ) -> serde_json::Value {
     let state = if permissions.approval_bypass() {
         "bypassed"

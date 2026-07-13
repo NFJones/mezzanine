@@ -59,6 +59,23 @@ pub enum RuleDecision {
     Allow,
 }
 
+/// Product adapter used while planning permission-sensitive agent actions.
+///
+/// The agent harness owns when permission decisions are requested and how the
+/// resulting approval mode affects action metadata. Product implementations
+/// retain command classification, path scopes, approval persistence, trusted
+/// directories, and concrete enforcement policy.
+pub trait PermissionPlanning: Send + Sync {
+    /// Returns the effective decision for one shell-shaped policy command.
+    fn evaluate_command(&self, command: &str) -> RuleDecision;
+
+    /// Returns the active approval policy used for prompt-gate behavior.
+    fn approval_policy(&self) -> ApprovalPolicy;
+
+    /// Returns whether the product currently bypasses fresh approvals.
+    fn approval_bypass(&self) -> bool;
+}
+
 /// Bounded permission state shown by agent-shell status commands.
 ///
 /// Product command rules, path scopes, approval persistence, and enforcement

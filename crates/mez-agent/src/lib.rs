@@ -78,7 +78,7 @@ pub use mcp::{
 };
 pub use memory::{MemoryContextRecord, MemoryContextScope};
 pub use permissions::{
-    AgentShellPermissionSummary, ApprovalPolicy, PermissionPreset, RuleDecision,
+    AgentShellPermissionSummary, ApprovalPolicy, PermissionPlanning, PermissionPreset, RuleDecision,
 };
 pub use prompt::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptError,

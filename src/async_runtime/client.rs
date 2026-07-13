@@ -1622,9 +1622,11 @@ async fn execute_runtime_agent_provider_dispatch(
             let runner = AgentTurnRunner {
                 provider: &provider,
                 model_profile,
-                permissions: &permission_policy,
-                approvals: &session_approvals,
-                path_scopes: path_scopes.as_ref(),
+                permissions: &crate::permissions::ProductPermissionPlanning::new(
+                    &permission_policy,
+                    &session_approvals,
+                    path_scopes.as_ref(),
+                ),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &crate::subagent::AGENT_SUBAGENT_SCOPE_ENFORCEMENT,
                 available_mcp_servers,
@@ -1649,9 +1651,11 @@ async fn execute_runtime_agent_provider_dispatch(
             let runner = AgentTurnRunner {
                 provider: &provider,
                 model_profile,
-                permissions: &permission_policy,
-                approvals: &session_approvals,
-                path_scopes: path_scopes.as_ref(),
+                permissions: &crate::permissions::ProductPermissionPlanning::new(
+                    &permission_policy,
+                    &session_approvals,
+                    path_scopes.as_ref(),
+                ),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &crate::subagent::AGENT_SUBAGENT_SCOPE_ENFORCEMENT,
                 available_mcp_servers,
@@ -1676,9 +1680,11 @@ async fn execute_runtime_agent_provider_dispatch(
             let runner = AgentTurnRunner {
                 provider: &provider,
                 model_profile,
-                permissions: &permission_policy,
-                approvals: &session_approvals,
-                path_scopes: path_scopes.as_ref(),
+                permissions: &crate::permissions::ProductPermissionPlanning::new(
+                    &permission_policy,
+                    &session_approvals,
+                    path_scopes.as_ref(),
+                ),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &crate::subagent::AGENT_SUBAGENT_SCOPE_ENFORCEMENT,
                 available_mcp_servers,
@@ -1703,9 +1709,11 @@ async fn execute_runtime_agent_provider_dispatch(
             let runner = AgentTurnRunner {
                 provider: &provider,
                 model_profile,
-                permissions: &permission_policy,
-                approvals: &session_approvals,
-                path_scopes: path_scopes.as_ref(),
+                permissions: &crate::permissions::ProductPermissionPlanning::new(
+                    &permission_policy,
+                    &session_approvals,
+                    path_scopes.as_ref(),
+                ),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &crate::subagent::AGENT_SUBAGENT_SCOPE_ENFORCEMENT,
                 available_mcp_servers,
@@ -1730,9 +1738,11 @@ async fn execute_runtime_agent_provider_dispatch(
             let runner = AgentTurnRunner {
                 provider: &provider,
                 model_profile,
-                permissions: &permission_policy,
-                approvals: &session_approvals,
-                path_scopes: path_scopes.as_ref(),
+                permissions: &crate::permissions::ProductPermissionPlanning::new(
+                    &permission_policy,
+                    &session_approvals,
+                    path_scopes.as_ref(),
+                ),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &crate::subagent::AGENT_SUBAGENT_SCOPE_ENFORCEMENT,
                 available_mcp_servers,

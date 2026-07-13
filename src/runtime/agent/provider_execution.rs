@@ -248,9 +248,11 @@ impl RuntimeSessionService {
             let runner = AgentTurnRunner {
                 provider,
                 model_profile: model_profile.clone(),
-                permissions: &permission_policy,
-                approvals: &self.session_approvals,
-                path_scopes: path_scopes.as_ref(),
+                permissions: &crate::permissions::ProductPermissionPlanning::new(
+                    &permission_policy,
+                    &self.session_approvals,
+                    path_scopes.as_ref(),
+                ),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &crate::subagent::AGENT_SUBAGENT_SCOPE_ENFORCEMENT,
                 available_mcp_servers: available_mcp_servers.clone(),
@@ -525,9 +527,11 @@ impl RuntimeSessionService {
             let runner = AgentTurnRunner {
                 provider,
                 model_profile: model_profile.clone(),
-                permissions: &permission_policy,
-                approvals: &self.session_approvals,
-                path_scopes: path_scopes.as_ref(),
+                permissions: &crate::permissions::ProductPermissionPlanning::new(
+                    &permission_policy,
+                    &self.session_approvals,
+                    path_scopes.as_ref(),
+                ),
                 subagent_scope: subagent_scope.as_ref(),
                 subagent_scope_enforcement: &crate::subagent::AGENT_SUBAGENT_SCOPE_ENFORCEMENT,
                 available_mcp_servers: available_mcp_servers.clone(),

@@ -50,6 +50,50 @@ pub use types::{
     PermissionPolicy, PermissionPreset, RuleDecision, RuleMatch, SessionApprovalStore,
 };
 
+/// Borrowed product adapter for agent action permission planning.
+///
+/// The adapter keeps command classification, path scopes, and persisted
+/// approvals in the composition crate while exposing only the bounded queries
+/// required by the provider-independent agent planner.
+pub struct ProductPermissionPlanning<'a> {
+    policy: &'a PermissionPolicy,
+    approvals: &'a SessionApprovalStore,
+    path_scopes: Option<&'a PathScopes>,
+}
+
+impl<'a> ProductPermissionPlanning<'a> {
+    /// Creates a planning adapter over the active product permission state.
+    pub fn new(
+        policy: &'a PermissionPolicy,
+        approvals: &'a SessionApprovalStore,
+        path_scopes: Option<&'a PathScopes>,
+    ) -> Self {
+        Self {
+            policy,
+            approvals,
+            path_scopes,
+        }
+    }
+}
+
+impl mez_agent::PermissionPlanning for ProductPermissionPlanning<'_> {
+    fn evaluate_command(&self, command: &str) -> mez_agent::RuleDecision {
+        self.policy.evaluate_shell_command_with_approvals_scoped(
+            command,
+            self.approvals,
+            self.path_scopes,
+        )
+    }
+
+    fn approval_policy(&self) -> mez_agent::ApprovalPolicy {
+        self.policy.approval_policy
+    }
+
+    fn approval_bypass(&self) -> bool {
+        self.policy.approval_bypass()
+    }
+}
+
 use classification::{
     analyze_shell, classify_tokens, tokenize_shell_words, tokenize_single_candidate,
     validate_git_read_only_subcommand,
