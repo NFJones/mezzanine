@@ -9,12 +9,11 @@ use portable_pty::{CommandBuilder, native_pty_system};
 
 use crate::error::{MezError, Result};
 use crate::layout::Size;
-use crate::runtime::PaneEnvironment;
 use crate::shell::ResolvedShell;
 
 use super::pane::{PaneProcess, configure_pty_master_nonblocking};
 use super::pty::pty_size;
-use super::types::PaneCommandPlan;
+use super::types::{PaneCommandPlan, PaneProcessEnvironment};
 
 /// Runs the pane command plan operation for this subsystem.
 ///
@@ -76,7 +75,7 @@ pub fn shell_command_from_argv(argv: &[String]) -> Result<String> {
 pub fn spawn_pane_process(
     shell: &ResolvedShell,
     explicit_command: Option<&str>,
-    environment: &PaneEnvironment,
+    environment: &PaneProcessEnvironment,
     size: Size,
 ) -> Result<PaneProcess> {
     spawn_pane_process_with_start_directory(shell, explicit_command, environment, size, None)
@@ -91,7 +90,7 @@ pub fn spawn_pane_process(
 pub fn spawn_pane_process_with_start_directory(
     shell: &ResolvedShell,
     explicit_command: Option<&str>,
-    environment: &PaneEnvironment,
+    environment: &PaneProcessEnvironment,
     size: Size,
     start_directory: Option<&Path>,
 ) -> Result<PaneProcess> {

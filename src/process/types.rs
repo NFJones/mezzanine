@@ -3,6 +3,24 @@
 //! These structures describe command plans, process output, and normalized exit
 //! status without owning PTY or runtime resources.
 
+/// Environment values injected into a newly spawned pane process.
+///
+/// Product adapters construct these values from runtime socket and session
+/// state; the process subsystem only applies the explicit launch contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneProcessEnvironment {
+    /// Structured `MEZ` value containing socket, session, window, pane, and term.
+    pub mez: String,
+    /// Session id exported separately for simple shell access.
+    pub session: String,
+    /// Window id exported separately for simple shell access.
+    pub window: String,
+    /// Pane id exported separately for simple shell access.
+    pub pane: String,
+    /// Terminal type exported for the pane process.
+    pub term: String,
+}
+
 /// Carries Pane Exit Status state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move

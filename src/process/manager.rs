@@ -9,12 +9,11 @@ use std::time::Duration;
 
 use crate::error::{MezError, Result};
 use crate::layout::Size;
-use crate::runtime::PaneEnvironment;
 use crate::shell::ResolvedShell;
 
 use super::pane::PaneProcess;
 use super::spawn::{spawn_pane_process, spawn_pane_process_with_start_directory};
-use super::types::{ExitedPaneProcess, PaneExitStatus, PaneProcessOutput};
+use super::types::{ExitedPaneProcess, PaneExitStatus, PaneProcessEnvironment, PaneProcessOutput};
 
 /// Defines the DEFAULT TERMINATION GRACE const used by this subsystem.
 ///
@@ -66,7 +65,7 @@ impl PaneProcessManager {
         pane_id: impl Into<String>,
         shell: &ResolvedShell,
         explicit_command: Option<&str>,
-        environment: &PaneEnvironment,
+        environment: &PaneProcessEnvironment,
         size: Size,
     ) -> Result<u32> {
         let pane_id = pane_id.into();
@@ -89,7 +88,7 @@ impl PaneProcessManager {
         pane_id: impl Into<String>,
         shell: &ResolvedShell,
         explicit_command: Option<&str>,
-        environment: &PaneEnvironment,
+        environment: &PaneProcessEnvironment,
         size: Size,
         start_directory: Option<&std::path::Path>,
     ) -> Result<u32> {

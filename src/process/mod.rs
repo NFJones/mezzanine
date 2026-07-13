@@ -43,7 +43,9 @@ pub use spawn::{
     pane_command_plan, shell_command_from_argv, spawn_pane_process,
     spawn_pane_process_with_start_directory,
 };
-pub use types::{ExitedPaneProcess, PaneCommandPlan, PaneExitStatus, PaneProcessOutput};
+pub use types::{
+    ExitedPaneProcess, PaneCommandPlan, PaneExitStatus, PaneProcessEnvironment, PaneProcessOutput,
+};
 
 /// Exposes the tests module boundary.
 ///

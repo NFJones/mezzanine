@@ -9,6 +9,8 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+pub use crate::process::PaneProcessEnvironment as PaneEnvironment;
+
 use super::sockets::current_effective_uid;
 
 /// Separates fields inside the `MEZ` pane-environment value.
@@ -65,19 +67,4 @@ pub struct SocketDirectory {
     pub path: PathBuf,
     /// Environment source that selected the directory.
     pub source: SocketDirectorySource,
-}
-
-/// Environment values injected into panes spawned by the runtime.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PaneEnvironment {
-    /// Structured `MEZ` value containing socket, session, window, pane, and term.
-    pub mez: String,
-    /// Session id exported separately for simple shell access.
-    pub session: String,
-    /// Window id exported separately for simple shell access.
-    pub window: String,
-    /// Pane id exported separately for simple shell access.
-    pub pane: String,
-    /// Terminal type exported for the pane process.
-    pub term: String,
 }
