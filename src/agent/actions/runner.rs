@@ -295,6 +295,8 @@ pub struct AgentTurnRunner<'a, P> {
     pub path_scopes: Option<&'a PathScopes>,
     /// Structured `subagent_scope` value carried by this API type.
     pub subagent_scope: Option<&'a SubagentScopeDeclaration>,
+    /// Product adapter for shell and patch scope classification.
+    pub subagent_scope_enforcement: &'a dyn mez_agent::SubagentScopeEnforcement,
     /// Structured `available_mcp_servers` value carried by this API type.
     pub available_mcp_servers: Vec<String>,
     /// Structured `available_mcp_tools` value carried by this API type.

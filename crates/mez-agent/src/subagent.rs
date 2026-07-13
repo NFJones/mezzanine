@@ -7,6 +7,28 @@
 
 use crate::PermissionPreset;
 
+/// Product adapter used to enforce one active subagent scope.
+///
+/// The agent harness owns when scope checks run, while the composition crate
+/// owns shell-effect classification, semantic-patch parsing, and filesystem
+/// policy. Implementations return a bounded diagnostic string when product
+/// classification itself fails.
+pub trait SubagentScopeEnforcement: Send + Sync {
+    /// Returns a user-facing violation for one shell-backed local action.
+    fn shell_command_violation(
+        &self,
+        scope: &SubagentScopeDeclaration,
+        command: &str,
+    ) -> Result<Option<String>, String>;
+
+    /// Returns a user-facing violation for one semantic patch action.
+    fn apply_patch_violation(
+        &self,
+        scope: &SubagentScopeDeclaration,
+        patch: &str,
+    ) -> Result<Option<String>, String>;
+}
+
 /// Declares how a subagent may interact with shared repository state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CooperationMode {

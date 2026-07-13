@@ -61,8 +61,12 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                     ));
                 };
                 if let Some(scope) = self.subagent_scope
-                    && let Some(message) =
-                        subagent_scope_violation(scope, action, &plan.policy_command)?
+                    && let Some(message) = subagent_scope_violation(
+                        self.subagent_scope_enforcement,
+                        scope,
+                        action,
+                        &plan.policy_command,
+                    )?
                 {
                     return ActionResult::failed(
                         turn,
@@ -400,18 +404,18 @@ impl<'a, P> AgentTurnRunner<'a, P> {
 
 /// Returns a delegated subagent scope violation for one local action.
 fn subagent_scope_violation(
+    enforcement: &dyn mez_agent::SubagentScopeEnforcement,
     scope: &mez_agent::SubagentScopeDeclaration,
     action: &AgentAction,
     policy_command: &str,
 ) -> Result<Option<String>> {
     match &action.payload {
-        AgentActionPayload::ApplyPatch { patch, .. } => {
-            crate::subagent::SubagentScopeEnforcement::apply_patch_violation(scope, patch)
-        }
-        _ => crate::subagent::SubagentScopeEnforcement::shell_command_violation(
-            scope,
-            policy_command,
-        ),
+        AgentActionPayload::ApplyPatch { patch, .. } => enforcement
+            .apply_patch_violation(scope, patch)
+            .map_err(MezError::invalid_args),
+        _ => enforcement
+            .shell_command_violation(scope, policy_command)
+            .map_err(MezError::invalid_args),
     }
 }
 

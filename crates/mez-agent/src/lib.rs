@@ -89,7 +89,7 @@ pub use slash::{
     SlashCommandEffect, SlashCommandInvocation, SlashCommandParseError, SlashCommandSpec,
     baseline_slash_commands, parse_slash_command,
 };
-pub use subagent::{CooperationMode, SubagentScopeDeclaration};
+pub use subagent::{CooperationMode, SubagentScopeDeclaration, SubagentScopeEnforcement};
 pub use transcript::{
     AgentTranscriptEntry, AgentTranscriptRole, TranscriptContractError, TranscriptPersistence,
 };

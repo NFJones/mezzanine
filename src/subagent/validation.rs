@@ -203,6 +203,34 @@ impl SubagentScopeEnforcement for SubagentScopeDeclaration {
     }
 }
 
+/// Product adapter for the agent-owned subagent scope-enforcement port.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProductSubagentScopeEnforcement;
+
+/// Shared stateless scope-enforcement adapter used by agent turn runners.
+pub static AGENT_SUBAGENT_SCOPE_ENFORCEMENT: ProductSubagentScopeEnforcement =
+    ProductSubagentScopeEnforcement;
+
+impl mez_agent::SubagentScopeEnforcement for ProductSubagentScopeEnforcement {
+    fn shell_command_violation(
+        &self,
+        scope: &SubagentScopeDeclaration,
+        command: &str,
+    ) -> std::result::Result<Option<String>, String> {
+        SubagentScopeEnforcement::shell_command_violation(scope, command)
+            .map_err(|error| error.to_string())
+    }
+
+    fn apply_patch_violation(
+        &self,
+        scope: &SubagentScopeDeclaration,
+        patch: &str,
+    ) -> std::result::Result<Option<String>, String> {
+        SubagentScopeEnforcement::apply_patch_violation(scope, patch)
+            .map_err(|error| error.to_string())
+    }
+}
+
 /// Returns a scope violation for one product-classified command effect.
 fn effect_violation(
     scope: &SubagentScopeDeclaration,
