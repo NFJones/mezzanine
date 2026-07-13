@@ -218,6 +218,254 @@ pub struct ProviderModelCatalog {
     pub quota_usage: Vec<crate::ProviderQuotaUsage>,
 }
 
+/// Failure to parse one provider model-catalog response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderModelCatalogParseError {
+    message: String,
+}
+
+impl ProviderModelCatalogParseError {
+    /// Returns the stable diagnostic for the malformed catalog response.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for ProviderModelCatalogParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for ProviderModelCatalogParseError {}
+
+/// Parses an OpenAI-compatible model-catalog response.
+///
+/// The caller supplies locally documented context-window sizes so product
+/// model knowledge remains outside the provider-neutral parser.
+pub fn parse_openai_models_http_body_with<F>(
+    body: &str,
+    known_context_window_tokens: F,
+) -> Result<Vec<ProviderModelInfo>, ProviderModelCatalogParseError>
+where
+    F: Fn(&str) -> Option<usize>,
+{
+    let value: serde_json::Value =
+        serde_json::from_str(body).map_err(|error| ProviderModelCatalogParseError {
+            message: format!("OpenAI Models response was not valid JSON: {error}"),
+        })?;
+    let models = openai_models_array(&value).ok_or_else(|| ProviderModelCatalogParseError {
+        message: "OpenAI Models response did not contain models".to_string(),
+    })?;
+    let mut parsed = Vec::new();
+    for model in models {
+        if let Some(info) = openai_model_info_from_value(model, &known_context_window_tokens) {
+            parsed.push(info);
+        }
+    }
+    parsed.sort_by(|left, right| left.id.cmp(&right.id));
+    parsed.dedup_by(|left, right| left.id == right.id);
+    Ok(parsed)
+}
+
+/// Returns default reasoning levels for OpenAI reasoning-model families.
+pub fn openai_default_reasoning_levels_for_model(model_id: &str) -> Vec<String> {
+    let lower = model_id.to_ascii_lowercase();
+    if lower.starts_with("gpt-5")
+        || lower.starts_with("o1")
+        || lower.starts_with("o3")
+        || lower.starts_with("o4")
+    {
+        vec![
+            "low".to_string(),
+            "medium".to_string(),
+            "high".to_string(),
+            "xhigh".to_string(),
+        ]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Returns the ordered union of reasoning levels advertised by a catalog.
+pub fn provider_catalog_reasoning_levels(models: &[ProviderModelInfo]) -> Vec<String> {
+    dedupe_provider_strings(
+        models
+            .iter()
+            .flat_map(|model| model.reasoning_levels.iter().cloned())
+            .collect(),
+    )
+}
+
+fn openai_models_array(value: &serde_json::Value) -> Option<&[serde_json::Value]> {
+    value
+        .get("data")
+        .and_then(serde_json::Value::as_array)
+        .or_else(|| value.get("models").and_then(serde_json::Value::as_array))
+        .or_else(|| value.as_array())
+        .map(Vec::as_slice)
+}
+
+fn openai_model_info_from_value<F>(
+    value: &serde_json::Value,
+    known_context_window_tokens: &F,
+) -> Option<ProviderModelInfo>
+where
+    F: Fn(&str) -> Option<usize>,
+{
+    let (id, display_name) = match value {
+        serde_json::Value::String(model_id) => (model_id.to_string(), None),
+        serde_json::Value::Object(object) => {
+            let id = object
+                .get("id")
+                .or_else(|| object.get("name"))
+                .or_else(|| object.get("slug"))
+                .and_then(serde_json::Value::as_str)?
+                .to_string();
+            let display_name = object
+                .get("display_name")
+                .or_else(|| object.get("label"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|name| *name != id)
+                .map(str::to_string);
+            (id, display_name)
+        }
+        _ => return None,
+    };
+    let mut reasoning_levels = provider_reasoning_levels_from_value(value);
+    if reasoning_levels.is_empty() {
+        reasoning_levels = openai_default_reasoning_levels_for_model(&id);
+    }
+    Some(ProviderModelInfo {
+        id: id.clone(),
+        display_name,
+        reasoning_levels,
+        context_window_tokens: provider_context_window_tokens_from_value(value)
+            .or_else(|| known_context_window_tokens(&id)),
+        capabilities: provider_capabilities_from_value(value),
+    })
+}
+
+fn provider_capabilities_from_value(value: &serde_json::Value) -> Vec<String> {
+    let mut capabilities = Vec::new();
+    if let Some(values) = value
+        .get("capabilities")
+        .and_then(serde_json::Value::as_array)
+    {
+        capabilities.extend(
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|capability| !capability.is_empty())
+                .map(str::to_string),
+        );
+    }
+    if let Some(object) = value
+        .get("capabilities")
+        .and_then(serde_json::Value::as_object)
+    {
+        capabilities.extend(
+            object
+                .iter()
+                .filter(|(_, value)| value.as_bool().unwrap_or(false))
+                .map(|(capability, _)| capability.trim())
+                .filter(|capability| !capability.is_empty())
+                .map(str::to_string),
+        );
+    }
+    for field in ["tool_use", "tools", "function_calling", "structured_output"] {
+        if value
+            .get(field)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            capabilities.push(field.to_string());
+        }
+    }
+    dedupe_provider_strings(capabilities)
+}
+
+fn provider_context_window_tokens_from_value(value: &serde_json::Value) -> Option<usize> {
+    let object = value.as_object()?;
+    for field in [
+        "context_window_tokens",
+        "context_limit_tokens",
+        "context_window",
+        "context_length",
+        "max_context_length",
+        "input_token_limit",
+        "max_input_tokens",
+    ] {
+        if let Some(tokens) = object
+            .get(field)
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|tokens| usize::try_from(tokens).ok())
+            .filter(|tokens| *tokens > 0)
+        {
+            return Some(tokens);
+        }
+    }
+    for pointer in [
+        "/limits/context_window_tokens",
+        "/limits/context_limit_tokens",
+        "/limits/context_window",
+        "/limits/context_length",
+        "/limits/max_context_length",
+        "/capabilities/context_window_tokens",
+        "/capabilities/context_limit_tokens",
+        "/capabilities/context_window",
+        "/capabilities/context_length",
+        "/capabilities/max_context_length",
+    ] {
+        if let Some(tokens) = value
+            .pointer(pointer)
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|tokens| usize::try_from(tokens).ok())
+            .filter(|tokens| *tokens > 0)
+        {
+            return Some(tokens);
+        }
+    }
+    None
+}
+
+fn provider_reasoning_levels_from_value(value: &serde_json::Value) -> Vec<String> {
+    for pointer in [
+        "/reasoning/efforts",
+        "/reasoning/levels",
+        "/reasoning_efforts",
+        "/reasoning_levels",
+        "/supported_reasoning_efforts",
+        "/supported_reasoning_levels",
+        "/capabilities/reasoning_efforts",
+        "/capabilities/reasoning_levels",
+    ] {
+        if let Some(levels) = value.pointer(pointer).and_then(serde_json::Value::as_array) {
+            let levels = levels
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .filter(|level| !level.trim().is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            if !levels.is_empty() {
+                return dedupe_provider_strings(levels);
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn dedupe_provider_strings(values: Vec<String>) -> Vec<String> {
+    let mut deduped = Vec::new();
+    for value in values {
+        if !deduped.iter().any(|existing| existing == &value) {
+            deduped.push(value);
+        }
+    }
+    deduped
+}
+
 /// Failure to resolve a configured provider API compatibility.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderApiCompatibilityError {
@@ -346,5 +594,37 @@ mod tests {
         assert_eq!(catalog.provider, "provider");
         assert_eq!(catalog.models[0].context_window_tokens, Some(128_000));
         assert_eq!(catalog.models[0].capabilities, ["tool_use"]);
+    }
+
+    #[test]
+    /// Verifies OpenAI-compatible model catalogs preserve provider metadata,
+    /// apply agent-owned reasoning defaults, and use caller-supplied context
+    /// knowledge only when the response omits an explicit limit.
+    fn openai_models_catalog_parser_extracts_models_and_reasoning_levels() {
+        let models = super::parse_openai_models_http_body_with(
+            r#"{"object":"list","data":[{"id":"gpt-5.5"},{"id":"gpt-custom","display_name":"Custom","reasoning":{"efforts":["tiny","large"]},"context_length":262144},{"id":"lmstudio-local","capabilities":["tool_use"],"structured_output":true}]}"#,
+            |model| (model == "gpt-5.5").then_some(1_050_000),
+        )
+        .unwrap();
+
+        assert_eq!(models.len(), 3);
+        let custom = models
+            .iter()
+            .find(|model| model.id == "gpt-custom")
+            .unwrap();
+        assert_eq!(custom.display_name.as_deref(), Some("Custom"));
+        assert_eq!(custom.reasoning_levels, ["tiny", "large"]);
+        assert_eq!(custom.context_window_tokens, Some(262_144));
+        let local = models
+            .iter()
+            .find(|model| model.id == "lmstudio-local")
+            .unwrap();
+        assert_eq!(local.capabilities, ["tool_use", "structured_output"]);
+        let defaulted = models.iter().find(|model| model.id == "gpt-5.5").unwrap();
+        assert_eq!(
+            defaulted.reasoning_levels,
+            ["low", "medium", "high", "xhigh"]
+        );
+        assert_eq!(defaulted.context_window_tokens, Some(1_050_000));
     }
 }

@@ -120,6 +120,12 @@ impl From<mez_agent::SseParseError> for MezError {
     }
 }
 
+impl From<mez_agent::ProviderModelCatalogParseError> for MezError {
+    fn from(error: mez_agent::ProviderModelCatalogParseError) -> Self {
+        Self::invalid_state(error.message())
+    }
+}
+
 impl From<mez_mux::MuxError> for MezError {
     fn from(error: mez_mux::MuxError) -> Self {
         match error.kind() {
