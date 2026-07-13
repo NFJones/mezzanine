@@ -7,7 +7,6 @@
 use super::errors::openai_provider_failure_event_json;
 use super::schema::OpenAiMaapToolSurface;
 use super::{ModelTokenUsage, OPENAI_MAAP_FUNCTION_TOOL_NAME};
-use crate::error::Result;
 use mez_agent::{
     DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, ProviderResponseError, ProviderResponseResult,
     parse_sse_events_with,
@@ -22,11 +21,11 @@ pub(super) fn parse_openai_responses_provider_body(
     body: &str,
     fallback_model: &str,
     stream: bool,
-) -> Result<(String, String, ModelTokenUsage)> {
+) -> ProviderResponseResult<(String, String, ModelTokenUsage)> {
     if stream {
-        parse_openai_responses_stream_body(body, fallback_model).map_err(Into::into)
+        parse_openai_responses_stream_body(body, fallback_model)
     } else {
-        parse_openai_responses_http_body(body, fallback_model).map_err(Into::into)
+        parse_openai_responses_http_body(body, fallback_model)
     }
 }
 
