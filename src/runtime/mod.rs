@@ -151,10 +151,8 @@ use crate::terminal::{
     PasteBuffers, RenderedClientView, TerminalClientLoopAction, TerminalClientLoopConfig,
     TerminalCursorStyle, TerminalFrameContext, TerminalOscEvent, TerminalScreen, UiTheme,
     UiThemeDefinition, WindowFrameAction, agent_prompt_reserved_line_count,
-    builtin_ui_theme_definition, pane_border_cells_for_geometries, pane_content_size_for_geometry,
-    pane_frame_merges_into_divider, pane_render_region_size_for_geometry,
-    render_attached_client_view, rendered_pane_geometries, rendered_window_body_size,
-    resolve_ui_theme, route_client_input_actions, valid_color_alias_name,
+    builtin_ui_theme_definition, pane_border_cells_for_geometries, render_attached_client_view,
+    rendered_pane_geometries, resolve_ui_theme, route_client_input_actions, valid_color_alias_name,
     window_frame_action_pillbox_cells, window_frame_pillbox_cells,
 };
 use crate::transcript::{

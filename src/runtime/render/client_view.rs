@@ -485,7 +485,7 @@ impl RuntimeSessionService {
                 .max(1),
         )
         .ok()?;
-        let body_size = rendered_window_body_size(display_size, window_frame_visible).ok()?;
+        let body_size = rendered_window_body_size(display_size, window_frame_visible);
         let geometries = if let Some(zoomed) = window.zoomed_pane_id() {
             let pane = window.panes().iter().find(|pane| &pane.id == zoomed)?;
             vec![mez_mux::layout::PaneGeometry {
@@ -501,14 +501,13 @@ impl RuntimeSessionService {
         let geometry = geometries
             .iter()
             .find(|geometry| geometry.index == pane_index)?;
-        let render_region = pane_render_region_size_for_geometry(geometry, &geometries).ok()?;
+        let render_region = pane_render_region_size_for_geometry(geometry, &geometries);
         let full_content_size = pane_content_size_for_geometry(
             geometry,
             &geometries,
             self.pane_frames_enabled,
             self.pane_frame_position,
-        )
-        .ok()?;
+        );
         let window_top_offset = usize::from(
             window_frame_visible && self.window_frame_position == TerminalFramePosition::Top,
         );

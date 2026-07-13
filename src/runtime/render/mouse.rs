@@ -1235,7 +1235,7 @@ impl RuntimeSessionService {
         let body_row = row.checked_sub(window_frame_top_offset)?;
         let geometries = rendered_pane_geometries(&display_window, window_frame_visible).ok()?;
         for geometry in &geometries {
-            let region_size = pane_render_region_size_for_geometry(geometry, &geometries).ok()?;
+            let region_size = pane_render_region_size_for_geometry(geometry, &geometries);
             let row_end = geometry.row.saturating_add(region_size.rows);
             let column_end = geometry.column.saturating_add(region_size.columns);
             if body_row < geometry.row

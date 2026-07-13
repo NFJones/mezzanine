@@ -4106,7 +4106,7 @@ impl RuntimeSessionService {
             .panes()
             .iter()
             .find(|pane| pane.id.as_str() == pane_id)?;
-        let body_size = rendered_window_body_size(window.size, self.window_frames_enabled).ok()?;
+        let body_size = rendered_window_body_size(window.size, self.window_frames_enabled);
         let geometries = if window.zoomed_pane_id() == Some(&pane.id) {
             vec![PaneGeometry {
                 index: pane.index,
@@ -4121,14 +4121,15 @@ impl RuntimeSessionService {
         let geometry = geometries
             .iter()
             .find(|geometry| geometry.index == pane.index)?;
-        pane_content_size_for_geometry(
-            geometry,
-            &geometries,
-            self.pane_frames_enabled,
-            self.pane_frame_position,
-        )
-        .ok()
-        .map(|size| usize::from(size.columns))
+        Some(usize::from(
+            pane_content_size_for_geometry(
+                geometry,
+                &geometries,
+                self.pane_frames_enabled,
+                self.pane_frame_position,
+            )
+            .columns,
+        ))
     }
 
     /// Returns the pane width to persist with one agent presentation entry.

@@ -147,12 +147,11 @@ pub use render::{
     compose_prompt_region_presentation_with_styles, compose_readline_prompt_client_presentation,
     draw_window_from_screens, max_viewport_column, max_viewport_row,
     modal_display_overlay_max_scroll, modal_display_overlay_page_rows,
-    pane_border_cells_for_geometries, pane_content_size_for_geometry,
-    pane_frame_agent_status_pillbox_cells, pane_frame_merges_into_divider,
-    pane_render_region_size_for_geometry, render_attached_client_view,
-    render_readline_prompt_status_row, render_window, render_window_with_pane_frame_template,
-    rendered_pane_geometries, rendered_window_body_size, window_frame_action_pillbox_cells,
-    window_frame_pillbox_cells, window_group_frame_pillbox_cells,
+    pane_border_cells_for_geometries, pane_frame_agent_status_pillbox_cells,
+    render_attached_client_view, render_readline_prompt_status_row, render_window,
+    render_window_with_pane_frame_template, rendered_pane_geometries,
+    window_frame_action_pillbox_cells, window_frame_pillbox_cells,
+    window_group_frame_pillbox_cells,
 };
 pub(crate) use screen::parse_mez_shell_transaction_osc;
 

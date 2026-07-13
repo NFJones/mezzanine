@@ -10,6 +10,7 @@ mod startup;
 mod transactions;
 
 use layout::terminal_clipboard_policy_accepts_osc52;
+use mez_mux::presentation::{pane_content_size_for_geometry, rendered_window_body_size};
 
 use super::{
     ActionContentBlock, ActionResult, ActionStatus, ActivePanePipe, AgentId, AgentTurnRecord,
@@ -26,8 +27,7 @@ use super::{
     action_result_context_content, current_unix_millis, current_unix_seconds,
     decode_shell_output_transport_with_diagnostics, focused_shell_pre_action_timeout_result,
     hook_execution_audit_record, json_escape, local_action_plan, optional_i32_json,
-    pane_content_size_for_geometry, pane_environment_with_term,
-    postprocess_shell_action_success_output, rendered_window_body_size,
+    pane_environment_with_term, postprocess_shell_action_success_output,
     runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
     runtime_execution_ready_for_provider_continuation, runtime_hook_event_name,
     runtime_hook_execution_status_name, runtime_marker_for_action,
@@ -1161,7 +1161,7 @@ impl RuntimeSessionService {
         )
         .ok()?;
         if window.zoomed_pane_id() == Some(&pane.id) {
-            let body_size = rendered_window_body_size(display_size, window_frame_visible).ok()?;
+            let body_size = rendered_window_body_size(display_size, window_frame_visible);
             let geometry = mez_mux::layout::PaneGeometry {
                 index: pane.index,
                 column: 0,
@@ -1174,8 +1174,7 @@ impl RuntimeSessionService {
                 std::slice::from_ref(&geometry),
                 self.pane_frames_enabled,
                 self.pane_frame_position,
-            )
-            .ok()?;
+            );
             return Some(
                 self.pane_process_size_after_agent_prompt_reservation(
                     pane.id.as_str(),
@@ -1184,7 +1183,7 @@ impl RuntimeSessionService {
             );
         }
 
-        let body_size = rendered_window_body_size(display_size, window_frame_visible).ok()?;
+        let body_size = rendered_window_body_size(display_size, window_frame_visible);
         let geometries = window.pane_geometries_for_size(body_size);
         let geometry = geometries
             .iter()
@@ -1194,8 +1193,7 @@ impl RuntimeSessionService {
             &geometries,
             self.pane_frames_enabled,
             self.pane_frame_position,
-        )
-        .ok()?;
+        );
         Some(self.pane_process_size_after_agent_prompt_reservation(pane.id.as_str(), content_size))
     }
 

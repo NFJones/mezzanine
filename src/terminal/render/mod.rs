@@ -59,7 +59,7 @@ pub(super) use overlay::{
 pub use panes::{
     draw_styled_window_from_screens, draw_window_from_screens, pane_content_size_for_geometry,
     pane_render_region_size_for_geometry, render_window, render_window_with_pane_frame_template,
-    rendered_pane_geometries, rendered_window_body_size,
+    rendered_pane_geometries,
 };
 use panes::{window_body_size, zoomed_pane_geometry};
 pub(crate) use prompt::agent_prompt_input_rendition;

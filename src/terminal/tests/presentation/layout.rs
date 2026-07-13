@@ -8,13 +8,12 @@ use crate::terminal::{
     RenderedClientView, Size, TerminalClientLoopConfig, TerminalCursorStyle, TerminalFrameContext,
     TerminalFrameRenderOptions, TerminalPaneFrameContext, TerminalScreen, UiTheme, Window,
     apply_client_view_offset, compose_client_presentation, draw_window_from_screens,
-    pane_render_region_size_for_geometry, render_attached_client_view, render_window,
-    render_window_with_pane_frame_template,
+    render_attached_client_view, render_window, render_window_with_pane_frame_template,
 };
 use mez_mux::layout::{PaneGeometry, SplitDirection};
 use mez_mux::presentation::{
     TerminalFramePosition, TerminalWindowFrameContext, TerminalWindowGroupFrameContext,
-    TerminalWindowStatusContext,
+    TerminalWindowStatusContext, pane_render_region_size_for_geometry,
 };
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 use unicode_width::UnicodeWidthStr;
@@ -105,7 +104,7 @@ fn pane_render_region_reserves_right_divider_for_even_vertical_split() {
     ];
 
     assert_eq!(
-        pane_render_region_size_for_geometry(&geometries[0], &geometries).unwrap(),
+        pane_render_region_size_for_geometry(&geometries[0], &geometries),
         Size::new(4, 3).unwrap()
     );
 }
@@ -135,7 +134,7 @@ fn pane_render_region_reserves_right_divider_for_odd_vertical_split() {
     ];
 
     assert_eq!(
-        pane_render_region_size_for_geometry(&geometries[0], &geometries).unwrap(),
+        pane_render_region_size_for_geometry(&geometries[0], &geometries),
         Size::new(5, 3).unwrap()
     );
 }
