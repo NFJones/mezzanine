@@ -507,11 +507,8 @@ pub(super) fn render_panes_by_geometry(
     let columns = usize::from(size.columns);
     let mut canvas = blank_render_cells(rows, columns, ' ');
 
-    for (placement_index, placement) in pane_canvas_placements(size, geometries)
-        .into_iter()
-        .enumerate()
-    {
-        let Some(pane) = rendered_panes.get(placement_index) else {
+    for placement in pane_canvas_placements(size, geometries) {
+        let Some(pane) = rendered_panes.get(placement.source_index) else {
             continue;
         };
         for row_offset in 0..placement.pane_rows {
@@ -557,11 +554,8 @@ pub(super) fn render_styled_panes_by_geometry(
     let mut text_canvas = blank_render_cells(rows, columns, ' ');
     let mut style_canvas = vec![Vec::new(); rows];
 
-    for (placement_index, placement) in pane_canvas_placements(size, geometries)
-        .into_iter()
-        .enumerate()
-    {
-        let Some(pane) = rendered_panes.get(placement_index) else {
+    for placement in pane_canvas_placements(size, geometries) {
+        let Some(pane) = rendered_panes.get(placement.source_index) else {
             continue;
         };
         for row_offset in 0..placement.pane_rows {

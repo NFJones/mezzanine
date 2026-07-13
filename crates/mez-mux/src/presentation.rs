@@ -308,6 +308,8 @@ pub fn merged_pane_frame_placements(
 /// Bounded destination for one rendered pane inside a window-body canvas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PaneCanvasPlacement {
+    /// Index of the pane's geometry in the source geometry slice.
+    pub source_index: usize,
     /// First destination row in the window body canvas.
     pub row_start: usize,
     /// First destination column in the window body canvas.
@@ -326,7 +328,7 @@ pub fn pane_canvas_placements(
     let rows = usize::from(size.rows);
     let columns = usize::from(size.columns);
     let mut placements = Vec::with_capacity(geometries.len());
-    for geometry in geometries {
+    for (source_index, geometry) in geometries.iter().enumerate() {
         let row_start = usize::from(geometry.row);
         let column_start = usize::from(geometry.column);
         if row_start >= rows || column_start >= columns {
@@ -334,6 +336,7 @@ pub fn pane_canvas_placements(
         }
         let region_size = pane_render_region_size_for_geometry(geometry, geometries);
         placements.push(PaneCanvasPlacement {
+            source_index,
             row_start,
             column_start,
             pane_rows: usize::from(region_size.rows).min(rows.saturating_sub(row_start)),
@@ -737,18 +740,47 @@ mod tests {
             pane_canvas_placements(TerminalSize::new(15, 4).unwrap(), &geometries),
             [
                 super::PaneCanvasPlacement {
+                    source_index: 0,
                     row_start: 0,
                     column_start: 0,
                     pane_rows: 4,
                     pane_columns: 9,
                 },
                 super::PaneCanvasPlacement {
+                    source_index: 1,
                     row_start: 0,
                     column_start: 10,
                     pane_rows: 4,
                     pane_columns: 5,
                 },
             ]
+        );
+
+        let clipped_then_visible = [
+            PaneGeometry {
+                index: 0,
+                column: 20,
+                row: 0,
+                columns: 5,
+                rows: 4,
+            },
+            PaneGeometry {
+                index: 1,
+                column: 0,
+                row: 0,
+                columns: 5,
+                rows: 4,
+            },
+        ];
+        assert_eq!(
+            pane_canvas_placements(TerminalSize::new(15, 4).unwrap(), &clipped_then_visible,),
+            [super::PaneCanvasPlacement {
+                source_index: 1,
+                row_start: 0,
+                column_start: 0,
+                pane_rows: 4,
+                pane_columns: 5,
+            }]
         );
     }
 
