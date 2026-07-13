@@ -59,6 +59,13 @@ pub use http::{
     AsyncProviderHttpTransport, DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS,
     ProviderHttpRequest, ProviderHttpResponse, ReqwestProviderHttpTransport,
 };
+#[cfg(test)]
+use mez_agent::ANTHROPIC_MESSAGES_API;
+use mez_agent::resolve_provider_api;
+pub use mez_agent::{
+    CLAUDE_CODE_API, DEEPSEEK_CHAT_COMPLETIONS_API, OPENAI_CHAT_COMPLETIONS_API,
+    OPENAI_RESPONSES_API, ProviderApiCompatibility,
+};
 pub use mez_agent::{ProviderQuotaUsage, provider_quota_usage_from_headers};
 use openai_chat_completions::OpenAiChatCompletionsDialect;
 pub use openai_request::openai_responses_request_body;
@@ -99,83 +106,9 @@ pub const DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME: &str = "mez_respond";
 /// DeepSeek shim function tool name used for executable action turns.
 pub const DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME: &str = "mez_take_actions";
 
-/// API compatibility id for providers that speak the OpenAI Responses API.
-pub const OPENAI_RESPONSES_API: &str = "openai-responses";
-/// API compatibility id for providers that speak OpenAI-style Chat Completions.
-pub const OPENAI_CHAT_COMPLETIONS_API: &str = "openai-chat-completions";
-/// API compatibility id for the DeepSeek Chat Completions dialect.
-pub const DEEPSEEK_CHAT_COMPLETIONS_API: &str = "deepseek-chat-completions";
-/// API compatibility id for the Anthropic Messages API.
-pub const ANTHROPIC_MESSAGES_API: &str = "anthropic-messages";
-/// API compatibility id for the Claude Code subprocess adapter.
-pub const CLAUDE_CODE_API: &str = "claude-code";
-
-/// Wire API compatibility selected for one configured provider.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderApiCompatibility {
-    /// OpenAI Responses request, response, model-catalog, and MAAP tool shape.
-    OpenAiResponses,
-    /// OpenAI-compatible Chat Completions request and response shape.
-    OpenAiChatCompletions,
-    /// DeepSeek Chat Completions dialect with native thinking and shim tools.
-    DeepSeekChatCompletions,
-    /// Anthropic Messages request, response, and tool-use shape.
-    AnthropicMessages,
-    /// Claude Code subprocess request and response shape.
-    ClaudeCode,
-}
-
-impl ProviderApiCompatibility {
-    /// Returns the stable configuration identifier for this compatibility.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::OpenAiResponses => OPENAI_RESPONSES_API,
-            Self::OpenAiChatCompletions => OPENAI_CHAT_COMPLETIONS_API,
-            Self::DeepSeekChatCompletions => DEEPSEEK_CHAT_COMPLETIONS_API,
-            Self::AnthropicMessages => ANTHROPIC_MESSAGES_API,
-            Self::ClaudeCode => CLAUDE_CODE_API,
-        }
-    }
-
-    /// Parses a stable API compatibility identifier.
-    pub fn from_id(api: &str) -> Option<Self> {
-        match api {
-            OPENAI_RESPONSES_API => Some(Self::OpenAiResponses),
-            OPENAI_CHAT_COMPLETIONS_API => Some(Self::OpenAiChatCompletions),
-            DEEPSEEK_CHAT_COMPLETIONS_API => Some(Self::DeepSeekChatCompletions),
-            ANTHROPIC_MESSAGES_API => Some(Self::AnthropicMessages),
-            CLAUDE_CODE_API => Some(Self::ClaudeCode),
-            _ => None,
-        }
-    }
-
-    /// Returns the compatibility historically implied by one provider kind.
-    pub fn default_for_kind(kind: &str) -> Option<Self> {
-        match kind {
-            "openai" => Some(Self::OpenAiResponses),
-            "openai-compatible" => Some(Self::OpenAiChatCompletions),
-            "deepseek" => Some(Self::DeepSeekChatCompletions),
-            "anthropic" => Some(Self::AnthropicMessages),
-            "claude-code" => Some(Self::ClaudeCode),
-            _ => None,
-        }
-    }
-}
-
 /// Resolves an optional configured API id against one provider kind.
 pub fn effective_provider_api(kind: &str, api: Option<&str>) -> Result<ProviderApiCompatibility> {
-    match api.map(str::trim).filter(|api| !api.is_empty()) {
-        Some(api) => ProviderApiCompatibility::from_id(api).ok_or_else(|| {
-            MezError::config(format!(
-                "unsupported provider API compatibility `{api}`; use {OPENAI_RESPONSES_API}, {OPENAI_CHAT_COMPLETIONS_API}, {DEEPSEEK_CHAT_COMPLETIONS_API}, {ANTHROPIC_MESSAGES_API}, or {CLAUDE_CODE_API}"
-            ))
-        }),
-        None => ProviderApiCompatibility::default_for_kind(kind).ok_or_else(|| {
-            MezError::config(format!(
-                "providers using kind `{kind}` must configure an api compatibility id"
-            ))
-        }),
-    }
+    resolve_provider_api(kind, api).map_err(|error| MezError::config(error.to_string()))
 }
 /// Stable provider/model identity for token-cost accounting.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

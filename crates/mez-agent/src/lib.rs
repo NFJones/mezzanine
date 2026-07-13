@@ -14,11 +14,18 @@ pub mod instructions;
 pub mod mcp;
 /// Provider-neutral prompt profile contracts.
 pub mod prompt;
+/// Provider-neutral API compatibility contracts.
+pub mod provider;
 /// Dependency-neutral provider quota accounting contracts.
 pub mod quota;
 
 pub use mcp::{McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer};
 pub use prompt::{AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptProfile};
+pub use provider::{
+    ANTHROPIC_MESSAGES_API, CLAUDE_CODE_API, DEEPSEEK_CHAT_COMPLETIONS_API,
+    OPENAI_CHAT_COMPLETIONS_API, OPENAI_RESPONSES_API, ProviderApiCompatibility,
+    ProviderApiCompatibilityError, resolve_provider_api,
+};
 pub use quota::{ProviderQuotaUsage, provider_quota_usage_from_headers};
 
 /// Maximum number of issue records a model-authored query may request.
