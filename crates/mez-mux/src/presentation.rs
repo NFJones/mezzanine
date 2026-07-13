@@ -273,6 +273,38 @@ pub fn pane_frame_row_for_geometry(
     })
 }
 
+/// Bounded destination for one pane frame rendered on a shared divider row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MergedPaneFramePlacement {
+    /// Pane index in the owning window.
+    pub pane_index: usize,
+    /// Destination row in the window body canvas.
+    pub row: usize,
+    /// First destination column in the window body canvas.
+    pub column_start: usize,
+    /// Maximum number of terminal cells available to the frame.
+    pub width: usize,
+}
+
+/// Computes pane-frame placements that occupy shared horizontal dividers.
+pub fn merged_pane_frame_placements(
+    geometries: &[PaneGeometry],
+    position: TerminalFramePosition,
+) -> Vec<MergedPaneFramePlacement> {
+    geometries
+        .iter()
+        .filter(|geometry| pane_frame_merges_into_divider(geometry, geometries, position))
+        .map(|geometry| MergedPaneFramePlacement {
+            pane_index: geometry.index,
+            row: usize::from(pane_frame_row_for_geometry(
+                geometry, geometries, position, 0,
+            )),
+            column_start: usize::from(geometry.column),
+            width: usize::from(pane_render_region_size_for_geometry(geometry, geometries).columns),
+        })
+        .collect()
+}
+
 /// Bounded destination for one rendered pane inside a window-body canvas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PaneCanvasPlacement {
@@ -778,6 +810,15 @@ mod tests {
                 2,
             ),
             11
+        );
+        assert_eq!(
+            super::merged_pane_frame_placements(&geometries, TerminalFramePosition::Top),
+            vec![super::MergedPaneFramePlacement {
+                pane_index: 1,
+                row: 4,
+                column_start: 0,
+                width: 19,
+            }]
         );
     }
 

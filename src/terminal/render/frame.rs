@@ -2277,37 +2277,25 @@ pub(super) fn write_merged_pane_frames_on_dividers(
     frame_context: &TerminalFrameContext,
     pane_frame: TerminalFrameRenderOptions<'_>,
 ) {
-    for geometry in geometries {
-        if !pane_frame.enabled
-            || !pane_frame_merges_into_divider(geometry, geometries, pane_frame.position)
-        {
-            continue;
-        }
+    if !pane_frame.enabled {
+        return;
+    }
+    for placement in
+        mez_mux::presentation::merged_pane_frame_placements(geometries, pane_frame.position)
+    {
         let pane = window
             .panes()
             .iter()
-            .find(|pane| pane.index == geometry.index)
+            .find(|pane| pane.index == placement.pane_index)
             .unwrap_or_else(|| window.active_pane());
-        let row = match pane_frame.position {
-            TerminalFramePosition::Top => geometry.row.saturating_sub(1),
-            TerminalFramePosition::Bottom => {
-                geometry.row.saturating_add(geometry.rows).saturating_sub(1)
-            }
-        };
-        let line = canvas.get_mut(usize::from(row));
+        let line = canvas.get_mut(placement.row);
         let Some(line) = line else {
             continue;
         };
-        let column_start = usize::from(geometry.column);
-        let width = usize::from(
-            pane_render_region_size_for_geometry(geometry, geometries)
-                .map(|s| s.columns)
-                .unwrap_or(geometry.columns),
-        );
         write_pane_frame_layout_cells(
             line,
-            column_start,
-            width,
+            placement.column_start,
+            placement.width,
             window,
             pane,
             frame_context,
@@ -2330,61 +2318,49 @@ pub(super) fn write_styled_merged_pane_frames_on_dividers(
     pane_frame: TerminalFrameRenderOptions<'_>,
     ui_theme: &UiTheme,
 ) {
-    for geometry in geometries {
-        if !pane_frame.enabled
-            || !pane_frame_merges_into_divider(geometry, geometries, pane_frame.position)
-        {
-            continue;
-        }
+    if !pane_frame.enabled {
+        return;
+    }
+    for placement in
+        mez_mux::presentation::merged_pane_frame_placements(geometries, pane_frame.position)
+    {
         let pane = window
             .panes()
             .iter()
-            .find(|pane| pane.index == geometry.index)
+            .find(|pane| pane.index == placement.pane_index)
             .unwrap_or_else(|| window.active_pane());
-        let row = match pane_frame.position {
-            TerminalFramePosition::Top => geometry.row.saturating_sub(1),
-            TerminalFramePosition::Bottom => {
-                geometry.row.saturating_add(geometry.rows).saturating_sub(1)
-            }
-        };
-        let line = text_canvas.get_mut(usize::from(row));
+        let line = text_canvas.get_mut(placement.row);
         let Some(line) = line else {
             continue;
         };
-        let column_start = usize::from(geometry.column);
-        let width = usize::from(
-            pane_render_region_size_for_geometry(geometry, geometries)
-                .map(|s| s.columns)
-                .unwrap_or(geometry.columns),
-        );
         let layout = write_pane_frame_layout_cells(
             line,
-            column_start,
-            width,
+            placement.column_start,
+            placement.width,
             window,
             pane,
             frame_context,
             pane_frame.template,
         );
-        if let Some(spans) = style_canvas.get_mut(usize::from(row)) {
+        if let Some(spans) = style_canvas.get_mut(placement.row) {
             if layout.left_text_width > 0 {
                 spans.push(TerminalStyleSpan {
-                    start: column_start,
+                    start: placement.column_start,
                     length: layout.left_text_width,
                     rendition: pane_frame_rendition(pane, pane_frame.style, ui_theme),
                 });
             }
             spans.extend(pane_frame_right_status_style_spans(
                 &layout,
-                column_start,
+                placement.column_start,
                 frame_context,
                 ui_theme,
             ));
             spans.extend(merged_pane_frame_boundary_style_spans(
                 geometries,
-                row,
-                column_start,
-                width,
+                u16::try_from(placement.row).unwrap_or(u16::MAX),
+                placement.column_start,
+                placement.width,
                 ui_theme,
             ));
         }
