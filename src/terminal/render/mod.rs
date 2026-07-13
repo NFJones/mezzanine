@@ -35,15 +35,15 @@ pub use dividers::{pane_border_cells_for_geometries, pane_frame_merges_into_divi
 use frame::{
     AGENT_STATUS_SCAN_BAND_WIDTH, agent_display_overlay_targets, group_frame_text,
     pane_agent_prompt_space_reserved, pane_agent_prompt_transparent, pane_agent_shell_visible,
-    pane_border_rendition, place_group_frame, place_window_frame, render_pane_lines,
-    render_styled_pane_lines, render_window_frame_text, styled_group_frame_line,
-    styled_window_frame_line, write_merged_pane_frames_on_dividers,
+    pane_border_rendition, render_pane_lines, render_styled_pane_lines, render_window_frame_text,
+    styled_group_frame_line, styled_window_frame_line, write_merged_pane_frames_on_dividers,
     write_styled_merged_pane_frames_on_dividers,
 };
 pub use frame::{
     pane_frame_agent_status_pillbox_cells, window_frame_action_pillbox_cells,
     window_frame_pillbox_cells, window_group_frame_pillbox_cells,
 };
+use mez_mux::presentation::{place_group_frame, place_window_frame};
 pub use overlay::{
     compose_display_overlay_line_style_spans, compose_display_overlay_lines,
     compose_modal_display_overlay_line_style_spans, compose_modal_display_overlay_lines,

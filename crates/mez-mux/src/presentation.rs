@@ -131,6 +131,38 @@ pub enum TerminalFramePosition {
     Bottom,
 }
 
+/// Places a one-row frame within an authoritative terminal region.
+///
+/// Top frames are inserted before body content, while bottom frames replace
+/// the final available row. In both cases the result is clipped to the
+/// authoritative row count.
+pub fn place_window_frame<T>(
+    lines: &mut Vec<T>,
+    frame: T,
+    position: TerminalFramePosition,
+    authoritative_rows: u16,
+) {
+    let rows = usize::from(authoritative_rows);
+    match position {
+        TerminalFramePosition::Top => {
+            lines.insert(0, frame);
+            lines.truncate(rows);
+        }
+        TerminalFramePosition::Bottom => {
+            lines.truncate(rows.saturating_sub(1));
+            lines.push(frame);
+            lines.truncate(rows);
+        }
+    }
+}
+
+/// Places a conditional top window-group frame above rendered window rows.
+pub fn place_group_frame<T>(lines: &mut Vec<T>, frame: T, authoritative_rows: u16) {
+    let rows = usize::from(authoritative_rows);
+    lines.insert(0, frame);
+    lines.truncate(rows);
+}
+
 /// Returns whether a pane frame should occupy an adjacent shared divider row.
 ///
 /// Top frames merge into a horizontal divider immediately above the pane;
@@ -447,7 +479,7 @@ mod tests {
 
     use super::{
         TerminalFramePosition, TerminalFrameStyle, pane_divider_cells, pane_divider_glyph,
-        pane_frame_merges_into_divider,
+        pane_frame_merges_into_divider, place_group_frame, place_window_frame,
     };
 
     /// Verifies neutral frame contracts retain the product's established
@@ -456,6 +488,23 @@ mod tests {
     fn frame_contract_defaults_remain_stable() {
         assert_eq!(TerminalFramePosition::default(), TerminalFramePosition::Top);
         assert_eq!(TerminalFrameStyle::default(), TerminalFrameStyle::Default);
+    }
+
+    /// Verifies mux-owned frame placement preserves authoritative viewport
+    /// height for top, bottom, and conditional group frame rows.
+    #[test]
+    fn frame_rows_are_placed_within_authoritative_height() {
+        let mut top = vec!["body-1", "body-2", "body-3"];
+        place_window_frame(&mut top, "frame", TerminalFramePosition::Top, 3);
+        assert_eq!(top, ["frame", "body-1", "body-2"]);
+
+        let mut bottom = vec!["body-1", "body-2", "body-3"];
+        place_window_frame(&mut bottom, "frame", TerminalFramePosition::Bottom, 3);
+        assert_eq!(bottom, ["body-1", "body-2", "frame"]);
+
+        let mut group = vec!["body-1", "body-2", "body-3"];
+        place_group_frame(&mut group, "group", 3);
+        assert_eq!(group, ["group", "body-1", "body-2"]);
     }
 
     /// Verifies pane-frame placement consumes shared split geometry without

@@ -7,38 +7,6 @@
 
 use super::*;
 
-/// Runs the place window frame operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn place_window_frame<T>(
-    lines: &mut Vec<T>,
-    frame: T,
-    position: TerminalFramePosition,
-    authoritative_rows: u16,
-) {
-    let rows = usize::from(authoritative_rows);
-    match position {
-        TerminalFramePosition::Top => {
-            lines.insert(0, frame);
-            lines.truncate(rows);
-        }
-        TerminalFramePosition::Bottom => {
-            lines.truncate(rows.saturating_sub(1));
-            lines.push(frame);
-            lines.truncate(rows);
-        }
-    }
-}
-
-/// Places the conditional top window-group frame above the rendered window.
-pub(super) fn place_group_frame<T>(lines: &mut Vec<T>, frame: T, authoritative_rows: u16) {
-    let rows = usize::from(authoritative_rows);
-    lines.insert(0, frame);
-    lines.truncate(rows);
-}
-
 /// Renders the unstyled top group bar when more than one group exists.
 pub(super) fn group_frame_text(
     frame_context: &TerminalFrameContext,
