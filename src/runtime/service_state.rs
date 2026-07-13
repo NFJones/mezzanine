@@ -24,15 +24,15 @@ use super::{
     RuntimeSideEffect, RuntimeStatusPillCache, RuntimeStatusPillDefinition, ScopeRegistry, Session,
     SessionApprovalStore, SessionMemoryStore, SessionRecord, SessionRegistry, Size,
     SnapshotRepository, SplitDirection, SubagentProfile, SubagentScopeDeclaration,
-    TerminalCursorStyle, TerminalFramePosition, TerminalFrameStyle, TerminalScreen,
-    ToolDiscoveryCache, UiTheme, WindowFrameAction, WindowId, execute_streamable_http_exchange,
-    mcp_tools_call_operation,
+    TerminalCursorStyle, TerminalScreen, ToolDiscoveryCache, UiTheme, WindowFrameAction, WindowId,
+    execute_streamable_http_exchange, mcp_tools_call_operation,
 };
 use crate::error::MezErrorKind;
 use crate::layout::PaneTitleSource;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
 use crate::runtime::record_browser::RuntimeRecordBrowser;
 use crate::terminal::{CopyPosition, PaneAgentStatusField, TerminalEmojiWidth};
+use mez_mux::presentation::{TerminalFramePosition, TerminalFrameStyle};
 use mez_terminal::TerminalStyleSpan;
 use secrecy::ExposeSecret;
 

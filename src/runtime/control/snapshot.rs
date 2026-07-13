@@ -10,8 +10,9 @@ use super::super::{
     BlockedApprovalState, ConfigScope, McpApprovalSetting, McpExternalCapability, McpServerKind,
     McpServerStatus, McpToolEffects, McpToolState, SnapshotApprovalGrantMetadata,
     SnapshotApprovalRequestMetadata, SnapshotMcpExternalCapability, SnapshotMcpServerState,
-    SnapshotMcpToolEffects, SnapshotMcpToolState, TerminalFramePosition, TerminalFrameStyle,
+    SnapshotMcpToolEffects, SnapshotMcpToolState,
 };
+use mez_mux::presentation::{TerminalFramePosition, TerminalFrameStyle};
 
 /// Returns the durable snapshot name for one runtime config layer scope.
 pub(super) fn runtime_snapshot_config_scope_name(scope: ConfigScope) -> &'static str {

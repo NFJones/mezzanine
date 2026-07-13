@@ -18,8 +18,7 @@ use super::{
     ReadlineInputDecoder, ReadlineOutcome, ReadlinePrompt, ReadlinePromptKind, RenderedClientView,
     Result, RuntimeAgentModifiedFileSummary, RuntimeAgentPromptInput, RuntimeSessionService,
     RuntimeSideEffect, Size, SplitDirection, TerminalClientLoopAction, TerminalClientLoopConfig,
-    TerminalFrameContext, TerminalFramePosition, TerminalPaneFrameContext, TerminalScreen,
-    TerminalWindowFrameContext, TerminalWindowStatusContext, WindowFocusTarget, WindowFrameAction,
+    TerminalFrameContext, TerminalScreen, WindowFocusTarget, WindowFrameAction,
     agent_prompt_reserved_line_count, current_unix_millis, current_unix_seconds, json_escape,
     key_chord_input_bytes, mouse_action_name, mux_action_command_prompt_prefill, mux_action_name,
     pane_border_cells_for_geometries, pane_content_size_for_geometry,
@@ -47,14 +46,18 @@ use crate::selector::{
 };
 use crate::terminal::{
     CopyPosition, GraphicRendition, GroupFocusTarget, MousePaneAgentSelectorCell,
-    MousePaneAgentStatusCell, PaneAgentStatusField, TerminalStyleSpan, TerminalStyledLine,
-    TerminalWindowGroupFrameContext, UiTheme, WindowFrameCommandKind,
-    compose_modal_display_overlay_lines, compose_prompt_overlay_presentation_with_styles,
-    modal_display_overlay_max_scroll, modal_display_overlay_page_rows,
-    pane_frame_agent_status_pillbox_cells, terminal_grapheme_width, terminal_graphemes,
-    terminal_text_width, window_group_frame_pillbox_cells,
+    MousePaneAgentStatusCell, PaneAgentStatusField, TerminalStyleSpan, TerminalStyledLine, UiTheme,
+    WindowFrameCommandKind, compose_modal_display_overlay_lines,
+    compose_prompt_overlay_presentation_with_styles, modal_display_overlay_max_scroll,
+    modal_display_overlay_page_rows, pane_frame_agent_status_pillbox_cells,
+    terminal_grapheme_width, terminal_graphemes, terminal_text_width,
+    window_group_frame_pillbox_cells,
 };
 use crate::transcript::AgentPresentationEntry;
+use mez_mux::presentation::{
+    TerminalFramePosition, TerminalPaneFrameContext, TerminalWindowFrameContext,
+    TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
+};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 mod attached_step;
