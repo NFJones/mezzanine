@@ -63,7 +63,10 @@ pub use config_change::{
     CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_SETTING_PATH_DESCRIPTION,
     CONFIG_CHANGE_VALUE_DESCRIPTION,
 };
-pub use context::{AgentContextError, AgentContextResult, validate_context_required};
+pub use context::{
+    AgentContextError, AgentContextResult, AgentRequestAssemblyError,
+    AgentRequestAssemblyErrorKind, AgentRequestAssemblyResult, validate_context_required,
+};
 pub use http::{
     DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ProviderHttpRequest,
     ProviderHttpResponse,

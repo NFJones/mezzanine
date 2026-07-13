@@ -535,6 +535,7 @@ impl RuntimeSessionService {
                     self.append_agent_trace_maap_request(&turn, &request)?;
                 }
                 Err(error) => {
+                    let error = crate::error::MezError::from(error);
                     self.append_agent_trace_turn_event(
                         &turn.pane_id,
                         &turn.turn_id,

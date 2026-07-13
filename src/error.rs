@@ -63,6 +63,19 @@ impl From<mez_agent::AgentContextError> for MezError {
     }
 }
 
+impl From<mez_agent::AgentRequestAssemblyError> for MezError {
+    fn from(error: mez_agent::AgentRequestAssemblyError) -> Self {
+        match error.kind() {
+            mez_agent::AgentRequestAssemblyErrorKind::InvalidArgs => {
+                Self::invalid_args(error.message())
+            }
+            mez_agent::AgentRequestAssemblyErrorKind::InvalidState => {
+                Self::invalid_state(error.message())
+            }
+        }
+    }
+}
+
 impl From<mez_agent::AgentPromptError> for MezError {
     fn from(error: mez_agent::AgentPromptError) -> Self {
         match error.kind() {

@@ -15,10 +15,9 @@ use super::{
     DEFAULT_MODEL_CONTEXT_RETAINED_TAIL_PERCENT, ModelInteractionKind, ModelMessage,
     ModelMessageRole, ModelProfile, ModelRequest, model_context_block_header,
 };
-use crate::error::Result;
 use mez_agent::{
-    McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer,
-    validate_context_required,
+    AgentRequestAssemblyResult, McpPromptServer, McpPromptSummary, McpPromptTool,
+    McpPromptUnavailableServer, validate_context_required,
 };
 
 /// Runs the assemble model request operation for this subsystem.
@@ -30,7 +29,7 @@ pub fn assemble_model_request(
     profile: &ModelProfile,
     turn: &AgentTurnRecord,
     context: &AgentContext,
-) -> Result<ModelRequest> {
+) -> AgentRequestAssemblyResult<ModelRequest> {
     assemble_model_request_with_retained_tail_percent(
         profile,
         turn,
@@ -49,7 +48,7 @@ pub fn assemble_model_request_with_retained_tail_percent(
     turn: &AgentTurnRecord,
     context: &AgentContext,
     _retained_tail_percent: usize,
-) -> Result<ModelRequest> {
+) -> AgentRequestAssemblyResult<ModelRequest> {
     validate_context_required("model provider", &profile.provider)?;
     validate_context_required("model", &profile.model)?;
     validate_context_required("turn_id", &turn.turn_id)?;
