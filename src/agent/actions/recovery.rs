@@ -316,14 +316,6 @@ fn capability_decision(request: &ModelRequest, capability: AgentCapability) -> C
                 "issues capability requires local issue tracking to be enabled in runtime config"
                     .to_string(),
         },
-        AgentCapability::ConfigChange => CapabilityDecision {
-            granted: true,
-            allowed_actions: AllowedActionSet::for_capability(capability)
-                .with_config_change_setting_path_description(
-                    crate::config::config_change_setting_path_description(),
-                ),
-            reason: "capability is permitted by deterministic action-surface rules".to_string(),
-        },
         _ => CapabilityDecision {
             granted: true,
             allowed_actions: AllowedActionSet::for_capability(capability),
