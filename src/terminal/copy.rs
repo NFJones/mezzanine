@@ -10,6 +10,7 @@ use super::{
     terminal_graphemes, validate_copy_position,
 };
 use crate::readline::readline_word_column_range;
+pub use mez_mux::copy::CopyPosition;
 
 // Copy mode, selection, and search primitives.
 
@@ -45,24 +46,6 @@ pub enum SearchDirection {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     Backward,
-}
-
-/// Carries Copy Position state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct CopyPosition {
-    /// Stores the line value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub line: usize,
-    /// Stores the column value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub column: usize,
 }
 
 /// Carries Copy Mode state for this subsystem.
