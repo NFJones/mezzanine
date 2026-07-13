@@ -474,7 +474,10 @@ fn agent_shell_rejects_mismatched_turn_completion() {
 
     let error = store.finish_turn("%1", "turn-2").unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert_eq!(
+        error.kind(),
+        mez_agent::AgentShellSessionErrorKind::InvalidArgs
+    );
 }
 
 #[test]

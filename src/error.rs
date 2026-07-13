@@ -75,6 +75,23 @@ impl From<mez_agent::AgentTurnLedgerError> for MezError {
     }
 }
 
+impl From<mez_agent::AgentShellSessionError> for MezError {
+    fn from(error: mez_agent::AgentShellSessionError) -> Self {
+        match error.kind() {
+            mez_agent::AgentShellSessionErrorKind::InvalidArgs => {
+                Self::invalid_args(error.message())
+            }
+            mez_agent::AgentShellSessionErrorKind::NotFound => {
+                Self::new(MezErrorKind::NotFound, error.message())
+            }
+            mez_agent::AgentShellSessionErrorKind::Conflict => Self::conflict(error.message()),
+            mez_agent::AgentShellSessionErrorKind::InvalidState => {
+                Self::invalid_state(error.message())
+            }
+        }
+    }
+}
+
 impl From<mez_mux::MuxError> for MezError {
     fn from(error: mez_mux::MuxError) -> Self {
         match error.kind() {

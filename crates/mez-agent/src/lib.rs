@@ -10,6 +10,8 @@ use std::collections::BTreeSet;
 
 /// Provider-neutral model token accounting contracts.
 pub mod accounting;
+/// Provider-independent agent-shell session error contracts.
+pub mod agent_shell;
 /// Provider authentication routing contracts.
 pub mod auth;
 /// Model-facing live configuration mutation contracts.
@@ -52,6 +54,10 @@ pub mod transcript;
 pub mod turn;
 
 pub use accounting::{AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsageKey};
+pub use agent_shell::{
+    AgentShellSessionError, AgentShellSessionErrorKind, AgentShellSessionResult,
+    validate_agent_shell_required,
+};
 pub use auth::{ProviderAuthMetadata, ProviderCredentialKind, ProviderCredentialSource};
 pub use config_change::{
     CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_SETTING_PATH_DESCRIPTION,

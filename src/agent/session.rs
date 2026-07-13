@@ -4,8 +4,11 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::{BTreeMap, MezError, Result, baseline_slash_commands, validate_non_empty};
-use mez_agent::{AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellPermissionSummary};
+use super::{BTreeMap, baseline_slash_commands};
+use mez_agent::{
+    AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellPermissionSummary,
+    AgentShellSessionError, AgentShellSessionResult, validate_agent_shell_required,
+};
 
 // Agent shell sessions, stores, and shell display helpers.
 
@@ -322,9 +325,12 @@ impl AgentShellStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn ensure_session(&mut self, pane_id: impl Into<String>) -> Result<&mut AgentShellSession> {
+    pub fn ensure_session(
+        &mut self,
+        pane_id: impl Into<String>,
+    ) -> AgentShellSessionResult<&mut AgentShellSession> {
         let pane_id = pane_id.into();
-        validate_non_empty("pane id", &pane_id)?;
+        validate_agent_shell_required("pane id", &pane_id)?;
         if !self.sessions_by_pane.contains_key(&pane_id) {
             self.sessions_by_pane.insert(
                 pane_id.clone(),
@@ -351,7 +357,10 @@ impl AgentShellStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn enter_or_resume(&mut self, pane_id: impl Into<String>) -> Result<&AgentShellSession> {
+    pub fn enter_or_resume(
+        &mut self,
+        pane_id: impl Into<String>,
+    ) -> AgentShellSessionResult<&AgentShellSession> {
         let pane_id = pane_id.into();
         let session = self.ensure_session(pane_id)?;
         session.visibility = AgentShellVisibility::Visible;
@@ -363,7 +372,7 @@ impl AgentShellStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn request_exit(&mut self, pane_id: &str) -> Result<&AgentShellSession> {
+    pub fn request_exit(&mut self, pane_id: &str) -> AgentShellSessionResult<&AgentShellSession> {
         let session = self.session_mut(pane_id)?;
         session.visibility = AgentShellVisibility::Hidden;
         Ok(session)
@@ -376,7 +385,7 @@ impl AgentShellStore {
     pub fn request_hide_pending_task_completion(
         &mut self,
         pane_id: &str,
-    ) -> Result<&AgentShellSession> {
+    ) -> AgentShellSessionResult<&AgentShellSession> {
         let session = self.session_mut(pane_id)?;
         session.visibility = AgentShellVisibility::HidePendingTaskCompletion;
         Ok(session)
@@ -387,12 +396,16 @@ impl AgentShellStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn start_turn(&mut self, pane_id: &str, turn_id: impl Into<String>) -> Result<()> {
+    pub fn start_turn(
+        &mut self,
+        pane_id: &str,
+        turn_id: impl Into<String>,
+    ) -> AgentShellSessionResult<()> {
         let turn_id = turn_id.into();
-        validate_non_empty("turn id", &turn_id)?;
+        validate_agent_shell_required("turn id", &turn_id)?;
         let session = self.session_mut(pane_id)?;
         if session.running_turn_id.is_some() {
-            return Err(MezError::conflict(
+            return Err(AgentShellSessionError::conflict(
                 "agent shell session already has a running turn",
             ));
         }
@@ -405,10 +418,14 @@ impl AgentShellStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn finish_turn(&mut self, pane_id: &str, turn_id: &str) -> Result<&AgentShellSession> {
+    pub fn finish_turn(
+        &mut self,
+        pane_id: &str,
+        turn_id: &str,
+    ) -> AgentShellSessionResult<&AgentShellSession> {
         let session = self.session_mut(pane_id)?;
         if session.running_turn_id.as_deref() != Some(turn_id) {
-            return Err(MezError::invalid_args(
+            return Err(AgentShellSessionError::invalid_args(
                 "finished turn does not match running agent shell turn",
             ));
         }
@@ -429,7 +446,7 @@ impl AgentShellStore {
         &mut self,
         pane_id: &str,
         entries: usize,
-    ) -> Result<&AgentShellSession> {
+    ) -> AgentShellSessionResult<&AgentShellSession> {
         let session = self.session_mut(pane_id)?;
         session.transcript_entries = session
             .transcript_entries
@@ -457,7 +474,7 @@ impl AgentShellStore {
         &mut self,
         pane_id: &str,
         entries: u64,
-    ) -> Result<&AgentShellSession> {
+    ) -> AgentShellSessionResult<&AgentShellSession> {
         let session = self.session_mut(pane_id)?;
         session.transcript_entries = entries;
         Ok(session)
@@ -473,7 +490,7 @@ impl AgentShellStore {
         pane_id: &str,
         conversation_id: impl Into<String>,
         transcript_entries: u64,
-    ) -> Result<&AgentShellSession> {
+    ) -> AgentShellSessionResult<&AgentShellSession> {
         self.bind_conversation_with_lineage(pane_id, conversation_id, transcript_entries, None)
     }
 
@@ -485,7 +502,7 @@ impl AgentShellStore {
         conversation_id: impl Into<String>,
         transcript_entries: u64,
         prompt_cache_lineage_id: Option<String>,
-    ) -> Result<&AgentShellSession> {
+    ) -> AgentShellSessionResult<&AgentShellSession> {
         self.bind_conversation_with_lineage_and_persistence(
             pane_id,
             conversation_id,
@@ -508,7 +525,7 @@ impl AgentShellStore {
         conversation_id: impl Into<String>,
         transcript_entries: u64,
         prompt_cache_lineage_id: Option<String>,
-    ) -> Result<&AgentShellSession> {
+    ) -> AgentShellSessionResult<&AgentShellSession> {
         self.bind_ephemeral_conversation_with_lineage_and_transcript_source(
             pane_id,
             conversation_id,
@@ -529,7 +546,7 @@ impl AgentShellStore {
         prompt_cache_lineage_id: Option<String>,
         transcript_source_conversation_id: Option<String>,
         transcript_source_entries: u64,
-    ) -> Result<&AgentShellSession> {
+    ) -> AgentShellSessionResult<&AgentShellSession> {
         self.bind_conversation_with_lineage_and_persistence(
             pane_id,
             conversation_id,
@@ -551,22 +568,25 @@ impl AgentShellStore {
         transcript_entries: u64,
         prompt_cache_lineage_id: Option<String>,
         persistence: AgentShellConversationPersistence,
-    ) -> Result<&AgentShellSession> {
+    ) -> AgentShellSessionResult<&AgentShellSession> {
         let conversation_id = conversation_id.into();
-        validate_non_empty("conversation id", &conversation_id)?;
+        validate_agent_shell_required("conversation id", &conversation_id)?;
         if let Some(source_conversation_id) = persistence.transcript_source_conversation_id.as_ref()
         {
-            validate_non_empty("transcript source conversation id", source_conversation_id)?;
+            validate_agent_shell_required(
+                "transcript source conversation id",
+                source_conversation_id,
+            )?;
         }
         let session = self.session_mut(pane_id)?;
         if session.running_turn_id.is_some() {
-            return Err(MezError::conflict(
+            return Err(AgentShellSessionError::conflict(
                 "cannot switch conversations while an agent turn is running",
             ));
         }
         session.session_id = conversation_id;
         if let Some(lineage_id) = prompt_cache_lineage_id {
-            validate_non_empty("prompt cache lineage id", &lineage_id)?;
+            validate_agent_shell_required("prompt cache lineage id", &lineage_id)?;
             session.prompt_cache_lineage_id = lineage_id;
         }
         session.transcript_entries = transcript_entries;
@@ -594,7 +614,7 @@ impl AgentShellStore {
         &mut self,
         pane_id: &str,
         level: AgentLogLevel,
-    ) -> Result<&AgentShellSession> {
+    ) -> AgentShellSessionResult<&AgentShellSession> {
         let session = self.session_mut(pane_id)?;
         session.log_level = level;
         Ok(session)
@@ -610,9 +630,9 @@ impl AgentShellStore {
         &mut self,
         pane_id: &str,
         directive: Option<String>,
-    ) -> Result<&AgentShellSession> {
+    ) -> AgentShellSessionResult<&AgentShellSession> {
         if let Some(text) = directive.as_deref() {
-            validate_non_empty("directive", text)?;
+            validate_agent_shell_required("directive", text)?;
         }
         let session = self.session_mut(pane_id)?;
         session.directive = directive;
@@ -624,8 +644,11 @@ impl AgentShellStore {
     /// The command refuses to switch away from a pane that still has a running
     /// turn so the caller cannot orphan active provider, scheduler, or shell
     /// work under an unreferenced conversation id.
-    pub fn start_new_conversation(&mut self, pane_id: &str) -> Result<&AgentShellSession> {
-        validate_non_empty("pane id", pane_id)?;
+    pub fn start_new_conversation(
+        &mut self,
+        pane_id: &str,
+    ) -> AgentShellSessionResult<&AgentShellSession> {
+        validate_agent_shell_required("pane id", pane_id)?;
         let log_level = self
             .sessions_by_pane
             .get(pane_id)
@@ -634,7 +657,7 @@ impl AgentShellStore {
         if let Some(session) = self.sessions_by_pane.get(pane_id)
             && session.running_turn_id.is_some()
         {
-            return Err(MezError::conflict(
+            return Err(AgentShellSessionError::conflict(
                 "cannot start a new conversation while an agent turn is running",
             ));
         }
@@ -654,8 +677,9 @@ impl AgentShellStore {
                 ephemeral_transcript_source_entries: 0,
             },
         );
-        self.get(pane_id)
-            .ok_or_else(|| MezError::invalid_state("new agent shell conversation was not retained"))
+        self.get(pane_id).ok_or_else(|| {
+            AgentShellSessionError::invalid_state("new agent shell conversation was not retained")
+        })
     }
 
     /// Runs the get operation for this subsystem.
@@ -681,12 +705,12 @@ impl AgentShellStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(super) fn session_mut(&mut self, pane_id: &str) -> Result<&mut AgentShellSession> {
+    pub(super) fn session_mut(
+        &mut self,
+        pane_id: &str,
+    ) -> AgentShellSessionResult<&mut AgentShellSession> {
         self.sessions_by_pane.get_mut(pane_id).ok_or_else(|| {
-            MezError::new(
-                crate::error::MezErrorKind::NotFound,
-                "agent shell session not found for pane",
-            )
+            AgentShellSessionError::not_found("agent shell session not found for pane")
         })
     }
 }
