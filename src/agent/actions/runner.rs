@@ -541,7 +541,9 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                 ProviderResponseAcceptance::ProviderIdentityMismatch
             ) {
                 let error = MezError::invalid_state(
-                    "model provider response identity does not match the selected provider",
+                    response_acceptance
+                        .rejection_message()
+                        .expect("provider identity rejection has a diagnostic"),
                 );
                 if let Some(execution) = summarize_controller_failure_execution(
                     self.provider,
@@ -904,7 +906,9 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                 ProviderResponseAcceptance::ProviderIdentityMismatch
             ) {
                 let error = MezError::invalid_state(
-                    "model provider response identity does not match the selected provider",
+                    response_acceptance
+                        .rejection_message()
+                        .expect("provider identity rejection has a diagnostic"),
                 );
                 if let Some(execution) = summarize_controller_failure_execution_async(
                     self.provider,
