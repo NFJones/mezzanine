@@ -4,16 +4,6 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-/// Defines the DEFAULT HISTORY LIMIT const used by this subsystem.
-///
-/// Keeping this value documented makes the contract explicit at the module
-/// boundary and avoids relying on call-site inference.
-pub const DEFAULT_HISTORY_LIMIT: usize = 10_000;
-/// Defines the DEFAULT HISTORY ROTATE LINES const used by this subsystem.
-///
-/// Keeping this value documented makes the contract explicit at the module
-/// boundary and avoids relying on call-site inference.
-pub const DEFAULT_HISTORY_ROTATE_LINES: usize = 1_000;
 /// Defines the DEFAULT PASTE BUFFER LIMIT BYTES const used by this subsystem.
 ///
 /// Keeping this value documented makes the contract explicit at the module

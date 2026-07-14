@@ -19,10 +19,11 @@ use super::{
 };
 use crate::agent::{AgentShellCommandOutcome, execute_agent_shell_command};
 use crate::permissions::builtin_rules;
-use crate::terminal::{DEFAULT_HISTORY_LIMIT, DEFAULT_PANE_TERM, TerminalFrameContext};
+use crate::terminal::{DEFAULT_PANE_TERM, TerminalFrameContext};
 use mez_mux::layout::LayoutNode;
 use mez_mux::process::PaneExitStatus;
 use mez_mux::session::ClientTerminalDescriptor;
+use mez_terminal::DEFAULT_HISTORY_LIMIT;
 use std::collections::BTreeMap;
 
 // Control state serialization helpers.

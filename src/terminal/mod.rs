@@ -100,9 +100,8 @@ pub use fd::{
     TerminalPaneFrameContext, TerminalRawModeGuard, read_attached_terminal_size,
 };
 pub use keys::{
-    DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, DEFAULT_MEZZANINE_TERMINFO,
-    DEFAULT_PANE_TERM, DEFAULT_PASTE_BUFFER_LIMIT_BYTES, MEZZANINE_TERMINFO_NAMES,
-    TERMINFO_FALLBACK_ORDER,
+    DEFAULT_MEZZANINE_TERMINFO, DEFAULT_PANE_TERM, DEFAULT_PASTE_BUFFER_LIMIT_BYTES,
+    MEZZANINE_TERMINFO_NAMES, TERMINFO_FALLBACK_ORDER,
 };
 pub(crate) use mez_mux::theme::{
     DEFAULT_UI_THEME_NAME, UiColorPair, UiTheme, UiThemeDefinition, builtin_ui_theme_definition,
