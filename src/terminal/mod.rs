@@ -53,11 +53,6 @@ mod mouse;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod paste;
-/// Exposes the profile module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-mod profile;
 /// Exposes the render module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -122,14 +117,6 @@ pub use mouse::{
     parse_sgr_mouse,
 };
 pub use paste::{HostClipboard, HostClipboardCommand, PasteBuffer, PasteBuffers};
-pub use profile::{
-    CapabilitySupport, DEFAULT_TERMINAL_PROFILE_NAME, DecPrivateModeCapabilities,
-    MEZZANINE_TERMINFO_PROFILES, SaveRestoreCapabilities, SgrCapabilities,
-    TERMINFO_FALLBACK_PROFILES, TerminalCapabilities, TerminalCompatibilityProfile,
-    TerminalDiagnostic, TerminalDiagnosticSeverity, TerminalProfile, TerminfoCapabilityProfile,
-    TerminfoSelection, TerminfoSource, select_installed_terminfo, select_terminfo,
-    terminal_profile_named,
-};
 pub(crate) use render::overlay_fixed_column_style_spans;
 #[cfg(test)]
 pub(crate) use render::pane_divider_glyph_for_test;
