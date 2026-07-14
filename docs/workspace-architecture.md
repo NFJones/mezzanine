@@ -44,3 +44,7 @@ Dependency inversion precedes file movement. Mixed modules are first split
 behind their intended facade, tests remain with their behavior owner, and then
 the focused implementation moves into the destination package. This avoids
 using broad public APIs or dependency cycles as temporary migration tools.
+
+The current module-level audit and remaining migration work are tracked in the
+[workspace ownership matrix](workspace-ownership-matrix.md). A valid Cargo
+dependency graph does not by itself prove that extraction is complete.

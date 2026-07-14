@@ -32,6 +32,9 @@ reference documentation.
   workflows.
 - [workspace-architecture.md](workspace-architecture.md): workspace package
   ownership, allowed dependency edges, and extraction rules.
+- [workspace-ownership-matrix.md](workspace-ownership-matrix.md): audited
+  module ownership, residual compatibility surfaces, and extraction acceptance
+  evidence.
 - [examples/config.toml](examples/config.toml): the generated baseline config
   example.
 

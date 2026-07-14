@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import subprocess
 import sys
 
@@ -24,6 +25,27 @@ ALLOWED_EDGES = {
     "mezzanine": {"mez-agent", "mez-core", "mez-mux", "mez-terminal"},
 }
 
+REQUIRED_OWNER_PATHS = {
+    "crates/mez-agent/src/lib.rs",
+    "crates/mez-core/src/ids.rs",
+    "crates/mez-mux/src/layout/mod.rs",
+    "crates/mez-mux/src/process/mod.rs",
+    "crates/mez-mux/src/session/mod.rs",
+    "crates/mez-terminal/src/screen.rs",
+    "docs/workspace-ownership-matrix.md",
+}
+
+RETIRED_COMPATIBILITY_PATHS = {
+    "src/ids.rs",
+    "src/layout.rs",
+    "src/layout/mod.rs",
+    "src/process.rs",
+    "src/process/mod.rs",
+    "src/scheduler.rs",
+    "src/session.rs",
+    "src/session/mod.rs",
+}
+
 
 def workspace_metadata() -> dict[str, object]:
     """Return Cargo metadata for the current workspace or fail visibly."""
@@ -38,7 +60,7 @@ def workspace_metadata() -> dict[str, object]:
 
 
 def main() -> int:
-    """Validate package membership and all internal dependency directions."""
+    """Validate package membership, dependency direction, and retired facades."""
 
     metadata = workspace_metadata()
     packages = {
@@ -69,7 +91,25 @@ def main() -> int:
             print(f"  {violation}")
         return 1
 
-    print("Mezzanine workspace dependency edges are valid.")
+    missing_owner_paths = sorted(
+        path for path in REQUIRED_OWNER_PATHS if not Path(path).is_file()
+    )
+    if missing_owner_paths:
+        print("missing required workspace owner paths:")
+        for path in missing_owner_paths:
+            print(f"  {path}")
+        return 1
+
+    restored_facades = sorted(
+        path for path in RETIRED_COMPATIBILITY_PATHS if Path(path).exists()
+    )
+    if restored_facades:
+        print("retired root compatibility facades must not be restored:")
+        for path in restored_facades:
+            print(f"  {path}")
+        return 1
+
+    print("Mezzanine workspace dependency and ownership guardrails are valid.")
     return 0
 
 
