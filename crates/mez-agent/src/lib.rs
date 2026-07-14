@@ -18,6 +18,8 @@ pub mod auth;
 pub mod config_change;
 /// Provider-independent agent context validation contracts.
 pub mod context;
+/// Provider-independent capability-continuation decisions.
+pub mod continuation;
 /// Provider-independent complete agent turn orchestration.
 pub mod harness;
 /// Provider-neutral HTTP request and response contracts.
@@ -79,6 +81,10 @@ pub use context::{
     AgentContextError, AgentContextResult, AgentRequestAssemblyError,
     AgentRequestAssemblyErrorKind, AgentRequestAssemblyResult, ContextSourceKind, ModelMessage,
     ModelMessageRole, validate_context_required,
+};
+pub use continuation::{
+    CapabilityAvailability, CapabilityDecision, CapabilityRequest, continuation_surface,
+    decide_capabilities,
 };
 pub use harness::{
     AgentActionExecutor, AgentHarnessAction, AgentHarnessActionResult, AgentHarnessError,

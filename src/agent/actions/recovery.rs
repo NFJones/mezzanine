@@ -17,6 +17,9 @@ use super::{
     AgentTurnExecution, FAILURE_SUMMARY_RAW_TEXT_LIMIT_BYTES, MAAP_REPAIR_RAW_TEXT_LIMIT_BYTES,
     say_structured_content_json,
 };
+use mez_agent::{
+    CapabilityAvailability, CapabilityDecision, CapabilityRequest, decide_capabilities,
+};
 
 /// Validates that the provider emitted only actions exposed in the active
 /// request schema.
@@ -117,15 +120,6 @@ fn capability_for_allowed_action(action: AllowedAction) -> Option<AgentCapabilit
         | AllowedAction::RequestSkills
         | AllowedAction::CallSkill => None,
     }
-}
-
-/// One model-requested coarse capability and its task-specific reason.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct CapabilityRequest {
-    /// Requested coarse capability.
-    pub(super) capability: AgentCapability,
-    /// Model-authored reason for exposing the capability.
-    pub(super) reason: String,
 }
 
 /// Splits one MAAP batch into capability requests and non-say actions.
@@ -279,16 +273,6 @@ pub(super) fn capability_continuation_request(
     request
 }
 
-/// Controller decision for a requested capability.
-struct CapabilityDecision {
-    /// Whether the capability was granted.
-    granted: bool,
-    /// Action set for the next request.
-    allowed_actions: AllowedActionSet,
-    /// Deterministic controller reason.
-    reason: String,
-}
-
 /// Grants or denies a coarse capability with deterministic policy checks.
 ///
 /// This deliberately does not try to solve the task or validate the eventual
@@ -296,32 +280,20 @@ struct CapabilityDecision {
 /// permission layer, and action executor after the capability-specific action
 /// surface has been exposed.
 fn capability_decision(request: &ModelRequest, capability: AgentCapability) -> CapabilityDecision {
-    match capability {
-        AgentCapability::Mcp if request.available_mcp_tools.is_empty() => CapabilityDecision {
-            granted: false,
-            allowed_actions: AllowedActionSet::capability_decision(),
-            reason: "mcp capability requires at least one available MCP tool in runtime context"
-                .to_string(),
+    decide_capabilities(
+        &[CapabilityRequest {
+            capability,
+            reason: String::new(),
+        }],
+        CapabilityAvailability {
+            mcp_available: !request.available_mcp_tools.is_empty(),
+            memory_enabled: request.memory_actions_enabled,
+            issues_enabled: request.issue_actions_enabled,
         },
-        AgentCapability::Memory if !request.memory_actions_enabled => CapabilityDecision {
-            granted: false,
-            allowed_actions: AllowedActionSet::capability_decision(),
-            reason: "memory capability requires persistent memory to be enabled in runtime config"
-                .to_string(),
-        },
-        AgentCapability::Issues if !request.issue_actions_enabled => CapabilityDecision {
-            granted: false,
-            allowed_actions: AllowedActionSet::capability_decision(),
-            reason:
-                "issues capability requires local issue tracking to be enabled in runtime config"
-                    .to_string(),
-        },
-        _ => CapabilityDecision {
-            granted: true,
-            allowed_actions: AllowedActionSet::for_capability(capability),
-            reason: "capability is permitted by deterministic action-surface rules".to_string(),
-        },
-    }
+    )
+    .into_iter()
+    .next()
+    .expect("one capability request produces one decision")
 }
 
 /// Builds an ephemeral provider retry request that asks the model to repair its
