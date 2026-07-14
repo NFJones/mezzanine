@@ -1,8 +1,9 @@
 //! Regression tests for terminal presentation copy mode behavior.
 
-use crate::terminal::{CopyMode, PasteBuffers, Size, TerminalScreen};
+use crate::terminal::{CopyMode, PasteBuffers, Size};
 use mez_mux::copy::{CopyPosition, SearchDirection};
 use mez_terminal::TerminalColor;
+use mez_terminal::TerminalScreen;
 
 /// Verifies copy mode starts at live view and pages through normal history.
 ///

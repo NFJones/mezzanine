@@ -22,6 +22,9 @@ use rustix::termios::{OptionalActions, Termios, tcgetattr, tcgetwinsize, tcsetat
 use crate::error::{MezError, Result};
 use crate::readline::ReadlinePrompt;
 use mez_mux::layout::{PaneGeometry, Size, Window};
+use mez_terminal::{
+    GraphicRendition, TerminalColor, TerminalScreen, TerminalStyleSpan, TerminalStyledLine,
+};
 
 /// Exposes the client loop module boundary.
 ///
@@ -106,10 +109,6 @@ pub(crate) use mez_mux::theme::{
 };
 #[cfg(test)]
 pub(crate) use mez_mux::theme::{deepforest_ui_theme, default_ui_theme};
-pub use mez_terminal::{
-    GraphicRendition, TerminalColor, TerminalCursorState, TerminalModeState, TerminalOscEvent,
-    TerminalSavedState, TerminalScreen, TerminalStyleSpan, TerminalStyledLine,
-};
 pub use mouse::{
     CopyModeKeyAction, MouseAction, MouseButton, MouseEvent, MouseEventKind, MouseModifiers,
     MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MouseWindowActionFrameCell,

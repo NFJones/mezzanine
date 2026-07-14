@@ -14,11 +14,12 @@ use super::{
 #[cfg(test)]
 use crate::terminal::AttachedTerminalClientLoopIo;
 use crate::terminal::{
-    AttachedTerminalOutputFrameState, TerminalFdInterest, TerminalRawModeGuard, TerminalStyleSpan,
+    AttachedTerminalOutputFrameState, TerminalFdInterest, TerminalRawModeGuard,
     attached_terminal_enter_presentation_frame, attached_terminal_output_disconnected,
     attached_terminal_restore_presentation_frame,
     encode_attached_terminal_output_update_frame_with_styles, read_attached_terminal_size,
 };
+use mez_terminal::TerminalStyleSpan;
 #[cfg(test)]
 use std::collections::VecDeque;
 use std::future::Future;

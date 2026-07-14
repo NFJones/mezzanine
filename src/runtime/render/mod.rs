@@ -51,12 +51,12 @@ use crate::selector::{
     SelectorCandidate, SelectorCandidateKind, SelectorExtraCandidate, SelectorSurface,
 };
 use crate::terminal::{
-    GraphicRendition, MousePaneAgentSelectorCell, MousePaneAgentStatusCell, PaneAgentStatusField,
-    TerminalStyleSpan, TerminalStyledLine, UiTheme, WindowFrameCommandKind,
-    compose_modal_display_overlay_lines, compose_prompt_overlay_presentation_with_styles,
-    modal_display_overlay_max_scroll, modal_display_overlay_page_rows,
-    pane_frame_agent_status_pillbox_cells, terminal_grapheme_width, terminal_graphemes,
-    terminal_text_width, window_group_frame_pillbox_cells,
+    MousePaneAgentSelectorCell, MousePaneAgentStatusCell, PaneAgentStatusField, UiTheme,
+    WindowFrameCommandKind, compose_modal_display_overlay_lines,
+    compose_prompt_overlay_presentation_with_styles, modal_display_overlay_max_scroll,
+    modal_display_overlay_page_rows, pane_frame_agent_status_pillbox_cells,
+    terminal_grapheme_width, terminal_graphemes, terminal_text_width,
+    window_group_frame_pillbox_cells,
 };
 use crate::transcript::AgentPresentationEntry;
 use mez_mux::copy::CopyPosition;
@@ -65,6 +65,7 @@ use mez_mux::presentation::{
     TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
 };
 use mez_mux::readline::DEFAULT_READLINE_HISTORY_LIMIT;
+use mez_terminal::{GraphicRendition, TerminalStyleSpan, TerminalStyledLine};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 mod attached_step;
@@ -189,10 +190,9 @@ mod tests {
         wrap_agent_terminal_text, wrapped_prefixed_agent_terminal_lines,
     };
     use crate::agent::{AgentAction, AgentActionPayload};
-    use crate::terminal::{
-        GraphicRendition, PaneAgentStatusField, TerminalStyleSpan, default_ui_theme,
-    };
+    use crate::terminal::{PaneAgentStatusField, default_ui_theme};
     use mez_mux::layout::Size;
+    use mez_terminal::{GraphicRendition, TerminalStyleSpan};
 
     /// Verifies normal-mode mutation result rendering treats patches as the
     /// only diff-producing file mutation operation.

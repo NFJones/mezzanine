@@ -4,9 +4,10 @@
 //! divider cells, box-drawing glyph connection masks, mouse-border hit cells,
 //! and styled/plain divider canvas writes.
 
-use crate::terminal::{GraphicRendition, TerminalStyleSpan, UiTheme};
+use crate::terminal::UiTheme;
 use mez_mux::input::MouseBorderCell;
 use mez_mux::layout::{PaneGeometry, Window};
+use mez_terminal::{GraphicRendition, TerminalStyleSpan};
 
 pub use mez_mux::presentation::pane_frame_merges_into_divider;
 use mez_mux::presentation::{PaneDividerCell, pane_divider_cells};

@@ -7,7 +7,7 @@ use crate::terminal::tests::fixtures::{
 use crate::terminal::{
     BTreeMap, ClientStatusKind, ClientStatusLine, ClientViewRole, ReadlinePromptRegion,
     RenderedClientView, Size, TerminalClientLoopConfig, TerminalCursorStyle, TerminalFrameContext,
-    TerminalPaneFrameContext, TerminalScreen, UiTheme, Window, builtin_ui_theme_definition,
+    TerminalPaneFrameContext, UiTheme, Window, builtin_ui_theme_definition,
     compose_prompt_overlay_presentation, compose_prompt_overlay_presentation_with_styles,
     compose_prompt_region_presentation_with_styles, compose_readline_prompt_client_presentation,
     render_attached_client_view, render_readline_prompt_status_row, resolve_ui_theme,
@@ -15,6 +15,7 @@ use crate::terminal::{
 };
 use mez_mux::layout::SplitDirection;
 use mez_terminal::TerminalColor;
+use mez_terminal::TerminalScreen;
 use unicode_width::UnicodeWidthStr;
 
 /// Verifies pane-local agent prompt rendering preserves the right divider when

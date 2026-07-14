@@ -63,12 +63,12 @@ use crate::snapshot::{
 };
 use crate::terminal::{
     AttachedTerminalClientLoopConfig, AttachedTerminalOutputModes, ClientViewRole,
-    GraphicRendition, TerminalClientLoopConfig, TerminalColor, TerminalCursorStyle,
-    TerminalStyleSpan, UiTheme, attached_terminal_output_disconnected,
+    TerminalClientLoopConfig, TerminalCursorStyle, UiTheme, attached_terminal_output_disconnected,
 };
 use crate::transcript::AgentTranscriptStore;
 use mez_mux::layout::Size;
 use mez_mux::session::Session;
+use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 
 use self::mcp::load_primary_config_layers;
 

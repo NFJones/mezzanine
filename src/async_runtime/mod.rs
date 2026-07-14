@@ -42,13 +42,13 @@ use crate::terminal::{
     AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopReport,
     AttachedTerminalClientStepPlan, AttachedTerminalFdReadiness, AttachedTerminalFdRole,
     AttachedTerminalOutputModes, ClientStatusLine, ClientViewRole, MouseAction, RenderedClientView,
-    TerminalClientLoopAction, TerminalClientLoopConfig, TerminalStyleSpan,
-    compose_client_presentation_with_styles, plan_attached_terminal_client_step,
-    plan_attached_terminal_client_step_with_host_paste_buffer,
+    TerminalClientLoopAction, TerminalClientLoopConfig, compose_client_presentation_with_styles,
+    plan_attached_terminal_client_step, plan_attached_terminal_client_step_with_host_paste_buffer,
 };
 use mez_mux::layout::Size;
 use mez_mux::process::{PaneExitStatus, PaneProcess};
 use mez_mux::session::ClientState;
+use mez_terminal::TerminalStyleSpan;
 
 /// Exposes the actor module boundary.
 ///

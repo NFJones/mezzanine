@@ -11,13 +11,13 @@ use super::{
 };
 use crate::message::{Envelope, MessageService, Recipient};
 use crate::shell::{ResolvedShell, ShellSource};
-use crate::terminal::{
-    GraphicRendition, TerminalColor, TerminalCursorState, TerminalModeState, TerminalSavedState,
-    TerminalStyleSpan,
-};
 use mez_mux::layout::{LayoutNode, LayoutPolicy, PaneGeometry, Size, SplitDirection};
 use mez_mux::session::{Session, SessionState};
 use mez_terminal::TerminalSavedDecPrivateMode;
+use mez_terminal::{
+    GraphicRendition, TerminalColor, TerminalCursorState, TerminalModeState, TerminalSavedState,
+    TerminalStyleSpan,
+};
 use std::fs;
 use std::path::PathBuf;
 

@@ -35,8 +35,7 @@ use crate::snapshot::SnapshotRepository;
 use crate::subagent::SubagentSpawnRequest;
 use crate::terminal::{
     AttachedTerminalClientStepPlan, ClientViewRole, DEFAULT_PANE_TERM, HostClipboard, MouseAction,
-    PaneAgentStatusField, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalColor,
-    TerminalOscEvent, TerminalScreen, TerminalStyledLine,
+    PaneAgentStatusField, TerminalClientLoopAction, TerminalClientLoopConfig,
 };
 use crate::test_support::runtime::{RuntimeServiceFixture, SessionFixture};
 use crate::transcript::{AgentTranscriptStore, TranscriptEntry, TranscriptRole};
@@ -46,6 +45,7 @@ use mez_mux::copy::CopyPosition;
 use mez_mux::input::{MuxAction, PaneFocusDirection};
 use mez_mux::session::{Session, SessionState};
 use mez_mux::theme::UI_COLOR_SLOT_NAMES;
+use mez_terminal::{TerminalColor, TerminalOscEvent, TerminalScreen, TerminalStyledLine};
 use std::cell::RefCell;
 use std::os::unix::fs::PermissionsExt;
 use unicode_width::UnicodeWidthStr;

@@ -5,15 +5,15 @@ use crate::terminal::{
     ClientStatusLine, ClientViewRole, CopyModeKeyAction, MouseAction, MousePaneAgentSelectorCell,
     MousePaneAgentStatusCell, MouseWindowActionFrameCell, PaneAgentStatusField, RenderedClientView,
     Size, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalCursorStyle,
-    TerminalFdInterest, TerminalScreen, UiTheme, Window, WindowFrameAction,
-    draw_window_from_screens, plan_attached_terminal_client_step, route_client_input,
-    route_client_input_actions,
+    TerminalFdInterest, UiTheme, Window, WindowFrameAction, draw_window_from_screens,
+    plan_attached_terminal_client_step, route_client_input, route_client_input_actions,
 };
 use mez_mux::copy::CopyPosition;
 use mez_mux::input::{
     KeyChord, KeyCode, MouseBorderCell, MousePaneRegion, MouseWindowFrameCell,
     MouseWindowGroupFrameCell, MuxAction, key_chord_input_bytes,
 };
+use mez_terminal::TerminalScreen;
 use unicode_width::UnicodeWidthStr;
 
 /// Verifies client loop routes input to pane mux and mouse actions.

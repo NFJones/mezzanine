@@ -40,15 +40,15 @@ use crate::snapshot::{
     SnapshotRepository, SnapshotSessionState, SnapshotShellMetadata, WindowSnapshotPayload,
 };
 use crate::terminal::{DEFAULT_HISTORY_LIMIT, DEFAULT_PANE_TERM};
-use crate::terminal::{
-    GraphicRendition, TerminalColor, TerminalModeState, TerminalSavedState, TerminalStyleSpan,
-};
 use crate::test_support::control::JsonRpcRequestBuilder;
 use crate::test_support::runtime::SessionFixture;
 use crate::test_support::temp::TestTempDir;
 use mez_mux::layout::SplitDirection;
 use mez_mux::layout::{LayoutPolicy, Size};
 use mez_mux::session::Session;
+use mez_terminal::{
+    GraphicRendition, TerminalColor, TerminalModeState, TerminalSavedState, TerminalStyleSpan,
+};
 use std::fs;
 use std::path::PathBuf;
 
