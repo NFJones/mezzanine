@@ -57,6 +57,30 @@ pub enum ProviderResponseAcceptance {
     MissingActionBatch,
 }
 
+impl ProviderResponseAcceptance {
+    /// Returns the stable failure-summary stage for a rejected response.
+    pub fn rejection_stage(self) -> Option<&'static str> {
+        match self {
+            Self::ProviderIdentityMismatch => Some("provider_identity"),
+            Self::MissingActionBatch => Some("maap_missing_action_batch"),
+            Self::Accept { .. } => None,
+        }
+    }
+
+    /// Returns the model-visible repair diagnostic for a rejected response.
+    pub fn rejection_message(self) -> Option<&'static str> {
+        match self {
+            Self::ProviderIdentityMismatch => {
+                Some("model provider response identity does not match the selected provider")
+            }
+            Self::MissingActionBatch => {
+                Some("provider response did not include a parsed MAAP action_batch")
+            }
+            Self::Accept { .. } => None,
+        }
+    }
+}
+
 /// Classifies the provider-independent acceptance conditions for one response.
 pub fn accept_provider_response(
     selected_provider: &str,
@@ -234,6 +258,25 @@ mod tests {
             ProviderResponseAcceptance::Accept {
                 promote_durable_request: false,
             }
+        );
+    }
+
+    /// Rejected responses carry the same repair wording and failure stage for
+    /// synchronous and asynchronous product turn-runner adapters.
+    #[test]
+    fn provider_response_rejections_expose_stable_diagnostics() {
+        let identity = ProviderResponseAcceptance::ProviderIdentityMismatch;
+        assert_eq!(identity.rejection_stage(), Some("provider_identity"));
+        assert_eq!(
+            identity.rejection_message(),
+            Some("model provider response identity does not match the selected provider")
+        );
+
+        let missing = ProviderResponseAcceptance::MissingActionBatch;
+        assert_eq!(missing.rejection_stage(), Some("maap_missing_action_batch"));
+        assert_eq!(
+            missing.rejection_message(),
+            Some("provider response did not include a parsed MAAP action_batch")
         );
     }
 }
