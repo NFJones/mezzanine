@@ -312,6 +312,105 @@ fn planned_execution_from_batch(
     })
 }
 
+/// Describes whether a validated MAAP batch can execute or needs another model request.
+enum BatchContinuationPlan {
+    /// Continue provider negotiation with an ephemeral repair or capability request.
+    Continue(Box<ModelRequest>),
+    /// Execute the validated action batch through the owning runtime adapter.
+    Execute,
+}
+
+/// Borrows the product-owned inputs used to validate one provider MAAP batch.
+struct BatchContinuationInput<'a> {
+    response_request: &'a ModelRequest,
+    durable_response_request: &'a ModelRequest,
+    response_raw_text: &'a str,
+    batch: &'a super::super::MaapBatch,
+    request: &'a ModelRequest,
+    turn: &'a AgentTurnRecord,
+    available_mcp_servers: &'a [String],
+    available_mcp_tools: &'a [McpPromptTool],
+}
+
+/// Validates a parsed MAAP batch and derives its provider-independent continuation.
+///
+/// Both synchronous and asynchronous runners share these validation and recovery
+/// rules. Provider failure summaries remain with their respective transport
+/// paths because those summaries can require synchronous or asynchronous I/O.
+fn plan_batch_continuation(
+    input: BatchContinuationInput<'_>,
+    repair_budget: &mut AgentTurnRecoveryBudget,
+) -> std::result::Result<BatchContinuationPlan, (MezError, &'static str)> {
+    if let Some(next_request) =
+        mixed_capability_continuation_request(input.response_request, input.batch)
+    {
+        repair_budget.reset();
+        return Ok(BatchContinuationPlan::Continue(Box::new(next_request)));
+    }
+    if let Err(error) = validate_batch_allowed_actions(input.batch, input.request) {
+        let capability_recovery_base =
+            if input.response_request.interaction_kind == ModelInteractionKind::Repair {
+                input.durable_response_request
+            } else {
+                input.response_request
+            };
+        if let Some(next_request) = disallowed_action_capability_continuation_request(
+            capability_recovery_base,
+            input.batch,
+            &error,
+        ) {
+            repair_budget.reset();
+            return Ok(BatchContinuationPlan::Continue(Box::new(next_request)));
+        }
+        if repair_budget.record_attempt() {
+            return Ok(BatchContinuationPlan::Continue(Box::new(
+                maap_repair_request(
+                    input.response_request,
+                    error.message(),
+                    input.response_raw_text,
+                    repair_budget.attempts(),
+                ),
+            )));
+        }
+        return Err((error, "allowed_actions"));
+    }
+    if let Err(error) = input.batch.validate(
+        input.turn,
+        input.available_mcp_servers,
+        input.available_mcp_tools,
+    ) {
+        if repair_budget.record_attempt() {
+            return Ok(BatchContinuationPlan::Continue(Box::new(
+                maap_repair_request(
+                    input.response_request,
+                    error.message(),
+                    input.response_raw_text,
+                    repair_budget.attempts(),
+                ),
+            )));
+        }
+        return Err((error, "maap_validation"));
+    }
+    match capability_requests_from_batch(input.batch) {
+        Ok(Some(capability_request)) => {
+            repair_budget.reset();
+            Ok(BatchContinuationPlan::Continue(Box::new(
+                capability_continuation_request(input.response_request, &capability_request),
+            )))
+        }
+        Ok(None) => Ok(BatchContinuationPlan::Execute),
+        Err(error) if repair_budget.record_attempt() => Ok(BatchContinuationPlan::Continue(
+            Box::new(maap_repair_request(
+                input.response_request,
+                error.message(),
+                input.response_raw_text,
+                repair_budget.attempts(),
+            )),
+        )),
+        Err(error) => Err((error, "capability_negotiation")),
+    }
+}
+
 /// Carries agent turn runner state for this subsystem.
 ///
 /// The fields are kept explicit so callers can inspect and move structured
@@ -488,98 +587,25 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                     },
                 ));
             };
-            if let Some(next_request) =
-                mixed_capability_continuation_request(&response_request, batch)
-            {
-                request = next_request;
-                repair_budget.reset();
-                continue;
-            }
-            if let Err(error) = validate_batch_allowed_actions(batch, &request) {
-                let capability_recovery_base =
-                    if response_request.interaction_kind == ModelInteractionKind::Repair {
-                        &durable_response_request
-                    } else {
-                        &response_request
-                    };
-                if let Some(next_request) = disallowed_action_capability_continuation_request(
-                    capability_recovery_base,
+            match plan_batch_continuation(
+                BatchContinuationInput {
+                    response_request: &response_request,
+                    durable_response_request: &durable_response_request,
+                    response_raw_text: &response.raw_text,
                     batch,
-                    &error,
-                ) {
-                    request = next_request;
-                    repair_budget.reset();
+                    request: &request,
+                    turn: &turn,
+                    available_mcp_servers: &self.available_mcp_servers,
+                    available_mcp_tools: self.available_mcp_tools,
+                },
+                &mut repair_budget,
+            ) {
+                Ok(BatchContinuationPlan::Continue(next_request)) => {
+                    request = *next_request;
                     continue;
                 }
-                if repair_budget.record_attempt() {
-                    request = maap_repair_request(
-                        &response_request,
-                        error.message(),
-                        &response.raw_text,
-                        repair_budget.attempts(),
-                    );
-                    continue;
-                }
-                ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-                let mut response = response;
-                response.usage = cumulative_usage;
-                response.quota_usage = latest_quota_usage;
-                return Ok(failed_maap_validation_execution_with_summary(
-                    self.provider,
-                    &turn,
-                    durable_response_request,
-                    response,
-                    latest_response_usage,
-                    &error,
-                    FailureSummaryScope {
-                        stage: "allowed_actions",
-                        available_mcp_servers: &self.available_mcp_servers,
-                        available_mcp_tools: self.available_mcp_tools,
-                    },
-                ));
-            }
-            if let Err(error) =
-                batch.validate(&turn, &self.available_mcp_servers, self.available_mcp_tools)
-            {
-                if repair_budget.record_attempt() {
-                    request = maap_repair_request(
-                        &response_request,
-                        error.message(),
-                        &response.raw_text,
-                        repair_budget.attempts(),
-                    );
-                    continue;
-                }
-                ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-                let mut response = response;
-                response.usage = cumulative_usage;
-                response.quota_usage = latest_quota_usage;
-                return Ok(failed_maap_validation_execution_with_summary(
-                    self.provider,
-                    &turn,
-                    durable_response_request,
-                    response,
-                    latest_response_usage,
-                    &error,
-                    FailureSummaryScope {
-                        stage: "maap_validation",
-                        available_mcp_servers: &self.available_mcp_servers,
-                        available_mcp_tools: self.available_mcp_tools,
-                    },
-                ));
-            }
-            let capability_request = match capability_requests_from_batch(batch) {
-                Ok(capability_request) => capability_request,
-                Err(error) => {
-                    if repair_budget.record_attempt() {
-                        request = maap_repair_request(
-                            &response_request,
-                            error.message(),
-                            &response.raw_text,
-                            repair_budget.attempts(),
-                        );
-                        continue;
-                    }
+                Ok(BatchContinuationPlan::Execute) => {}
+                Err((error, stage)) => {
                     ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
                     let mut response = response;
                     response.usage = cumulative_usage;
@@ -592,17 +618,12 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                         latest_response_usage,
                         &error,
                         FailureSummaryScope {
-                            stage: "capability_negotiation",
+                            stage,
                             available_mcp_servers: &self.available_mcp_servers,
                             available_mcp_tools: self.available_mcp_tools,
                         },
                     ));
                 }
-            };
-            if let Some(capability_request) = capability_request {
-                request = capability_continuation_request(&response_request, &capability_request);
-                repair_budget.reset();
-                continue;
             }
             break response;
         };
@@ -916,100 +937,25 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                 )
                 .await);
             };
-            if let Some(next_request) =
-                mixed_capability_continuation_request(&response_request, batch)
-            {
-                request = next_request;
-                repair_budget.reset();
-                continue;
-            }
-            if let Err(error) = validate_batch_allowed_actions(batch, &request) {
-                let capability_recovery_base =
-                    if response_request.interaction_kind == ModelInteractionKind::Repair {
-                        &durable_response_request
-                    } else {
-                        &response_request
-                    };
-                if let Some(next_request) = disallowed_action_capability_continuation_request(
-                    capability_recovery_base,
+            match plan_batch_continuation(
+                BatchContinuationInput {
+                    response_request: &response_request,
+                    durable_response_request: &durable_response_request,
+                    response_raw_text: &response.raw_text,
                     batch,
-                    &error,
-                ) {
-                    request = next_request;
-                    repair_budget.reset();
+                    request: &request,
+                    turn: &turn,
+                    available_mcp_servers: &self.available_mcp_servers,
+                    available_mcp_tools: self.available_mcp_tools,
+                },
+                &mut repair_budget,
+            ) {
+                Ok(BatchContinuationPlan::Continue(next_request)) => {
+                    request = *next_request;
                     continue;
                 }
-                if repair_budget.record_attempt() {
-                    request = maap_repair_request(
-                        &response_request,
-                        error.message(),
-                        &response.raw_text,
-                        repair_budget.attempts(),
-                    );
-                    continue;
-                }
-                ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-                let mut response = response;
-                response.usage = cumulative_usage;
-                response.quota_usage = latest_quota_usage;
-                return Ok(failed_maap_validation_execution_with_summary_async(
-                    self.provider,
-                    &turn,
-                    durable_response_request,
-                    response,
-                    latest_response_usage,
-                    &error,
-                    FailureSummaryScope {
-                        stage: "allowed_actions",
-                        available_mcp_servers: &self.available_mcp_servers,
-                        available_mcp_tools: self.available_mcp_tools,
-                    },
-                )
-                .await);
-            }
-            if let Err(error) =
-                batch.validate(&turn, &self.available_mcp_servers, self.available_mcp_tools)
-            {
-                if repair_budget.record_attempt() {
-                    request = maap_repair_request(
-                        &response_request,
-                        error.message(),
-                        &response.raw_text,
-                        repair_budget.attempts(),
-                    );
-                    continue;
-                }
-                ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-                let mut response = response;
-                response.usage = cumulative_usage;
-                response.quota_usage = latest_quota_usage;
-                return Ok(failed_maap_validation_execution_with_summary_async(
-                    self.provider,
-                    &turn,
-                    durable_response_request,
-                    response,
-                    latest_response_usage,
-                    &error,
-                    FailureSummaryScope {
-                        stage: "maap_validation",
-                        available_mcp_servers: &self.available_mcp_servers,
-                        available_mcp_tools: self.available_mcp_tools,
-                    },
-                )
-                .await);
-            }
-            let capability_request = match capability_requests_from_batch(batch) {
-                Ok(capability_request) => capability_request,
-                Err(error) => {
-                    if repair_budget.record_attempt() {
-                        request = maap_repair_request(
-                            &response_request,
-                            error.message(),
-                            &response.raw_text,
-                            repair_budget.attempts(),
-                        );
-                        continue;
-                    }
+                Ok(BatchContinuationPlan::Execute) => {}
+                Err((error, stage)) => {
                     ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
                     let mut response = response;
                     response.usage = cumulative_usage;
@@ -1022,18 +968,13 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                         latest_response_usage,
                         &error,
                         FailureSummaryScope {
-                            stage: "capability_negotiation",
+                            stage,
                             available_mcp_servers: &self.available_mcp_servers,
                             available_mcp_tools: self.available_mcp_tools,
                         },
                     )
                     .await);
                 }
-            };
-            if let Some(capability_request) = capability_request {
-                request = capability_continuation_request(&response_request, &capability_request);
-                repair_budget.reset();
-                continue;
             }
             break response;
         };
