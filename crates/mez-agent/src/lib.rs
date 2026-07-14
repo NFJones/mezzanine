@@ -83,8 +83,8 @@ pub use context::{
     ModelMessageRole, validate_context_required,
 };
 pub use continuation::{
-    CapabilityAvailability, CapabilityDecision, CapabilityRequest, continuation_surface,
-    decide_capabilities,
+    CapabilityAvailability, CapabilityDecision, CapabilityRequest, ProviderResponseAcceptance,
+    accept_provider_response, continuation_surface, decide_capabilities,
 };
 pub use harness::{
     AgentActionExecutor, AgentHarnessAction, AgentHarnessActionResult, AgentHarnessError,

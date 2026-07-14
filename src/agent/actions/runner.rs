@@ -37,7 +37,10 @@ use super::recovery::{
     summarize_provider_failure_execution,
 };
 use super::{AgentTurnExecution, turn_state_from_action_results};
-use mez_agent::{AgentTurnRecoveryBudget, SubagentScopeDeclaration};
+use mez_agent::{
+    AgentTurnRecoveryBudget, ProviderResponseAcceptance, SubagentScopeDeclaration,
+    accept_provider_response,
+};
 
 /// Maximum number of ephemeral provider retries after a MAAP validation error.
 ///
@@ -529,7 +532,16 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             if !response.quota_usage.is_empty() {
                 latest_quota_usage = response.quota_usage.clone();
             }
-            if response.provider != self.provider.provider_id() {
+            let response_acceptance = accept_provider_response(
+                self.provider.provider_id(),
+                &response.provider,
+                response_request.interaction_kind == ModelInteractionKind::Repair,
+                response.action_batch.is_some(),
+            );
+            if matches!(
+                response_acceptance,
+                ProviderResponseAcceptance::ProviderIdentityMismatch
+            ) {
                 let error = MezError::invalid_state(
                     "model provider response identity does not match the selected provider",
                 );
@@ -553,10 +565,19 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                 ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
                 return Err(error);
             }
-            if response_request.interaction_kind != ModelInteractionKind::Repair {
+            if matches!(
+                response_acceptance,
+                ProviderResponseAcceptance::Accept {
+                    promote_durable_request: true
+                }
+            ) {
                 durable_response_request = response_request.clone();
             }
             let Some(batch) = &response.action_batch else {
+                debug_assert_eq!(
+                    response_acceptance,
+                    ProviderResponseAcceptance::MissingActionBatch
+                );
                 let error = MezError::invalid_args(
                     "provider response did not include a parsed MAAP action_batch",
                 );
@@ -876,7 +897,16 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             if !response.quota_usage.is_empty() {
                 latest_quota_usage = response.quota_usage.clone();
             }
-            if response.provider != self.provider.provider_id() {
+            let response_acceptance = accept_provider_response(
+                self.provider.provider_id(),
+                &response.provider,
+                response_request.interaction_kind == ModelInteractionKind::Repair,
+                response.action_batch.is_some(),
+            );
+            if matches!(
+                response_acceptance,
+                ProviderResponseAcceptance::ProviderIdentityMismatch
+            ) {
                 let error = MezError::invalid_state(
                     "model provider response identity does not match the selected provider",
                 );
@@ -902,10 +932,19 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                 ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
                 return Err(error);
             }
-            if response_request.interaction_kind != ModelInteractionKind::Repair {
+            if matches!(
+                response_acceptance,
+                ProviderResponseAcceptance::Accept {
+                    promote_durable_request: true
+                }
+            ) {
                 durable_response_request = response_request.clone();
             }
             let Some(batch) = &response.action_batch else {
+                debug_assert_eq!(
+                    response_acceptance,
+                    ProviderResponseAcceptance::MissingActionBatch
+                );
                 let error = MezError::invalid_args(
                     "provider response did not include a parsed MAAP action_batch",
                 );

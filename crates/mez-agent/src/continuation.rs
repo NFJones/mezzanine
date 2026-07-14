@@ -39,6 +39,42 @@ pub struct CapabilityDecision {
     pub reason: String,
 }
 
+/// The deterministic acceptance outcome for one provider response.
+///
+/// Product turn runners retain transport-specific failure summaries and repair
+/// request rendering, while this contract keeps their identity and missing
+/// batch decisions aligned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderResponseAcceptance {
+    /// Accept the response and retain its request as durable turn context.
+    Accept {
+        /// Whether the request should replace the durable response request.
+        promote_durable_request: bool,
+    },
+    /// Reject a response emitted by a provider other than the selected one.
+    ProviderIdentityMismatch,
+    /// Reject a response that omitted the required parsed MAAP action batch.
+    MissingActionBatch,
+}
+
+/// Classifies the provider-independent acceptance conditions for one response.
+pub fn accept_provider_response(
+    selected_provider: &str,
+    response_provider: &str,
+    response_is_repair: bool,
+    has_action_batch: bool,
+) -> ProviderResponseAcceptance {
+    if response_provider != selected_provider {
+        return ProviderResponseAcceptance::ProviderIdentityMismatch;
+    }
+    if !has_action_batch {
+        return ProviderResponseAcceptance::MissingActionBatch;
+    }
+    ProviderResponseAcceptance::Accept {
+        promote_durable_request: !response_is_repair,
+    }
+}
+
 /// Computes deterministic decisions for each requested capability.
 pub fn decide_capabilities(
     requests: &[CapabilityRequest],
@@ -121,7 +157,8 @@ fn capability_decision(
 #[cfg(test)]
 mod tests {
     use super::{
-        CapabilityAvailability, CapabilityRequest, continuation_surface, decide_capabilities,
+        CapabilityAvailability, CapabilityRequest, ProviderResponseAcceptance,
+        accept_provider_response, continuation_surface, decide_capabilities,
     };
     use crate::{AgentCapability, AllowedAction, AllowedActionSet, ModelInteractionKind};
 
@@ -172,5 +209,31 @@ mod tests {
         assert_eq!(interaction, ModelInteractionKind::ActionExecution);
         assert!(actions.contains(AllowedAction::ShellCommand));
         assert!(actions.contains(AllowedAction::ApplyPatch));
+    }
+
+    /// Response acceptance rejects identity and MAAP-shape failures before
+    /// allowing a non-repair response to become durable turn context.
+    #[test]
+    fn provider_response_acceptance_classifies_shared_turn_runner_guards() {
+        assert_eq!(
+            accept_provider_response("openai", "anthropic", false, true),
+            ProviderResponseAcceptance::ProviderIdentityMismatch
+        );
+        assert_eq!(
+            accept_provider_response("openai", "openai", false, false),
+            ProviderResponseAcceptance::MissingActionBatch
+        );
+        assert_eq!(
+            accept_provider_response("openai", "openai", false, true),
+            ProviderResponseAcceptance::Accept {
+                promote_durable_request: true,
+            }
+        );
+        assert_eq!(
+            accept_provider_response("openai", "openai", true, true),
+            ProviderResponseAcceptance::Accept {
+                promote_durable_request: false,
+            }
+        );
     }
 }
