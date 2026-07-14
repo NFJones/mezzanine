@@ -38,8 +38,8 @@ use super::recovery::{
 };
 use super::{AgentTurnExecution, turn_state_from_action_results};
 use mez_agent::{
-    AgentTurnRecoveryBudget, ProviderResponseAcceptance, SubagentScopeDeclaration,
-    accept_provider_response,
+    AgentTurnRecoveryBudget, ProviderResponseAcceptance, ProviderResponseProgress,
+    SubagentScopeDeclaration, accept_provider_response,
 };
 
 /// Maximum number of ephemeral provider retries after a MAAP validation error.
@@ -491,9 +491,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
         let mut repair_budget = AgentTurnRecoveryBudget::new(MAAP_REPAIR_ATTEMPT_LIMIT);
         let mut response_request: ModelRequest;
         let mut durable_response_request = request.clone();
-        let mut cumulative_usage = ModelTokenUsage::default();
-        let mut latest_response_usage;
-        let mut latest_quota_usage = Vec::new();
+        let mut response_progress = ProviderResponseProgress::default();
         let mut response = loop {
             response_request = request.clone();
             let response = match self.provider.send_request(&request) {
@@ -527,11 +525,11 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                     return Err(error);
                 }
             };
-            latest_response_usage = response.latest_request_usage.unwrap_or(response.usage);
-            cumulative_usage.add_assign(response.usage);
-            if !response.quota_usage.is_empty() {
-                latest_quota_usage = response.quota_usage.clone();
-            }
+            response_progress.observe(
+                response.usage,
+                response.latest_request_usage,
+                &response.quota_usage,
+            );
             let response_acceptance = accept_provider_response(
                 self.provider.provider_id(),
                 &response.provider,
@@ -592,14 +590,14 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                 }
                 ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
                 let mut response = response;
-                response.usage = cumulative_usage;
-                response.quota_usage = latest_quota_usage;
+                response.usage = response_progress.cumulative_usage();
+                response.quota_usage = response_progress.latest_quota_usage().to_vec();
                 return Ok(failed_maap_validation_execution_with_summary(
                     self.provider,
                     &turn,
                     durable_response_request,
                     response,
-                    latest_response_usage,
+                    response_progress.latest_response_usage(),
                     &error,
                     FailureSummaryScope {
                         stage: "maap_missing_action_batch",
@@ -629,14 +627,14 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                 Err((error, stage)) => {
                     ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
                     let mut response = response;
-                    response.usage = cumulative_usage;
-                    response.quota_usage = latest_quota_usage;
+                    response.usage = response_progress.cumulative_usage();
+                    response.quota_usage = response_progress.latest_quota_usage().to_vec();
                     return Ok(failed_maap_validation_execution_with_summary(
                         self.provider,
                         &turn,
                         durable_response_request,
                         response,
-                        latest_response_usage,
+                        response_progress.latest_response_usage(),
                         &error,
                         FailureSummaryScope {
                             stage,
@@ -648,15 +646,15 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             }
             break response;
         };
-        response.usage = cumulative_usage;
-        response.quota_usage = latest_quota_usage;
+        response.usage = response_progress.cumulative_usage();
+        response.quota_usage = response_progress.latest_quota_usage().to_vec();
 
         let Some(batch) = response.action_batch.clone() else {
             ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
             return Ok(AgentTurnExecution {
                 request: durable_response_request,
                 response,
-                latest_response_usage,
+                latest_response_usage: response_progress.latest_response_usage(),
                 routing_token_usage_by_model: std::collections::BTreeMap::new(),
                 action_results: Vec::new(),
                 final_turn: true,
@@ -670,7 +668,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             context,
             durable_response_request,
             response,
-            latest_response_usage,
+            response_progress.latest_response_usage(),
             batch,
         )?;
         if execution.terminal_state != AgentTurnState::Running {
@@ -854,9 +852,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         let mut repair_budget = AgentTurnRecoveryBudget::new(MAAP_REPAIR_ATTEMPT_LIMIT);
         let mut response_request: ModelRequest;
         let mut durable_response_request = request.clone();
-        let mut cumulative_usage = ModelTokenUsage::default();
-        let mut latest_response_usage;
-        let mut latest_quota_usage = Vec::new();
+        let mut response_progress = ProviderResponseProgress::default();
         let mut response = loop {
             response_request = request.clone();
             let response = match self.provider.send_request_async(&request).await {
@@ -892,11 +888,11 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                     return Err(error);
                 }
             };
-            latest_response_usage = response.latest_request_usage.unwrap_or(response.usage);
-            cumulative_usage.add_assign(response.usage);
-            if !response.quota_usage.is_empty() {
-                latest_quota_usage = response.quota_usage.clone();
-            }
+            response_progress.observe(
+                response.usage,
+                response.latest_request_usage,
+                &response.quota_usage,
+            );
             let response_acceptance = accept_provider_response(
                 self.provider.provider_id(),
                 &response.provider,
@@ -959,14 +955,14 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                 }
                 ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
                 let mut response = response;
-                response.usage = cumulative_usage;
-                response.quota_usage = latest_quota_usage;
+                response.usage = response_progress.cumulative_usage();
+                response.quota_usage = response_progress.latest_quota_usage().to_vec();
                 return Ok(failed_maap_validation_execution_with_summary_async(
                     self.provider,
                     &turn,
                     durable_response_request,
                     response,
-                    latest_response_usage,
+                    response_progress.latest_response_usage(),
                     &error,
                     FailureSummaryScope {
                         stage: "maap_missing_action_batch",
@@ -997,14 +993,14 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                 Err((error, stage)) => {
                     ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
                     let mut response = response;
-                    response.usage = cumulative_usage;
-                    response.quota_usage = latest_quota_usage;
+                    response.usage = response_progress.cumulative_usage();
+                    response.quota_usage = response_progress.latest_quota_usage().to_vec();
                     return Ok(failed_maap_validation_execution_with_summary_async(
                         self.provider,
                         &turn,
                         durable_response_request,
                         response,
-                        latest_response_usage,
+                        response_progress.latest_response_usage(),
                         &error,
                         FailureSummaryScope {
                             stage,
@@ -1017,15 +1013,15 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             }
             break response;
         };
-        response.usage = cumulative_usage;
-        response.quota_usage = latest_quota_usage;
+        response.usage = response_progress.cumulative_usage();
+        response.quota_usage = response_progress.latest_quota_usage().to_vec();
 
         let Some(batch) = response.action_batch.clone() else {
             ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
             return Ok(AgentTurnExecution {
                 request: durable_response_request,
                 response,
-                latest_response_usage,
+                latest_response_usage: response_progress.latest_response_usage(),
                 routing_token_usage_by_model: std::collections::BTreeMap::new(),
                 action_results: Vec::new(),
                 final_turn: true,
@@ -1039,7 +1035,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             context,
             durable_response_request,
             response,
-            latest_response_usage,
+            response_progress.latest_response_usage(),
             batch,
         )?;
         if execution.terminal_state != AgentTurnState::Running {
