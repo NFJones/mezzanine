@@ -189,6 +189,14 @@ impl From<mez_agent::ProviderResponseError> for MezError {
     }
 }
 
+impl From<mez_agent::ProviderMalformedOutputError> for MezError {
+    fn from(error: mez_agent::ProviderMalformedOutputError) -> Self {
+        Self::new(error.kind().into(), error.message())
+            .with_provider_raw_text(error.raw_text().to_string())
+            .with_provider_failure_json(error.provider_failure_json().to_string())
+    }
+}
+
 impl From<mez_agent::ProviderModelCatalogParseError> for MezError {
     fn from(error: mez_agent::ProviderModelCatalogParseError) -> Self {
         Self::invalid_state(error.message())

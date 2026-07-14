@@ -79,11 +79,7 @@ pub(crate) fn provider_event_error_from_parts(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn provider_maap_parse_error(error: MezError, raw_text: &str) -> MezError {
-    let diagnostic =
-        provider_malformed_output_error(error.kind().into(), error.message(), raw_text);
-    MezError::new(error.kind(), diagnostic.message())
-        .with_provider_raw_text(diagnostic.raw_text().to_string())
-        .with_provider_failure_json(diagnostic.provider_failure_json().to_string())
+    provider_malformed_output_error(error.kind().into(), error.message(), raw_text).into()
 }
 
 #[cfg(test)]
