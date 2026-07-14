@@ -18,6 +18,8 @@ pub mod auth;
 pub mod config_change;
 /// Provider-independent agent context validation contracts.
 pub mod context;
+/// Provider-independent complete agent turn orchestration.
+pub mod harness;
 /// Provider-neutral HTTP request and response contracts.
 pub mod http;
 /// Dependency-neutral project instruction discovery records and parsing.
@@ -77,6 +79,11 @@ pub use context::{
     AgentContextError, AgentContextResult, AgentRequestAssemblyError,
     AgentRequestAssemblyErrorKind, AgentRequestAssemblyResult, ContextSourceKind, ModelMessage,
     ModelMessageRole, validate_context_required,
+};
+pub use harness::{
+    AgentActionExecutor, AgentHarnessAction, AgentHarnessActionResult, AgentHarnessError,
+    AgentHarnessErrorKind, AgentHarnessOutcome, AgentHarnessRequest, AgentHarnessResponse,
+    AgentHarnessTurn, AgentTurnProvider, DEFAULT_TURN_RECOVERY_LIMIT, run_agent_turn,
 };
 pub use http::{
     DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ProviderHttpError,
