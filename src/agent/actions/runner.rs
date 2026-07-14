@@ -553,7 +553,9 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                         failed_response: response.clone(),
                         error: &error,
                         scope: FailureSummaryScope {
-                            stage: "provider_identity",
+                            stage: response_acceptance
+                                .rejection_stage()
+                                .expect("provider identity rejection has a failure stage"),
                             available_mcp_servers: &self.available_mcp_servers,
                             available_mcp_tools: self.available_mcp_tools,
                         },
@@ -918,7 +920,9 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                         failed_response: response.clone(),
                         error: &error,
                         scope: FailureSummaryScope {
-                            stage: "provider_identity",
+                            stage: response_acceptance
+                                .rejection_stage()
+                                .expect("provider identity rejection has a failure stage"),
                             available_mcp_servers: &self.available_mcp_servers,
                             available_mcp_tools: self.available_mcp_tools,
                         },
