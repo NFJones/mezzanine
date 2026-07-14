@@ -7,6 +7,8 @@
 
 use std::collections::BTreeMap;
 
+use mez_agent::ProviderHttpResult;
+
 use super::shell::shell_quote;
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnRecord,
@@ -301,7 +303,7 @@ async fn send_network_get<T: AsyncProviderHttpTransport>(
     transport: &T,
     url: &str,
     max_response_bytes: usize,
-) -> Result<ProviderHttpResponse> {
+) -> ProviderHttpResult<ProviderHttpResponse> {
     let mut headers = BTreeMap::new();
     headers.insert("user-agent".to_string(), "mez".to_string());
     let request = ProviderHttpRequest {
@@ -312,12 +314,7 @@ async fn send_network_get<T: AsyncProviderHttpTransport>(
         timeout_ms: NETWORK_ACTION_TIMEOUT_MS,
         max_response_bytes: Some(max_response_bytes),
     };
-    transport.send_async(&request).await.map_err(|error| {
-        MezError::invalid_state(format!(
-            "network action request failed: {}",
-            error.message()
-        ))
-    })
+    transport.send_async(&request).await
 }
 
 fn network_response_was_truncated(response: &ProviderHttpResponse) -> bool {
