@@ -7,9 +7,9 @@
 use super::OPENAI_MAAP_FUNCTION_TOOL_NAME;
 use super::openai_request::openai_responses_request_control_shape_with_stream;
 use super::schema::openai_maap_action_batch_tools;
-use crate::agent::{ModelInteractionKind, ModelRequest};
 #[cfg(test)]
 use crate::agent::{ContextSourceKind, ModelMessage, ModelMessageRole};
+use crate::agent::{ModelInteractionKind, ModelRequest};
 #[cfg(test)]
 use mez_agent::openai_stable_prefix_material;
 use mez_agent::{
