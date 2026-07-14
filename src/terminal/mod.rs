@@ -23,7 +23,8 @@ use crate::error::{MezError, Result};
 use crate::readline::ReadlinePrompt;
 use mez_mux::layout::{PaneGeometry, Size, Window};
 use mez_terminal::{
-    GraphicRendition, TerminalColor, TerminalScreen, TerminalStyleSpan, TerminalStyledLine,
+    GraphicRendition, MouseButton, MouseEvent, MouseEventKind, TerminalColor, TerminalScreen,
+    TerminalStyleSpan, TerminalStyledLine, parse_sgr_mouse,
 };
 
 /// Exposes the client loop module boundary.
@@ -110,10 +111,9 @@ pub(crate) use mez_mux::theme::{
 #[cfg(test)]
 pub(crate) use mez_mux::theme::{deepforest_ui_theme, default_ui_theme};
 pub use mouse::{
-    CopyModeKeyAction, MouseAction, MouseButton, MouseEvent, MouseEventKind, MouseModifiers,
-    MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MouseWindowActionFrameCell,
-    PaneAgentStatusField, WindowFrameAction, WindowFrameCommandKind, classify_mouse_event,
-    parse_sgr_mouse,
+    CopyModeKeyAction, MouseAction, MousePaneAgentSelectorCell, MousePaneAgentStatusCell,
+    MouseWindowActionFrameCell, PaneAgentStatusField, WindowFrameAction, WindowFrameCommandKind,
+    classify_mouse_event,
 };
 pub use paste::{HostClipboard, HostClipboardCommand, PasteBuffer, PasteBuffers};
 pub(crate) use render::overlay_fixed_column_style_spans;

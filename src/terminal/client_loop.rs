@@ -2163,7 +2163,7 @@ pub fn route_client_input(
     }
 
     if input.starts_with(b"\x1b[<") {
-        let Some(event) = parse_sgr_mouse(input)? else {
+        let Some(event) = parse_sgr_mouse(input) else {
             return Ok(TerminalClientLoopAction::HandleMouse(MouseAction::Ignore));
         };
         return route_mouse_event(input, event, config);

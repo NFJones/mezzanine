@@ -4,11 +4,10 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::Result;
 use mez_mux::copy::CopyPosition;
 
 use mez_mux::input::MousePolicy;
-pub use mez_terminal::{MouseButton, MouseEvent, MouseEventKind, MouseModifiers};
+use mez_terminal::{MouseButton, MouseEvent, MouseEventKind};
 
 // Mouse event parsing and policy classification.
 
@@ -474,15 +473,6 @@ pub enum CopyModeKeyAction {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     Cancel,
-}
-
-/// Runs the parse sgr mouse operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub fn parse_sgr_mouse(input: &[u8]) -> Result<Option<MouseEvent>> {
-    Ok(mez_terminal::parse_sgr_mouse(input))
 }
 
 /// Runs the classify mouse event operation for this subsystem.
