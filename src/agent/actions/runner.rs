@@ -278,6 +278,40 @@ pub(crate) fn apply_default_action_gates(
     expose_issue_actions_gate(request, issue_actions_enabled);
 }
 
+/// Plans post-batch action results and derives the resulting terminal state.
+fn planned_execution_from_batch(
+    runner: &AgentTurnRunner<'_, impl Sized>,
+    turn: &AgentTurnRecord,
+    context: &AgentContext,
+    request: ModelRequest,
+    response: super::super::ModelResponse,
+    latest_response_usage: ModelTokenUsage,
+    batch: super::super::MaapBatch,
+) -> Result<AgentTurnExecution> {
+    let final_turn = batch.final_turn;
+    let mut action_results = Vec::with_capacity(batch.actions.len());
+    let mut memory_budget = MemoryActionBudget::from_context(context);
+    for action in &batch.actions {
+        if let Some(result) =
+            memory_budget.accept_or_skip(turn, action, &batch.rationale, batch.thought.as_deref())
+        {
+            action_results.push(result);
+            continue;
+        }
+        action_results.push(runner.plan_action_result(turn, action)?);
+    }
+    let terminal_state = turn_state_from_action_results(&action_results, final_turn);
+    Ok(AgentTurnExecution {
+        request,
+        response,
+        latest_response_usage,
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results,
+        final_turn,
+        terminal_state,
+    })
+}
+
 /// Carries agent turn runner state for this subsystem.
 ///
 /// The fields are kept explicit so callers can inspect and move structured
@@ -575,7 +609,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
         response.usage = cumulative_usage;
         response.quota_usage = latest_quota_usage;
 
-        let Some(batch) = &response.action_batch else {
+        let Some(batch) = response.action_batch.clone() else {
             ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
             return Ok(AgentTurnExecution {
                 request: durable_response_request,
@@ -588,35 +622,20 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             });
         };
 
-        let final_turn = batch.final_turn;
-        let mut action_results = Vec::with_capacity(batch.actions.len());
-        let mut memory_budget = MemoryActionBudget::from_context(context);
-        for action in &batch.actions {
-            if let Some(result) = memory_budget.accept_or_skip(
-                &turn,
-                action,
-                &batch.rationale,
-                batch.thought.as_deref(),
-            ) {
-                action_results.push(result);
-                continue;
-            }
-            action_results.push(self.plan_action_result(&turn, action)?);
-        }
-        let terminal_state = turn_state_from_action_results(&action_results, final_turn);
-        if terminal_state != AgentTurnState::Running {
-            ledger.finish_turn(&turn.turn_id, terminal_state)?;
-        }
-
-        Ok(AgentTurnExecution {
-            request: durable_response_request,
+        let execution = planned_execution_from_batch(
+            self,
+            &turn,
+            context,
+            durable_response_request,
             response,
             latest_response_usage,
-            routing_token_usage_by_model: std::collections::BTreeMap::new(),
-            action_results,
-            final_turn,
-            terminal_state,
-        })
+            batch,
+        )?;
+        if execution.terminal_state != AgentTurnState::Running {
+            ledger.finish_turn(&turn.turn_id, execution.terminal_state)?;
+        }
+
+        Ok(execution)
     }
 
     /// Executes the `run_turn_with_shell_executor` operation for the owning subsystem.
@@ -1021,7 +1040,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         response.usage = cumulative_usage;
         response.quota_usage = latest_quota_usage;
 
-        let Some(batch) = &response.action_batch else {
+        let Some(batch) = response.action_batch.clone() else {
             ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
             return Ok(AgentTurnExecution {
                 request: durable_response_request,
@@ -1034,34 +1053,19 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             });
         };
 
-        let final_turn = batch.final_turn;
-        let mut action_results = Vec::with_capacity(batch.actions.len());
-        let mut memory_budget = MemoryActionBudget::from_context(context);
-        for action in &batch.actions {
-            if let Some(result) = memory_budget.accept_or_skip(
-                &turn,
-                action,
-                &batch.rationale,
-                batch.thought.as_deref(),
-            ) {
-                action_results.push(result);
-                continue;
-            }
-            action_results.push(self.plan_action_result(&turn, action)?);
-        }
-        let terminal_state = turn_state_from_action_results(&action_results, final_turn);
-        if terminal_state != AgentTurnState::Running {
-            ledger.finish_turn(&turn.turn_id, terminal_state)?;
-        }
-
-        Ok(AgentTurnExecution {
-            request: durable_response_request,
+        let execution = planned_execution_from_batch(
+            self,
+            &turn,
+            context,
+            durable_response_request,
             response,
             latest_response_usage,
-            routing_token_usage_by_model: std::collections::BTreeMap::new(),
-            action_results,
-            final_turn,
-            terminal_state,
-        })
+            batch,
+        )?;
+        if execution.terminal_state != AgentTurnState::Running {
+            ledger.finish_turn(&turn.turn_id, execution.terminal_state)?;
+        }
+
+        Ok(execution)
     }
 }
