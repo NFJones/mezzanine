@@ -103,12 +103,6 @@ pub use keys::{
     DEFAULT_MEZZANINE_TERMINFO, DEFAULT_PANE_TERM, DEFAULT_PASTE_BUFFER_LIMIT_BYTES,
     MEZZANINE_TERMINFO_NAMES, TERMINFO_FALLBACK_ORDER,
 };
-pub(crate) use mez_mux::theme::{
-    DEFAULT_UI_THEME_NAME, UiColorPair, UiTheme, UiThemeDefinition, builtin_ui_theme_definition,
-    resolve_ui_theme,
-};
-#[cfg(test)]
-pub(crate) use mez_mux::theme::{deepforest_ui_theme, default_ui_theme};
 pub use mouse::{
     CopyModeKeyAction, MouseAction, MousePaneAgentSelectorCell, MousePaneAgentStatusCell,
     MouseWindowActionFrameCell, PaneAgentStatusField, WindowFrameAction, WindowFrameCommandKind,

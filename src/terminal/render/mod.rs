@@ -10,7 +10,7 @@ use super::{
     MouseWindowActionFrameCell, PaneAgentStatusField, PaneGeometry, PaneRenderInput,
     ReadlinePromptRegion, RenderedClientView, Result, Size, TerminalClientLoopConfig,
     TerminalFrameContext, TerminalPaneFrameContext, TerminalScreen, TerminalStyleSpan,
-    TerminalStyledLine, UiColorPair, UiTheme, Window, WindowFrameAction,
+    TerminalStyledLine, Window, WindowFrameAction,
 };
 use mez_mux::copy::CopyPosition;
 use mez_mux::input::{MouseWindowFrameCell, MouseWindowGroupFrameCell};
@@ -18,6 +18,7 @@ use mez_mux::presentation::{
     TerminalFramePosition, TerminalFrameStyle, TerminalWindowFrameContext,
     TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
 };
+use mez_mux::theme::{UiColorPair, UiTheme};
 
 // Client view composition and pane/window rendering.
 mod dividers;

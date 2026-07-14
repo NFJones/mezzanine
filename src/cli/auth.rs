@@ -6,12 +6,13 @@
 
 use super::{
     Args, AuthMethod, AuthPaths, AuthStore, CliEnv, CliOutputFormat, ConfigPaths, MezError,
-    OpenAiProviderCredential, PathBuf, Result, Serialize, Subcommand, UiTheme, Write, fs,
-    json_escape, load_runtime_config_layers, run_openai_browser_login_with_theme_async,
+    OpenAiProviderCredential, PathBuf, Result, Serialize, Subcommand, Write, fs, json_escape,
+    load_runtime_config_layers, run_openai_browser_login_with_theme_async,
     run_openai_device_code_login_async, runtime_effective_config_value,
     runtime_ui_theme_from_config, serialize_json, write_json_or_plain,
 };
 use crate::auth::selected_auth_method_from_flags;
+use mez_mux::theme::UiTheme;
 
 // Authentication subcommands and output formatting.
 

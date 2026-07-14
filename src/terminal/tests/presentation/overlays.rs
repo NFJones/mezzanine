@@ -2,13 +2,14 @@
 
 use crate::terminal::render::compose_client_presentation_with_styles;
 use crate::terminal::{
-    ClientViewRole, ReadlinePromptRegion, RenderedClientView, Size, TerminalCursorStyle, UiTheme,
+    ClientViewRole, ReadlinePromptRegion, RenderedClientView, Size, TerminalCursorStyle,
     compose_display_overlay_line_style_spans, compose_display_overlay_lines,
     compose_display_region_overlay_line_style_spans, compose_display_region_overlay_lines,
     compose_modal_display_overlay_line_style_spans, compose_modal_display_overlay_lines,
     modal_display_overlay_max_scroll,
 };
 use mez_mux::copy::CopyPosition;
+use mez_mux::theme::UiTheme;
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 
 /// Verifies client presentation highlights the submitted pager search match.

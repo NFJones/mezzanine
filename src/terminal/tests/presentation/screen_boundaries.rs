@@ -2,8 +2,9 @@
 
 use crate::terminal::{
     ClientStatusKind, ClientStatusLine, ClientViewRole, RenderedClientView, Size,
-    TerminalCursorStyle, UiTheme, compose_client_presentation, pane_divider_glyph_for_test,
+    TerminalCursorStyle, compose_client_presentation, pane_divider_glyph_for_test,
 };
+use mez_mux::theme::UiTheme;
 
 /// Verifies client presentation renders the status line inside the authoritative size.
 ///

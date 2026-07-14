@@ -10,8 +10,9 @@ use crate::readline::ReadlinePromptKind;
 use crate::terminal::{
     ClientStatusKind, ClientStatusLine, ReadlinePrompt, ReadlinePromptClientPresentation,
     ReadlinePromptRegion, ReadlinePromptStatusRow, RenderedClientView, Size,
-    TerminalPaneFrameContext, UiColorPair, UiTheme,
+    TerminalPaneFrameContext,
 };
+use mez_mux::theme::{UiColorPair, UiTheme};
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalStyledLine};
 
 use super::super::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;

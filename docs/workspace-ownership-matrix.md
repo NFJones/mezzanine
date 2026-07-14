@@ -50,7 +50,7 @@ persistence, transport, and composition adapters.
 | `src/terminal/copy.rs`, `paste.rs`, `keys.rs`, `mouse.rs` | `mez-mux` domain plus root product policy adapters | temporary | Move generic copy/paste, binding, and mouse-action behavior. Retain transcript normalization, clipboard commands, agent selectors, templated actions, and overlays in root. |
 | `src/terminal/fd.rs` | root host terminal adapter | adapter | Keep raw terminal mode, FD polling, and host restoration product-owned; depend on mux/terminal contracts directly. |
 | `src/terminal/screen.rs` | root OSC 133 product adapter over `mez-terminal` | adapter | Keep the explicitly named shell-transaction decoder product-owned; do not restore the removed profile facade or add terminal-screen forwarding here. |
-| `src/terminal/mod.rs` | product presentation/host facade | temporary | Remove broad terminal and mux forwarding exports. Split host I/O and product presentation into explicit adapter modules. |
+| `src/terminal/mod.rs` | product presentation/host facade | temporary | Mux theme forwarding is removed; continue removing broad copy/render/client exports and split host I/O from product presentation adapters. |
 | `src/terminal/tests/` | split by behavior owner | temporary | Move neutral rendering/input/copy tests to `mez-mux`; retain real host-loop, product overlay, agent annotation, and raw-mode integration tests. |
 | `src/readline/` | `mez-mux` generic prompt behavior plus root command/selector adapter | temporary | Move remaining neutral prompt and decoder integration. Retain product command completion, selectors, runtime effects, and agent-specific semantics. |
 
@@ -71,8 +71,8 @@ The following current exports are migration markers, not completion evidence:
 - `src/lib.rs` re-exports `mez_core::ids`.
 - `src/agent/mod.rs` broadly re-exports `mez-agent` contracts and product
   implementations through one facade.
-- `src/terminal/mod.rs` forwards `mez-terminal` screen/style/state contracts
-  and mux theme contracts.
+- `src/terminal/mod.rs` still forwards product copy/render/client surfaces; mux
+  theme contracts are now imported directly from `mez-mux`.
 - `src/readline/mod.rs` and `src/readline/types.rs` forward mux readline types.
 - Product permission, MCP, instruction, subagent, provider, config, and runtime
   modules still forward selected `mez-agent` contracts.

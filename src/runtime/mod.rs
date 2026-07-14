@@ -143,13 +143,11 @@ use crate::subagent::{
 };
 use crate::terminal::{
     AttachedTerminalClientStepPlan, ClientViewRole, CopyMode, CopyModeKeyAction, DEFAULT_PANE_TERM,
-    DEFAULT_UI_THEME_NAME, HostClipboard, HostClipboardCommand, MouseAction,
-    MouseWindowActionFrameCell, PasteBuffer, PasteBuffers, RenderedClientView,
-    TerminalClientLoopAction, TerminalClientLoopConfig, TerminalCursorStyle, TerminalFrameContext,
-    UiTheme, UiThemeDefinition, WindowFrameAction, agent_prompt_reserved_line_count,
-    builtin_ui_theme_definition, pane_border_cells_for_geometries, render_attached_client_view,
-    rendered_pane_geometries, resolve_ui_theme, route_client_input_actions,
-    window_frame_action_pillbox_cells, window_frame_pillbox_cells,
+    HostClipboard, HostClipboardCommand, MouseAction, MouseWindowActionFrameCell, PasteBuffer,
+    PasteBuffers, RenderedClientView, TerminalClientLoopAction, TerminalClientLoopConfig,
+    TerminalCursorStyle, TerminalFrameContext, WindowFrameAction, agent_prompt_reserved_line_count,
+    pane_border_cells_for_geometries, render_attached_client_view, rendered_pane_geometries,
+    route_client_input_actions, window_frame_action_pillbox_cells, window_frame_pillbox_cells,
 };
 use crate::transcript::{
     AgentSessionMetadata, AgentTranscriptStore, TranscriptEntry, TranscriptRole,
@@ -171,6 +169,7 @@ use mez_mux::process::{
 use mez_mux::readline::ReadlineOutcome;
 use mez_mux::session::{ClientRole, ClientState, ObserverDecisionState, Session};
 use mez_mux::theme::valid_color_alias_name;
+use mez_mux::theme::{UiThemeDefinition, builtin_ui_theme_definition, resolve_ui_theme};
 use mez_terminal::{
     DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, TerminalOscEvent, TerminalScreen,
 };

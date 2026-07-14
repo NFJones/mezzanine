@@ -6,8 +6,8 @@
 
 use super::{
     BTreeMap, BorrowedFd, Errno, MezError, MousePaneAgentSelectorCell, MousePaneAgentStatusCell,
-    MouseWindowActionFrameCell, OptionalActions, RawFd, Result, Size, Termios, UiTheme,
-    WindowFrameAction, borrow_raw_fd, fcntl_getfl, tcgetattr, tcgetwinsize, tcsetattr,
+    MouseWindowActionFrameCell, OptionalActions, RawFd, Result, Size, Termios, WindowFrameAction,
+    borrow_raw_fd, fcntl_getfl, tcgetattr, tcgetwinsize, tcsetattr,
 };
 use crate::readline::ReadlinePrompt;
 use mez_mux::copy::CopyPosition;
@@ -15,6 +15,7 @@ use mez_mux::input::{
     KeyBindings, KeyChord, MouseBorderCell, MousePaneRegion, MousePolicy, MouseWindowFrameCell,
     MouseWindowGroupFrameCell,
 };
+use mez_mux::theme::UiTheme;
 #[cfg(test)]
 use rustix::event::{PollFd as RustixPollFd, PollFlags, Timespec, poll as rustix_poll};
 #[cfg(test)]

@@ -20,7 +20,7 @@ use sha2::Digest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::error::{MezError, MezErrorKind, Result};
-use crate::terminal::UiTheme;
+use mez_mux::theme::UiTheme;
 use mez_terminal::TerminalColor;
 
 /// Defines the DEFAULT ISSUER const used by this subsystem.
@@ -1987,9 +1987,9 @@ mod tests {
     /// logic to terminal rendering internals.
     #[test]
     fn login_page_theme_tokens_adapt_to_light_theme() {
-        let theme = crate::terminal::resolve_ui_theme(
+        let theme = mez_mux::theme::resolve_ui_theme(
             "gruvbox_light",
-            crate::terminal::builtin_ui_theme_definition("gruvbox_light").unwrap(),
+            mez_mux::theme::builtin_ui_theme_definition("gruvbox_light").unwrap(),
         )
         .unwrap();
         let tokens = login_page_theme_tokens(&theme);

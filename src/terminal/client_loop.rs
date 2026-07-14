@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use super::mouse::mouse_copy_position;
 #[cfg(test)]
 use super::{
-    AttachedTerminalFd, Errno, TerminalFdInterest, UiTheme, poll_attached_terminal_fd_readiness,
+    AttachedTerminalFd, Errno, TerminalFdInterest, poll_attached_terminal_fd_readiness,
     read_attached_terminal_size, rustix_read, rustix_write,
 };
 use super::{
@@ -25,6 +25,7 @@ use mez_mux::input::{
     classify_prefix_binding, classify_terminal_input_with_command_bindings, key_chord_input_bytes,
     parse_key_chord_bytes,
 };
+use mez_mux::theme::UiTheme;
 
 // Attached terminal loop planning and I/O abstraction.
 
@@ -234,7 +235,7 @@ pub struct RenderedClientView {
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub ui_theme: super::UiTheme,
+    pub ui_theme: UiTheme,
     /// Stores the agent prompt region value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

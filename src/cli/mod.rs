@@ -63,7 +63,7 @@ use crate::snapshot::{
 };
 use crate::terminal::{
     AttachedTerminalClientLoopConfig, AttachedTerminalOutputModes, ClientViewRole,
-    TerminalClientLoopConfig, TerminalCursorStyle, UiTheme, attached_terminal_output_disconnected,
+    TerminalClientLoopConfig, TerminalCursorStyle, attached_terminal_output_disconnected,
 };
 use crate::transcript::AgentTranscriptStore;
 use mez_mux::layout::Size;

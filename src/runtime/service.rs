@@ -359,7 +359,7 @@ impl RuntimeSessionService {
             terminal_agent_wrap_column_cap: crate::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP,
             terminal_reduced_motion: false,
             terminal_clipboard: "external".to_string(),
-            ui_theme: crate::terminal::UiTheme::default(),
+            ui_theme: mez_mux::theme::UiTheme::default(),
             key_bindings: KeyBindings::default(),
             command_bindings: BTreeMap::new(),
             permission_policy: PermissionPolicy::default(),

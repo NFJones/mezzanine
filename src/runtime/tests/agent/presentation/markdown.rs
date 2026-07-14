@@ -678,9 +678,9 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
 #[test]
 fn runtime_agent_markdown_uses_dark_neutral_accents_on_light_theme() {
     let mut service = test_runtime_service();
-    service.ui_theme = crate::terminal::resolve_ui_theme(
+    service.ui_theme = mez_mux::theme::resolve_ui_theme(
         "catppuccin_latte",
-        crate::terminal::builtin_ui_theme_definition("catppuccin_latte").unwrap(),
+        mez_mux::theme::builtin_ui_theme_definition("catppuccin_latte").unwrap(),
     )
     .unwrap();
     service

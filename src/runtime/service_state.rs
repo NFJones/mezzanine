@@ -24,7 +24,7 @@ use super::{
     RuntimeSideEffect, RuntimeStatusPillCache, RuntimeStatusPillDefinition, ScopeRegistry, Session,
     SessionApprovalStore, SessionMemoryStore, SessionRecord, SessionRegistry, Size,
     SnapshotRepository, SplitDirection, SubagentProfile, SubagentScopeDeclaration,
-    TerminalCursorStyle, TerminalScreen, ToolDiscoveryCache, UiTheme, WindowFrameAction, WindowId,
+    TerminalCursorStyle, TerminalScreen, ToolDiscoveryCache, WindowFrameAction, WindowId,
     execute_streamable_http_exchange, mcp_tools_call_operation,
 };
 use crate::error::MezErrorKind;
@@ -34,6 +34,7 @@ use crate::terminal::{PaneAgentStatusField, TerminalEmojiWidth};
 use mez_mux::copy::CopyPosition;
 use mez_mux::layout::PaneTitleSource;
 use mez_mux::presentation::{TerminalFramePosition, TerminalFrameStyle};
+use mez_mux::theme::UiTheme;
 use mez_terminal::TerminalStyleSpan;
 use secrecy::ExposeSecret;
 

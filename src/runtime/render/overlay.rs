@@ -625,7 +625,7 @@ fn list_themes_command_display_detects_markdown_tables() {
 #[cfg(test)]
 #[test]
 fn list_themes_markdown_overlay_preserves_actions_and_preview_colors() {
-    let ui_theme = crate::terminal::deepforest_ui_theme();
+    let ui_theme = mez_mux::theme::deepforest_ui_theme();
     let content = runtime_agent_shell_markdown_overlay_content(
         Some("list-themes".to_string()),
         "| active | theme | preview | source | preview colors | action |\n| --- | --- | --- | --- | --- | --- |\n| ★ active | kanagawa | █████ | builtin | #111111,#222222,#333333,#444444,#555555 | [`set-theme kanagawa`](mez-agent:set-theme%20kanagawa) |",
@@ -1864,7 +1864,7 @@ fn record_browser_prompt_text(
 
 fn render_record_browser_overlay(
     overlay: &mut RuntimeDisplayOverlay,
-    ui_theme: &crate::terminal::UiTheme,
+    ui_theme: &mez_mux::theme::UiTheme,
 ) -> bool {
     let Some(record_browser) = overlay.record_browser.as_ref() else {
         return false;
@@ -2639,7 +2639,7 @@ pub(super) fn runtime_overlay_text_at(line: &mut String, column: usize, width: u
 pub(super) fn runtime_pane_agent_selector_rendition(
     field: PaneAgentStatusField,
     active: bool,
-    ui_theme: &crate::terminal::UiTheme,
+    ui_theme: &mez_mux::theme::UiTheme,
 ) -> mez_terminal::GraphicRendition {
     let pair = if active {
         match field {

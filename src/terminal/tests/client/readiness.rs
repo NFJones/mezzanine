@@ -5,10 +5,11 @@ use crate::terminal::{
     AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopIo, AttachedTerminalFd,
     AttachedTerminalFdLoopIo, AttachedTerminalFdRole, ClientViewRole, Duration, RenderedClientView,
     Size, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalCursorStyle,
-    TerminalFdInterest, TerminalRawModeGuard, UiTheme, poll_attached_terminal_fd_readiness,
+    TerminalFdInterest, TerminalRawModeGuard, poll_attached_terminal_fd_readiness,
     run_attached_terminal_client_loop,
 };
 use mez_mux::input::MuxAction;
+use mez_mux::theme::UiTheme;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;

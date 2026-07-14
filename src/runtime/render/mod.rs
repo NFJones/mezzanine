@@ -51,7 +51,7 @@ use crate::selector::{
     SelectorCandidate, SelectorCandidateKind, SelectorExtraCandidate, SelectorSurface,
 };
 use crate::terminal::{
-    MousePaneAgentSelectorCell, MousePaneAgentStatusCell, PaneAgentStatusField, UiTheme,
+    MousePaneAgentSelectorCell, MousePaneAgentStatusCell, PaneAgentStatusField,
     WindowFrameCommandKind, compose_modal_display_overlay_lines,
     compose_prompt_overlay_presentation_with_styles, modal_display_overlay_max_scroll,
     modal_display_overlay_page_rows, pane_frame_agent_status_pillbox_cells,
@@ -65,6 +65,7 @@ use mez_mux::presentation::{
     TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
 };
 use mez_mux::readline::DEFAULT_READLINE_HISTORY_LIMIT;
+use mez_mux::theme::UiTheme;
 use mez_terminal::{GraphicRendition, TerminalStyleSpan, TerminalStyledLine};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
@@ -190,8 +191,9 @@ mod tests {
         wrap_agent_terminal_text, wrapped_prefixed_agent_terminal_lines,
     };
     use crate::agent::{AgentAction, AgentActionPayload};
-    use crate::terminal::{PaneAgentStatusField, default_ui_theme};
+    use crate::terminal::PaneAgentStatusField;
     use mez_mux::layout::Size;
+    use mez_mux::theme::default_ui_theme;
     use mez_terminal::{GraphicRendition, TerminalStyleSpan};
 
     /// Verifies normal-mode mutation result rendering treats patches as the
@@ -335,7 +337,7 @@ mod tests {
     /// filesystem change.
     #[test]
     fn readable_agent_diff_display_lines_parse_noisy_unified_diff() {
-        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
         let lines = readable_agent_diff_display_lines(
             "\n∙\nMEZ_RESTORE_NOUNSET_NOW=$MEZ_RESTORE_NOUNSET\n\
              diff -- update file\n--- a/src/runtime/agent.rs\n+++ b/src/runtime/agent.rs\n\
@@ -372,7 +374,7 @@ mod tests {
     /// making the parsed diff lossy once hunk body parsing has started.
     #[test]
     fn readable_agent_diff_display_lines_preserve_diff_body_blank_and_wrapper_text() {
-        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
         let lines = readable_agent_diff_display_lines(
             "diff -- update file\n--- a/src/config.txt\n+++ b/src/config.txt\n\
              @@ -1,3 +1,3 @@\n \n-MEZ_STATUS=old\n+unset MEZ_STATUS\n",
@@ -402,7 +404,7 @@ mod tests {
     /// while leaving unbreakable long words for the pane to wrap naturally.
     #[test]
     fn readable_agent_diff_display_lines_wrap_at_spaces_only() {
-        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
         let lines = readable_agent_diff_display_lines_for_width(
             "diff -- update file\n--- a/src/main.rs\n+++ b/src/main.rs\n\
              @@ -1,1 +1,1 @@\n+alpha beta gamma delta epsilon zeta\n\
@@ -443,7 +445,7 @@ mod tests {
     /// changes use this preview format instead of unified hunks.
     #[test]
     fn readable_agent_diff_display_lines_parse_path_delta() {
-        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
         let lines = readable_agent_diff_display_lines("diff -- delete path\n- a.txt\n", &ui_theme)
             .into_iter()
             .map(|line| line.display)
@@ -458,11 +460,11 @@ mod tests {
     /// coloring once a path provides enough information to pick a syntax.
     #[test]
     fn readable_agent_diff_display_lines_highlight_known_file_type() {
-        let mut definition = crate::terminal::builtin_ui_theme_definition("deepforest").unwrap();
+        let mut definition = mez_mux::theme::builtin_ui_theme_definition("deepforest").unwrap();
         definition
             .colors
             .insert("syntax_type_fg".to_string(), "#010203".to_string());
-        let ui_theme = crate::terminal::resolve_ui_theme("syntax-test", definition).unwrap();
+        let ui_theme = mez_mux::theme::resolve_ui_theme("syntax-test", definition).unwrap();
         let lines = readable_agent_diff_display_lines(
             "diff -- update file\n--- a/src/main.rs\n+++ b/src/main.rs\n\
              @@ -1,1 +1,1 @@\n-fn old() {}\n+fn new() {}\n",
@@ -502,11 +504,11 @@ mod tests {
     /// commands are rendered without separate assistant summary lines.
     #[test]
     fn command_preview_terminal_rendered_lines_highlight_shell_syntax() {
-        let mut definition = crate::terminal::builtin_ui_theme_definition("deepforest").unwrap();
+        let mut definition = mez_mux::theme::builtin_ui_theme_definition("deepforest").unwrap();
         definition
             .colors
             .insert("syntax_keyword_fg".to_string(), "#010203".to_string());
-        let ui_theme = crate::terminal::resolve_ui_theme("syntax-test", definition).unwrap();
+        let ui_theme = mez_mux::theme::resolve_ui_theme("syntax-test", definition).unwrap();
         let lines = command_preview_terminal_rendered_lines(
             "if true; then echo \"ok\"; fi",
             80,
@@ -750,7 +752,7 @@ mod tests {
     /// resolving a syntax.
     #[test]
     fn readable_agent_diff_display_lines_falls_back_for_unknown_file_type() {
-        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
         let lines = readable_agent_diff_display_lines(
             "diff -- update file\n--- a/file.unknown-mez\n+++ b/file.unknown-mez\n\
              @@ -1,1 +1,1 @@\n-old value\n+new value\n",
@@ -775,7 +777,7 @@ mod tests {
     /// forcing that command into a bespoke renderer.
     #[test]
     fn command_markdown_renders_modified_file_count_spans() {
-        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
         let lines = render_command_markdown_body_lines(
             "- edited `src/lib.rs` (<span class=\"mez-diff-addition\">+12</span> <span class=\"mez-diff-deletion\">-3</span>)",
             &ui_theme,
@@ -809,7 +811,7 @@ mod tests {
     /// transcript and syntax colors for diff gutters and file-aware syntax spans.
     #[test]
     fn readable_agent_diff_display_lines_follow_active_theme_palette() {
-        let mut definition = crate::terminal::builtin_ui_theme_definition("deepforest").unwrap();
+        let mut definition = mez_mux::theme::builtin_ui_theme_definition("deepforest").unwrap();
         definition.colors.insert(
             "agent_transcript_user_fg".to_string(),
             "#010203".to_string(),
@@ -837,7 +839,7 @@ mod tests {
         definition
             .colors
             .insert("syntax_operator_fg".to_string(), "#161718".to_string());
-        let ui_theme = crate::terminal::resolve_ui_theme("constant-diff-test", definition).unwrap();
+        let ui_theme = mez_mux::theme::resolve_ui_theme("constant-diff-test", definition).unwrap();
         let lines = readable_agent_diff_display_lines(
             "diff -- update file\n--- a/src/main.rs\n+++ b/src/main.rs\n\
              @@ -1,1 +1,1 @@\n-old_value()\n+fn new_value() {}\n",
@@ -908,7 +910,7 @@ mod tests {
     /// out of the pane transcript.
     #[test]
     fn agent_shell_markdown_overlay_preserves_agent_links() {
-        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
         let content = runtime_agent_shell_markdown_overlay_content(
             Some("list-sessions".to_string()),
             "- [`saved`](mez-agent:%2Fresume%20saved)",
@@ -949,7 +951,7 @@ mod tests {
     /// addition to the selection metadata.
     #[test]
     fn agent_shell_markdown_overlay_preserves_selectable_link_style_spans() {
-        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
         let content = runtime_agent_shell_markdown_overlay_content(
             Some("list-sessions".to_string()),
             "- [`saved`](mez-agent:%2Fresume%20saved)",
@@ -1000,7 +1002,7 @@ mod tests {
     /// fallback selection span leak onto the tail cell.
     #[test]
     fn active_markdown_overlay_link_keeps_tail_cell_link_styling() {
-        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
         let content = runtime_agent_shell_markdown_overlay_content(
             Some("list-sessions".to_string()),
             "- [`saved`](mez-agent:%2Fresume%20saved)",
@@ -1058,7 +1060,7 @@ mod tests {
     /// including the final character that previously fell back to plain text.
     #[test]
     fn active_saved_session_overlay_uuid_keeps_tail_cell_link_styling() {
-        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
         let session_id = "018f6b3a-1b2c-7000-9000-cafebabefeed";
         let content = runtime_agent_shell_markdown_overlay_content(
             Some("list-sessions".to_string()),
@@ -1118,7 +1120,7 @@ mod tests {
     /// rather than leaking one column left onto the separator space.
     #[test]
     fn active_saved_session_overlay_uuid_does_not_style_previous_cell() {
-        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
         let session_id = "018f6b3a-1b2c-7000-9000-cafebabefeed";
         let content = runtime_agent_shell_markdown_overlay_content(
             Some("list-sessions".to_string()),
@@ -1169,7 +1171,7 @@ mod tests {
     /// visually shift left into the gutter column.
     #[test]
     fn active_markdown_overlay_front_of_line_link_keeps_gutter_separate() {
-        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
         let content = runtime_agent_shell_markdown_overlay_content(
             Some("status".to_string()),
             "[`saved`](mez-agent:%2Fresume%20saved)",
@@ -1262,7 +1264,7 @@ mod tests {
     /// composed after the selected-link span list.
     #[test]
     fn active_markdown_overlay_link_style_stops_before_following_cell() {
-        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
         let content = runtime_agent_shell_markdown_overlay_content(
             Some("status".to_string()),
             "[`saved`](mez-agent:%2Fresume%20saved) next",
@@ -1311,7 +1313,7 @@ mod tests {
     /// the dropdown text.
     #[test]
     fn pane_agent_selector_overlay_clips_underlying_pane_styling() {
-        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
         let overlay_column = 4;
         let overlay_width = 8;
         let pane_rendition = GraphicRendition {
@@ -1370,7 +1372,7 @@ mod tests {
     /// leave surrounding text with its original body/link rendition.
     #[test]
     fn display_overlay_search_highlights_only_matching_columns() {
-        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
         let link_rendition = GraphicRendition {
             underline: true,
             foreground: Some(ui_theme.colors.agent_transcript_command.foreground),
@@ -1442,7 +1444,7 @@ mod tests {
     /// actually off-screen.
     #[test]
     fn display_overlay_search_skips_offscreen_match_ranges() {
-        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
         let overlay = RuntimeDisplayOverlay {
             lines: vec!["visible text then hidden needle".to_string()],
             line_style_spans: vec![Vec::new()],
@@ -1481,7 +1483,7 @@ mod tests {
     /// navigation expose one selection per logical session.
     #[test]
     fn agent_shell_markdown_overlay_linkifies_each_session_id_once() {
-        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
         let content = runtime_agent_shell_markdown_overlay_content(
             Some("list-sessions".to_string()),
             "- [`018f6b3a-1b2c-7000-9000-cafebabefeed`](mez-agent:%2Fresume%20018f6b3a-1b2c-7000-9000-cafebabefeed)",
@@ -1511,7 +1513,7 @@ mod tests {
     /// styling or become the mouse target for the hidden command.
     #[test]
     fn agent_shell_markdown_overlay_maps_hidden_links_to_exact_rendered_occurrence() {
-        let ui_theme = crate::terminal::deepforest_ui_theme();
+        let ui_theme = mez_mux::theme::deepforest_ui_theme();
         let content = runtime_agent_shell_markdown_overlay_content(
             Some("status".to_string()),
             "saved before [`saved`](mez-agent:%2Fresume%20saved)",

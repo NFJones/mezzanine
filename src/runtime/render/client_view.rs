@@ -15,7 +15,7 @@ use super::*;
 pub(super) fn apply_copy_mode_selection_spans(
     copy_mode: &CopyMode,
     lines: &mut [TerminalStyledLine],
-    ui_theme: &crate::terminal::UiTheme,
+    ui_theme: &mez_mux::theme::UiTheme,
 ) {
     let Some((start, end)) = copy_mode.selection() else {
         return;
@@ -95,7 +95,7 @@ pub(super) fn ordered_copy_positions(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn copy_selection_rendition(
-    ui_theme: &crate::terminal::UiTheme,
+    ui_theme: &mez_mux::theme::UiTheme,
 ) -> mez_terminal::GraphicRendition {
     let mut rendition = ui_theme.colors.copy_selection.rendition();
     rendition.inverse = true;
