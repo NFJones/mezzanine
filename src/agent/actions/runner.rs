@@ -37,7 +37,7 @@ use super::recovery::{
     summarize_provider_failure_execution,
 };
 use super::{AgentTurnExecution, turn_state_from_action_results};
-use mez_agent::SubagentScopeDeclaration;
+use mez_agent::{AgentTurnRecoveryBudget, SubagentScopeDeclaration};
 
 /// Maximum number of ephemeral provider retries after a MAAP validation error.
 ///
@@ -352,7 +352,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             self.memory_actions_enabled,
             self.issue_actions_enabled,
         );
-        let mut repair_attempts = 0usize;
+        let mut repair_budget = AgentTurnRecoveryBudget::new(MAAP_REPAIR_ATTEMPT_LIMIT);
         let mut response_request: ModelRequest;
         let mut durable_response_request = request.clone();
         let mut cumulative_usage = ModelTokenUsage::default();
@@ -363,15 +363,14 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             let response = match self.provider.send_request(&request) {
                 Ok(response) => response,
                 Err(error)
-                    if repair_attempts < MAAP_REPAIR_ATTEMPT_LIMIT
-                        && maap_provider_error_is_repairable(&error) =>
+                    if maap_provider_error_is_repairable(&error)
+                        && repair_budget.record_attempt() =>
                 {
-                    repair_attempts = repair_attempts.saturating_add(1);
                     request = maap_repair_request(
                         &response_request,
                         error.message(),
                         error.provider_raw_text().unwrap_or(""),
-                        repair_attempts,
+                        repair_budget.attempts(),
                     );
                     continue;
                 }
@@ -428,13 +427,12 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                 let error = MezError::invalid_args(
                     "provider response did not include a parsed MAAP action_batch",
                 );
-                if repair_attempts < MAAP_REPAIR_ATTEMPT_LIMIT {
-                    repair_attempts = repair_attempts.saturating_add(1);
+                if repair_budget.record_attempt() {
                     request = maap_repair_request(
                         &response_request,
                         error.message(),
                         &response.raw_text,
-                        repair_attempts,
+                        repair_budget.attempts(),
                     );
                     continue;
                 }
@@ -460,7 +458,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                 mixed_capability_continuation_request(&response_request, batch)
             {
                 request = next_request;
-                repair_attempts = 0;
+                repair_budget.reset();
                 continue;
             }
             if let Err(error) = validate_batch_allowed_actions(batch, &request) {
@@ -476,16 +474,15 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                     &error,
                 ) {
                     request = next_request;
-                    repair_attempts = 0;
+                    repair_budget.reset();
                     continue;
                 }
-                if repair_attempts < MAAP_REPAIR_ATTEMPT_LIMIT {
-                    repair_attempts = repair_attempts.saturating_add(1);
+                if repair_budget.record_attempt() {
                     request = maap_repair_request(
                         &response_request,
                         error.message(),
                         &response.raw_text,
-                        repair_attempts,
+                        repair_budget.attempts(),
                     );
                     continue;
                 }
@@ -510,13 +507,12 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             if let Err(error) =
                 batch.validate(&turn, &self.available_mcp_servers, self.available_mcp_tools)
             {
-                if repair_attempts < MAAP_REPAIR_ATTEMPT_LIMIT {
-                    repair_attempts = repair_attempts.saturating_add(1);
+                if repair_budget.record_attempt() {
                     request = maap_repair_request(
                         &response_request,
                         error.message(),
                         &response.raw_text,
-                        repair_attempts,
+                        repair_budget.attempts(),
                     );
                     continue;
                 }
@@ -541,13 +537,12 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             let capability_request = match capability_requests_from_batch(batch) {
                 Ok(capability_request) => capability_request,
                 Err(error) => {
-                    if repair_attempts < MAAP_REPAIR_ATTEMPT_LIMIT {
-                        repair_attempts = repair_attempts.saturating_add(1);
+                    if repair_budget.record_attempt() {
                         request = maap_repair_request(
                             &response_request,
                             error.message(),
                             &response.raw_text,
-                            repair_attempts,
+                            repair_budget.attempts(),
                         );
                         continue;
                     }
@@ -572,7 +567,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             };
             if let Some(capability_request) = capability_request {
                 request = capability_continuation_request(&response_request, &capability_request);
-                repair_attempts = 0;
+                repair_budget.reset();
                 continue;
             }
             break response;
@@ -795,7 +790,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             self.memory_actions_enabled,
             self.issue_actions_enabled,
         );
-        let mut repair_attempts = 0usize;
+        let mut repair_budget = AgentTurnRecoveryBudget::new(MAAP_REPAIR_ATTEMPT_LIMIT);
         let mut response_request: ModelRequest;
         let mut durable_response_request = request.clone();
         let mut cumulative_usage = ModelTokenUsage::default();
@@ -806,15 +801,14 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             let response = match self.provider.send_request_async(&request).await {
                 Ok(response) => response,
                 Err(error)
-                    if repair_attempts < MAAP_REPAIR_ATTEMPT_LIMIT
-                        && maap_provider_error_is_repairable(&error) =>
+                    if maap_provider_error_is_repairable(&error)
+                        && repair_budget.record_attempt() =>
                 {
-                    repair_attempts = repair_attempts.saturating_add(1);
                     request = maap_repair_request(
                         &response_request,
                         error.message(),
                         error.provider_raw_text().unwrap_or(""),
-                        repair_attempts,
+                        repair_budget.attempts(),
                     );
                     continue;
                 }
@@ -875,13 +869,12 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                 let error = MezError::invalid_args(
                     "provider response did not include a parsed MAAP action_batch",
                 );
-                if repair_attempts < MAAP_REPAIR_ATTEMPT_LIMIT {
-                    repair_attempts = repair_attempts.saturating_add(1);
+                if repair_budget.record_attempt() {
                     request = maap_repair_request(
                         &response_request,
                         error.message(),
                         &response.raw_text,
-                        repair_attempts,
+                        repair_budget.attempts(),
                     );
                     continue;
                 }
@@ -908,7 +901,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                 mixed_capability_continuation_request(&response_request, batch)
             {
                 request = next_request;
-                repair_attempts = 0;
+                repair_budget.reset();
                 continue;
             }
             if let Err(error) = validate_batch_allowed_actions(batch, &request) {
@@ -924,16 +917,15 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                     &error,
                 ) {
                     request = next_request;
-                    repair_attempts = 0;
+                    repair_budget.reset();
                     continue;
                 }
-                if repair_attempts < MAAP_REPAIR_ATTEMPT_LIMIT {
-                    repair_attempts = repair_attempts.saturating_add(1);
+                if repair_budget.record_attempt() {
                     request = maap_repair_request(
                         &response_request,
                         error.message(),
                         &response.raw_text,
-                        repair_attempts,
+                        repair_budget.attempts(),
                     );
                     continue;
                 }
@@ -959,13 +951,12 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             if let Err(error) =
                 batch.validate(&turn, &self.available_mcp_servers, self.available_mcp_tools)
             {
-                if repair_attempts < MAAP_REPAIR_ATTEMPT_LIMIT {
-                    repair_attempts = repair_attempts.saturating_add(1);
+                if repair_budget.record_attempt() {
                     request = maap_repair_request(
                         &response_request,
                         error.message(),
                         &response.raw_text,
-                        repair_attempts,
+                        repair_budget.attempts(),
                     );
                     continue;
                 }
@@ -991,13 +982,12 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             let capability_request = match capability_requests_from_batch(batch) {
                 Ok(capability_request) => capability_request,
                 Err(error) => {
-                    if repair_attempts < MAAP_REPAIR_ATTEMPT_LIMIT {
-                        repair_attempts = repair_attempts.saturating_add(1);
+                    if repair_budget.record_attempt() {
                         request = maap_repair_request(
                             &response_request,
                             error.message(),
                             &response.raw_text,
-                            repair_attempts,
+                            repair_budget.attempts(),
                         );
                         continue;
                     }
@@ -1023,7 +1013,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             };
             if let Some(capability_request) = capability_request {
                 request = capability_continuation_request(&response_request, &capability_request);
-                repair_attempts = 0;
+                repair_budget.reset();
                 continue;
             }
             break response;

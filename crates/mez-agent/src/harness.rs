@@ -20,6 +20,42 @@ use crate::{
 /// Default number of recoverable provider failures accepted for one turn.
 pub const DEFAULT_TURN_RECOVERY_LIMIT: usize = 2;
 
+/// Bounded recovery state shared by portable and product-adapted turn loops.
+///
+/// The budget records only accepted recovery attempts. Callers may reset it
+/// after a valid continuation response starts a new negotiation phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentTurnRecoveryBudget {
+    limit: usize,
+    attempts: usize,
+}
+
+impl AgentTurnRecoveryBudget {
+    /// Creates an unused recovery budget with the supplied attempt limit.
+    pub const fn new(limit: usize) -> Self {
+        Self { limit, attempts: 0 }
+    }
+
+    /// Returns the number of accepted recovery attempts.
+    pub const fn attempts(self) -> usize {
+        self.attempts
+    }
+
+    /// Records one recovery attempt when capacity remains.
+    pub const fn record_attempt(&mut self) -> bool {
+        if self.attempts >= self.limit {
+            return false;
+        }
+        self.attempts = self.attempts.saturating_add(1);
+        true
+    }
+
+    /// Starts a fresh recovery phase with the original limit.
+    pub const fn reset(&mut self) {
+        self.attempts = 0;
+    }
+}
+
 /// One provider request in a portable agent turn.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentHarnessRequest {
@@ -185,17 +221,14 @@ where
         allowed_actions: turn.allowed_actions,
     };
     let mut provider_request_count = 0usize;
-    let mut recovery_count = 0usize;
+    let mut recovery_budget = AgentTurnRecoveryBudget::new(turn.recovery_limit);
     let mut action_results = Vec::new();
 
     loop {
         provider_request_count = provider_request_count.saturating_add(1);
         let response = match provider.send(&request) {
             Ok(response) => response,
-            Err(error)
-                if recovery_count < turn.recovery_limit && provider.is_recoverable(&error) =>
-            {
-                recovery_count = recovery_count.saturating_add(1);
+            Err(error) if provider.is_recoverable(&error) && recovery_budget.record_attempt() => {
                 request.messages.push(ModelMessage {
                     role: ModelMessageRole::Developer,
                     source: crate::ContextSourceKind::RuntimeHint,
@@ -242,7 +275,7 @@ where
             )?;
             return Ok(AgentHarnessOutcome {
                 provider_request_count,
-                recovery_count,
+                recovery_count: recovery_budget.attempts(),
                 action_results,
             });
         }
