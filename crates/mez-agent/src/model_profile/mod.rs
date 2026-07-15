@@ -1,14 +1,12 @@
-//! Model profile, message, and request context types.
+//! Provider-independent model profile policy.
 //!
-//! This module owns provider-facing model metadata that is independent of
-//! context block storage: model messages, model profiles and overrides,
-//! selected-profile metadata and profile selection helpers.
+//! This module owns canonical model profile records, provider-option
+//! interpretation, context-window budgeting, output-limit escalation,
+//! failover safety comparison, and override precedence. Product configuration
+//! loading and runtime override mutation remain in the root package.
 
-use mez_agent::{
-    AgentContextResult,
-    known_model_context_window_tokens as agent_known_model_context_window_tokens,
-    known_provider_model_context_window_tokens as agent_known_provider_model_context_window_tokens,
-    validate_context_required,
+use crate::{
+    AgentContextResult, known_provider_model_context_window_tokens, validate_context_required,
 };
 
 /// Fallback context window when the model profile does not carry one.
@@ -201,16 +199,6 @@ impl ModelProfile {
     }
 }
 
-/// Returns known provider model context-window metadata for built-in providers.
-fn known_provider_model_context_window_tokens(provider: &str, model: &str) -> Option<usize> {
-    agent_known_provider_model_context_window_tokens(provider, model)
-}
-
-/// Returns documented context-window metadata based on model-family naming.
-pub fn known_model_context_window_tokens(model: &str) -> Option<usize> {
-    agent_known_model_context_window_tokens(model)
-}
-
 /// Carries Model Profile Overrides state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -305,6 +293,21 @@ pub enum ModelProfileOverrideSource {
     Subagent,
 }
 
+/// Validates the model-profile and turn identity required to assemble a
+/// provider request.
+///
+/// The caller remains responsible for product prompt assets and context
+/// assembly. This check only enforces the provider-independent fields that
+/// must identify every model request.
+pub fn validate_model_profile_request(
+    profile: &ModelProfile,
+    turn_id: &str,
+) -> AgentContextResult<()> {
+    validate_context_required("model provider", &profile.provider)?;
+    validate_context_required("model", &profile.model)?;
+    validate_context_required("turn_id", turn_id)
+}
+
 /// Runs the select model profile operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -355,3 +358,6 @@ pub fn select_model_profile(
         source: ModelProfileOverrideSource::Default,
     })
 }
+
+#[cfg(test)]
+mod tests;

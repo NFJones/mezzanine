@@ -20,9 +20,9 @@ use super::{
     DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,
     DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS,
     EnvironmentSignature, MarkerToken, McpActionExecutor, ModelMessage, ModelMessageRole,
-    ModelProfile, ModelProfileOverrideSource, ModelProfileOverrides, ModelProvider, ModelResponse,
-    OpenAiResponsesProvider, PaneShellExecutor, ProviderHttpTransport, Result, ShellClassification,
-    ShellExecutionOutput, ShellExecutionRequest, ShellTransaction, ShellTransactionInput,
+    ModelProfile, ModelProvider, ModelResponse, OpenAiResponsesProvider, PaneShellExecutor,
+    ProviderHttpTransport, Result, ShellClassification, ShellExecutionOutput,
+    ShellExecutionRequest, ShellTransaction, ShellTransactionInput,
     ShellTransactionOutputTransport, ToolDiscoveryCache, ToolInventory,
     action_result_context_content, agent_subshell_enter_command, append_mcp_context,
     append_memory_context, append_permission_policy_context, append_project_guidance_context,
@@ -45,7 +45,7 @@ use super::{
     parse_fenced_maap_action_batch, parse_maap_action_batch_json,
     parse_maap_action_batch_json_for_turn, parse_openai_models_http_body, parse_slash_command,
     persist_turn_execution_transcript, postprocess_shell_action_success_output,
-    readiness_probe_command_for_classification, select_model_profile, set_project_guidance_context,
+    readiness_probe_command_for_classification, set_project_guidance_context,
     tool_discovery_script, transcript_entries_for_execution,
 };
 use super::{prompt, semantic, shell};

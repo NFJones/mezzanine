@@ -44,6 +44,8 @@ pub mod maap;
 pub mod mcp;
 /// Prompt-facing memory context contracts.
 pub mod memory;
+/// Provider-independent model profile records and selection policy.
+pub mod model_profile;
 /// OpenAI request rendering and prompt-cache diagnostics.
 pub mod openai_cache;
 /// Provider-independent OpenAI-compatible Chat Completions request shaping.
@@ -167,6 +169,10 @@ pub use mcp::{
     McpPromptUnavailableServer,
 };
 pub use memory::{MemoryContextRecord, MemoryContextScope};
+pub use model_profile::{
+    ModelProfile, ModelProfileOverrideSource, ModelProfileOverrides, SelectedModelProfile,
+    select_model_profile, validate_model_profile_request,
+};
 pub use openai_cache::{
     openai_prompt_cache_diagnostics_for_request,
     openai_prompt_cache_diagnostics_for_request_with_stream,

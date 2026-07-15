@@ -10,7 +10,6 @@ mod appenders;
 mod assembly;
 mod compaction;
 mod evidence;
-mod model;
 mod skills;
 
 pub use appenders::{
@@ -26,10 +25,6 @@ pub use compaction::{
 use mez_agent::{
     AllowedAction, AllowedActionSet, ContextSourceKind, ModelInteractionKind, ModelMessage,
     ModelMessageRole, ModelRequest,
-};
-pub use model::{
-    ModelProfile, ModelProfileOverrideSource, ModelProfileOverrides, SelectedModelProfile,
-    known_model_context_window_tokens, select_model_profile,
 };
 pub use skills::constrain_skill_actions_for_loaded_context;
 

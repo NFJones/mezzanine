@@ -32,8 +32,8 @@ use crate::agent::{
     AgentShellSession, AgentShellStore, AgentShellVisibility, AgentTurnExecution, AgentTurnLedger,
     AgentTurnRecord, AsyncMcpActionExecutor, AsyncModelProvider, ContextBlock,
     DeepSeekChatCompletionsProvider, EnvironmentSignature, MarkerToken, McpActionExecutor,
-    ModelProfile, ModelProfileOverrides, ModelResponse, OpenAiCompatibleChatCompletionsProvider,
-    OpenAiResponsesProvider, ReqwestProviderHttpTransport, ShellClassification, ShellTransaction,
+    ModelResponse, OpenAiCompatibleChatCompletionsProvider, OpenAiResponsesProvider,
+    ReqwestProviderHttpTransport, ShellClassification, ShellTransaction,
     ShellTransactionOutputTransport, ToolDiscoveryCache, action_result_context_content,
     agent_subshell_enter_command, append_mcp_context, append_memory_context,
     append_permission_policy_context, append_scheduler_context,
@@ -43,9 +43,9 @@ use crate::agent::{
     execute_mcp_action_through_runtime, execute_mcp_action_through_runtime_async,
     execute_network_action_with_transport_async, invoked_mcp_tools_for_context, local_action_plan,
     local_action_summary, network_action_plan, network_action_summary, next_transcript_sequence,
-    parse_slash_command, postprocess_shell_action_success_output, select_model_profile,
-    set_project_guidance_context, shell_command_result_content,
-    shell_command_structured_content_json, transcript_entries_for_execution,
+    parse_slash_command, postprocess_shell_action_success_output, set_project_guidance_context,
+    shell_command_result_content, shell_command_structured_content_json,
+    transcript_entries_for_execution,
 };
 use crate::audit::{
     AuditActor, AuditConfig, AuditDeferredWrite, AuditLog, AuditRecord, AuditRetentionPolicy,
@@ -144,9 +144,9 @@ use mez_agent::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, ActionContentBlock, ActionResult,
     ActionStatus, AgentAction, AgentActionPayload, AgentTurnState, AgentTurnTrigger,
     ContextSourceKind, McpExecutionRequest, McpExecutionResponse, ModelMessage, ModelMessageRole,
-    ModelRequest, ModelTokenUsage, ModelTokenUsageKey, PaneReadinessOverrideStore,
-    PaneReadinessState, ProviderQuotaUsage, ReadinessOverrideRevocation,
-    openai_default_reasoning_levels_for_model,
+    ModelProfile, ModelProfileOverrides, ModelRequest, ModelTokenUsage, ModelTokenUsageKey,
+    PaneReadinessOverrideStore, PaneReadinessState, ProviderQuotaUsage,
+    ReadinessOverrideRevocation, openai_default_reasoning_levels_for_model, select_model_profile,
 };
 use mez_agent::{AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ScheduledWork, ScheduledWorkKind};
 use mez_agent::{ApprovalPolicy, PermissionPreset, RuleDecision};

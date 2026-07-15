@@ -1,6 +1,7 @@
-//! Model Context tests for profiles behavior.
+//! Model profile policy regressions.
 //!
-//! This bounded leaf owns the named behavioral scenarios.
+//! These tests remain with the provider-independent profile records and
+//! selection rules they protect.
 
 use super::*;
 
@@ -165,4 +166,52 @@ fn model_profile_selection_uses_most_specific_override() {
 
     assert_eq!(selection.profile, "window");
     assert_eq!(selection.source, ModelProfileOverrideSource::Window);
+}
+
+/// Verifies a complete model profile and turn identity satisfy request
+/// preconditions before product context assembly begins.
+#[test]
+fn model_profile_request_preconditions_accept_complete_identity() {
+    let profile = ModelProfile {
+        provider: "openai".to_string(),
+        model: "gpt-5.5".to_string(),
+        ..ModelProfile::default()
+    };
+
+    assert!(validate_model_profile_request(&profile, "turn-1").is_ok());
+}
+
+/// Verifies every provider-independent request identity field rejects blank
+/// input with the same stable field-specific diagnostic used by root assembly.
+#[test]
+fn model_profile_request_preconditions_reject_blank_identity_fields() {
+    let complete = ModelProfile {
+        provider: "openai".to_string(),
+        model: "gpt-5.5".to_string(),
+        ..ModelProfile::default()
+    };
+    let cases = [
+        (
+            ModelProfile {
+                provider: " ".to_string(),
+                ..complete.clone()
+            },
+            "turn-1",
+            "model provider must not be empty",
+        ),
+        (
+            ModelProfile {
+                model: "\t".to_string(),
+                ..complete.clone()
+            },
+            "turn-1",
+            "model must not be empty",
+        ),
+        (complete, "", "turn_id must not be empty"),
+    ];
+
+    for (profile, turn_id, expected) in cases {
+        let error = validate_model_profile_request(&profile, turn_id).unwrap_err();
+        assert_eq!(error.message(), expected);
+    }
 }

@@ -20,7 +20,7 @@ use super::{
     run_async_attached_terminal_client_loop, sleep,
 };
 use crate::agent::{
-    AgentTurnExecution, AgentTurnRecord, AsyncModelProvider, ModelProfile, ModelResponse,
+    AgentTurnExecution, AgentTurnRecord, AsyncModelProvider, ModelResponse,
     ReqwestProviderHttpTransport, execute_network_action_with_transport_async,
     provider_error_retry_class,
 };
@@ -30,7 +30,8 @@ use crate::runtime::runtime_execute_auto_sizing_with_async_provider;
 use crate::terminal::TerminalFdInterest;
 use mez_agent::{
     ActionStatus, AgentActionPayload, AgentTurnState, ContextSourceKind, ModelMessage,
-    ModelMessageRole, ModelRequest, ModelTokenUsage, ModelTokenUsageKey, ProviderErrorRetryClass,
+    ModelMessageRole, ModelProfile, ModelRequest, ModelTokenUsage, ModelTokenUsageKey,
+    ProviderErrorRetryClass,
 };
 use mez_core::ids::AgentId;
 use mez_terminal::TerminalStyleSpan;

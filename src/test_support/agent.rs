@@ -6,11 +6,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::agent::ModelProfile;
 use mez_agent::{
     AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, AgentAction, AgentActionPayload, AgentCapability,
-    AllowedActionSet, MaapBatch, McpPromptTool, ModelInteractionKind, ModelMessage, ModelRequest,
-    SayStatus,
+    AllowedActionSet, MaapBatch, McpPromptTool, ModelInteractionKind, ModelMessage, ModelProfile,
+    ModelRequest, SayStatus,
 };
 
 /// Builds a model profile with stable defaults for tests.

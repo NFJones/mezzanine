@@ -11,7 +11,7 @@ use std::path::Path;
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::error::{MezError, Result};
-use mez_agent::{McpPromptTool, RuleDecision};
+use mez_agent::{McpPromptTool, ModelProfile, RuleDecision};
 
 /// Exposes the actions module boundary.
 ///
@@ -87,14 +87,12 @@ pub use actions::{
 };
 pub use context::{
     AgentContext, ContextBlock, ContextCachePolicy, ContextStability, ModelContextCompactionReport,
-    ModelProfile, ModelProfileOverrideSource, ModelProfileOverrides, SelectedModelProfile,
     append_mcp_context, append_memory_context, append_permission_policy_context,
     append_project_guidance_context, append_scheduler_context, assemble_model_request,
     assemble_model_request_with_retained_tail_percent, compact_model_context_for_budget,
     compact_model_context_for_budget_with_retained_tail_percent,
     constrain_skill_actions_for_loaded_context, invoked_mcp_tools_for_context,
-    known_model_context_window_tokens, model_context_text_word_count, select_model_profile,
-    set_project_guidance_context,
+    model_context_text_word_count, set_project_guidance_context,
 };
 pub(crate) use maap::MaapBatchProductValidation;
 pub use maap::{

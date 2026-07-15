@@ -9,4 +9,3 @@ mod assembly;
 mod compaction;
 mod guidance;
 mod integrations;
-mod profiles;

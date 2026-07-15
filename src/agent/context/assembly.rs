@@ -13,11 +13,11 @@ use super::skills::constrain_skill_actions_for_loaded_context;
 use super::{
     AgentContext, AllowedActionSet, ContextBlock, ContextSourceKind,
     DEFAULT_MODEL_CONTEXT_RETAINED_TAIL_PERCENT, ModelInteractionKind, ModelMessage,
-    ModelMessageRole, ModelProfile, ModelRequest, model_context_block_header,
+    ModelMessageRole, ModelRequest, model_context_block_header,
 };
 use mez_agent::{
     AgentRequestAssemblyResult, McpPromptServer, McpPromptSummary, McpPromptTool,
-    McpPromptUnavailableServer, validate_context_required,
+    McpPromptUnavailableServer, ModelProfile, validate_model_profile_request,
 };
 
 /// Runs the assemble model request operation for this subsystem.
@@ -49,9 +49,7 @@ pub fn assemble_model_request_with_retained_tail_percent(
     context: &AgentContext,
     _retained_tail_percent: usize,
 ) -> AgentRequestAssemblyResult<ModelRequest> {
-    validate_context_required("model provider", &profile.provider)?;
-    validate_context_required("model", &profile.model)?;
-    validate_context_required("turn_id", &turn.turn_id)?;
+    validate_model_profile_request(profile, &turn.turn_id)?;
 
     let blocks = prepare_model_context_blocks(context.blocks.clone());
     let repository_instruction_blocks = blocks

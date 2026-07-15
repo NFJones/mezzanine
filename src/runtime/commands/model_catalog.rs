@@ -431,7 +431,7 @@ fn runtime_insert_catalog_model(
             id: model.to_string(),
             display_name: None,
             reasoning_levels: Vec::new(),
-            context_window_tokens: crate::agent::known_model_context_window_tokens(model),
+            context_window_tokens: mez_agent::known_model_context_window_tokens(model),
             capabilities: Vec::new(),
         });
     entry.reasoning_levels.extend(
@@ -441,7 +441,7 @@ fn runtime_insert_catalog_model(
     );
     entry.reasoning_levels = dedupe_runtime_strings(std::mem::take(&mut entry.reasoning_levels));
     if entry.context_window_tokens.is_none() {
-        entry.context_window_tokens = crate::agent::known_model_context_window_tokens(model);
+        entry.context_window_tokens = mez_agent::known_model_context_window_tokens(model);
     }
 }
 
