@@ -27,31 +27,14 @@ impl RuntimeSessionService {
         let mut copied = None;
         {
             let copy_mode = self.ensure_active_copy_mode(pane_id.as_str())?;
-            match action {
-                CopyModeKeyAction::MoveUp => copy_mode.move_cursor_by(-1, 0),
-                CopyModeKeyAction::MoveUpFast => copy_mode.move_cursor_by(-5, 0),
-                CopyModeKeyAction::MoveDown => copy_mode.move_cursor_by(1, 0),
-                CopyModeKeyAction::MoveDownFast => copy_mode.move_cursor_by(5, 0),
-                CopyModeKeyAction::MoveLeft => copy_mode.move_cursor_by(0, -1),
-                CopyModeKeyAction::MoveWordLeft => copy_mode.move_cursor_word_left(),
-                CopyModeKeyAction::MoveRight => copy_mode.move_cursor_by(0, 1),
-                CopyModeKeyAction::MoveWordRight => copy_mode.move_cursor_word_right(),
-                CopyModeKeyAction::PageUp => copy_mode.page_up(),
-                CopyModeKeyAction::PageDown => copy_mode.page_down(),
-                CopyModeKeyAction::Top => copy_mode.scroll_to_top(),
-                CopyModeKeyAction::LineStart => copy_mode.move_cursor_to_line_start(),
-                CopyModeKeyAction::Bottom => copy_mode.scroll_to_bottom(),
-                CopyModeKeyAction::LineEnd => copy_mode.move_cursor_to_line_end(),
-                CopyModeKeyAction::BeginSelection => {
-                    if copy_mode.selection().is_some() {
-                        copied = Some(copy_mode.copy_selection()?);
-                        copy_mode.clear_selection();
-                    } else {
-                        copy_mode.begin_keyboard_selection();
-                    }
+            match copy_mode.apply_key_action(action) {
+                mez_mux::copy::CopyModeActionOutcome::SelectionReady => {
+                    copied = Some(copy_mode.copy_selection()?);
+                    copy_mode.clear_selection();
                 }
-                CopyModeKeyAction::Ignore => {}
-                CopyModeKeyAction::Cancel => should_exit = true,
+                mez_mux::copy::CopyModeActionOutcome::Exit => should_exit = true,
+                mez_mux::copy::CopyModeActionOutcome::Updated
+                | mez_mux::copy::CopyModeActionOutcome::Ignored => {}
             }
         }
         if let Some(copied) = copied {

@@ -1021,6 +1021,11 @@ mod tests {
     use crate::process::PaneProcessOutput;
     use crate::session::{Session, SessionShell};
 
+    use crate::copy::{
+        CopyBuffer, CopyModeActionOutcome, CopyModeKeyAction, CopyPosition,
+        classify_copy_mode_key_action,
+    };
+
     use super::{
         AttachedClientEndpointReadiness, AttachedClientOutputDecision, AttachedClientStepPlan,
         TerminalFramePosition, TerminalFrameStyle, classify_attached_client_readiness,
@@ -1285,6 +1290,52 @@ mod tests {
         assert_eq!(resize_effects.len(), 2);
         assert!(resize_effects.iter().all(|effect| effect.size.columns > 0));
         assert!(resize_effects.iter().all(|effect| effect.size.rows > 0));
+    }
+
+    /// Verifies a headless client can drive mux-owned copy navigation and use
+    /// the resulting invalidation to present a new viewport without product
+    /// copy-mode or terminal-loop adapters.
+    #[test]
+    fn headless_client_drives_copy_state_and_redraw() {
+        let mut copy = CopyBuffer::new(
+            vec![
+                "zero".to_owned(),
+                "one".to_owned(),
+                "two".to_owned(),
+                "three".to_owned(),
+            ],
+            2,
+            2,
+            CopyPosition { line: 3, column: 5 },
+        )
+        .unwrap();
+        let action = classify_copy_mode_key_action(b"\x1b[5~").unwrap();
+        assert_eq!(action, CopyModeKeyAction::PageUp);
+        let outcome = copy.apply_key_action(action);
+        assert_eq!(outcome, CopyModeActionOutcome::Updated);
+        assert!(outcome.requires_redraw());
+
+        let cycle = plan_headless_attached_client_cycle(
+            [AttachedClientEndpointReadiness {
+                role: "output",
+                input: false,
+                output: true,
+                readable: false,
+                writable: true,
+                hangup: false,
+                error: false,
+            }],
+            vec![outcome],
+            outcome
+                .requires_redraw()
+                .then(|| (copy.visible_lines().to_vec(), vec![Vec::new(); 2])),
+            0,
+        );
+
+        assert_eq!(copy.scroll_top(), 0);
+        assert_eq!(cycle.output_decision, AttachedClientOutputDecision::Present);
+        assert_eq!(cycle.step.actions, [CopyModeActionOutcome::Updated]);
+        assert_eq!(cycle.step.output_lines, ["zero", "one"]);
     }
 
     /// Verifies mux-owned frame placement preserves authoritative viewport

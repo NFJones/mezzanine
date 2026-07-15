@@ -68,6 +68,26 @@ pub enum CopyModeKeyAction {
     Cancel,
 }
 
+/// Result of applying one keyboard action to mux-owned copy state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyModeActionOutcome {
+    /// Copy navigation or selection state changed and should be redrawn.
+    Updated,
+    /// The current selection is ready for product-owned clipboard handling.
+    SelectionReady,
+    /// The key was consumed without changing copy state.
+    Ignored,
+    /// Copy mode should close and the underlying pane should be redrawn.
+    Exit,
+}
+
+impl CopyModeActionOutcome {
+    /// Returns whether applying this outcome requires a new client frame.
+    pub const fn requires_redraw(self) -> bool {
+        !matches!(self, Self::Ignored)
+    }
+}
+
 /// Classifies one complete attached-client key sequence for copy mode.
 pub fn classify_copy_mode_key_action(input: &[u8]) -> Option<CopyModeKeyAction> {
     if input == b"\x1b" {
@@ -321,6 +341,38 @@ impl CopyBuffer {
     pub fn begin_keyboard_selection(&mut self) {
         self.selection_anchor = Some(self.cursor);
         self.selection = Some((self.cursor, self.cursor));
+    }
+
+    /// Applies one classified copy-mode key action to this buffer.
+    ///
+    /// Clipboard text normalization and copy-mode lifecycle ownership remain
+    /// with the product adapter. `SelectionReady` deliberately leaves the
+    /// selection intact so that adapter can copy styled or source-aware text
+    /// before clearing it.
+    pub fn apply_key_action(&mut self, action: CopyModeKeyAction) -> CopyModeActionOutcome {
+        match action {
+            CopyModeKeyAction::MoveUp => self.move_cursor_by(-1, 0),
+            CopyModeKeyAction::MoveUpFast => self.move_cursor_by(-5, 0),
+            CopyModeKeyAction::MoveDown => self.move_cursor_by(1, 0),
+            CopyModeKeyAction::MoveDownFast => self.move_cursor_by(5, 0),
+            CopyModeKeyAction::MoveLeft => self.move_cursor_by(0, -1),
+            CopyModeKeyAction::MoveWordLeft => self.move_cursor_word_left(),
+            CopyModeKeyAction::MoveRight => self.move_cursor_by(0, 1),
+            CopyModeKeyAction::MoveWordRight => self.move_cursor_word_right(),
+            CopyModeKeyAction::PageUp => self.page_up(),
+            CopyModeKeyAction::PageDown => self.page_down(),
+            CopyModeKeyAction::Top => self.scroll_to_top(),
+            CopyModeKeyAction::LineStart => self.move_cursor_to_line_start(),
+            CopyModeKeyAction::Bottom => self.scroll_to_bottom(),
+            CopyModeKeyAction::LineEnd => self.move_cursor_to_line_end(),
+            CopyModeKeyAction::BeginSelection if self.selection().is_some() => {
+                return CopyModeActionOutcome::SelectionReady;
+            }
+            CopyModeKeyAction::BeginSelection => self.begin_keyboard_selection(),
+            CopyModeKeyAction::Ignore => return CopyModeActionOutcome::Ignored,
+            CopyModeKeyAction::Cancel => return CopyModeActionOutcome::Exit,
+        }
+        CopyModeActionOutcome::Updated
     }
 
     /// Searches the buffer and selects the matching text.

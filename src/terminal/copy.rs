@@ -6,7 +6,8 @@
 
 use super::{MezError, Result, TerminalScreen, TerminalStyledLine, char_count, line_slice};
 use mez_mux::copy::{
-    CopyBuffer, CopyPosition, SearchDirection, normalize_selection, validate_position,
+    CopyBuffer, CopyModeActionOutcome, CopyModeKeyAction, CopyPosition, SearchDirection,
+    normalize_selection, validate_position,
 };
 use mez_mux::paste::PasteBuffers;
 
@@ -183,6 +184,11 @@ impl CopyMode {
     /// Returns the styled lines visible in the copy-mode viewport.
     pub fn visible_styled_lines(&self) -> &[TerminalStyledLine] {
         &self.styled_lines[self.scroll_top()..self.visible_end_line()]
+    }
+
+    /// Applies one mux-owned keyboard transition to the copy buffer.
+    pub fn apply_key_action(&mut self, action: CopyModeKeyAction) -> CopyModeActionOutcome {
+        self.buffer.apply_key_action(action)
     }
 
     /// Updates the copy-mode viewport height after a pane or window resize.
