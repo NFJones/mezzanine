@@ -94,9 +94,8 @@ pub use fd::{
 };
 pub use host_clipboard::{HostClipboard, HostClipboardCommand};
 pub use mouse::{
-    CopyModeKeyAction, MouseAction, MousePaneAgentSelectorCell, MousePaneAgentStatusCell,
-    MouseWindowActionFrameCell, PaneAgentStatusField, WindowFrameAction, WindowFrameCommandKind,
-    classify_mouse_event,
+    MouseAction, MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MouseWindowActionFrameCell,
+    PaneAgentStatusField, WindowFrameAction, WindowFrameCommandKind, classify_mouse_event,
 };
 pub(crate) use render::overlay_fixed_column_style_spans;
 #[cfg(test)]

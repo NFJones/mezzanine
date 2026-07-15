@@ -4,6 +4,7 @@
 //! rendering, and runtime adapters. Product-specific copy-text normalization
 //! remains in the Mezzanine composition crate.
 
+use crate::input::{KeyCode, parse_key_chord_bytes};
 use crate::readline::readline_word_column_range;
 use crate::{MuxError, Result};
 use mez_terminal::{
@@ -26,6 +27,81 @@ pub enum SearchDirection {
     Forward,
     /// Search toward earlier lines, wrapping to the end when needed.
     Backward,
+}
+
+/// Keyboard actions supported while copy mode owns attached-client input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopyModeKeyAction {
+    /// Moves the copy-mode cursor up by one line.
+    MoveUp,
+    /// Moves the copy-mode cursor up by five lines.
+    MoveUpFast,
+    /// Moves the copy-mode cursor down by one line.
+    MoveDown,
+    /// Moves the copy-mode cursor down by five lines.
+    MoveDownFast,
+    /// Moves the copy-mode cursor left by one cell.
+    MoveLeft,
+    /// Moves the copy-mode cursor left by one word-like segment.
+    MoveWordLeft,
+    /// Moves the copy-mode cursor right by one cell.
+    MoveRight,
+    /// Moves the copy-mode cursor right by one word-like segment.
+    MoveWordRight,
+    /// Moves the viewport up by one page.
+    PageUp,
+    /// Moves the viewport down by one page.
+    PageDown,
+    /// Moves to the top of the copy buffer.
+    Top,
+    /// Moves to the beginning of the current line.
+    LineStart,
+    /// Moves to the bottom of the copy buffer.
+    Bottom,
+    /// Moves to the end of the current line.
+    LineEnd,
+    /// Starts or completes a keyboard selection.
+    BeginSelection,
+    /// Consumes an unbound key without forwarding it to the pane.
+    Ignore,
+    /// Exits copy mode.
+    Cancel,
+}
+
+/// Classifies one complete attached-client key sequence for copy mode.
+pub fn classify_copy_mode_key_action(input: &[u8]) -> Option<CopyModeKeyAction> {
+    if input == b"\x1b" {
+        return Some(CopyModeKeyAction::Cancel);
+    }
+    if input == b"\x03" {
+        return Some(CopyModeKeyAction::Ignore);
+    }
+    let (chord, consumed) = parse_key_chord_bytes(input)?;
+    if consumed != input.len() {
+        return None;
+    }
+    match chord.code {
+        KeyCode::Up if chord.modifiers.ctrl => Some(CopyModeKeyAction::MoveUpFast),
+        KeyCode::Up => Some(CopyModeKeyAction::MoveUp),
+        KeyCode::Down if chord.modifiers.ctrl => Some(CopyModeKeyAction::MoveDownFast),
+        KeyCode::Down => Some(CopyModeKeyAction::MoveDown),
+        KeyCode::Left if chord.modifiers.ctrl || chord.modifiers.alt => {
+            Some(CopyModeKeyAction::MoveWordLeft)
+        }
+        KeyCode::Left => Some(CopyModeKeyAction::MoveLeft),
+        KeyCode::Right if chord.modifiers.ctrl || chord.modifiers.alt => {
+            Some(CopyModeKeyAction::MoveWordRight)
+        }
+        KeyCode::Right => Some(CopyModeKeyAction::MoveRight),
+        KeyCode::PageUp => Some(CopyModeKeyAction::PageUp),
+        KeyCode::PageDown => Some(CopyModeKeyAction::PageDown),
+        KeyCode::Home if chord.modifiers.ctrl => Some(CopyModeKeyAction::Top),
+        KeyCode::Home => Some(CopyModeKeyAction::LineStart),
+        KeyCode::End if chord.modifiers.ctrl => Some(CopyModeKeyAction::Bottom),
+        KeyCode::End => Some(CopyModeKeyAction::LineEnd),
+        KeyCode::Char(' ') => Some(CopyModeKeyAction::BeginSelection),
+        _ => None,
+    }
 }
 
 /// Owns dependency-neutral copy-mode navigation and selection state.
@@ -514,6 +590,29 @@ pub fn validate_position(lines: &[String], position: CopyPosition) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies copy mode classifies navigation, selection, cancellation, and
+    /// unbound input without forwarding owned keystrokes to a pane process.
+    #[test]
+    fn copy_mode_key_actions_are_classified_by_mux() {
+        assert_eq!(
+            classify_copy_mode_key_action(b"\x1b[5~"),
+            Some(CopyModeKeyAction::PageUp)
+        );
+        assert_eq!(
+            classify_copy_mode_key_action(b" "),
+            Some(CopyModeKeyAction::BeginSelection)
+        );
+        assert_eq!(
+            classify_copy_mode_key_action(b"\x1b"),
+            Some(CopyModeKeyAction::Cancel)
+        );
+        assert_eq!(
+            classify_copy_mode_key_action(b"\x03"),
+            Some(CopyModeKeyAction::Ignore)
+        );
+        assert_eq!(classify_copy_mode_key_action(b"q"), None);
+    }
 
     /// Verifies the mux-owned copy buffer keeps Unicode cursor movement,
     /// viewport scrolling, and keyboard selections synchronized.

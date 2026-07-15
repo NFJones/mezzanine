@@ -14,13 +14,14 @@ use super::{
     read_attached_terminal_size, rustix_read, rustix_write,
 };
 use super::{
-    AttachedTerminalFdReadiness, AttachedTerminalFdRole, BorrowedFd, CopyModeKeyAction, MezError,
-    MouseAction, MouseEvent, RawFd, Result, TerminalClientLoopConfig, TerminalColor,
-    TerminalStyleSpan, classify_mouse_event, compose_client_presentation_with_styles,
-    parse_sgr_mouse, terminal_grapheme_width, terminal_graphemes, terminal_text_width,
+    AttachedTerminalFdReadiness, AttachedTerminalFdRole, BorrowedFd, MezError, MouseAction,
+    MouseEvent, RawFd, Result, TerminalClientLoopConfig, TerminalColor, TerminalStyleSpan,
+    classify_mouse_event, compose_client_presentation_with_styles, parse_sgr_mouse,
+    terminal_grapheme_width, terminal_graphemes, terminal_text_width,
 };
+use mez_mux::copy::{CopyModeKeyAction, classify_copy_mode_key_action};
 use mez_mux::input::{
-    KeyChord, KeyCode, MousePolicy, MuxAction, TerminalInputClassification, WindowFocusTarget,
+    KeyChord, MousePolicy, MuxAction, TerminalInputClassification, WindowFocusTarget,
     classify_prefix_binding, classify_terminal_input_with_command_bindings, key_chord_input_bytes,
     parse_key_chord_bytes,
 };
@@ -2800,46 +2801,6 @@ fn malformed_sgr_mouse_prefix_len(input: &[u8]) -> Option<usize> {
         }
     }
     None
-}
-
-/// Runs the classify copy mode key action operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn classify_copy_mode_key_action(input: &[u8]) -> Option<CopyModeKeyAction> {
-    if input == b"\x1b" {
-        return Some(CopyModeKeyAction::Cancel);
-    }
-    if input == b"\x03" {
-        return Some(CopyModeKeyAction::Ignore);
-    }
-    let (chord, consumed) = parse_key_chord_bytes(input)?;
-    if consumed != input.len() {
-        return None;
-    }
-    match chord.code {
-        KeyCode::Up if chord.modifiers.ctrl => Some(CopyModeKeyAction::MoveUpFast),
-        KeyCode::Up => Some(CopyModeKeyAction::MoveUp),
-        KeyCode::Down if chord.modifiers.ctrl => Some(CopyModeKeyAction::MoveDownFast),
-        KeyCode::Down => Some(CopyModeKeyAction::MoveDown),
-        KeyCode::Left if chord.modifiers.ctrl || chord.modifiers.alt => {
-            Some(CopyModeKeyAction::MoveWordLeft)
-        }
-        KeyCode::Left => Some(CopyModeKeyAction::MoveLeft),
-        KeyCode::Right if chord.modifiers.ctrl || chord.modifiers.alt => {
-            Some(CopyModeKeyAction::MoveWordRight)
-        }
-        KeyCode::Right => Some(CopyModeKeyAction::MoveRight),
-        KeyCode::PageUp => Some(CopyModeKeyAction::PageUp),
-        KeyCode::PageDown => Some(CopyModeKeyAction::PageDown),
-        KeyCode::Home if chord.modifiers.ctrl => Some(CopyModeKeyAction::Top),
-        KeyCode::Home => Some(CopyModeKeyAction::LineStart),
-        KeyCode::End if chord.modifiers.ctrl => Some(CopyModeKeyAction::Bottom),
-        KeyCode::End => Some(CopyModeKeyAction::LineEnd),
-        KeyCode::Char(' ') => Some(CopyModeKeyAction::BeginSelection),
-        _ => None,
-    }
 }
 
 /// Runs the application cursor forwarding bytes operation for this subsystem.

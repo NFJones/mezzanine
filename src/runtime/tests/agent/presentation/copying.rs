@@ -110,7 +110,7 @@ fn runtime_copy_mode_key_navigation_requests_diff_refresh() {
             &primary,
             &AttachedTerminalClientStepPlan {
                 actions: vec![TerminalClientLoopAction::HandleCopyMode(
-                    crate::terminal::CopyModeKeyAction::PageUp,
+                    mez_mux::copy::CopyModeKeyAction::PageUp,
                 )],
                 output_lines: Vec::new(),
                 output_line_style_spans: Vec::new(),
