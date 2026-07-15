@@ -8,4 +8,4 @@ use mez_agent::AgentContext;
 
 mod assembly;
 
-pub use assembly::{assemble_model_request, assemble_model_request_with_retained_tail_percent};
+pub use assembly::assemble_model_request;

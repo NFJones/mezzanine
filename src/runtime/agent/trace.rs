@@ -6,9 +6,7 @@
 
 use super::outcome::{runtime_agent_terminal_preview, runtime_humanize_agent_diagnostic};
 use super::{runtime_action_status_name, runtime_mezzanine_error_code};
-use crate::agent::{
-    AgentTurnRecord, apply_default_action_gates, assemble_model_request_with_retained_tail_percent,
-};
+use crate::agent::{AgentTurnRecord, apply_default_action_gates, assemble_model_request};
 use crate::error::{MezError, Result};
 use crate::runtime::{RuntimeSessionService, runtime_agent_turn_state_name};
 use mez_agent::{
@@ -170,12 +168,7 @@ impl RuntimeSessionService {
         memory_actions_enabled: bool,
         issue_actions_enabled: bool,
     ) {
-        let Ok(mut request) = assemble_model_request_with_retained_tail_percent(
-            model_profile,
-            turn,
-            context,
-            self.agent_compaction_raw_retention_percent,
-        ) else {
+        let Ok(mut request) = assemble_model_request(model_profile, turn, context) else {
             return;
         };
         apply_default_action_gates(

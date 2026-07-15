@@ -85,7 +85,7 @@ pub use actions::{
     shell_command_structured_content_json, shell_read_observations_for_command,
     transcript_entries_for_execution,
 };
-pub use context::{assemble_model_request, assemble_model_request_with_retained_tail_percent};
+pub use context::assemble_model_request;
 pub(crate) use maap::MaapBatchProductValidation;
 pub use maap::{
     parse_fenced_maap_action_batch, parse_fenced_maap_action_batch_for_turn,

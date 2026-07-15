@@ -118,12 +118,7 @@ impl RuntimeSessionService {
             .get(&turn.turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        let request = assemble_model_request_with_retained_tail_percent(
-            model_profile,
-            turn,
-            &context,
-            self.agent_compaction_raw_retention_percent,
-        )?;
+        let request = assemble_model_request(model_profile, turn, &context)?;
         let mut raw_text = match error.provider_raw_text() {
             Some(raw_text) => format!("{raw_text}\nprovider_error: {error}"),
             None => format!("provider_error: {error}"),
@@ -372,12 +367,7 @@ impl RuntimeSessionService {
             .get(&turn.turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        let request = assemble_model_request_with_retained_tail_percent(
-            model_profile,
-            turn,
-            &context,
-            self.agent_compaction_raw_retention_percent,
-        )?;
+        let request = assemble_model_request(model_profile, turn, &context)?;
         let execution = AgentTurnExecution {
             request,
             response: ModelResponse {

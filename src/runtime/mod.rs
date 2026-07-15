@@ -34,7 +34,7 @@ use crate::agent::{
     EnvironmentSignature, MarkerToken, McpActionExecutor, OpenAiCompatibleChatCompletionsProvider,
     OpenAiResponsesProvider, ReqwestProviderHttpTransport, ShellClassification, ShellTransaction,
     ShellTransactionOutputTransport, ToolDiscoveryCache, action_result_context_content,
-    agent_subshell_enter_command, assemble_model_request_with_retained_tail_percent,
+    agent_subshell_enter_command, assemble_model_request,
     decode_shell_output_transport_with_diagnostics, execute_agent_shell_command_with_context,
     execute_mcp_action_through_runtime, execute_mcp_action_through_runtime_async,
     execute_network_action_with_transport_async, local_action_plan, local_action_summary,

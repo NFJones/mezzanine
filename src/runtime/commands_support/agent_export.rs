@@ -10,7 +10,7 @@ use super::super::{
     AgentTurnRecord, AgentTurnState, AgentTurnTrigger, MezError, Result, RuntimeSessionService,
     current_unix_seconds, json_escape,
 };
-use crate::agent::assemble_model_request_with_retained_tail_percent;
+use crate::agent::assemble_model_request;
 use mez_agent::{ContextSourceKind, ModelMessageRole, ModelRequest, append_mcp_context};
 
 /// Captures one assembled model request dump before it is written to a target.
@@ -176,12 +176,7 @@ fn runtime_agent_context_dump_for_pane(
         .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
     let mcp_summary = service.mcp_registry.prompt_summary();
     let context = append_mcp_context(context.clone(), &mcp_summary)?;
-    let mut request = assemble_model_request_with_retained_tail_percent(
-        &model_profile,
-        &turn,
-        &context,
-        service.agent_compaction_raw_retention_percent,
-    )?;
+    let mut request = assemble_model_request(&model_profile, &turn, &context)?;
     request.available_mcp_tools = mcp_summary.available_tools.clone();
     let dump = runtime_model_request_context_dump(&pane_id, &turn_id, &request)?;
     let message_count = request.messages.len();
@@ -229,12 +224,7 @@ fn runtime_idle_agent_context_dump_for_pane(
         state: AgentTurnState::Queued,
         initial_capability: None,
     };
-    let mut request = assemble_model_request_with_retained_tail_percent(
-        &model_profile,
-        &turn,
-        &context,
-        service.agent_compaction_raw_retention_percent,
-    )?;
+    let mut request = assemble_model_request(&model_profile, &turn, &context)?;
     request.available_mcp_tools = mcp_summary.available_tools.clone();
     let dump = runtime_model_request_context_dump(pane_id, &turn_id, &request)?;
     let message_count = request.messages.len();
