@@ -5,8 +5,8 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    BTreeMap, ExposeSecret, MaapBatch, MezError, ModelInteractionKind, ModelMessageRole, Result,
-    SecretString, parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
+    BTreeMap, ExposeSecret, MaapBatch, MezError, ModelInteractionKind, Result, SecretString,
+    parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
     validate_non_empty,
 };
 use std::future::Future;
