@@ -17,11 +17,11 @@ EXPECTED_PACKAGES = {
     "mezzanine",
 }
 
-ALLOWED_EDGES = {
-    "mez-agent": {"mez-core"},
+EXPECTED_EDGES = {
+    "mez-agent": set(),
     "mez-core": set(),
     "mez-mux": {"mez-core", "mez-terminal"},
-    "mez-terminal": {"mez-core"},
+    "mez-terminal": set(),
     "mezzanine": {"mez-agent", "mez-core", "mez-mux", "mez-terminal"},
 }
 
@@ -141,6 +141,17 @@ def main() -> int:
     """Validate package membership, dependency direction, and retired facades."""
 
     metadata = workspace_metadata()
+    workspace_member_ids = set(metadata["workspace_members"])
+    workspace_packages = {
+        package["name"]
+        for package in metadata["packages"]
+        if package["id"] in workspace_member_ids
+    }
+    unexpected = workspace_packages - EXPECTED_PACKAGES
+    if unexpected:
+        print(f"unexpected Mezzanine workspace packages: {', '.join(sorted(unexpected))}")
+        return 1
+
     packages = {
         package["name"]: package
         for package in metadata["packages"]
@@ -159,9 +170,12 @@ def main() -> int:
             for dependency in package["dependencies"]
             if dependency["name"] in EXPECTED_PACKAGES
         }
-        forbidden = internal_dependencies - ALLOWED_EDGES[package_name]
+        forbidden = internal_dependencies - EXPECTED_EDGES[package_name]
+        absent = EXPECTED_EDGES[package_name] - internal_dependencies
         for dependency_name in sorted(forbidden):
             violations.append(f"{package_name} -> {dependency_name}")
+        for dependency_name in sorted(absent):
+            violations.append(f"{package_name} missing -> {dependency_name}")
 
     if violations:
         print("forbidden Mezzanine workspace dependency edges:")
@@ -176,6 +190,11 @@ def main() -> int:
         print("missing required workspace owner paths:")
         for path in missing_owner_paths:
             print(f"  {path}")
+        return 1
+
+    ownership_matrix = Path("docs/workspace-ownership-matrix.md").read_text(encoding="utf-8")
+    if "| temporary |" in ownership_matrix:
+        print("workspace ownership matrix still contains temporary boundaries")
         return 1
 
     restored_facades = sorted(

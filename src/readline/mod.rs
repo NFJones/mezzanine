@@ -1,9 +1,8 @@
-//! Readline-style line editing primitives for Mezzanine command surfaces.
+//! Product readline adapters for Mezzanine command surfaces.
 //!
-//! The agent shell and configuration shell both need predictable editable
-//! prompt behavior. This module keeps the editing state independent from any
-//! concrete terminal renderer so command surfaces can be tested without a live
-//! terminal and later wired to key decoding and drawing code.
+//! `mez-mux` owns the generic editable buffer, history search, input decoding,
+//! and selection state. This module specializes that state with Mezzanine and
+//! agent prompt kinds, prefixes, selector policy, and rendering inputs.
 
 /// Exposes the buffer module boundary.
 ///

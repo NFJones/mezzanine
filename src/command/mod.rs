@@ -1,9 +1,9 @@
-//! Mezzanine command-language parsing.
+//! Mezzanine product command dispatch and integration.
 //!
-//! Commands entered through the prefix command prompt are parsed by Mezzanine
-//! rather than the pane shell. This module implements deterministic tokenization,
-//! command-sequence parsing, and the in-memory execution semantics that can be
-//! satisfied before the live control endpoint exists.
+//! `mez-mux` owns the reusable command grammar, typed session plans, validation,
+//! and neutral presentation. This module projects product errors and executes
+//! commands against concrete runtime, configuration, auth, audit, agent, and
+//! persistence services.
 
 use std::fs;
 use std::path::PathBuf;

@@ -68,6 +68,22 @@ persistence, transport, and composition adapters.
 | `src/runtime/`, `src/async_runtime/` | product composition | adapter | Keep serialized ownership, supervision, persistence, scheduling, transport, and effect execution. Ensure deterministic lower-crate transitions are invoked rather than duplicated. |
 | auth, config, control, audit, hooks, MCP, memory, issues, snapshot, transcript stores | product policy/persistence/transport | adapter | Keep concrete stores and transports in root; implement narrow lower-crate ports and convert errors once at boundaries. |
 
+## Root product ownership
+
+The remaining root modules are product code, not lower-crate compatibility
+surfaces. This table makes every top-level root domain explicit so line count
+alone is not mistaken for an unexamined package boundary.
+
+| Root surface | Root responsibility | State | Boundary evidence |
+|---|---|---|---|
+| `src/lib.rs`, `src/main.rs`, `src/error.rs`, `src/identifiers.rs`, `src/shell.rs` | product composition, error projection, product-local validation, and host shell resolution | adapter | The binary remains thin; lower errors convert once at the root. Identifier grammar has only root product consumers and therefore does not meet the two-lower-consumer rule for `mez-core`. Shell resolution inspects the host process environment and executable filesystem. |
+| `src/cli/`, `src/config/`, `src/control/`, `src/framing/`, `src/message/` | CLI, schema/migrations, control and MMP wire protocols, bounded codecs, and product request dispatch | adapter | These modules define the `mez` executable and its product protocols. They compose lower IDs/session/terminal records but own JSON, socket roles, idempotency, migrations, and request semantics. |
+| `src/runtime/`, `src/async_runtime/`, `src/event/` | serialized product state owner, Tokio/Unix orchestration, effect execution, supervision, and observer fanout | adapter | Deterministic lower transitions return typed effects; root executes PTY, socket, timer, provider, persistence, and terminal I/O and retains product event visibility policy. |
+| `src/auth/`, `src/audit/`, `src/project/`, `src/registry/` | credentials, security audit persistence, project trust, and live-session registry I/O | adapter | These are concrete OS keyring, OAuth/HTTP, filesystem, JSONL, trust, and registry adapters with product retention and security policy. |
+| `src/mcp/`, `src/permissions/`, `src/hooks/`, `src/instructions/`, `src/skills/`, `src/macros/`, `src/subagent/` | external integration transport, product authorization, process execution, and filesystem/asset discovery | adapter | Canonical agent contracts, parsers, plans, and enforcement ports are lower-owned where reusable. Root binds them to configured servers, shell/process execution, persisted approvals, embedded assets, and trusted project paths. |
+| `src/issues/`, `src/memory/`, `src/snapshot/`, `src/transcript/` | SQLite and filesystem repositories, snapshot encoding/restoration, and durable product history | adapter | Lower crates own portable records and transitions; root owns concrete storage schemas, compression, retention, migration, restore I/O, and product error mapping. |
+| `src/test_support/` and subsystem test trees | crate-internal product integration fixtures and end-to-end coverage | adapter | Shared fixtures are test-only. Intrinsic engine tests live in their lower crates; root tests cover concrete adapters and cross-crate workflows. |
+
 ## Final adapter surfaces
 
 The root package now exposes explicit product adapter namespaces rather than
@@ -99,12 +115,13 @@ behavior.
 3. The independent `mez-terminal` suite contains 120 one-surface engine tests.
 4. Root terminal, runtime, and async-runtime integration suites retain real PTY,
    host restoration, product agent-to-mux, persistence, and transport coverage.
-5. The previous package audit found no root lower-contract forwarding exports.
-   `cargo metadata`, `cargo tree`, and `cargo package --list` confirmed five
-   packages, the intended workspace edges, no crate features, and owned package
-   contents. The reopened audit still requires readline test cleanup, the mux
-   effect/client/render ownership review, stronger source guardrails, and a
-   fresh final package and public-API audit before completion can be claimed.
+5. The final package audit found no root lower-contract forwarding exports.
+   `cargo metadata`, `cargo package --list`, source inventory, and workspace
+   documentation confirm exactly five packages, the intended direct edges, no
+   crate features, owned package contents, and no temporary ownership rows.
+   Architecture checks reject graph drift, retired facades, root forwarding
+   exports, restored generic selector/client/readline/agent behavior, and any
+   newly recorded temporary boundary.
 
 ## Final mux behavior audit
 
@@ -120,6 +137,6 @@ PTY resize and render invalidation I/O. The duplicate sync client loop and
 generic host-paste decoder were the remaining ownership violations found by
 that audit, and both are now removed from root.
 
-Update this matrix whenever ownership or an adapter boundary changes. The
-decomposition acceptance criteria remain open while the reopened audit items
-above are unfinished.
+The decomposition acceptance criteria are satisfied. Future changes must keep
+the graph and source-ownership guardrails green and update this matrix whenever
+an adapter boundary changes.

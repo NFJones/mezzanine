@@ -1,10 +1,9 @@
-//! Terminal-state primitives.
+//! Product terminal presentation and host-I/O adapters.
 //!
-//! This module provides bounded history behavior, alternate-screen history
-//! exclusion, TERM fallback selection, and Mezzanine's bounded
-//! xterm-compatible screen core for common line-oriented output and terminal UI
-//! control sequences. Unsupported terminal capabilities are kept explicit in
-//! the profile layer instead of being advertised as full xterm emulation.
+//! `mez-terminal` owns terminal parsing and state while `mez-mux` owns neutral
+//! client, copy, input, and render planning. This module binds those engines to
+//! raw host file descriptors, clipboard commands, product prompt and agent
+//! views, configured themes, terminal encoding, and mouse actions.
 
 use std::collections::BTreeMap;
 use std::os::fd::RawFd;

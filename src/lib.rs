@@ -1,8 +1,9 @@
-//! Core library for Mezzanine.
+//! Product composition library for Mezzanine.
 //!
-//! The crate is organized around the logical subsystems defined by
-//! `SPEC.md`. Implementation logic lives in testable subsystem modules
-//! rather than the binary entry point.
+//! The root crate owns the `mez` product's policy, persistence, transport, and
+//! runtime composition. Reusable terminal, multiplexer, and agent engines live
+//! in their dedicated workspace crates and are consumed through explicit
+//! adapters here.
 
 /// Exposes the agent module boundary.
 ///
@@ -79,10 +80,6 @@ pub mod instructions;
 /// The nested module keeps local issue tracking isolated while this declaration
 /// makes the boundary available to CLI, runtime commands, and agent actions.
 pub mod issues;
-/// Exposes the layout module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
 /// Exposes the macros module boundary.
 ///
 /// The nested module keeps agent macro discovery and parsing isolated while
@@ -108,10 +105,6 @@ pub mod message;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 pub mod permissions;
-/// Exposes the process module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
 /// Exposes the project module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

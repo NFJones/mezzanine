@@ -1,11 +1,9 @@
-//! Content-length protocol framing and visible frame rendering.
+//! Product content-length protocol framing and configured template rendering.
 //!
 //! Both the control endpoint and local message protocol use an ASCII header
 //! block followed by a UTF-8 JSON body. This module provides shared frame
-//! encoding and strict bounded decoding. It also contains the small template
-//! renderer used by window and pane frames; that renderer is intentionally
-//! independent from terminal drawing so it can be tested before the full
-//! renderer exists.
+//! encoding and strict bounded decoding. Its template records support product
+//! control requests; terminal UI template expansion lives in `mez-mux`.
 
 /// Exposes the codec module boundary.
 ///
