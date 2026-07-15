@@ -30,6 +30,70 @@ pub struct AttachedClientStepPlan<Action, ErrorRole> {
     pub error_roles: Vec<ErrorRole>,
 }
 
+/// Transport-neutral readiness for one attached-client endpoint.
+///
+/// Product adapters identify which endpoints carry client input or output;
+/// the mux then derives the lifecycle and I/O state needed by one headless
+/// planning step without depending on file descriptors or host polling APIs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AttachedClientEndpointReadiness<Role> {
+    /// Product-owned identity used when reporting endpoint errors.
+    pub role: Role,
+    /// Whether this endpoint carries attached-client input.
+    pub input: bool,
+    /// Whether this endpoint carries attached-client output.
+    pub output: bool,
+    /// Whether input is currently available.
+    pub readable: bool,
+    /// Whether output can currently be written.
+    pub writable: bool,
+    /// Whether the endpoint reported a hangup.
+    pub hangup: bool,
+    /// Whether the endpoint reported an error.
+    pub error: bool,
+}
+
+/// Aggregated readiness and lifecycle state for one attached-client step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachedClientReadiness<Role> {
+    /// Whether an attached-client input endpoint is readable.
+    pub input_readable: bool,
+    /// Whether an attached-client output endpoint is writable.
+    pub output_writable: bool,
+    /// Whether an attached-client input endpoint reported a hangup.
+    pub input_hangup: bool,
+    /// Whether an attached-client output endpoint reported a hangup.
+    pub output_hangup: bool,
+    /// Product-owned endpoint roles that reported errors.
+    pub error_roles: Vec<Role>,
+}
+
+/// Aggregates host endpoint readiness into the transport-neutral state used by
+/// attached-client planning.
+pub fn classify_attached_client_readiness<Role: Copy>(
+    endpoints: impl IntoIterator<Item = AttachedClientEndpointReadiness<Role>>,
+) -> AttachedClientReadiness<Role> {
+    let mut state = AttachedClientReadiness {
+        input_readable: false,
+        output_writable: false,
+        input_hangup: false,
+        output_hangup: false,
+        error_roles: Vec::new(),
+    };
+
+    for endpoint in endpoints {
+        state.input_readable |= endpoint.input && endpoint.readable;
+        state.output_writable |= endpoint.output && endpoint.writable;
+        state.input_hangup |= endpoint.input && endpoint.hangup;
+        state.output_hangup |= endpoint.output && endpoint.hangup;
+        if endpoint.error {
+            state.error_roles.push(endpoint.role);
+        }
+    }
+
+    state
+}
+
 /// Per-pane metadata consumed by mux frame and body presentation.
 ///
 /// Scalar fields are presentation-only values. The prompt and supplemental
@@ -684,7 +748,8 @@ mod tests {
     use crate::layout::PaneGeometry;
 
     use super::{
-        AttachedClientStepPlan, TerminalFramePosition, TerminalFrameStyle, pane_canvas_placements,
+        AttachedClientEndpointReadiness, AttachedClientStepPlan, TerminalFramePosition,
+        TerminalFrameStyle, classify_attached_client_readiness, pane_canvas_placements,
         pane_content_size_for_geometry, pane_divider_cells, pane_divider_glyph,
         pane_frame_merges_into_divider, pane_render_region_size_for_geometry, place_group_frame,
         place_window_frame, rendered_window_body_size,
@@ -719,6 +784,38 @@ mod tests {
         assert_eq!(plan.output_lines, ["pane"]);
         assert!(plan.output_hangup);
         assert_eq!(plan.error_roles, [7]);
+    }
+
+    /// Verifies host endpoint details are reduced to the input, output, and
+    /// lifecycle state required by a headless mux client planning step.
+    #[test]
+    fn attached_client_readiness_is_transport_neutral() {
+        let readiness = classify_attached_client_readiness([
+            AttachedClientEndpointReadiness {
+                role: "input",
+                input: true,
+                output: false,
+                readable: true,
+                writable: false,
+                hangup: true,
+                error: false,
+            },
+            AttachedClientEndpointReadiness {
+                role: "output",
+                input: false,
+                output: true,
+                readable: false,
+                writable: true,
+                hangup: false,
+                error: true,
+            },
+        ]);
+
+        assert!(readiness.input_readable);
+        assert!(readiness.output_writable);
+        assert!(readiness.input_hangup);
+        assert!(!readiness.output_hangup);
+        assert_eq!(readiness.error_roles, ["output"]);
     }
 
     /// Verifies mux-owned frame placement preserves authoritative viewport

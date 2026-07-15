@@ -3167,25 +3167,21 @@ pub(crate) fn plan_attached_terminal_client_step_with_host_paste_buffer(
     config: &TerminalClientLoopConfig,
     host_paste: &mut HostBracketedPasteBufferState<'_>,
 ) -> Result<AttachedTerminalClientStepPlan> {
-    let input_readable = readiness
-        .iter()
-        .any(|ready| ready.role == AttachedTerminalFdRole::Input && ready.readable);
-    let output_writable = readiness
-        .iter()
-        .any(|ready| ready.role == AttachedTerminalFdRole::Output && ready.writable);
-    let input_hangup = readiness
-        .iter()
-        .any(|ready| ready.role == AttachedTerminalFdRole::Input && ready.hangup);
-    let output_hangup = readiness
-        .iter()
-        .any(|ready| ready.role == AttachedTerminalFdRole::Output && ready.hangup);
-    let error_roles = readiness
-        .iter()
-        .filter_map(|ready| ready.error.then_some(ready.role))
-        .collect::<Vec<_>>();
+    let readiness =
+        mez_mux::presentation::classify_attached_client_readiness(readiness.iter().map(|ready| {
+            mez_mux::presentation::AttachedClientEndpointReadiness {
+                role: ready.role,
+                input: ready.role == AttachedTerminalFdRole::Input,
+                output: ready.role == AttachedTerminalFdRole::Output,
+                readable: ready.readable,
+                writable: ready.writable,
+                hangup: ready.hangup,
+                error: ready.error,
+            }
+        }));
 
     let mut actions = Vec::new();
-    if input_readable
+    if readiness.input_readable
         && let Some(input) = input
         && !input.is_empty()
     {
@@ -3205,7 +3201,7 @@ pub(crate) fn plan_attached_terminal_client_step_with_host_paste_buffer(
         ));
     }
 
-    let (output_lines, output_line_style_spans) = if output_writable {
+    let (output_lines, output_line_style_spans) = if readiness.output_writable {
         view.map(|view| compose_client_presentation_with_styles(view, status))
             .unwrap_or_default()
     } else {
@@ -3216,9 +3212,9 @@ pub(crate) fn plan_attached_terminal_client_step_with_host_paste_buffer(
         actions,
         output_lines,
         output_line_style_spans,
-        input_hangup,
-        output_hangup,
-        error_roles,
+        input_hangup: readiness.input_hangup,
+        output_hangup: readiness.output_hangup,
+        error_roles: readiness.error_roles,
     })
 }
 
