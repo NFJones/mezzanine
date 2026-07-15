@@ -10,15 +10,17 @@ use super::super::{
     ActionResult, AgentActionPayload, AgentCapability, AgentTurnRecord, AgentTurnState,
     AllowedAction, AllowedActionSet, AsyncModelProvider, ContextSourceKind, MaapBatch,
     McpPromptTool, MezError, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest,
-    ModelResponse, ModelTokenUsage, ProviderErrorRetryClass, Result, SayStatus,
-    constrain_skill_actions_for_loaded_context, provider_error_retry_class,
+    ModelResponse, ModelTokenUsage, Result, SayStatus, constrain_skill_actions_for_loaded_context,
+    provider_error_retry_class,
 };
 use super::{
     AgentTurnExecution, FAILURE_SUMMARY_RAW_TEXT_LIMIT_BYTES, MAAP_REPAIR_RAW_TEXT_LIMIT_BYTES,
     say_structured_content_json,
 };
 use mez_agent::{
-    CapabilityAvailability, CapabilityDecision, CapabilityRequest, decide_capabilities,
+    AgentFailureSummaryNegotiation, AgentFailureSummaryProviderDecision,
+    AgentFailureSummaryResponseDecision, CapabilityAvailability, CapabilityDecision,
+    CapabilityRequest, decide_capabilities,
 };
 
 /// Validates that the provider emitted only actions exposed in the active
@@ -403,17 +405,6 @@ fn provider_error_raw_text(error: &MezError) -> String {
     }
 }
 
-/// Reports whether a provider error should remain visible to runtime retry
-/// handling instead of being converted into a terminal failure summary.
-pub(super) fn provider_error_should_retry_without_summary(error: &MezError) -> bool {
-    matches!(
-        provider_error_retry_class(error),
-        ProviderErrorRetryClass::ContextLimit
-            | ProviderErrorRetryClass::OutputLimit
-            | ProviderErrorRetryClass::RetryableTransport
-    )
-}
-
 /// Maximum number of retryable provider transport retries for one
 /// failure-summary request.
 const FAILURE_SUMMARY_PROVIDER_RETRY_LIMIT: usize = 1;
@@ -555,6 +546,86 @@ fn failure_summary_execution_from_response(
     })
 }
 
+/// Advances a failed summary provider call and installs a repair request when needed.
+fn advance_failure_summary_provider_failure(
+    negotiation: &mut AgentFailureSummaryNegotiation<ModelRequest>,
+    error: &MezError,
+) -> bool {
+    match negotiation.advance_provider_failure(
+        provider_error_retry_class(error),
+        maap_provider_error_is_repairable(error),
+    ) {
+        AgentFailureSummaryProviderDecision::RetryProvider { .. } => true,
+        AgentFailureSummaryProviderDecision::RecoverMalformedOutput { attempt } => {
+            let request = maap_repair_request(
+                negotiation.request(),
+                error.message(),
+                error.provider_raw_text().unwrap_or(""),
+                attempt,
+            );
+            negotiation.replace_request(request);
+            true
+        }
+        AgentFailureSummaryProviderDecision::Reject => false,
+    }
+}
+
+/// Product-side outcome after lower-crate summary response progression.
+enum FailureSummaryResponsePlan {
+    /// Return a valid terminal summary execution.
+    Finish(Box<AgentTurnExecution>),
+    /// Send the repair request installed in the negotiation state.
+    Continue,
+    /// Stop best-effort summary negotiation.
+    Reject,
+}
+
+/// Validates one summary response and advances canonical response progression.
+fn advance_failure_summary_response(
+    negotiation: &mut AgentFailureSummaryNegotiation<ModelRequest>,
+    expected_provider: &str,
+    turn: &AgentTurnRecord,
+    failed_response_raw_text: &str,
+    response: ModelResponse,
+    scope: FailureSummaryScope<'_>,
+) -> FailureSummaryResponsePlan {
+    let actual_provider = response.provider.clone();
+    let response_raw_text = response.raw_text.clone();
+    let execution = failure_summary_execution_from_response(
+        turn,
+        negotiation.request().clone(),
+        failed_response_raw_text,
+        response,
+        scope,
+    );
+    let decision = negotiation.advance_provider_response(
+        expected_provider,
+        &actual_provider,
+        execution.is_ok(),
+    );
+    match (decision, execution) {
+        (AgentFailureSummaryResponseDecision::Accept, Ok(execution)) => {
+            FailureSummaryResponsePlan::Finish(Box::new(execution))
+        }
+        (AgentFailureSummaryResponseDecision::RecoverMalformedResponse { attempt }, Err(error)) => {
+            let request = maap_repair_request(
+                negotiation.request(),
+                error.message(),
+                &response_raw_text,
+                attempt,
+            );
+            negotiation.replace_request(request);
+            FailureSummaryResponsePlan::Continue
+        }
+        (
+            AgentFailureSummaryResponseDecision::RejectProviderIdentity
+            | AgentFailureSummaryResponseDecision::RejectMalformedResponse,
+            _,
+        ) => FailureSummaryResponsePlan::Reject,
+        _ => FailureSummaryResponsePlan::Reject,
+    }
+}
+
 /// Attempts one response-only provider call to summarize a provider failure.
 #[cfg(test)]
 pub(super) fn summarize_provider_failure_execution<P: ModelProvider>(
@@ -593,61 +664,35 @@ pub(super) fn summarize_controller_failure_execution<P: ModelProvider>(
     previous_request: &ModelRequest,
     input: FailureSummaryInput<'_>,
 ) -> Option<AgentTurnExecution> {
-    let mut request = failure_summary_request(
-        previous_request,
-        input.scope.stage,
-        input.error,
-        &input.failed_response.raw_text,
+    let mut negotiation = AgentFailureSummaryNegotiation::new(
+        failure_summary_request(
+            previous_request,
+            input.scope.stage,
+            input.error,
+            &input.failed_response.raw_text,
+        ),
+        FAILURE_SUMMARY_PROVIDER_RETRY_LIMIT,
+        FAILURE_SUMMARY_MAAP_REPAIR_LIMIT,
     );
-    let mut retry_attempts = 0;
-    let mut repair_attempts = 0;
     loop {
-        let response = match provider.send_request(&request) {
+        let response = match provider.send_request(negotiation.request()) {
             Ok(response) => response,
-            Err(error) => {
-                if provider_error_should_retry_without_summary(&error)
-                    && retry_attempts < FAILURE_SUMMARY_PROVIDER_RETRY_LIMIT
-                {
-                    retry_attempts += 1;
-                    continue;
-                }
-                if maap_provider_error_is_repairable(&error)
-                    && repair_attempts < FAILURE_SUMMARY_MAAP_REPAIR_LIMIT
-                {
-                    repair_attempts += 1;
-                    request = maap_repair_request(
-                        &request,
-                        error.message(),
-                        error.provider_raw_text().unwrap_or(""),
-                        repair_attempts,
-                    );
-                    continue;
-                }
-                return None;
+            Err(error) if advance_failure_summary_provider_failure(&mut negotiation, &error) => {
+                continue;
             }
+            Err(_) => return None,
         };
-        if response.provider != provider.provider_id() {
-            return None;
-        }
-        let response_raw_text = response.raw_text.clone();
-        match failure_summary_execution_from_response(
+        match advance_failure_summary_response(
+            &mut negotiation,
+            provider.provider_id(),
             turn,
-            request.clone(),
             &input.failed_response.raw_text,
             response,
             input.scope,
         ) {
-            Ok(execution) => return Some(execution),
-            Err(error) if repair_attempts < FAILURE_SUMMARY_MAAP_REPAIR_LIMIT => {
-                repair_attempts += 1;
-                request = maap_repair_request(
-                    &request,
-                    error.message(),
-                    &response_raw_text,
-                    repair_attempts,
-                );
-            }
-            Err(_) => return None,
+            FailureSummaryResponsePlan::Finish(execution) => return Some(*execution),
+            FailureSummaryResponsePlan::Continue => {}
+            FailureSummaryResponsePlan::Reject => return None,
         }
     }
 }
@@ -689,61 +734,35 @@ pub(super) async fn summarize_controller_failure_execution_async<P: AsyncModelPr
     previous_request: &ModelRequest,
     input: FailureSummaryInput<'_>,
 ) -> Option<AgentTurnExecution> {
-    let mut request = failure_summary_request(
-        previous_request,
-        input.scope.stage,
-        input.error,
-        &input.failed_response.raw_text,
+    let mut negotiation = AgentFailureSummaryNegotiation::new(
+        failure_summary_request(
+            previous_request,
+            input.scope.stage,
+            input.error,
+            &input.failed_response.raw_text,
+        ),
+        FAILURE_SUMMARY_PROVIDER_RETRY_LIMIT,
+        FAILURE_SUMMARY_MAAP_REPAIR_LIMIT,
     );
-    let mut retry_attempts = 0;
-    let mut repair_attempts = 0;
     loop {
-        let response = match provider.send_request_async(&request).await {
+        let response = match provider.send_request_async(negotiation.request()).await {
             Ok(response) => response,
-            Err(error) => {
-                if provider_error_should_retry_without_summary(&error)
-                    && retry_attempts < FAILURE_SUMMARY_PROVIDER_RETRY_LIMIT
-                {
-                    retry_attempts += 1;
-                    continue;
-                }
-                if maap_provider_error_is_repairable(&error)
-                    && repair_attempts < FAILURE_SUMMARY_MAAP_REPAIR_LIMIT
-                {
-                    repair_attempts += 1;
-                    request = maap_repair_request(
-                        &request,
-                        error.message(),
-                        error.provider_raw_text().unwrap_or(""),
-                        repair_attempts,
-                    );
-                    continue;
-                }
-                return None;
+            Err(error) if advance_failure_summary_provider_failure(&mut negotiation, &error) => {
+                continue;
             }
+            Err(_) => return None,
         };
-        if response.provider != provider.provider_id() {
-            return None;
-        }
-        let response_raw_text = response.raw_text.clone();
-        match failure_summary_execution_from_response(
+        match advance_failure_summary_response(
+            &mut negotiation,
+            provider.provider_id(),
             turn,
-            request.clone(),
             &input.failed_response.raw_text,
             response,
             input.scope,
         ) {
-            Ok(execution) => return Some(execution),
-            Err(error) if repair_attempts < FAILURE_SUMMARY_MAAP_REPAIR_LIMIT => {
-                repair_attempts += 1;
-                request = maap_repair_request(
-                    &request,
-                    error.message(),
-                    &response_raw_text,
-                    repair_attempts,
-                );
-            }
-            Err(_) => return None,
+            FailureSummaryResponsePlan::Finish(execution) => return Some(*execution),
+            FailureSummaryResponsePlan::Continue => {}
+            FailureSummaryResponsePlan::Reject => return None,
         }
     }
 }

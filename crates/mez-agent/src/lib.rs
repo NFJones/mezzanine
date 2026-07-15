@@ -20,6 +20,8 @@ pub mod config_change;
 pub mod context;
 /// Provider-independent capability-continuation decisions.
 pub mod continuation;
+/// Provider-neutral terminal failure-summary progression.
+pub mod failure_summary;
 /// Provider-independent complete agent turn orchestration.
 pub mod harness;
 /// Provider-neutral HTTP request and response contracts.
@@ -87,6 +89,10 @@ pub use context::{
 pub use continuation::{
     CapabilityAvailability, CapabilityDecision, CapabilityRequest, ProviderResponseAcceptance,
     accept_provider_response, continuation_surface, decide_capabilities,
+};
+pub use failure_summary::{
+    AgentFailureSummaryNegotiation, AgentFailureSummaryProviderDecision,
+    AgentFailureSummaryResponseDecision,
 };
 pub use harness::{
     AgentActionExecutor, AgentHarnessAction, AgentHarnessActionResult, AgentHarnessError,
