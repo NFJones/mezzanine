@@ -10,9 +10,7 @@ use super::{
 
 mod execution;
 mod planning;
-mod read_observation;
 mod recovery;
-mod result_context;
 mod runner;
 mod shell_transport;
 mod transcript;
@@ -26,12 +24,6 @@ pub use execution::{
     execute_shell_action_through_pane, postprocess_shell_action_success_output,
     shell_command_result_content,
 };
-pub use read_observation::{
-    ShellReadObservation, ShellReadObservationKind, ShellReadRange,
-    shell_read_observations_for_command,
-};
-pub use result_context::action_result_context_content;
-pub(super) use result_context::action_result_transcript_content;
 pub use runner::AgentTurnRunner;
 pub(crate) use runner::apply_default_action_gates;
 pub use shell_transport::{
@@ -44,6 +36,8 @@ pub use transcript::{
 };
 
 // Shell/MCP executors, action execution, and transcript persistence.
+
+use mez_agent::shell_read_observations_for_command;
 
 /// Maximum previous-response bytes included in one ephemeral MAAP repair prompt.
 const MAAP_REPAIR_RAW_TEXT_LIMIT_BYTES: usize = 12 * 1024;

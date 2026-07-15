@@ -251,14 +251,14 @@ fn shell_command_rejects_semantic_action_invocation_as_shell_program() {
 /// segment instead of stealing the last file-looking token from a later
 /// unrelated command.
 fn shell_read_observations_scope_targets_per_shell_segment() {
-    let observations = crate::agent::shell_read_observations_for_command(
+    let observations = mez_agent::shell_read_observations_for_command(
         "sed -n '300,420p' src/runtime/render/overlay.rs && cat README.md",
     );
 
     assert_eq!(observations.len(), 2, "{observations:?}");
     assert_eq!(
         observations[0].kind,
-        crate::agent::ShellReadObservationKind::Read
+        mez_agent::ShellReadObservationKind::Read
     );
     assert_eq!(observations[0].target, "src/runtime/render/overlay.rs");
     assert_eq!(observations[0].ranges.len(), 1);
@@ -266,7 +266,7 @@ fn shell_read_observations_scope_targets_per_shell_segment() {
     assert_eq!(observations[0].ranges[0].end_line, 420);
     assert_eq!(
         observations[1].kind,
-        crate::agent::ShellReadObservationKind::Read
+        mez_agent::ShellReadObservationKind::Read
     );
     assert_eq!(observations[1].target, "README.md");
     assert!(observations[1].ranges.is_empty());

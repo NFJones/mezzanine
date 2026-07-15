@@ -11,7 +11,6 @@
 
 // Agent module tests.
 
-use super::actions::action_result_transcript_content;
 use super::{
     AgentCapability, AgentShellCommandOutcome, AgentTurnExecution, AgentTurnRunner,
     AsyncModelProvider, AsyncProviderHttpTransport, CHATGPT_ACCOUNT_ID_HEADER, ContextSourceKind,
@@ -20,12 +19,11 @@ use super::{
     OpenAiResponsesProvider, PaneShellExecutor, ProviderHttpTransport, Result, ShellClassification,
     ShellExecutionOutput, ShellExecutionRequest, ShellTransaction, ShellTransactionInput,
     ShellTransactionOutputTransport, ToolDiscoveryCache, ToolInventory,
-    action_result_context_content, agent_subshell_enter_command, apply_default_action_gates,
-    apply_patch_read_plan_for_paths, apply_patch_write_plan_from_read_output,
-    apply_patch_write_plan_from_read_outputs, assemble_model_request, bootstrap_script,
-    bootstrap_script_for_classification, build_agent_system_prompt,
-    build_deepseek_chat_completions_http_request, decode_shell_output_transport,
-    decode_shell_output_transport_with_diagnostics,
+    agent_subshell_enter_command, apply_default_action_gates, apply_patch_read_plan_for_paths,
+    apply_patch_write_plan_from_read_output, apply_patch_write_plan_from_read_outputs,
+    assemble_model_request, bootstrap_script, bootstrap_script_for_classification,
+    build_agent_system_prompt, build_deepseek_chat_completions_http_request,
+    decode_shell_output_transport, decode_shell_output_transport_with_diagnostics,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     discover_tools_through_pane_shell, execute_agent_shell_command,
     execute_agent_shell_command_with_mcp, execute_agent_shell_command_with_permissions,
@@ -59,7 +57,8 @@ use mez_agent::{
     MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, MaapBatch, McpExecutionRequest,
     McpExecutionResponse, McpPromptTool, ModelRequest, ModelTokenUsage, OPENAI_MODELS_ENDPOINT,
     OPENAI_RESPONSES_ENDPOINT, ProviderHttpRequest, ProviderHttpResponse, ProviderTranscriptEvent,
-    SlashCommandEffect, baseline_slash_commands, openai_models_endpoint_for_responses_endpoint,
+    SlashCommandEffect, action_result_context_content, action_result_transcript_content,
+    baseline_slash_commands, openai_models_endpoint_for_responses_endpoint,
     openai_prompt_cache_diagnostics_for_request, openai_responses_endpoint_for_base_url,
     openai_responses_request_body, openai_stable_prefix_material_for_request,
     provider_quota_usage_from_headers, shell_quote,

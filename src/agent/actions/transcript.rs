@@ -10,7 +10,7 @@ use super::super::{
     ModelMessageRole, ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey,
     ProviderTranscriptEvent, Result, TranscriptPersistence,
 };
-use super::action_result_transcript_content;
+use mez_agent::action_result_transcript_content;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Carries agent turn execution state for this subsystem.

@@ -6,8 +6,7 @@
 //! separate from turn execution while preserving raw shell output bytes inside
 //! ordinary model context.
 
-use super::ShellReadObservation;
-use mez_agent::{ActionResult, ActionStatus};
+use crate::{ActionResult, ActionStatus, ShellReadObservation};
 
 /// Maximum action-result content bytes included in one model-facing context
 /// block before native truncation metadata is appended.
@@ -75,7 +74,7 @@ impl<'a> ActionResultContextView<'a> {
 ///
 /// Callers receive a typed result or error with context from the underlying
 /// runtime operation.
-pub(in crate::agent) fn action_result_transcript_content(result: &ActionResult) -> String {
+pub fn action_result_transcript_content(result: &ActionResult) -> String {
     if matches!(result.action_type, "request_skills" | "call_skill") {
         let mut content = format!(
             "action_id={} action_type={} status={:?}",

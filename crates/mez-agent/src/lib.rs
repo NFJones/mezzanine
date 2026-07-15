@@ -12,6 +12,8 @@ use std::collections::BTreeSet;
 pub mod accounting;
 /// Provider-independent MAAP action-result contracts.
 pub mod action_result;
+/// Provider-independent action-result context and transcript rendering.
+pub mod action_result_context;
 /// Provider-independent agent-shell session error contracts.
 pub mod agent_shell;
 /// Provider-independent agent-shell session state and display policy.
@@ -96,6 +98,8 @@ pub mod schema;
 pub mod semantic_patch;
 /// Provider-independent shell-source construction helpers.
 pub mod shell;
+/// Structured shell-read observation extraction.
+pub mod shell_read_observation;
 /// Dependency-neutral agent slash-command registry and parsing.
 pub mod slash;
 /// Provider-independent subagent cooperation and scope contracts.
@@ -115,6 +119,7 @@ pub use action_result::{
     ActionResultContractResult, ActionStatus, AgentActionResultIdentity, AgentTurnResultIdentity,
     action_text_content_blocks, turn_state_from_action_results,
 };
+pub use action_result_context::{action_result_context_content, action_result_transcript_content};
 pub use agent_shell::{
     AgentShellSessionError, AgentShellSessionErrorKind, AgentShellSessionResult,
     validate_agent_shell_required,
@@ -299,6 +304,10 @@ pub use semantic_patch::{is_mez_patch_payload, validate_apply_patch_payload};
 pub use shell::{
     AgentShellValidationError, AgentShellValidationErrorKind, AgentShellValidationResult,
     shell_quote, validate_resolved_shell_path, validate_shell_marker_token,
+};
+pub use shell_read_observation::{
+    ShellReadObservation, ShellReadObservationKind, ShellReadRange,
+    shell_read_observations_for_command,
 };
 pub use slash::{
     SlashCommandEffect, SlashCommandInvocation, SlashCommandParseError, SlashCommandSpec,
