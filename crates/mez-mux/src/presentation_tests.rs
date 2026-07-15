@@ -1,11 +1,11 @@
-//! Regression tests for presentation behavior adjacent to terminal screens.
+//! Direct regression tests for mux-owned presentation boundaries.
 
-use crate::terminal::{compose_client_presentation, pane_divider_glyph_for_test};
-use mez_mux::layout::Size;
-use mez_mux::presentation::{
+use crate::layout::Size;
+use crate::presentation::{
     ClientStatusKind, ClientStatusLine, ClientViewRole, RenderedClientView, TerminalCursorStyle,
+    compose_client_presentation, pane_divider_glyph,
 };
-use mez_mux::theme::UiTheme;
+use crate::theme::UiTheme;
 
 /// Verifies client presentation renders the status line inside the authoritative size.
 ///
@@ -75,7 +75,7 @@ fn pane_divider_connection_masks_use_correct_box_drawing_glyphs() {
 
     for ((up, down, left, right), expected) in cases {
         assert_eq!(
-            pane_divider_glyph_for_test(up, down, left, right),
+            pane_divider_glyph(up, down, left, right),
             expected,
             "unexpected glyph for up={up} down={down} left={left} right={right}"
         );

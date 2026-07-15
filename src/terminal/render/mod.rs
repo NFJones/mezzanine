@@ -1,8 +1,10 @@
-//! Terminal Render implementation.
+//! Product presentation adapters over mux-owned render primitives.
 //!
-//! This module owns the terminal render boundary for Mezzanine. It keeps related
-//! state transitions and helper routines localized so neighboring modules
-//! interact through typed APIs instead of duplicating subsystem details.
+//! `mez-mux` owns geometry, canvases, frame/status layout, overlay pagination,
+//! prompt layout, styling math, and attached-client presentation contracts.
+//! This module injects Mezzanine pane/frame fields, agent and readline view
+//! models, product labels, configured themes, animation timing, and hit actions
+//! into those lower plans.
 
 use super::{
     AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, BTreeMap, GraphicRendition, MezError,
@@ -41,8 +43,6 @@ mod prompt;
 
 mod text;
 
-#[cfg(test)]
-pub(crate) use dividers::pane_divider_glyph_for_test;
 use dividers::{merged_pane_frame_boundary_style_spans, pane_divider_rendition};
 pub use dividers::{pane_border_cells_for_geometries, pane_frame_merges_into_divider};
 use frame::{

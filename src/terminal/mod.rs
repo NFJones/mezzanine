@@ -96,8 +96,6 @@ pub use mouse::{
     PaneAgentStatusField, WindowFrameAction, WindowFrameCommandKind, classify_mouse_event,
 };
 pub(crate) use render::overlay_fixed_column_style_spans;
-#[cfg(test)]
-pub(crate) use render::pane_divider_glyph_for_test;
 pub use render::{
     DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_PANE_FRAME_VISIBLE_FIELDS,
     DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE, DEFAULT_WINDOW_FRAME_TEMPLATE,

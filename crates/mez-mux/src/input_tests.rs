@@ -1,10 +1,12 @@
-//! Regression tests for terminal input key bindings behavior.
+//! Direct regression tests for mux-owned terminal input parsing and bindings.
 
-use mez_mux::input::{
+use crate::MuxErrorKind;
+use crate::input::{
     GroupFocusTarget, KeyBindings, KeyChord, KeyCode, MuxAction, PaneFocusDirection,
     PasteBufferTarget, TerminalInputClassification, WindowFocusTarget, classify_terminal_input,
     key_chord_input_bytes,
 };
+use mez_terminal::{MouseButton, MouseEvent, MouseEventKind, MouseModifiers};
 
 /// Verifies parses key binding notation for default surface.
 ///
@@ -74,11 +76,11 @@ fn parses_key_binding_notation_for_default_surface() {
     );
     assert_eq!(
         KeyChord::parse("C-C-a").unwrap_err().kind(),
-        mez_mux::MuxErrorKind::InvalidArgs
+        MuxErrorKind::InvalidArgs
     );
     assert_eq!(
         KeyChord::parse("DefinitelyNotAKey").unwrap_err().kind(),
-        mez_mux::MuxErrorKind::InvalidArgs
+        MuxErrorKind::InvalidArgs
     );
 }
 
@@ -89,7 +91,7 @@ fn parses_key_binding_notation_for_default_surface() {
 /// than a panic hazard.
 #[test]
 fn rejects_empty_key_chord_input() {
-    assert_eq!(mez_mux::input::parse_key_chord_bytes(b""), None);
+    assert_eq!(crate::input::parse_key_chord_bytes(b""), None);
 }
 
 /// Verifies classifies default direct mux key bindings.
@@ -265,5 +267,38 @@ fn classifies_default_prefix_key_bindings() {
     assert_eq!(
         classify_terminal_input(b"\x01e", &bindings).unwrap(),
         TerminalInputClassification::UnboundPrefix(KeyChord::new(KeyCode::Char('e')))
+    );
+}
+
+/// Verifies SGR mouse sequences are classified as terminal input with
+/// zero-based coordinates and explicit modifier state.
+#[test]
+fn classifies_mouse_sequences_as_terminal_input() {
+    assert_eq!(
+        classify_terminal_input(b"\x1b[<0;12;5M", &KeyBindings::default()).unwrap(),
+        TerminalInputClassification::Mouse(MouseEvent {
+            kind: MouseEventKind::Press,
+            button: MouseButton::Left,
+            column: 11,
+            row: 4,
+            modifiers: MouseModifiers {
+                shift: false,
+                alt: false,
+                ctrl: false,
+            },
+        })
+    );
+}
+
+/// Verifies malformed SGR mouse packets with surplus fields remain ordinary
+/// terminal input instead of being accepted as mux mouse events.
+#[test]
+fn rejects_sgr_mouse_packets_with_extra_fields() {
+    assert!(
+        !matches!(
+            classify_terminal_input(b"\x1b[<0;12;5;999M", &KeyBindings::default()).unwrap(),
+            TerminalInputClassification::Mouse(_)
+        ),
+        "malformed SGR mouse input must not be classified as a mux mouse event"
     );
 }

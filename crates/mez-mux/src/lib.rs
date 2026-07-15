@@ -19,4 +19,9 @@ pub mod render;
 pub mod session;
 pub mod theme;
 
+#[cfg(test)]
+mod input_tests;
+#[cfg(test)]
+mod presentation_tests;
+
 pub use error::{MuxError, MuxErrorKind, Result};

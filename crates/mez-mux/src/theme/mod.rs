@@ -11,6 +11,9 @@ use mez_terminal::{GraphicRendition, TerminalColor};
 
 use crate::{MuxError, Result};
 
+#[cfg(test)]
+mod tests;
+
 /// User-configurable color slots for Mezzanine-owned UI components.
 pub const UI_COLOR_SLOT_NAMES: &[&str] = &[
     "window_frame_fg",

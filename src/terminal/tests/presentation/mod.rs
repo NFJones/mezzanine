@@ -5,5 +5,4 @@ mod copy_mode;
 mod frames;
 mod layout;
 mod overlays;
-mod screen_boundaries;
 mod themes;

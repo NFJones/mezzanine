@@ -1,8 +1,8 @@
-//! Terminal pane-divider geometry and glyph rendering helpers.
+//! Product pane-divider presentation adapters.
 //!
-//! This module owns the conversion from pane geometries into mux-managed
-//! divider cells, box-drawing glyph connection masks, mouse-border hit cells,
-//! and styled/plain divider canvas writes.
+//! `mez-mux` owns divider geometry and glyph connectivity. This module maps
+//! lower divider cells to product mouse-hit records and applies configured
+//! Mezzanine theme renditions to merged frame boundaries.
 
 use mez_mux::input::MouseBorderCell;
 use mez_mux::layout::PaneGeometry;
@@ -24,16 +24,6 @@ pub fn pane_border_cells_for_geometries(
             row: cell.row.saturating_add(row_offset),
         })
         .collect()
-}
-
-/// Returns the box-drawing glyph for an explicit divider-connection mask.
-///
-/// This test helper keeps the glyph contract covered independently from any
-/// particular split-tree shape, while production rendering still derives the
-/// same connection mask from pane geometry.
-#[cfg(test)]
-pub(crate) fn pane_divider_glyph_for_test(up: bool, down: bool, left: bool, right: bool) -> char {
-    mez_mux::presentation::pane_divider_glyph(up, down, left, right)
 }
 
 /// Builds style spans for divider junctions that bound a merged pane status row.

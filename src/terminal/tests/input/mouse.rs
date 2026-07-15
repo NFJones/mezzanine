@@ -2,50 +2,8 @@
 
 use crate::terminal::{MouseAction, classify_mouse_event};
 use mez_mux::copy::CopyPosition;
-use mez_mux::input::{
-    KeyBindings, MousePolicy, TerminalInputClassification, classify_terminal_input,
-};
+use mez_mux::input::MousePolicy;
 use mez_terminal::{MouseButton, MouseEvent, MouseEventKind, MouseModifiers};
-
-/// Verifies classifies mouse sequences as terminal input.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
-#[test]
-fn classifies_mouse_sequences_as_terminal_input() {
-    assert_eq!(
-        classify_terminal_input(b"\x1b[<0;12;5M", &KeyBindings::default()).unwrap(),
-        TerminalInputClassification::Mouse(MouseEvent {
-            kind: MouseEventKind::Press,
-            button: MouseButton::Left,
-            column: 11,
-            row: 4,
-            modifiers: MouseModifiers {
-                shift: false,
-                alt: false,
-                ctrl: false,
-            },
-        })
-    );
-}
-
-/// Verifies malformed SGR mouse packets with extra fields are rejected.
-///
-/// SGR mouse packets must contain exactly `code;column;row` before the final
-/// button-state byte. Accepting surplus fields lets malformed terminal input
-/// trigger mux mouse actions using only the leading coordinates, so this
-/// regression protects the parser boundary and the higher-level key classifier.
-#[test]
-fn rejects_sgr_mouse_packets_with_extra_fields() {
-    assert!(
-        !matches!(
-            classify_terminal_input(b"\x1b[<0;12;5;999M", &KeyBindings::default()).unwrap(),
-            TerminalInputClassification::Mouse(_)
-        ),
-        "malformed SGR mouse input must not be classified as a mux mouse event"
-    );
-}
 
 /// Verifies classifies mouse actions for resize selection scroll and forwarding.
 ///
