@@ -66,6 +66,7 @@ use mez_mux::render::{
     normalize_overlay_canvas, normalize_overlay_style_spans, overlay_text_style_width,
     push_or_extend_style_span,
 };
+use mez_mux::render::{clipped_prompt_region, write_line_segment};
 pub use overlay::{
     compose_display_overlay_line_style_spans, compose_display_overlay_lines,
     compose_modal_display_overlay_line_style_spans, compose_modal_display_overlay_lines,
@@ -79,8 +80,7 @@ pub use panes::{
 pub(crate) use prompt::agent_prompt_input_rendition;
 use prompt::{
     AgentPromptBlock, agent_live_footer_state_label, agent_live_footer_style_spans,
-    clipped_prompt_region, display_overlay_text_rendition, render_agent_prompt_block,
-    write_line_segment,
+    display_overlay_text_rendition, render_agent_prompt_block,
 };
 pub use prompt::{
     agent_prompt_reserved_line_count, compose_display_region_overlay_line_style_spans,

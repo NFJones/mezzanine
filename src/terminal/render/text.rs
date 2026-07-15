@@ -133,11 +133,6 @@ fn wrap_agent_log_physical_line(line: &str, wrap_width: usize) -> Vec<String> {
     rows
 }
 
-/// Returns the terminal display width of one Unicode scalar.
-pub(crate) fn terminal_char_width(ch: char) -> usize {
-    mez_terminal::terminal_char_width(ch, terminal_emoji_width())
-}
-
 /// Returns the display width of one Unicode grapheme cluster.
 ///
 /// Terminal renderers display each grapheme cluster in a single cell span of

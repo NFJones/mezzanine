@@ -16,12 +16,17 @@ use crate::presentation::{
 };
 
 mod overlay;
+mod prompt;
 mod style;
 
 pub use overlay::{
     NormalizedOverlayCanvas, compose_bottom_overlay_lines, compose_modal_overlay_lines,
     modal_overlay_max_scroll, modal_overlay_page_rows, normalize_overlay_canvas,
     normalize_overlay_style_spans, overlay_text_style_width,
+};
+pub use prompt::{
+    PromptShadowSpan, WrappedPromptLayout, clipped_prompt_region, layout_wrapped_prompt,
+    wrap_prompt_line_with_cursor_and_shadow, write_line_segment,
 };
 pub use style::{
     agent_status_running_gradient_palette, animated_scan_background, blend_terminal_color,

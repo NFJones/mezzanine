@@ -13,14 +13,15 @@ use crate::terminal::{
 };
 use mez_mux::layout::Size;
 use mez_mux::presentation::{ReadlinePromptRegion, RenderedClientView};
-use mez_mux::render::{char_count, fit_width, offset_style_span};
+use mez_mux::render::{
+    PromptShadowSpan, WrappedPromptLayout, char_count, clipped_prompt_region, fit_width,
+    layout_wrapped_prompt, offset_style_span, write_line_segment,
+};
 use mez_mux::theme::{UiColorPair, UiTheme};
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalStyledLine};
 
 use super::super::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
-use super::text::{
-    terminal_char_width, terminal_grapheme_width, terminal_graphemes, terminal_text_width,
-};
+use super::text::{terminal_grapheme_width, terminal_graphemes, terminal_text_width};
 use super::{
     AGENT_STATUS_SCAN_BAND_WIDTH, compose_client_presentation_with_styles,
     normalize_overlay_canvas, normalize_overlay_style_spans, overlay_text_style_width,
@@ -37,14 +38,6 @@ const MIN_PROMPT_SHADOW_CONTRAST_RATIO: f64 = 4.5;
 /// command overlays) so users can distinguish them from agent-controlled
 /// terminal output. Terminal content never receives this prefix.
 const MEZ_UI_PREFIX: &str = "▐ ";
-
-/// Clamps a zero-based visible cursor column into the addressable cells of a
-/// rendered row. Terminal cursor addressing is one-based and cannot represent a
-/// visible insertion point after the final cell without relying on emulator
-/// autowrap behavior.
-fn clamp_visible_cursor_column(column: usize, width: usize) -> usize {
-    column.min(width.saturating_sub(1))
-}
 
 /// Runs the render readline prompt status row operation for this subsystem.
 ///
@@ -500,57 +493,6 @@ pub fn compose_display_region_overlay_line_style_spans(
     line_style_spans
 }
 
-/// Carries Wrapped Prompt Layout state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct WrappedPromptLayout {
-    /// Stores the lines value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    lines: Vec<String>,
-    /// Stores the shadow spans value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    shadow_spans: Vec<Vec<PromptShadowSpan>>,
-    /// Stores the cursor row value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    cursor_row: usize,
-    /// Stores the cursor column value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    cursor_column: usize,
-    /// Stores the cursor visible value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    cursor_visible: bool,
-}
-
-/// Carries Prompt Shadow Span state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct PromptShadowSpan {
-    /// Stores the start value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    start: usize,
-    /// Stores the length value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    length: usize,
-}
-
 /// Runs the render wrapped prompt layout operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -561,15 +503,6 @@ fn render_wrapped_prompt_layout(
     width: usize,
     max_rows: usize,
 ) -> WrappedPromptLayout {
-    if width == 0 || max_rows == 0 {
-        return WrappedPromptLayout {
-            lines: Vec::new(),
-            shadow_spans: Vec::new(),
-            cursor_row: 0,
-            cursor_column: 0,
-            cursor_visible: false,
-        };
-    }
     let raw_line = format!("{MEZ_UI_PREFIX}{}", prompt.render_with_shadow_hint());
     let raw_cursor_index = prompt.rendered_cursor_column().saturating_add(2);
     let raw_shadow_range = prompt
@@ -581,56 +514,21 @@ fn render_wrapped_prompt_layout(
         } else {
             0
         };
-    let (chunks, chunk_shadow_spans, cursor_row, cursor_column) =
-        wrap_prompt_line_with_cursor_and_shadow(
-            &raw_line,
-            raw_cursor_index,
-            raw_shadow_range,
-            width,
-            continuation_indent,
-        );
-    let max_first_visible_chunk = chunks.len().saturating_sub(max_rows);
-    let first_visible_chunk = cursor_row
-        .saturating_add(1)
-        .saturating_sub(max_rows)
-        .min(max_first_visible_chunk);
-    let visible_chunks = chunks
-        .iter()
-        .skip(first_visible_chunk)
-        .take(max_rows)
-        .map(|line| fit_width(line, width))
-        .collect::<Vec<_>>();
-    let mut visible_shadow_spans = chunk_shadow_spans
-        .iter()
-        .skip(first_visible_chunk)
-        .take(max_rows)
-        .cloned()
-        .collect::<Vec<_>>();
-    let cursor_visible = cursor_row >= first_visible_chunk
-        && cursor_row < first_visible_chunk + visible_chunks.len();
-    let mut lines = visible_chunks;
-    let mut cursor_column = cursor_column;
-    if should_show_prompt_length_note(prompt, width, max_rows)
-        && let Some(first) = lines.first_mut()
-    {
-        let note = format!(
+    let length_note = should_show_prompt_length_note(prompt, width, max_rows).then(|| {
+        format!(
             "{MEZ_UI_PREFIX}mez> [{} chars pasted]",
             prompt.buffer.line().chars().count()
-        );
-        *first = fit_width(&note, width);
-        if let Some(first_spans) = visible_shadow_spans.first_mut() {
-            first_spans.clear();
-        }
-        cursor_column = width;
-    }
-    let cursor_column = clamp_visible_cursor_column(cursor_column, width);
-    WrappedPromptLayout {
-        lines,
-        shadow_spans: visible_shadow_spans,
-        cursor_row: cursor_row.saturating_sub(first_visible_chunk),
-        cursor_column,
-        cursor_visible,
-    }
+        )
+    });
+    layout_wrapped_prompt(
+        &raw_line,
+        raw_cursor_index,
+        raw_shadow_range,
+        width,
+        max_rows,
+        continuation_indent,
+        length_note.as_deref(),
+    )
 }
 
 /// Runs the should show prompt length note operation for this subsystem.
@@ -641,213 +539,6 @@ fn render_wrapped_prompt_layout(
 fn should_show_prompt_length_note(prompt: &ReadlinePrompt, width: usize, max_rows: usize) -> bool {
     prompt.kind == ReadlinePromptKind::Agent
         && char_count(prompt.buffer.line()) > width.saturating_mul(max_rows).max(160)
-}
-
-/// Runs the wrap prompt line with cursor and shadow operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn wrap_prompt_line_with_cursor_and_shadow(
-    value: &str,
-    cursor_index: usize,
-    shadow_range: Option<(usize, usize)>,
-    width: usize,
-    continuation_indent: usize,
-) -> (Vec<String>, Vec<Vec<PromptShadowSpan>>, usize, usize) {
-    let mut chunks = Vec::new();
-    let mut chunk_shadow_spans = Vec::new();
-    let mut current = String::new();
-    let mut current_shadow_spans = Vec::new();
-    let mut used = 0usize;
-    let mut cursor = None;
-    let mut last_space_break: Option<(usize, usize, Vec<PromptShadowSpan>)> = None;
-    let continuation_prefix = " ".repeat(continuation_indent);
-    for (index, ch) in value.chars().enumerate() {
-        if ch == '\n' {
-            if cursor.is_none() && index == cursor_index {
-                cursor = Some((chunks.len(), used));
-            }
-            chunks.push(current);
-            chunk_shadow_spans.push(current_shadow_spans);
-            current = continuation_prefix.clone();
-            current_shadow_spans = Vec::new();
-            used = continuation_indent;
-            last_space_break = None;
-            continue;
-        }
-        let ch_width = terminal_char_width(ch).max(1);
-        if used > 0 && used.saturating_add(ch_width) > width {
-            if let Some((text_break, consumed_break, spans_at_break)) = last_space_break.take() {
-                let consumed_columns = terminal_text_width(&current[..consumed_break]);
-                if consumed_columns > continuation_indent {
-                    if let Some(cursor_position) = cursor.as_mut()
-                        && cursor_position.0 == chunks.len()
-                        && cursor_position.1 >= consumed_columns
-                    {
-                        cursor_position.0 = cursor_position.0.saturating_add(1);
-                        cursor_position.1 = continuation_indent
-                            .saturating_add(cursor_position.1.saturating_sub(consumed_columns));
-                    }
-                    let wrapped = current[..text_break].to_string();
-                    let remainder = current[consumed_break..].to_string();
-                    chunks.push(wrapped);
-                    chunk_shadow_spans.push(spans_at_break);
-                    current = format!("{continuation_prefix}{remainder}");
-                    current_shadow_spans = prompt_shadow_spans_after_consumed(
-                        &current_shadow_spans,
-                        consumed_columns,
-                        continuation_indent,
-                    );
-                    used = terminal_text_width(&current);
-                } else {
-                    chunks.push(current);
-                    chunk_shadow_spans.push(current_shadow_spans);
-                    current = continuation_prefix.clone();
-                    current_shadow_spans = Vec::new();
-                    used = continuation_indent;
-                }
-            } else {
-                chunks.push(current);
-                chunk_shadow_spans.push(current_shadow_spans);
-                current = continuation_prefix.clone();
-                current_shadow_spans = Vec::new();
-                used = continuation_indent;
-            }
-        }
-        if cursor.is_none() && index == cursor_index {
-            cursor = Some((chunks.len(), used));
-        }
-        let current_byte_len = current.len();
-        current.push(ch);
-        if shadow_range.is_some_and(|(start, end)| index >= start && index < end) {
-            push_prompt_shadow_cell(&mut current_shadow_spans, used, ch_width);
-        }
-        used = used.saturating_add(ch_width);
-        if ch.is_whitespace() && used > 0 {
-            last_space_break = Some((
-                current_byte_len,
-                current.len(),
-                current_shadow_spans.clone(),
-            ));
-        }
-    }
-    if cursor.is_none() && value.chars().count() == cursor_index {
-        cursor = Some((chunks.len(), used));
-    }
-    chunks.push(current);
-    chunk_shadow_spans.push(current_shadow_spans);
-    let (cursor_row, cursor_column) = cursor.unwrap_or((chunks.len().saturating_sub(1), 0));
-    (chunks, chunk_shadow_spans, cursor_row, cursor_column)
-}
-
-/// Returns prompt-shadow spans after one wrapped prefix is consumed.
-fn prompt_shadow_spans_after_consumed(
-    spans: &[PromptShadowSpan],
-    consumed_columns: usize,
-    shift_columns: usize,
-) -> Vec<PromptShadowSpan> {
-    spans
-        .iter()
-        .filter_map(|span| {
-            let end = span.start.saturating_add(span.length);
-            if end <= consumed_columns {
-                None
-            } else {
-                Some(PromptShadowSpan {
-                    start: span
-                        .start
-                        .saturating_sub(consumed_columns)
-                        .saturating_add(shift_columns),
-                    length: end.saturating_sub(consumed_columns.max(span.start)),
-                })
-            }
-        })
-        .collect()
-}
-
-/// Runs the push prompt shadow cell operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn push_prompt_shadow_cell(
-    current_shadow_spans: &mut Vec<PromptShadowSpan>,
-    start: usize,
-    length: usize,
-) {
-    if let Some(last) = current_shadow_spans.last_mut()
-        && last.start.saturating_add(last.length) == start
-    {
-        last.length = last.length.saturating_add(length);
-        return;
-    }
-    current_shadow_spans.push(PromptShadowSpan { start, length });
-}
-
-/// Runs the clipped prompt region operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn clipped_prompt_region(
-    region: ReadlinePromptRegion,
-    client_width: usize,
-    client_rows: usize,
-) -> Option<ReadlinePromptRegion> {
-    if region.row >= client_rows || region.column >= client_width {
-        return None;
-    }
-    let columns = region
-        .columns
-        .min(client_width.saturating_sub(region.column));
-    let rows = region.rows.min(client_rows.saturating_sub(region.row));
-    (columns > 0 && rows > 0).then_some(ReadlinePromptRegion {
-        row: region.row,
-        column: region.column,
-        columns,
-        rows,
-    })
-}
-
-/// Runs the write line segment operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn write_line_segment(line: &mut String, column: usize, width: usize, value: &str) {
-    if width == 0 {
-        return;
-    }
-    let target_end = column.saturating_add(width);
-    let original = line.clone();
-    let mut output = String::new();
-    let mut current_column = 0usize;
-    for grapheme in terminal_graphemes(&original) {
-        let grapheme_width = terminal_grapheme_width(grapheme);
-        let next_column = current_column.saturating_add(grapheme_width);
-        if next_column <= column {
-            output.push_str(grapheme);
-            current_column = next_column;
-            continue;
-        }
-        break;
-    }
-    let output_width = terminal_text_width(&output);
-    if output_width < column {
-        output.push_str(&" ".repeat(column.saturating_sub(output_width)));
-    }
-    let fitted = fit_width(value, width);
-    output.push_str(&fitted);
-    current_column = 0;
-    for grapheme in terminal_graphemes(&original) {
-        let grapheme_width = terminal_grapheme_width(grapheme);
-        if current_column >= target_end {
-            output.push_str(grapheme);
-        }
-        current_column = current_column.saturating_add(grapheme_width);
-    }
-    *line = output;
 }
 
 /// Carries Agent Prompt Block state for this subsystem.
@@ -1111,7 +802,7 @@ fn render_agent_live_footer_prompt_layout(
         lines: vec![fit_width(&line, width)],
         shadow_spans: vec![Vec::new()],
         cursor_row: 0,
-        cursor_column: clamp_visible_cursor_column(cursor_column, width),
+        cursor_column: cursor_column.min(width.saturating_sub(1)),
         cursor_visible: cursor_column < width,
     }
 }
@@ -1309,42 +1000,4 @@ fn agent_live_footer_background_is_light(ui_theme: &UiTheme) -> bool {
 /// Builds an RGB gray terminal color.
 fn terminal_gray(level: u8) -> TerminalColor {
     TerminalColor::Rgb(level, level, level)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Verifies the wrapped prompt cursor relocates onto the continuation row
-    /// when a later overflow retroactively wraps the word containing the
-    /// cursor.
-    ///
-    /// This regression covers agent-prompt editing in the first columns of a
-    /// wrapped word, which previously left the rendered cursor stranded on the
-    /// prior visual row.
-    #[test]
-    fn wrap_prompt_cursor_tracks_retroactive_whitespace_wrap() {
-        let (chunks, shadow_spans, cursor_row, cursor_column) =
-            wrap_prompt_line_with_cursor_and_shadow("ab cdef", 4, None, 5, 0);
-
-        assert_eq!(chunks, vec!["ab".to_string(), "cdef".to_string()]);
-        assert_eq!(shadow_spans, vec![Vec::new(), Vec::new()]);
-        assert_eq!((cursor_row, cursor_column), (1, 1));
-    }
-
-    /// Verifies a cursor captured at the wrap boundary lands on the
-    /// continuation indent instead of remaining at the consumed trailing space
-    /// position on the previous row.
-    ///
-    /// This edge case keeps prompt cursor placement stable when the wrapped
-    /// remainder is indented for the agent prompt continuation prefix.
-    #[test]
-    fn wrap_prompt_cursor_moves_to_continuation_indent_at_wrap_boundary() {
-        let (chunks, shadow_spans, cursor_row, cursor_column) =
-            wrap_prompt_line_with_cursor_and_shadow("aa bcd", 3, None, 5, 2);
-
-        assert_eq!(chunks, vec!["aa".to_string(), "  bcd".to_string()]);
-        assert_eq!(shadow_spans, vec![Vec::new(), Vec::new()]);
-        assert_eq!((cursor_row, cursor_column), (1, 2));
-    }
 }
