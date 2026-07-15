@@ -38,8 +38,8 @@ use super::recovery::{
 };
 use super::{AgentTurnExecution, turn_state_from_action_results};
 use mez_agent::{
-    AgentTurnNegotiation, ProviderResponseAcceptance, ProviderResponseProgress,
-    SubagentScopeDeclaration, accept_provider_response,
+    AgentTurnNegotiation, ProviderResponseAcceptance, SubagentScopeDeclaration,
+    accept_provider_response,
 };
 
 /// Maximum number of ephemeral provider retries after a MAAP validation error.
@@ -489,7 +489,6 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
         );
         let mut negotiation = AgentTurnNegotiation::new(request.clone(), MAAP_REPAIR_ATTEMPT_LIMIT);
         let mut response_request: ModelRequest;
-        let mut response_progress = ProviderResponseProgress::default();
         let mut response = loop {
             response_request = request.clone();
             let response = match self.provider.send_request(&request) {
@@ -523,7 +522,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                     return Err(error);
                 }
             };
-            response_progress.observe(
+            negotiation.observe_response(
                 response.usage,
                 response.latest_request_usage,
                 &response.quota_usage,
@@ -592,14 +591,14 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                 }
                 ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
                 let mut response = response;
-                response.usage = response_progress.cumulative_usage();
-                response.quota_usage = response_progress.latest_quota_usage().to_vec();
+                response.usage = negotiation.cumulative_response_usage();
+                response.quota_usage = negotiation.latest_quota_usage().to_vec();
                 return Ok(failed_maap_validation_execution_with_summary(
                     self.provider,
                     &turn,
                     negotiation.durable_request().clone(),
                     response,
-                    response_progress.latest_response_usage(),
+                    negotiation.latest_response_usage(),
                     &error,
                     FailureSummaryScope {
                         stage: "maap_missing_action_batch",
@@ -628,14 +627,14 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                 Err((error, stage)) => {
                     ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
                     let mut response = response;
-                    response.usage = response_progress.cumulative_usage();
-                    response.quota_usage = response_progress.latest_quota_usage().to_vec();
+                    response.usage = negotiation.cumulative_response_usage();
+                    response.quota_usage = negotiation.latest_quota_usage().to_vec();
                     return Ok(failed_maap_validation_execution_with_summary(
                         self.provider,
                         &turn,
                         negotiation.durable_request().clone(),
                         response,
-                        response_progress.latest_response_usage(),
+                        negotiation.latest_response_usage(),
                         &error,
                         FailureSummaryScope {
                             stage,
@@ -647,15 +646,15 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             }
             break response;
         };
-        response.usage = response_progress.cumulative_usage();
-        response.quota_usage = response_progress.latest_quota_usage().to_vec();
+        response.usage = negotiation.cumulative_response_usage();
+        response.quota_usage = negotiation.latest_quota_usage().to_vec();
 
         let Some(batch) = response.action_batch.clone() else {
             ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
             return Ok(AgentTurnExecution {
                 request: negotiation.durable_request().clone(),
                 response,
-                latest_response_usage: response_progress.latest_response_usage(),
+                latest_response_usage: negotiation.latest_response_usage(),
                 routing_token_usage_by_model: std::collections::BTreeMap::new(),
                 action_results: Vec::new(),
                 final_turn: true,
@@ -669,7 +668,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             context,
             negotiation.durable_request().clone(),
             response,
-            response_progress.latest_response_usage(),
+            negotiation.latest_response_usage(),
             batch,
         )?;
         if execution.terminal_state != AgentTurnState::Running {
@@ -852,7 +851,6 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         );
         let mut negotiation = AgentTurnNegotiation::new(request.clone(), MAAP_REPAIR_ATTEMPT_LIMIT);
         let mut response_request: ModelRequest;
-        let mut response_progress = ProviderResponseProgress::default();
         let mut response = loop {
             response_request = request.clone();
             let response = match self.provider.send_request_async(&request).await {
@@ -888,7 +886,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                     return Err(error);
                 }
             };
-            response_progress.observe(
+            negotiation.observe_response(
                 response.usage,
                 response.latest_request_usage,
                 &response.quota_usage,
@@ -959,14 +957,14 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                 }
                 ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
                 let mut response = response;
-                response.usage = response_progress.cumulative_usage();
-                response.quota_usage = response_progress.latest_quota_usage().to_vec();
+                response.usage = negotiation.cumulative_response_usage();
+                response.quota_usage = negotiation.latest_quota_usage().to_vec();
                 return Ok(failed_maap_validation_execution_with_summary_async(
                     self.provider,
                     &turn,
                     negotiation.durable_request().clone(),
                     response,
-                    response_progress.latest_response_usage(),
+                    negotiation.latest_response_usage(),
                     &error,
                     FailureSummaryScope {
                         stage: "maap_missing_action_batch",
@@ -996,14 +994,14 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                 Err((error, stage)) => {
                     ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
                     let mut response = response;
-                    response.usage = response_progress.cumulative_usage();
-                    response.quota_usage = response_progress.latest_quota_usage().to_vec();
+                    response.usage = negotiation.cumulative_response_usage();
+                    response.quota_usage = negotiation.latest_quota_usage().to_vec();
                     return Ok(failed_maap_validation_execution_with_summary_async(
                         self.provider,
                         &turn,
                         negotiation.durable_request().clone(),
                         response,
-                        response_progress.latest_response_usage(),
+                        negotiation.latest_response_usage(),
                         &error,
                         FailureSummaryScope {
                             stage,
@@ -1016,15 +1014,15 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             }
             break response;
         };
-        response.usage = response_progress.cumulative_usage();
-        response.quota_usage = response_progress.latest_quota_usage().to_vec();
+        response.usage = negotiation.cumulative_response_usage();
+        response.quota_usage = negotiation.latest_quota_usage().to_vec();
 
         let Some(batch) = response.action_batch.clone() else {
             ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
             return Ok(AgentTurnExecution {
                 request: negotiation.durable_request().clone(),
                 response,
-                latest_response_usage: response_progress.latest_response_usage(),
+                latest_response_usage: negotiation.latest_response_usage(),
                 routing_token_usage_by_model: std::collections::BTreeMap::new(),
                 action_results: Vec::new(),
                 final_turn: true,
@@ -1038,7 +1036,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             context,
             negotiation.durable_request().clone(),
             response,
-            response_progress.latest_response_usage(),
+            negotiation.latest_response_usage(),
             batch,
         )?;
         if execution.terminal_state != AgentTurnState::Running {

@@ -65,14 +65,16 @@ impl AgentTurnRecoveryBudget {
 pub struct AgentTurnNegotiation<Request> {
     durable_request: Request,
     recovery_budget: AgentTurnRecoveryBudget,
+    response_progress: crate::ProviderResponseProgress,
 }
 
 impl<Request> AgentTurnNegotiation<Request> {
     /// Starts provider negotiation from the request that may be persisted.
-    pub const fn new(durable_request: Request, recovery_limit: usize) -> Self {
+    pub fn new(durable_request: Request, recovery_limit: usize) -> Self {
         Self {
             durable_request,
             recovery_budget: AgentTurnRecoveryBudget::new(recovery_limit),
+            response_progress: crate::ProviderResponseProgress::default(),
         }
     }
 
@@ -104,6 +106,32 @@ impl<Request> AgentTurnNegotiation<Request> {
     /// Borrows the recovery budget for canonical MAAP continuation planning.
     pub const fn recovery_budget_mut(&mut self) -> &mut AgentTurnRecoveryBudget {
         &mut self.recovery_budget
+    }
+
+    /// Records accounting from one completed provider response.
+    pub fn observe_response(
+        &mut self,
+        usage: crate::ModelTokenUsage,
+        latest_request_usage: Option<crate::ModelTokenUsage>,
+        quota_usage: &[crate::ProviderQuotaUsage],
+    ) {
+        self.response_progress
+            .observe(usage, latest_request_usage, quota_usage);
+    }
+
+    /// Returns cumulative usage across all completed provider responses.
+    pub fn cumulative_response_usage(&self) -> crate::ModelTokenUsage {
+        self.response_progress.cumulative_usage()
+    }
+
+    /// Returns usage from the latest completed provider response.
+    pub fn latest_response_usage(&self) -> crate::ModelTokenUsage {
+        self.response_progress.latest_response_usage()
+    }
+
+    /// Returns the latest non-empty provider quota observation.
+    pub fn latest_quota_usage(&self) -> &[crate::ProviderQuotaUsage] {
+        self.response_progress.latest_quota_usage()
     }
 
     /// Consumes the state and returns the durable request.
@@ -465,6 +493,54 @@ mod tests {
 
     use super::*;
     use crate::ContextSourceKind;
+
+    /// Verifies one negotiation owner keeps durable request promotion,
+    /// bounded recovery, and cumulative provider accounting synchronized.
+    #[test]
+    fn turn_negotiation_owns_recovery_and_response_progress() {
+        let mut negotiation = AgentTurnNegotiation::new("initial", 1);
+        let quota = crate::ProviderQuotaUsage {
+            name: "requests".to_string(),
+            used_basis_points: 5_000,
+            limit: 20,
+            remaining: 10,
+            reset: None,
+        };
+
+        assert!(negotiation.record_recovery_attempt());
+        assert!(!negotiation.record_recovery_attempt());
+        negotiation.observe_response(
+            crate::ModelTokenUsage {
+                input_tokens: 3,
+                output_tokens: 5,
+                ..crate::ModelTokenUsage::default()
+            },
+            None,
+            std::slice::from_ref(&quota),
+        );
+        negotiation.observe_response(
+            crate::ModelTokenUsage {
+                input_tokens: 7,
+                output_tokens: 11,
+                ..crate::ModelTokenUsage::default()
+            },
+            Some(crate::ModelTokenUsage {
+                input_tokens: 2,
+                output_tokens: 3,
+                ..crate::ModelTokenUsage::default()
+            }),
+            &[],
+        );
+        negotiation.promote_durable_request("accepted");
+
+        assert_eq!(negotiation.durable_request(), &"accepted");
+        assert_eq!(negotiation.recovery_attempts(), 1);
+        assert_eq!(negotiation.cumulative_response_usage().input_tokens, 10);
+        assert_eq!(negotiation.cumulative_response_usage().output_tokens, 16);
+        assert_eq!(negotiation.latest_response_usage().input_tokens, 2);
+        assert_eq!(negotiation.latest_response_usage().output_tokens, 3);
+        assert_eq!(negotiation.latest_quota_usage(), &[quota]);
+    }
 
     struct FakeProvider {
         responses: VecDeque<Result<AgentHarnessResponse, io::Error>>,
