@@ -49,10 +49,11 @@ use super::{
     shell_command_structured_content_json, transcript_entries_for_execution,
     validate_mmp_payload_metadata,
 };
+use crate::agent::assistant_context_content_for_execution;
 #[cfg(test)]
 use crate::agent::{AgentTurnLedger, AgentTurnRunner, ModelProvider};
 use crate::agent::{
-    ApplyPatchTransactionPhase, MaapBatch, ProviderApiCompatibility, apply_patch_error_plan,
+    ApplyPatchTransactionPhase, ProviderApiCompatibility, apply_patch_error_plan,
     apply_patch_read_plan_for_paths, apply_patch_touched_paths, apply_patch_transaction_phase,
     apply_patch_write_plan_from_read_output, apply_patch_write_plan_from_read_outputs,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
@@ -61,12 +62,12 @@ use crate::agent::{
 };
 #[cfg(test)]
 use crate::agent::{ProviderErrorRetryClass, provider_error_retry_class};
-use crate::agent::{SayStatus, assistant_context_content_for_execution};
 use crate::command::CommandInvocation;
 use crate::config::{
     ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
     ConfigPaths, ConfigScope,
 };
+use mez_agent::{MaapBatch, SayStatus};
 
 mod approvals;
 mod audit;
@@ -351,12 +352,10 @@ mod tests {
                 action_id: "a1".to_string(),
                 action_type: "shell_command",
                 status: ActionStatus::Failed,
-                content: vec![crate::agent::ActionContentBlock::text(
-                    "shell command failed",
-                )],
+                content: vec![mez_agent::ActionContentBlock::text("shell command failed")],
                 structured_content_json: None,
                 is_error: true,
-                error: Some(crate::agent::ActionError {
+                error: Some(mez_agent::ActionError {
                     code: "shell_failed".to_string(),
                     message: "command exited with status 1".to_string(),
                     data_json: None,

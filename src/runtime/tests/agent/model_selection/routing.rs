@@ -793,10 +793,10 @@ fn runtime_shell_pane_not_ready_queues_model_self_correction() {
     service.pending_agent_provider_tasks.remove(&turn.turn_id);
     service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
 
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "shell-not-ready".to_string(),
         rationale: "inspect the render owner".to_string(),
-        payload: crate::agent::AgentActionPayload::ShellCommand {
+        payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect the render owner.".to_string(),
             command: "rg -n \"status pager\" src".to_string(),
             interactive: false,
@@ -804,7 +804,7 @@ fn runtime_shell_pane_not_ready_queues_model_self_correction() {
             timeout_ms: None,
         },
     };
-    let mut failed = crate::agent::ActionResult::failed(
+    let mut failed = mez_agent::ActionResult::failed(
         &turn,
         &action,
         ActionStatus::Failed,
@@ -829,7 +829,7 @@ fn runtime_shell_pane_not_ready_queues_model_self_correction() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,

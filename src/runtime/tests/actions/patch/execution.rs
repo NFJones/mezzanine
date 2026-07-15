@@ -47,16 +47,16 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "patch-1".to_string(),
                     rationale: "create a file".to_string(),
-                    payload: crate::agent::AgentActionPayload::ApplyPatch {
+                    payload: mez_agent::AgentActionPayload::ApplyPatch {
                         patch: format!(
                             "*** Begin Patch\n*** Add File: {target_rel}\n+alpha\n+beta\n*** End Patch"
                         ),
@@ -234,16 +234,16 @@ fn runtime_apply_patch_read_phase_truncation_dispatches_specific_error_plan() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "patch-1".to_string(),
                     rationale: "create a file".to_string(),
-                    payload: crate::agent::AgentActionPayload::ApplyPatch {
+                    payload: mez_agent::AgentActionPayload::ApplyPatch {
                         patch: "*** Begin Patch\n*** Add File: target/truncated-read-note.txt\n+alpha\n*** End Patch"
                             .to_string(),
                         strip: None,
@@ -379,16 +379,16 @@ fn runtime_apply_patch_uses_full_read_transport_when_preview_truncates() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "patch-1".to_string(),
                     rationale: "create a file".to_string(),
-                    payload: crate::agent::AgentActionPayload::ApplyPatch {
+                    payload: mez_agent::AgentActionPayload::ApplyPatch {
                         patch: "*** Begin Patch\n*** Add File: target/truncated-read-note.txt\n+alpha\n*** End Patch"
                             .to_string(),
                         strip: None,
@@ -537,16 +537,16 @@ fn runtime_agent_loop_continues_after_apply_patch_iteration() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "patch-1".to_string(),
                     rationale: "create a file".to_string(),
-                    payload: crate::agent::AgentActionPayload::ApplyPatch {
+                    payload: mez_agent::AgentActionPayload::ApplyPatch {
                         patch: format!(
                             "*** Begin Patch\n*** Add File: {target_rel}\n+alpha\n*** End Patch"
                         ),
@@ -629,7 +629,7 @@ fn runtime_agent_markdown_say_displays_raw_mez_patch_examples() {
         .append_agent_assistant_content_to_terminal_buffer(
             "%1",
             patch,
-            crate::agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+            mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
         )
         .unwrap();
 
@@ -671,10 +671,10 @@ fn runtime_action_pressure_shifts_after_apply_patch_success() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
 
-    let shell_action = crate::agent::AgentAction {
+    let shell_action = mez_agent::AgentAction {
         id: "inspect".to_string(),
         rationale: "read current owner".to_string(),
-        payload: crate::agent::AgentActionPayload::ShellCommand {
+        payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect owner".to_string(),
             command: "git diff -- src/runtime/mod.rs".to_string(),
             interactive: false,
@@ -698,10 +698,10 @@ fn runtime_action_pressure_shifts_after_apply_patch_success() {
             .any(|block| block.label == "action pressure")
     );
 
-    let patch_action = crate::agent::AgentAction {
+    let patch_action = mez_agent::AgentAction {
         id: "patch".to_string(),
         rationale: "apply implementation".to_string(),
-        payload: crate::agent::AgentActionPayload::ApplyPatch {
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch:
                 "*** Begin Patch\n*** Update File: src/runtime/mod.rs\n@@\n context\n*** End Patch"
                     .to_string(),
@@ -733,10 +733,10 @@ fn runtime_action_pressure_shifts_after_apply_patch_success() {
         pressure_block.content
     );
 
-    let validation_action = crate::agent::AgentAction {
+    let validation_action = mez_agent::AgentAction {
         id: "validate".to_string(),
         rationale: "run validation".to_string(),
-        payload: crate::agent::AgentActionPayload::ShellCommand {
+        payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Run tests".to_string(),
             command: "just test".to_string(),
             interactive: false,
@@ -806,16 +806,16 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
         .expect("started turn should be recorded");
     service.pending_agent_provider_tasks.remove(&turn.turn_id);
 
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "patch-transport".to_string(),
         rationale: "write a source file".to_string(),
-        payload: crate::agent::AgentActionPayload::ApplyPatch {
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Add File: src/generated.rs\n+content\n*** End Patch"
                 .to_string(),
             strip: None,
         },
     };
-    let failed = crate::agent::ActionResult::failed(
+    let failed = mez_agent::ActionResult::failed(
         &turn,
         &action,
         ActionStatus::Failed,
@@ -832,7 +832,7 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,

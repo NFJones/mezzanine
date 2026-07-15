@@ -18,10 +18,10 @@ fn runtime_mcp_call_logs_styled_action_line_in_normal_mode() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "mcp-1".to_string(),
         rationale: String::new(),
-        payload: crate::agent::AgentActionPayload::McpCall {
+        payload: mez_agent::AgentActionPayload::McpCall {
             server: "github".to_string(),
             tool: "search_issues".to_string(),
             arguments_json: r#"{ "query": "prompt cache", "limit": 5 }"#.to_string(),
@@ -587,16 +587,16 @@ async fn runtime_executes_accepted_stdio_mcp_action_and_audits_call() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "m1".to_string(),
                     rationale: "call mcp".to_string(),
-                    payload: crate::agent::AgentActionPayload::McpCall {
+                    payload: mez_agent::AgentActionPayload::McpCall {
                         server: "fixture".to_string(),
                         tool: "echo".to_string(),
                         arguments_json: r#"{"message":"hello"}"#.to_string(),
@@ -696,16 +696,16 @@ async fn runtime_full_access_executes_prompt_stdio_mcp_action() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "m1".to_string(),
                     rationale: "call mcp".to_string(),
-                    payload: crate::agent::AgentActionPayload::McpCall {
+                    payload: mez_agent::AgentActionPayload::McpCall {
                         server: "fixture".to_string(),
                         tool: "echo".to_string(),
                         arguments_json: r#"{"message":"hello"}"#.to_string(),
@@ -790,16 +790,16 @@ async fn runtime_nonfinal_mcp_action_queues_provider_continuation() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "m1".to_string(),
                     rationale: "call mcp".to_string(),
-                    payload: crate::agent::AgentActionPayload::McpCall {
+                    payload: mez_agent::AgentActionPayload::McpCall {
                         server: "fixture".to_string(),
                         tool: "echo".to_string(),
                         arguments_json: r#"{"message":"hello"}"#.to_string(),

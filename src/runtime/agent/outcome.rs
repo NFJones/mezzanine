@@ -429,7 +429,7 @@ pub(super) fn runtime_execution_is_missing_batch_terminal_failure(
 /// could complete.
 pub(super) fn runtime_execution_is_controller_failure_summary(
     execution: &AgentTurnExecution,
-    batch: &crate::agent::MaapBatch,
+    batch: &mez_agent::MaapBatch,
 ) -> bool {
     execution.terminal_state == AgentTurnState::Failed
         && execution.final_turn

@@ -17,10 +17,10 @@ fn runtime_skill_lookup_logs_styled_action_line_in_normal_mode() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "skill-catalog-1".to_string(),
         rationale: String::new(),
-        payload: crate::agent::AgentActionPayload::RequestSkills,
+        payload: mez_agent::AgentActionPayload::RequestSkills,
     };
 
     let emitted = service
@@ -78,10 +78,10 @@ fn runtime_skill_load_logs_styled_action_line_in_normal_mode() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "skill-load-1".to_string(),
         rationale: String::new(),
-        payload: crate::agent::AgentActionPayload::CallSkill {
+        payload: mez_agent::AgentActionPayload::CallSkill {
             name: "review".to_string(),
             additional_context: Some("focus on context replay churn".to_string()),
         },
@@ -445,16 +445,16 @@ fn runtime_explicit_skill_prompt_rejects_redundant_call_skill_loop() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "load skill authoring context".to_string(),
                 thought: None,
                 turn_id: started.turn_id.clone(),
                 agent_id: started.agent_id.clone(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "skill-loop".to_string(),
                     rationale: "load the create-skill workflow".to_string(),
-                    payload: crate::agent::AgentActionPayload::CallSkill {
+                    payload: mez_agent::AgentActionPayload::CallSkill {
                         name: "create-skill".to_string(),
                         additional_context: Some("create a review skill".to_string()),
                     },
@@ -544,16 +544,16 @@ fn runtime_explicit_skill_prompt_rejects_redundant_skill_catalog_lookup() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "check available skill workflows".to_string(),
                 thought: None,
                 turn_id: started.turn_id.clone(),
                 agent_id: started.agent_id.clone(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "skill-catalog-loop".to_string(),
                     rationale: "check available skill workflows".to_string(),
-                    payload: crate::agent::AgentActionPayload::RequestSkills,
+                    payload: mez_agent::AgentActionPayload::RequestSkills,
                 }],
                 final_turn: false,
             }),

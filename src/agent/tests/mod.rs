@@ -16,20 +16,19 @@ use super::provider::{
     openai_prompt_cache_diagnostics_for_request, openai_stable_prefix_material_for_request,
 };
 use super::{
-    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentCapability, AgentContext,
-    AgentLogLevel, AgentPromptProfile, AgentShellCommandOutcome, AgentShellStore,
-    AgentShellVisibility, AgentTurnExecution, AgentTurnLedger, AgentTurnRecord, AgentTurnRunner,
-    AgentTurnState, AgentTurnTrigger, AsyncModelProvider, AsyncProviderHttpTransport,
-    CHATGPT_ACCOUNT_ID_HEADER, CHATGPT_RESPONSES_ENDPOINT, ContextBlock, ContextCachePolicy,
-    ContextSourceKind, ContextStability, DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME,
+    AgentCapability, AgentContext, AgentLogLevel, AgentPromptProfile, AgentShellCommandOutcome,
+    AgentShellStore, AgentShellVisibility, AgentTurnExecution, AgentTurnLedger, AgentTurnRecord,
+    AgentTurnRunner, AsyncModelProvider, AsyncProviderHttpTransport, CHATGPT_ACCOUNT_ID_HEADER,
+    CHATGPT_RESPONSES_ENDPOINT, ContextBlock, ContextCachePolicy, ContextSourceKind,
+    ContextStability, DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME,
     DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME,
-    DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MaapBatch, MarkerToken,
-    McpActionExecutor, ModelMessage, ModelMessageRole, ModelProfile, ModelProfileOverrideSource,
+    DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MarkerToken, McpActionExecutor,
+    ModelMessage, ModelMessageRole, ModelProfile, ModelProfileOverrideSource,
     ModelProfileOverrides, ModelProvider, ModelRequest, ModelResponse, ModelTokenUsage,
     OPENAI_MAAP_FUNCTION_TOOL_NAME, OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT,
     OpenAiResponsesProvider, PaneShellExecutor, ProviderHttpRequest, ProviderHttpResponse,
-    ProviderHttpTransport, ProviderTranscriptEvent, Result, ShellClassification,
-    ShellExecutionOutput, ShellExecutionRequest, ShellTransaction, ShellTransactionInput,
+    ProviderHttpTransport, Result, ShellClassification, ShellExecutionOutput,
+    ShellExecutionRequest, ShellTransaction, ShellTransactionInput,
     ShellTransactionOutputTransport, ToolDiscoveryCache, ToolInventory,
     action_result_context_content, agent_subshell_enter_command, append_mcp_context,
     append_memory_context, append_permission_policy_context, append_project_guidance_context,
@@ -67,9 +66,10 @@ use crate::transcript::{AgentTranscriptStore, TranscriptRole as DurableTranscrip
 use base64::Engine;
 use mez_agent::instructions::DiscoveredInstructionFile;
 use mez_agent::{
-    AgentTranscriptRole as TranscriptRole, McpExecutionRequest, McpExecutionResponse,
-    McpPromptTool, MemoryContextRecord, MemoryContextScope, SlashCommandEffect,
-    baseline_slash_commands,
+    ActionResult, ActionStatus, AgentAction, AgentActionPayload,
+    AgentTranscriptRole as TranscriptRole, AgentTurnState, AgentTurnTrigger, MaapBatch,
+    McpExecutionRequest, McpExecutionResponse, McpPromptTool, MemoryContextRecord,
+    MemoryContextScope, ProviderTranscriptEvent, SlashCommandEffect, baseline_slash_commands,
 };
 use std::cell::RefCell;
 use std::collections::BTreeSet;

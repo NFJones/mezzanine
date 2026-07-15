@@ -34,20 +34,19 @@ fn runtime_agent_plain_say_does_not_render_markdown_divider() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "say-1".to_string(),
                     rationale: String::new(),
-                    payload: crate::agent::AgentActionPayload::Say {
-                        status: crate::agent::SayStatus::Final,
+                    payload: mez_agent::AgentActionPayload::Say {
+                        status: mez_agent::SayStatus::Final,
                         text: plain.to_string(),
-                        content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
-                            .to_string(),
+                        content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
                 final_turn: true,
@@ -117,19 +116,19 @@ fn runtime_agent_markdown_say_renders_styled_presentation_and_copies_raw_markdow
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "say-1".to_string(),
                     rationale: String::new(),
-                    payload: crate::agent::AgentActionPayload::Say {
-                        status: crate::agent::SayStatus::Final,
+                    payload: mez_agent::AgentActionPayload::Say {
+                        status: mez_agent::SayStatus::Final,
                         text: markdown.to_string(),
-                        content_type: crate::agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE
+                        content_type: mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE
                             .to_string(),
                     },
                 }],
@@ -260,7 +259,7 @@ fn runtime_agent_markdown_copy_preserves_raw_table_when_rendered_rows_wrap() {
         .append_agent_assistant_content_to_terminal_buffer(
             "%1",
             markdown,
-            crate::agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+            mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
         )
         .unwrap();
 
@@ -350,7 +349,7 @@ fn runtime_agent_markdown_copy_omits_synthetic_frame_row() {
         .append_agent_assistant_content_to_terminal_buffer(
             "%1",
             markdown,
-            crate::agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+            mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
         )
         .unwrap();
 
@@ -408,7 +407,7 @@ fn runtime_agent_markdown_partial_and_continuation_copy_matches_rendered_selecti
         .append_agent_assistant_content_to_terminal_buffer(
             "%1",
             markdown,
-            crate::agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+            mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
         )
         .unwrap();
 
@@ -497,7 +496,7 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
         .append_agent_assistant_content_to_terminal_buffer(
             "%1",
             markdown,
-            crate::agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+            mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
         )
         .unwrap();
 
@@ -691,7 +690,7 @@ fn runtime_agent_markdown_uses_dark_neutral_accents_on_light_theme() {
         .append_agent_assistant_content_to_terminal_buffer(
             "%1",
             "`code`\n\n| Name | Count |\n|:--|--:|\n| alpha | 2 |",
-            crate::agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+            mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
         )
         .unwrap();
 
@@ -745,7 +744,7 @@ fn runtime_agent_markdown_wraps_to_120_cells_and_indents_continuations() {
         .append_agent_assistant_content_to_terminal_buffer(
             "%1",
             &markdown,
-            crate::agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+            mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
         )
         .unwrap();
 
@@ -804,7 +803,7 @@ fn runtime_agent_markdown_thematic_break_expands_to_capped_divider_width() {
         .append_agent_assistant_content_to_terminal_buffer(
             "%1",
             markdown,
-            crate::agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+            mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
         )
         .unwrap();
 
@@ -847,7 +846,7 @@ fn runtime_agent_markdown_tables_wrap_only_at_terminal_width() {
         .append_agent_assistant_content_to_terminal_buffer(
             "%1",
             &markdown,
-            crate::agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+            mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
         )
         .unwrap();
 
@@ -896,7 +895,7 @@ fn runtime_agent_markdown_box_drawing_paragraph_uses_prose_width() {
         .append_agent_assistant_content_to_terminal_buffer(
             "%1",
             &markdown,
-            crate::agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+            mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
         )
         .unwrap();
 

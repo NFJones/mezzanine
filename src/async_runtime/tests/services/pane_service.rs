@@ -720,20 +720,20 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             turn_id: task.turn_id.clone(),
             agent_id: task.agent_id.clone(),
             pane_id: task.pane_id.clone(),
-            trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
             started_at_unix_seconds: 1,
             policy_profile: "default".to_string(),
             model_profile: "default".to_string(),
             parent_turn_id: None,
-            state: crate::agent::AgentTurnState::Running,
+            state: mez_agent::AgentTurnState::Running,
             cooperation_mode: None,
 
             initial_capability: None,
         };
-        let action = crate::agent::AgentAction {
+        let action = mez_agent::AgentAction {
             id: "shell-1".to_string(),
             rationale: "print a marker".to_string(),
-            payload: crate::agent::AgentActionPayload::ShellCommand {
+            payload: mez_agent::AgentActionPayload::ShellCommand {
                 summary: "Print a marker".to_string(),
                 command: "printf 'AGENT_ASYNC_FIRST_COMMAND\\n'".to_string(),
                 interactive: false,
@@ -741,7 +741,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                 timeout_ms: Some(60_000),
             },
         };
-        let batch = crate::agent::MaapBatch {
+        let batch = mez_agent::MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
             thought: None,
@@ -799,14 +799,14 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             },
             latest_response_usage: Default::default(),
             routing_token_usage_by_model: std::collections::BTreeMap::new(),
-            action_results: vec![crate::agent::ActionResult::running(
+            action_results: vec![mez_agent::ActionResult::running(
                 &turn,
                 &action,
                 vec!["shell command accepted for pane execution".to_string()],
                 Some(r#"{"state":"pending_dispatch"}"#.to_string()),
             )],
             final_turn: false,
-            terminal_state: crate::agent::AgentTurnState::Running,
+            terminal_state: mez_agent::AgentTurnState::Running,
         };
         let mut provider_batch = RuntimeEventBatch::new();
         provider_batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
@@ -865,20 +865,20 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             turn_id: next_task.turn_id.clone(),
             agent_id: next_task.agent_id.clone(),
             pane_id: next_task.pane_id.clone(),
-            trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
             started_at_unix_seconds: 2,
             policy_profile: "default".to_string(),
             model_profile: "default".to_string(),
             parent_turn_id: None,
-            state: crate::agent::AgentTurnState::Running,
+            state: mez_agent::AgentTurnState::Running,
             cooperation_mode: None,
 
             initial_capability: None,
         };
-        let second_action = crate::agent::AgentAction {
+        let second_action = mez_agent::AgentAction {
             id: "shell-2".to_string(),
             rationale: "verify the pane shell still accepts input".to_string(),
-            payload: crate::agent::AgentActionPayload::ShellCommand {
+            payload: mez_agent::AgentActionPayload::ShellCommand {
                 summary: "Print a second marker".to_string(),
                 command: "printf 'ASYNC_PANE_STILL_ALIVE\\n'".to_string(),
                 interactive: false,
@@ -886,7 +886,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                 timeout_ms: Some(60_000),
             },
         };
-        let second_batch = crate::agent::MaapBatch {
+        let second_batch = mez_agent::MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
             thought: None,
@@ -944,14 +944,14 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             },
             latest_response_usage: Default::default(),
             routing_token_usage_by_model: std::collections::BTreeMap::new(),
-            action_results: vec![crate::agent::ActionResult::running(
+            action_results: vec![mez_agent::ActionResult::running(
                 &second_turn,
                 &second_action,
                 vec!["second shell command accepted for pane execution".to_string()],
                 Some(r#"{"state":"pending_dispatch"}"#.to_string()),
             )],
             final_turn: false,
-            terminal_state: crate::agent::AgentTurnState::Running,
+            terminal_state: mez_agent::AgentTurnState::Running,
         };
         let mut second_provider_batch = RuntimeEventBatch::new();
         second_provider_batch.push(RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {

@@ -801,10 +801,10 @@ fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
         .find(|turn| turn.turn_id == parent.turn_id)
         .cloned()
         .unwrap();
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "macro-step-1".to_string(),
         rationale: "send macro step".to_string(),
-        payload: crate::agent::AgentActionPayload::SendMessage {
+        payload: mez_agent::AgentActionPayload::SendMessage {
             recipient: format!("agent:{}", child.agent_id),
             content_type: "text/plain; charset=utf-8".to_string(),
             payload: "step one".to_string(),
@@ -821,7 +821,7 @@ fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
                 usage: Default::default(),
                 latest_request_usage: None,
                 quota_usage: Default::default(),
-                action_batch: Some(crate::agent::MaapBatch {
+                action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "test macro action batch".to_string(),
                     thought: None,
@@ -834,7 +834,7 @@ fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
             },
             latest_response_usage: Default::default(),
             routing_token_usage_by_model: std::collections::BTreeMap::new(),
-            action_results: vec![crate::agent::ActionResult::running(
+            action_results: vec![mez_agent::ActionResult::running(
                 &parent_turn,
                 &action,
                 vec!["waiting for macro step".to_string()],

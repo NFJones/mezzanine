@@ -39,7 +39,7 @@ persistence, transport, and composition adapters.
 | `src/agent/session.rs`, `turn.rs` | `mez-agent` | temporary | Move deterministic state machines and intrinsic tests; keep presentation and runtime mutation in product adapters. |
 | `src/agent/slash.rs` | root agent-shell execution adapter over `mez-agent` | adapter | Canonical slash registry, parser records, effects, and intrinsic parsing tests are lower-owned. Keep product session mutation, display rendering, runtime-effect routing, and product error projection here. |
 | `src/agent/network.rs`, `shell.rs` | `mez-agent` contracts plus root transport adapter | temporary | Move provider-independent protocol and action behavior; retain network I/O and pane-shell transport in root. |
-| `src/agent/mod.rs` | product composition facade | temporary | Replace broad re-exports with explicit `src/adapters/agent_*` modules after consumers import `mez_agent` directly. |
+| `src/agent/mod.rs` | product composition facade | temporary | Canonical MAAP, action-result, turn-state, transcript, MCP execution, and provider-transcript records are no longer re-exported; continue replacing provider/context/prompt/semantic compatibility exports with explicit product adapters. |
 | `src/agent/tests/` | split by behavior owner | temporary | Readiness tests now run directly in `mez-agent`; move remaining intrinsic harness/provider/context/MAAP/patch tests and retain tests that exercise concrete product stores, transports, permissions, runtime, or UI. |
 
 ## Residual root mux and terminal audit
@@ -70,8 +70,10 @@ persistence, transport, and composition adapters.
 
 The following current exports are migration markers, not completion evidence:
 
-- `src/agent/mod.rs` broadly re-exports `mez-agent` contracts and product
-  implementations through one facade.
+- `src/agent/mod.rs` exports root product implementations through one facade;
+  its former broad canonical-contract block is private, and product consumers
+  import those records directly from `mez-agent`. Provider, context, prompt,
+  and semantic submodules still expose compatibility exports.
 - `src/terminal/mod.rs` exposes product copy/render and host-I/O adapters; lower
   mux status, viewport, theme, and attached-client contracts are imported
   directly from `mez-mux`.

@@ -242,7 +242,7 @@ fn runtime_stale_joined_spawn_result_is_unreachable_progress() {
                 usage: Default::default(),
                 latest_request_usage: None,
                 quota_usage: Default::default(),
-                action_batch: Some(crate::agent::MaapBatch {
+                action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "test action batch rationale".to_string(),
                     thought: None,
@@ -255,7 +255,7 @@ fn runtime_stale_joined_spawn_result_is_unreachable_progress() {
             },
             latest_response_usage: Default::default(),
             routing_token_usage_by_model: std::collections::BTreeMap::new(),
-            action_results: vec![crate::agent::ActionResult::running(
+            action_results: vec![mez_agent::ActionResult::running(
                 &parent_turn,
                 &spawn,
                 vec!["waiting for missing child".to_string()],
@@ -323,19 +323,19 @@ fn runtime_unrecovered_failure_with_pending_sibling_explains_blocker() {
         .expect("started turn should be recorded");
     service.pending_agent_provider_tasks.remove(&turn.turn_id);
 
-    let patch_action = crate::agent::AgentAction {
+    let patch_action = mez_agent::AgentAction {
         id: "patch-fail".to_string(),
         rationale: "apply a source patch".to_string(),
-        payload: crate::agent::AgentActionPayload::ApplyPatch {
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** End Patch"
                 .to_string(),
             strip: None,
         },
     };
-    let read_action = crate::agent::AgentAction {
+    let read_action = mez_agent::AgentAction {
         id: "read-pending".to_string(),
         rationale: "read the target file".to_string(),
-        payload: crate::agent::AgentActionPayload::ShellCommand {
+        payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Read the target file".to_string(),
             command: "sed -n '1,120p' src/lib.rs".to_string(),
             interactive: false,
@@ -343,7 +343,7 @@ fn runtime_unrecovered_failure_with_pending_sibling_explains_blocker() {
             timeout_ms: None,
         },
     };
-    let mut failed = crate::agent::ActionResult::failed(
+    let mut failed = mez_agent::ActionResult::failed(
         &turn,
         &patch_action,
         ActionStatus::Failed,
@@ -362,7 +362,7 @@ fn runtime_unrecovered_failure_with_pending_sibling_explains_blocker() {
         })
         .to_string(),
     );
-    let pending = crate::agent::ActionResult::running(
+    let pending = mez_agent::ActionResult::running(
         &turn,
         &read_action,
         vec!["local action accepted for pane execution".to_string()],
@@ -377,7 +377,7 @@ fn runtime_unrecovered_failure_with_pending_sibling_explains_blocker() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
@@ -448,16 +448,16 @@ fn runtime_unrecovered_non_correctable_failure_explains_boundary() {
         .expect("started turn should be recorded");
     service.pending_agent_provider_tasks.remove(&turn.turn_id);
 
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "patch-denied".to_string(),
         rationale: "write a source file".to_string(),
-        payload: crate::agent::AgentActionPayload::ApplyPatch {
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** End Patch"
                 .to_string(),
             strip: None,
         },
     };
-    let denied = crate::agent::ActionResult::failed(
+    let denied = mez_agent::ActionResult::failed(
         &turn,
         &action,
         ActionStatus::Denied,
@@ -474,7 +474,7 @@ fn runtime_unrecovered_non_correctable_failure_explains_boundary() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
@@ -592,7 +592,7 @@ fn runtime_spawn_limit_denial_queues_model_recovery() {
         .cloned()
         .unwrap();
     let action = runtime_spawn_agent_action("spawn-over-capacity", "start another child");
-    let denied = crate::agent::ActionResult::failed(
+    let denied = mez_agent::ActionResult::failed(
         &turn,
         &action,
         ActionStatus::Denied,
@@ -609,7 +609,7 @@ fn runtime_spawn_limit_denial_queues_model_recovery() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,

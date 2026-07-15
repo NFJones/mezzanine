@@ -7,8 +7,8 @@
 //! state transitions together.
 
 use super::*;
-use crate::agent::AgentAction;
 use crate::runtime::{RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition};
+use mez_agent::AgentAction;
 use std::collections::{BTreeMap, HashSet};
 
 /// Defines the RUNTIME SHELL TRANSACTION OBSERVATION LIMIT BYTES const used by this subsystem.

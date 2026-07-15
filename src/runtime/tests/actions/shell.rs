@@ -85,16 +85,16 @@ fn runtime_agent_shell_command_is_presented_before_pty_dispatch() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "check shell access".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
                     rationale: String::new(),
-                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Check shell access".to_string(),
                         command: "if true; then echo \"ok\"; fi".to_string(),
                         interactive: false,
@@ -185,10 +185,10 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
         .find(|turn| turn.turn_id == "turn-1")
         .cloned()
         .unwrap();
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "shell-1".to_string(),
         rationale: "run a command".to_string(),
-        payload: crate::agent::AgentActionPayload::ShellCommand {
+        payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Run a command".to_string(),
             command: "sleep 1".to_string(),
             interactive: false,
@@ -233,7 +233,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
                 usage: Default::default(),
                 latest_request_usage: None,
                 quota_usage: Default::default(),
-                action_batch: Some(crate::agent::MaapBatch {
+                action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "test action batch rationale".to_string(),
                     thought: None,
@@ -246,7 +246,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
             },
             latest_response_usage: Default::default(),
             routing_token_usage_by_model: std::collections::BTreeMap::new(),
-            action_results: vec![crate::agent::ActionResult::running(
+            action_results: vec![mez_agent::ActionResult::running(
                 &turn,
                 &action,
                 vec!["shell command accepted for pane execution".to_string()],
@@ -418,16 +418,16 @@ fn runtime_agent_shell_command_output_is_visible_in_verbose_mode() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
                     rationale: "print a marker".to_string(),
-                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Print a marker".to_string(),
                         command: "printf 'agent-visible-%s\\n' output".to_string(),
                         interactive: false,
@@ -509,16 +509,16 @@ fn runtime_agent_shell_command_output_keeps_decoded_context() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
                     rationale: "print a hidden marker".to_string(),
-                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Print a hidden marker".to_string(),
                         command: "printf 'agent-hidden-%s\\n' output".to_string(),
                         interactive: false,
@@ -641,16 +641,16 @@ fn runtime_agent_shell_command_without_output_keeps_mez_framing_out_of_logs() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
                     rationale: "print nothing".to_string(),
-                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Print nothing".to_string(),
                         command: ":".to_string(),
                         interactive: false,
@@ -753,16 +753,16 @@ fn runtime_agent_shell_command_preview_is_wrapped_and_capped() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
                     rationale: "run a long command".to_string(),
-                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Run a long command".to_string(),
                         command: command.to_string(),
                         interactive: false,
@@ -956,17 +956,17 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![
-                    crate::agent::AgentAction {
+                    mez_agent::AgentAction {
                         id: "shell-fail".to_string(),
                         rationale: "exercise failure feedback".to_string(),
-                        payload: crate::agent::AgentActionPayload::ShellCommand {
+                        payload: mez_agent::AgentActionPayload::ShellCommand {
                             summary: "Run a command that will need correction".to_string(),
                             command: "false".to_string(),
                             interactive: false,
@@ -974,10 +974,10 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
                             timeout_ms: None,
                         },
                     },
-                    crate::agent::AgentAction {
+                    mez_agent::AgentAction {
                         id: "shell-next".to_string(),
                         rationale: "should wait for model after nonzero shell exit".to_string(),
-                        payload: crate::agent::AgentActionPayload::ShellCommand {
+                        payload: mez_agent::AgentActionPayload::ShellCommand {
                             summary: "Run a command after the failing command".to_string(),
                             command: "echo should wait".to_string(),
                             interactive: false,
@@ -1140,15 +1140,15 @@ fn runtime_shell_action_timeout_queues_model_self_correction() {
         .expect("started turn should be recorded");
     service.pending_agent_provider_tasks.remove(&turn.turn_id);
 
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "patch-timeout".to_string(),
         rationale: "write a file through the pane shell".to_string(),
-        payload: crate::agent::AgentActionPayload::ApplyPatch {
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Add File: note.txt\n+hello\n*** End Patch".to_string(),
             strip: None,
         },
     };
-    let timed_out = crate::agent::ActionResult::failed(
+    let timed_out = mez_agent::ActionResult::failed(
         &turn,
         &action,
         ActionStatus::TimedOut,
@@ -1165,7 +1165,7 @@ fn runtime_shell_action_timeout_queues_model_self_correction() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
@@ -1245,16 +1245,16 @@ fn runtime_shell_command_heredoc_is_rejected_before_pane_dispatch() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "shell-heredoc".to_string(),
                     rationale: "write a file with a heredoc".to_string(),
-                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Write a file with a heredoc".to_string(),
                         command: "cat > /tmp/mez-heredoc.rs <<'EOF'\nfn main() {}\nEOF".to_string(),
                         interactive: false,

@@ -1152,7 +1152,7 @@ impl RuntimeSessionService {
             turn_id: turn_id.clone(),
             agent_id: child_agent_id.to_string(),
             pane_id: child_pane_id.to_string(),
-            trigger: crate::agent::AgentTurnTrigger::LocalMessage,
+            trigger: mez_agent::AgentTurnTrigger::LocalMessage,
             started_at_unix_seconds: created_at_unix_seconds,
             policy_profile: "runtime".to_string(),
             model_profile: model_profile_name.clone(),

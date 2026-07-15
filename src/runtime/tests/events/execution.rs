@@ -17,10 +17,10 @@ fn runtime_multi_target_action_line_mutes_secondary_count() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "patch-many".to_string(),
         rationale: String::new(),
-        payload: crate::agent::AgentActionPayload::ApplyPatch {
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: concat!(
                 "*** Begin Patch\n",
                 "*** Update File: src/runtime/render.rs\n",
@@ -307,25 +307,25 @@ fn runtime_action_failure_retry_budget_is_per_failed_action() {
         .find(|turn| turn.turn_id == "turn-1")
         .cloned()
         .unwrap();
-    let first_action = crate::agent::AgentAction {
+    let first_action = mez_agent::AgentAction {
         id: "fetch-first".to_string(),
         rationale: "try first source".to_string(),
-        payload: crate::agent::AgentActionPayload::FetchUrl {
+        payload: mez_agent::AgentActionPayload::FetchUrl {
             url: "https://example.test/first".to_string(),
             format: None,
             max_bytes: None,
         },
     };
-    let second_action = crate::agent::AgentAction {
+    let second_action = mez_agent::AgentAction {
         id: "fetch-second".to_string(),
         rationale: "try second source".to_string(),
-        payload: crate::agent::AgentActionPayload::FetchUrl {
+        payload: mez_agent::AgentActionPayload::FetchUrl {
             url: "https://example.test/second".to_string(),
             format: None,
             max_bytes: None,
         },
     };
-    let first_result = crate::agent::ActionResult::failed(
+    let first_result = mez_agent::ActionResult::failed(
         &turn,
         &first_action,
         ActionStatus::Failed,
@@ -333,7 +333,7 @@ fn runtime_action_failure_retry_budget_is_per_failed_action() {
         "network request returned HTTP 404 for first source",
     )
     .unwrap();
-    let second_result = crate::agent::ActionResult::failed(
+    let second_result = mez_agent::ActionResult::failed(
         &turn,
         &second_action,
         ActionStatus::Failed,
@@ -350,7 +350,7 @@ fn runtime_action_failure_retry_budget_is_per_failed_action() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
@@ -418,16 +418,16 @@ fn runtime_cancelled_action_does_not_queue_failure_feedback() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "abort-1".to_string(),
                     rationale: "abort the turn".to_string(),
-                    payload: crate::agent::AgentActionPayload::Abort {
+                    payload: mez_agent::AgentActionPayload::Abort {
                         reason: "cannot continue".to_string(),
                     },
                 }],

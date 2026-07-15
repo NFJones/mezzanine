@@ -13,11 +13,12 @@ use super::geometry::overlay_text_cells;
 use super::*;
 use std::{str::FromStr, sync::LazyLock};
 
-use crate::agent::{AgentAction, AgentActionPayload, apply_patch_touched_paths};
+use crate::agent::apply_patch_touched_paths;
 use crate::terminal::{
     AGENT_COPY_SKIP_LINE, AGENT_COPY_WRAP_CONTINUATION, agent_wrap_column_cap,
     encode_agent_copy_source_line, overlay_fixed_column_style_spans, terminal_grapheme_width,
 };
+use mez_agent::{AgentAction, AgentActionPayload};
 use mez_mux::theme::{UiColorPair, UiTheme};
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalStyledLine};
 use pulldown_cmark::{Alignment, Event, Options, Parser, Tag, TagEnd};

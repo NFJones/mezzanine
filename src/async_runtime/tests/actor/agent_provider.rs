@@ -105,26 +105,26 @@ async fn async_actor_applies_agent_provider_completion_events() {
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         pane_id: task.pane_id.clone(),
-        trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
         started_at_unix_seconds: 1,
         policy_profile: "default".to_string(),
         model_profile: "default".to_string(),
         parent_turn_id: None,
-        state: crate::agent::AgentTurnState::Running,
+        state: mez_agent::AgentTurnState::Running,
         cooperation_mode: None,
 
         initial_capability: None,
     };
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "say-1".to_string(),
         rationale: "complete with a visible summary".to_string(),
-        payload: crate::agent::AgentActionPayload::Say {
-            status: crate::agent::SayStatus::Final,
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Final,
             text: "Typed completion applied.".to_string(),
-            content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
         },
     };
-    let response_batch = crate::agent::MaapBatch {
+    let response_batch = mez_agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
         thought: None,
@@ -182,7 +182,7 @@ async fn async_actor_applies_agent_provider_completion_events() {
         },
         latest_response_usage: Default::default(),
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
-        action_results: vec![crate::agent::ActionResult::succeeded(
+        action_results: vec![mez_agent::ActionResult::succeeded(
             &turn,
             &action,
             vec!["Typed completion applied.".to_string()],
@@ -192,7 +192,7 @@ async fn async_actor_applies_agent_provider_completion_events() {
             ),
         )],
         final_turn: true,
-        terminal_state: crate::agent::AgentTurnState::Completed,
+        terminal_state: mez_agent::AgentTurnState::Completed,
     };
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
@@ -283,26 +283,26 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         pane_id: task.pane_id.clone(),
-        trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
         started_at_unix_seconds: 1,
         policy_profile: "default".to_string(),
         model_profile: "default".to_string(),
         parent_turn_id: None,
-        state: crate::agent::AgentTurnState::Running,
+        state: mez_agent::AgentTurnState::Running,
         cooperation_mode: None,
 
         initial_capability: None,
     };
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "say-1".to_string(),
         rationale: "complete with a visible summary".to_string(),
-        payload: crate::agent::AgentActionPayload::Say {
-            status: crate::agent::SayStatus::Final,
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Final,
             text: "Typed transcript completion.".to_string(),
-            content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
         },
     };
-    let response_batch = crate::agent::MaapBatch {
+    let response_batch = mez_agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
         thought: None,
@@ -360,7 +360,7 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
         },
         latest_response_usage: Default::default(),
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
-        action_results: vec![crate::agent::ActionResult::succeeded(
+        action_results: vec![mez_agent::ActionResult::succeeded(
             &turn,
             &action,
             vec!["Typed transcript completion.".to_string()],
@@ -370,7 +370,7 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
             ),
         )],
         final_turn: true,
-        terminal_state: crate::agent::AgentTurnState::Completed,
+        terminal_state: mez_agent::AgentTurnState::Completed,
     };
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()

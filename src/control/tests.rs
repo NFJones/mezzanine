@@ -2052,7 +2052,7 @@ fn agent_state_dispatch_persists_visibility_and_lists_turns() {
             turn_id: "turn-1".to_string(),
             agent_id: "agent-%1".to_string(),
             pane_id: "%1".to_string(),
-            trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
             started_at_unix_seconds: 42,
             policy_profile: "default".to_string(),
             model_profile: "default".to_string(),

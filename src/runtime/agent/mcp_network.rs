@@ -6,7 +6,7 @@
 //! facade.
 
 use super::*;
-use crate::agent::McpExecutionRequest;
+use mez_agent::McpExecutionRequest;
 
 impl RuntimeSessionService {
     /// Runs the execute running mcp actions for turn operation for this subsystem.

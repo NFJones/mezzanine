@@ -67,13 +67,13 @@ fn runtime_owns_agent_turn_start_and_finish_lifecycle() {
             turn_id: "turn-1".to_string(),
             agent_id: "agent-%1".to_string(),
             pane_id: "%1".to_string(),
-            trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
             started_at_unix_seconds: 200,
             policy_profile: "default".to_string(),
             model_profile: "default".to_string(),
             parent_turn_id: None,
             cooperation_mode: None,
-            state: crate::agent::AgentTurnState::Queued,
+            state: mez_agent::AgentTurnState::Queued,
 
             initial_capability: None,
         })
@@ -114,7 +114,7 @@ fn runtime_owns_agent_turn_start_and_finish_lifecycle() {
 
     service.agent_shell_store_mut().request_exit("%1").unwrap();
     let finished = service
-        .finish_agent_turn("%1", "turn-1", crate::agent::AgentTurnState::Completed)
+        .finish_agent_turn("%1", "turn-1", mez_agent::AgentTurnState::Completed)
         .unwrap();
     assert_eq!(finished.running_turn_id, None);
     assert_eq!(finished.visibility, AgentShellVisibility::Hidden);
@@ -743,7 +743,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
                 usage: Default::default(),
                 latest_request_usage: None,
                 quota_usage: Default::default(),
-                action_batch: Some(crate::agent::MaapBatch {
+                action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "test action batch rationale".to_string(),
                     thought: None,
@@ -757,13 +757,13 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
             latest_response_usage: Default::default(),
             routing_token_usage_by_model: std::collections::BTreeMap::new(),
             action_results: vec![
-                crate::agent::ActionResult::running(
+                mez_agent::ActionResult::running(
                     &parent_turn,
                     &spawn_one,
                     vec!["waiting for child one".to_string()],
                     None,
                 ),
-                crate::agent::ActionResult::running(
+                mez_agent::ActionResult::running(
                     &parent_turn,
                     &spawn_two,
                     vec!["waiting for child two".to_string()],

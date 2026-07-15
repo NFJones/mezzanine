@@ -47,27 +47,27 @@ fn runtime_mixed_say_and_file_mutation_defers_say_until_after_diff() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![
-                    crate::agent::AgentAction {
+                    mez_agent::AgentAction {
                         id: "say-1".to_string(),
                         rationale: String::new(),
-                        payload: crate::agent::AgentActionPayload::Say {
-                            status: crate::agent::SayStatus::Final,
+                        payload: mez_agent::AgentActionPayload::Say {
+                            status: mez_agent::SayStatus::Final,
                             text: "Created `note.txt`.".to_string(),
-                            content_type: crate::agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE
+                            content_type: mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE
                                 .to_string(),
                         },
                     },
-                    crate::agent::AgentAction {
+                    mez_agent::AgentAction {
                         id: "patch-1".to_string(),
                         rationale: "write a file".to_string(),
-                        payload: crate::agent::AgentActionPayload::ApplyPatch {
+                        payload: mez_agent::AgentActionPayload::ApplyPatch {
                             patch: format!(
                                 "*** Begin Patch\n*** Add File: {target_rel}\n+alpha\n+beta\n*** End Patch"
                             ),
@@ -199,19 +199,19 @@ fn runtime_agent_diff_say_renders_file_aware_syntax_spans() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "say-diff".to_string(),
                     rationale: String::new(),
-                    payload: crate::agent::AgentActionPayload::Say {
-                        status: crate::agent::SayStatus::Final,
+                    payload: mez_agent::AgentActionPayload::Say {
+                        status: mez_agent::SayStatus::Final,
                         text: diff.to_string(),
-                        content_type: crate::agent::AGENT_OUTPUT_TEXT_DIFF_CONTENT_TYPE.to_string(),
+                        content_type: mez_agent::AGENT_OUTPUT_TEXT_DIFF_CONTENT_TYPE.to_string(),
                     },
                 }],
                 final_turn: true,
@@ -291,20 +291,19 @@ fn runtime_agent_complete_without_say_reports_visible_completion_status() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "the task is complete".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "say-1".to_string(),
                     rationale: String::new(),
-                    payload: crate::agent::AgentActionPayload::Say {
-                        status: crate::agent::SayStatus::Final,
+                    payload: mez_agent::AgentActionPayload::Say {
+                        status: mez_agent::SayStatus::Final,
                         text: "Done.".to_string(),
-                        content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
-                            .to_string(),
+                        content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
                 final_turn: true,
@@ -688,7 +687,7 @@ fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
             turn_id: "turn-running-restore".to_string(),
             agent_id: "agent-%1".to_string(),
             pane_id: "%1".to_string(),
-            trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
             started_at_unix_seconds: 200,
             policy_profile: "runtime".to_string(),
             model_profile: "default".to_string(),

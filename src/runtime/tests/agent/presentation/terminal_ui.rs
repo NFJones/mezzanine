@@ -116,7 +116,7 @@ fn runtime_agent_plain_say_wraps_under_agent_indicator() {
         .append_agent_assistant_content_to_terminal_buffer(
             "%1",
             "alpha beta gamma delta epsilon",
-            crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE,
+            mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE,
         )
         .unwrap();
 

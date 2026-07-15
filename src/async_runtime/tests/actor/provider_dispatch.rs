@@ -131,20 +131,20 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         pane_id: task.pane_id.clone(),
-        trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
         started_at_unix_seconds: 1,
         policy_profile: "default".to_string(),
         model_profile: "default".to_string(),
         parent_turn_id: None,
-        state: crate::agent::AgentTurnState::Running,
+        state: mez_agent::AgentTurnState::Running,
         cooperation_mode: None,
 
         initial_capability: None,
     };
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "shell-1".to_string(),
         rationale: "run a short shell command for the user".to_string(),
-        payload: crate::agent::AgentActionPayload::ShellCommand {
+        payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Print a shell marker.".to_string(),
             command: "printf 'async timer shell\\n'".to_string(),
             interactive: false,
@@ -152,7 +152,7 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
             timeout_ms: Some(60_000),
         },
     };
-    let response_batch = crate::agent::MaapBatch {
+    let response_batch = mez_agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
         thought: None,
@@ -210,14 +210,14 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
         },
         latest_response_usage: Default::default(),
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
-        action_results: vec![crate::agent::ActionResult::running(
+        action_results: vec![mez_agent::ActionResult::running(
             &turn,
             &action,
             vec!["shell command accepted for pane execution".to_string()],
             Some(r#"{"state":"pending_dispatch"}"#.to_string()),
         )],
         final_turn: false,
-        terminal_state: crate::agent::AgentTurnState::Running,
+        terminal_state: mez_agent::AgentTurnState::Running,
     };
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()

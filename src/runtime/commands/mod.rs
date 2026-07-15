@@ -40,12 +40,11 @@ use super::{
     shell_command_from_argv, unix_seconds_to_rfc3339,
 };
 use crate::agent::{
-    AgentActionPayload, AllowedActionSet, AsyncModelProvider, ClaudeCodeProvider,
-    DEFAULT_PROVIDER_TIMEOUT_MS, ModelInteractionKind, ModelMessage, ModelMessageRole,
-    ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey, ProviderApiCompatibility,
-    ProviderCapabilities, ProviderModelCatalog, ProviderModelInfo, ProviderQuotaUsage,
-    ReqwestProviderHttpTransport, append_mcp_context,
-    deepseek_chat_completions_provider_from_auth_store_with_provider_options,
+    AllowedActionSet, AsyncModelProvider, ClaudeCodeProvider, DEFAULT_PROVIDER_TIMEOUT_MS,
+    ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest, ModelResponse,
+    ModelTokenUsage, ModelTokenUsageKey, ProviderApiCompatibility, ProviderCapabilities,
+    ProviderModelCatalog, ProviderModelInfo, ProviderQuotaUsage, ReqwestProviderHttpTransport,
+    append_mcp_context, deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     effective_provider_api, model_context_text_word_count,
     openai_compatible_provider_from_auth_store_with_provider_options,
     openai_default_reasoning_levels_for_model,
@@ -58,6 +57,7 @@ use crate::runtime::config::{
 };
 use crate::transcript::ConversationSummary;
 use base64::Engine;
+use mez_agent::AgentActionPayload;
 use mez_mux::readline::ReadlineEdit;
 use std::fs;
 
@@ -1043,7 +1043,7 @@ impl RuntimeSessionService {
             turn_id: turn_id.clone(),
             agent_id: agent_id.clone(),
             pane_id: pane_id.to_string(),
-            trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+            trigger: mez_agent::AgentTurnTrigger::UserPrompt,
             started_at_unix_seconds: created_at_unix_seconds,
             policy_profile: "runtime".to_string(),
             model_profile: model_profile_name.clone(),
@@ -1200,7 +1200,7 @@ impl RuntimeSessionService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{AgentAction, MaapBatch};
+    use mez_agent::{AgentAction, MaapBatch};
 
     /// Verifies model compaction consumes the structured `say` action text
     /// returned by the provider. This keeps manual and automatic compaction
@@ -1224,8 +1224,8 @@ mod tests {
                 actions: vec![AgentAction {
                     id: "summary".to_string(),
                     rationale: String::new(),
-                    payload: crate::agent::AgentActionPayload::Say {
-                        status: crate::agent::SayStatus::Final,
+                    payload: mez_agent::AgentActionPayload::Say {
+                        status: mez_agent::SayStatus::Final,
                         text: "## Summary\n\nKeep this.".to_string(),
                         content_type: "text/markdown; charset=utf-8".to_string(),
                     },

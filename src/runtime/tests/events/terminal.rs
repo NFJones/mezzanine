@@ -401,7 +401,7 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
         turn_id: "turn-pane-not-ready".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
-        trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
         started_at_unix_seconds: 1,
         policy_profile: "runtime".to_string(),
         model_profile: "default".to_string(),
@@ -411,10 +411,10 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
         state: AgentTurnState::Running,
     };
     service.agent_turn_ledger.start_turn(turn.clone()).unwrap();
-    let first = crate::agent::AgentAction {
+    let first = mez_agent::AgentAction {
         id: "shell-a".to_string(),
         rationale: "inspect owner one".to_string(),
-        payload: crate::agent::AgentActionPayload::ShellCommand {
+        payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect owner one.".to_string(),
             command: "rg -n \"status pager\" src".to_string(),
             interactive: false,
@@ -422,10 +422,10 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
             timeout_ms: None,
         },
     };
-    let second = crate::agent::AgentAction {
+    let second = mez_agent::AgentAction {
         id: "shell-b".to_string(),
         rationale: "inspect owner two".to_string(),
-        payload: crate::agent::AgentActionPayload::ShellCommand {
+        payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect owner two.".to_string(),
             command: "sed -n '1,120p' src/runtime/render/mod.rs".to_string(),
             interactive: false,
@@ -442,7 +442,7 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "inspect with shell".to_string(),
                 thought: None,
@@ -456,7 +456,7 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
         latest_response_usage: Default::default(),
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
         action_results: vec![
-            crate::agent::ActionResult {
+            mez_agent::ActionResult {
                 protocol: "maap/1".to_string(),
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
@@ -468,7 +468,7 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
                 is_error: false,
                 error: None,
             },
-            crate::agent::ActionResult {
+            mez_agent::ActionResult {
                 protocol: "maap/1".to_string(),
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),

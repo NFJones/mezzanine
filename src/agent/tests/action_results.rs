@@ -193,7 +193,7 @@ fn action_result_context_prunes_empty_non_shell_data() {
 /// larger body. The durable result can keep the full payload while the next
 /// provider request receives a compact, marked preview.
 fn action_result_context_truncates_large_result_body_at_256k() {
-    use crate::agent::ActionContentBlock;
+    use mez_agent::ActionContentBlock;
 
     let result = ActionResult {
         protocol: "maap/1".to_string(),

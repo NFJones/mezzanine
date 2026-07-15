@@ -171,20 +171,20 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         pane_id: task.pane_id.clone(),
-        trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
         started_at_unix_seconds: 1,
         policy_profile: "default".to_string(),
         model_profile: "default".to_string(),
         parent_turn_id: None,
-        state: crate::agent::AgentTurnState::Running,
+        state: mez_agent::AgentTurnState::Running,
         cooperation_mode: None,
 
         initial_capability: None,
     };
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "shell-1".to_string(),
         rationale: "list files".to_string(),
-        payload: crate::agent::AgentActionPayload::ShellCommand {
+        payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "List files in the current directory".to_string(),
             command: "ls".to_string(),
             interactive: false,
@@ -192,7 +192,7 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
             timeout_ms: Some(60_000),
         },
     };
-    let response_batch = crate::agent::MaapBatch {
+    let response_batch = mez_agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
         thought: None,
@@ -250,14 +250,14 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
         },
         latest_response_usage: Default::default(),
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
-        action_results: vec![crate::agent::ActionResult::running(
+        action_results: vec![mez_agent::ActionResult::running(
             &turn,
             &action,
             vec!["shell command accepted for pane execution".to_string()],
             Some(r#"{"state":"pending_dispatch"}"#.to_string()),
         )],
         final_turn: false,
-        terminal_state: crate::agent::AgentTurnState::Running,
+        terminal_state: mez_agent::AgentTurnState::Running,
     };
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
@@ -344,35 +344,35 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         pane_id: task.pane_id.clone(),
-        trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
         started_at_unix_seconds: 1,
         policy_profile: "default".to_string(),
         model_profile: "default".to_string(),
         parent_turn_id: None,
-        state: crate::agent::AgentTurnState::Running,
+        state: mez_agent::AgentTurnState::Running,
         cooperation_mode: None,
 
         initial_capability: None,
     };
-    let batch_action = crate::agent::AgentAction {
+    let batch_action = mez_agent::AgentAction {
         id: "fetch-listed".to_string(),
         rationale: "fetch the listed source".to_string(),
-        payload: crate::agent::AgentActionPayload::FetchUrl {
+        payload: mez_agent::AgentActionPayload::FetchUrl {
             url: "https://example.com/listed".to_string(),
             format: None,
             max_bytes: None,
         },
     };
-    let missing_action = crate::agent::AgentAction {
+    let missing_action = mez_agent::AgentAction {
         id: "fetch-missing-result".to_string(),
         rationale: "this result no longer has a matching batch action".to_string(),
-        payload: crate::agent::AgentActionPayload::FetchUrl {
+        payload: mez_agent::AgentActionPayload::FetchUrl {
             url: "https://example.com/missing".to_string(),
             format: None,
             max_bytes: None,
         },
     };
-    let response_batch = crate::agent::MaapBatch {
+    let response_batch = mez_agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
         thought: None,
@@ -430,14 +430,14 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
         },
         latest_response_usage: Default::default(),
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
-        action_results: vec![crate::agent::ActionResult::running(
+        action_results: vec![mez_agent::ActionResult::running(
             &turn,
             &missing_action,
             vec!["network action accepted".to_string()],
             Some(r#"{"state":"pending_network"}"#.to_string()),
         )],
         final_turn: false,
-        terminal_state: crate::agent::AgentTurnState::Running,
+        terminal_state: mez_agent::AgentTurnState::Running,
     };
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()
@@ -503,20 +503,20 @@ async fn async_provider_worker_executes_network_actions_before_actor_completion(
         turn_id: "turn-network-worker".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
-        trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
         started_at_unix_seconds: 1,
         policy_profile: "default".to_string(),
         model_profile: "default".to_string(),
         parent_turn_id: None,
-        state: crate::agent::AgentTurnState::Running,
+        state: mez_agent::AgentTurnState::Running,
         cooperation_mode: None,
 
         initial_capability: None,
     };
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "fetch-local-file".to_string(),
         rationale: "try a local file URL".to_string(),
-        payload: crate::agent::AgentActionPayload::FetchUrl {
+        payload: mez_agent::AgentActionPayload::FetchUrl {
             url: "file:///tmp/provider-doc.md".to_string(),
             format: None,
             max_bytes: None,
@@ -557,7 +557,7 @@ async fn async_provider_worker_executes_network_actions_before_actor_completion(
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "fetch one provider documentation source".to_string(),
                 thought: None,
@@ -570,14 +570,14 @@ async fn async_provider_worker_executes_network_actions_before_actor_completion(
         },
         latest_response_usage: Default::default(),
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
-        action_results: vec![crate::agent::ActionResult::running(
+        action_results: vec![mez_agent::ActionResult::running(
             &turn,
             &action,
             vec!["network action accepted for runtime execution".to_string()],
             Some(r#"{"state":"pending_runtime_network"}"#.to_string()),
         )],
         final_turn: false,
-        terminal_state: crate::agent::AgentTurnState::Running,
+        terminal_state: mez_agent::AgentTurnState::Running,
     };
 
     let execution =
@@ -585,12 +585,9 @@ async fn async_provider_worker_executes_network_actions_before_actor_completion(
             .await
             .unwrap();
 
-    assert_eq!(
-        execution.terminal_state,
-        crate::agent::AgentTurnState::Failed
-    );
+    assert_eq!(execution.terminal_state, mez_agent::AgentTurnState::Failed);
     let result = &execution.action_results[0];
-    assert_eq!(result.status, crate::agent::ActionStatus::Failed);
+    assert_eq!(result.status, mez_agent::ActionStatus::Failed);
     let error = result.error.as_ref().unwrap();
     assert_eq!(error.code, "unsupported_url_scheme");
     assert!(

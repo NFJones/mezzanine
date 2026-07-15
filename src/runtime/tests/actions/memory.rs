@@ -649,18 +649,18 @@ fn runtime_executes_memory_actions_and_audits_action_arguments() {
         .find(|turn| turn.turn_id == "turn-1")
         .cloned()
         .unwrap();
-    let search = crate::agent::AgentAction {
+    let search = mez_agent::AgentAction {
         id: "mem-search".to_string(),
         rationale: "search memory".to_string(),
-        payload: crate::agent::AgentActionPayload::MemorySearch {
+        payload: mez_agent::AgentActionPayload::MemorySearch {
             query: "prompt cache".to_string(),
             limit: Some(3),
         },
     };
-    let store_action = crate::agent::AgentAction {
+    let store_action = mez_agent::AgentAction {
         id: "mem-store".to_string(),
         rationale: "store memory".to_string(),
-        payload: crate::agent::AgentActionPayload::MemoryStore {
+        payload: mez_agent::AgentActionPayload::MemoryStore {
             kind: "research".to_string(),
             priority: Some(80),
             scope: Some("project".to_string()),
@@ -678,7 +678,7 @@ fn runtime_executes_memory_actions_and_audits_action_arguments() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
@@ -692,7 +692,7 @@ fn runtime_executes_memory_actions_and_audits_action_arguments() {
         latest_response_usage: Default::default(),
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
         action_results: vec![
-            crate::agent::ActionResult {
+            mez_agent::ActionResult {
                 protocol: "maap/1".to_string(),
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
@@ -704,7 +704,7 @@ fn runtime_executes_memory_actions_and_audits_action_arguments() {
                 is_error: false,
                 error: None,
             },
-            crate::agent::ActionResult {
+            mez_agent::ActionResult {
                 protocol: "maap/1".to_string(),
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
@@ -797,10 +797,10 @@ fn runtime_memory_store_rejects_episode_and_scratch_kinds() {
         .unwrap();
     let actions = ["episode", "scratch"]
         .into_iter()
-        .map(|kind| crate::agent::AgentAction {
+        .map(|kind| mez_agent::AgentAction {
             id: format!("mem-{kind}"),
             rationale: "store transient memory".to_string(),
-            payload: crate::agent::AgentActionPayload::MemoryStore {
+            payload: mez_agent::AgentActionPayload::MemoryStore {
                 kind: kind.to_string(),
                 priority: Some(50),
                 scope: Some("project".to_string()),
@@ -819,7 +819,7 @@ fn runtime_memory_store_rejects_episode_and_scratch_kinds() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
@@ -834,7 +834,7 @@ fn runtime_memory_store_rejects_episode_and_scratch_kinds() {
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
         action_results: actions
             .iter()
-            .map(|action| crate::agent::ActionResult {
+            .map(|action| mez_agent::ActionResult {
                 protocol: "maap/1".to_string(),
                 turn_id: turn.turn_id.clone(),
                 agent_id: turn.agent_id.clone(),
@@ -925,10 +925,10 @@ fn runtime_memory_disabled_failure_tells_model_to_continue_without_retrying_memo
         .find(|turn| turn.turn_id == "turn-1")
         .cloned()
         .unwrap();
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "mem-search".to_string(),
         rationale: "search memory".to_string(),
-        payload: crate::agent::AgentActionPayload::MemorySearch {
+        payload: mez_agent::AgentActionPayload::MemorySearch {
             query: "prompt cache".to_string(),
             limit: Some(3),
         },
@@ -942,7 +942,7 @@ fn runtime_memory_disabled_failure_tells_model_to_continue_without_retrying_memo
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
@@ -955,7 +955,7 @@ fn runtime_memory_disabled_failure_tells_model_to_continue_without_retrying_memo
         },
         latest_response_usage: Default::default(),
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
-        action_results: vec![crate::agent::ActionResult {
+        action_results: vec![mez_agent::ActionResult {
             protocol: "maap/1".to_string(),
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),

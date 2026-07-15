@@ -161,30 +161,30 @@ fn runtime_agent_shell_copy_writes_latest_say_text_to_destinations() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![
-                    crate::agent::AgentAction {
+                    mez_agent::AgentAction {
                         id: "say-1".to_string(),
                         rationale: "give an earlier answer".to_string(),
-                        payload: crate::agent::AgentActionPayload::Say {
-                            status: crate::agent::SayStatus::Final,
+                        payload: mez_agent::AgentActionPayload::Say {
+                            status: mez_agent::SayStatus::Final,
                             text: "Earlier say text.".to_string(),
-                            content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
                                 .to_string(),
                         },
                     },
-                    crate::agent::AgentAction {
+                    mez_agent::AgentAction {
                         id: "say-2".to_string(),
                         rationale: "give the answer that should be copied".to_string(),
-                        payload: crate::agent::AgentActionPayload::Say {
-                            status: crate::agent::SayStatus::Final,
+                        payload: mez_agent::AgentActionPayload::Say {
+                            status: mez_agent::SayStatus::Final,
                             text: "Latest say text.".to_string(),
-                            content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
                                 .to_string(),
                         },
                     },
@@ -328,20 +328,19 @@ fn runtime_agent_copy_trace_log_retains_hidden_trace_and_writes_destinations() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "say-1".to_string(),
                     rationale: "retain trace details".to_string(),
-                    payload: crate::agent::AgentActionPayload::Say {
-                        status: crate::agent::SayStatus::Final,
+                    payload: mez_agent::AgentActionPayload::Say {
+                        status: mez_agent::SayStatus::Final,
                         text: "Trace retained.".to_string(),
-                        content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
-                            .to_string(),
+                        content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
                 final_turn: true,
@@ -547,20 +546,16 @@ fn runtime_agent_copy_patches_writes_retained_patches_to_destinations() {
         .expect("started turn should be recorded");
     let target_rel = "target/mez-copy-patches-export/note.txt".to_string();
     let patch = format!("*** Begin Patch\n*** Add File: {target_rel}\n+alpha\n*** End Patch");
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "patch-1".to_string(),
         rationale: "write a note".to_string(),
-        payload: crate::agent::AgentActionPayload::ApplyPatch {
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: patch.clone(),
             strip: None,
         },
     };
-    let result = crate::agent::ActionResult::succeeded(
-        &turn,
-        &action,
-        vec!["patch applied".to_string()],
-        None,
-    );
+    let result =
+        mez_agent::ActionResult::succeeded(&turn, &action, vec!["patch applied".to_string()], None);
     let execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: crate::agent::ModelResponse {
@@ -570,7 +565,7 @@ fn runtime_agent_copy_patches_writes_retained_patches_to_destinations() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
@@ -685,7 +680,7 @@ fn runtime_agent_copy_patches_retains_reused_action_id_attempts() {
     let second_patch =
         "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-current\n+updated\n*** End Patch";
     let build_execution =
-        |patch: &str, result: crate::agent::ActionResult| crate::agent::AgentTurnExecution {
+        |patch: &str, result: mez_agent::ActionResult| crate::agent::AgentTurnExecution {
             request: runtime_model_request_fixture(&turn.turn_id),
             response: crate::agent::ModelResponse {
                 provider: "runtime-batch".to_string(),
@@ -694,16 +689,16 @@ fn runtime_agent_copy_patches_retains_reused_action_id_attempts() {
                 usage: Default::default(),
                 latest_request_usage: None,
                 quota_usage: Default::default(),
-                action_batch: Some(crate::agent::MaapBatch {
+                action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "test action batch rationale".to_string(),
                     thought: None,
                     turn_id: turn.turn_id.clone(),
                     agent_id: turn.agent_id.clone(),
-                    actions: vec![crate::agent::AgentAction {
+                    actions: vec![mez_agent::AgentAction {
                         id: result.action_id.clone(),
                         rationale: "apply a source patch".to_string(),
-                        payload: crate::agent::AgentActionPayload::ApplyPatch {
+                        payload: mez_agent::AgentActionPayload::ApplyPatch {
                             patch: patch.to_string(),
                             strip: None,
                         },
@@ -718,17 +713,17 @@ fn runtime_agent_copy_patches_retains_reused_action_id_attempts() {
             final_turn: false,
             terminal_state: AgentTurnState::Running,
         };
-    let action_for_result = |patch: &str| crate::agent::AgentAction {
+    let action_for_result = |patch: &str| mez_agent::AgentAction {
         id: "patch-retry".to_string(),
         rationale: "apply a source patch".to_string(),
-        payload: crate::agent::AgentActionPayload::ApplyPatch {
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: patch.to_string(),
             strip: None,
         },
     };
 
     let first_action = action_for_result(first_patch);
-    let first_running = crate::agent::ActionResult::running(
+    let first_running = mez_agent::ActionResult::running(
         &turn,
         &first_action,
         vec!["shell command accepted for pane execution".to_string()],
@@ -738,7 +733,7 @@ fn runtime_agent_copy_patches_retains_reused_action_id_attempts() {
         &turn,
         &build_execution(first_patch, first_running),
     );
-    let first_failed = crate::agent::ActionResult::failed(
+    let first_failed = mez_agent::ActionResult::failed(
         &turn,
         &first_action,
         ActionStatus::Failed,
@@ -752,7 +747,7 @@ fn runtime_agent_copy_patches_retains_reused_action_id_attempts() {
     );
 
     let second_action = action_for_result(second_patch);
-    let second_running = crate::agent::ActionResult::running(
+    let second_running = mez_agent::ActionResult::running(
         &turn,
         &second_action,
         vec!["shell command accepted for pane execution".to_string()],
@@ -762,7 +757,7 @@ fn runtime_agent_copy_patches_retains_reused_action_id_attempts() {
         &turn,
         &build_execution(second_patch, second_running),
     );
-    let second_succeeded = crate::agent::ActionResult::succeeded(
+    let second_succeeded = mez_agent::ActionResult::succeeded(
         &turn,
         &second_action,
         vec!["patch applied".to_string()],

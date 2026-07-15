@@ -35,20 +35,19 @@ fn runtime_agent_suppresses_batch_rationale_that_duplicates_say_text() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: format!("thinking: {visible}"),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "say-1".to_string(),
                     rationale: String::new(),
-                    payload: crate::agent::AgentActionPayload::Say {
-                        status: crate::agent::SayStatus::Final,
+                    payload: mez_agent::AgentActionPayload::Say {
+                        status: mez_agent::SayStatus::Final,
                         text: visible.to_string(),
-                        content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
-                            .to_string(),
+                        content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
                 final_turn: true,
@@ -122,20 +121,19 @@ fn runtime_agent_verbose_mode_injects_low_level_status_lines() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "say-1".to_string(),
                     rationale: "answer in the pane".to_string(),
-                    payload: crate::agent::AgentActionPayload::Say {
-                        status: crate::agent::SayStatus::Final,
+                    payload: mez_agent::AgentActionPayload::Say {
+                        status: mez_agent::SayStatus::Final,
                         text: "The pane is ready.".to_string(),
-                        content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
-                            .to_string(),
+                        content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
                 final_turn: true,
@@ -213,20 +211,19 @@ fn runtime_agent_thinking_mode_injects_action_rationales() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "say-1".to_string(),
                     rationale: "answer in the pane".to_string(),
-                    payload: crate::agent::AgentActionPayload::Say {
-                        status: crate::agent::SayStatus::Final,
+                    payload: mez_agent::AgentActionPayload::Say {
+                        status: mez_agent::SayStatus::Final,
                         text: "The pane is ready.".to_string(),
-                        content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
-                            .to_string(),
+                        content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
                 final_turn: true,
@@ -300,20 +297,19 @@ fn runtime_agent_trace_mode_prints_maap_request_response_and_results() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "say-1".to_string(),
                     rationale: "show trace details".to_string(),
-                    payload: crate::agent::AgentActionPayload::Say {
-                        status: crate::agent::SayStatus::Final,
+                    payload: mez_agent::AgentActionPayload::Say {
+                        status: mez_agent::SayStatus::Final,
                         text: "Trace visible.".to_string(),
-                        content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
-                            .to_string(),
+                        content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
                 final_turn: true,
@@ -400,16 +396,16 @@ fn runtime_agent_debug_mode_prints_maap_without_shell_view() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
                     rationale: "run a command for debug redaction".to_string(),
-                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Run a debug redaction command".to_string(),
                         command: "printf 'debug-secret-command\\n'".to_string(),
                         interactive: false,
@@ -497,20 +493,19 @@ fn runtime_agent_suppresses_redundant_same_turn_rationale() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "Check exact selector owner".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "say-progress".to_string(),
                     rationale: "tell the user the owner is narrowed".to_string(),
-                    payload: crate::agent::AgentActionPayload::Say {
-                        status: crate::agent::SayStatus::Progress,
+                    payload: mez_agent::AgentActionPayload::Say {
+                        status: mez_agent::SayStatus::Progress,
                         text: "The selector owner is narrowed to the resume path.".to_string(),
-                        content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
-                            .to_string(),
+                        content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
                 final_turn: false,
@@ -536,20 +531,19 @@ fn runtime_agent_suppresses_redundant_same_turn_rationale() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "Check exact selector owner".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "say-final".to_string(),
                     rationale: "finish the user reply".to_string(),
-                    payload: crate::agent::AgentActionPayload::Say {
-                        status: crate::agent::SayStatus::Final,
+                    payload: mez_agent::AgentActionPayload::Say {
+                        status: mez_agent::SayStatus::Final,
                         text: "The selector fix is complete.".to_string(),
-                        content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
-                            .to_string(),
+                        content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
                 final_turn: true,
@@ -629,7 +623,7 @@ fn runtime_batch_thought_is_hidden_until_verbose_logging() {
                 usage: Default::default(),
                 latest_request_usage: None,
                 quota_usage: Default::default(),
-                action_batch: Some(crate::agent::MaapBatch {
+                action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "respond with the final message".to_string(),
                     thought: Some(
@@ -637,13 +631,13 @@ fn runtime_batch_thought_is_hidden_until_verbose_logging() {
                     ),
                     turn_id: "turn-1".to_string(),
                     agent_id: "agent-%1".to_string(),
-                    actions: vec![crate::agent::AgentAction {
+                    actions: vec![mez_agent::AgentAction {
                         id: "say-final".to_string(),
                         rationale: String::new(),
-                        payload: crate::agent::AgentActionPayload::Say {
-                            status: crate::agent::SayStatus::Final,
+                        payload: mez_agent::AgentActionPayload::Say {
+                            status: mez_agent::SayStatus::Final,
                             text: "Done.".to_string(),
-                            content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
                                 .to_string(),
                         },
                     }],

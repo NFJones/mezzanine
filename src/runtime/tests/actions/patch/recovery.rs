@@ -31,16 +31,16 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
         .expect("started turn should be recorded");
     service.pending_agent_provider_tasks.remove(&turn.turn_id);
 
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "patch-invalid".to_string(),
         rationale: "apply an invalid patch".to_string(),
-        payload: crate::agent::AgentActionPayload::ApplyPatch {
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Update File: src/lib.rs\n@@\n-old\n+new\n*** End Patch".to_string(),
             strip: None,
         },
     };
 
-    let mut failed = crate::agent::ActionResult::failed(
+    let mut failed = mez_agent::ActionResult::failed(
         &turn,
         &action,
         ActionStatus::Failed,
@@ -68,7 +68,7 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
@@ -189,17 +189,17 @@ fn runtime_apply_patch_hunk_mismatch_recovery_guides_context_refresh() {
         .expect("started turn should be recorded");
     service.pending_agent_provider_tasks.remove(&turn.turn_id);
 
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "patch-hunk".to_string(),
         rationale: "apply a source patch".to_string(),
-        payload: crate::agent::AgentActionPayload::ApplyPatch {
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch:
                 "*** Begin Patch\n*** Update File: src/driver/mod.rs\n@@\n-old\n+new\n*** End Patch"
                     .to_string(),
             strip: None,
         },
     };
-    let mut failed = crate::agent::ActionResult::failed(
+    let mut failed = mez_agent::ActionResult::failed(
         &turn,
         &action,
         ActionStatus::Failed,
@@ -228,7 +228,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_guides_context_refresh() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
@@ -386,17 +386,17 @@ fn runtime_apply_patch_replacement_hint_recovery_guides_reconcile_or_skip() {
         .expect("started turn should be recorded");
     service.pending_agent_provider_tasks.remove(&turn.turn_id);
 
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "patch-replacement".to_string(),
         rationale: "apply a source patch".to_string(),
-        payload: crate::agent::AgentActionPayload::ApplyPatch {
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch:
                 "*** Begin Patch\n*** Update File: src/driver/mod.rs\n@@\n-old\n+new\n*** End Patch"
                     .to_string(),
             strip: None,
         },
     };
-    let mut failed = crate::agent::ActionResult::failed(
+    let mut failed = mez_agent::ActionResult::failed(
         &turn,
         &action,
         ActionStatus::Failed,
@@ -425,7 +425,7 @@ fn runtime_apply_patch_replacement_hint_recovery_guides_reconcile_or_skip() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
@@ -519,17 +519,17 @@ fn runtime_apply_patch_missing_anchor_recovery_guides_anchor_refresh() {
         .expect("started turn should be recorded");
     service.pending_agent_provider_tasks.remove(&turn.turn_id);
 
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "patch-anchor".to_string(),
         rationale: "apply a source patch".to_string(),
-        payload: crate::agent::AgentActionPayload::ApplyPatch {
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch:
                 "*** Begin Patch\n*** Update File: src/driver/mod.rs\n@@ fn owner()\n-old\n+new\n*** End Patch"
                     .to_string(),
             strip: None,
         },
     };
-    let mut failed = crate::agent::ActionResult::failed(
+    let mut failed = mez_agent::ActionResult::failed(
         &turn,
         &action,
         ActionStatus::Failed,
@@ -558,7 +558,7 @@ fn runtime_apply_patch_missing_anchor_recovery_guides_anchor_refresh() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
@@ -647,16 +647,16 @@ fn runtime_apply_patch_candidate_region_recovery_guides_ambiguous_ranges() {
         .expect("started turn should be recorded");
     service.pending_agent_provider_tasks.remove(&turn.turn_id);
 
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "patch-candidates".to_string(),
         rationale: "apply a source patch".to_string(),
-        payload: crate::agent::AgentActionPayload::ApplyPatch {
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Update File: note.rs\n@@\n-old();\n+new();\n*** End Patch"
                 .to_string(),
             strip: None,
         },
     };
-    let mut failed = crate::agent::ActionResult::failed(
+    let mut failed = mez_agent::ActionResult::failed(
         &turn,
         &action,
         ActionStatus::Failed,
@@ -685,7 +685,7 @@ fn runtime_apply_patch_candidate_region_recovery_guides_ambiguous_ranges() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
@@ -780,16 +780,16 @@ fn runtime_apply_patch_write_phase_hunk_mismatch_queues_model_recovery() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "patch-write".to_string(),
                     rationale: "apply a source patch".to_string(),
-                    payload: crate::agent::AgentActionPayload::ApplyPatch {
+                    payload: mez_agent::AgentActionPayload::ApplyPatch {
                         patch: "*** Begin Patch\n*** Update File: tests/standard_config_consumer_test.rs\n@@\n-old\n+new\n*** End Patch"
                             .to_string(),
                         strip: None,
@@ -935,17 +935,17 @@ fn runtime_apply_patch_hunk_mismatch_recovery_is_unbounded_and_hides_retry_budge
     service.pending_agent_provider_tasks.remove(&turn.turn_id);
 
     let build_execution = |raw_text: &str, action_id: &str| {
-        let action = crate::agent::AgentAction {
+        let action = mez_agent::AgentAction {
             id: action_id.to_string(),
             rationale: "apply a source patch".to_string(),
-            payload: crate::agent::AgentActionPayload::ApplyPatch {
+            payload: mez_agent::AgentActionPayload::ApplyPatch {
                 patch:
                     "*** Begin Patch\n*** Update File: src/main.rs\n@@\n-old\n+new\n*** End Patch"
                         .to_string(),
                 strip: None,
             },
         };
-        let mut failed = crate::agent::ActionResult::failed(
+        let mut failed = mez_agent::ActionResult::failed(
             &turn,
             &action,
             ActionStatus::Failed,
@@ -974,7 +974,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_is_unbounded_and_hides_retry_budge
                 usage: Default::default(),
                 latest_request_usage: None,
                 quota_usage: Default::default(),
-                action_batch: Some(crate::agent::MaapBatch {
+                action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "test action batch rationale".to_string(),
                     thought: None,
@@ -1097,17 +1097,17 @@ fn runtime_apply_patch_unsafe_path_recovery_guides_relative_headers() {
     service.pending_agent_provider_tasks.remove(&turn.turn_id);
 
     let unsafe_path = "/home/neil/Documents/repos/chimera/src/conf/document.rs";
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "patch-absolute".to_string(),
         rationale: "apply a source patch".to_string(),
-        payload: crate::agent::AgentActionPayload::ApplyPatch {
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: format!(
                 "*** Begin Patch\n*** Update File: {unsafe_path}\n@@\n-old\n+new\n*** End Patch"
             ),
             strip: None,
         },
     };
-    let mut failed = crate::agent::ActionResult::failed(
+    let mut failed = mez_agent::ActionResult::failed(
         &turn,
         &action,
         ActionStatus::Failed,
@@ -1136,7 +1136,7 @@ fn runtime_apply_patch_unsafe_path_recovery_guides_relative_headers() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
@@ -1250,16 +1250,16 @@ fn runtime_unrecovered_apply_patch_failure_logs_terminal_observation() {
         .find(|turn| turn.turn_id == "turn-1")
         .cloned()
         .expect("started turn should be recorded");
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "patch-fail".to_string(),
         rationale: "apply a source patch".to_string(),
-        payload: crate::agent::AgentActionPayload::ApplyPatch {
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** End Patch"
                 .to_string(),
             strip: None,
         },
     };
-    let mut result = crate::agent::ActionResult::failed(
+    let mut result = mez_agent::ActionResult::failed(
         &turn,
         &action,
         ActionStatus::Failed,
@@ -1287,7 +1287,7 @@ fn runtime_unrecovered_apply_patch_failure_logs_terminal_observation() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
@@ -1350,10 +1350,10 @@ fn runtime_unrecovered_apply_patch_failure_logs_terminal_observation() {
 /// `apply_patch:` or error line is available.
 #[test]
 fn runtime_unrecovered_apply_patch_failure_uses_generic_line_for_fragments() {
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "patch-fragment".to_string(),
         rationale: "apply a source patch".to_string(),
-        payload: crate::agent::AgentActionPayload::ApplyPatch {
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-old\n+new\n*** End Patch"
                 .to_string(),
             strip: None,

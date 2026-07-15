@@ -36,14 +36,15 @@ use super::{
     shell_command_structured_content_json, validate_pane_size_for_resize,
 };
 use crate::agent::{
-    AgentActionPayload, ApplyPatchTransactionPhase, DEFAULT_BOOTSTRAP_TIMEOUT_MS,
-    apply_patch_transaction_phase, bootstrap_script_for_classification, parse_bootstrap_env_output,
+    ApplyPatchTransactionPhase, DEFAULT_BOOTSTRAP_TIMEOUT_MS, apply_patch_transaction_phase,
+    bootstrap_script_for_classification, parse_bootstrap_env_output,
     readiness_probe_command_for_classification,
 };
 use crate::runtime::{
     PaneEvent, ProcessEvent, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition,
 };
 use crate::terminal::parse_mez_shell_transaction_osc;
+use mez_agent::AgentActionPayload;
 use mez_mux::process::PaneProcess;
 use mez_terminal::TerminalStyledLine;
 

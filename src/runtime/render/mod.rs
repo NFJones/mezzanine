@@ -41,10 +41,6 @@ const DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS: u64 = 500;
 /// How long the copied-word highlight remains visible after a double click.
 const DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS: u64 = 500;
 
-use crate::agent::{
-    AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, ActionResult, agent_output_content_type_is_diff,
-    agent_output_content_type_is_markdown,
-};
 use crate::command::baseline_commands;
 use crate::mcp::McpServerStatus;
 use crate::selector::{
@@ -59,6 +55,10 @@ use crate::terminal::{
     window_group_frame_pillbox_cells,
 };
 use crate::transcript::AgentPresentationEntry;
+use mez_agent::{
+    AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, ActionResult, agent_output_content_type_is_diff,
+    agent_output_content_type_is_markdown,
+};
 use mez_mux::copy::CopyPosition;
 use mez_mux::presentation::{
     TerminalFramePosition, TerminalPaneFrameContext, TerminalWindowFrameContext,
@@ -190,8 +190,8 @@ mod tests {
         runtime_pane_agent_selector_rendition, wrap_agent_rendered_line_to_width,
         wrap_agent_terminal_text, wrapped_prefixed_agent_terminal_lines,
     };
-    use crate::agent::{AgentAction, AgentActionPayload};
     use crate::terminal::PaneAgentStatusField;
+    use mez_agent::{AgentAction, AgentActionPayload};
     use mez_mux::layout::Size;
     use mez_mux::theme::default_ui_theme;
     use mez_terminal::{GraphicRendition, TerminalStyleSpan};

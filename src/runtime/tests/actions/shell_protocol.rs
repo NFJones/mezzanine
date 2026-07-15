@@ -11,14 +11,14 @@ fn runtime_marker_for_action_uses_fresh_entropy() {
         turn_id: "turn-1".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
-        trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
         started_at_unix_seconds: 200,
         policy_profile: "default".to_string(),
         model_profile: "default".to_string(),
         parent_turn_id: None,
         cooperation_mode: None,
         initial_capability: None,
-        state: crate::agent::AgentTurnState::Running,
+        state: mez_agent::AgentTurnState::Running,
     };
 
     let first = runtime_marker_for_action(&turn, "a1").unwrap();
@@ -482,7 +482,7 @@ fn runtime_agent_markdown_lists_keep_content_on_marker_row() {
         .append_agent_assistant_content_to_terminal_buffer(
             "%1",
             markdown,
-            crate::agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+            mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
         )
         .unwrap();
 
@@ -553,16 +553,16 @@ fn runtime_bash_agent_shell_transaction_keeps_parent_shell_alive() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
                     rationale: "exercise bash shell survival".to_string(),
-                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Run a failing bash command and keep the parent shell available"
                             .to_string(),
                         command: "printf 'agent-bash-command-ran\\n'; false".to_string(),
@@ -672,16 +672,16 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
                     rationale: "exercise bash strict shell survival".to_string(),
-                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Run a failing bash command and keep strict shell options intact"
                             .to_string(),
                         command: "printf 'agent-bash-strict-command-ran\\n'; false".to_string(),
@@ -792,16 +792,16 @@ fn runtime_shell_transaction_metadata_mismatch_fails_live_action() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "shell-1".to_string(),
                     rationale: "run a shell command".to_string(),
-                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Run a command".to_string(),
                         command: "true".to_string(),
                         interactive: false,
@@ -1007,16 +1007,16 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "shell-stream".to_string(),
                     rationale: "run payload command".to_string(),
-                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Run payload command".to_string(),
                         command: "printf '%s\\n' payload-marker".to_string(),
                         interactive: false,

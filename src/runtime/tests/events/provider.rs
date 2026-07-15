@@ -30,16 +30,16 @@ fn runtime_provider_completion_accepts_controller_failure_summary_state() {
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .expect("started turn should be recorded");
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "say-1".to_string(),
         rationale: "summarize the provider failure".to_string(),
-        payload: crate::agent::AgentActionPayload::Say {
-            status: crate::agent::SayStatus::Progress,
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Progress,
             text: "The provider request failed before any action could run.".to_string(),
-            content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
         },
     };
-    let result = crate::agent::ActionResult::succeeded(
+    let result = mez_agent::ActionResult::succeeded(
         &turn,
         &action,
         vec!["The provider request failed before any action could run.".to_string()],
@@ -56,7 +56,7 @@ fn runtime_provider_completion_accepts_controller_failure_summary_state() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
@@ -105,10 +105,10 @@ fn runtime_provider_completion_accepts_terminal_maap_validation_failure_state() 
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .expect("started turn should be recorded");
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "mcp-1".to_string(),
         rationale: "call missing tool".to_string(),
-        payload: crate::agent::AgentActionPayload::McpCall {
+        payload: mez_agent::AgentActionPayload::McpCall {
             server: "missing".to_string(),
             tool: "read".to_string(),
             arguments_json: "{}".to_string(),
@@ -123,7 +123,7 @@ fn runtime_provider_completion_accepts_terminal_maap_validation_failure_state() 
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
@@ -231,7 +231,7 @@ fn runtime_provider_completion_rejects_empty_nonfinal_batch_state() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
@@ -540,16 +540,16 @@ fn runtime_maap_validation_failure_persists_provider_response_detail() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "mcp-1".to_string(),
                     rationale: "call missing tool".to_string(),
-                    payload: crate::agent::AgentActionPayload::McpCall {
+                    payload: mez_agent::AgentActionPayload::McpCall {
                         server: "missing".to_string(),
                         tool: "read".to_string(),
                         arguments_json: "{}".to_string(),
@@ -648,16 +648,16 @@ fn runtime_provider_failure_after_nonzero_shell_result_does_not_report_running_r
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "shell-fail".to_string(),
                     rationale: "exercise failure feedback".to_string(),
-                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Run a command that will need correction".to_string(),
                         command: "false".to_string(),
                         interactive: false,
@@ -763,25 +763,25 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
         .find(|turn| turn.turn_id == "turn-1")
         .cloned()
         .unwrap();
-    let success_action = crate::agent::AgentAction {
+    let success_action = mez_agent::AgentAction {
         id: "fetch-ok".to_string(),
         rationale: "fetch an available provider document".to_string(),
-        payload: crate::agent::AgentActionPayload::FetchUrl {
+        payload: mez_agent::AgentActionPayload::FetchUrl {
             url: "https://example.test/ok".to_string(),
             format: None,
             max_bytes: None,
         },
     };
-    let failed_action = crate::agent::AgentAction {
+    let failed_action = mez_agent::AgentAction {
         id: "fetch-404".to_string(),
         rationale: "fetch a provider document that moved".to_string(),
-        payload: crate::agent::AgentActionPayload::FetchUrl {
+        payload: mez_agent::AgentActionPayload::FetchUrl {
             url: "https://example.test/missing".to_string(),
             format: None,
             max_bytes: None,
         },
     };
-    let success_result = crate::agent::ActionResult::succeeded(
+    let success_result = mez_agent::ActionResult::succeeded(
         &turn,
         &success_action,
         vec!["provider document body".to_string()],
@@ -803,7 +803,7 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
             .unwrap(),
         ),
     );
-    let mut failed_result = crate::agent::ActionResult::failed(
+    let mut failed_result = mez_agent::ActionResult::failed(
         &turn,
         &failed_action,
         ActionStatus::Failed,
@@ -843,7 +843,7 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "fetch provider documentation sources".to_string(),
                 thought: None,

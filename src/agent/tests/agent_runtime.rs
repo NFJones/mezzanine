@@ -144,7 +144,7 @@ fn fish_stateful_wrapper_uses_active_shell_eval_block() {
 /// bytes exactly instead of stripping echoed commands or Mezzanine wrapper
 /// lines.
 fn shell_action_result_context_preserves_raw_recorded_output_preview() {
-    use crate::agent::ActionContentBlock;
+    use mez_agent::ActionContentBlock;
 
     let result = ActionResult {
         protocol: "maap/1".to_string(),

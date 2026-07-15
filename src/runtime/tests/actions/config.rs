@@ -18,10 +18,10 @@ fn runtime_config_change_action_logs_styled_action_line_in_normal_mode() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "config-1".to_string(),
         rationale: String::new(),
-        payload: crate::agent::AgentActionPayload::ConfigChange {
+        payload: mez_agent::AgentActionPayload::ConfigChange {
             setting_path: "theme.active".to_string(),
             operation: "set".to_string(),
             value: Some("kanagawa".to_string()),
@@ -93,7 +93,7 @@ fn runtime_config_change_persists_generic_setting_and_applies_live() {
         turn_id: "turn-config-generic".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
-        trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
         started_at_unix_seconds: 200,
         policy_profile: "default".to_string(),
         model_profile: "default".to_string(),
@@ -102,10 +102,10 @@ fn runtime_config_change_persists_generic_setting_and_applies_live() {
         initial_capability: None,
         state: AgentTurnState::Running,
     };
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "config-generic".to_string(),
         rationale: String::new(),
-        payload: crate::agent::AgentActionPayload::ConfigChange {
+        payload: mez_agent::AgentActionPayload::ConfigChange {
             setting_path: "history.lines".to_string(),
             operation: "set".to_string(),
             value: Some("7".to_string()),
@@ -148,7 +148,7 @@ fn runtime_config_change_reset_removes_override_and_restores_default() {
         turn_id: "turn-config-reset".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
-        trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
         started_at_unix_seconds: 200,
         policy_profile: "default".to_string(),
         model_profile: "default".to_string(),
@@ -157,19 +157,19 @@ fn runtime_config_change_reset_removes_override_and_restores_default() {
         initial_capability: None,
         state: AgentTurnState::Running,
     };
-    let set_action = crate::agent::AgentAction {
+    let set_action = mez_agent::AgentAction {
         id: "config-reset-set".to_string(),
         rationale: String::new(),
-        payload: crate::agent::AgentActionPayload::ConfigChange {
+        payload: mez_agent::AgentActionPayload::ConfigChange {
             setting_path: "history.lines".to_string(),
             operation: "set".to_string(),
             value: Some("7".to_string()),
         },
     };
-    let reset_action = crate::agent::AgentAction {
+    let reset_action = mez_agent::AgentAction {
         id: "config-reset".to_string(),
         rationale: String::new(),
-        payload: crate::agent::AgentActionPayload::ConfigChange {
+        payload: mez_agent::AgentActionPayload::ConfigChange {
             setting_path: "history.lines".to_string(),
             operation: "reset".to_string(),
             value: None,
@@ -209,7 +209,7 @@ fn runtime_config_change_idempotency_uses_setting_payload() {
         turn_id: "turn-config-idempotency".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
-        trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
         started_at_unix_seconds: 200,
         policy_profile: "default".to_string(),
         model_profile: "default".to_string(),
@@ -218,19 +218,19 @@ fn runtime_config_change_idempotency_uses_setting_payload() {
         initial_capability: None,
         state: AgentTurnState::Running,
     };
-    let first = crate::agent::AgentAction {
+    let first = mez_agent::AgentAction {
         id: "config-reused".to_string(),
         rationale: String::new(),
-        payload: crate::agent::AgentActionPayload::ConfigChange {
+        payload: mez_agent::AgentActionPayload::ConfigChange {
             setting_path: "history.lines".to_string(),
             operation: "set".to_string(),
             value: Some("7".to_string()),
         },
     };
-    let second = crate::agent::AgentAction {
+    let second = mez_agent::AgentAction {
         id: "config-reused".to_string(),
         rationale: String::new(),
-        payload: crate::agent::AgentActionPayload::ConfigChange {
+        payload: mez_agent::AgentActionPayload::ConfigChange {
             setting_path: "history.rotate_lines".to_string(),
             operation: "set".to_string(),
             value: Some("3".to_string()),
@@ -300,10 +300,10 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
         ("danger", "#b00020"),
         ("thinking", "#7a5c00"),
     ] {
-        actions.push(crate::agent::AgentAction {
+        actions.push(mez_agent::AgentAction {
             id: format!("alias-{name}"),
             rationale: String::new(),
-            payload: crate::agent::AgentActionPayload::ConfigChange {
+            payload: mez_agent::AgentActionPayload::ConfigChange {
                 setting_path: format!("theme.aliases.{name}"),
                 operation: "set".to_string(),
                 value: Some(value.to_string()),
@@ -326,10 +326,10 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
         } else {
             "foreground"
         };
-        actions.push(crate::agent::AgentAction {
+        actions.push(mez_agent::AgentAction {
             id: format!("color-{slot}"),
             rationale: String::new(),
-            payload: crate::agent::AgentActionPayload::ConfigChange {
+            payload: mez_agent::AgentActionPayload::ConfigChange {
                 setting_path: format!("theme.colors.{slot}"),
                 operation: "set".to_string(),
                 value: Some(value.to_string()),
@@ -345,7 +345,7 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "set every terminal theme color".to_string(),
                 thought: None,
@@ -454,16 +454,16 @@ fn runtime_config_change_resumes_after_full_access_change() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "change the requested live configuration".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "config-1".to_string(),
                     rationale: String::new(),
-                    payload: crate::agent::AgentActionPayload::ConfigChange {
+                    payload: mez_agent::AgentActionPayload::ConfigChange {
                         setting_path: "theme.active".to_string(),
                         operation: "set".to_string(),
                         value: Some("catppuccin_latte".to_string()),

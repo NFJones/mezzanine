@@ -36,21 +36,20 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "record the first sequence point".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "say-progress".to_string(),
                     rationale: "tell the user the owner changed".to_string(),
-                    payload: crate::agent::AgentActionPayload::Say {
-                        status: crate::agent::SayStatus::Progress,
+                    payload: mez_agent::AgentActionPayload::Say {
+                        status: mez_agent::SayStatus::Progress,
                         text: "The redundant updates are coming from repeated progress says."
                             .to_string(),
-                        content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
-                            .to_string(),
+                        content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
                 final_turn: false,
@@ -161,20 +160,19 @@ fn runtime_agent_keeps_redundant_progress_say_updates_visible() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "record the owner".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "say-progress-1".to_string(),
                     rationale: "tell the user the selector owner".to_string(),
-                    payload: crate::agent::AgentActionPayload::Say {
-                        status: crate::agent::SayStatus::Progress,
+                    payload: mez_agent::AgentActionPayload::Say {
+                        status: mez_agent::SayStatus::Progress,
                         text: first_progress.to_string(),
-                        content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
-                            .to_string(),
+                        content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
                 final_turn: false,
@@ -201,30 +199,30 @@ fn runtime_agent_keeps_redundant_progress_say_updates_visible() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: duplicate_progress.to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
                 actions: vec![
-                    crate::agent::AgentAction {
+                    mez_agent::AgentAction {
                         id: "say-progress-2".to_string(),
                         rationale: "repeat the selector owner".to_string(),
-                        payload: crate::agent::AgentActionPayload::Say {
-                            status: crate::agent::SayStatus::Progress,
+                        payload: mez_agent::AgentActionPayload::Say {
+                            status: mez_agent::SayStatus::Progress,
                             text: duplicate_progress.to_string(),
-                            content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
                                 .to_string(),
                         },
                     },
-                    crate::agent::AgentAction {
+                    mez_agent::AgentAction {
                         id: "say-final".to_string(),
                         rationale: "finish the reply".to_string(),
-                        payload: crate::agent::AgentActionPayload::Say {
-                            status: crate::agent::SayStatus::Final,
+                        payload: mez_agent::AgentActionPayload::Say {
+                            status: mez_agent::SayStatus::Final,
                             text: final_text.to_string(),
-                            content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
                                 .to_string(),
                         },
                     },

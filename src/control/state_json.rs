@@ -1482,13 +1482,13 @@ pub(super) fn agent_turn_state_name(state: AgentTurnState) -> &'static str {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn agent_turn_trigger_name(trigger: crate::agent::AgentTurnTrigger) -> &'static str {
+pub(super) fn agent_turn_trigger_name(trigger: mez_agent::AgentTurnTrigger) -> &'static str {
     match trigger {
-        crate::agent::AgentTurnTrigger::UserPrompt => "user prompt",
-        crate::agent::AgentTurnTrigger::LocalMessage => "local message",
-        crate::agent::AgentTurnTrigger::ScheduledTask => "scheduled task",
-        crate::agent::AgentTurnTrigger::SubagentEvent => "subagent event",
-        crate::agent::AgentTurnTrigger::ApprovedContinuation => "approved continuation",
+        mez_agent::AgentTurnTrigger::UserPrompt => "user prompt",
+        mez_agent::AgentTurnTrigger::LocalMessage => "local message",
+        mez_agent::AgentTurnTrigger::ScheduledTask => "scheduled task",
+        mez_agent::AgentTurnTrigger::SubagentEvent => "subagent event",
+        mez_agent::AgentTurnTrigger::ApprovedContinuation => "approved continuation",
     }
 }
 

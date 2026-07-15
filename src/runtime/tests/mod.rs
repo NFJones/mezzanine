@@ -250,7 +250,7 @@ struct RuntimeEchoProvider;
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn runtime_complete_batch(turn_id: impl Into<String>) -> crate::agent::MaapBatch {
+fn runtime_complete_batch(turn_id: impl Into<String>) -> mez_agent::MaapBatch {
     runtime_complete_batch_for(turn_id, "agent-%1")
 }
 
@@ -262,20 +262,20 @@ fn runtime_complete_batch(turn_id: impl Into<String>) -> crate::agent::MaapBatch
 fn runtime_complete_batch_for(
     turn_id: impl Into<String>,
     agent_id: impl Into<String>,
-) -> crate::agent::MaapBatch {
-    crate::agent::MaapBatch {
+) -> mez_agent::MaapBatch {
+    mez_agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
         thought: None,
         turn_id: turn_id.into(),
         agent_id: agent_id.into(),
-        actions: vec![crate::agent::AgentAction {
+        actions: vec![mez_agent::AgentAction {
             id: "say-1".to_string(),
             rationale: "report completion".to_string(),
-            payload: crate::agent::AgentActionPayload::Say {
-                status: crate::agent::SayStatus::Final,
+            payload: mez_agent::AgentActionPayload::Say {
+                status: mez_agent::SayStatus::Final,
                 text: "Done.".to_string(),
-                content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
             },
         }],
         final_turn: true,
@@ -438,40 +438,40 @@ fn runtime_capability_for_response(
         .actions
         .iter()
         .find_map(|action| match &action.payload {
-            crate::agent::AgentActionPayload::ShellCommand { .. }
-            | crate::agent::AgentActionPayload::ApplyPatch { .. } => {
+            mez_agent::AgentActionPayload::ShellCommand { .. }
+            | mez_agent::AgentActionPayload::ApplyPatch { .. } => {
                 Some(crate::agent::AgentCapability::Shell)
             }
-            crate::agent::AgentActionPayload::WebSearch { .. } => {
+            mez_agent::AgentActionPayload::WebSearch { .. } => {
                 Some(crate::agent::AgentCapability::NetworkSearch)
             }
-            crate::agent::AgentActionPayload::FetchUrl { .. } => {
+            mez_agent::AgentActionPayload::FetchUrl { .. } => {
                 Some(crate::agent::AgentCapability::NetworkFetch)
             }
-            crate::agent::AgentActionPayload::McpCall { .. } => {
+            mez_agent::AgentActionPayload::McpCall { .. } => {
                 Some(crate::agent::AgentCapability::Mcp)
             }
-            crate::agent::AgentActionPayload::SendMessage { .. }
-            | crate::agent::AgentActionPayload::SpawnAgent { .. } => {
+            mez_agent::AgentActionPayload::SendMessage { .. }
+            | mez_agent::AgentActionPayload::SpawnAgent { .. } => {
                 Some(crate::agent::AgentCapability::Subagent)
             }
-            crate::agent::AgentActionPayload::ConfigChange { .. } => {
+            mez_agent::AgentActionPayload::ConfigChange { .. } => {
                 Some(crate::agent::AgentCapability::ConfigChange)
             }
-            crate::agent::AgentActionPayload::IssueAdd { .. }
-            | crate::agent::AgentActionPayload::IssueUpdate { .. }
-            | crate::agent::AgentActionPayload::IssueQuery { .. }
-            | crate::agent::AgentActionPayload::IssueDelete { .. } => {
+            mez_agent::AgentActionPayload::IssueAdd { .. }
+            | mez_agent::AgentActionPayload::IssueUpdate { .. }
+            | mez_agent::AgentActionPayload::IssueQuery { .. }
+            | mez_agent::AgentActionPayload::IssueDelete { .. } => {
                 Some(crate::agent::AgentCapability::Issues)
             }
-            crate::agent::AgentActionPayload::Say { .. }
-            | crate::agent::AgentActionPayload::RequestCapability { .. }
-            | crate::agent::AgentActionPayload::RequestSkills
-            | crate::agent::AgentActionPayload::CallSkill { .. }
-            | crate::agent::AgentActionPayload::Complete
-            | crate::agent::AgentActionPayload::Abort { .. }
-            | crate::agent::AgentActionPayload::MemorySearch { .. }
-            | crate::agent::AgentActionPayload::MemoryStore { .. } => None,
+            mez_agent::AgentActionPayload::Say { .. }
+            | mez_agent::AgentActionPayload::RequestCapability { .. }
+            | mez_agent::AgentActionPayload::RequestSkills
+            | mez_agent::AgentActionPayload::CallSkill { .. }
+            | mez_agent::AgentActionPayload::Complete
+            | mez_agent::AgentActionPayload::Abort { .. }
+            | mez_agent::AgentActionPayload::MemorySearch { .. }
+            | mez_agent::AgentActionPayload::MemoryStore { .. } => None,
         })
 }
 
@@ -488,16 +488,16 @@ fn runtime_capability_response(
         usage: Default::default(),
         latest_request_usage: None,
         quota_usage: Default::default(),
-        action_batch: Some(crate::agent::MaapBatch {
+        action_batch: Some(mez_agent::MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
             thought: None,
             turn_id: request.turn_id.clone(),
             agent_id: request.agent_id.clone(),
-            actions: vec![crate::agent::AgentAction {
+            actions: vec![mez_agent::AgentAction {
                 id: "capability-1".to_string(),
                 rationale: "request the action surface needed for the runtime test".to_string(),
-                payload: crate::agent::AgentActionPayload::RequestCapability {
+                payload: mez_agent::AgentActionPayload::RequestCapability {
                     capability,
                     reason: format!("need {} actions for this runtime test", capability.as_str()),
                 },
@@ -580,19 +580,19 @@ fn runtime_say_response_for_agent(
         usage: Default::default(),
         latest_request_usage: None,
         quota_usage: Default::default(),
-        action_batch: Some(crate::agent::MaapBatch {
+        action_batch: Some(mez_agent::MaapBatch {
             protocol: "maap/1".to_string(),
             rationale: "test action batch rationale".to_string(),
             thought: None,
             turn_id: turn_id.to_string(),
             agent_id: agent_id.to_string(),
-            actions: vec![crate::agent::AgentAction {
+            actions: vec![mez_agent::AgentAction {
                 id: "say-1".to_string(),
                 rationale: "respond to the pane".to_string(),
-                payload: crate::agent::AgentActionPayload::Say {
-                    status: crate::agent::SayStatus::Final,
+                payload: mez_agent::AgentActionPayload::Say {
+                    status: mez_agent::SayStatus::Final,
                     text: text.to_string(),
-                    content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+                    content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                 },
             }],
             final_turn,
@@ -602,11 +602,11 @@ fn runtime_say_response_for_agent(
 }
 
 /// Builds a joined-spawn action fixture for scheduler and subagent tests.
-fn runtime_spawn_agent_action(id: &str, task_prompt: &str) -> crate::agent::AgentAction {
-    crate::agent::AgentAction {
+fn runtime_spawn_agent_action(id: &str, task_prompt: &str) -> mez_agent::AgentAction {
+    mez_agent::AgentAction {
         id: id.to_string(),
         rationale: "delegate a bounded child task".to_string(),
-        payload: crate::agent::AgentActionPayload::SpawnAgent {
+        payload: mez_agent::AgentActionPayload::SpawnAgent {
             role: "default".to_string(),
             placement: "new-window".to_string(),
             cooperation_mode: "explore-only".to_string(),
@@ -1161,16 +1161,16 @@ fn execute_runtime_send_message_action(
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "msg-1".to_string(),
                     rationale: "coordinate with another local agent".to_string(),
-                    payload: crate::agent::AgentActionPayload::SendMessage {
+                    payload: mez_agent::AgentActionPayload::SendMessage {
                         recipient: "agent:agent-%2".to_string(),
                         content_type: content_type.to_string(),
                         payload: payload.to_string(),
@@ -1233,16 +1233,16 @@ fn dispatch_protocol_test_shell_action(
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: action_id.to_string(),
                     rationale: "run a shell command".to_string(),
-                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Run a command".to_string(),
                         command: "true".to_string(),
                         interactive: false,

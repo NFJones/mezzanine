@@ -1095,29 +1095,29 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         pane_id: task.pane_id.clone(),
-        trigger: crate::agent::AgentTurnTrigger::UserPrompt,
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
         started_at_unix_seconds: 2,
         policy_profile: "default".to_string(),
         model_profile: "default".to_string(),
         parent_turn_id: None,
-        state: crate::agent::AgentTurnState::Running,
+        state: mez_agent::AgentTurnState::Running,
         cooperation_mode: None,
 
         initial_capability: None,
     };
-    let write_action = crate::agent::AgentAction {
+    let write_action = mez_agent::AgentAction {
         id: "patch-fail".to_string(),
         rationale: "write a source file".to_string(),
-        payload: crate::agent::AgentActionPayload::ApplyPatch {
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
             patch: "*** Begin Patch\n*** Add File: src/generated.rs\n+content\n*** End Patch"
                 .to_string(),
             strip: None,
         },
     };
-    let read_action = crate::agent::AgentAction {
+    let read_action = mez_agent::AgentAction {
         id: "read-unsent".to_string(),
         rationale: "read the source file".to_string(),
-        payload: crate::agent::AgentActionPayload::ShellCommand {
+        payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Read the source file".to_string(),
             command: "sed -n '1,120p' src/generated.rs".to_string(),
             interactive: false,
@@ -1125,10 +1125,10 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
             timeout_ms: None,
         },
     };
-    let mut failed = crate::agent::ActionResult::failed(
+    let mut failed = mez_agent::ActionResult::failed(
         &turn,
         &write_action,
-        crate::agent::ActionStatus::Failed,
+        mez_agent::ActionStatus::Failed,
         "pane_input_write_failed",
         "pane input write failed while sending shell action",
     )
@@ -1142,13 +1142,13 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
         })
         .to_string(),
     );
-    let pending = crate::agent::ActionResult::running(
+    let pending = mez_agent::ActionResult::running(
         &turn,
         &read_action,
         vec!["local action accepted for pane execution".to_string()],
         Some(r#"{"state":"pending_dispatch"}"#.to_string()),
     );
-    let batch = crate::agent::MaapBatch {
+    let batch = mez_agent::MaapBatch {
         protocol: "maap/1".to_string(),
         rationale: "test action batch rationale".to_string(),
         thought: None,
@@ -1208,7 +1208,7 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
         action_results: vec![failed, pending],
         final_turn: false,
-        terminal_state: crate::agent::AgentTurnState::Failed,
+        terminal_state: mez_agent::AgentTurnState::Failed,
     };
     let (handle, actor) = AsyncRuntimeActorFixture::from_service(service)
         .build()

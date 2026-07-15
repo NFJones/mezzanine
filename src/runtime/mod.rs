@@ -28,19 +28,18 @@ use serde_json::Value;
 #[cfg(test)]
 pub use crate::agent::ModelProvider;
 use crate::agent::{
-    AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, ActionContentBlock, ActionResult,
-    ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentLogLevel,
+    AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentContext, AgentLogLevel,
     AgentShellCommandOutcome, AgentShellRuntimeContext, AgentShellSession, AgentShellStore,
-    AgentShellVisibility, AgentTurnExecution, AgentTurnLedger, AgentTurnRecord, AgentTurnState,
-    AgentTurnTrigger, AsyncMcpActionExecutor, AsyncModelProvider, ContextBlock, ContextSourceKind,
+    AgentShellVisibility, AgentTurnExecution, AgentTurnLedger, AgentTurnRecord,
+    AsyncMcpActionExecutor, AsyncModelProvider, ContextBlock, ContextSourceKind,
     DEFAULT_PROVIDER_TIMEOUT_MS, DeepSeekChatCompletionsProvider, EnvironmentSignature,
-    MarkerToken, McpActionExecutor, McpExecutionRequest, McpExecutionResponse, ModelMessage,
-    ModelMessageRole, ModelProfile, ModelProfileOverrides, ModelRequest, ModelResponse,
-    ModelTokenUsage, ModelTokenUsageKey, OpenAiCompatibleChatCompletionsProvider,
-    OpenAiResponsesProvider, ProviderQuotaUsage, ReqwestProviderHttpTransport, ShellClassification,
-    ShellTransaction, ShellTransactionOutputTransport, ToolDiscoveryCache,
-    action_result_context_content, agent_subshell_enter_command, append_mcp_context,
-    append_memory_context, append_permission_policy_context, append_scheduler_context,
+    MarkerToken, McpActionExecutor, ModelMessage, ModelMessageRole, ModelProfile,
+    ModelProfileOverrides, ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey,
+    OpenAiCompatibleChatCompletionsProvider, OpenAiResponsesProvider, ProviderQuotaUsage,
+    ReqwestProviderHttpTransport, ShellClassification, ShellTransaction,
+    ShellTransactionOutputTransport, ToolDiscoveryCache, action_result_context_content,
+    agent_subshell_enter_command, append_mcp_context, append_memory_context,
+    append_permission_policy_context, append_scheduler_context,
     assemble_model_request_with_retained_tail_percent,
     compact_model_context_for_budget_with_retained_tail_percent,
     decode_shell_output_transport_with_diagnostics, execute_agent_shell_command_with_context,
@@ -145,13 +144,17 @@ use crate::terminal::{
 use crate::transcript::{
     AgentSessionMetadata, AgentTranscriptStore, TranscriptEntry, TranscriptRole,
 };
+use mez_agent::{
+    ActionContentBlock, ActionResult, ActionStatus, AgentAction, AgentActionPayload,
+    AgentTurnState, AgentTurnTrigger, McpExecutionRequest, McpExecutionResponse,
+    PaneReadinessOverrideStore, PaneReadinessState, ReadinessOverrideRevocation,
+};
 use mez_agent::{AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ScheduledWork, ScheduledWorkKind};
 use mez_agent::{ApprovalPolicy, PermissionPreset, RuleDecision};
 use mez_agent::{
     CooperationMode, ScopeRegistry, SubagentProfile, SubagentScopeDeclaration,
     SubagentSpawnRequest, builtin_subagent_profiles,
 };
-use mez_agent::{PaneReadinessOverrideStore, PaneReadinessState, ReadinessOverrideRevocation};
 use mez_core::ids::{AgentId, ClientId, PaneId, SessionId, WindowId};
 use mez_mux::copy::CopyModeKeyAction;
 use mez_mux::copy::{CopyPosition, SearchDirection};

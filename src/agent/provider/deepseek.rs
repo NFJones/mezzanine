@@ -1267,7 +1267,8 @@ pub(super) fn build_deepseek_models_http_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{ContextSourceKind, ModelMessage, PROVIDER_TRANSCRIPT_EVENT_MARKER};
+    use crate::agent::{ContextSourceKind, ModelMessage};
+    use mez_agent::PROVIDER_TRANSCRIPT_EVENT_MARKER;
 
     /// Builds a minimal DeepSeek model request for provider-shape tests.
     fn deepseek_test_request(messages: Vec<ModelMessage>) -> ModelRequest {

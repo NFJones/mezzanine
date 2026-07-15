@@ -1880,10 +1880,9 @@ fn turn_runner_summarizes_terminal_provider_failure_with_say_only_request() {
                     id: "say-1".to_string(),
                     rationale: "summarize the controller failure".to_string(),
                     payload: AgentActionPayload::Say {
-                        status: crate::agent::SayStatus::Progress,
+                        status: mez_agent::SayStatus::Progress,
                         text: "The provider request failed before an action could run.".to_string(),
-                        content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
-                            .to_string(),
+                        content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
                     },
                 }],
                 final_turn: false,
@@ -1934,7 +1933,7 @@ fn turn_runner_summarizes_terminal_provider_failure_with_say_only_request() {
     assert!(summary_batch.final_turn);
     match &summary_batch.actions[0].payload {
         AgentActionPayload::Say { status, .. } => {
-            assert_eq!(*status, crate::agent::SayStatus::Final)
+            assert_eq!(*status, mez_agent::SayStatus::Final)
         }
         payload => panic!("unexpected payload: {payload:?}"),
     }

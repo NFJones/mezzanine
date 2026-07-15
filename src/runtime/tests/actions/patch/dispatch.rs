@@ -25,10 +25,10 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .unwrap();
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "shell-1".to_string(),
         rationale: "inspect the working directory".to_string(),
-        payload: crate::agent::AgentActionPayload::ShellCommand {
+        payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect the working directory.".to_string(),
             command: "pwd".to_string(),
             interactive: false,
@@ -47,7 +47,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
                 usage: Default::default(),
                 latest_request_usage: None,
                 quota_usage: Default::default(),
-                action_batch: Some(crate::agent::MaapBatch {
+                action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "inspect with shell".to_string(),
                     thought: None,
@@ -60,7 +60,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
             },
             latest_response_usage: Default::default(),
             routing_token_usage_by_model: std::collections::BTreeMap::new(),
-            action_results: vec![crate::agent::ActionResult::running(
+            action_results: vec![mez_agent::ActionResult::running(
                 &turn,
                 &action,
                 Vec::new(),
@@ -117,10 +117,10 @@ fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_block
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .unwrap();
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "shell-1".to_string(),
         rationale: "confirm the pending shell action resumes".to_string(),
-        payload: crate::agent::AgentActionPayload::ShellCommand {
+        payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Print a recovery marker.".to_string(),
             command: "printf 'STALE_INTERACTIVE_BLOCKED_RECOVERED\\n'".to_string(),
             interactive: false,
@@ -139,7 +139,7 @@ fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_block
                 usage: Default::default(),
                 latest_request_usage: None,
                 quota_usage: Default::default(),
-                action_batch: Some(crate::agent::MaapBatch {
+                action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "inspect with shell".to_string(),
                     thought: None,
@@ -152,7 +152,7 @@ fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_block
             },
             latest_response_usage: Default::default(),
             routing_token_usage_by_model: std::collections::BTreeMap::new(),
-            action_results: vec![crate::agent::ActionResult::running(
+            action_results: vec![mez_agent::ActionResult::running(
                 &turn,
                 &action,
                 Vec::new(),
@@ -267,10 +267,10 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_shell_process_
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .unwrap();
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "shell-1".to_string(),
         rationale: "inspect the working directory".to_string(),
-        payload: crate::agent::AgentActionPayload::ShellCommand {
+        payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect the working directory.".to_string(),
             command: "pwd".to_string(),
             interactive: false,
@@ -289,7 +289,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_shell_process_
                 usage: Default::default(),
                 latest_request_usage: None,
                 quota_usage: Default::default(),
-                action_batch: Some(crate::agent::MaapBatch {
+                action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "inspect with shell".to_string(),
                     thought: None,
@@ -302,7 +302,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_shell_process_
             },
             latest_response_usage: Default::default(),
             routing_token_usage_by_model: std::collections::BTreeMap::new(),
-            action_results: vec![crate::agent::ActionResult::running(
+            action_results: vec![mez_agent::ActionResult::running(
                 &turn,
                 &action,
                 Vec::new(),
@@ -359,10 +359,10 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_cached_foregro
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .unwrap();
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "shell-1".to_string(),
         rationale: "inspect the working directory".to_string(),
-        payload: crate::agent::AgentActionPayload::ShellCommand {
+        payload: mez_agent::AgentActionPayload::ShellCommand {
             summary: "Inspect the working directory.".to_string(),
             command: "pwd".to_string(),
             interactive: false,
@@ -381,7 +381,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_cached_foregro
                 usage: Default::default(),
                 latest_request_usage: None,
                 quota_usage: Default::default(),
-                action_batch: Some(crate::agent::MaapBatch {
+                action_batch: Some(mez_agent::MaapBatch {
                     protocol: "maap/1".to_string(),
                     rationale: "inspect with shell".to_string(),
                     thought: None,
@@ -394,7 +394,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_cached_foregro
             },
             latest_response_usage: Default::default(),
             routing_token_usage_by_model: std::collections::BTreeMap::new(),
-            action_results: vec![crate::agent::ActionResult::running(
+            action_results: vec![mez_agent::ActionResult::running(
                 &turn,
                 &action,
                 Vec::new(),
@@ -470,16 +470,16 @@ fn runtime_shell_command_dispatch_uses_action_timeout() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-%1".to_string(),
-                actions: vec![crate::agent::AgentAction {
+                actions: vec![mez_agent::AgentAction {
                     id: "shell-timeout".to_string(),
                     rationale: "run a bounded command".to_string(),
-                    payload: crate::agent::AgentActionPayload::ShellCommand {
+                    payload: mez_agent::AgentActionPayload::ShellCommand {
                         summary: "Run bounded grep".to_string(),
                         command: "grep -n needle file.txt".to_string(),
                         interactive: false,

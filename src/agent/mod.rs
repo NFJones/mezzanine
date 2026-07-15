@@ -103,14 +103,10 @@ pub use maap::{
     parse_fenced_maap_action_batch, parse_fenced_maap_action_batch_for_turn,
     parse_maap_action_batch_json, parse_maap_action_batch_json_for_turn,
 };
-pub use mez_agent::{
-    AGENT_OUTPUT_TEXT_DIFF_CONTENT_TYPE, AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
-    AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, ActionContentBlock, ActionError, ActionResult,
-    ActionStatus, AgentAction, AgentActionPayload, AgentTranscriptEntry, AgentTranscriptRole,
-    AgentTurnState, AgentTurnTrigger, MaapBatch, McpExecutionRequest, McpExecutionResponse,
-    PROVIDER_TRANSCRIPT_EVENT_MARKER, ProviderTranscriptEvent, SayStatus, TranscriptContractError,
-    TranscriptPersistence, agent_output_content_type_is_diff,
-    agent_output_content_type_is_markdown, normalize_agent_output_content_type,
+use mez_agent::{
+    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTranscriptEntry,
+    AgentTranscriptRole, AgentTurnState, AgentTurnTrigger, MaapBatch, McpExecutionRequest,
+    McpExecutionResponse, ProviderTranscriptEvent, SayStatus, TranscriptPersistence,
 };
 pub use network::{
     NetworkActionPlan, execute_network_action_with_transport_async, network_action_plan,

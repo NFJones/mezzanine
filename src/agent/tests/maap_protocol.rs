@@ -180,9 +180,9 @@ fn maap_batch_accepts_nonfinal_say_only_actions() {
             id: "say-1".to_string(),
             rationale: "reply to user".to_string(),
             payload: AgentActionPayload::Say {
-                status: crate::agent::SayStatus::Progress,
+                status: mez_agent::SayStatus::Progress,
                 text: "I will search now".to_string(),
-                content_type: crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
             },
         }],
         final_turn: false,
@@ -619,7 +619,7 @@ fn maap_parser_normalizes_say_content_type() {
         AgentActionPayload::Say { content_type, .. } => {
             assert_eq!(
                 content_type,
-                crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
+                mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE
             );
         }
         payload => panic!("expected say payload, got {payload:?}"),
@@ -628,17 +628,14 @@ fn maap_parser_normalizes_say_content_type() {
         AgentActionPayload::Say { content_type, .. } => {
             assert_eq!(
                 content_type,
-                crate::agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE
+                mez_agent::AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE
             );
         }
         payload => panic!("expected say payload, got {payload:?}"),
     }
     match &batch.actions[2].payload {
         AgentActionPayload::Say { content_type, .. } => {
-            assert_eq!(
-                content_type,
-                crate::agent::AGENT_OUTPUT_TEXT_DIFF_CONTENT_TYPE
-            );
+            assert_eq!(content_type, mez_agent::AGENT_OUTPUT_TEXT_DIFF_CONTENT_TYPE);
         }
         payload => panic!("expected say payload, got {payload:?}"),
     }
@@ -726,7 +723,7 @@ fn maap_parser_rejects_missing_batch_rationale() {
             {
                 "type": "say",
                 "status": "final",
-                "content_type": crate::agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE,
+                "content_type": mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE,
                 "text": "hello"
             }
         ]

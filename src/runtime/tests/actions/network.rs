@@ -18,10 +18,10 @@ fn runtime_url_action_logs_single_action_line_in_normal_mode() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    let action = crate::agent::AgentAction {
+    let action = mez_agent::AgentAction {
         id: "fetch-1".to_string(),
         rationale: String::new(),
-        payload: crate::agent::AgentActionPayload::FetchUrl {
+        payload: mez_agent::AgentActionPayload::FetchUrl {
             url: "https://example.test/file.txt".to_string(),
             format: None,
             max_bytes: None,
@@ -108,25 +108,25 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
         .find(|turn| turn.turn_id == "turn-1")
         .cloned()
         .unwrap();
-    let success_action = crate::agent::AgentAction {
+    let success_action = mez_agent::AgentAction {
         id: "fetch-good".to_string(),
         rationale: "capture one usable source".to_string(),
-        payload: crate::agent::AgentActionPayload::FetchUrl {
+        payload: mez_agent::AgentActionPayload::FetchUrl {
             url: "https://example.test/ok".to_string(),
             format: None,
             max_bytes: None,
         },
     };
-    let failed_action = crate::agent::AgentAction {
+    let failed_action = mez_agent::AgentAction {
         id: "fetch-missing".to_string(),
         rationale: "try a moved source".to_string(),
-        payload: crate::agent::AgentActionPayload::FetchUrl {
+        payload: mez_agent::AgentActionPayload::FetchUrl {
             url: "https://example.test/missing".to_string(),
             format: None,
             max_bytes: None,
         },
     };
-    let mut failed_result = crate::agent::ActionResult::failed(
+    let mut failed_result = mez_agent::ActionResult::failed(
         &turn,
         &failed_action,
         ActionStatus::Failed,
@@ -179,7 +179,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(crate::agent::MaapBatch {
+            action_batch: Some(mez_agent::MaapBatch {
                 protocol: "maap/1".to_string(),
                 rationale: "test action batch rationale".to_string(),
                 thought: None,
@@ -193,7 +193,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
         latest_response_usage: Default::default(),
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
         action_results: vec![
-            crate::agent::ActionResult::succeeded(
+            mez_agent::ActionResult::succeeded(
                 &turn,
                 &success_action,
                 vec!["usable source body".to_string()],

@@ -22,7 +22,7 @@ fn runtime_execution_is_patch_free(execution: &AgentTurnExecution) -> bool {
             batch.actions.iter().any(|action| {
                 matches!(
                     action.payload,
-                    crate::agent::AgentActionPayload::ApplyPatch { .. }
+                    mez_agent::AgentActionPayload::ApplyPatch { .. }
                 )
             })
         })

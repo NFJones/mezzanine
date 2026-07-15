@@ -6,7 +6,7 @@
 //! control request dispatcher from also owning model-context shaping details.
 
 use super::super::{ContextBlock, ContextSourceKind, Envelope, TranscriptEntry, TranscriptRole};
-use crate::agent::ProviderTranscriptEvent;
+use mez_agent::ProviderTranscriptEvent;
 
 const AGENT_LOCAL_MESSAGE_CONTEXT_PAYLOAD_CHARS: usize = 256 * 1024;
 pub(super) const AGENT_TRANSCRIPT_CONTEXT_READ_BYTES: u64 = 100 * 1024 * 1024;

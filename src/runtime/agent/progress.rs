@@ -5,7 +5,8 @@
 //! model-visible context. It is pure text normalization and ledger logic;
 //! runtime service state changes remain in the parent agent module.
 
-use crate::agent::{AgentActionPayload, AgentTurnExecution, SayStatus};
+use crate::agent::AgentTurnExecution;
+use mez_agent::{AgentActionPayload, SayStatus};
 use std::collections::BTreeSet;
 
 /// Label for ephemeral active-turn context that tracks visible progress output.

@@ -805,11 +805,11 @@ impl RuntimeSessionService {
 /// Returns a delegated subagent scope violation for one runtime local action.
 fn runtime_subagent_scope_violation(
     scope: &mez_agent::SubagentScopeDeclaration,
-    action: &crate::agent::AgentAction,
+    action: &mez_agent::AgentAction,
     policy_command: &str,
 ) -> Result<Option<String>> {
     match &action.payload {
-        crate::agent::AgentActionPayload::ApplyPatch { patch, .. } => {
+        mez_agent::AgentActionPayload::ApplyPatch { patch, .. } => {
             crate::subagent::SubagentScopeEnforcement::apply_patch_violation(scope, patch)
         }
         _ => crate::subagent::SubagentScopeEnforcement::shell_command_violation(
