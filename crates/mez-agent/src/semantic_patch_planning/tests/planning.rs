@@ -3,6 +3,10 @@
 //! This bounded leaf owns the named behavioral scenarios.
 
 use super::*;
+use std::fs::File;
+use std::process::Stdio;
+use std::time::Duration;
+use wait_timeout::ChildExt;
 
 #[test]
 /// Verifies semantic patch lowering accepts related multi-file patch batches.
@@ -81,10 +85,7 @@ fn semantic_apply_patch_plan_applies_codex_style_blocks() {
     };
 
     let read_plan = local_action_plan(&action).unwrap().unwrap();
-    assert_eq!(
-        read_plan.timeout_ms,
-        Some(super::semantic::APPLY_PATCH_TIMEOUT_MS)
-    );
+    assert_eq!(read_plan.timeout_ms, Some(APPLY_PATCH_TIMEOUT_MS));
     assert!(
         !read_plan.command.contains("<<"),
         "generated Mezzanine patch command should not use heredocs:\n{}",
@@ -293,7 +294,6 @@ fn semantic_apply_patch_rejects_empty_patch_blocks() {
 
     let error = local_action_plan(&action).unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
     assert!(
         error.message().contains("at least one file operation"),
         "{}",

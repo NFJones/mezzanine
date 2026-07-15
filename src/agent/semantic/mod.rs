@@ -10,8 +10,6 @@ use super::shell::validate_agent_authored_shell_command;
 use super::{AgentAction, AgentActionPayload};
 use mez_agent::{LocalActionKind, LocalActionPlan};
 
-#[cfg(test)]
-pub(super) use mez_agent::semantic_patch_planning::APPLY_PATCH_TIMEOUT_MS;
 pub use mez_agent::semantic_patch_planning::{
     ApplyPatchTransactionPhase, apply_patch_error_plan, apply_patch_read_plan_for_paths,
     apply_patch_transaction_phase,

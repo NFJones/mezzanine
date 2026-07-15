@@ -14,6 +14,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 mod matcher;
 mod snapshot;
+#[cfg(test)]
+mod tests;
 mod transaction;
 
 use matcher::apply_patch_hunks_to_file;

@@ -19,11 +19,10 @@ use super::{
     OpenAiResponsesProvider, PaneShellExecutor, ProviderHttpTransport, Result, ShellClassification,
     ShellExecutionOutput, ShellExecutionRequest, ShellTransaction, ShellTransactionInput,
     ShellTransactionOutputTransport, ToolDiscoveryCache, ToolInventory,
-    agent_subshell_enter_command, apply_patch_read_plan_for_paths,
-    apply_patch_write_plan_from_read_output, apply_patch_write_plan_from_read_outputs,
-    assemble_model_request, bootstrap_script, bootstrap_script_for_classification,
-    build_agent_system_prompt, build_deepseek_chat_completions_http_request,
-    decode_shell_output_transport, decode_shell_output_transport_with_diagnostics,
+    agent_subshell_enter_command, assemble_model_request, bootstrap_script,
+    bootstrap_script_for_classification, build_agent_system_prompt,
+    build_deepseek_chat_completions_http_request, decode_shell_output_transport,
+    decode_shell_output_transport_with_diagnostics,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     discover_tools_through_pane_shell, execute_agent_shell_command,
     execute_agent_shell_command_with_mcp, execute_agent_shell_command_with_permissions,
@@ -40,7 +39,7 @@ use super::{
     readiness_probe_command_for_classification, tool_discovery_script,
     transcript_entries_for_execution,
 };
-use super::{prompt, semantic, shell};
+use super::{prompt, shell};
 use crate::auth::{AuthStore, OpenAiProviderCredential};
 use crate::mcp::McpRegistry;
 use crate::permissions::{PathScopes, PermissionPolicy, SessionApprovalStore};
@@ -48,7 +47,6 @@ use crate::test_support::agent::ActionBuilder;
 use crate::test_support::temp::TestTempDir;
 use crate::transcript::{AgentTranscriptStore, TranscriptRole as DurableTranscriptRole};
 use base64::Engine;
-use mez_agent::semantic_patch::try_convert_unified_diff_to_mez_patch;
 use mez_agent::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentLogLevel,
     AgentPromptProfile, AgentShellStore, AgentShellVisibility,
@@ -69,13 +67,11 @@ use mez_agent::{
 };
 use std::cell::RefCell;
 use std::collections::BTreeSet;
-use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::Duration;
-use wait_timeout::ChildExt;
 
 /// Builds a representative MCP tool state for agent-shell display tests. The
 /// registry normalizes server id, availability, and approval from the owning
@@ -505,78 +501,6 @@ fn add_file_patch(path: &str, content: &str) -> String {
     }
     patch.push_str("*** End Patch");
     patch
-}
-
-/// Executes an `apply_patch` action through its read and write phases in one
-/// temporary working directory.
-///
-/// Tests use this helper when validating file-content behavior that used to be
-/// covered by broader semantic mutation actions.
-fn run_apply_patch_action(cwd: &Path, patch: &str) -> Output {
-    let action = AgentAction {
-        id: "patch".to_string(),
-        rationale: String::new(),
-        payload: AgentActionPayload::ApplyPatch {
-            patch: patch.to_string(),
-            strip: None,
-        },
-    };
-    let read_plan = local_action_plan(&action).unwrap().unwrap();
-    let read_output = Command::new("/bin/sh")
-        .arg("-c")
-        .arg(&read_plan.command)
-        .current_dir(cwd)
-        .output()
-        .unwrap();
-    assert!(
-        read_output.status.success(),
-        "read phase failed:\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&read_output.stdout),
-        String::from_utf8_lossy(&read_output.stderr)
-    );
-    let write_plan = apply_patch_write_plan_from_read_output(
-        patch,
-        &String::from_utf8_lossy(&read_output.stdout),
-    )
-    .unwrap();
-    Command::new("/bin/sh")
-        .arg("-c")
-        .arg(&write_plan.command)
-        .current_dir(cwd)
-        .output()
-        .unwrap()
-}
-
-/// Returns the write-phase error message for one semantic patch action.
-///
-/// Tests use this helper for matcher failures that should be reported before
-/// any generated write command is emitted.
-fn apply_patch_write_error(cwd: &Path, patch: &str) -> String {
-    let action = AgentAction {
-        id: "patch-error".to_string(),
-        rationale: String::new(),
-        payload: AgentActionPayload::ApplyPatch {
-            patch: patch.to_string(),
-            strip: None,
-        },
-    };
-    let read_plan = local_action_plan(&action).unwrap().unwrap();
-    let read_output = Command::new("/bin/sh")
-        .arg("-c")
-        .arg(&read_plan.command)
-        .current_dir(cwd)
-        .output()
-        .unwrap();
-    assert!(
-        read_output.status.success(),
-        "read phase failed:\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&read_output.stdout),
-        String::from_utf8_lossy(&read_output.stderr)
-    );
-    apply_patch_write_plan_from_read_output(patch, &String::from_utf8_lossy(&read_output.stdout))
-        .unwrap_err()
-        .message()
-        .to_string()
 }
 
 /// Runs the mcp plan operation for this subsystem.
