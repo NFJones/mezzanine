@@ -910,9 +910,9 @@ pub(super) enum RuntimeRecordBrowserOverlaySource {
         /// Optional project glob filter; `None` means all projects.
         project_glob: Option<String>,
         /// Optional defect/task kind filter.
-        kind: Option<crate::issues::IssueKind>,
+        kind: Option<mez_agent::issues::IssueKind>,
         /// Optional lifecycle state filter.
-        state: Option<crate::issues::IssueState>,
+        state: Option<mez_agent::issues::IssueState>,
         /// Optional title/body text filter.
         text: Option<String>,
         /// Maximum number of displayed records.

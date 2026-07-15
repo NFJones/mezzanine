@@ -1,28 +1,21 @@
-//! SQLite-backed project issue tracking.
+//! Product persistence and location adapters for canonical agent issues.
 //!
-//! The issue subsystem owns Mezzanine-local defect and task records. It keeps
-//! validation, project-key normalization, SQLite persistence, and result
-//! formatting independent from CLI, slash-command, and MAAP action surfaces so
-//! every user entry point shares the same behavior.
+//! Canonical records and validation live in `mez_agent::issues`. Root owns
+//! SQLite schema/query execution, dependency graph checks, project discovery,
+//! ID generation, configured paths, and private filesystem permissions.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{MezError, Result};
-
-mod store;
-mod types;
-
-pub use store::IssueStore;
-pub use types::{
+use mez_agent::issues::{
     DeleteIssueResult, IssueBrowserQuery, IssueKind, IssueQuery, IssueRecord, IssueState,
-    IssueUpdate, NewIssueRecord, UpdateIssueResult, validate_issue_dependency_ids,
+    IssueUpdate, NewIssueRecord, UpdateIssueResult, validate_project_key,
 };
 
-/// Default maximum issue records returned by one query.
-pub const DEFAULT_ISSUE_QUERY_LIMIT: usize = 50;
-/// Hard upper bound for one issue query result set.
-pub const MAX_ISSUE_QUERY_LIMIT: usize = 200;
+mod store;
+
+pub use store::IssueStore;
 
 /// Returns the canonical SQLite database path under a Mezzanine config root.
 pub fn default_issue_database_path(config_root: impl AsRef<Path>) -> PathBuf {
@@ -103,40 +96,6 @@ pub fn project_key_for_working_directory(working_directory: impl AsRef<Path>) ->
         .into_owned()
 }
 
-/// Validates a user or runtime resolved project key.
-pub fn validate_project_key(project: &str) -> Result<()> {
-    validate_non_empty_single_line("issue project", project)
-}
-
-/// Validates an issue title.
-pub fn validate_issue_title(title: &str) -> Result<()> {
-    validate_non_empty_single_line("issue title", title)
-}
-
-/// Validates optional issue body text.
-pub fn validate_issue_body(body: Option<&str>) -> Result<()> {
-    if let Some(body) = body
-        && body.bytes().any(|byte| byte == 0)
-    {
-        return Err(MezError::invalid_args(
-            "issue body must not contain NUL bytes",
-        ));
-    }
-    Ok(())
-}
-
-/// Validates optional mutable issue notes text.
-pub fn validate_issue_notes(notes: Option<&str>) -> Result<()> {
-    if let Some(notes) = notes
-        && notes.bytes().any(|byte| byte == 0)
-    {
-        return Err(MezError::invalid_args(
-            "issue notes must not contain NUL bytes",
-        ));
-    }
-    Ok(())
-}
-
 /// Creates a best-effort globally unique issue id.
 pub fn generate_issue_id() -> String {
     let mut bytes = [0u8; 16];
@@ -202,21 +161,6 @@ fn set_private_file_permissions(path: &Path) -> Result<()> {
     #[cfg(not(unix))]
     {
         let _ = path;
-    }
-    Ok(())
-}
-
-fn validate_non_empty_single_line(label: &str, value: &str) -> Result<()> {
-    if value.trim().is_empty() {
-        return Err(MezError::invalid_args(format!("{label} must not be empty")));
-    }
-    if value
-        .bytes()
-        .any(|byte| byte == 0 || byte == b'\n' || byte == b'\r')
-    {
-        return Err(MezError::invalid_args(format!(
-            "{label} must be a single line without NUL bytes"
-        )));
     }
     Ok(())
 }

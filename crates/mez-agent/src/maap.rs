@@ -8,14 +8,16 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use crate::issues::{
+    IssueQueryValidation, IssueUpdateValidation, validate_issue_body,
+    validate_issue_dependency_ids, validate_issue_kind, validate_issue_notes, validate_issue_query,
+    validate_issue_title, validate_issue_update,
+};
 use crate::semantic_patch::{
     try_convert_unified_diff_to_mez_patch,
     validate_apply_patch_payload as validate_agent_apply_patch_payload,
 };
-use crate::{
-    AgentActionResultIdentity, AgentCapability, IssueQueryValidation, IssueUpdateValidation,
-    McpPromptTool,
-};
+use crate::{AgentActionResultIdentity, AgentCapability, McpPromptTool};
 use serde_json::Value;
 
 /// Result returned by MAAP parsing and validation contracts.
@@ -49,8 +51,8 @@ impl fmt::Display for MaapContractError {
 
 impl std::error::Error for MaapContractError {}
 
-fn validate_agent_contract(result: Result<(), String>) -> MaapContractResult<()> {
-    result.map_err(MaapContractError::invalid_args)
+fn validate_agent_contract<E: fmt::Display>(result: Result<(), E>) -> MaapContractResult<()> {
+    result.map_err(|error| MaapContractError::invalid_args(error.to_string()))
 }
 
 /// Validates one required string field without changing provider-authored text.
@@ -737,11 +739,11 @@ impl AgentAction {
                 depends_on,
             } => {
                 validate_non_empty("issue kind", kind)?;
-                validate_agent_contract(crate::validate_issue_kind(kind))?;
-                validate_agent_contract(crate::validate_issue_title(title))?;
-                validate_agent_contract(crate::validate_issue_body(body.as_deref()))?;
-                validate_agent_contract(crate::validate_issue_notes(notes.as_deref()))?;
-                validate_agent_contract(crate::validate_issue_dependency_ids(depends_on))
+                validate_agent_contract(validate_issue_kind(kind))?;
+                validate_agent_contract(validate_issue_title(title))?;
+                validate_agent_contract(validate_issue_body(body.as_deref()))?;
+                validate_agent_contract(validate_issue_notes(notes.as_deref()))?;
+                validate_agent_contract(validate_issue_dependency_ids(None, depends_on))
             }
             AgentActionPayload::IssueUpdate {
                 id,
@@ -756,7 +758,7 @@ impl AgentAction {
                 clear_depends_on,
             } => {
                 validate_non_empty("issue id", id)?;
-                validate_agent_contract(crate::validate_issue_update(IssueUpdateValidation {
+                validate_agent_contract(validate_issue_update(IssueUpdateValidation {
                     kind: kind.as_deref(),
                     state: state.as_deref(),
                     title: title.as_deref(),
@@ -773,7 +775,7 @@ impl AgentAction {
                 state,
                 text,
                 limit,
-            } => validate_agent_contract(crate::validate_issue_query(IssueQueryValidation {
+            } => validate_agent_contract(validate_issue_query(IssueQueryValidation {
                 kind: kind.as_deref(),
                 state: state.as_deref(),
                 text: text.as_deref(),

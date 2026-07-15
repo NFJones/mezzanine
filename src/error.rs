@@ -330,6 +330,12 @@ impl From<mez_agent::memory::MemoryRecordError> for MezError {
     }
 }
 
+impl From<mez_agent::issues::IssueError> for MezError {
+    fn from(error: mez_agent::issues::IssueError) -> Self {
+        Self::invalid_args(error.to_string())
+    }
+}
+
 impl From<mez_mux::MuxError> for MezError {
     fn from(error: mez_mux::MuxError) -> Self {
         match error.kind() {

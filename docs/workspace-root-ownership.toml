@@ -68,8 +68,8 @@ role = "Product-local identifier predicates and diagnostics."
 
 [[surface]]
 path = "src/issues"
-state = "temporary"
-role = "SQLite issue repository still contains canonical agent issue records and validation."
+state = "adapter"
+role = "Configured SQLite issue repository, project discovery, ID generation, dependency graph checks, and filesystem permissions over canonical mez-agent issue contracts."
 
 [[surface]]
 path = "src/lib.rs"

@@ -460,8 +460,8 @@ fn row_to_issue_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<IssueRecord>
     Ok(IssueRecord {
         id: row.get(0)?,
         project: row.get(1)?,
-        kind: IssueKind::parse(&kind).map_err(rusqlite_from_mez_error)?,
-        state: IssueState::parse(&state).map_err(rusqlite_from_mez_error)?,
+        kind: IssueKind::parse(&kind).map_err(|error| rusqlite_from_mez_error(error.into()))?,
+        state: IssueState::parse(&state).map_err(|error| rusqlite_from_mez_error(error.into()))?,
         title: row.get(4)?,
         body: row.get(5)?,
         notes: row.get(6)?,

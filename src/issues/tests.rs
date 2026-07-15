@@ -302,25 +302,6 @@ fn issue_store_delete_requires_matching_project() {
     );
 }
 
-/// Verifies invalid issue kinds and required text fields fail before SQL is
-/// allowed to persist a malformed record.
-#[test]
-fn issue_validation_rejects_invalid_kind_and_empty_title() {
-    assert!(IssueKind::parse("bug").is_err());
-    assert!(
-        IssueRecord::new(
-            "id".to_string(),
-            "/repo".to_string(),
-            IssueKind::Task,
-            "".to_string(),
-            None,
-            None,
-            10,
-        )
-        .is_err()
-    );
-}
-
 /// Verifies notes are persisted, updated, cleared, and used to refresh the
 /// issue's update timestamp without changing the original description body.
 #[test]

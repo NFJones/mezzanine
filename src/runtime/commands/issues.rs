@@ -43,7 +43,7 @@ pub(super) fn execute_agent_shell_issue_command(
             depends_on,
         } => {
             let record = store.add_issue_with_dependencies(
-                crate::issues::NewIssueRecord {
+                mez_agent::issues::NewIssueRecord {
                     project,
                     kind,
                     title,
@@ -91,10 +91,10 @@ pub(super) fn execute_agent_shell_issue_command(
             text,
             limit,
         } => {
-            let query = crate::issues::IssueQuery::new_with_state(
+            let query = mez_agent::issues::IssueQuery::new_with_state(
                 project,
                 kind,
-                state.or(Some(crate::issues::IssueState::Open)),
+                state.or(Some(mez_agent::issues::IssueState::Open)),
                 text,
                 limit,
             )?;
@@ -123,7 +123,7 @@ pub(super) fn execute_agent_shell_issue_command(
 #[derive(Debug)]
 enum RuntimeIssueArgs {
     Add {
-        kind: crate::issues::IssueKind,
+        kind: mez_agent::issues::IssueKind,
         title: String,
         body: Option<String>,
         notes: Option<String>,
@@ -134,11 +134,11 @@ enum RuntimeIssueArgs {
     },
     Update {
         id: String,
-        update: crate::issues::IssueUpdate,
+        update: mez_agent::issues::IssueUpdate,
     },
     Query {
-        kind: Option<crate::issues::IssueKind>,
-        state: Option<crate::issues::IssueState>,
+        kind: Option<mez_agent::issues::IssueKind>,
+        state: Option<mez_agent::issues::IssueState>,
         text: Option<String>,
         limit: Option<usize>,
     },
@@ -171,7 +171,7 @@ fn parse_issue_args(args: &str) -> Result<RuntimeIssueArgs> {
 }
 
 fn parse_issue_add_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
-    let mut kind = crate::issues::IssueKind::Defect;
+    let mut kind = mez_agent::issues::IssueKind::Defect;
     let mut title = None;
     let mut body = None;
     let mut notes = None;
@@ -181,8 +181,9 @@ fn parse_issue_add_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
         match tokens[index].as_str() {
             "--kind" => {
                 index = index.saturating_add(1);
-                kind =
-                    crate::issues::IssueKind::parse(required_issue_value(tokens, index, "kind")?)?;
+                kind = mez_agent::issues::IssueKind::parse(required_issue_value(
+                    tokens, index, "kind",
+                )?)?;
             }
             "--title" => {
                 index = index.saturating_add(1);
@@ -230,19 +231,19 @@ fn parse_issue_update_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
     let Some(id) = tokens.first() else {
         return Err(MezError::invalid_args("issue update expects one issue id"));
     };
-    let mut update = crate::issues::IssueUpdate::default();
+    let mut update = mez_agent::issues::IssueUpdate::default();
     let mut index = 1usize;
     while index < tokens.len() {
         match tokens[index].as_str() {
             "--kind" => {
                 index = index.saturating_add(1);
-                update.kind = Some(crate::issues::IssueKind::parse(required_issue_value(
+                update.kind = Some(mez_agent::issues::IssueKind::parse(required_issue_value(
                     tokens, index, "kind",
                 )?)?);
             }
             "--state" => {
                 index = index.saturating_add(1);
-                update.state = Some(crate::issues::IssueState::parse(required_issue_value(
+                update.state = Some(mez_agent::issues::IssueState::parse(required_issue_value(
                     tokens, index, "state",
                 )?)?);
             }
@@ -293,13 +294,13 @@ fn parse_issue_query_args(tokens: &[String]) -> Result<RuntimeIssueArgs> {
         match tokens[index].as_str() {
             "--kind" => {
                 index = index.saturating_add(1);
-                kind = Some(crate::issues::IssueKind::parse(required_issue_value(
+                kind = Some(mez_agent::issues::IssueKind::parse(required_issue_value(
                     tokens, index, "kind",
                 )?)?);
             }
             "--state" => {
                 index = index.saturating_add(1);
-                state = Some(crate::issues::IssueState::parse(required_issue_value(
+                state = Some(mez_agent::issues::IssueState::parse(required_issue_value(
                     tokens, index, "state",
                 )?)?);
             }
@@ -355,7 +356,7 @@ fn required_issue_value<'a>(tokens: &'a [String], index: usize, name: &str) -> R
     Ok(value)
 }
 
-fn runtime_issue_record_detail_display(record: Option<&crate::issues::IssueRecord>) -> String {
+fn runtime_issue_record_detail_display(record: Option<&mez_agent::issues::IssueRecord>) -> String {
     let Some(record) = record else {
         return "issue found=false".to_string();
     };
@@ -382,7 +383,7 @@ fn runtime_issue_record_detail_display(record: Option<&crate::issues::IssueRecor
     )
 }
 
-fn runtime_issue_records_display(records: &[crate::issues::IssueRecord]) -> String {
+fn runtime_issue_records_display(records: &[mez_agent::issues::IssueRecord]) -> String {
     if records.is_empty() {
         return "issues count=0".to_string();
     }

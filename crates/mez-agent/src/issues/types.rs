@@ -3,13 +3,10 @@
 //! These types define the durable shape shared by the issue SQLite store,
 //! process CLI, runtime slash commands, and model-authored semantic actions.
 
-use std::collections::BTreeSet;
-
-use crate::error::{MezError, Result};
-
 use super::{
-    DEFAULT_ISSUE_QUERY_LIMIT, MAX_ISSUE_QUERY_LIMIT, validate_issue_body, validate_issue_notes,
-    validate_issue_title, validate_project_key,
+    DEFAULT_ISSUE_QUERY_LIMIT, IssueError, IssueResult as Result, MAX_ISSUE_QUERY_LIMIT,
+    validate_issue_body, validate_issue_dependency_ids, validate_issue_notes, validate_issue_title,
+    validate_project_key,
 };
 
 /// Classification for one locally tracked issue.
@@ -35,7 +32,9 @@ impl IssueKind {
         match value {
             "defect" => Ok(Self::Defect),
             "task" => Ok(Self::Task),
-            _ => Err(MezError::invalid_args("issue kind must be defect or task")),
+            _ => Err(IssueError::invalid_args(
+                "issue kind must be defect or task",
+            )),
         }
     }
 }
@@ -63,7 +62,7 @@ impl IssueState {
         match value {
             "open" => Ok(Self::Open),
             "resolved" => Ok(Self::Resolved),
-            _ => Err(MezError::invalid_args(
+            _ => Err(IssueError::invalid_args(
                 "issue state must be open or resolved",
             )),
         }
@@ -167,10 +166,10 @@ impl IssueRecord {
         validate_issue_notes(self.notes.as_deref())?;
         validate_issue_dependency_ids(Some(&self.id), &self.depends_on)?;
         if self.id.trim().is_empty() || self.id.bytes().any(|byte| byte == 0) {
-            return Err(MezError::invalid_args("issue id must not be empty"));
+            return Err(IssueError::invalid_args("issue id must not be empty"));
         }
         if self.created_at_unix_seconds == 0 || self.updated_at_unix_seconds == 0 {
-            return Err(MezError::invalid_args(
+            return Err(IssueError::invalid_args(
                 "issue timestamps must be positive Unix seconds",
             ));
         }
@@ -222,22 +221,22 @@ impl IssueUpdate {
     /// Validates update fields before they are applied to a record.
     pub fn validate(&self) -> Result<()> {
         if !self.has_changes() {
-            return Err(MezError::invalid_args(
+            return Err(IssueError::invalid_args(
                 "issue update requires at least one field to change",
             ));
         }
         if self.body.is_some() && self.clear_body {
-            return Err(MezError::invalid_args(
+            return Err(IssueError::invalid_args(
                 "issue update cannot set and clear body",
             ));
         }
         if self.notes.is_some() && self.clear_notes {
-            return Err(MezError::invalid_args(
+            return Err(IssueError::invalid_args(
                 "issue update cannot set and clear notes",
             ));
         }
         if self.depends_on.is_some() && self.clear_depends_on {
-            return Err(MezError::invalid_args(
+            return Err(IssueError::invalid_args(
                 "issue update cannot set and clear dependencies",
             ));
         }
@@ -251,27 +250,6 @@ impl IssueUpdate {
         }
         Ok(())
     }
-}
-
-/// Validates issue dependency ids before project-specific lookup.
-pub fn validate_issue_dependency_ids(issue_id: Option<&str>, depends_on: &[String]) -> Result<()> {
-    let mut seen = BTreeSet::new();
-    for dependency_id in depends_on {
-        if dependency_id.trim().is_empty() || dependency_id.bytes().any(|byte| byte == 0) {
-            return Err(MezError::invalid_args(
-                "issue dependency id must not be empty",
-            ));
-        }
-        if issue_id.is_some_and(|id| id == dependency_id) {
-            return Err(MezError::invalid_args("issue cannot depend on itself"));
-        }
-        if !seen.insert(dependency_id.as_str()) {
-            return Err(MezError::invalid_args(
-                "issue dependencies must not contain duplicates",
-            ));
-        }
-    }
-    Ok(())
 }
 
 /// Result of updating one issue record.
@@ -328,13 +306,15 @@ impl IssueQuery {
         if let Some(text) = text.as_deref()
             && text.bytes().any(|byte| byte == 0)
         {
-            return Err(MezError::invalid_args(
+            return Err(IssueError::invalid_args(
                 "issue query text must not contain NUL bytes",
             ));
         }
         let limit = limit.unwrap_or(DEFAULT_ISSUE_QUERY_LIMIT);
         if limit == 0 {
-            return Err(MezError::invalid_args("issue query limit must be positive"));
+            return Err(IssueError::invalid_args(
+                "issue query limit must be positive",
+            ));
         }
         Ok(Self {
             project,
@@ -378,7 +358,7 @@ impl IssueBrowserQuery {
         if let Some(project_glob) = project_glob.as_deref()
             && project_glob.bytes().any(|byte| byte == 0)
         {
-            return Err(MezError::invalid_args(
+            return Err(IssueError::invalid_args(
                 "issue browser project glob must not contain NUL bytes",
             ));
         }
@@ -388,13 +368,13 @@ impl IssueBrowserQuery {
         if let Some(text) = text.as_deref()
             && text.bytes().any(|byte| byte == 0)
         {
-            return Err(MezError::invalid_args(
+            return Err(IssueError::invalid_args(
                 "issue browser query text must not contain NUL bytes",
             ));
         }
         let limit = limit.unwrap_or(DEFAULT_ISSUE_QUERY_LIMIT);
         if limit == 0 {
-            return Err(MezError::invalid_args(
+            return Err(IssueError::invalid_args(
                 "issue browser query limit must be positive",
             ));
         }

@@ -124,9 +124,9 @@ impl RuntimeSessionService {
                 depends_on,
             } => {
                 let result = store.add_issue_with_dependencies(
-                    crate::issues::NewIssueRecord {
+                    mez_agent::issues::NewIssueRecord {
                         project,
-                        kind: crate::issues::IssueKind::parse(kind)?,
+                        kind: mez_agent::issues::IssueKind::parse(kind)?,
                         title: title.clone(),
                         body: body.clone(),
                         notes: notes.clone(),
@@ -160,14 +160,14 @@ impl RuntimeSessionService {
                 let result = store.update_issue(
                     project,
                     id.clone(),
-                    crate::issues::IssueUpdate {
+                    mez_agent::issues::IssueUpdate {
                         kind: kind
                             .as_deref()
-                            .map(crate::issues::IssueKind::parse)
+                            .map(mez_agent::issues::IssueKind::parse)
                             .transpose()?,
                         state: state
                             .as_deref()
-                            .map(crate::issues::IssueState::parse)
+                            .map(mez_agent::issues::IssueState::parse)
                             .transpose()?,
                         title: title.clone(),
                         body: body.clone(),
@@ -198,17 +198,17 @@ impl RuntimeSessionService {
             } => {
                 let kind = kind
                     .as_deref()
-                    .map(crate::issues::IssueKind::parse)
+                    .map(mez_agent::issues::IssueKind::parse)
                     .transpose()?;
                 let state = state
                     .as_deref()
-                    .map(crate::issues::IssueState::parse)
+                    .map(mez_agent::issues::IssueState::parse)
                     .transpose()?;
                 let limit = limit.and_then(|value| usize::try_from(value).ok());
-                let query = crate::issues::IssueQuery::new_with_state(
+                let query = mez_agent::issues::IssueQuery::new_with_state(
                     project,
                     kind,
-                    state.or(Some(crate::issues::IssueState::Open)),
+                    state.or(Some(mez_agent::issues::IssueState::Open)),
                     text.clone(),
                     limit,
                 )?;
@@ -282,7 +282,7 @@ fn issue_record_action_result(
     turn: &AgentTurnRecord,
     action: &AgentAction,
     operation: &str,
-    record: &crate::issues::IssueRecord,
+    record: &mez_agent::issues::IssueRecord,
 ) -> ActionResult {
     ActionResult::succeeded(
         turn,
@@ -295,7 +295,7 @@ fn issue_record_action_result(
 fn issue_query_action_result(
     turn: &AgentTurnRecord,
     action: &AgentAction,
-    records: &[crate::issues::IssueRecord],
+    records: &[mez_agent::issues::IssueRecord],
 ) -> ActionResult {
     ActionResult::succeeded(
         turn,
@@ -314,7 +314,7 @@ fn issue_query_action_result(
 fn issue_update_action_result(
     turn: &AgentTurnRecord,
     action: &AgentAction,
-    result: &crate::issues::UpdateIssueResult,
+    result: &mez_agent::issues::UpdateIssueResult,
 ) -> ActionResult {
     ActionResult::succeeded(
         turn,
@@ -338,7 +338,7 @@ fn issue_update_action_result(
 fn issue_delete_action_result(
     turn: &AgentTurnRecord,
     action: &AgentAction,
-    result: &crate::issues::DeleteIssueResult,
+    result: &mez_agent::issues::DeleteIssueResult,
 ) -> ActionResult {
     ActionResult::succeeded(
         turn,
@@ -358,7 +358,7 @@ fn issue_delete_action_result(
     )
 }
 
-fn issue_record_json(record: &crate::issues::IssueRecord) -> serde_json::Value {
+fn issue_record_json(record: &mez_agent::issues::IssueRecord) -> serde_json::Value {
     serde_json::json!({
         "id": record.id,
         "project": record.project,

@@ -7,9 +7,9 @@
 use super::{
     Args, CliEnv, CliOutputFormat, Result, Serialize, Subcommand, Write, load_runtime_config_layers,
 };
-use crate::issues::{
-    IssueKind, IssueQuery, IssueRecord, IssueState, IssueStore, IssueUpdate, NewIssueRecord,
-    issue_database_location, project_key_for_working_directory,
+use crate::issues::{IssueStore, issue_database_location, project_key_for_working_directory};
+use mez_agent::issues::{
+    IssueKind, IssueQuery, IssueRecord, IssueState, IssueUpdate, NewIssueRecord,
 };
 
 /// Runs one `mez issue` command against the configured local issue store.
@@ -288,8 +288,8 @@ struct IssueUpdateJson<'a> {
     record: Option<IssueRecordJson<'a>>,
 }
 
-impl<'a> From<&'a crate::issues::UpdateIssueResult> for IssueUpdateJson<'a> {
-    fn from(result: &'a crate::issues::UpdateIssueResult) -> Self {
+impl<'a> From<&'a mez_agent::issues::UpdateIssueResult> for IssueUpdateJson<'a> {
+    fn from(result: &'a mez_agent::issues::UpdateIssueResult) -> Self {
         Self {
             project: &result.project,
             id: &result.id,

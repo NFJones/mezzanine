@@ -487,7 +487,7 @@ enabled = true
     store
         .add_issue(
             project.clone(),
-            crate::issues::IssueKind::Defect,
+            mez_agent::issues::IssueKind::Defect,
             "Second issue".to_string(),
             Some("Second body".to_string()),
             None,
@@ -497,7 +497,7 @@ enabled = true
     store
         .add_issue(
             project,
-            crate::issues::IssueKind::Task,
+            mez_agent::issues::IssueKind::Task,
             "First issue".to_string(),
             Some("First body".to_string()),
             None,

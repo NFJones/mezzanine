@@ -45,7 +45,7 @@ impl RuntimeSessionService {
         let store = crate::issues::IssueStore::from_database_path(
             issues::runtime_issue_database_path(self, &config_root),
         );
-        let issue_state = args.state.or(Some(crate::issues::IssueState::Open));
+        let issue_state = args.state.or(Some(mez_agent::issues::IssueState::Open));
         let source = args
             .detail_id
             .is_none()
@@ -62,7 +62,7 @@ impl RuntimeSessionService {
                 .into_iter()
                 .collect::<Vec<_>>()
         } else {
-            let query = crate::issues::IssueBrowserQuery::new(
+            let query = mez_agent::issues::IssueBrowserQuery::new(
                 project_glob.clone(),
                 args.kind,
                 issue_state,
@@ -230,7 +230,7 @@ impl RuntimeSessionService {
                 let store = crate::issues::IssueStore::from_database_path(
                     issues::runtime_issue_database_path(self, &config_root),
                 );
-                let query = crate::issues::IssueBrowserQuery::new(
+                let query = mez_agent::issues::IssueBrowserQuery::new(
                     project_glob.clone(),
                     *kind,
                     *state,
@@ -303,7 +303,7 @@ impl RuntimeSessionService {
                 },
                 kind: if field == RuntimeRecordBrowserFilterField::Kind {
                     (!value.is_empty())
-                        .then(|| crate::issues::IssueKind::parse(value))
+                        .then(|| mez_agent::issues::IssueKind::parse(value))
                         .transpose()?
                 } else {
                     *kind
@@ -371,8 +371,8 @@ impl RuntimeSessionService {
 struct ShowIssuesArgs {
     project_glob: Option<String>,
     all_projects: bool,
-    kind: Option<crate::issues::IssueKind>,
-    state: Option<crate::issues::IssueState>,
+    kind: Option<mez_agent::issues::IssueKind>,
+    state: Option<mez_agent::issues::IssueState>,
     text: Option<String>,
     limit: usize,
     save_path: Option<String>,
@@ -412,7 +412,7 @@ fn parse_show_issues_args(args: &str) -> Result<ShowIssuesArgs> {
             "--all-projects" => parsed.all_projects = true,
             "--kind" => {
                 index = index.saturating_add(1);
-                parsed.kind = Some(crate::issues::IssueKind::parse(required_show_value(
+                parsed.kind = Some(mez_agent::issues::IssueKind::parse(required_show_value(
                     &tokens, index, "kind",
                 )?)?);
             }
@@ -422,7 +422,7 @@ fn parse_show_issues_args(args: &str) -> Result<ShowIssuesArgs> {
                 parsed.state = if value == "all" {
                     None
                 } else {
-                    Some(crate::issues::IssueState::parse(value)?)
+                    Some(mez_agent::issues::IssueState::parse(value)?)
                 };
             }
             "--text" | "--query" => {
@@ -553,7 +553,7 @@ fn parse_show_limit(value: &str) -> Result<usize> {
     Ok(limit.min(DEFAULT_SHOW_RECORD_LIMIT))
 }
 
-fn issue_browser_record(record: crate::issues::IssueRecord) -> RuntimeRecordBrowserRecord {
+fn issue_browser_record(record: mez_agent::issues::IssueRecord) -> RuntimeRecordBrowserRecord {
     let markdown = issue_record_markdown(&record);
     RuntimeRecordBrowserRecord {
         id: record.id.clone(),
@@ -581,7 +581,7 @@ fn issue_browser_record(record: crate::issues::IssueRecord) -> RuntimeRecordBrow
     }
 }
 
-fn issue_record_markdown(record: &crate::issues::IssueRecord) -> String {
+fn issue_record_markdown(record: &mez_agent::issues::IssueRecord) -> String {
     let mut lines = Vec::new();
     if let Some(body) = record.body.as_deref() {
         lines.push(body.to_string());
@@ -649,12 +649,12 @@ fn issue_kind_filter_choices() -> Vec<RuntimeRecordBrowserFilterChoice> {
             value: String::new(),
         },
         RuntimeRecordBrowserFilterChoice {
-            label: crate::issues::IssueKind::Defect.as_str().to_string(),
-            value: crate::issues::IssueKind::Defect.as_str().to_string(),
+            label: mez_agent::issues::IssueKind::Defect.as_str().to_string(),
+            value: mez_agent::issues::IssueKind::Defect.as_str().to_string(),
         },
         RuntimeRecordBrowserFilterChoice {
-            label: crate::issues::IssueKind::Task.as_str().to_string(),
-            value: crate::issues::IssueKind::Task.as_str().to_string(),
+            label: mez_agent::issues::IssueKind::Task.as_str().to_string(),
+            value: mez_agent::issues::IssueKind::Task.as_str().to_string(),
         },
     ]
 }
@@ -788,8 +788,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(parsed.project_glob.as_deref(), Some("/repo/*"));
-        assert_eq!(parsed.kind, Some(crate::issues::IssueKind::Task));
-        assert_eq!(parsed.state, Some(crate::issues::IssueState::Resolved));
+        assert_eq!(parsed.kind, Some(mez_agent::issues::IssueKind::Task));
+        assert_eq!(parsed.state, Some(mez_agent::issues::IssueState::Resolved));
         assert_eq!(parsed.text.as_deref(), Some("panic"));
         assert_eq!(parsed.limit, 20);
         assert_eq!(parsed.save_path.as_deref(), Some("out.md"));
