@@ -1661,6 +1661,79 @@ mod tests {
         );
     }
 
+    /// Verifies the Anthropic API compatibility identifier round-trips through
+    /// the stable parser and formatter used by provider configuration.
+    #[test]
+    fn anthropic_messages_api_id_round_trips() {
+        assert_eq!(
+            ProviderApiCompatibility::from_id(ANTHROPIC_MESSAGES_API),
+            Some(ProviderApiCompatibility::AnthropicMessages)
+        );
+        assert_eq!(
+            ProviderApiCompatibility::AnthropicMessages.as_str(),
+            ANTHROPIC_MESSAGES_API
+        );
+    }
+
+    /// Verifies Anthropic provider kinds default to the Messages compatibility
+    /// layer when no explicit API id is configured.
+    #[test]
+    fn effective_provider_api_defaults_anthropic_kind_to_messages() {
+        assert_eq!(
+            resolve_provider_api("anthropic", None).unwrap(),
+            ProviderApiCompatibility::AnthropicMessages
+        );
+    }
+
+    /// Verifies OpenAI Responses capability metadata only advertises accepted
+    /// provider request fields.
+    #[test]
+    fn openai_responses_capabilities_omit_prompt_cache_retention() {
+        let capabilities = ProviderCapabilities::for_api(ProviderApiCompatibility::OpenAiResponses);
+
+        assert!(capabilities.supports_responses_api);
+        assert!(capabilities.supports_reasoning_controls);
+        assert!(capabilities.supports_service_tier);
+        assert!(!capabilities.supports_prompt_cache_retention);
+        assert!(capabilities.supports_streaming);
+        assert!(capabilities.supports_tool_calls);
+    }
+
+    /// Verifies Anthropic advertises only the conservative capabilities needed
+    /// for native Messages integration.
+    #[test]
+    fn anthropic_messages_capabilities_are_conservative() {
+        let capabilities =
+            ProviderCapabilities::for_api(ProviderApiCompatibility::AnthropicMessages);
+
+        assert!(!capabilities.supports_responses_api);
+        assert!(capabilities.supports_max_output_tokens);
+        assert!(capabilities.supports_reasoning_controls);
+        assert!(!capabilities.supports_thinking_toggle);
+        assert!(!capabilities.supports_service_tier);
+        assert!(!capabilities.supports_prompt_cache_retention);
+        assert!(capabilities.supports_streaming);
+        assert!(capabilities.supports_tool_calls);
+        assert!(!capabilities.supports_parallel_tool_calls);
+    }
+
+    /// Verifies Claude Code advertises only the local CLI reasoning control it
+    /// can map to subprocess arguments.
+    #[test]
+    fn claude_code_capabilities_expose_cli_reasoning_only() {
+        let capabilities = ProviderCapabilities::for_api(ProviderApiCompatibility::ClaudeCode);
+
+        assert!(!capabilities.supports_responses_api);
+        assert!(!capabilities.supports_max_output_tokens);
+        assert!(capabilities.supports_reasoning_controls);
+        assert!(!capabilities.supports_thinking_toggle);
+        assert!(!capabilities.supports_service_tier);
+        assert!(!capabilities.supports_prompt_cache_retention);
+        assert!(!capabilities.supports_streaming);
+        assert!(!capabilities.supports_tool_calls);
+        assert!(!capabilities.supports_parallel_tool_calls);
+    }
+
     #[test]
     /// Verifies normalized model-catalog contracts preserve provider identity,
     /// model capabilities, context limits, reasoning levels, and quota data.

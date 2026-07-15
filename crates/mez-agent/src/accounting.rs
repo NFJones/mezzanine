@@ -182,13 +182,17 @@ mod tests {
     /// Verifies aggregation fails closed when cache counters are missing from
     /// one contributing request.
     fn token_usage_aggregation_preserves_unknown_cache_counters() {
-        let mut usage = ModelTokenUsage {
+        let mut usage = ModelTokenUsage::default();
+        usage.add_assign(ModelTokenUsage {
             input_tokens: 100,
             output_tokens: 10,
             reasoning_tokens: 0,
             cached_input_tokens: Some(60),
             cache_write_input_tokens: Some(20),
-        };
+        });
+        assert_eq!(usage.cache_write_input_tokens, Some(20));
+        assert_eq!(usage.billed_input_tokens(), 60);
+        assert_eq!(usage.total_tokens(), 130);
         usage.add_assign(ModelTokenUsage {
             input_tokens: 50,
             output_tokens: 5,
@@ -198,7 +202,11 @@ mod tests {
         });
 
         assert_eq!(usage.input_tokens, 150);
+        assert_eq!(usage.output_tokens, 15);
         assert_eq!(usage.cached_input_tokens, None);
+        assert_eq!(usage.cache_write_input_tokens, None);
+        assert_eq!(usage.cached_input_tokens_display(), "unknown");
+        assert_eq!(usage.cached_input_hit_ratio_basis_points(), None);
         assert_eq!(usage.cached_input_hit_ratio_display(), "unknown");
     }
 
@@ -214,6 +222,7 @@ mod tests {
             cache_write_input_tokens: Some(6_112),
         };
 
+        assert_eq!(usage.input_tokens, 2);
         assert_eq!(usage.billed_input_tokens(), 6_114);
         assert_eq!(usage.total_tokens(), 16_622);
         assert_eq!(usage.cached_input_hit_ratio_display(), "63.19%");

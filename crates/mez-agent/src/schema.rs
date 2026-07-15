@@ -1095,4 +1095,99 @@ mod tests {
         assert_eq!(arguments["additionalProperties"], false);
         assert!(arguments["properties"]["url"].get("format").is_none());
     }
+
+    /// Verifies third-party MCP input schemas are normalized into the OpenAI
+    /// strict-schema subset before they are embedded in MAAP function tools.
+    ///
+    /// Some MCP servers advertise ordinary JSON Schema `format` annotations
+    /// such as `uri`. The OpenAI validator rejects at least some of those
+    /// values, so normalization must recurse through objects, arrays, and
+    /// unions while preserving strict required-field expansion.
+    #[test]
+    fn normalize_openai_strict_schema_strips_nested_format_annotations() {
+        let normalized = normalize_openai_strict_schema(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "data": {
+                    "type": "object",
+                    "properties": {
+                        "uri": {"type": "string", "format": "uri"}
+                    }
+                },
+                "items": {
+                    "type": "array",
+                    "items": {"type": "string", "format": "uri-reference"}
+                },
+                "choice": {
+                    "anyOf": [
+                        {"type": "string", "format": "email"},
+                        {"type": "null"}
+                    ]
+                }
+            }
+        }));
+
+        assert_eq!(
+            normalized.pointer("/properties/data/properties/uri/format"),
+            None
+        );
+        assert_eq!(normalized.pointer("/properties/items/items/format"), None);
+        assert_eq!(
+            normalized.pointer("/properties/choice/anyOf/0/format"),
+            None
+        );
+        assert_eq!(
+            normalized.pointer("/properties/data/required"),
+            Some(&serde_json::json!(["uri"]))
+        );
+        assert_eq!(
+            normalized.pointer("/required"),
+            Some(&serde_json::json!(["choice", "data", "items"]))
+        );
+        assert_eq!(
+            normalized.pointer("/properties/data/additionalProperties"),
+            Some(&serde_json::json!(false))
+        );
+    }
+
+    /// Verifies an MCP tool schema containing `format: uri` can be embedded in
+    /// the OpenAI MCP action schema without leaking the rejected annotation.
+    ///
+    /// This protects the provider request path where a configured MCP server
+    /// advertises a nested `arguments.data.uri` field.
+    #[test]
+    fn openai_mcp_action_tool_schema_omits_rejected_uri_format() {
+        let tool = McpPromptTool {
+            server_id: "everything".to_string(),
+            tool_name: "echo".to_string(),
+            description: "Echo test input".to_string(),
+            approval_required: false,
+            input_schema_json: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "data": {
+                        "type": "object",
+                        "properties": {
+                            "uri": {"type": "string", "format": "uri"}
+                        }
+                    }
+                }
+            })
+            .to_string(),
+        };
+        let schema = maap_mcp_call_action_schema_for_tool(&tool);
+
+        assert_eq!(
+            schema.pointer("/properties/arguments/properties/data/properties/uri/format"),
+            None
+        );
+        assert_eq!(
+            schema.pointer("/properties/arguments/properties/data/required"),
+            Some(&serde_json::json!(["uri"]))
+        );
+        assert_eq!(
+            schema.pointer("/properties/arguments/required"),
+            Some(&serde_json::json!(["data"]))
+        );
+    }
 }
