@@ -38,8 +38,8 @@ use super::recovery::{
 };
 use super::{AgentTurnExecution, turn_state_from_action_results};
 use mez_agent::{
-    AgentTurnNegotiation, ProviderResponseAcceptance, SubagentScopeDeclaration,
-    accept_provider_response,
+    AgentTurnNegotiation, AgentTurnResponseDecision, ProviderResponseAcceptance,
+    SubagentScopeDeclaration,
 };
 
 /// Maximum number of ephemeral provider retries after a MAAP validation error.
@@ -522,21 +522,20 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                     return Err(error);
                 }
             };
-            negotiation.observe_response(
-                response.usage,
-                response.latest_request_usage,
-                &response.quota_usage,
-            );
-            let response_acceptance = accept_provider_response(
+            let response_decision = negotiation.advance_provider_response(
+                &response_request,
                 self.provider.provider_id(),
                 &response.provider,
                 response_request.interaction_kind == ModelInteractionKind::Repair,
                 response.action_batch.is_some(),
+                response.usage,
+                response.latest_request_usage,
+                &response.quota_usage,
             );
-            if matches!(
-                response_acceptance,
-                ProviderResponseAcceptance::ProviderIdentityMismatch
-            ) {
+            if let AgentTurnResponseDecision::Reject(
+                response_acceptance @ ProviderResponseAcceptance::ProviderIdentityMismatch,
+            ) = response_decision
+            {
                 let error = MezError::invalid_state(
                     response_acceptance
                         .rejection_message()
@@ -564,31 +563,27 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                 ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
                 return Err(error);
             }
-            if matches!(
-                response_acceptance,
-                ProviderResponseAcceptance::Accept {
-                    promote_durable_request: true
-                }
-            ) {
-                negotiation.promote_durable_request(response_request.clone());
-            }
             let Some(batch) = &response.action_batch else {
-                debug_assert_eq!(
-                    response_acceptance,
-                    ProviderResponseAcceptance::MissingActionBatch
-                );
                 let error = MezError::invalid_args(
                     "provider response did not include a parsed MAAP action_batch",
                 );
-                if negotiation.record_recovery_attempt() {
+                if let AgentTurnResponseDecision::RecoverMissingActionBatch { attempt } =
+                    response_decision
+                {
                     request = maap_repair_request(
                         &response_request,
                         error.message(),
                         &response.raw_text,
-                        negotiation.recovery_attempts(),
+                        attempt,
                     );
                     continue;
                 }
+                debug_assert_eq!(
+                    response_decision,
+                    AgentTurnResponseDecision::Reject(
+                        ProviderResponseAcceptance::MissingActionBatch
+                    )
+                );
                 ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
                 let mut response = response;
                 response.usage = negotiation.cumulative_response_usage();
@@ -886,21 +881,20 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                     return Err(error);
                 }
             };
-            negotiation.observe_response(
-                response.usage,
-                response.latest_request_usage,
-                &response.quota_usage,
-            );
-            let response_acceptance = accept_provider_response(
+            let response_decision = negotiation.advance_provider_response(
+                &response_request,
                 self.provider.provider_id(),
                 &response.provider,
                 response_request.interaction_kind == ModelInteractionKind::Repair,
                 response.action_batch.is_some(),
+                response.usage,
+                response.latest_request_usage,
+                &response.quota_usage,
             );
-            if matches!(
-                response_acceptance,
-                ProviderResponseAcceptance::ProviderIdentityMismatch
-            ) {
+            if let AgentTurnResponseDecision::Reject(
+                response_acceptance @ ProviderResponseAcceptance::ProviderIdentityMismatch,
+            ) = response_decision
+            {
                 let error = MezError::invalid_state(
                     response_acceptance
                         .rejection_message()
@@ -930,31 +924,27 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                 ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
                 return Err(error);
             }
-            if matches!(
-                response_acceptance,
-                ProviderResponseAcceptance::Accept {
-                    promote_durable_request: true
-                }
-            ) {
-                negotiation.promote_durable_request(response_request.clone());
-            }
             let Some(batch) = &response.action_batch else {
-                debug_assert_eq!(
-                    response_acceptance,
-                    ProviderResponseAcceptance::MissingActionBatch
-                );
                 let error = MezError::invalid_args(
                     "provider response did not include a parsed MAAP action_batch",
                 );
-                if negotiation.record_recovery_attempt() {
+                if let AgentTurnResponseDecision::RecoverMissingActionBatch { attempt } =
+                    response_decision
+                {
                     request = maap_repair_request(
                         &response_request,
                         error.message(),
                         &response.raw_text,
-                        negotiation.recovery_attempts(),
+                        attempt,
                     );
                     continue;
                 }
+                debug_assert_eq!(
+                    response_decision,
+                    AgentTurnResponseDecision::Reject(
+                        ProviderResponseAcceptance::MissingActionBatch
+                    )
+                );
                 ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
                 let mut response = response;
                 response.usage = negotiation.cumulative_response_usage();

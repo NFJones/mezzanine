@@ -61,6 +61,24 @@ impl AgentTurnRecoveryBudget {
 /// The state keeps the durable request separate from ephemeral repair and
 /// capability-continuation requests while owning the bounded recovery budget.
 /// Concrete request and response types remain adapter-defined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentTurnResponseDecision {
+    /// The provider response is valid and may proceed to batch validation.
+    Accept,
+    /// The response omitted its required action batch and may be repaired.
+    RecoverMissingActionBatch {
+        /// One-based recovery attempt accepted for this response.
+        attempt: usize,
+    },
+    /// The response cannot continue through the provider negotiation loop.
+    Reject(crate::ProviderResponseAcceptance),
+}
+
+/// Provider-negotiation state shared by portable and product turn runners.
+///
+/// The state keeps the durable request separate from ephemeral repair and
+/// capability-continuation requests while owning the bounded recovery budget.
+/// Concrete request and response types remain adapter-defined.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentTurnNegotiation<Request> {
     durable_request: Request,
@@ -117,6 +135,53 @@ impl<Request> AgentTurnNegotiation<Request> {
     ) {
         self.response_progress
             .observe(usage, latest_request_usage, quota_usage);
+    }
+
+    /// Records and classifies one completed provider response.
+    ///
+    /// Accepted non-repair requests become durable. Missing action batches
+    /// consume the shared recovery budget, while provider identity failures
+    /// remain terminal decisions for the product adapter to summarize.
+    #[allow(clippy::too_many_arguments)]
+    pub fn advance_provider_response(
+        &mut self,
+        response_request: &Request,
+        expected_provider: &str,
+        actual_provider: &str,
+        repair_response: bool,
+        has_action_batch: bool,
+        usage: crate::ModelTokenUsage,
+        latest_request_usage: Option<crate::ModelTokenUsage>,
+        quota_usage: &[crate::ProviderQuotaUsage],
+    ) -> AgentTurnResponseDecision
+    where
+        Request: Clone,
+    {
+        self.observe_response(usage, latest_request_usage, quota_usage);
+        let acceptance = crate::accept_provider_response(
+            expected_provider,
+            actual_provider,
+            repair_response,
+            has_action_batch,
+        );
+        match acceptance {
+            crate::ProviderResponseAcceptance::Accept {
+                promote_durable_request,
+            } => {
+                if promote_durable_request {
+                    self.promote_durable_request(response_request.clone());
+                }
+                AgentTurnResponseDecision::Accept
+            }
+            crate::ProviderResponseAcceptance::MissingActionBatch
+                if self.record_recovery_attempt() =>
+            {
+                AgentTurnResponseDecision::RecoverMissingActionBatch {
+                    attempt: self.recovery_attempts(),
+                }
+            }
+            rejection => AgentTurnResponseDecision::Reject(rejection),
+        }
     }
 
     /// Returns cumulative usage across all completed provider responses.
@@ -540,6 +605,54 @@ mod tests {
         assert_eq!(negotiation.latest_response_usage().input_tokens, 2);
         assert_eq!(negotiation.latest_response_usage().output_tokens, 3);
         assert_eq!(negotiation.latest_quota_usage(), &[quota]);
+    }
+
+    /// Verifies canonical response progression promotes durable requests and
+    /// owns the bounded missing-action-batch recovery decision.
+    #[test]
+    fn turn_negotiation_advances_provider_responses() {
+        let mut negotiation = AgentTurnNegotiation::new("initial", 1);
+        assert_eq!(
+            negotiation.advance_provider_response(
+                &"accepted",
+                "openai",
+                "openai",
+                false,
+                true,
+                crate::ModelTokenUsage::default(),
+                None,
+                &[],
+            ),
+            AgentTurnResponseDecision::Accept
+        );
+        assert_eq!(negotiation.durable_request(), &"accepted");
+
+        assert_eq!(
+            negotiation.advance_provider_response(
+                &"accepted",
+                "openai",
+                "openai",
+                false,
+                false,
+                crate::ModelTokenUsage::default(),
+                None,
+                &[],
+            ),
+            AgentTurnResponseDecision::RecoverMissingActionBatch { attempt: 1 }
+        );
+        assert_eq!(
+            negotiation.advance_provider_response(
+                &"accepted",
+                "openai",
+                "openai",
+                false,
+                false,
+                crate::ModelTokenUsage::default(),
+                None,
+                &[],
+            ),
+            AgentTurnResponseDecision::Reject(crate::ProviderResponseAcceptance::MissingActionBatch)
+        );
     }
 
     struct FakeProvider {
