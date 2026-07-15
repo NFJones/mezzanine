@@ -1,0 +1,172 @@
+version = 1
+status = "open"
+
+[[surface]]
+path = "src/agent"
+state = "temporary"
+role = "Concrete agent providers and product execution adapters; portable recovery and routing policy still requires extraction."
+
+[[surface]]
+path = "src/async_runtime"
+state = "product"
+role = "Tokio actors, workers, supervision, and concrete side-effect services."
+
+[[surface]]
+path = "src/audit"
+state = "product"
+role = "Security audit records, redaction, persistence, hash chaining, and retention."
+
+[[surface]]
+path = "src/auth"
+state = "product"
+role = "Credential stores, OAuth flows, browser callbacks, and secret handling."
+
+[[surface]]
+path = "src/cli"
+state = "product"
+role = "The mez process command line and process-level workflows."
+
+[[surface]]
+path = "src/command"
+state = "adapter"
+role = "Product command dispatch over mux plans, stores, configuration, and runtime effects."
+
+[[surface]]
+path = "src/config"
+state = "product"
+role = "Versioned product configuration schema, defaults, migration, mutation, and validation."
+
+[[surface]]
+path = "src/control"
+state = "product"
+role = "Product JSON-RPC schema, authorization, idempotency, state projection, and dispatch."
+
+[[surface]]
+path = "src/error.rs"
+state = "product"
+role = "Product error taxonomy and lower-crate error projection."
+
+[[surface]]
+path = "src/event"
+state = "product"
+role = "Product event records, retention, audience visibility, and notification encoding."
+
+[[surface]]
+path = "src/framing"
+state = "product"
+role = "Shared product content-length wire framing and Tokio codec."
+
+[[surface]]
+path = "src/hooks"
+state = "product"
+role = "Product lifecycle extension policy and concrete program or focused-shell execution."
+
+[[surface]]
+path = "src/identifiers.rs"
+state = "product"
+role = "Product-local identifier predicates and diagnostics."
+
+[[surface]]
+path = "src/instructions"
+state = "temporary"
+role = "Instruction discovery adapter still contains lower-owned validation and command planning."
+
+[[surface]]
+path = "src/issues"
+state = "temporary"
+role = "SQLite issue repository still contains canonical agent issue records and validation."
+
+[[surface]]
+path = "src/lib.rs"
+state = "product"
+role = "Product composition library root."
+
+[[surface]]
+path = "src/macros"
+state = "adapter"
+role = "Filesystem and embedded macro discovery over mez-agent macro contracts."
+
+[[surface]]
+path = "src/main.rs"
+state = "product"
+role = "Thin mez binary entry point."
+
+[[surface]]
+path = "src/mcp"
+state = "temporary"
+role = "Concrete MCP transports and configuration still contain lower-owned protocol and registry state."
+
+[[surface]]
+path = "src/memory"
+state = "temporary"
+role = "SQLite memory repository still contains canonical agent memory records and retrieval policy."
+
+[[surface]]
+path = "src/message"
+state = "temporary"
+role = "Product MMP transport still contains the lower-owned deterministic messaging service and body protocol."
+
+[[surface]]
+path = "src/permissions"
+state = "temporary"
+role = "Product permission persistence still contains the lower-owned deterministic permission engine."
+
+[[surface]]
+path = "src/project"
+state = "product"
+role = "Project discovery, trust decisions, filesystem posture, and trust persistence."
+
+[[surface]]
+path = "src/readline"
+state = "adapter"
+role = "Product prompt kinds and selector policy over mux readline state."
+
+[[surface]]
+path = "src/registry"
+state = "product"
+role = "Durable live daemon and session registry."
+
+[[surface]]
+path = "src/runtime"
+state = "temporary"
+role = "Product serialized state and effects still contain lower-owned agent and mux policy."
+
+[[surface]]
+path = "src/selector.rs"
+state = "adapter"
+role = "Product command, runtime, parameter, and filesystem candidate providers over the mux selector engine."
+
+[[surface]]
+path = "src/shell.rs"
+state = "product"
+role = "Host shell discovery and executable resolution."
+
+[[surface]]
+path = "src/skills"
+state = "adapter"
+role = "Filesystem and embedded skill discovery over mez-agent validation contracts."
+
+[[surface]]
+path = "src/snapshot"
+state = "product"
+role = "Cross-crate product snapshot encoding, repository, compatibility, and restore."
+
+[[surface]]
+path = "src/subagent"
+state = "temporary"
+role = "Product subagent naming still contains lower-owned scope enforcement."
+
+[[surface]]
+path = "src/terminal"
+state = "temporary"
+role = "Host terminal adapters still contain lower-owned attached-client and neutral render behavior."
+
+[[surface]]
+path = "src/test_support"
+state = "adapter"
+role = "Shared root integration fixtures used by multiple product test owners."
+
+[[surface]]
+path = "src/transcript"
+state = "temporary"
+role = "Filesystem transcript repository still contains duplicate canonical agent transcript records and summary policy."

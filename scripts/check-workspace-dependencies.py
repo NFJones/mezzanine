@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tomllib
 
 
 EXPECTED_PACKAGES = {
@@ -18,7 +19,7 @@ EXPECTED_PACKAGES = {
 }
 
 EXPECTED_EDGES = {
-    "mez-agent": set(),
+    "mez-agent": {"mez-core"},
     "mez-core": set(),
     "mez-mux": {"mez-core", "mez-terminal"},
     "mez-terminal": set(),
@@ -40,7 +41,11 @@ REQUIRED_OWNER_PATHS = {
     "crates/mez-mux/src/session/mod.rs",
     "crates/mez-terminal/src/screen.rs",
     "docs/workspace-ownership-matrix.md",
+    "docs/workspace-root-ownership.toml",
 }
+
+ROOT_OWNERSHIP_STATES = {"adapter", "product", "temporary"}
+ROOT_OWNERSHIP_MANIFEST = Path("docs/workspace-root-ownership.toml")
 
 RETIRED_COMPATIBILITY_PATHS = {
     "src/agent/shell.rs",
@@ -102,6 +107,73 @@ def workspace_metadata() -> dict[str, object]:
         text=True,
     )
     return json.loads(completed.stdout)
+
+
+def root_source_surfaces() -> set[str]:
+    """Return top-level root source surfaces that contain Rust source."""
+
+    surfaces: set[str] = set()
+    for path in Path("src").iterdir():
+        if path.is_file() and path.suffix == ".rs":
+            surfaces.add(path.as_posix())
+        elif path.is_dir() and any(path.rglob("*.rs")):
+            surfaces.add(path.as_posix())
+    return surfaces
+
+
+def root_ownership_violations() -> tuple[list[str], str, set[str]]:
+    """Validate exhaustive root ownership and return its lifecycle state."""
+
+    document = tomllib.loads(ROOT_OWNERSHIP_MANIFEST.read_text(encoding="utf-8"))
+    violations: list[str] = []
+    if document.get("version") != 1:
+        violations.append("root ownership manifest version must be 1")
+    status = document.get("status")
+    if status not in {"open", "complete"}:
+        violations.append("root ownership manifest status must be open or complete")
+        status = "invalid"
+
+    entries = document.get("surface")
+    if not isinstance(entries, list):
+        return (["root ownership manifest must contain [[surface]] entries"], status, set())
+
+    recorded: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            violations.append("root ownership surface entry must be a table")
+            continue
+        path = entry.get("path")
+        state = entry.get("state")
+        role = entry.get("role")
+        if not isinstance(path, str) or not path.startswith("src/"):
+            violations.append(f"invalid root ownership path: {path!r}")
+            continue
+        if path in recorded:
+            violations.append(f"duplicate root ownership path: {path}")
+        if state not in ROOT_OWNERSHIP_STATES:
+            violations.append(f"{path}: invalid root ownership state {state!r}")
+            continue
+        if not isinstance(role, str) or not role.strip():
+            violations.append(f"{path}: root ownership role must not be empty")
+        recorded[path] = state
+
+    actual = root_source_surfaces()
+    missing = actual - recorded.keys()
+    stale = recorded.keys() - actual
+    for path in sorted(missing):
+        violations.append(f"unclassified root source surface: {path}")
+    for path in sorted(stale):
+        violations.append(f"stale root ownership surface: {path}")
+
+    temporary = {path for path, state in recorded.items() if state == "temporary"}
+    if status == "open" and not temporary:
+        violations.append("open root decomposition must identify temporary surfaces")
+    if status == "complete" and temporary:
+        violations.append(
+            "complete root decomposition still has temporary surfaces: "
+            + ", ".join(sorted(temporary))
+        )
+    return violations, status, temporary
 
 
 def source_ownership_violations() -> list[str]:
@@ -192,9 +264,20 @@ def main() -> int:
             print(f"  {path}")
         return 1
 
+    root_violations, ownership_status, temporary_surfaces = root_ownership_violations()
+    if root_violations:
+        print("root ownership manifest violations:")
+        for violation in root_violations:
+            print(f"  {violation}")
+        return 1
+
     ownership_matrix = Path("docs/workspace-ownership-matrix.md").read_text(encoding="utf-8")
-    if "| temporary |" in ownership_matrix:
-        print("workspace ownership matrix still contains temporary boundaries")
+    matrix_has_temporary = "| temporary |" in ownership_matrix
+    if ownership_status == "open" and not matrix_has_temporary:
+        print("open root decomposition is not reflected by temporary matrix boundaries")
+        return 1
+    if ownership_status == "complete" and matrix_has_temporary:
+        print("complete root decomposition matrix still contains temporary boundaries")
         return 1
 
     restored_facades = sorted(
@@ -213,7 +296,13 @@ def main() -> int:
             print(f"  {violation}")
         return 1
 
-    print("Mezzanine workspace dependency and ownership guardrails are valid.")
+    if ownership_status == "open":
+        print(
+            "Mezzanine workspace dependency guardrails are valid; "
+            f"root decomposition remains open across {len(temporary_surfaces)} surfaces."
+        )
+    else:
+        print("Mezzanine workspace dependency and ownership guardrails are valid.")
     return 0
 
 

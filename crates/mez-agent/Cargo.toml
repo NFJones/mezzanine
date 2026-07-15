@@ -8,6 +8,7 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
+mez-core = { path = "../mez-core" }
 base64 = "0.22"
 rand = "0.10"
 serde = { version = "1", features = ["derive"] }
