@@ -1010,9 +1010,10 @@ pub enum TerminalFrameStyle {
 
 #[cfg(test)]
 mod tests {
-    use mez_terminal::{TerminalSize, TerminalStyleSpan};
+    use mez_terminal::{TerminalScreen, TerminalSize, TerminalStyleSpan};
 
     use crate::layout::PaneGeometry;
+    use crate::process::PaneProcessOutput;
 
     use super::{
         AttachedClientEndpointReadiness, AttachedClientOutputDecision, AttachedClientStepPlan,
@@ -1169,6 +1170,45 @@ mod tests {
         assert_eq!(cycle.step.output_lines, ["pane"]);
         assert!(cycle.step.output_hangup);
         assert_eq!(cycle.step.error_roles, ["output"]);
+    }
+
+    /// Verifies fake pane-process output can flow through terminal emulation
+    /// into a writable headless mux client without product runtime adapters.
+    #[test]
+    fn headless_client_presents_fake_pane_process_output() {
+        let output = PaneProcessOutput {
+            pane_id: "pane-1".to_owned(),
+            primary_pid: 42,
+            bytes: b"ready\r\n$ ".to_vec(),
+        };
+        let mut screen = TerminalScreen::new(TerminalSize::new(8, 2).unwrap(), 16).unwrap();
+        screen.feed(&output.bytes);
+
+        let lines = screen.visible_lines();
+        let line_style_spans = screen
+            .visible_styled_lines()
+            .into_iter()
+            .map(|line| line.style_spans)
+            .collect();
+        let cycle = plan_headless_attached_client_cycle(
+            [AttachedClientEndpointReadiness {
+                role: "output",
+                input: false,
+                output: true,
+                readable: false,
+                writable: true,
+                hangup: false,
+                error: false,
+            }],
+            vec![output.pane_id],
+            Some((lines, line_style_spans)),
+            0,
+        );
+
+        assert_eq!(cycle.output_decision, AttachedClientOutputDecision::Present);
+        assert_eq!(cycle.step.actions, ["pane-1"]);
+        assert_eq!(cycle.step.output_lines, ["ready", "$"]);
+        assert_eq!(cycle.step.output_line_style_spans, [vec![], vec![]]);
     }
 
     /// Verifies mux-owned frame placement preserves authoritative viewport

@@ -22,7 +22,7 @@ persistence, transport, and composition adapters.
 |---|---|---|---|---|
 | Stable identifiers | `mez-core` | `crates/mez-core/src/ids.rs` | owned | Remove the root `mez_core::ids` forwarding export and import IDs directly. |
 | Terminal geometry, history, protocol, state, style, width, profiles, and screen parser | `mez-terminal` | `crates/mez-terminal/src/{geometry,history,protocol,state,style,width,profile,screen}.rs` and crate-owned screen tests | owned | The unused root profile facade is removed; remove remaining screen/style/state forwarding exports while keeping explicitly named product adapters for OSC 133 and host policy. |
-| Layout, session state/effects, PTY processes, input contracts, theme, and copy/readline primitives | `mez-mux` | `crates/mez-mux/src/{layout,session,process,input,theme,copy,readline}` | owned | Finish multi-surface rendering and headless attached-client behavior, then remove root compatibility aliases. |
+| Layout, session state/effects, PTY processes, input contracts, theme, and copy/readline primitives | `mez-mux` | `crates/mez-mux/src/{layout,session,process,input,theme,copy,readline}` | owned | The lower-crate fake pane-output-to-terminal-screen-to-headless-client flow is covered; finish input routing, resize/focus/layout, copy-mode, and redraw integration before removing root compatibility aliases. |
 | Mux presentation geometry | `mez-mux` | `crates/mez-mux/src/presentation.rs` | owned | Move neutral canvas/frame/divider/status composition and intrinsic tests from root rendering modules. |
 | Agent contracts and extracted pure policy | `mez-agent` | `crates/mez-agent/src/` owns action surfaces, schemas, context validation, provider contracts, scheduler, patch parsing, and ports | owned | Move the reusable turn harness and provider-independent execution/state machines, not just their DTOs. |
 
@@ -46,7 +46,7 @@ persistence, transport, and composition adapters.
 | Root surface | Final owner / root role | State | Required migration |
 |---|---|---|---|
 | `src/terminal/render/` | `mez-mux` composition plus root product presentation adapter | temporary | Move neutral canvas writes, frame/divider/status composition, pane placement, copy presentation, and intrinsic tests. Inject agent/prompt/permission/overlay view models and product styles. |
-| `src/terminal/client_loop.rs` | `mez-mux` headless client policy plus root host I/O adapter | temporary | Move redraw/invalidation and neutral input/output planning. Retain OS polling, raw-mode lifecycle, async runtime, and terminal FD operations in root. |
+| `src/terminal/client_loop.rs` | `mez-mux` headless client policy plus root host I/O adapter | temporary | Neutral readiness, lifecycle, pending-output precedence, and pane-output presentation planning are mux-owned and covered headlessly. Move redraw/invalidation and remaining neutral input planning; retain OS polling, raw-mode lifecycle, async runtime, and terminal FD operations in root. |
 | `src/terminal/copy.rs`, `client_loop.rs`, `mouse.rs` | `mez-mux` domain plus root product policy adapters | temporary | Move generic copy/input/client behavior. Retain transcript normalization, agent selectors, templated actions, overlays, and attached-host policy in root. |
 | `src/terminal/host_clipboard.rs` | root host clipboard process adapter | adapter | Keep platform command discovery and process execution product-owned; generic paste-buffer state is owned by `mez-mux`. |
 | `src/terminal/fd.rs` | root host terminal adapter | adapter | Keep raw terminal mode, FD polling, and host restoration product-owned; depend on mux/terminal contracts directly. |
@@ -88,7 +88,9 @@ product behavior. Consumers should otherwise import the owning crate directly.
    transcript persistence, and completion.
 2. A headless `mez-mux` fake-process/fake-client flow covering terminal output,
    viewport composition, input routing, resize/focus/layout effects, copy mode,
-   and redraw.
+   and redraw. The pane-output-to-`TerminalScreen`-to-writable-client segment is
+   covered by `headless_client_presents_fake_pane_process_output`; the remaining
+   input, layout-effect, copy-mode, and redraw segments are still required.
 3. Independent `mez-terminal` tests covering the complete one-surface engine.
 4. Root end-to-end tests for real PTY/host restoration and product agent-to-mux
    adapters.
