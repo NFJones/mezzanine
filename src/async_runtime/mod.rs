@@ -30,9 +30,7 @@ use crate::control::{ControlConnectionState, encode_control_body};
 use crate::error::{MezError, Result};
 use crate::event::{EventAudience, encode_event_notification};
 use crate::framing::{ProtocolFrameCodec, encode_frame};
-use crate::message::{
-    DeliveryCursor, FanoutBatch, MessageConnection, delivery_batch_json, encode_mmp_body,
-};
+use crate::message::encode_mmp_body;
 use crate::runtime::{
     AttachedClientStepApplication, RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
@@ -46,6 +44,7 @@ use crate::terminal::{
     MouseAction, TerminalClientLoopAction, TerminalClientLoopConfig,
     plan_attached_terminal_client_step, plan_attached_terminal_client_step_with_host_paste_buffer,
 };
+use mez_agent::messaging::{DeliveryCursor, FanoutBatch, MessageConnection, delivery_batch_json};
 use mez_agent::{AgentTurnExecution, AgentTurnLedger};
 use mez_core::ids::{AgentId, ClientId};
 use mez_mux::layout::Size;

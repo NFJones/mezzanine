@@ -4,7 +4,7 @@
 //! transcript references. They do not contain raw credentials or live processes.
 
 use crate::error::{MezError, Result};
-use crate::message::MessageServiceSnapshot;
+use mez_agent::messaging::{MessageService, MessageServiceSnapshot};
 use mez_mux::layout::LayoutPolicy;
 use mez_mux::process::PaneExitStatus;
 use mez_mux::session::{Session, SessionState};
@@ -1493,7 +1493,9 @@ fn validate_approval_decision_name(value: &str) -> Result<()> {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn validate_message_snapshot_state(state: &MessageServiceSnapshot) -> Result<()> {
-    crate::message::MessageService::from_snapshot_state(state).map(|_| ())
+    MessageService::from_snapshot_state(state)
+        .map(|_| ())
+        .map_err(Into::into)
 }
 
 /// Runs the validate mcp name operation for this subsystem.

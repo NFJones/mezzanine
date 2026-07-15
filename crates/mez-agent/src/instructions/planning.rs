@@ -5,9 +5,9 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::error::{MezError, Result};
+use crate::shell::shell_quote;
 
-use super::shell::shell_quote;
+use super::error::{InstructionDiscoveryError, InstructionDiscoveryResult};
 use super::types::{InstructionDiscoveryConfig, InstructionDiscoveryPlan};
 
 /// Builds a shell execution plan for discovering instruction files.
@@ -19,14 +19,14 @@ pub fn plan_instruction_discovery(
     project_root: impl Into<PathBuf>,
     task_path: impl Into<PathBuf>,
     config: &InstructionDiscoveryConfig,
-) -> Result<InstructionDiscoveryPlan> {
+) -> InstructionDiscoveryResult<InstructionDiscoveryPlan> {
     if config.project_filenames.is_empty() {
-        return Err(MezError::invalid_args(
+        return Err(InstructionDiscoveryError::invalid_args(
             "at least one project instruction filename is required",
         ));
     }
     if config.max_bytes == 0 {
-        return Err(MezError::invalid_args(
+        return Err(InstructionDiscoveryError::invalid_args(
             "instruction discovery max bytes must be greater than zero",
         ));
     }
@@ -36,12 +36,12 @@ pub fn plan_instruction_discovery(
     let project_root = project_root.into();
     let task_path = task_path.into();
     if !project_root.is_absolute() || !task_path.is_absolute() {
-        return Err(MezError::invalid_args(
+        return Err(InstructionDiscoveryError::invalid_args(
             "instruction discovery paths must be absolute",
         ));
     }
     if !task_path.starts_with(&project_root) {
-        return Err(MezError::invalid_args(
+        return Err(InstructionDiscoveryError::invalid_args(
             "instruction discovery task path must be inside the project root",
         ));
     }
@@ -78,10 +78,10 @@ pub fn plan_instruction_discovery(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn task_directory(project_root: &Path, task_path: &Path) -> Result<String> {
-    let relative = task_path
-        .strip_prefix(project_root)
-        .map_err(|_| MezError::invalid_args("task path must be inside project root"))?;
+fn task_directory(project_root: &Path, task_path: &Path) -> InstructionDiscoveryResult<String> {
+    let relative = task_path.strip_prefix(project_root).map_err(|_| {
+        InstructionDiscoveryError::invalid_args("task path must be inside project root")
+    })?;
     let dir = if task_path.extension().is_some() {
         relative.parent().unwrap_or_else(|| Path::new(""))
     } else {
@@ -99,13 +99,13 @@ fn task_directory(project_root: &Path, task_path: &Path) -> Result<String> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn validate_filename(filename: &str) -> Result<()> {
+fn validate_filename(filename: &str) -> InstructionDiscoveryResult<()> {
     if filename.is_empty()
         || filename.contains('/')
         || filename.contains('\\')
         || filename.bytes().any(|byte| byte.is_ascii_control())
     {
-        return Err(MezError::invalid_args(
+        return Err(InstructionDiscoveryError::invalid_args(
             "instruction filename must be a plain file name",
         ));
     }

@@ -29,6 +29,10 @@ EXPECTED_EDGES = {
 REQUIRED_OWNER_PATHS = {
     "crates/mez-agent/src/lib.rs",
     "crates/mez-agent/src/execution.rs",
+    "crates/mez-agent/src/instructions/mod.rs",
+    "crates/mez-agent/src/instructions/planning.rs",
+    "crates/mez-agent/src/messaging/mod.rs",
+    "crates/mez-agent/src/messaging/service.rs",
     "crates/mez-agent/src/shell/mod.rs",
     "crates/mez-agent/src/turn_runner.rs",
     "crates/mez-core/src/ids.rs",
@@ -84,6 +88,9 @@ ROOT_FORBIDDEN_DECLARATIONS = {
     "fn unescape_selector_shell_token": "selector shell-token normalization",
     "struct ActiveSelector": "active selector state",
     "struct HostBracketedPasteDecoder": "host-input framing state",
+    "struct InstructionDiscoveryConfig": "instruction discovery configuration",
+    "struct InstructionDiscoveryPlan": "instruction discovery command plan",
+    "struct MessageService": "MMP delivery service state",
     "struct SelectorCandidate": "selector candidate contract",
     "struct SelectorPlan": "selector replacement plan",
     "struct SelectorShadowHint": "selector shadow-hint contract",
@@ -92,6 +99,7 @@ ROOT_FORBIDDEN_DECLARATIONS = {
     "trait LocalActionExecutor": "local action execution port",
     "trait McpActionExecutor": "MCP execution port",
     "trait PaneShellExecutor": "pane shell execution port",
+    "fn plan_instruction_discovery": "instruction discovery command planning",
 }
 
 LOWER_CRATE_PREFIXES = ("mez_agent::", "mez_core::", "mez_mux::", "mez_terminal::")

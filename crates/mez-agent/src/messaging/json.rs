@@ -3,8 +3,7 @@
 //! Message dispatch currently uses deterministic small-format JSON helpers for
 //! protocol responses and targeted field extraction from inbound envelopes.
 
-use crate::error::{MezError, MezErrorKind};
-
+use super::error::{MessageError, MessageErrorKind};
 use super::types::{
     DeliveryBatch, DeliveryCursor, Envelope, MMP_DUPLICATE_MESSAGE_ID_MESSAGE, MMP_EXPIRED_MESSAGE,
     MMP_PAYLOAD_TOO_LARGE_MESSAGE, MMP_UNDELIVERABLE_MESSAGE, MMP_UNSUPPORTED_PROTOCOL_MESSAGE,
@@ -203,21 +202,24 @@ pub(super) fn mmp_error(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn mmp_error_code(error: &MezError) -> &'static str {
-    if error.kind() == MezErrorKind::InvalidArgs
+pub fn mmp_error_code(error: &MessageError) -> &'static str {
+    if error.kind() == MessageErrorKind::InvalidArgs
         && error.message() == MMP_UNSUPPORTED_PROTOCOL_MESSAGE
     {
         "unsupported_protocol"
-    } else if error.kind() == MezErrorKind::InvalidArgs
+    } else if error.kind() == MessageErrorKind::InvalidArgs
         && error.message() == MMP_PAYLOAD_TOO_LARGE_MESSAGE
     {
         "payload_too_large"
-    } else if error.kind() == MezErrorKind::NotFound && error.message() == MMP_UNDELIVERABLE_MESSAGE
+    } else if error.kind() == MessageErrorKind::NotFound
+        && error.message() == MMP_UNDELIVERABLE_MESSAGE
     {
         "undeliverable"
-    } else if error.kind() == MezErrorKind::InvalidState && error.message() == MMP_EXPIRED_MESSAGE {
+    } else if error.kind() == MessageErrorKind::InvalidState
+        && error.message() == MMP_EXPIRED_MESSAGE
+    {
         "expired"
-    } else if error.kind() == MezErrorKind::Conflict
+    } else if error.kind() == MessageErrorKind::Conflict
         && error.message() == MMP_DUPLICATE_MESSAGE_ID_MESSAGE
     {
         "invalid_envelope"
@@ -231,10 +233,12 @@ pub(super) fn mmp_error_code(error: &MezError) -> &'static str {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn mmp_delivery_status(error: &MezError) -> &'static str {
-    if error.kind() == MezErrorKind::NotFound && error.message() == MMP_UNDELIVERABLE_MESSAGE {
+pub(super) fn mmp_delivery_status(error: &MessageError) -> &'static str {
+    if error.kind() == MessageErrorKind::NotFound && error.message() == MMP_UNDELIVERABLE_MESSAGE {
         "undeliverable"
-    } else if error.kind() == MezErrorKind::InvalidState && error.message() == MMP_EXPIRED_MESSAGE {
+    } else if error.kind() == MessageErrorKind::InvalidState
+        && error.message() == MMP_EXPIRED_MESSAGE
+    {
         "expired"
     } else {
         "rejected"
@@ -246,11 +250,11 @@ pub(super) fn mmp_delivery_status(error: &MezError) -> &'static str {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn error_code(kind: MezErrorKind) -> &'static str {
+fn error_code(kind: MessageErrorKind) -> &'static str {
     match kind {
-        MezErrorKind::InvalidArgs => "invalid_envelope",
-        MezErrorKind::Forbidden => "unauthorized",
-        MezErrorKind::NotFound => "not_found",
+        MessageErrorKind::InvalidArgs => "invalid_envelope",
+        MessageErrorKind::Forbidden => "unauthorized",
+        MessageErrorKind::NotFound => "not_found",
         _ => "internal_error",
     }
 }

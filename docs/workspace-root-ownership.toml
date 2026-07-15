@@ -67,11 +67,6 @@ state = "product"
 role = "Product-local identifier predicates and diagnostics."
 
 [[surface]]
-path = "src/instructions"
-state = "temporary"
-role = "Instruction discovery adapter still contains lower-owned validation and command planning."
-
-[[surface]]
 path = "src/issues"
 state = "temporary"
 role = "SQLite issue repository still contains canonical agent issue records and validation."
@@ -103,8 +98,8 @@ role = "SQLite memory repository still contains canonical agent memory records a
 
 [[surface]]
 path = "src/message"
-state = "temporary"
-role = "Product MMP transport still contains the lower-owned deterministic messaging service and body protocol."
+state = "adapter"
+role = "Product content-length framing and concrete fanout writes over canonical mez-agent MMP contracts and delivery state."
 
 [[surface]]
 path = "src/permissions"

@@ -6,8 +6,9 @@
 use crate::error::{MezError, Result};
 use crate::framing::{ProtocolFrame, decode_frame, encode_frame};
 
-use super::dispatch::dispatch_mmp_body;
-use super::types::{MMP_CONTENT_TYPE, MessageConnection, MessageService};
+use mez_agent::messaging::{
+    MMP_CONTENT_TYPE, MessageConnection, MessageService, dispatch_mmp_body,
+};
 
 /// Runs the encode mmp body operation for this subsystem.
 ///

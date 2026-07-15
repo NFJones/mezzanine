@@ -248,7 +248,8 @@ async fn async_message_listener_can_schedule_multiple_connections() {
 /// implementation detail.
 #[tokio::test(flavor = "current_thread")]
 async fn async_message_connection_flushes_fanout_after_response_write() {
-    use crate::message::{Envelope, Recipient, decode_mmp_frame, encode_mmp_body};
+    use crate::message::{decode_mmp_frame, encode_mmp_body};
+    use mez_agent::messaging::{Envelope, Recipient};
     use std::time::Duration;
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

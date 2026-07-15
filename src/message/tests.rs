@@ -1,13 +1,16 @@
 //! Unit tests for message service delivery, MMP dispatch, and fanout behavior.
 
 use super::{
-    AgentPresenceStatus, DeliveryStatus, Envelope, MessageConnection, MessageFanoutSink,
-    MessageService, Recipient, SenderIdentity, TaskResultPayload, TaskState, TaskStatusPayload,
-    decode_mmp_frame, dispatch_mmp_body, encode_mmp_body, flush_message_fanout,
-    flush_message_fanout_for, handle_mmp_frame, mmp_error_code, validate_message_type,
+    MessageFanoutSink, decode_mmp_frame, encode_mmp_body, flush_message_fanout,
+    flush_message_fanout_for, handle_mmp_frame,
 };
 use crate::MezError;
 use crate::error::Result;
+use mez_agent::messaging::{
+    AgentPresenceStatus, DeliveryStatus, Envelope, MessageConnection, MessageErrorKind,
+    MessageService, Recipient, SenderIdentity, TaskResultPayload, TaskState, TaskStatusPayload,
+    dispatch_mmp_body, mmp_error_code, validate_message_type,
+};
 use mez_core::ids::IdFactory;
 use mez_core::ids::{AgentId, PaneId, WindowId};
 
@@ -189,7 +192,7 @@ fn conflicting_duplicate_message_ids_are_rejected() {
     service.accept_at(&sender.agent_id, first, 10).unwrap();
     let error = service.accept_at(&sender.agent_id, second, 11).unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::Conflict);
+    assert_eq!(error.kind(), MessageErrorKind::Conflict);
     assert_eq!(mmp_error_code(&error), "invalid_envelope");
     assert_eq!(service.receive_for(&target.agent_id, 12).len(), 1);
 }
@@ -210,7 +213,7 @@ fn rejects_sender_spoofing() {
         .accept(&sender.agent_id, envelope(spoofed))
         .unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert_eq!(error.kind(), MessageErrorKind::Forbidden);
 }
 
 /// Verifies mmp frame round trips raw json body.
@@ -1607,7 +1610,7 @@ fn undeliverable_messages_are_rejected() {
 
     let error = service.accept(&sender.agent_id, message).unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::NotFound);
+    assert_eq!(error.kind(), MessageErrorKind::NotFound);
     assert_eq!(mmp_error_code(&error), "undeliverable");
 }
 
@@ -1871,7 +1874,7 @@ fn zero_ttl_messages_are_rejected_before_delivery() {
         .accept_at(&sender.agent_id, message, 10)
         .unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
+    assert_eq!(error.kind(), MessageErrorKind::InvalidState);
     assert_eq!(mmp_error_code(&error), "expired");
     assert!(service.receive_for(&target.agent_id, 10).is_empty());
 }
@@ -1934,7 +1937,7 @@ fn oversized_payload_is_rejected() {
 
     let error = service.accept(&sender.agent_id, message).unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert_eq!(error.kind(), MessageErrorKind::InvalidArgs);
     assert_eq!(mmp_error_code(&error), "payload_too_large");
 }
 

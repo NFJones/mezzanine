@@ -96,11 +96,7 @@ use crate::mcp::{
     mcp_tools_call_operation, spawn_stdio_mcp_connection,
 };
 use crate::memory::{MemoryRecord, MemoryScope, MemorySource, SessionMemoryStore};
-use crate::message::{
-    Envelope, MessageConnection, MessageService, MessageServiceSnapshot, Recipient, SenderIdentity,
-    TaskResultPayload, TaskState, TaskStatusPayload, decode_mmp_frame, delivery_batch_json,
-    encode_mmp_body, handle_mmp_frame, validate_mmp_payload_metadata,
-};
+use crate::message::{decode_mmp_frame, encode_mmp_body, handle_mmp_frame};
 use crate::permissions::{
     ApprovalDecision, ApprovalGrant, ApprovalScope, ArgumentPolicy, BlockedApprovalQueue,
     BlockedApprovalRequest, BlockedApprovalState, CommandRule, CommandRuleScope,
@@ -131,6 +127,11 @@ use crate::terminal::{
 };
 use crate::transcript::{
     AgentSessionMetadata, AgentTranscriptStore, TranscriptEntry, TranscriptRole,
+};
+use mez_agent::messaging::{
+    Envelope, MessageConnection, MessageService, MessageServiceSnapshot, Recipient, SenderIdentity,
+    TaskResultPayload, TaskState, TaskStatusPayload, delivery_batch_json,
+    validate_mmp_payload_metadata,
 };
 use mez_agent::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, ActionContentBlock, ActionResult,

@@ -5,8 +5,9 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::error::{MezError, Result};
 use mez_core::ids::{AgentId, IdFactory, PaneId, StableId, WindowId};
+
+use super::error::{MessageError, MessageErrorKind, Result};
 
 use super::types::{
     AcceptedMessage, AgentPresenceStatus, Delivery, DeliveryBatch, DeliveryCursor, DeliveryStatus,
@@ -137,10 +138,10 @@ impl MessageService {
         let registered = self
             .registered
             .get(connection_agent)
-            .ok_or_else(|| MezError::forbidden("unregistered agent connection"))?;
+            .ok_or_else(|| MessageError::forbidden("unregistered agent connection"))?;
 
         if &envelope.sender != registered {
-            return Err(MezError::forbidden(
+            return Err(MessageError::forbidden(
                 "message sender does not match authenticated agent connection",
             ));
         }
@@ -151,18 +152,18 @@ impl MessageService {
                 }
                 return Ok(accepted.delivery.clone());
             }
-            return Err(MezError::conflict(MMP_DUPLICATE_MESSAGE_ID_MESSAGE));
+            return Err(MessageError::conflict(MMP_DUPLICATE_MESSAGE_ID_MESSAGE));
         }
 
         let queued_recipients = self.matching_recipients(&envelope).len();
         if queued_recipients == 0 {
-            return Err(MezError::new(
-                crate::error::MezErrorKind::NotFound,
+            return Err(MessageError::new(
+                MessageErrorKind::NotFound,
                 MMP_UNDELIVERABLE_MESSAGE,
             ));
         }
         if expires_before_delivery(&envelope) {
-            return Err(MezError::invalid_state(MMP_EXPIRED_MESSAGE));
+            return Err(MessageError::invalid_state(MMP_EXPIRED_MESSAGE));
         }
         let message_id = envelope.id.clone();
         let accepted_envelope = envelope.clone();
@@ -276,9 +277,10 @@ impl MessageService {
         status: AgentPresenceStatus,
         now_ms: u64,
     ) -> Result<()> {
-        let presence = self.presence.get_mut(agent_id).ok_or_else(|| {
-            MezError::new(crate::error::MezErrorKind::NotFound, "agent not found")
-        })?;
+        let presence = self
+            .presence
+            .get_mut(agent_id)
+            .ok_or_else(|| MessageError::not_found("agent not found"))?;
         presence.status = status;
         presence.updated_at_ms = now_ms;
         Ok(())
@@ -287,9 +289,10 @@ impl MessageService {
     /// Records a heartbeat for a registered agent without changing its
     /// declared presence status.
     pub fn record_heartbeat(&mut self, agent_id: &AgentId, now_ms: u64) -> Result<()> {
-        let presence = self.presence.get_mut(agent_id).ok_or_else(|| {
-            MezError::new(crate::error::MezErrorKind::NotFound, "agent not found")
-        })?;
+        let presence = self
+            .presence
+            .get_mut(agent_id)
+            .ok_or_else(|| MessageError::not_found("agent not found"))?;
         presence.updated_at_ms = now_ms;
         Ok(())
     }
@@ -441,7 +444,7 @@ impl MessageService {
     /// on duplicated control-flow logic.
     pub fn subscribe(&mut self, recipient: &AgentId) -> Result<DeliveryCursor> {
         self.registered.get(recipient).ok_or_else(|| {
-            MezError::forbidden("delivery subscription requires registered agent")
+            MessageError::forbidden("delivery subscription requires registered agent")
         })?;
         let cursor = DeliveryCursor {
             recipient: recipient.clone(),
@@ -474,7 +477,7 @@ impl MessageService {
         let cursor = self
             .subscriptions
             .get(recipient)
-            .ok_or_else(|| MezError::forbidden("agent has no delivery subscription"))?;
+            .ok_or_else(|| MessageError::forbidden("agent has no delivery subscription"))?;
         self.receive_after(cursor, now_ms, limit)
     }
 
@@ -549,10 +552,9 @@ impl MessageService {
         now_ms: u64,
         limit: usize,
     ) -> Result<DeliveryBatch> {
-        let identity = self
-            .registered
-            .get(&cursor.recipient)
-            .ok_or_else(|| MezError::forbidden("delivery cursor recipient is not registered"))?;
+        let identity = self.registered.get(&cursor.recipient).ok_or_else(|| {
+            MessageError::forbidden("delivery cursor recipient is not registered")
+        })?;
         if !self.recipient_is_available(&identity.agent_id) {
             return Ok(DeliveryBatch {
                 cursor: cursor.clone(),
@@ -589,14 +591,14 @@ impl MessageService {
         sequence: MessageSequence,
     ) -> Result<DeliveryCursor> {
         if sequence > self.last_sequence() {
-            return Err(MezError::invalid_args(
+            return Err(MessageError::invalid_args(
                 "delivery cursor cannot advance past the latest accepted message",
             ));
         }
         let cursor = self
             .subscriptions
             .get_mut(recipient)
-            .ok_or_else(|| MezError::forbidden("agent has no delivery subscription"))?;
+            .ok_or_else(|| MessageError::forbidden("agent has no delivery subscription"))?;
         cursor.last_sequence = cursor.last_sequence.max(sequence);
         Ok(cursor.clone())
     }
@@ -645,13 +647,13 @@ impl MessageService {
     fn enqueue(&mut self, envelope: Envelope, now_ms: u64) -> Result<MessageSequence> {
         let size = envelope.payload.len();
         if size > self.retention_bytes {
-            return Err(MezError::invalid_args(MMP_PAYLOAD_TOO_LARGE_MESSAGE));
+            return Err(MessageError::invalid_args(MMP_PAYLOAD_TOO_LARGE_MESSAGE));
         }
         let sequence = self.next_sequence;
         self.next_sequence = self
             .next_sequence
             .checked_add(1)
-            .ok_or_else(|| MezError::invalid_state("message sequence number exhausted"))?;
+            .ok_or_else(|| MessageError::invalid_state("message sequence number exhausted"))?;
         self.queued_bytes += size;
         self.queue.push_back(QueuedEnvelope {
             sequence,
@@ -773,7 +775,7 @@ fn expires_before_delivery(envelope: &Envelope) -> bool {
 /// on duplicated control-flow logic.
 fn validate_message_service_snapshot(snapshot: &MessageServiceSnapshot) -> Result<()> {
     if snapshot.protocol != MMP_PROTOCOL || snapshot.schema_version == 0 {
-        return Err(MezError::invalid_args(
+        return Err(MessageError::invalid_args(
             "snapshot MMP state has unsupported protocol or schema version",
         ));
     }
@@ -781,7 +783,7 @@ fn validate_message_service_snapshot(snapshot: &MessageServiceSnapshot) -> Resul
         || snapshot.retention_messages == 0
         || snapshot.retention_bytes == 0
     {
-        return Err(MezError::invalid_args(
+        return Err(MessageError::invalid_args(
             "snapshot MMP state sequence and retention values must be non-zero",
         ));
     }
@@ -799,7 +801,7 @@ fn validate_message_service_snapshot(snapshot: &MessageServiceSnapshot) -> Resul
     let mut queued_bytes = 0usize;
     for retained in &snapshot.retained_messages {
         if retained.sequence == 0 {
-            return Err(MezError::invalid_args(
+            return Err(MessageError::invalid_args(
                 "snapshot MMP retained message sequence must be non-zero",
             ));
         }
@@ -811,19 +813,19 @@ fn validate_message_service_snapshot(snapshot: &MessageServiceSnapshot) -> Resul
         let envelope = envelope_from_snapshot(&accepted.envelope)?;
         parse_delivery_status(&accepted.delivery.status)?;
         if accepted.delivery.message_id != envelope.id {
-            return Err(MezError::invalid_args(
+            return Err(MessageError::invalid_args(
                 "snapshot MMP accepted delivery id must match envelope id",
             ));
         }
         max_sequence = max_sequence.max(accepted.delivery.sequence);
     }
     if snapshot.next_sequence <= max_sequence {
-        return Err(MezError::invalid_args(
+        return Err(MessageError::invalid_args(
             "snapshot MMP next sequence must be greater than retained sequences",
         ));
     }
     if queued_bytes > snapshot.retention_bytes {
-        return Err(MezError::invalid_args(
+        return Err(MessageError::invalid_args(
             "snapshot MMP retained messages exceed retention bytes",
         ));
     }
@@ -857,7 +859,7 @@ fn sender_identity_from_snapshot(snapshot: &MessageIdentitySnapshot) -> Result<S
         .any(|capability| capability.is_empty())
         || snapshot.role.as_deref().is_some_and(str::is_empty)
     {
-        return Err(MezError::invalid_args(
+        return Err(MessageError::invalid_args(
             "snapshot MMP sender identity fields must not be empty",
         ));
     }
@@ -979,7 +981,7 @@ fn envelope_from_snapshot(snapshot: &MessageEnvelopeSnapshot) -> Result<Envelope
                 || serde_json::from_str::<serde_json::Value>(&field.value_json).is_err()
         })
     {
-        return Err(MezError::invalid_args(
+        return Err(MessageError::invalid_args(
             "snapshot MMP envelope fields must be valid and non-empty",
         ));
     }
@@ -1060,7 +1062,7 @@ fn recipient_from_snapshot(snapshot: &MessageRecipientSnapshot) -> Result<Recipi
         "group" => Ok(Recipient::Group(
             required_recipient_value(snapshot)?.to_string(),
         )),
-        _ => Err(MezError::invalid_args(
+        _ => Err(MessageError::invalid_args(
             "snapshot MMP recipient selector is invalid",
         )),
     }
@@ -1085,7 +1087,7 @@ fn required_recipient_value(snapshot: &MessageRecipientSnapshot) -> Result<&str>
         .value
         .as_deref()
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| MezError::invalid_args("snapshot MMP recipient value must not be empty"))
+        .ok_or_else(|| MessageError::invalid_args("snapshot MMP recipient value must not be empty"))
 }
 
 /// Runs the parse opaque id operation for this subsystem.
@@ -1095,7 +1097,7 @@ fn required_recipient_value(snapshot: &MessageRecipientSnapshot) -> Result<&str>
 /// on duplicated control-flow logic.
 fn parse_opaque_id(value: &str, field: &'static str) -> Result<StableId> {
     StableId::opaque(value).ok_or_else(|| {
-        MezError::invalid_args(format!(
+        MessageError::invalid_args(format!(
             "snapshot {field} is empty or contains control characters"
         ))
     })
@@ -1126,7 +1128,7 @@ fn parse_presence_status(value: &str) -> Result<AgentPresenceStatus> {
         "busy" => Ok(AgentPresenceStatus::Busy),
         "blocked" => Ok(AgentPresenceStatus::Blocked),
         "offline" => Ok(AgentPresenceStatus::Offline),
-        _ => Err(MezError::invalid_args(
+        _ => Err(MessageError::invalid_args(
             "snapshot MMP presence status is invalid",
         )),
     }
@@ -1155,7 +1157,7 @@ fn parse_delivery_status(value: &str) -> Result<DeliveryStatus> {
         "accepted" => Ok(DeliveryStatus::Accepted),
         "undeliverable" => Ok(DeliveryStatus::Undeliverable),
         "expired" => Ok(DeliveryStatus::Expired),
-        _ => Err(MezError::invalid_args(
+        _ => Err(MessageError::invalid_args(
             "snapshot MMP delivery status is invalid",
         )),
     }

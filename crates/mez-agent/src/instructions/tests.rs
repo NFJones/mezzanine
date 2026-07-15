@@ -3,7 +3,8 @@
 use std::{fs, path::PathBuf, process::Command};
 
 use super::{
-    InstructionDiscoveryConfig, parse_instruction_discovery_output, plan_instruction_discovery,
+    InstructionDiscoveryConfig, InstructionDiscoveryErrorKind, parse_instruction_discovery_output,
+    plan_instruction_discovery,
 };
 
 /// Verifies that discovery planning emits a pane-shell command rooted at the
@@ -84,7 +85,7 @@ fn instruction_discovery_rejects_paths_outside_project_root() {
     )
     .unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert_eq!(error.kind(), InstructionDiscoveryErrorKind::InvalidArgs);
 }
 
 /// Verifies that escaped content from the shell command is decoded into the

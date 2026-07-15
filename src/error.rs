@@ -284,6 +284,30 @@ impl From<mez_agent::semantic_patch::SemanticPatchPlanningError> for MezError {
     }
 }
 
+impl From<mez_agent::instructions::InstructionDiscoveryError> for MezError {
+    fn from(error: mez_agent::instructions::InstructionDiscoveryError) -> Self {
+        Self::invalid_args(error.message())
+    }
+}
+
+impl From<mez_agent::messaging::MessageError> for MezError {
+    fn from(error: mez_agent::messaging::MessageError) -> Self {
+        match error.kind() {
+            mez_agent::messaging::MessageErrorKind::InvalidArgs => {
+                Self::invalid_args(error.message())
+            }
+            mez_agent::messaging::MessageErrorKind::InvalidState => {
+                Self::invalid_state(error.message())
+            }
+            mez_agent::messaging::MessageErrorKind::Conflict => Self::conflict(error.message()),
+            mez_agent::messaging::MessageErrorKind::NotFound => {
+                Self::new(MezErrorKind::NotFound, error.message())
+            }
+            mez_agent::messaging::MessageErrorKind::Forbidden => Self::forbidden(error.message()),
+        }
+    }
+}
+
 impl From<mez_mux::MuxError> for MezError {
     fn from(error: mez_mux::MuxError) -> Self {
         match error.kind() {

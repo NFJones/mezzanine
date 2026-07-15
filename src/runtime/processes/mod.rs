@@ -980,7 +980,7 @@ impl RuntimeSessionService {
         {
             let _ = self.message_service.update_presence(
                 &agent_id,
-                crate::message::AgentPresenceStatus::Offline,
+                mez_agent::messaging::AgentPresenceStatus::Offline,
                 current_unix_seconds().saturating_mul(1000),
             );
         }

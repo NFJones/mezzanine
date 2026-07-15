@@ -3,8 +3,7 @@
 //! Validation centralizes spoofing-sensitive sender checks, supported baseline
 //! message types, extension namespace rules, and task-state names.
 
-use crate::error::{MezError, Result};
-
+use super::error::{MessageError, Result};
 use super::types::{MMP_PROTOCOL, MMP_UNSUPPORTED_PROTOCOL_MESSAGE, SenderIdentity, TaskState};
 
 /// Runs the validate sender identity operation for this subsystem.
@@ -14,21 +13,23 @@ use super::types::{MMP_PROTOCOL, MMP_UNSUPPORTED_PROTOCOL_MESSAGE, SenderIdentit
 /// on duplicated control-flow logic.
 pub(super) fn validate_sender_identity(identity: &SenderIdentity) -> Result<()> {
     if identity.agent_id.as_str().is_empty() {
-        return Err(MezError::invalid_args("message sender agent id is invalid"));
+        return Err(MessageError::invalid_args(
+            "message sender agent id is invalid",
+        ));
     }
     if identity
         .role
         .as_deref()
         .is_some_and(|role| role.is_empty() || role.chars().any(char::is_control))
     {
-        return Err(MezError::invalid_args("message sender role is invalid"));
+        return Err(MessageError::invalid_args("message sender role is invalid"));
     }
     if identity
         .capabilities
         .iter()
         .any(|capability| capability.is_empty() || capability.chars().any(char::is_control))
     {
-        return Err(MezError::invalid_args(
+        return Err(MessageError::invalid_args(
             "message sender capability is invalid",
         ));
     }
@@ -40,7 +41,7 @@ pub(super) fn validate_sender_identity(identity: &SenderIdentity) -> Result<()> 
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn validate_message_type(message_type: &str) -> Result<()> {
+pub fn validate_message_type(message_type: &str) -> Result<()> {
     let baseline = [
         "hello",
         "welcome",
@@ -60,7 +61,7 @@ pub(super) fn validate_message_type(message_type: &str) -> Result<()> {
     if baseline.contains(&message_type) || has_extension_namespace(message_type) {
         Ok(())
     } else {
-        Err(MezError::invalid_args("unsupported message type"))
+        Err(MessageError::invalid_args("unsupported message type"))
     }
 }
 
@@ -73,7 +74,7 @@ pub(super) fn validate_protocol(protocol: &str) -> Result<()> {
     if protocol == MMP_PROTOCOL {
         Ok(())
     } else {
-        Err(MezError::invalid_args(MMP_UNSUPPORTED_PROTOCOL_MESSAGE))
+        Err(MessageError::invalid_args(MMP_UNSUPPORTED_PROTOCOL_MESSAGE))
     }
 }
 
@@ -165,15 +166,15 @@ pub(super) fn validate_task_payload(
         return Ok(());
     }
     if content_type != "application/json" {
-        return Err(MezError::invalid_args(
+        return Err(MessageError::invalid_args(
             "MMP task messages require content_type application/json",
         ));
     }
     let value = serde_json::from_str::<serde_json::Value>(payload)
-        .map_err(|_| MezError::invalid_args("MMP task payload must be a valid JSON object"))?;
-    let object = value
-        .as_object()
-        .ok_or_else(|| MezError::invalid_args("MMP task payload must be a valid JSON object"))?;
+        .map_err(|_| MessageError::invalid_args("MMP task payload must be a valid JSON object"))?;
+    let object = value.as_object().ok_or_else(|| {
+        MessageError::invalid_args("MMP task payload must be a valid JSON object")
+    })?;
 
     match message_type {
         "task_status" => validate_task_status_payload(object),
@@ -187,36 +188,36 @@ pub(super) fn validate_task_payload(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(crate) fn validate_mmp_payload_metadata(
+pub fn validate_mmp_payload_metadata(
     message_type: &str,
     content_type: &str,
     payload: &str,
     payload_encoding: Option<&str>,
 ) -> Result<()> {
     if content_type.starts_with("text/") && content_type != "text/plain; charset=utf-8" {
-        return Err(MezError::invalid_args(
+        return Err(MessageError::invalid_args(
             "MMP text payloads require content_type text/plain; charset=utf-8",
         ));
     }
     if content_type == "application/json"
         && serde_json::from_str::<serde_json::Value>(payload).is_err()
     {
-        return Err(MezError::invalid_args(
+        return Err(MessageError::invalid_args(
             "MMP JSON payload must be valid JSON",
         ));
     }
     if content_type == "application/octet-stream" && payload_encoding != Some("base64") {
-        return Err(MezError::invalid_args(
+        return Err(MessageError::invalid_args(
             "MMP binary payloads require payload_encoding base64",
         ));
     }
     if payload_encoding == Some("base64") && !is_valid_base64_payload(payload) {
-        return Err(MezError::invalid_args(
+        return Err(MessageError::invalid_args(
             "MMP base64 payload must be valid base64",
         ));
     }
     if payload_encoding.is_some_and(|encoding| encoding != "base64") {
-        return Err(MezError::invalid_args(
+        return Err(MessageError::invalid_args(
             "MMP payload_encoding must be base64 when present",
         ));
     }
@@ -258,7 +259,7 @@ pub(super) fn is_valid_base64_payload(payload: &str) -> bool {
 fn validate_task_status_payload(object: &serde_json::Map<String, serde_json::Value>) -> Result<()> {
     let task_id = required_task_string(object, "task_id")?;
     if task_id.trim().is_empty() {
-        return Err(MezError::invalid_args(
+        return Err(MessageError::invalid_args(
             "MMP task payload task_id is invalid",
         ));
     }
@@ -269,10 +270,10 @@ fn validate_task_status_payload(object: &serde_json::Map<String, serde_json::Val
         && !progress.is_null()
     {
         let progress = progress.as_u64().ok_or_else(|| {
-            MezError::invalid_args("MMP task_status progress_percent must be 0 through 100")
+            MessageError::invalid_args("MMP task_status progress_percent must be 0 through 100")
         })?;
         if progress > 100 {
-            return Err(MezError::invalid_args(
+            return Err(MessageError::invalid_args(
                 "MMP task_status progress_percent must be 0 through 100",
             ));
         }
@@ -288,14 +289,14 @@ fn validate_task_status_payload(object: &serde_json::Map<String, serde_json::Val
 fn validate_task_result_payload(object: &serde_json::Map<String, serde_json::Value>) -> Result<()> {
     let task_id = required_task_string(object, "task_id")?;
     if task_id.trim().is_empty() {
-        return Err(MezError::invalid_args(
+        return Err(MessageError::invalid_args(
             "MMP task payload task_id is invalid",
         ));
     }
     object
         .get("success")
         .and_then(serde_json::Value::as_bool)
-        .ok_or_else(|| MezError::invalid_args("MMP task_result requires boolean success"))?;
+        .ok_or_else(|| MessageError::invalid_args("MMP task_result requires boolean success"))?;
     let _summary = required_task_string(object, "summary")?;
     let _output = required_task_string(object, "output")?;
     Ok(())
@@ -313,7 +314,7 @@ fn required_task_string<'a>(
     object
         .get(field)
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| MezError::invalid_args(format!("MMP task payload requires {field}")))
+        .ok_or_else(|| MessageError::invalid_args(format!("MMP task payload requires {field}")))
 }
 
 /// Runs the parse task state name operation for this subsystem.
@@ -329,7 +330,7 @@ fn parse_task_state_name(state: &str) -> Result<TaskState> {
         "succeeded" => Ok(TaskState::Succeeded),
         "failed" => Ok(TaskState::Failed),
         "cancelled" => Ok(TaskState::Cancelled),
-        _ => Err(MezError::invalid_args("unsupported task state")),
+        _ => Err(MessageError::invalid_args("unsupported task state")),
     }
 }
 

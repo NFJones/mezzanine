@@ -570,7 +570,7 @@ pub(crate) struct RuntimeSnapshotOwnedCreationContext {
     /// Approval requests to include in the snapshot payload.
     pub approval_requests: Vec<crate::snapshot::SnapshotApprovalRequestMetadata>,
     /// Message-service state to include in the snapshot payload.
-    pub message_state: crate::message::MessageServiceSnapshot,
+    pub message_state: mez_agent::messaging::MessageServiceSnapshot,
     /// MCP server state to include in the snapshot payload.
     pub mcp_servers: Vec<crate::snapshot::SnapshotMcpServerState>,
 }

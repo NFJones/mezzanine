@@ -9,8 +9,8 @@ use super::{
     SnapshotRepository, SnapshotSessionState, SnapshotShellMetadata, SnapshotState,
     WindowSnapshotPayload,
 };
-use crate::message::{Envelope, MessageService, Recipient};
 use crate::shell::{ResolvedShell, ShellSource};
+use mez_agent::messaging::{Envelope, MessageService, Recipient};
 use mez_mux::layout::{LayoutNode, LayoutPolicy, PaneGeometry, Size, SplitDirection};
 use mez_mux::session::{Session, SessionState};
 use mez_terminal::TerminalSavedDecPrivateMode;

@@ -562,6 +562,7 @@ impl RuntimeSessionService {
             ),
         )?;
         if let Err(error) = delivery {
+            let error = MezError::from(error);
             self.append_lifecycle_event(
                 EventKind::AgentStatus,
                 format!(
@@ -776,9 +777,10 @@ impl RuntimeSessionService {
                 })
                 .unwrap_or_default(),
         };
-        self.message_service
+        Ok(self
+            .message_service
             .accept_at(&child_identity.agent_id, envelope, now_ms)
-            .map(|_| ())
+            .map(|_| ())?)
     }
 
     /// Resolves a parent `spawn_agent` action that joined a child task result.

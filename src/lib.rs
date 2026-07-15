@@ -74,7 +74,6 @@ pub(crate) mod identifiers;
 ///
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
-pub mod instructions;
 /// Exposes the issues module boundary.
 ///
 /// The nested module keeps local issue tracking isolated while this declaration

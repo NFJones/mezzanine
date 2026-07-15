@@ -517,7 +517,8 @@ impl AsyncRuntimeSessionActor {
                                 batch,
                             }
                         })
-                    });
+                    })
+                    .map_err(Into::into);
                 let _ = reply.send(result);
                 false
             }
@@ -525,7 +526,8 @@ impl AsyncRuntimeSessionActor {
                 let result = self
                     .service
                     .message_service_mut()
-                    .acknowledge_fanout_batch(&batch);
+                    .acknowledge_fanout_batch(&batch)
+                    .map_err(Into::into);
                 let _ = reply.send(result);
                 false
             }

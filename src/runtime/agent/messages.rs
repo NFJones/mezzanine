@@ -95,6 +95,7 @@ impl RuntimeSessionService {
         };
         let content_type = runtime_maap_message_content_type(content_type);
         if let Err(error) = validate_mmp_payload_metadata("send", &content_type, payload, None) {
+            let error = MezError::from(error);
             let mut result = ActionResult::failed(
                 turn,
                 action,
@@ -139,6 +140,7 @@ impl RuntimeSessionService {
         {
             Ok(delivery) => delivery,
             Err(error) => {
+                let error = MezError::from(error);
                 let mut result = ActionResult::failed(
                     turn,
                     action,
@@ -187,7 +189,7 @@ impl RuntimeSessionService {
         let window_id = self
             .find_pane_descriptor(&turn.pane_id)
             .map(|descriptor| descriptor.window_id);
-        self.message_service.ensure_agent_identity(
+        Ok(self.message_service.ensure_agent_identity(
             SenderIdentity {
                 agent_id,
                 pane_id,
@@ -196,6 +198,6 @@ impl RuntimeSessionService {
                 capabilities: vec!["agent-harness".to_string()],
             },
             current_unix_seconds().saturating_mul(1000),
-        )
+        )?)
     }
 }

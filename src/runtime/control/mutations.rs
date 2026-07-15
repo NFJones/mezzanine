@@ -762,7 +762,7 @@ impl RuntimeSessionService {
             .as_ref()
             .and_then(|pane_id| self.find_pane_descriptor(pane_id.as_str()))
             .map(|descriptor| descriptor.window_id);
-        self.message_service.ensure_agent_identity(
+        Ok(self.message_service.ensure_agent_identity(
             SenderIdentity {
                 agent_id,
                 pane_id,
@@ -774,7 +774,7 @@ impl RuntimeSessionService {
                     .collect(),
             },
             now_ms,
-        )
+        )?)
     }
 
     /// Runs the dispatch runtime pane capture operation for this subsystem.

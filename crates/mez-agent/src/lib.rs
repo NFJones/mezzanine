@@ -74,6 +74,8 @@ pub mod mcp;
 pub mod memory;
 /// Per-turn persistent-memory action guardrails.
 pub mod memory_guardrail;
+/// Deterministic local-agent message protocol and delivery service state.
+pub mod messaging;
 /// Provider-independent model profile records and selection policy.
 pub mod model_profile;
 /// Provider-independent successful model response contract.
