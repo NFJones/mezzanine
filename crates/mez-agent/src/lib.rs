@@ -98,13 +98,11 @@ pub use agent_shell::{
     validate_agent_shell_required,
 };
 pub use anthropic::{
-    AnthropicMessagesOptions, AnthropicResponseError, DEFAULT_ANTHROPIC_MAX_TOKENS,
-    DEFAULT_ANTHROPIC_PROMPT_CACHING, DEFAULT_ANTHROPIC_VERSION, anthropic_content_to_output,
+    AnthropicMessagesOptions, AnthropicMessagesResponse, AnthropicResponseError,
+    DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_PROMPT_CACHING, DEFAULT_ANTHROPIC_VERSION,
     anthropic_messages_endpoint_for_base_url, anthropic_messages_request_body,
-    anthropic_overlay_usage, anthropic_provider_failure_event_json,
     anthropic_provider_failure_json, anthropic_request_requires_maap,
-    anthropic_stop_reason_response_error, anthropic_unsupported_content_block_error,
-    anthropic_usage_from_value,
+    parse_anthropic_messages_provider_body,
 };
 pub use auth::{ProviderAuthMetadata, ProviderCredentialKind, ProviderCredentialSource};
 pub use config_change::{
