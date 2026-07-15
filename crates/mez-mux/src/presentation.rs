@@ -1012,6 +1012,9 @@ pub enum TerminalFrameStyle {
 mod tests {
     use mez_terminal::{TerminalScreen, TerminalSize, TerminalStyleSpan};
 
+    use crate::input::{
+        KeyBindings, MuxAction, TerminalInputClassification, classify_terminal_input,
+    };
     use crate::layout::PaneGeometry;
     use crate::process::PaneProcessOutput;
 
@@ -1209,6 +1212,41 @@ mod tests {
         assert_eq!(cycle.step.actions, ["pane-1"]);
         assert_eq!(cycle.step.output_lines, ["ready", "$"]);
         assert_eq!(cycle.step.output_line_style_spans, [vec![], vec![]]);
+    }
+
+    /// Verifies a headless client can route raw terminal input through the
+    /// mux-owned classifier before retaining the resulting action in its cycle.
+    #[test]
+    fn headless_client_routes_mux_and_pane_input() {
+        let bindings = KeyBindings::default();
+        let mux_input = classify_terminal_input(b"\x01 ", &bindings).unwrap();
+        let pane_input = classify_terminal_input(b"echo ready\r", &bindings).unwrap();
+        let cycle = plan_headless_attached_client_cycle(
+            [AttachedClientEndpointReadiness {
+                role: "input",
+                input: true,
+                output: false,
+                readable: true,
+                writable: false,
+                hangup: false,
+                error: false,
+            }],
+            vec![mux_input, pane_input],
+            None,
+            0,
+        );
+
+        assert_eq!(
+            cycle.step.actions,
+            [
+                TerminalInputClassification::Mux(MuxAction::CycleLayouts),
+                TerminalInputClassification::ForwardToPane,
+            ]
+        );
+        assert_eq!(
+            cycle.output_decision,
+            AttachedClientOutputDecision::WaitForOutput
+        );
     }
 
     /// Verifies mux-owned frame placement preserves authoritative viewport
