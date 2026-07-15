@@ -6,9 +6,12 @@
 //! policy, overlays, and host terminal encoding.
 
 use mez_terminal::{
-    TerminalStyleSpan, TerminalStyledLine, terminal_emoji_width, terminal_grapheme_width,
-    terminal_graphemes, terminal_text_width,
+    GraphicRendition, TerminalStyleSpan, TerminalStyledLine, terminal_emoji_width,
+    terminal_grapheme_width, terminal_graphemes, terminal_text_width,
 };
+
+use crate::layout::PaneGeometry;
+use crate::presentation::{PaneDividerCell, pane_divider_cells};
 
 /// One display-cell slot in a mux-owned render canvas.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +75,97 @@ pub fn write_single_width_cell(row: &mut [TerminalRenderCell], column: usize, gl
         right = right.saturating_add(1);
     }
     row[column] = TerminalRenderCell::from_char(glyph);
+}
+
+/// Writes mux-owned pane-divider glyphs and caller-supplied style policy into
+/// render canvases.
+pub fn draw_styled_pane_dividers(
+    text_canvas: &mut [Vec<TerminalRenderCell>],
+    style_canvas: &mut [Vec<TerminalStyleSpan>],
+    geometries: &[PaneGeometry],
+    include_horizontal: bool,
+    active_pane_index: usize,
+    active_rendition: GraphicRendition,
+    divider_rendition: GraphicRendition,
+) {
+    for cell in pane_divider_cells(geometries, include_horizontal) {
+        let row = usize::from(cell.row);
+        let column = usize::from(cell.column);
+        if let Some(line) = text_canvas.get_mut(row) {
+            write_single_width_cell(line, column, cell.glyph);
+        }
+        if let Some(spans) = style_canvas.get_mut(row) {
+            spans.push(TerminalStyleSpan {
+                start: column,
+                length: 1,
+                rendition: if divider_cell_touches_pane(cell, geometries, active_pane_index) {
+                    active_rendition
+                } else {
+                    divider_rendition
+                },
+            });
+        }
+    }
+}
+
+/// Builds caller-styled spans for divider junctions bounding a merged pane
+/// frame row.
+pub fn merged_pane_frame_boundary_style_spans(
+    geometries: &[PaneGeometry],
+    row: u16,
+    column_start: usize,
+    width: usize,
+    rendition: GraphicRendition,
+) -> Vec<TerminalStyleSpan> {
+    pane_divider_cells(geometries, true)
+        .into_iter()
+        .filter(|cell| {
+            cell.row == row && merged_pane_frame_boundary_cell(*cell, column_start, width)
+        })
+        .map(|cell| TerminalStyleSpan {
+            start: usize::from(cell.column),
+            length: 1,
+            rendition,
+        })
+        .collect()
+}
+
+fn merged_pane_frame_boundary_cell(
+    cell: PaneDividerCell,
+    column_start: usize,
+    width: usize,
+) -> bool {
+    if cell.glyph == '\u{2502}' {
+        return false;
+    }
+    let column = usize::from(cell.column);
+    let column_end = column_start.saturating_add(width);
+    (column_start > 0 && column.saturating_add(1) == column_start) || column == column_end
+}
+
+fn divider_cell_touches_pane(
+    cell: PaneDividerCell,
+    geometries: &[PaneGeometry],
+    pane_index: usize,
+) -> bool {
+    let Some(geometry) = geometries
+        .iter()
+        .find(|geometry| geometry.index == pane_index)
+    else {
+        return false;
+    };
+    let column = cell.column;
+    let row = cell.row;
+    let vertical_overlap = row >= geometry.row && row < geometry.row.saturating_add(geometry.rows);
+    let horizontal_overlap =
+        column >= geometry.column && column < geometry.column.saturating_add(geometry.columns);
+    let right_edge = geometry
+        .column
+        .saturating_add(geometry.columns)
+        .saturating_sub(1);
+    let bottom_edge = geometry.row.saturating_add(geometry.rows).saturating_sub(1);
+    (vertical_overlap && (column == right_edge || column.saturating_add(1) == geometry.column))
+        || (horizontal_overlap && (row == bottom_edge || row.saturating_add(1) == geometry.row))
 }
 
 /// Writes bounded text into a terminal cell row using wide-cell sentinels.
