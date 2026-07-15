@@ -666,6 +666,76 @@ pub fn rendered_window_body_size(size: TerminalSize, window_frames_enabled: bool
     }
 }
 
+/// One pane selected for dependency-neutral window rendering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaneRenderPlan {
+    /// Pane index used to locate the source pane and its prepared rows.
+    pub source_index: usize,
+    /// Pane placement within the drawable window body.
+    pub geometry: PaneGeometry,
+    /// Visible pane region after shared-divider reservations.
+    pub render_region_size: TerminalSize,
+    /// Whether the pane frame occupies an adjacent shared divider.
+    pub frame_merges_into_divider: bool,
+}
+
+/// Dependency-neutral geometry plan for rendering one mux window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowRenderPlan {
+    /// Drawable size after reserving the optional window frame.
+    pub body_size: TerminalSize,
+    /// Ordered pane sources and placements to render into the body.
+    pub panes: Vec<PaneRenderPlan>,
+}
+
+/// Plans pane selection, zoom handling, geometry, and frame merging for a window.
+///
+/// Returns `None` when the window has no panes or references a missing zoomed
+/// pane. Product renderers remain responsible for preparing pane content,
+/// frame text, themes, overlays, and host-terminal output.
+pub fn plan_window_render(
+    window: &crate::layout::Window,
+    window_frames_enabled: bool,
+    pane_frames_enabled: bool,
+    pane_frame_position: TerminalFramePosition,
+) -> Option<WindowRenderPlan> {
+    if window.panes().is_empty() {
+        return None;
+    }
+    let body_size = rendered_window_body_size(window.size, window_frames_enabled);
+    if let Some(zoomed_id) = window.zoomed_pane_id() {
+        let pane = window.panes().iter().find(|pane| pane.id == *zoomed_id)?;
+        return Some(WindowRenderPlan {
+            body_size,
+            panes: vec![PaneRenderPlan {
+                source_index: pane.index,
+                geometry: PaneGeometry {
+                    index: pane.index,
+                    column: 0,
+                    row: 0,
+                    columns: body_size.columns,
+                    rows: body_size.rows,
+                },
+                render_region_size: body_size,
+                frame_merges_into_divider: false,
+            }],
+        });
+    }
+    let geometries = window.pane_geometries_for_size(body_size);
+    let panes = geometries
+        .iter()
+        .copied()
+        .map(|geometry| PaneRenderPlan {
+            source_index: geometry.index,
+            render_region_size: pane_render_region_size_for_geometry(&geometry, &geometries),
+            frame_merges_into_divider: pane_frames_enabled
+                && pane_frame_merges_into_divider(&geometry, &geometries, pane_frame_position),
+            geometry,
+        })
+        .collect();
+    Some(WindowRenderPlan { body_size, panes })
+}
+
 /// Returns whether a pane has a shared horizontal divider immediately below it.
 pub fn geometry_has_bottom_divider(geometry: &PaneGeometry, geometries: &[PaneGeometry]) -> bool {
     let bottom = geometry.row.saturating_add(geometry.rows);
@@ -1171,7 +1241,7 @@ mod tests {
         pane_content_size_for_geometry, pane_divider_cells, pane_divider_glyph,
         pane_frame_merges_into_divider, pane_render_region_size_for_geometry, place_group_frame,
         place_window_frame, plan_attached_client_output, plan_attached_client_step,
-        plan_headless_attached_client_cycle, rendered_window_body_size,
+        plan_headless_attached_client_cycle, plan_window_render, rendered_window_body_size,
     };
 
     /// Verifies neutral frame contracts retain the product's established
@@ -1494,6 +1564,49 @@ mod tests {
         assert_eq!(resize_effects.len(), 2);
         assert!(resize_effects.iter().all(|effect| effect.size.columns > 0));
         assert!(resize_effects.iter().all(|effect| effect.size.rows > 0));
+    }
+
+    /// Verifies window render planning owns normal and zoomed pane selection,
+    /// frame reservations, and geometry without product rendering adapters.
+    #[test]
+    fn window_render_plan_owns_normal_and_zoomed_geometry() {
+        let mut session = Session::new_default(
+            SessionShell::new(PathBuf::from("/bin/sh"), "fallback-bin-sh", true),
+            Size::new(80, 24).unwrap(),
+        );
+        let primary = session.attach_primary("primary", true).unwrap();
+        session
+            .split_active_pane(&primary, SplitDirection::Vertical)
+            .unwrap();
+
+        let plan = plan_window_render(
+            session.active_window().unwrap(),
+            true,
+            true,
+            TerminalFramePosition::Top,
+        )
+        .unwrap();
+        assert_eq!(plan.body_size, Size::new(80, 23).unwrap());
+        assert_eq!(plan.panes.len(), 2);
+        assert!(
+            plan.panes
+                .iter()
+                .all(|pane| pane.render_region_size.rows > 0)
+        );
+
+        session.toggle_active_pane_zoom(&primary).unwrap();
+        let zoomed = plan_window_render(
+            session.active_window().unwrap(),
+            true,
+            true,
+            TerminalFramePosition::Top,
+        )
+        .unwrap();
+        assert_eq!(zoomed.panes.len(), 1);
+        assert_eq!(zoomed.panes[0].geometry.column, 0);
+        assert_eq!(zoomed.panes[0].geometry.row, 0);
+        assert_eq!(zoomed.panes[0].render_region_size, zoomed.body_size);
+        assert!(!zoomed.panes[0].frame_merges_into_divider);
     }
 
     /// Verifies a headless client can drive mux-owned copy navigation and use

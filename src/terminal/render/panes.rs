@@ -139,48 +139,26 @@ pub fn render_window_with_pane_frame_template(
     window_frame: TerminalFrameRenderOptions<'_>,
     pane_frame: TerminalFrameRenderOptions<'_>,
 ) -> Result<Vec<String>> {
-    if window.panes().is_empty() {
-        return Err(MezError::invalid_state(
-            "cannot render a window with no panes",
-        ));
-    }
-    let body_size = window_body_size(window.size, window_frame.enabled)?;
-
-    if let Some(rendered) =
-        zoomed_pane_render_input(window, pane_inputs, frame_context, pane_frame, body_size)
-    {
-        let zoomed_geometry = zoomed_pane_geometry(window.active_pane_index(), body_size);
-        let mut lines = render_panes_by_geometry(
-            body_size,
-            &[zoomed_geometry],
-            &[rendered],
-            window,
-            frame_context,
-            pane_frame,
-        );
-        if window_frame.enabled {
-            let frame = fit_width(
-                &render_window_frame_text(
-                    window,
-                    frame_context,
-                    window_frame.template,
-                    usize::from(window.size.columns),
-                ),
-                usize::from(window.size.columns),
-            );
-            place_window_frame(&mut lines, frame, window_frame.position, window.size.rows);
-        }
-        return Ok(lines);
-    }
-
-    let geometries = rendered_pane_geometries(window, window_frame.enabled)?;
-    let rendered_panes = geometries
+    let plan = plan_window_render(
+        window,
+        window_frame.enabled,
+        pane_frame.enabled,
+        pane_frame.position,
+    )
+    .ok_or_else(|| MezError::invalid_state("cannot render a window with no panes"))?;
+    let geometries = plan
+        .panes
         .iter()
-        .map(|geometry| {
+        .map(|pane| pane.geometry)
+        .collect::<Vec<_>>();
+    let rendered_panes = plan
+        .panes
+        .iter()
+        .map(|render_plan| {
             let pane = window
                 .panes()
                 .iter()
-                .find(|pane| pane.index == geometry.index)
+                .find(|pane| pane.index == render_plan.source_index)
                 .unwrap_or_else(|| window.active_pane());
             let lines = pane_inputs
                 .iter()
@@ -188,22 +166,20 @@ pub fn render_window_with_pane_frame_template(
                 .map(|input| input.lines.as_slice())
                 .unwrap_or(&[]);
             let mut display_pane = pane.clone();
-            display_pane.size = pane_render_region_size_for_geometry(geometry, &geometries)?;
-            let merges = pane_frame.enabled
-                && pane_frame_merges_into_divider(geometry, &geometries, pane_frame.position);
+            display_pane.size = render_plan.render_region_size;
             Ok(render_pane_lines(
                 window,
                 &display_pane,
                 frame_context,
                 lines,
                 pane_frame,
-                merges,
+                render_plan.frame_merges_into_divider,
             ))
         })
         .collect::<Result<Vec<_>>>()?;
 
     let mut lines = render_panes_by_geometry(
-        body_size,
+        plan.body_size,
         &geometries,
         &rendered_panes,
         window,
@@ -256,53 +232,26 @@ pub(super) fn render_styled_window_with_pane_frame_template(
     pane_frame: TerminalFrameRenderOptions<'_>,
     ui_theme: &UiTheme,
 ) -> Result<Vec<TerminalStyledLine>> {
-    if window.panes().is_empty() {
-        return Err(MezError::invalid_state(
-            "cannot render a window with no panes",
-        ));
-    }
-    let body_size = window_body_size(window.size, window_frame.enabled)?;
-
-    if let Some(rendered) = zoomed_styled_pane_render_input(
+    let plan = plan_window_render(
         window,
-        pane_inputs,
-        frame_context,
-        pane_frame,
-        body_size,
-        ui_theme,
-    ) {
-        let zoomed_geometry = zoomed_pane_geometry(window.active_pane_index(), body_size);
-        let mut lines = render_styled_panes_by_geometry(
-            body_size,
-            &[zoomed_geometry],
-            &[rendered],
-            window,
-            frame_context,
-            pane_frame,
-            ui_theme,
-        );
-        if window_frame.enabled {
-            let frame = styled_window_frame_line(
-                window,
-                frame_context,
-                window_frame.template,
-                usize::from(window.size.columns),
-                window_frame.style,
-                ui_theme,
-            );
-            place_window_frame(&mut lines, frame, window_frame.position, window.size.rows);
-        }
-        return Ok(lines);
-    }
-
-    let geometries = rendered_pane_geometries(window, window_frame.enabled)?;
-    let rendered_panes = geometries
+        window_frame.enabled,
+        pane_frame.enabled,
+        pane_frame.position,
+    )
+    .ok_or_else(|| MezError::invalid_state("cannot render a window with no panes"))?;
+    let geometries = plan
+        .panes
         .iter()
-        .map(|geometry| {
+        .map(|pane| pane.geometry)
+        .collect::<Vec<_>>();
+    let rendered_panes = plan
+        .panes
+        .iter()
+        .map(|render_plan| {
             let pane = window
                 .panes()
                 .iter()
-                .find(|pane| pane.index == geometry.index)
+                .find(|pane| pane.index == render_plan.source_index)
                 .unwrap_or_else(|| window.active_pane());
             let lines = pane_inputs
                 .iter()
@@ -310,23 +259,21 @@ pub(super) fn render_styled_window_with_pane_frame_template(
                 .map(|input| input.lines.as_slice())
                 .unwrap_or(&[]);
             let mut display_pane = pane.clone();
-            display_pane.size = pane_render_region_size_for_geometry(geometry, &geometries)?;
-            let merges = pane_frame.enabled
-                && pane_frame_merges_into_divider(geometry, &geometries, pane_frame.position);
+            display_pane.size = render_plan.render_region_size;
             Ok(render_styled_pane_lines(
                 window,
                 &display_pane,
                 frame_context,
                 lines,
                 pane_frame,
-                merges,
+                render_plan.frame_merges_into_divider,
                 ui_theme,
             ))
         })
         .collect::<Result<Vec<_>>>()?;
 
     let mut lines = render_styled_panes_by_geometry(
-        body_size,
+        plan.body_size,
         &geometries,
         &rendered_panes,
         window,
@@ -348,91 +295,6 @@ pub(super) fn render_styled_window_with_pane_frame_template(
     Ok(lines)
 }
 
-/// Runs the zoomed pane render input operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn zoomed_pane_render_input(
-    window: &Window,
-    pane_inputs: &[PaneRenderInput],
-    frame_context: &TerminalFrameContext,
-    pane_frame: TerminalFrameRenderOptions<'_>,
-    body_size: Size,
-) -> Option<Vec<String>> {
-    let zoomed_id = window.zoomed_pane_id()?;
-    let pane = window
-        .panes()
-        .iter()
-        .find(|pane| pane.id.as_str() == zoomed_id.as_str())?;
-    let lines = pane_inputs
-        .iter()
-        .find(|input| input.pane_id == pane.id.to_string())
-        .map(|input| input.lines.as_slice())
-        .unwrap_or(&[]);
-    let mut display_pane = pane.clone();
-    display_pane.size = body_size;
-    Some(render_pane_lines(
-        window,
-        &display_pane,
-        frame_context,
-        lines,
-        pane_frame,
-        false,
-    ))
-}
-
-/// Runs the zoomed styled pane render input operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn zoomed_styled_pane_render_input(
-    window: &Window,
-    pane_inputs: &[StyledPaneRenderInput],
-    frame_context: &TerminalFrameContext,
-    pane_frame: TerminalFrameRenderOptions<'_>,
-    body_size: Size,
-    ui_theme: &UiTheme,
-) -> Option<Vec<TerminalStyledLine>> {
-    let zoomed_id = window.zoomed_pane_id()?;
-    let pane = window
-        .panes()
-        .iter()
-        .find(|pane| pane.id.as_str() == zoomed_id.as_str())?;
-    let lines = pane_inputs
-        .iter()
-        .find(|input| input.pane_id == pane.id.to_string())
-        .map(|input| input.lines.as_slice())
-        .unwrap_or(&[]);
-    let mut display_pane = pane.clone();
-    display_pane.size = body_size;
-    Some(render_styled_pane_lines(
-        window,
-        &display_pane,
-        frame_context,
-        lines,
-        pane_frame,
-        false,
-        ui_theme,
-    ))
-}
-
-/// Runs the zoomed pane geometry operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn zoomed_pane_geometry(index: usize, size: Size) -> PaneGeometry {
-    PaneGeometry {
-        index,
-        column: 0,
-        row: 0,
-        columns: size.columns,
-        rows: size.rows,
-    }
-}
-
 /// Returns the drawable window body after reserving mux-managed window frames.
 pub fn rendered_window_body_size(size: Size, window_frames_enabled: bool) -> Result<Size> {
     Ok(mez_mux::presentation::rendered_window_body_size(
@@ -446,10 +308,6 @@ pub fn rendered_window_body_size(size: Size, window_frames_enabled: bool) -> Res
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn window_body_size(size: Size, window_frames_enabled: bool) -> Result<Size> {
-    rendered_window_body_size(size, window_frames_enabled)
-}
-
 /// Returns pane rectangles apportioned within the rendered window body.
 pub fn rendered_pane_geometries(
     window: &Window,

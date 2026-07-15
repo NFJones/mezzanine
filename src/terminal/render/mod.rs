@@ -17,6 +17,7 @@ use mez_mux::presentation::{ClientViewRole, ReadlinePromptRegion, RenderedClient
 use mez_mux::presentation::{
     TerminalFramePosition, TerminalFrameStyle, TerminalWindowFrameContext,
     TerminalWindowGroupFrameContext, TerminalWindowStatusContext, compose_client_viewport,
+    plan_window_render,
 };
 pub(crate) use mez_mux::render::overlay_fixed_column_style_spans;
 use mez_mux::render::{
@@ -75,7 +76,6 @@ pub use panes::{
     pane_render_region_size_for_geometry, render_window, render_window_with_pane_frame_template,
     rendered_pane_geometries,
 };
-use panes::{window_body_size, zoomed_pane_geometry};
 pub(crate) use prompt::agent_prompt_input_rendition;
 use prompt::{
     AgentPromptBlock, agent_live_footer_state_label, agent_live_footer_style_spans,
@@ -323,12 +323,18 @@ fn rendered_cursor(
     let Some(active_pane) = window.panes().get(active_index) else {
         return Ok((0, 0, false));
     };
-    let body_size = window_body_size(window.size, config.window_frames_enabled)?;
-    let geometries = if window.zoomed_pane_id() == Some(&active_pane.id) {
-        vec![zoomed_pane_geometry(active_index, body_size)]
-    } else {
-        rendered_pane_geometries(window, config.window_frames_enabled)?
-    };
+    let render_plan = plan_window_render(
+        window,
+        config.window_frames_enabled,
+        config.pane_frames_enabled,
+        config.pane_frame_position,
+    )
+    .ok_or_else(|| MezError::invalid_state("cannot plan active pane rendering"))?;
+    let geometries = render_plan
+        .panes
+        .iter()
+        .map(|pane| pane.geometry)
+        .collect::<Vec<_>>();
     let geometry = geometries
         .iter()
         .copied()
@@ -429,12 +435,18 @@ fn active_pane_render_region(
     let Some(active_pane) = window.panes().get(active_index) else {
         return Ok(None);
     };
-    let body_size = window_body_size(window.size, config.window_frames_enabled)?;
-    let geometries = if window.zoomed_pane_id() == Some(&active_pane.id) {
-        vec![zoomed_pane_geometry(active_index, body_size)]
-    } else {
-        rendered_pane_geometries(window, config.window_frames_enabled)?
-    };
+    let render_plan = plan_window_render(
+        window,
+        config.window_frames_enabled,
+        config.pane_frames_enabled,
+        config.pane_frame_position,
+    )
+    .ok_or_else(|| MezError::invalid_state("cannot plan active pane rendering"))?;
+    let geometries = render_plan
+        .panes
+        .iter()
+        .map(|pane| pane.geometry)
+        .collect::<Vec<_>>();
     let geometry = geometries
         .iter()
         .copied()
