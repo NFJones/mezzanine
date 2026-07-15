@@ -3,8 +3,8 @@
 //! This module owns deterministic DeepSeek endpoint derivation, request
 //! strategy, thinking controls, native transcript replay, shim schemas, and
 //! JSON request construction. Product adapters retain credentials, HTTP
-//! metadata, transport, quota attachment, and error projection; response
-//! parsing remains in root until its typed lower contract is extracted.
+//! metadata, transport, quota attachment, and error projection; deterministic
+//! response parsing lives in the sibling `deepseek_response` module.
 
 use crate::{
     AgentCapability, AllowedAction, AllowedActionSet,
@@ -72,7 +72,7 @@ pub enum DeepSeekMaapRequestStrategy {
 
 /// DeepSeek-facing MAAP shim function selected for one provider request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeepSeekMaapShimKind {
+pub(crate) enum DeepSeekMaapShimKind {
     /// Capability-routing function with direct capability fields.
     CapabilityDecision,
     /// Response-only function with direct say fields.
@@ -99,7 +99,7 @@ impl DeepSeekMaapShimKind {
     }
 
     /// Returns the provider-facing function name for this shim surface.
-    pub fn tool_name(self) -> &'static str {
+    pub(crate) fn tool_name(self) -> &'static str {
         match self {
             Self::CapabilityDecision => DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,
             Self::RespondOnly => DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME,
@@ -108,7 +108,7 @@ impl DeepSeekMaapShimKind {
     }
 
     /// Parses a DeepSeek provider-facing function name into a shim surface.
-    pub fn from_tool_name(name: &str) -> Option<Self> {
+    pub(crate) fn from_tool_name(name: &str) -> Option<Self> {
         match name {
             DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME => Some(Self::CapabilityDecision),
             DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME => Some(Self::RespondOnly),
@@ -276,7 +276,7 @@ pub fn deepseek_maap_request_strategy(request: &ModelRequest) -> DeepSeekMaapReq
 }
 
 /// Returns whether DeepSeek thinking mode is active for this request.
-pub fn deepseek_thinking_enabled_for_request(request: &ModelRequest) -> bool {
+pub(crate) fn deepseek_thinking_enabled_for_request(request: &ModelRequest) -> bool {
     request.thinking_enabled == Some(true)
         || (request.thinking_enabled != Some(false)
             && request
