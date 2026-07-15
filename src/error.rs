@@ -224,6 +224,15 @@ impl From<mez_agent::ProviderMalformedOutputError> for MezError {
     }
 }
 
+impl From<mez_agent::ClaudeCodeResponseError> for MezError {
+    fn from(error: mez_agent::ClaudeCodeResponseError) -> Self {
+        match error {
+            mez_agent::ClaudeCodeResponseError::Provider(error) => error.into(),
+            mez_agent::ClaudeCodeResponseError::MalformedOutput(error) => error.into(),
+        }
+    }
+}
+
 impl From<mez_agent::OpenAiChatCompletionsResponseError> for MezError {
     fn from(error: mez_agent::OpenAiChatCompletionsResponseError) -> Self {
         match error {

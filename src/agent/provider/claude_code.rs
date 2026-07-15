@@ -2,20 +2,22 @@
 //!
 //! This module owns the experimental provider boundary for Claude Code
 //! subscription-backed execution. The adapter invokes the local `claude` CLI in
-//! noninteractive print mode for each request, captures bounded stdout/stderr,
-//! and returns assistant text for the normal Mezzanine MAAP parsing path without
-//! granting Claude Code direct tool execution or filesystem mutation authority.
+//! noninteractive print mode, owns temporary settings and system-prompt files,
+//! serializes session access, and projects lower Claude policy results into
+//! product responses without granting direct tool or filesystem authority.
 
 use super::{
     AsyncModelProvider, MaapBatch, MezError, ModelInteractionKind, ModelRequest, ModelResponse,
-    ModelTokenUsage, ProviderModelCatalog, Result, parse_maap_action_batch_json_for_turn,
-    provider_maap_parse_error, validate_non_empty,
+    ModelTokenUsage, ProviderModelCatalog, Result, validate_non_empty,
 };
 use mez_agent::{
-    CLAUDE_CODE_EMPTY_OUTPUT_RETRY_INSTRUCTION, CLAUDE_CODE_MAAP_RETRY_INSTRUCTION,
-    claude_code_auto_sizing_json_schema, claude_code_maap_json_schema,
-    claude_code_macro_judge_json_schema, claude_code_prompt, claude_code_resume_prompt,
-    claude_code_session_id, claude_code_system_prompt,
+    CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL, ClaudeCodeOutput, ClaudeCodeSessionErrorKind,
+    bound_claude_code_text, claude_code_auto_sizing_json_schema,
+    claude_code_corrective_retry_instruction, claude_code_empty_output_error,
+    claude_code_maap_json_schema, claude_code_macro_judge_json_schema, claude_code_prompt,
+    claude_code_resume_prompt, claude_code_session_error_kind, claude_code_session_id,
+    claude_code_system_prompt, parse_claude_code_json_output, parse_claude_code_maap_output,
+    redact_claude_code_text, validate_claude_code_auto_sizing_output,
 };
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -30,8 +32,6 @@ use tokio::process::Command;
 
 /// Executable name used for Claude Code subprocess requests.
 const CLAUDE_CODE_PROGRAM: &str = "claude";
-/// Claude Code tool name required for schema-backed structured output.
-const CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL: &str = "StructuredOutput";
 /// Claude Code native tools that must stay unavailable under Mezzanine-managed
 /// execution.
 const CLAUDE_CODE_DISALLOWED_NATIVE_TOOLS: &str = concat!(
@@ -43,8 +43,6 @@ const CLAUDE_CODE_DISALLOWED_NATIVE_TOOLS: &str = concat!(
     "TaskStop,TaskUpdate,TodoWrite,ToolSearch,WaitForMcpServers,Workflow,Write,",
     "WebFetch,WebSearch",
 );
-/// Maximum stderr bytes retained in provider diagnostics.
-const CLAUDE_CODE_STDERR_LIMIT: usize = 8192;
 /// Number of short retries after Claude reports a session lock is still active.
 const CLAUDE_CODE_SESSION_LOCK_RETRY_ATTEMPTS: usize = 4;
 /// Delay between Claude Code session-lock retries.
@@ -236,47 +234,6 @@ enum ClaudeCodeSessionInvocation<'a> {
     Resume { session_id: &'a str },
 }
 
-/// Stores the Claude Code JSON usage counters relevant to provider accounting.
-#[derive(Debug, Default, serde::Deserialize)]
-struct ClaudeCodeJsonUsage {
-    input_tokens: Option<u64>,
-    output_tokens: Option<u64>,
-    cache_creation_input_tokens: Option<u64>,
-    cache_read_input_tokens: Option<u64>,
-}
-
-/// Stores one Claude Code permission denial from a print-mode JSON envelope.
-#[derive(Debug, Default, serde::Deserialize)]
-struct ClaudeCodePermissionDenial {
-    tool_name: Option<String>,
-}
-
-/// Stores the Claude Code JSON envelope shape used by print-mode output.
-#[derive(Debug, serde::Deserialize)]
-struct ClaudeCodeJsonEnvelope {
-    #[serde(rename = "type")]
-    envelope_type: Option<String>,
-    subtype: Option<String>,
-    #[serde(default)]
-    is_error: bool,
-    result: Option<String>,
-    structured_output: Option<serde_json::Value>,
-    #[serde(default)]
-    permission_denials: Vec<ClaudeCodePermissionDenial>,
-    #[serde(default)]
-    usage: ClaudeCodeJsonUsage,
-}
-
-/// Stores the validated Claude Code auto-sizing router response shape.
-#[derive(Debug, serde::Deserialize)]
-struct ClaudeCodeAutoSizingDecision {
-    version: u64,
-    size: String,
-    reasoning_effort: String,
-    confidence: f64,
-    rationale: String,
-}
-
 /// Experimental Claude Code subprocess provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaudeCodeProvider {
@@ -371,7 +328,7 @@ impl AsyncModelProvider for ClaudeCodeProvider {
                     })
                     .await?;
                     if output.assistant_text.is_empty() && output.structured_output.is_none() {
-                        return Err(claude_code_empty_output_error(&output.stderr));
+                        return Err(claude_code_empty_output_error(&output.stderr).into());
                     }
                     let raw_text = if request.interaction_kind == ModelInteractionKind::AutoSizing {
                         validate_claude_code_auto_sizing_output(
@@ -408,278 +365,6 @@ impl AsyncModelProvider for ClaudeCodeProvider {
             })
         })
     }
-}
-
-/// Parses Claude Code MAAP output from schema-enforced Claude Code responses.
-fn parse_claude_code_maap_output(
-    request: &ModelRequest,
-    raw_text: &str,
-    structured_output: Option<&str>,
-) -> Result<MaapBatch> {
-    if let Some(structured_output) = structured_output {
-        return parse_maap_action_batch_json_for_turn(
-            structured_output,
-            &request.turn_id,
-            &request.agent_id,
-        )
-        .map_err(|error| provider_maap_parse_error(error, structured_output));
-    }
-    let detail = raw_text.trim();
-    let message = if claude_code_login_required_detail(detail) {
-        "Claude Code response did not include structured_output for a schema-enforced MAAP turn because Claude Code is not logged in; run `claude /login` in a non-bare Claude CLI session or configure headless auth for provider-style invocations".to_string()
-    } else if detail.is_empty() {
-        "Claude Code response did not include structured_output for a schema-enforced MAAP turn"
-            .to_string()
-    } else {
-        "Claude Code response did not include structured_output for a schema-enforced MAAP turn; check Claude Code login and StructuredOutput permissions"
-            .to_string()
-    };
-    Err(MezError::invalid_state(message).with_provider_raw_text(raw_text.to_string()))
-}
-
-/// Builds the provider error used when Claude Code exits successfully but
-/// produces no assistant output.
-fn claude_code_empty_output_error(stderr: &str) -> MezError {
-    MezError::invalid_state("Claude Code subprocess produced no assistant output")
-        .with_provider_raw_text(stderr.to_string())
-}
-
-/// Parses assistant text, structured output, and token usage from Claude Code
-/// JSON print output.
-fn parse_claude_code_json_output(
-    stdout: &str,
-) -> Result<(String, Option<String>, ModelTokenUsage)> {
-    let trimmed = stdout.trim();
-    if trimmed.is_empty() {
-        return Ok((String::new(), None, ModelTokenUsage::default()));
-    }
-    let result_state = serde_json::from_str::<serde_json::Value>(trimmed)
-        .ok()
-        .map(|value| claude_code_json_result_state(&value))
-        .unwrap_or("unknown");
-    let envelope = match serde_json::from_str::<ClaudeCodeJsonEnvelope>(trimmed) {
-        Ok(envelope) => envelope,
-        Err(error) => {
-            if !trimmed.starts_with('{') && !trimmed.starts_with('[') {
-                return Ok((trimmed.to_string(), None, ModelTokenUsage::default()));
-            }
-            return Err(MezError::invalid_state(format!(
-                "Claude Code JSON output could not be parsed: {error}"
-            ))
-            .with_provider_raw_text(trimmed.to_string()));
-        }
-    };
-    let result = envelope.result.unwrap_or_default();
-    if envelope.is_error {
-        let subtype = envelope.subtype.as_deref().unwrap_or("unknown");
-        let detail = result.trim();
-        let base_message = match envelope.envelope_type.as_deref() {
-            Some(envelope_type) if !envelope_type.is_empty() && !detail.is_empty() => {
-                format!(
-                    "Claude Code JSON output reported an error ({envelope_type}/{subtype}): {detail}"
-                )
-            }
-            Some(envelope_type) if !envelope_type.is_empty() => {
-                format!("Claude Code JSON output reported an error ({envelope_type}/{subtype})")
-            }
-            _ if !detail.is_empty() => {
-                format!("Claude Code JSON output reported an error ({subtype}): {detail}")
-            }
-            _ => format!("Claude Code JSON output reported an error ({subtype})"),
-        };
-        let message = if claude_code_login_required_detail(detail) {
-            format!(
-                "{base_message}; run `claude /login` in a non-bare Claude CLI session or configure headless auth for provider-style invocations"
-            )
-        } else {
-            base_message
-        };
-        return Err(MezError::invalid_state(message).with_provider_raw_text(trimmed.to_string()));
-    }
-    if envelope.structured_output.is_none()
-        && envelope
-            .permission_denials
-            .iter()
-            .any(|denial| denial.tool_name.as_deref() == Some(CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL))
-    {
-        let detail = result.trim();
-        let message = if detail.is_empty() {
-            "Claude Code JSON output denied StructuredOutput permission required for schema-enforced responses".to_string()
-        } else {
-            format!(
-                "Claude Code JSON output denied StructuredOutput permission required for schema-enforced responses: {detail}"
-            )
-        };
-        return Err(MezError::invalid_state(message).with_provider_raw_text(trimmed.to_string()));
-    }
-    let structured_output = envelope
-        .structured_output
-        .map(|value| serde_json::to_string(&value))
-        .transpose()
-        .map_err(|error| {
-            MezError::invalid_state(format!(
-                "Claude Code JSON structured output could not be serialized: {error}"
-            ))
-            .with_provider_raw_text(trimmed.to_string())
-        })?;
-    if result.trim().is_empty() && structured_output.is_none() {
-        let message = match result_state {
-            "missing" => {
-                "Claude Code JSON output did not contain result text or structured output; result field was missing"
-            }
-            "null" => {
-                "Claude Code JSON output did not contain result text or structured output; result field was null"
-            }
-            "empty" => {
-                "Claude Code JSON output did not contain result text or structured output; result field was empty"
-            }
-            "blank" => {
-                "Claude Code JSON output did not contain result text or structured output; result field was blank"
-            }
-            _ => "Claude Code JSON output did not contain result text or structured output",
-        };
-        return Err(MezError::invalid_state(message).with_provider_raw_text(trimmed.to_string()));
-    };
-    let input_tokens = envelope.usage.input_tokens.unwrap_or(0);
-    let cached_input_tokens = envelope.usage.cache_read_input_tokens;
-    Ok((
-        result.trim().to_string(),
-        structured_output,
-        ModelTokenUsage {
-            input_tokens,
-            output_tokens: envelope.usage.output_tokens.unwrap_or(0),
-            reasoning_tokens: 0,
-            cached_input_tokens,
-            cache_write_input_tokens: envelope.usage.cache_creation_input_tokens,
-        },
-    ))
-}
-
-/// Classifies the raw JSON `result` field before typed envelope parsing erases
-/// the distinction between absent, null, empty, and blank values.
-fn claude_code_json_result_state(value: &serde_json::Value) -> &'static str {
-    match value.get("result") {
-        None => "missing",
-        Some(serde_json::Value::Null) => "null",
-        Some(serde_json::Value::String(text)) if text.is_empty() => "empty",
-        Some(serde_json::Value::String(text)) if text.trim().is_empty() => "blank",
-        Some(serde_json::Value::String(_)) => "present",
-        Some(_) => "non_string",
-    }
-}
-
-/// Reports whether a Claude Code detail string indicates that the CLI needs
-/// interactive login or alternate headless authentication.
-fn claude_code_login_required_detail(detail: &str) -> bool {
-    let lower = detail.trim().to_ascii_lowercase();
-    lower.contains("not logged in") || lower.contains("please run /login")
-}
-
-/// Returns the first valid top-level JSON object embedded in Claude Code
-/// assistant text.
-fn claude_code_extract_top_level_json_object(text: &str) -> Option<String> {
-    for (start, ch) in text.char_indices() {
-        if ch != '{' {
-            continue;
-        }
-        let mut depth = 0usize;
-        let mut in_string = false;
-        let mut escaped = false;
-        for (offset, ch) in text[start..].char_indices() {
-            if in_string {
-                if escaped {
-                    escaped = false;
-                } else {
-                    match ch {
-                        '\\' => escaped = true,
-                        '"' => in_string = false,
-                        _ => {}
-                    }
-                }
-                continue;
-            }
-            match ch {
-                '"' => in_string = true,
-                '{' => depth += 1,
-                '}' => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        let end = start + offset + ch.len_utf8();
-                        let candidate = text[start..end].trim();
-                        if matches!(
-                            serde_json::from_str::<serde_json::Value>(candidate),
-                            Ok(serde_json::Value::Object(_))
-                        ) {
-                            return Some(candidate.to_string());
-                        }
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    None
-}
-
-/// Validates Claude Code auto-sizing output and returns the normalized router
-/// JSON text consumed by the runtime parser.
-fn validate_claude_code_auto_sizing_output(
-    raw_text: &str,
-    structured_output: Option<&str>,
-) -> Result<String> {
-    let validation_input = structured_output.unwrap_or(raw_text);
-    let candidate = structured_output
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| claude_code_extract_top_level_json_object(raw_text))
-        .ok_or_else(|| {
-            MezError::invalid_state("Claude Code auto-sizing response must be valid router JSON")
-                .with_provider_raw_text(raw_text.to_string())
-        })?;
-    let value =
-        serde_json::from_str::<ClaudeCodeAutoSizingDecision>(&candidate).map_err(|error| {
-            MezError::invalid_state(format!(
-                "Claude Code auto-sizing response must be valid router JSON: {error}"
-            ))
-            .with_provider_raw_text(validation_input.to_string())
-        })?;
-    if value.version != 1 {
-        return Err(MezError::invalid_state(
-            "Claude Code auto-sizing response returned unsupported version",
-        )
-        .with_provider_raw_text(validation_input.to_string()));
-    }
-    if !matches!(value.size.as_str(), "small" | "medium" | "large") {
-        return Err(MezError::invalid_state(
-            "Claude Code auto-sizing response returned unknown size bucket",
-        )
-        .with_provider_raw_text(validation_input.to_string()));
-    }
-    if !matches!(
-        value.reasoning_effort.as_str(),
-        "low" | "medium" | "high" | "xhigh"
-    ) {
-        return Err(MezError::invalid_state(
-            "Claude Code auto-sizing response returned unsupported reasoning effort",
-        )
-        .with_provider_raw_text(validation_input.to_string()));
-    }
-    if !(0.0..=1.0).contains(&value.confidence) {
-        return Err(MezError::invalid_state(
-            "Claude Code auto-sizing response returned confidence outside 0..=1",
-        )
-        .with_provider_raw_text(validation_input.to_string()));
-    }
-    let rationale = value.rationale.trim();
-    if rationale.is_empty() || rationale.chars().any(char::is_control) {
-        return Err(MezError::invalid_state(
-            "Claude Code auto-sizing response returned invalid rationale",
-        )
-        .with_provider_raw_text(validation_input.to_string()));
-    }
-    Ok(candidate)
 }
 
 /// Returns shared process-local state for one Claude Code session id.
@@ -739,11 +424,7 @@ async fn run_claude_code_request_with_corrective_retry(
             latest_request_usage: None,
         });
     }
-    let retry_instruction = if first_output.assistant_text.is_empty() {
-        CLAUDE_CODE_EMPTY_OUTPUT_RETRY_INSTRUCTION
-    } else {
-        CLAUDE_CODE_MAAP_RETRY_INSTRUCTION
-    };
+    let retry_instruction = claude_code_corrective_retry_instruction(&first_output.assistant_text);
     let retry_prompt = claude_code_prompt(request, Some(retry_instruction));
     let retry_resume_prompt = claude_code_resume_prompt(request, Some(retry_instruction));
     let retry_system_prompt = claude_code_system_prompt(request, Some(retry_instruction));
@@ -761,7 +442,7 @@ async fn run_claude_code_request_with_corrective_retry(
     })
     .await?;
     if retry_output.assistant_text.is_empty() && retry_output.structured_output.is_none() {
-        return Err(claude_code_empty_output_error(&retry_output.stderr));
+        return Err(claude_code_empty_output_error(&retry_output.stderr).into());
     }
     let action_batch = parse_claude_code_maap_output(
         request,
@@ -840,7 +521,8 @@ async fn run_claude_code_resume_subprocess(
         match result {
             Ok(output) => return Ok(output),
             Err(error)
-                if claude_code_error_indicates_active_session(&error)
+                if claude_code_session_error_kind(error.message(), error.provider_raw_text())
+                    == ClaudeCodeSessionErrorKind::Active
                     && attempt < CLAUDE_CODE_SESSION_LOCK_RETRY_ATTEMPTS =>
             {
                 tokio::time::sleep(Duration::from_millis(
@@ -848,7 +530,10 @@ async fn run_claude_code_resume_subprocess(
                 ))
                 .await;
             }
-            Err(error) if claude_code_error_indicates_missing_session(&error) => {
+            Err(error)
+                if claude_code_session_error_kind(error.message(), error.provider_raw_text())
+                    == ClaudeCodeSessionErrorKind::Missing =>
+            {
                 let create_result = run_claude_code_subprocess_with_session_invocation(
                     ClaudeCodeSessionInvocationRequest {
                         program: request.program,
@@ -868,8 +553,14 @@ async fn run_claude_code_resume_subprocess(
                 match create_result {
                     Ok(output) => return Ok(output),
                     Err(error)
-                        if claude_code_error_indicates_existing_session(&error)
-                            && attempt < CLAUDE_CODE_SESSION_LOCK_RETRY_ATTEMPTS =>
+                        if matches!(
+                            claude_code_session_error_kind(
+                                error.message(),
+                                error.provider_raw_text()
+                            ),
+                            ClaudeCodeSessionErrorKind::Active
+                                | ClaudeCodeSessionErrorKind::Existing
+                        ) && attempt < CLAUDE_CODE_SESSION_LOCK_RETRY_ATTEMPTS =>
                     {
                         tokio::time::sleep(Duration::from_millis(
                             CLAUDE_CODE_SESSION_LOCK_RETRY_DELAY_MS,
@@ -997,10 +688,18 @@ async fn run_claude_code_subprocess_with_session_invocation(
         ))
         .with_provider_raw_text(stderr));
     }
-    let (assistant_text, structured_output, usage) = if request.json_output {
+    let ClaudeCodeOutput {
+        assistant_text,
+        structured_output,
+        usage,
+    } = if request.json_output {
         parse_claude_code_json_output(&stdout)?
     } else {
-        (stdout, None, ModelTokenUsage::default())
+        ClaudeCodeOutput {
+            assistant_text: stdout,
+            structured_output: None,
+            usage: ModelTokenUsage::default(),
+        }
     };
     Ok(ClaudeCodeSubprocessOutput {
         assistant_text,
@@ -1014,280 +713,6 @@ async fn run_claude_code_subprocess_with_session_invocation(
 /// one immediate retry before surfacing a provider setup failure.
 fn claude_code_spawn_error_is_transient(error: &std::io::Error) -> bool {
     error.raw_os_error() == Some(26)
-}
-
-/// Reports whether Claude Code says the requested session already exists or is
-/// still locked by a recent invocation.
-fn claude_code_error_indicates_existing_session(error: &MezError) -> bool {
-    let text = claude_code_error_search_text(error);
-    claude_code_error_indicates_active_session_text(&text)
-        || text.contains("already exists")
-        || (text.contains("session id") && text.contains("already"))
-}
-
-/// Reports whether Claude Code says the requested session is currently locked.
-fn claude_code_error_indicates_active_session(error: &MezError) -> bool {
-    claude_code_error_indicates_active_session_text(&claude_code_error_search_text(error))
-}
-
-/// Reports whether Claude Code says a resume target is absent.
-fn claude_code_error_indicates_missing_session(error: &MezError) -> bool {
-    let text = claude_code_error_search_text(error);
-    (text.contains("session") || text.contains("conversation"))
-        && (text.contains("not found")
-            || text.contains("does not exist")
-            || text.contains("could not find")
-            || text.contains("no conversation")
-            || text.contains("unknown"))
-}
-
-/// Reports whether normalized diagnostic text describes an active session lock.
-fn claude_code_error_indicates_active_session_text(text: &str) -> bool {
-    (text.contains("session") || text.contains("conversation"))
-        && (text.contains("already in use")
-            || text.contains("currently in use")
-            || text.contains("is in use")
-            || text.contains("locked"))
-}
-
-/// Builds lowercase diagnostic text for session error classifiers.
-fn claude_code_error_search_text(error: &MezError) -> String {
-    let mut text = error.message().to_string();
-    if let Some(raw) = error.provider_raw_text() {
-        text.push('\n');
-        text.push_str(raw);
-    }
-    text.to_ascii_lowercase()
-}
-
-/// Redacts common secret-bearing fragments from subprocess diagnostics.
-fn redact_claude_code_text(value: &str) -> String {
-    let mut ranges = Vec::new();
-    collect_bearer_secret_ranges(value, &mut ranges);
-    collect_secret_key_value_ranges(value, &mut ranges);
-    collect_openai_secret_key_ranges(value, &mut ranges);
-    apply_secret_redactions(value, ranges)
-}
-
-/// Records ranges for bearer credentials, including compact URL-style
-/// separators that whitespace tokenization would miss.
-fn collect_bearer_secret_ranges(value: &str, ranges: &mut Vec<(usize, usize)>) {
-    let mut index = 0;
-    while index < value.len() {
-        if !ascii_case_insensitive_starts_with_at(value, index, "bearer")
-            || !has_secret_left_boundary(value, index)
-        {
-            index = next_char_boundary(value, index);
-            continue;
-        }
-
-        let mut credential_start = index + "bearer".len();
-        let Some(separator) = value[credential_start..].chars().next() else {
-            break;
-        };
-        if !separator.is_whitespace()
-            && separator != '+'
-            && !ascii_case_insensitive_starts_with_at(value, credential_start, "%20")
-            && !ascii_case_insensitive_starts_with_at(value, credential_start, "%2b")
-        {
-            index = credential_start;
-            continue;
-        }
-
-        credential_start = skip_bearer_separators(value, credential_start);
-        let credential_end = secret_value_end(value, credential_start);
-        if credential_end > credential_start {
-            ranges.push((index, credential_end));
-            index = credential_end;
-        } else {
-            index = credential_start;
-        }
-    }
-}
-
-/// Records ranges for explicit secret-bearing key/value fields while avoiding
-/// substring matches such as `tokenization` or `access_token_count`.
-fn collect_secret_key_value_ranges(value: &str, ranges: &mut Vec<(usize, usize)>) {
-    const SECRET_KEYS: &[&str] = &[
-        "access_token",
-        "access-token",
-        "authorization",
-        "api_key",
-        "api-key",
-        "apikey",
-        "secret",
-        "token",
-    ];
-
-    let mut index = 0;
-    while index < value.len() {
-        let mut matched = false;
-        for key in SECRET_KEYS {
-            if !ascii_case_insensitive_starts_with_at(value, index, key)
-                || !has_secret_left_boundary(value, index)
-            {
-                continue;
-            }
-
-            let Some(value_start) = secret_key_value_start(value, index + key.len()) else {
-                continue;
-            };
-            let value_end = secret_value_end(value, value_start);
-            if value_end > value_start {
-                ranges.push((index, value_end));
-                index = value_end;
-                matched = true;
-                break;
-            }
-        }
-        if !matched {
-            index = next_char_boundary(value, index);
-        }
-    }
-}
-
-/// Records ranges for OpenAI-style `sk-...` secret tokens embedded in compact
-/// diagnostics.
-fn collect_openai_secret_key_ranges(value: &str, ranges: &mut Vec<(usize, usize)>) {
-    let mut index = 0;
-    while index < value.len() {
-        if !value[index..].starts_with("sk-") || !has_secret_left_boundary(value, index) {
-            index = next_char_boundary(value, index);
-            continue;
-        }
-        let credential_start = index + "sk-".len();
-        if value[credential_start..]
-            .chars()
-            .next()
-            .is_none_or(|ch| !ch.is_ascii_alphanumeric())
-        {
-            index = credential_start;
-            continue;
-        }
-        let credential_end = secret_value_end(value, credential_start);
-        ranges.push((index, credential_end));
-        index = credential_end;
-    }
-}
-
-/// Returns the start index of a key/value secret value after a matched key.
-fn secret_key_value_start(value: &str, mut cursor: usize) -> Option<usize> {
-    if matches!(value[cursor..].chars().next(), Some('\'' | '"')) {
-        cursor = next_char_boundary(value, cursor);
-    }
-    if !matches!(value[cursor..].chars().next(), Some(':' | '=')) {
-        return None;
-    }
-    cursor = next_char_boundary(value, cursor);
-    while matches!(value[cursor..].chars().next(), Some(ch) if ch.is_whitespace()) {
-        cursor = next_char_boundary(value, cursor);
-    }
-    if matches!(value[cursor..].chars().next(), Some('\'' | '"')) {
-        cursor = next_char_boundary(value, cursor);
-    }
-    Some(cursor)
-}
-
-/// Skips separators that can appear between `Bearer` and its credential.
-fn skip_bearer_separators(value: &str, mut cursor: usize) -> usize {
-    loop {
-        if ascii_case_insensitive_starts_with_at(value, cursor, "%20")
-            || ascii_case_insensitive_starts_with_at(value, cursor, "%2b")
-        {
-            cursor += 3;
-            continue;
-        }
-        match value[cursor..].chars().next() {
-            Some(ch) if ch.is_whitespace() || ch == '+' => {
-                cursor += ch.len_utf8();
-            }
-            _ => break cursor,
-        }
-    }
-}
-
-/// Returns the end of a compact secret value without consuming surrounding
-/// structured punctuation.
-fn secret_value_end(value: &str, start: usize) -> usize {
-    let mut end = start;
-    for (offset, ch) in value[start..].char_indices() {
-        if ch.is_whitespace() || matches!(ch, '\'' | '"' | ',' | ';' | ')' | ']' | '}' | '<' | '>')
-        {
-            return start + offset;
-        }
-        end = start + offset + ch.len_utf8();
-    }
-    end
-}
-
-/// Applies sorted and merged redaction ranges to diagnostic text.
-fn apply_secret_redactions(value: &str, mut ranges: Vec<(usize, usize)>) -> String {
-    ranges.retain(|(start, end)| start < end);
-    if ranges.is_empty() {
-        return value.to_string();
-    }
-
-    ranges.sort_unstable_by_key(|(start, _)| *start);
-    let mut merged = Vec::<(usize, usize)>::new();
-    for (start, end) in ranges {
-        if let Some((_, last_end)) = merged.last_mut()
-            && start <= *last_end
-        {
-            *last_end = (*last_end).max(end);
-            continue;
-        }
-        merged.push((start, end));
-    }
-
-    let mut redacted = String::with_capacity(value.len());
-    let mut cursor = 0;
-    for (start, end) in merged {
-        redacted.push_str(&value[cursor..start]);
-        redacted.push_str("[redacted]");
-        cursor = end;
-    }
-    redacted.push_str(&value[cursor..]);
-    redacted
-}
-
-/// Reports whether an ASCII secret marker starts at a byte index.
-fn ascii_case_insensitive_starts_with_at(value: &str, start: usize, needle: &str) -> bool {
-    start.checked_add(needle.len()).is_some_and(|end| {
-        end <= value.len() && value.as_bytes()[start..end].eq_ignore_ascii_case(needle.as_bytes())
-    })
-}
-
-/// Reports whether a secret marker is not embedded inside an identifier-like
-/// word.
-fn has_secret_left_boundary(value: &str, start: usize) -> bool {
-    value[..start]
-        .chars()
-        .next_back()
-        .is_none_or(|ch| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
-}
-
-/// Advances one UTF-8 scalar from a valid string boundary.
-fn next_char_boundary(value: &str, index: usize) -> usize {
-    value[index..]
-        .chars()
-        .next()
-        .map_or(value.len(), |ch| index + ch.len_utf8())
-}
-
-/// Bounds diagnostic text retained from Claude Code stderr.
-fn bound_claude_code_text(value: &str) -> String {
-    if value.len() <= CLAUDE_CODE_STDERR_LIMIT {
-        return value.to_string();
-    }
-    let mut end = CLAUDE_CODE_STDERR_LIMIT;
-    while !value.is_char_boundary(end) {
-        end = end.saturating_sub(1);
-    }
-    format!(
-        "{}... [truncated, {} bytes total]",
-        &value[..end],
-        value.len()
-    )
 }
 
 #[cfg(test)]
@@ -1313,36 +738,6 @@ mod tests {
     use mez_agent::{ModelMessageRole, ProviderErrorRetryClass};
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
-
-    /// Verifies Claude Code diagnostic redaction no longer uses broad
-    /// substring matching that corrupts ordinary words and metric names.
-    #[test]
-    fn claude_code_redaction_preserves_non_secret_substrings() {
-        let redacted = redact_claude_code_text(
-            "tokenization access_token_count secretive authorization_count",
-        );
-
-        assert_eq!(
-            redacted,
-            "tokenization access_token_count secretive authorization_count"
-        );
-    }
-
-    /// Verifies Claude Code diagnostic redaction catches structured and compact
-    /// secret shapes without depending on whitespace-delimited tokens.
-    #[test]
-    fn claude_code_redaction_targets_secret_patterns() {
-        let redacted = redact_claude_code_text(
-            r#"login auth="Bearer+sk-abc123" api_key=sk-def456 token=secret-value"#,
-        );
-
-        assert!(redacted.contains("login"), "{redacted}");
-        assert!(redacted.contains("[redacted]"), "{redacted}");
-        assert!(!redacted.contains("Bearer"), "{redacted}");
-        assert!(!redacted.contains("sk-abc123"), "{redacted}");
-        assert!(!redacted.contains("sk-def456"), "{redacted}");
-        assert!(!redacted.contains("secret-value"), "{redacted}");
-    }
 
     /// Verifies executable-busy subprocess spawn failures are treated as
     /// transient so parallel test fixtures and real CLI upgrades can recover
@@ -1948,128 +1343,6 @@ EOF
             "{:?}",
             error.provider_raw_text()
         );
-    }
-
-    /// Verifies Claude Code JSON usage parsing preserves omitted cache counters
-    /// separately from explicit zero cache counters.
-    ///
-    /// Cache accounting displays provider-omitted fields as unknown while
-    /// explicit provider zeros should remain known zero values. This protects
-    /// the provider boundary from collapsing `None` and `Some(0)` as Claude
-    /// Code print-mode usage envelopes evolve.
-    #[test]
-    fn claude_code_json_usage_distinguishes_missing_and_zero_cache_counters() {
-        let omitted = r#"{"result":"hello","usage":{"input_tokens":2,"output_tokens":12}}"#;
-        let explicit_zero = r#"{"result":"hello","usage":{"input_tokens":2,"output_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}"#;
-
-        let (_, _, omitted_usage) = parse_claude_code_json_output(omitted).unwrap();
-        let (_, _, explicit_zero_usage) = parse_claude_code_json_output(explicit_zero).unwrap();
-
-        assert_eq!(omitted_usage.input_tokens, 2);
-        assert_eq!(omitted_usage.cached_input_tokens, None);
-        assert_eq!(omitted_usage.cached_input_tokens_display(), "unknown");
-        assert_eq!(omitted_usage.cached_input_hit_ratio_display(), "unknown");
-        assert_eq!(omitted_usage.cache_write_input_tokens, None);
-        assert_eq!(explicit_zero_usage.input_tokens, 2);
-        assert_eq!(explicit_zero_usage.cached_input_tokens, Some(0));
-        assert_eq!(explicit_zero_usage.cached_input_tokens_display(), "0");
-        assert_eq!(
-            explicit_zero_usage.cached_input_hit_ratio_display(),
-            "0.00%"
-        );
-        assert_eq!(explicit_zero_usage.cache_write_input_tokens, Some(0));
-    }
-
-    /// Verifies empty Claude Code JSON envelopes report which `result` state
-    /// was observed so diagnostics can distinguish missing, null, empty, and
-    /// blank provider output when no structured output is available.
-    #[test]
-    fn claude_code_json_output_distinguishes_absent_null_and_empty_result_states() {
-        for (raw, expected) in [
-            (
-                r#"{"usage":{"input_tokens":2,"output_tokens":12}}"#,
-                "result field was missing",
-            ),
-            (
-                r#"{"result":null,"usage":{"input_tokens":2,"output_tokens":12}}"#,
-                "result field was null",
-            ),
-            (
-                r#"{"result":"","usage":{"input_tokens":2,"output_tokens":12}}"#,
-                "result field was empty",
-            ),
-            (
-                r#"{"result":"   ","usage":{"input_tokens":2,"output_tokens":12}}"#,
-                "result field was blank",
-            ),
-        ] {
-            let error = parse_claude_code_json_output(raw).unwrap_err();
-
-            assert!(error.message().contains(expected), "{}", error.message());
-            assert_eq!(error.provider_raw_text(), Some(raw));
-        }
-    }
-
-    /// Verifies malformed Claude Code JSON output is reported at the JSON
-    /// parser boundary instead of being downgraded to assistant text with
-    /// default token usage.
-    #[test]
-    fn claude_code_json_output_rejects_malformed_json() {
-        let raw = r#"{"type":"result","result":"unterminated""#;
-
-        let error = parse_claude_code_json_output(raw).unwrap_err();
-
-        assert!(
-            error.message().contains("JSON output could not be parsed"),
-            "{}",
-            error.message()
-        );
-        assert_eq!(error.provider_raw_text(), Some(raw));
-    }
-
-    /// Verifies Claude Code JSON error envelopes surface as provider errors
-    /// instead of falling through to MAAP parsing as assistant content.
-    ///
-    /// Claude Code can report structured-output failures in its JSON envelope.
-    /// The provider must stop at that boundary so upstream retry or handoff
-    /// logic receives the provider error instead of a misleading MAAP failure.
-    #[test]
-    fn claude_code_json_output_rejects_error_envelopes() {
-        let raw = r#"{"type":"result","subtype":"error_max_structured_output_retries","is_error":true,"result":"schema failed","usage":{"input_tokens":2,"output_tokens":12}}"#;
-
-        let error = parse_claude_code_json_output(raw).unwrap_err();
-
-        assert!(
-            error.message().contains(
-                "reported an error (result/error_max_structured_output_retries): schema failed"
-            ),
-            "{}",
-            error.message()
-        );
-        assert_eq!(error.provider_raw_text(), Some(raw));
-    }
-
-    /// Verifies login-required Claude Code JSON error envelopes tell the user
-    /// how to satisfy authentication for interactive or provider-style runs.
-    #[test]
-    fn claude_code_json_output_reports_login_guidance() {
-        let raw = r#"{"type":"result","subtype":"error_auth","is_error":true,"result":"Not logged in · Please run /login","usage":{"input_tokens":2,"output_tokens":12}}"#;
-
-        let error = parse_claude_code_json_output(raw).unwrap_err();
-
-        assert!(
-            error.message().contains("run `claude /login`"),
-            "{}",
-            error.message()
-        );
-        assert!(
-            error
-                .message()
-                .contains("configure headless auth for provider-style invocations"),
-            "{}",
-            error.message()
-        );
-        assert_eq!(error.provider_raw_text(), Some(raw));
     }
 
     /// Verifies missing Claude Code executables are classified as provider
