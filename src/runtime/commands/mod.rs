@@ -42,8 +42,7 @@ use super::{
 use crate::agent::{
     AsyncModelProvider, ClaudeCodeProvider, ReqwestProviderHttpTransport, append_mcp_context,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
-    effective_provider_api, model_context_text_word_count,
-    openai_compatible_provider_from_auth_store_with_provider_options,
+    effective_provider_api, openai_compatible_provider_from_auth_store_with_provider_options,
     openai_responses_provider_from_auth_store_with_provider_options,
 };
 use crate::auth::AuthCredentialKind;
@@ -54,6 +53,7 @@ use crate::runtime::config::{
 use crate::transcript::ConversationSummary;
 use base64::Engine;
 use mez_agent::ModelResponse;
+use mez_agent::model_context_text_word_count;
 use mez_agent::{
     AgentActionPayload, AllowedActionSet, DEFAULT_PROVIDER_TIMEOUT_MS, ModelInteractionKind,
     ModelMessage, ModelMessageRole, ModelRequest, ModelTokenUsage, ModelTokenUsageKey,

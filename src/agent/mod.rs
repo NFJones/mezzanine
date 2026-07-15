@@ -88,10 +88,8 @@ pub use actions::{
 pub use context::{
     append_mcp_context, append_memory_context, append_permission_policy_context,
     append_project_guidance_context, append_scheduler_context, assemble_model_request,
-    assemble_model_request_with_retained_tail_percent, compact_model_context_for_budget,
-    compact_model_context_for_budget_with_retained_tail_percent,
-    constrain_skill_actions_for_loaded_context, invoked_mcp_tools_for_context,
-    model_context_text_word_count, set_project_guidance_context,
+    assemble_model_request_with_retained_tail_percent, constrain_skill_actions_for_loaded_context,
+    invoked_mcp_tools_for_context, set_project_guidance_context,
 };
 pub(crate) use maap::MaapBatchProductValidation;
 pub use maap::{

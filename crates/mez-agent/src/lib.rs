@@ -24,6 +24,8 @@ pub mod claude_code;
 pub mod config_change;
 /// Provider-independent agent context validation contracts.
 pub mod context;
+/// Provider-independent model-context compaction and budgeting.
+pub mod context_compaction;
 /// Provider-independent capability-continuation decisions.
 pub mod continuation;
 /// Provider-independent DeepSeek endpoint and protocol policy.
@@ -136,6 +138,10 @@ pub use context::{
     ContextSourceKind, ContextStability, ModelContextCompactionReport, ModelMessage,
     ModelMessageRole, ModelRequest, TrustDomain, model_context_block_header,
     validate_context_required,
+};
+pub use context_compaction::{
+    DEFAULT_MODEL_CONTEXT_RETAINED_TAIL_PERCENT, compact_model_context_for_budget,
+    compact_model_context_for_budget_with_retained_tail_percent, model_context_text_word_count,
 };
 pub use continuation::{
     CapabilityAvailability, CapabilityDecision, CapabilityRequest, ProviderResponseAcceptance,

@@ -1,26 +1,24 @@
-//! Model context compaction and budgeting.
+//! Provider-independent model-context compaction and budgeting.
 //!
-//! This module owns deterministic local compaction after an explicit trigger
-//! or provider context-limit response. It keeps word budgeting, retained-tail
-//! selection, protected evidence, and compacted-block inventory formatting out
-//! of provider request assembly.
+//! This module owns deterministic bulk compaction after an explicit trigger or
+//! provider context-limit response. It preserves protected guidance and recent
+//! evidence, retains a configurable raw tail, and emits bounded inventory
+//! summaries without product runtime or persistence dependencies.
 
-use super::evidence::prepare_model_context_blocks;
-use super::{
-    AgentContext, ContextBlock, ContextSourceKind, DEFAULT_MODEL_CONTEXT_RETAINED_TAIL_PERCENT,
-    MODEL_CONTEXT_BLOCK_LIMIT_BYTES, MODEL_CONTEXT_COMPACTED_PREFIX, ModelContextCompactionReport,
-    model_context_block_header,
+use crate::{
+    AgentContext, AgentContextResult, ContextBlock, ContextSourceKind,
+    ModelContextCompactionReport, model_context_block_header,
 };
-use mez_agent::AgentContextResult;
 use std::collections::HashSet;
 
-/// Compacts provider-bound context blocks after a trigger has fired.
-///
-/// This uses deterministic local summarization and returns the compacted
-/// context to callers that need to persist a reduced active-turn context before
-/// the next provider continuation. Callers invoke this only after an explicit
-/// or provider-limit trigger, so it always applies the bulk summary-plus-tail
-/// shape.
+/// Maximum bytes from one context block retained in a raw suffix.
+const MODEL_CONTEXT_BLOCK_LIMIT_BYTES: usize = 128 * 1024;
+/// Marker used for deterministic local compaction summaries.
+const MODEL_CONTEXT_COMPACTED_PREFIX: &str = "[context compacted]";
+/// Default raw suffix percent retained after local context compaction.
+pub const DEFAULT_MODEL_CONTEXT_RETAINED_TAIL_PERCENT: usize = 10;
+
+/// Compacts provider-bound context with the default retained-tail percentage.
 pub fn compact_model_context_for_budget(
     context: AgentContext,
     context_budget_words: usize,
@@ -32,23 +30,27 @@ pub fn compact_model_context_for_budget(
     )
 }
 
-/// Compacts provider-bound context while using the configured raw-tail percent.
+/// Compacts provider-bound context with one configured raw-tail percentage.
 pub fn compact_model_context_for_budget_with_retained_tail_percent(
     context: AgentContext,
     context_budget_words: usize,
     retained_tail_percent: usize,
 ) -> AgentContextResult<(AgentContext, ModelContextCompactionReport)> {
-    let blocks = prepare_model_context_blocks(context.blocks);
-    let (blocks, report) =
-        compact_model_context_blocks(&blocks, context_budget_words, true, retained_tail_percent);
+    let (blocks, report) = compact_model_context_blocks(
+        &context.blocks,
+        context_budget_words,
+        true,
+        retained_tail_percent,
+    );
     AgentContext::new(blocks).map(|context| (context, report))
 }
 
-/// Returns context blocks prepared for a provider request without slicing block
-/// content.
-///
-/// When compaction is required, older blocks are folded into one memory summary
-/// and only a bounded recent raw suffix is retained.
+/// Counts whitespace-delimited words for context budgeting.
+pub fn model_context_text_word_count(value: &str) -> usize {
+    value.split_whitespace().count()
+}
+
+/// Applies summary-plus-tail compaction to ordered context blocks.
 fn compact_model_context_blocks(
     blocks: &[ContextBlock],
     context_budget_words: usize,
@@ -122,7 +124,7 @@ fn compact_model_context_blocks(
     (prepared, report)
 }
 
-/// Returns compacted-block indexes that should stay exact through compaction.
+/// Returns compacted-block indexes that stay exact through compaction.
 fn protected_compacted_block_indices(blocks: &[ContextBlock]) -> HashSet<usize> {
     let mut protected = HashSet::new();
     for (index, block) in blocks.iter().enumerate() {
@@ -144,13 +146,13 @@ fn protected_compacted_block_indices(blocks: &[ContextBlock]) -> HashSet<usize> 
     protected
 }
 
-/// Returns the provider-request word cost of one prepared context block.
+/// Returns the provider-request word cost of one block.
 fn model_context_block_words(block: &ContextBlock) -> usize {
     model_context_text_word_count(&model_context_block_header(block))
         .saturating_add(model_context_text_word_count(&block.content))
 }
 
-/// Returns the aggregate provider-request word cost for prepared blocks.
+/// Returns the aggregate provider-request word cost for blocks.
 fn model_context_total_words(blocks: &[ContextBlock]) -> usize {
     blocks
         .iter()
@@ -158,7 +160,7 @@ fn model_context_total_words(blocks: &[ContextBlock]) -> usize {
         .fold(0usize, usize::saturating_add)
 }
 
-/// Returns the retained raw-tail word budget for local bulk compaction.
+/// Returns the retained raw-tail word budget.
 fn model_context_retained_tail_budget_words(
     context_budget_words: usize,
     retained_tail_percent: usize,
@@ -171,18 +173,12 @@ fn model_context_retained_tail_budget_words(
         .max(1)
 }
 
-/// Normalizes configured retained-tail percentages for defensive callers.
+/// Clamps retained-tail percentages to the supported range.
 fn normalize_model_context_retained_tail_percent(retained_tail_percent: usize) -> usize {
     retained_tail_percent.clamp(1, 100)
 }
 
-/// Counts whitespace-delimited words for context compaction summaries and
-/// bounded internal router projections.
-pub fn model_context_text_word_count(value: &str) -> usize {
-    value.split_whitespace().count()
-}
-
-/// Finds the first block in the retained raw suffix for local bulk compaction.
+/// Finds the first block in the retained raw suffix.
 fn model_context_tail_start_index(blocks: &[ContextBlock], tail_budget_words: usize) -> usize {
     let mut retained_words = 0usize;
     let mut tail_start = blocks.len();
@@ -200,7 +196,7 @@ fn model_context_tail_start_index(blocks: &[ContextBlock], tail_budget_words: us
     tail_start
 }
 
-/// Builds the memory-style block representing locally compacted context.
+/// Builds the memory-style block representing compacted context.
 fn bulk_compacted_model_context_block(
     compacted_blocks: &[ContextBlock],
     retained_tail: &[ContextBlock],
@@ -249,8 +245,8 @@ fn bulk_compacted_model_context_block(
     }
 }
 
-/// Returns a stable source label for local compaction diagnostics.
-pub(super) fn model_context_source_kind_name(source: ContextSourceKind) -> &'static str {
+/// Returns a stable source label for compaction diagnostics.
+fn model_context_source_kind_name(source: ContextSourceKind) -> &'static str {
     match source {
         ContextSourceKind::System => "system",
         ContextSourceKind::UserInstruction => "user_instruction",
@@ -272,7 +268,133 @@ pub(super) fn model_context_source_kind_name(source: ContextSourceKind) -> &'sta
     }
 }
 
-/// Returns a single-line value for compact diagnostics.
-pub(super) fn model_context_single_line(value: &str) -> String {
+/// Escapes line breaks for compact single-line inventory fields.
+fn model_context_single_line(value: &str) -> String {
     value.replace('\n', "\\n").replace('\r', "\\r")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies explicit bulk compaction prefers older recoverable history
+    /// before the recent context tail.
+    ///
+    /// Provider-limit recovery and manual compaction both use this helper after
+    /// a concrete trigger has fired, which keeps fresh correction signals
+    /// visible while summarizing older recoverable history.
+    #[test]
+    fn explicit_context_compaction_preserves_recent_recoverable_tail_when_possible() {
+        let mut blocks = Vec::new();
+        for index in 0..20 {
+            blocks.push(ContextBlock {
+                source: ContextSourceKind::Transcript,
+                label: format!("transcript {index}"),
+                content: format!("transcript-{index} {}", "history-word ".repeat(7_000)),
+            });
+        }
+
+        let (context, report) =
+            compact_model_context_for_budget(AgentContext::new(blocks).unwrap(), 80 * 1024)
+                .unwrap();
+
+        assert!(report.changed());
+        let summary = context
+            .blocks
+            .iter()
+            .find(|block| block.source == ContextSourceKind::Memory)
+            .expect("oldest transcript should be present in summary inventory");
+        let recent_history = context
+            .blocks
+            .iter()
+            .find(|block| block.label == "transcript 19")
+            .expect("recent transcript should remain present");
+
+        assert!(summary.content.contains("[context compacted]"));
+        assert!(summary.content.contains("label=transcript 0"));
+        assert!(recent_history.content.contains("transcript-19"));
+        assert!(!recent_history.content.contains("[context compacted]"));
+    }
+
+    /// Verifies explicit compaction keeps current execution evidence and repo
+    /// guidance exact while folding older unrelated context into a summary.
+    ///
+    /// Removing generated provider-visible evidence summaries must not make
+    /// provider-limit compaction drop the newest raw action-result evidence.
+    #[test]
+    fn explicit_context_compaction_protects_guidance_and_recent_action_result() {
+        let mut blocks = vec![
+            ContextBlock {
+                source: ContextSourceKind::ProjectGuidance,
+                label: "project guidance".to_string(),
+                content: "run just test before handoff".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                label: "action result".to_string(),
+                content: format!(
+                    "[action_result a1 shell_command succeeded]\ncommand: rg cache\noutput: fresh evidence large-action-marker {}",
+                    "large exact evidence ".repeat(2_000)
+                ),
+            },
+        ];
+        for index in 0..40 {
+            blocks.push(ContextBlock {
+                source: ContextSourceKind::Memory,
+                label: format!("old memory {index}"),
+                content: "old unrelated context ".repeat(20),
+            });
+        }
+
+        let (context, report) = compact_model_context_for_budget_with_retained_tail_percent(
+            AgentContext::new(blocks).unwrap(),
+            600,
+            10,
+        )
+        .unwrap();
+
+        assert!(report.changed());
+        assert!(context.blocks.iter().any(|block| {
+            block.source == ContextSourceKind::ProjectGuidance
+                && block.content.contains("run just test")
+        }));
+        assert!(context.blocks.iter().any(|block| {
+            block.source == ContextSourceKind::ActionResult
+                && block.content.contains("fresh evidence")
+        }));
+        assert!(context.blocks.iter().any(|block| {
+            block.source == ContextSourceKind::ActionResult
+                && block.content.contains("large-action-marker")
+        }));
+        assert!(context.blocks.iter().any(|block| {
+            block.source == ContextSourceKind::Memory
+                && block.content.contains("[context compacted]")
+        }));
+    }
+
+    /// Verifies explicit context compaction reports the configured retained
+    /// tail instead of a hard-coded default percentage.
+    #[test]
+    fn explicit_context_compaction_uses_configured_retained_tail_percent() {
+        let (context, report) = compact_model_context_for_budget_with_retained_tail_percent(
+            AgentContext::new(vec![ContextBlock {
+                source: ContextSourceKind::Transcript,
+                label: "older transcript".to_string(),
+                content: "x".repeat(2 * 1024 * 1024),
+            }])
+            .unwrap(),
+            8 * 1024,
+            25,
+        )
+        .unwrap();
+
+        assert!(report.changed());
+        let memory_block = context
+            .blocks
+            .iter()
+            .find(|block| block.source == ContextSourceKind::Memory)
+            .expect("bulk compaction memory should be present");
+
+        assert!(memory_block.content.contains("retained_tail_percent=25"));
+    }
 }
