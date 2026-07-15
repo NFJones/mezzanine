@@ -8,8 +8,10 @@ use crate::input::{KeyCode, parse_key_chord_bytes};
 use crate::readline::readline_word_column_range;
 use crate::{MuxError, Result};
 use mez_terminal::{
-    terminal_emoji_width, terminal_grapheme_width, terminal_graphemes, terminal_text_width,
+    TerminalScreen, TerminalStyledLine, terminal_emoji_width, terminal_grapheme_width,
+    terminal_graphemes, terminal_text_width,
 };
+use std::ops::{Deref, DerefMut};
 
 /// Identifies one terminal-cell position in a copy-mode buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -510,6 +512,161 @@ impl CopyBuffer {
     }
 }
 
+/// Mux-owned styled copy-mode state built from one terminal surface.
+///
+/// This type keeps terminal-derived display rows, source-aware copy text, and
+/// navigation state aligned. Product adapters may interpret the copy-text
+/// metadata, but they do not own viewport, cursor, search, or selection state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StyledCopyMode {
+    buffer: CopyBuffer,
+    copy_lines: Vec<String>,
+    styled_lines: Vec<TerminalStyledLine>,
+    alternate_screen_was_active: bool,
+}
+
+impl StyledCopyMode {
+    /// Builds copy state from normal-screen history and live terminal rows.
+    pub fn from_screen(screen: &TerminalScreen, viewport_rows: usize) -> Result<Self> {
+        let styled_lines = screen.normal_styled_content_lines();
+        let (scroll_top, cursor) = initial_copy_mode_view(screen, &styled_lines, viewport_rows);
+        Self::new(
+            styled_lines,
+            viewport_rows,
+            scroll_top,
+            cursor,
+            screen.alternate_screen_active(),
+        )
+    }
+
+    /// Builds copy state from only the currently visible terminal rows.
+    pub fn from_visible_screen(screen: &TerminalScreen, viewport_rows: usize) -> Result<Self> {
+        Self::new(
+            screen.visible_styled_lines(),
+            viewport_rows,
+            0,
+            CopyPosition { line: 0, column: 0 },
+            screen.alternate_screen_active(),
+        )
+    }
+
+    /// Builds styled copy state from explicit terminal rows.
+    pub fn new(
+        styled_lines: Vec<TerminalStyledLine>,
+        viewport_rows: usize,
+        scroll_top: usize,
+        cursor: CopyPosition,
+        alternate_screen_was_active: bool,
+    ) -> Result<Self> {
+        let lines = styled_lines
+            .iter()
+            .map(|line| line.text.clone())
+            .collect::<Vec<_>>();
+        let copy_lines = styled_lines
+            .iter()
+            .map(|line| line.copy_text.clone().unwrap_or_else(|| line.text.clone()))
+            .collect::<Vec<_>>();
+        Ok(Self {
+            buffer: CopyBuffer::new(lines, viewport_rows, scroll_top, cursor)?,
+            copy_lines,
+            styled_lines,
+            alternate_screen_was_active,
+        })
+    }
+
+    /// Returns the underlying navigation and selection state.
+    pub fn buffer(&self) -> &CopyBuffer {
+        &self.buffer
+    }
+
+    /// Returns mutable navigation and selection state.
+    pub fn buffer_mut(&mut self) -> &mut CopyBuffer {
+        &mut self.buffer
+    }
+
+    /// Returns copy-text metadata parallel to the display rows.
+    pub fn copy_lines(&self) -> &[String] {
+        &self.copy_lines
+    }
+
+    /// Returns all styled terminal rows in the copy buffer.
+    pub fn styled_lines(&self) -> &[TerminalStyledLine] {
+        &self.styled_lines
+    }
+
+    /// Returns styled rows currently visible in the copy viewport.
+    pub fn visible_styled_lines(&self) -> &[TerminalStyledLine] {
+        &self.styled_lines[self.buffer.scroll_top()..self.buffer.visible_end_line()]
+    }
+
+    /// Returns whether the terminal used its alternate screen at entry.
+    pub fn alternate_screen_was_active(&self) -> bool {
+        self.alternate_screen_was_active
+    }
+}
+
+impl Deref for StyledCopyMode {
+    type Target = CopyBuffer;
+
+    fn deref(&self) -> &Self::Target {
+        &self.buffer
+    }
+}
+
+impl DerefMut for StyledCopyMode {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.buffer
+    }
+}
+
+/// Computes the initial viewport and keyboard cursor from terminal state.
+fn initial_copy_mode_view(
+    screen: &TerminalScreen,
+    styled_lines: &[TerminalStyledLine],
+    viewport_rows: usize,
+) -> (usize, CopyPosition) {
+    let mut scroll_top = styled_lines.len().saturating_sub(viewport_rows);
+    if styled_lines.is_empty() || screen.alternate_screen_active() {
+        return (
+            scroll_top,
+            CopyPosition {
+                line: scroll_top,
+                column: 0,
+            },
+        );
+    }
+
+    let live_rows = usize::from(screen.size().rows).max(1);
+    let live_base_line = styled_lines.len().saturating_sub(live_rows);
+    let terminal_cursor = screen.cursor_state();
+    let cursor_line = live_base_line
+        .saturating_add(terminal_cursor.row.min(live_rows.saturating_sub(1)))
+        .min(styled_lines.len().saturating_sub(1));
+    let cursor_column = styled_lines
+        .get(cursor_line)
+        .map(|line| {
+            terminal_cursor
+                .column
+                .min(terminal_text_width(&line.text, terminal_emoji_width()))
+        })
+        .unwrap_or_default();
+
+    let viewport_bottom = scroll_top.saturating_add(viewport_rows);
+    if cursor_line < scroll_top {
+        scroll_top = cursor_line;
+    } else if cursor_line >= viewport_bottom {
+        scroll_top = cursor_line.saturating_sub(viewport_rows.saturating_sub(1));
+    }
+
+    (
+        scroll_top,
+        CopyPosition {
+            line: cursor_line,
+            column: cursor_column,
+        },
+    )
+}
+
 /// Finds the grapheme cluster covering a display column and returns its
 /// starting display column and total cell width.
 fn grapheme_at_column(line: &str, target: usize) -> Option<(usize, usize)> {
@@ -664,6 +821,47 @@ mod tests {
             Some(CopyModeKeyAction::Ignore)
         );
         assert_eq!(classify_copy_mode_key_action(b"q"), None);
+    }
+
+    /// Verifies styled copy state keeps terminal display rows, source-aware
+    /// copy text, viewport state, and navigation in one mux-owned structure.
+    #[test]
+    fn styled_copy_mode_owns_terminal_derived_copy_state() {
+        let mut source_line = TerminalStyledLine::plain("rendered source");
+        source_line.copy_text = Some("# raw source".to_string());
+        let styled_lines = vec![TerminalStyledLine::plain("first"), source_line];
+
+        let mut copy = StyledCopyMode::new(
+            styled_lines.clone(),
+            1,
+            1,
+            CopyPosition { line: 1, column: 0 },
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(copy.styled_lines(), styled_lines);
+        assert_eq!(copy.copy_lines(), ["first", "# raw source"]);
+        assert_eq!(copy.visible_styled_lines(), &styled_lines[1..]);
+        assert!(copy.alternate_screen_was_active());
+        copy.move_cursor_to_line_end();
+        assert_eq!(copy.cursor().column, "rendered source".len());
+    }
+
+    /// Verifies styled copy state preserves mux-owned invalid viewport
+    /// validation instead of reintroducing product error handling.
+    #[test]
+    fn styled_copy_mode_rejects_empty_viewport() {
+        let error = StyledCopyMode::new(
+            vec![TerminalStyledLine::plain("line")],
+            0,
+            0,
+            CopyPosition { line: 0, column: 0 },
+            false,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), crate::MuxErrorKind::InvalidArgs);
     }
 
     /// Verifies the mux-owned copy buffer keeps Unicode cursor movement,

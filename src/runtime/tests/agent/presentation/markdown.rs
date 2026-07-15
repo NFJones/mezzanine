@@ -368,14 +368,15 @@ fn runtime_agent_markdown_copy_omits_synthetic_frame_row() {
         .position(|line| line.contains("Heading"))
         .unwrap();
     let heading_line_width = visible_lines[heading_line_index].chars().count();
+    let scroll_top = copy_mode.scroll_top();
     copy_mode
         .select_range(
             CopyPosition {
-                line: copy_mode.scroll_top().saturating_add(heading_line_index),
+                line: scroll_top.saturating_add(heading_line_index),
                 column: 0,
             },
             CopyPosition {
-                line: copy_mode.scroll_top().saturating_add(heading_line_index),
+                line: scroll_top.saturating_add(heading_line_index),
                 column: heading_line_width,
             },
         )
@@ -436,17 +437,16 @@ fn runtime_agent_markdown_partial_and_continuation_copy_matches_rendered_selecti
         .skip(heading_column_start)
         .collect::<String>();
     let expected_continuation_slice = "that wraps";
+    let scroll_top = copy_mode.scroll_top();
 
     copy_mode
         .select_range(
             CopyPosition {
-                line: copy_mode.scroll_top().saturating_add(heading_line_index),
+                line: scroll_top.saturating_add(heading_line_index),
                 column: heading_column_start,
             },
             CopyPosition {
-                line: copy_mode
-                    .scroll_top()
-                    .saturating_add(continuation_line_index),
+                line: scroll_top.saturating_add(continuation_line_index),
                 column: continuation_line_width,
             },
         )
@@ -459,15 +459,11 @@ fn runtime_agent_markdown_partial_and_continuation_copy_matches_rendered_selecti
     copy_mode
         .select_range(
             CopyPosition {
-                line: copy_mode
-                    .scroll_top()
-                    .saturating_add(continuation_line_index),
+                line: scroll_top.saturating_add(continuation_line_index),
                 column: 0,
             },
             CopyPosition {
-                line: copy_mode
-                    .scroll_top()
-                    .saturating_add(continuation_line_index),
+                line: scroll_top.saturating_add(continuation_line_index),
                 column: continuation_line_width,
             },
         )
