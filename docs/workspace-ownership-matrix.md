@@ -24,13 +24,13 @@ persistence, transport, and composition adapters.
 | Terminal geometry, history, protocol, state, style, width, profiles, and screen parser | `mez-terminal` | `crates/mez-terminal/src/{geometry,history,protocol,state,style,width,profile,screen}.rs` and crate-owned screen tests | owned | Root consumers import terminal contracts directly. The root retains only the explicitly named OSC 133 decoder and host-policy adapters. |
 | Layout, session state/effects, PTY processes, input contracts, theme, and copy/readline primitives | `mez-mux` | `crates/mez-mux/src/{layout,session,process,input,theme,copy,readline}` | owned | The lower-crate fake pane-output-to-terminal-screen-to-headless-client flow covers input routing, resize/focus/layout effects, copy-mode transitions, and redraw. Styled terminal-derived copy state plus prompt buffer ownership, reverse history search, multiline navigation, and baseline terminal-input transitions are mux-owned; product transcript/Markdown normalization and selector candidate policy remain adapter concerns. |
 | Mux presentation geometry and canvas primitives | `mez-mux` | `crates/mez-mux/src/{presentation,render}.rs` and `crates/mez-mux/src/render/{overlay,prompt,style}.rs` | owned | Neutral window render planning (including zoom selection, pane geometry, frame reservations, and divider-frame merging), pane-to-canvas composition, divider rendering, exact-width pane/window/group frame-row composition, generic frame/status template expansion, semantic right-status composition and placement, attached-client status-row composition, Unicode-aware window/group frame pillbox layout, and prompt wrapping/viewport/cursor/shadow-region layout are mux-owned. Product pane content, prompt kinds and summary policy, field resolution, merged-frame overlays, palettes, animation, and hit-action policy remain adapters. |
-| Agent contracts and provider-independent policy | `mez-agent` | `crates/mez-agent/src/` owns action surfaces, schemas, context policy, provider contracts, scheduler, canonical turn records/ledger, patch parsing, and shell transaction contracts | temporary | Shell classification, transaction rendering, bootstrap parsing, environment signatures, tool discovery, and intrinsic regressions are lower-owned. The lower fake-provider/fake-port harness still uses parallel acceptance DTOs while the production turn runner and execution ports remain in root, so this surface is not yet complete. |
+| Agent contracts and provider-independent policy | `mez-agent` | `crates/mez-agent/src/` owns action surfaces, schemas, context policy, provider contracts, scheduler, canonical turn records/ledger, execution ports, production turn orchestration, patch parsing, and shell transaction contracts | owned | The canonical async turn runner operates on production request, response, MAAP, action-result, transcript, and ledger contracts. Root sync tests and the production async adapter both invoke that state machine through an injected product environment; the retired parallel acceptance DTO model cannot be restored without failing the architecture check. |
 
 ## Root agent adapter audit
 
 | Root surface | Final owner / root role | State | Boundary evidence |
 |---|---|---|---|
-| `src/agent/actions/` | `mez-agent` harness plus root local-action, permission, provider, transcript-store, and runtime adapters | temporary | Initial and resumed action-result planning, batch continuation/recovery, memory guardrails, request gating, canonical execution projection, lifecycle derivation, transcript projection, shell-output decoding, and shell/local/MCP execution ports are lower-owned. Root planning supplies semantic plans and concrete permission/scope/MCP facts; root execution retains transaction construction, pane/MCP/filesystem dispatch, and product error projection behind lower contracts. The production turn runner still remains root-owned. |
+| `src/agent/actions/` | `mez-agent` harness plus root local-action, permission, provider, transcript-store, and runtime adapters | adapter | Initial and resumed action-result planning, batch continuation/recovery, memory guardrails, request gating, canonical execution projection, lifecycle derivation, transcript projection, shell-output decoding, execution ports, and production turn orchestration are lower-owned. Root supplies concrete permission/scope/MCP facts, request assembly, provider and transcript I/O, pane/MCP/filesystem dispatch, and product error projection through `AgentTurnEnvironment` and execution-port implementations. |
 | `src/agent/context/` | `mez-agent` with root product-input adapters | adapter | Canonical records, compaction, request projection, evidence/cache/provider shaping, skill constraints, and all context appenders are lower-owned. Root context code supplies only turn identity and embedded prompt assets through one assembly function; the ignored retained-tail compatibility API is removed. All appender and request-shaping scenarios run lower; root retains one turn-record and embedded-asset adapter regression. |
 | `src/agent/maap.rs` | root error and shell-policy adapter over `mez-agent` | adapter | Canonical action/domain types, parsing, normalization, validation, and 25 intrinsic protocol regressions are lower-owned. Root retains product error projection, shell policy, execution formatting, and one shell-policy callback integration. |
 | `src/agent/provider/` | `mez-agent` provider behavior plus root credential/HTTP/runtime adapters | adapter | Canonical request/response contracts and all OpenAI Responses, compatible Chat Completions, Anthropic, DeepSeek, and Claude Code request, response, schema, capability, session, prompt, accounting, diagnostic-redaction, and corrective-retry policy are lower-owned. Root provider code is audited concrete composition: auth-store lookup, credential and header attachment, reqwest/process transport, temporary settings files, bounded process retries, refresh, quota attachment, runtime event conversion, and `MezError` projection. Intrinsic schema, capability, compatibility, and accounting tests run lower; root tests exercise concrete adapters. |
@@ -41,7 +41,7 @@ persistence, transport, and composition adapters.
 | `src/agent/network.rs` | `mez-agent` contracts plus root HTTP transport adapter | adapter | Network action plans, summaries, permission-facing pseudo commands, and structured result shaping are lower-owned with no root plan forwarding. Root retains HTTP transport, response caps/parsing, and product error projection. |
 | Shell transaction boundary | `mez-agent` | owned | `crates/mez-agent/src/shell/` owns classification, transaction rendering, authored-command policy, bootstrap scripts/parsing, environment signatures, tool inventory/cache state, and intrinsic tests. `src/agent/shell.rs` is retired; root retains pane execution, timeout, output observation, and product error mapping only. |
 | `src/agent/mod.rs` | product adapter namespace | adapter | Canonical lower contracts and helpers are imported directly from `mez-agent`. Product consumers import explicit `actions`, `context`, `maap`, `network`, `prompt`, `provider`, `semantic`, or `slash` adapters; the module root retains only private sibling wiring and no compatibility exports. |
-| `src/agent/tests/` | product adapter integrations | temporary | Intrinsic shell transaction/bootstrap/tool-cache tests now run in `mez-agent`; root retains pane-executor discovery and output-decoding integration. Turn-runner and execution-port regressions still exercise root-owned production orchestration and must move with that boundary. |
+| `src/agent/tests/` | product adapter integrations | adapter | Intrinsic shell transaction/bootstrap/tool-cache tests run in `mez-agent`; root retains pane-executor discovery, output-decoding, concrete provider/recovery, permission, MCP, transcript, and runtime integrations. All 56 root turn-runner regressions exercise the same lower canonical state machine used by production rather than a root-owned orchestration loop. |
 
 ## Root mux and terminal adapter audit
 
@@ -87,22 +87,24 @@ An audit of root `pub use` declarations found no forwarding export from any
 lower workspace crate. Remaining root exports name adapters that add product
 behavior.
 
-## Acceptance evidence
+## Current acceptance evidence
 
-1. `mez-agent::harness::tests::fake_provider_and_ports_complete_one_agent_turn`
-   covers context assembly, provider recovery, MAAP validation and execution,
-   result replay, transcript persistence, and completion.
+1. `mez-agent::turn_runner::tests::fake_provider_and_ports_complete_one_agent_turn`
+   covers canonical request assembly, provider recovery, MAAP validation and
+   execution projection, result replay, ledger transitions, and completion.
 2. The `mez-mux` `headless_client_*` tests cover fake pane-process output,
    terminal emulation, viewport presentation, input routing,
    resize/focus/layout effects, copy mode, redraw, readiness, and output work.
 3. The independent `mez-terminal` suite contains 120 one-surface engine tests.
 4. Root terminal, runtime, and async-runtime integration suites retain real PTY,
    host restoration, product agent-to-mux, persistence, and transport coverage.
-5. The final audit found no temporary rows or root lower-contract forwarding
-   exports. `cargo metadata`, `cargo tree`, and `cargo package --list` confirmed
-   five packages, the intended workspace edges, no crate features, and owned
-   package contents. Direct-source usage review removed two unused workspace
-   dependencies and reclassified `portable-pty` as a root test-only dependency.
+5. The previous package audit found no root lower-contract forwarding exports.
+   `cargo metadata`, `cargo tree`, and `cargo package --list` confirmed five
+   packages, the intended workspace edges, no crate features, and owned package
+   contents. The reopened audit still requires readline test cleanup, the mux
+   effect/client/render ownership review, stronger source guardrails, and a
+   fresh final package and public-API audit before completion can be claimed.
 
 Update this matrix whenever ownership or an adapter boundary changes. The
-decomposition acceptance criteria are satisfied with no `temporary` rows.
+decomposition acceptance criteria remain open while the reopened audit items
+above are unfinished.

@@ -134,6 +134,8 @@ pub mod transcript;
 pub mod turn;
 /// Provider-independent agent turn records and ledger state machine.
 pub mod turn_ledger;
+/// Canonical provider-independent production turn orchestration.
+pub mod turn_runner;
 
 pub use accounting::{AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsageKey};
 pub use action_gates::apply_default_action_gates;
@@ -239,11 +241,8 @@ pub use failure_summary::{
     AgentFailureSummaryResponseDecision,
 };
 pub use harness::{
-    AgentActionExecutor, AgentHarnessAction, AgentHarnessActionResult, AgentHarnessError,
-    AgentHarnessErrorKind, AgentHarnessOutcome, AgentHarnessRequest, AgentHarnessResponse,
-    AgentHarnessTurn, AgentTurnNegotiation, AgentTurnProvider, AgentTurnProviderFailureDecision,
-    AgentTurnRecoveryBudget, AgentTurnResponseDecision, DEFAULT_TURN_RECOVERY_LIMIT,
-    run_agent_turn,
+    AgentTurnNegotiation, AgentTurnProviderFailureDecision, AgentTurnRecoveryBudget,
+    AgentTurnResponseDecision,
 };
 pub use http::{
     DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ProviderHttpError,
@@ -397,6 +396,10 @@ pub use turn::{
     AgentTurnTrigger, validate_turn_required,
 };
 pub use turn_ledger::{AgentTurnLedger, AgentTurnRecord};
+pub use turn_runner::{
+    AgentTurnEnvironment, AgentTurnProviderFailure, DEFAULT_MAAP_REPAIR_ATTEMPT_LIMIT,
+    run_agent_turn_async,
+};
 
 /// Maximum number of issue records a model-authored query may request.
 pub const MAX_ISSUE_QUERY_LIMIT: u64 = 200;

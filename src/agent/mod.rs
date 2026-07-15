@@ -64,7 +64,7 @@ use mez_agent::{
     AgentShellStore, AgentShellVisibility, AgentTranscriptEntry, AgentTurnLedger, AgentTurnRecord,
     AgentTurnState, AllowedActionSet, ContextSourceKind, MaapBatch, McpExecutionRequest,
     McpExecutionResponse, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest,
-    ModelTokenUsage, ProviderHttpRequest, ProviderHttpResponse, SayStatus, TranscriptPersistence,
+    ProviderHttpRequest, ProviderHttpResponse, SayStatus, TranscriptPersistence,
     agent_shell_help_display, agent_shell_mcp_display, agent_shell_permissions_display,
     agent_shell_status_display,
 };

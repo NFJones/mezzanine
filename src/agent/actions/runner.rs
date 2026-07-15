@@ -9,25 +9,22 @@ use super::super::AsyncModelProvider;
 #[cfg(test)]
 use super::super::{ActionStatus, AgentAction, local_action_plan};
 use super::super::{
-    AgentContext, AgentTurnLedger, AgentTurnRecord, AgentTurnState, AllowedActionSet,
-    McpPromptTool, MezError, ModelInteractionKind, ModelProfile, ModelRequest, Result,
-    assemble_model_request, provider_error_retry_class,
+    AgentContext, AgentTurnLedger, AgentTurnRecord, AllowedActionSet, McpPromptTool, MezError,
+    ModelProfile, ModelRequest, Result, assemble_model_request, provider_error_retry_class,
 };
 #[cfg(test)]
-use super::super::{MarkerToken, McpExecutionRequest, Path};
+use super::super::{AgentTurnState, MarkerToken, McpExecutionRequest, Path};
 #[cfg(test)]
 use super::execution::{
     PaneShellLocalExecutor, execute_local_action, execute_mcp_action_through_runtime,
 };
 use super::recovery::{
-    FailureSummaryInput, FailureSummaryScope, failed_maap_validation_execution_with_summary_async,
-    maap_provider_error_is_repairable, summarize_controller_failure_execution_async,
-    summarize_provider_failure_execution_async,
+    FailureSummaryInput, FailureSummaryScope, maap_provider_error_is_repairable,
+    summarize_controller_failure_execution_async, summarize_provider_failure_execution_async,
 };
 #[cfg(test)]
 use super::recovery::{
-    failed_maap_validation_execution_with_summary, summarize_controller_failure_execution,
-    summarize_provider_failure_execution,
+    summarize_controller_failure_execution, summarize_provider_failure_execution,
 };
 use crate::agent::maap::MaapBatchProductValidation;
 #[cfg(test)]
@@ -35,76 +32,10 @@ use crate::agent::provider::ModelProvider;
 #[cfg(test)]
 use mez_agent::turn_state_from_action_results;
 use mez_agent::{
-    AgentTurnExecution, AgentTurnNegotiation, AgentTurnProviderFailureDecision,
-    AgentTurnResponseDecision, BatchContinuationError, BatchContinuationInput,
-    BatchContinuationPlan, BatchValidationFailure, ProviderResponseAcceptance,
-    SubagentScopeDeclaration, apply_default_action_gates, failed_turn_execution_without_batch,
-    maap_repair_request, plan_turn_execution_from_batch,
+    AgentTurnEnvironment, AgentTurnExecution, AgentTurnProviderFailure, SubagentScopeDeclaration,
 };
 #[cfg(test)]
 use mez_agent::{LocalActionExecutor, McpActionExecutor, PaneShellExecutor};
-
-/// Maximum number of ephemeral provider retries after a MAAP validation error.
-///
-/// The retry instruction is appended only to a cloned request and is never
-/// returned in `AgentTurnExecution.request`, keeping repair diagnostics out of
-/// durable transcripts and future model context when the corrected response is
-/// valid.
-const MAAP_REPAIR_ATTEMPT_LIMIT: usize = 2;
-
-/// Borrows product-owned facts needed by the lower batch-continuation planner.
-struct ProductBatchContinuationInput<'a> {
-    /// Request that produced the current provider response.
-    response_request: &'a ModelRequest,
-    /// Raw provider output used only for ephemeral repair context.
-    response_raw_text: &'a str,
-    /// Parsed batch being validated.
-    batch: &'a super::super::MaapBatch,
-    /// Active request whose allowed-action surface must be enforced.
-    active_request: &'a ModelRequest,
-    /// Active product turn identity.
-    turn: &'a AgentTurnRecord,
-    /// MCP server ids available to product MAAP validation.
-    available_mcp_servers: &'a [String],
-    /// Concrete MCP tools available to product MAAP validation.
-    available_mcp_tools: &'a [McpPromptTool],
-}
-
-/// Supplies product MAAP validation to canonical lower continuation planning.
-fn plan_product_batch_continuation(
-    input: ProductBatchContinuationInput<'_>,
-    negotiation: &mut AgentTurnNegotiation<ModelRequest>,
-) -> std::result::Result<BatchContinuationPlan, (MezError, &'static str)> {
-    mez_agent::plan_batch_continuation(
-        BatchContinuationInput {
-            response_request: input.response_request,
-            response_raw_text: input.response_raw_text,
-            batch: input.batch,
-            active_request: input.active_request,
-        },
-        negotiation,
-        || {
-            input
-                .batch
-                .validate(
-                    input.turn,
-                    input.available_mcp_servers,
-                    input.available_mcp_tools,
-                )
-                .map_err(|error| {
-                    let message = error.message().to_string();
-                    BatchValidationFailure::new(error, message)
-                })
-        },
-    )
-    .map_err(|rejection| {
-        let error = match rejection.error {
-            BatchContinuationError::Recovery(error) => MezError::invalid_args(error.message()),
-            BatchContinuationError::Product(error) => error,
-        };
-        (error, rejection.stage)
-    })
-}
 
 /// Carries agent turn runner state for this subsystem.
 ///
@@ -129,6 +60,138 @@ pub struct AgentTurnRunner<'a, P> {
     pub memory_actions_enabled: bool,
     /// Whether local issue-tracking MAAP actions may be exposed for this turn.
     pub issue_actions_enabled: bool,
+}
+
+/// Synchronous fake-provider adapter for canonical lower turn orchestration.
+#[cfg(test)]
+struct SyncProductAgentTurnEnvironment<'runner, 'config, P> {
+    runner: &'runner AgentTurnRunner<'config, P>,
+}
+
+#[cfg(test)]
+impl<P: ModelProvider> AgentTurnEnvironment for SyncProductAgentTurnEnvironment<'_, '_, P> {
+    type Error = MezError;
+
+    fn provider_id(&self) -> &str {
+        self.runner.provider.provider_id()
+    }
+
+    fn assemble_request(
+        &self,
+        turn: &AgentTurnRecord,
+        context: &AgentContext,
+    ) -> Result<ModelRequest> {
+        Ok(assemble_model_request(
+            &self.runner.model_profile,
+            turn,
+            context,
+        )?)
+    }
+
+    fn available_mcp_tools(&self) -> &[McpPromptTool] {
+        self.runner.available_mcp_tools
+    }
+
+    fn memory_actions_enabled(&self) -> bool {
+        self.runner.memory_actions_enabled
+    }
+
+    fn issue_actions_enabled(&self) -> bool {
+        self.runner.issue_actions_enabled
+    }
+
+    async fn send_request(&self, request: &ModelRequest) -> Result<super::super::ModelResponse> {
+        self.runner.provider.send_request(request)
+    }
+
+    fn provider_failure(&self, error: &MezError) -> AgentTurnProviderFailure {
+        AgentTurnProviderFailure {
+            repairable_malformed_output: maap_provider_error_is_repairable(error),
+            retry_class: provider_error_retry_class(error),
+            message: error.message().to_string(),
+            raw_text: error.provider_raw_text().unwrap_or("").to_string(),
+        }
+    }
+
+    fn validate_batch(
+        &self,
+        turn: &AgentTurnRecord,
+        batch: &super::super::MaapBatch,
+    ) -> Result<()> {
+        batch.validate(
+            turn,
+            &self.runner.available_mcp_servers,
+            self.runner.available_mcp_tools,
+        )
+    }
+
+    fn plan_action_result(
+        &self,
+        turn: &AgentTurnRecord,
+        action: &super::super::AgentAction,
+    ) -> Result<super::super::ActionResult> {
+        self.runner.plan_action_result(turn, action)
+    }
+
+    fn invalid_args(&self, message: String) -> MezError {
+        MezError::invalid_args(message)
+    }
+
+    fn invalid_state(&self, message: String) -> MezError {
+        MezError::invalid_state(message)
+    }
+
+    fn error_message<'a>(&self, error: &'a MezError) -> &'a str {
+        error.message()
+    }
+
+    async fn summarize_provider_failure(
+        &self,
+        turn: &AgentTurnRecord,
+        previous_request: &ModelRequest,
+        error: &MezError,
+    ) -> Option<AgentTurnExecution> {
+        summarize_provider_failure_execution(self.runner.provider, turn, previous_request, error)
+    }
+
+    async fn summarize_controller_failure(
+        &self,
+        turn: &AgentTurnRecord,
+        previous_request: &ModelRequest,
+        failed_response: super::super::ModelResponse,
+        error: &MezError,
+        stage: &'static str,
+    ) -> Option<AgentTurnExecution> {
+        summarize_controller_failure_execution(
+            self.runner.provider,
+            turn,
+            previous_request,
+            FailureSummaryInput {
+                failed_response,
+                error,
+                scope: FailureSummaryScope {
+                    stage,
+                    available_mcp_servers: &self.runner.available_mcp_servers,
+                    available_mcp_tools: self.runner.available_mcp_tools,
+                },
+            },
+        )
+    }
+}
+
+/// Polls a synchronous fake-provider turn future that must not wait on I/O.
+#[cfg(test)]
+fn run_ready_turn<T>(future: impl std::future::Future<Output = T>) -> T {
+    use std::pin::pin;
+    use std::task::{Context, Poll, Waker};
+
+    let mut future = pin!(future);
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
+    match future.as_mut().poll(&mut context) {
+        Poll::Ready(output) => output,
+        Poll::Pending => panic!("synchronous test provider unexpectedly returned pending"),
+    }
 }
 
 #[cfg(test)]
@@ -168,199 +231,14 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
         context: &AgentContext,
         allowed_actions: Option<AllowedActionSet>,
     ) -> Result<AgentTurnExecution> {
-        ledger.start_turn(turn.clone())?;
-        let mut request = assemble_model_request(&self.model_profile, &turn, context)?;
-        if let Some(allowed_actions) = allowed_actions {
-            request.interaction_kind = ModelInteractionKind::ActionExecution;
-            request.allowed_actions = allowed_actions;
-        }
-        apply_default_action_gates(
-            &mut request,
-            self.available_mcp_tools,
-            self.memory_actions_enabled,
-            self.issue_actions_enabled,
-        );
-        let mut negotiation = AgentTurnNegotiation::new(request.clone(), MAAP_REPAIR_ATTEMPT_LIMIT);
-        let mut response_request: ModelRequest;
-        let mut response = loop {
-            response_request = request.clone();
-            let response = match self.provider.send_request(&request) {
-                Ok(response) => response,
-                Err(error) => {
-                    match negotiation.advance_provider_failure(
-                        maap_provider_error_is_repairable(&error),
-                        provider_error_retry_class(&error),
-                    ) {
-                        AgentTurnProviderFailureDecision::RecoverMalformedOutput { attempt } => {
-                            request = maap_repair_request(
-                                &response_request,
-                                error.message(),
-                                error.provider_raw_text().unwrap_or(""),
-                                attempt,
-                            );
-                            continue;
-                        }
-                        AgentTurnProviderFailureDecision::ReturnToRuntime => return Err(error),
-                        AgentTurnProviderFailureDecision::Summarize => {}
-                    }
-                    if let Some(execution) = summarize_provider_failure_execution(
-                        self.provider,
-                        &turn,
-                        &response_request,
-                        &error,
-                    ) {
-                        ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-                        return Ok(execution);
-                    }
-                    ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-                    return Err(error);
-                }
-            };
-            let response_decision = negotiation.advance_provider_response(
-                &response_request,
-                self.provider.provider_id(),
-                &response.provider,
-                response_request.interaction_kind == ModelInteractionKind::Repair,
-                response.action_batch.is_some(),
-                response.usage,
-                response.latest_request_usage,
-                &response.quota_usage,
-            );
-            if let AgentTurnResponseDecision::Reject(
-                response_acceptance @ ProviderResponseAcceptance::ProviderIdentityMismatch,
-            ) = response_decision
-            {
-                let error = MezError::invalid_state(
-                    response_acceptance
-                        .rejection_message()
-                        .expect("provider identity rejection has a diagnostic"),
-                );
-                if let Some(execution) = summarize_controller_failure_execution(
-                    self.provider,
-                    &turn,
-                    &response_request,
-                    FailureSummaryInput {
-                        failed_response: response.clone(),
-                        error: &error,
-                        scope: FailureSummaryScope {
-                            stage: response_acceptance
-                                .rejection_stage()
-                                .expect("provider identity rejection has a failure stage"),
-                            available_mcp_servers: &self.available_mcp_servers,
-                            available_mcp_tools: self.available_mcp_tools,
-                        },
-                    },
-                ) {
-                    ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-                    return Ok(execution);
-                }
-                ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-                return Err(error);
-            }
-            let Some(batch) = &response.action_batch else {
-                let error = MezError::invalid_args(
-                    "provider response did not include a parsed MAAP action_batch",
-                );
-                if let AgentTurnResponseDecision::RecoverMissingActionBatch { attempt } =
-                    response_decision
-                {
-                    request = maap_repair_request(
-                        &response_request,
-                        error.message(),
-                        &response.raw_text,
-                        attempt,
-                    );
-                    continue;
-                }
-                debug_assert_eq!(
-                    response_decision,
-                    AgentTurnResponseDecision::Reject(
-                        ProviderResponseAcceptance::MissingActionBatch
-                    )
-                );
-                ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-                let mut response = response;
-                response.usage = negotiation.cumulative_response_usage();
-                response.quota_usage = negotiation.latest_quota_usage().to_vec();
-                return Ok(failed_maap_validation_execution_with_summary(
-                    self.provider,
-                    &turn,
-                    negotiation.durable_request().clone(),
-                    response,
-                    negotiation.latest_response_usage(),
-                    &error,
-                    FailureSummaryScope {
-                        stage: "maap_missing_action_batch",
-                        available_mcp_servers: &self.available_mcp_servers,
-                        available_mcp_tools: self.available_mcp_tools,
-                    },
-                ));
-            };
-            match plan_product_batch_continuation(
-                ProductBatchContinuationInput {
-                    response_request: &response_request,
-                    response_raw_text: &response.raw_text,
-                    batch,
-                    active_request: &request,
-                    turn: &turn,
-                    available_mcp_servers: &self.available_mcp_servers,
-                    available_mcp_tools: self.available_mcp_tools,
-                },
-                &mut negotiation,
-            ) {
-                Ok(BatchContinuationPlan::Continue(next_request)) => {
-                    request = *next_request;
-                    continue;
-                }
-                Ok(BatchContinuationPlan::Execute) => {}
-                Err((error, stage)) => {
-                    ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-                    let mut response = response;
-                    response.usage = negotiation.cumulative_response_usage();
-                    response.quota_usage = negotiation.latest_quota_usage().to_vec();
-                    return Ok(failed_maap_validation_execution_with_summary(
-                        self.provider,
-                        &turn,
-                        negotiation.durable_request().clone(),
-                        response,
-                        negotiation.latest_response_usage(),
-                        &error,
-                        FailureSummaryScope {
-                            stage,
-                            available_mcp_servers: &self.available_mcp_servers,
-                            available_mcp_tools: self.available_mcp_tools,
-                        },
-                    ));
-                }
-            }
-            break response;
-        };
-        response.usage = negotiation.cumulative_response_usage();
-        response.quota_usage = negotiation.latest_quota_usage().to_vec();
-
-        let Some(batch) = response.action_batch.clone() else {
-            ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-            return Ok(failed_turn_execution_without_batch(
-                negotiation.durable_request().clone(),
-                response,
-                negotiation.latest_response_usage(),
-            ));
-        };
-
-        let execution = plan_turn_execution_from_batch(
-            &turn,
+        let environment = SyncProductAgentTurnEnvironment { runner: self };
+        run_ready_turn(mez_agent::run_agent_turn_async(
+            &environment,
+            ledger,
+            turn,
             context,
-            negotiation.durable_request().clone(),
-            response,
-            negotiation.latest_response_usage(),
-            &batch,
-            |action| self.plan_action_result(&turn, action),
-        )?;
-        if execution.terminal_state != AgentTurnState::Running {
-            ledger.finish_turn(&turn.turn_id, execution.terminal_state)?;
-        }
-
-        Ok(execution)
+            allowed_actions,
+        ))
     }
 
     /// Executes the `run_turn_with_shell_executor` operation for the owning subsystem.
@@ -485,6 +363,128 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
     }
 }
 
+/// Product effects supplied to the canonical lower production turn loop.
+struct ProductAgentTurnEnvironment<'runner, 'config, P> {
+    runner: &'runner AgentTurnRunner<'config, P>,
+}
+
+impl<P: AsyncModelProvider> AgentTurnEnvironment for ProductAgentTurnEnvironment<'_, '_, P> {
+    type Error = MezError;
+
+    fn provider_id(&self) -> &str {
+        self.runner.provider.provider_id()
+    }
+
+    fn assemble_request(
+        &self,
+        turn: &AgentTurnRecord,
+        context: &AgentContext,
+    ) -> Result<ModelRequest> {
+        Ok(assemble_model_request(
+            &self.runner.model_profile,
+            turn,
+            context,
+        )?)
+    }
+
+    fn available_mcp_tools(&self) -> &[McpPromptTool] {
+        self.runner.available_mcp_tools
+    }
+
+    fn memory_actions_enabled(&self) -> bool {
+        self.runner.memory_actions_enabled
+    }
+
+    fn issue_actions_enabled(&self) -> bool {
+        self.runner.issue_actions_enabled
+    }
+
+    async fn send_request(&self, request: &ModelRequest) -> Result<super::super::ModelResponse> {
+        self.runner.provider.send_request_async(request).await
+    }
+
+    fn provider_failure(&self, error: &MezError) -> AgentTurnProviderFailure {
+        AgentTurnProviderFailure {
+            repairable_malformed_output: maap_provider_error_is_repairable(error),
+            retry_class: provider_error_retry_class(error),
+            message: error.message().to_string(),
+            raw_text: error.provider_raw_text().unwrap_or("").to_string(),
+        }
+    }
+
+    fn validate_batch(
+        &self,
+        turn: &AgentTurnRecord,
+        batch: &super::super::MaapBatch,
+    ) -> Result<()> {
+        batch.validate(
+            turn,
+            &self.runner.available_mcp_servers,
+            self.runner.available_mcp_tools,
+        )
+    }
+
+    fn plan_action_result(
+        &self,
+        turn: &AgentTurnRecord,
+        action: &super::super::AgentAction,
+    ) -> Result<super::super::ActionResult> {
+        self.runner.plan_action_result(turn, action)
+    }
+
+    fn invalid_args(&self, message: String) -> MezError {
+        MezError::invalid_args(message)
+    }
+
+    fn invalid_state(&self, message: String) -> MezError {
+        MezError::invalid_state(message)
+    }
+
+    fn error_message<'a>(&self, error: &'a MezError) -> &'a str {
+        error.message()
+    }
+
+    async fn summarize_provider_failure(
+        &self,
+        turn: &AgentTurnRecord,
+        previous_request: &ModelRequest,
+        error: &MezError,
+    ) -> Option<AgentTurnExecution> {
+        summarize_provider_failure_execution_async(
+            self.runner.provider,
+            turn,
+            previous_request,
+            error,
+        )
+        .await
+    }
+
+    async fn summarize_controller_failure(
+        &self,
+        turn: &AgentTurnRecord,
+        previous_request: &ModelRequest,
+        failed_response: super::super::ModelResponse,
+        error: &MezError,
+        stage: &'static str,
+    ) -> Option<AgentTurnExecution> {
+        summarize_controller_failure_execution_async(
+            self.runner.provider,
+            turn,
+            previous_request,
+            FailureSummaryInput {
+                failed_response,
+                error,
+                scope: FailureSummaryScope {
+                    stage,
+                    available_mcp_servers: &self.runner.available_mcp_servers,
+                    available_mcp_tools: self.runner.available_mcp_tools,
+                },
+            },
+        )
+        .await
+    }
+}
+
 impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
     /// Executes the `run_turn_async` operation for the owning subsystem.
     ///
@@ -522,204 +522,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         context: &AgentContext,
         allowed_actions: Option<AllowedActionSet>,
     ) -> Result<AgentTurnExecution> {
-        ledger.start_turn(turn.clone())?;
-        let mut request = assemble_model_request(&self.model_profile, &turn, context)?;
-        if let Some(allowed_actions) = allowed_actions {
-            request.interaction_kind = ModelInteractionKind::ActionExecution;
-            request.allowed_actions = allowed_actions;
-        }
-        apply_default_action_gates(
-            &mut request,
-            self.available_mcp_tools,
-            self.memory_actions_enabled,
-            self.issue_actions_enabled,
-        );
-        let mut negotiation = AgentTurnNegotiation::new(request.clone(), MAAP_REPAIR_ATTEMPT_LIMIT);
-        let mut response_request: ModelRequest;
-        let mut response = loop {
-            response_request = request.clone();
-            let response = match self.provider.send_request_async(&request).await {
-                Ok(response) => response,
-                Err(error) => {
-                    match negotiation.advance_provider_failure(
-                        maap_provider_error_is_repairable(&error),
-                        provider_error_retry_class(&error),
-                    ) {
-                        AgentTurnProviderFailureDecision::RecoverMalformedOutput { attempt } => {
-                            request = maap_repair_request(
-                                &response_request,
-                                error.message(),
-                                error.provider_raw_text().unwrap_or(""),
-                                attempt,
-                            );
-                            continue;
-                        }
-                        AgentTurnProviderFailureDecision::ReturnToRuntime => return Err(error),
-                        AgentTurnProviderFailureDecision::Summarize => {}
-                    }
-                    if let Some(execution) = summarize_provider_failure_execution_async(
-                        self.provider,
-                        &turn,
-                        &response_request,
-                        &error,
-                    )
-                    .await
-                    {
-                        ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-                        return Ok(execution);
-                    }
-                    ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-                    return Err(error);
-                }
-            };
-            let response_decision = negotiation.advance_provider_response(
-                &response_request,
-                self.provider.provider_id(),
-                &response.provider,
-                response_request.interaction_kind == ModelInteractionKind::Repair,
-                response.action_batch.is_some(),
-                response.usage,
-                response.latest_request_usage,
-                &response.quota_usage,
-            );
-            if let AgentTurnResponseDecision::Reject(
-                response_acceptance @ ProviderResponseAcceptance::ProviderIdentityMismatch,
-            ) = response_decision
-            {
-                let error = MezError::invalid_state(
-                    response_acceptance
-                        .rejection_message()
-                        .expect("provider identity rejection has a diagnostic"),
-                );
-                if let Some(execution) = summarize_controller_failure_execution_async(
-                    self.provider,
-                    &turn,
-                    &response_request,
-                    FailureSummaryInput {
-                        failed_response: response.clone(),
-                        error: &error,
-                        scope: FailureSummaryScope {
-                            stage: response_acceptance
-                                .rejection_stage()
-                                .expect("provider identity rejection has a failure stage"),
-                            available_mcp_servers: &self.available_mcp_servers,
-                            available_mcp_tools: self.available_mcp_tools,
-                        },
-                    },
-                )
-                .await
-                {
-                    ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-                    return Ok(execution);
-                }
-                ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-                return Err(error);
-            }
-            let Some(batch) = &response.action_batch else {
-                let error = MezError::invalid_args(
-                    "provider response did not include a parsed MAAP action_batch",
-                );
-                if let AgentTurnResponseDecision::RecoverMissingActionBatch { attempt } =
-                    response_decision
-                {
-                    request = maap_repair_request(
-                        &response_request,
-                        error.message(),
-                        &response.raw_text,
-                        attempt,
-                    );
-                    continue;
-                }
-                debug_assert_eq!(
-                    response_decision,
-                    AgentTurnResponseDecision::Reject(
-                        ProviderResponseAcceptance::MissingActionBatch
-                    )
-                );
-                ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-                let mut response = response;
-                response.usage = negotiation.cumulative_response_usage();
-                response.quota_usage = negotiation.latest_quota_usage().to_vec();
-                return Ok(failed_maap_validation_execution_with_summary_async(
-                    self.provider,
-                    &turn,
-                    negotiation.durable_request().clone(),
-                    response,
-                    negotiation.latest_response_usage(),
-                    &error,
-                    FailureSummaryScope {
-                        stage: "maap_missing_action_batch",
-                        available_mcp_servers: &self.available_mcp_servers,
-                        available_mcp_tools: self.available_mcp_tools,
-                    },
-                )
-                .await);
-            };
-            match plan_product_batch_continuation(
-                ProductBatchContinuationInput {
-                    response_request: &response_request,
-                    response_raw_text: &response.raw_text,
-                    batch,
-                    active_request: &request,
-                    turn: &turn,
-                    available_mcp_servers: &self.available_mcp_servers,
-                    available_mcp_tools: self.available_mcp_tools,
-                },
-                &mut negotiation,
-            ) {
-                Ok(BatchContinuationPlan::Continue(next_request)) => {
-                    request = *next_request;
-                    continue;
-                }
-                Ok(BatchContinuationPlan::Execute) => {}
-                Err((error, stage)) => {
-                    ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-                    let mut response = response;
-                    response.usage = negotiation.cumulative_response_usage();
-                    response.quota_usage = negotiation.latest_quota_usage().to_vec();
-                    return Ok(failed_maap_validation_execution_with_summary_async(
-                        self.provider,
-                        &turn,
-                        negotiation.durable_request().clone(),
-                        response,
-                        negotiation.latest_response_usage(),
-                        &error,
-                        FailureSummaryScope {
-                            stage,
-                            available_mcp_servers: &self.available_mcp_servers,
-                            available_mcp_tools: self.available_mcp_tools,
-                        },
-                    )
-                    .await);
-                }
-            }
-            break response;
-        };
-        response.usage = negotiation.cumulative_response_usage();
-        response.quota_usage = negotiation.latest_quota_usage().to_vec();
-
-        let Some(batch) = response.action_batch.clone() else {
-            ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-            return Ok(failed_turn_execution_without_batch(
-                negotiation.durable_request().clone(),
-                response,
-                negotiation.latest_response_usage(),
-            ));
-        };
-
-        let execution = plan_turn_execution_from_batch(
-            &turn,
-            context,
-            negotiation.durable_request().clone(),
-            response,
-            negotiation.latest_response_usage(),
-            &batch,
-            |action| self.plan_action_result(&turn, action),
-        )?;
-        if execution.terminal_state != AgentTurnState::Running {
-            ledger.finish_turn(&turn.turn_id, execution.terminal_state)?;
-        }
-
-        Ok(execution)
+        let environment = ProductAgentTurnEnvironment { runner: self };
+        mez_agent::run_agent_turn_async(&environment, ledger, turn, context, allowed_actions).await
     }
 }

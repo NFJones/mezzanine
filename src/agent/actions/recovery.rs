@@ -7,8 +7,8 @@
 use super::super::{
     ActionResult, AgentActionPayload, AgentTurnRecord, AgentTurnState, AllowedActionSet,
     AsyncModelProvider, ContextSourceKind, McpPromptTool, MezError, ModelInteractionKind,
-    ModelMessage, ModelMessageRole, ModelRequest, ModelResponse, ModelTokenUsage, Result,
-    SayStatus, provider_error_retry_class,
+    ModelMessage, ModelMessageRole, ModelRequest, ModelResponse, Result, SayStatus,
+    provider_error_retry_class,
 };
 use super::FAILURE_SUMMARY_RAW_TEXT_LIMIT_BYTES;
 use crate::agent::maap::MaapBatchProductValidation;
@@ -430,78 +430,4 @@ pub(super) async fn summarize_controller_failure_execution_async<P: AsyncModelPr
             FailureSummaryResponsePlan::Reject => return None,
         }
     }
-}
-
-/// Builds the terminal failed execution for a MAAP response that remained
-/// invalid after all ephemeral repair attempts were exhausted.
-fn failed_maap_validation_execution(
-    request: ModelRequest,
-    mut response: ModelResponse,
-    latest_response_usage: ModelTokenUsage,
-    error: &MezError,
-) -> AgentTurnExecution {
-    response.raw_text = format!("{}\nmaap_validation_error: {}", response.raw_text, error);
-    AgentTurnExecution {
-        request,
-        response,
-        latest_response_usage,
-        routing_token_usage_by_model: std::collections::BTreeMap::new(),
-        action_results: Vec::new(),
-        final_turn: true,
-        terminal_state: AgentTurnState::Failed,
-    }
-}
-
-/// Builds a terminal failed MAAP validation execution, asking the model for one
-/// final user-facing characterization when possible.
-#[cfg(test)]
-pub(super) fn failed_maap_validation_execution_with_summary<P: ModelProvider>(
-    provider: &P,
-    turn: &AgentTurnRecord,
-    request: ModelRequest,
-    response: ModelResponse,
-    latest_response_usage: ModelTokenUsage,
-    error: &MezError,
-    scope: FailureSummaryScope<'_>,
-) -> AgentTurnExecution {
-    let failed =
-        failed_maap_validation_execution(request.clone(), response, latest_response_usage, error);
-    summarize_controller_failure_execution(
-        provider,
-        turn,
-        &request,
-        FailureSummaryInput {
-            failed_response: failed.response.clone(),
-            error,
-            scope,
-        },
-    )
-    .unwrap_or(failed)
-}
-
-/// Builds a terminal failed MAAP validation execution, asking the model for one
-/// final user-facing characterization when possible.
-pub(super) async fn failed_maap_validation_execution_with_summary_async<P: AsyncModelProvider>(
-    provider: &P,
-    turn: &AgentTurnRecord,
-    request: ModelRequest,
-    response: ModelResponse,
-    latest_response_usage: ModelTokenUsage,
-    error: &MezError,
-    scope: FailureSummaryScope<'_>,
-) -> AgentTurnExecution {
-    let failed =
-        failed_maap_validation_execution(request.clone(), response, latest_response_usage, error);
-    summarize_controller_failure_execution_async(
-        provider,
-        turn,
-        &request,
-        FailureSummaryInput {
-            failed_response: failed.response.clone(),
-            error,
-            scope,
-        },
-    )
-    .await
-    .unwrap_or(failed)
 }

@@ -29,6 +29,7 @@ REQUIRED_OWNER_PATHS = {
     "crates/mez-agent/src/lib.rs",
     "crates/mez-agent/src/execution.rs",
     "crates/mez-agent/src/shell/mod.rs",
+    "crates/mez-agent/src/turn_runner.rs",
     "crates/mez-core/src/ids.rs",
     "crates/mez-mux/src/layout/mod.rs",
     "crates/mez-mux/src/process/mod.rs",
@@ -49,6 +50,16 @@ RETIRED_COMPATIBILITY_PATHS = {
     "src/session/mod.rs",
 }
 
+RETIRED_RUST_IDENTIFIERS = {
+    "AgentHarness": "parallel agent acceptance contracts",
+}
+
+ROOT_RUNNER_FORBIDDEN_CALLS = {
+    "advance_provider_failure(": "provider-failure negotiation",
+    "advance_provider_response(": "provider-response negotiation",
+    "plan_batch_continuation(": "batch-continuation negotiation",
+}
+
 
 def workspace_metadata() -> dict[str, object]:
     """Return Cargo metadata for the current workspace or fail visibly."""
@@ -60,6 +71,25 @@ def workspace_metadata() -> dict[str, object]:
         text=True,
     )
     return json.loads(completed.stdout)
+
+
+def source_ownership_violations() -> list[str]:
+    """Return source patterns that would restore retired root ownership."""
+
+    violations: list[str] = []
+    for path in sorted((*Path("src").rglob("*.rs"), *Path("crates").rglob("*.rs"))):
+        source = path.read_text(encoding="utf-8")
+        for identifier, ownership in RETIRED_RUST_IDENTIFIERS.items():
+            if identifier in source:
+                violations.append(f"{path}: retired {ownership} `{identifier}`")
+
+    root_runner = Path("src/agent/actions/runner.rs")
+    runner_source = root_runner.read_text(encoding="utf-8")
+    for call, ownership in ROOT_RUNNER_FORBIDDEN_CALLS.items():
+        if call in runner_source:
+            violations.append(f"{root_runner}: lower-owned {ownership} `{call}`")
+
+    return violations
 
 
 def main() -> int:
@@ -110,6 +140,13 @@ def main() -> int:
         print("retired root compatibility facades must not be restored:")
         for path in restored_facades:
             print(f"  {path}")
+        return 1
+
+    ownership_violations = source_ownership_violations()
+    if ownership_violations:
+        print("source ownership violations:")
+        for violation in ownership_violations:
+            print(f"  {violation}")
         return 1
 
     print("Mezzanine workspace dependency and ownership guardrails are valid.")
