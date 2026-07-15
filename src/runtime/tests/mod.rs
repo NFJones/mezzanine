@@ -431,7 +431,7 @@ impl ModelProvider for RuntimeBatchFailingProvider {
 /// request when their fixed response contains executable actions.
 fn runtime_capability_for_response(
     response: &crate::agent::ModelResponse,
-) -> Option<crate::agent::AgentCapability> {
+) -> Option<mez_agent::AgentCapability> {
     response
         .action_batch
         .as_ref()?
@@ -440,29 +440,27 @@ fn runtime_capability_for_response(
         .find_map(|action| match &action.payload {
             mez_agent::AgentActionPayload::ShellCommand { .. }
             | mez_agent::AgentActionPayload::ApplyPatch { .. } => {
-                Some(crate::agent::AgentCapability::Shell)
+                Some(mez_agent::AgentCapability::Shell)
             }
             mez_agent::AgentActionPayload::WebSearch { .. } => {
-                Some(crate::agent::AgentCapability::NetworkSearch)
+                Some(mez_agent::AgentCapability::NetworkSearch)
             }
             mez_agent::AgentActionPayload::FetchUrl { .. } => {
-                Some(crate::agent::AgentCapability::NetworkFetch)
+                Some(mez_agent::AgentCapability::NetworkFetch)
             }
-            mez_agent::AgentActionPayload::McpCall { .. } => {
-                Some(crate::agent::AgentCapability::Mcp)
-            }
+            mez_agent::AgentActionPayload::McpCall { .. } => Some(mez_agent::AgentCapability::Mcp),
             mez_agent::AgentActionPayload::SendMessage { .. }
             | mez_agent::AgentActionPayload::SpawnAgent { .. } => {
-                Some(crate::agent::AgentCapability::Subagent)
+                Some(mez_agent::AgentCapability::Subagent)
             }
             mez_agent::AgentActionPayload::ConfigChange { .. } => {
-                Some(crate::agent::AgentCapability::ConfigChange)
+                Some(mez_agent::AgentCapability::ConfigChange)
             }
             mez_agent::AgentActionPayload::IssueAdd { .. }
             | mez_agent::AgentActionPayload::IssueUpdate { .. }
             | mez_agent::AgentActionPayload::IssueQuery { .. }
             | mez_agent::AgentActionPayload::IssueDelete { .. } => {
-                Some(crate::agent::AgentCapability::Issues)
+                Some(mez_agent::AgentCapability::Issues)
             }
             mez_agent::AgentActionPayload::Say { .. }
             | mez_agent::AgentActionPayload::RequestCapability { .. }
@@ -479,7 +477,7 @@ fn runtime_capability_for_response(
 fn runtime_capability_response(
     provider_id: &str,
     request: &crate::agent::ModelRequest,
-    capability: crate::agent::AgentCapability,
+    capability: mez_agent::AgentCapability,
 ) -> crate::agent::ModelResponse {
     crate::agent::ModelResponse {
         provider: provider_id.to_string(),
@@ -544,7 +542,7 @@ impl ModelProvider for RuntimeBatchProvider {
         &self,
         request: &crate::agent::ModelRequest,
     ) -> Result<crate::agent::ModelResponse> {
-        if request.interaction_kind == crate::agent::ModelInteractionKind::CapabilityDecision
+        if request.interaction_kind == mez_agent::ModelInteractionKind::CapabilityDecision
             && let Some(capability) = runtime_capability_for_response(&self.response)
         {
             return Ok(runtime_capability_response(
@@ -645,10 +643,10 @@ fn runtime_model_request_fixture_for_agent(
         available_mcp_tools: Vec::new(),
         memory_actions_enabled: false,
         issue_actions_enabled: true,
-        interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
-        allowed_actions: crate::agent::AllowedActionSet::capability_decision(),
-        messages: vec![crate::agent::ModelMessage {
-            role: crate::agent::ModelMessageRole::User,
+        interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+        allowed_actions: mez_agent::AllowedActionSet::capability_decision(),
+        messages: vec![mez_agent::ModelMessage {
+            role: mez_agent::ModelMessageRole::User,
             source: ContextSourceKind::UserInstruction,
             content: "initial request".to_string(),
         }],
@@ -697,7 +695,7 @@ impl ModelProvider for RuntimeRecordingProvider {
         request: &crate::agent::ModelRequest,
     ) -> Result<crate::agent::ModelResponse> {
         *self.last_request.borrow_mut() = Some(request.clone());
-        if request.interaction_kind == crate::agent::ModelInteractionKind::CapabilityDecision
+        if request.interaction_kind == mez_agent::ModelInteractionKind::CapabilityDecision
             && let Some(capability) = runtime_capability_for_response(&self.response)
         {
             return Ok(runtime_capability_response(
@@ -850,7 +848,7 @@ impl ModelProvider for RuntimeAutoSizingProvider {
         request: &crate::agent::ModelRequest,
     ) -> Result<crate::agent::ModelResponse> {
         self.requests.borrow_mut().push(request.clone());
-        if request.interaction_kind == crate::agent::ModelInteractionKind::AutoSizing {
+        if request.interaction_kind == mez_agent::ModelInteractionKind::AutoSizing {
             return Ok(crate::agent::ModelResponse {
                 provider: self.provider_id().to_string(),
                 model: request.model.clone(),

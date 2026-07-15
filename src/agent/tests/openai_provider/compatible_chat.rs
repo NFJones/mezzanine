@@ -101,9 +101,9 @@ fn openai_compatible_chat_completions_duplicate_maap_tool_calls_are_malformed_ou
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::RespondOnly);
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
     let arguments = serde_json::json!({
         "rationale": "duplicate tool call payload",
         "thought": null,
@@ -222,9 +222,9 @@ fn openai_compatible_chat_completions_length_finish_reason_is_output_limit_error
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::RespondOnly);
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
     let transport = FakeProviderHttpTransport {
         requests: RefCell::new(Vec::new()),
         response: ProviderHttpResponse {
@@ -312,11 +312,11 @@ fn openai_compatible_chat_completions_provider_describes_callable_mcp_tools() {
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions.extend([
-        crate::agent::AllowedAction::McpCall,
-        crate::agent::AllowedAction::MemorySearch,
-        crate::agent::AllowedAction::MemoryStore,
+        mez_agent::AllowedAction::McpCall,
+        mez_agent::AllowedAction::MemorySearch,
+        mez_agent::AllowedAction::MemoryStore,
     ]);
     request.available_mcp_tools = vec![mez_agent::McpPromptTool {
         server_id: "gitlab".to_string(),
@@ -446,9 +446,9 @@ fn openai_compatible_chat_completions_provider_honors_generic_maap_options() {
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::RespondOnly);
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
     let arguments = serde_json::json!({
         "rationale": "generic options returned structured output",
         "thought": null,
@@ -566,9 +566,9 @@ fn openai_compatible_chat_completions_provider_recovers_structured_maap_from_rea
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::RespondOnly);
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
     let reasoning_content = serde_json::json!({
         "rationale": "generic compatible provider returned structured JSON in reasoning_content",
         "thought": null,
@@ -660,9 +660,9 @@ fn openai_compatible_chat_completions_provider_supports_structured_maap_output()
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::RespondOnly);
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
     let content = serde_json::json!({
         "rationale": "generic compatible provider returned structured JSON",
         "thought": null,
@@ -776,9 +776,9 @@ fn openai_compatible_chat_completions_provider_uses_generic_tool_surface() {
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::RespondOnly);
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
     let arguments = serde_json::json!({
         "rationale": "generic compatible provider returned structured output",
         "thought": null,

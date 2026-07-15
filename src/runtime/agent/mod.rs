@@ -321,8 +321,8 @@ mod tests {
                 available_mcp_tools: Vec::new(),
                 memory_actions_enabled: false,
                 issue_actions_enabled: true,
-                interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
-                allowed_actions: crate::agent::AllowedActionSet::action_execution_base(),
+                interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+                allowed_actions: mez_agent::AllowedActionSet::action_execution_base(),
                 messages: Vec::new(),
             },
             response: ModelResponse {
@@ -404,9 +404,9 @@ mod tests {
                 available_mcp_tools: Vec::new(),
                 memory_actions_enabled: false,
                 issue_actions_enabled: false,
-                interaction_kind: crate::agent::ModelInteractionKind::MacroJudge,
-                allowed_actions: crate::agent::AllowedActionSet::for_capability(
-                    crate::agent::AgentCapability::RespondOnly,
+                interaction_kind: mez_agent::ModelInteractionKind::MacroJudge,
+                allowed_actions: mez_agent::AllowedActionSet::for_capability(
+                    mez_agent::AgentCapability::RespondOnly,
                 ),
                 messages: Vec::new(),
             },

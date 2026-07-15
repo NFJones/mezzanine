@@ -867,7 +867,7 @@ mod tests {
             memory_actions_enabled: false,
             issue_actions_enabled: false,
             interaction_kind: ModelInteractionKind::ActionExecution,
-            allowed_actions: crate::agent::AllowedActionSet::say_only(),
+            allowed_actions: mez_agent::AllowedActionSet::say_only(),
             stop: None,
             messages: vec![ModelMessage {
                 role: ModelMessageRole::Developer,

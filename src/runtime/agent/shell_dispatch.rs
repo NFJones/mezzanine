@@ -55,7 +55,7 @@ impl RuntimeSessionService {
         &mut self,
         turn: &AgentTurnRecord,
         action: &AgentAction,
-        plan: &mut crate::agent::LocalActionPlan,
+        plan: &mut mez_agent::LocalActionPlan,
     ) -> Result<()> {
         let AgentActionPayload::ApplyPatch { patch, .. } = &action.payload else {
             return Ok(());

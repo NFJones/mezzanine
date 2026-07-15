@@ -15,9 +15,9 @@ use super::{
     openai_default_reasoning_levels_for_model,
 };
 use crate::agent::{
-    AllowedActionSet, ModelInteractionKind, ProviderApiCompatibility, effective_provider_api,
-    model_context_text_word_count,
+    ProviderApiCompatibility, effective_provider_api, model_context_text_word_count,
 };
+use mez_agent::{AllowedActionSet, ModelInteractionKind};
 
 /// Fixed word cap for the filtered conversation projection sent to the internal
 /// auto-sizing router.

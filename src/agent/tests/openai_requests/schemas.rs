@@ -127,9 +127,9 @@ fn openai_maap_schema_is_stable_across_non_mcp_action_surfaces() {
     )
     .unwrap();
     let mut execution = capability.clone();
-    execution.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    execution.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     execution.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::Shell);
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::Shell);
 
     let capability_body: serde_json::Value =
         serde_json::from_str(&openai_responses_request_body(&capability).unwrap()).unwrap();
@@ -210,9 +210,9 @@ fn openai_memory_search_schema_disallows_startup_rituals_and_repeat_searches() {
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::Memory);
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::Memory);
 
     let body = openai_responses_request_body(&request).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -276,9 +276,9 @@ fn openai_memory_store_schema_excludes_episode_and_scratch_kinds() {
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::Memory);
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::Memory);
 
     let body = openai_responses_request_body(&request).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -351,9 +351,9 @@ fn openai_responses_request_body_describes_apply_patch_format() {
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::Shell);
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::Shell);
 
     let body = openai_responses_request_body(&request).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -488,9 +488,9 @@ fn openai_responses_request_body_describes_config_change_schema() {
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::ConfigChange)
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::ConfigChange)
             .with_config_change_setting_path_description(
                 crate::config::config_change_setting_path_description(),
             );
@@ -624,9 +624,9 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::Shell);
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::Shell);
 
     let body = openai_responses_request_body(&request).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
@@ -752,8 +752,8 @@ fn openai_responses_request_body_uses_auto_sizing_schema_for_router() {
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::AutoSizing;
-    request.allowed_actions = crate::agent::AllowedActionSet::say_only();
+    request.interaction_kind = mez_agent::ModelInteractionKind::AutoSizing;
+    request.allowed_actions = mez_agent::AllowedActionSet::say_only();
     request.reasoning_effort = Some("low".to_string());
 
     let body = openai_responses_request_body(&request).unwrap();
@@ -811,11 +811,11 @@ fn openai_responses_request_body_uses_current_schema_for_composite_action_surfac
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     let mut allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::Shell);
-    allowed_actions.extend_set(&crate::agent::AllowedActionSet::for_capability(
-        crate::agent::AgentCapability::NetworkFetch,
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::Shell);
+    allowed_actions.extend_set(&mez_agent::AllowedActionSet::for_capability(
+        mez_agent::AgentCapability::NetworkFetch,
     ));
     request.allowed_actions = allowed_actions;
 
@@ -862,9 +862,9 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::Mcp);
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::Mcp);
     request.available_mcp_tools = vec![
         McpPromptTool {
             server_id: "zeta".to_string(),

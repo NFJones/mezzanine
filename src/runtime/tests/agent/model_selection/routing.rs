@@ -470,7 +470,7 @@ reasoning_profile = "high"
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[0].interaction_kind,
-        crate::agent::ModelInteractionKind::AutoSizing
+        mez_agent::ModelInteractionKind::AutoSizing
     );
     assert_eq!(requests[0].model, "gpt-router");
     assert!(requests[0].turn_id.ends_with(":auto-sizing"));
@@ -497,12 +497,12 @@ reasoning_profile = "high"
         "router context should stay bounded independently of model-window fallback estimates"
     );
     assert!(requests[0].messages.iter().any(|message| {
-        message.role == crate::agent::ModelMessageRole::User
+        message.role == mez_agent::ModelMessageRole::User
             && message.source == ContextSourceKind::UserInstruction
             && message.content.contains("implement this")
     }));
     assert!(requests[0].messages.iter().any(|message| {
-        message.role == crate::agent::ModelMessageRole::Assistant
+        message.role == mez_agent::ModelMessageRole::Assistant
             && message.source == ContextSourceKind::TranscriptAssistant
             && message
                 .content
@@ -518,7 +518,7 @@ reasoning_profile = "high"
     );
     assert_eq!(
         requests[1].interaction_kind,
-        crate::agent::ModelInteractionKind::CapabilityDecision
+        mez_agent::ModelInteractionKind::CapabilityDecision
     );
     assert_eq!(requests[1].model, "gpt-5.5");
     assert_eq!(requests[1].reasoning_effort.as_deref(), Some("high"));
@@ -590,7 +590,7 @@ fn runtime_agent_turn_routing_provider_error_fails_turn() {
             request: &crate::agent::ModelRequest,
         ) -> Result<crate::agent::ModelResponse> {
             self.requests.borrow_mut().push(request.clone());
-            if request.interaction_kind == crate::agent::ModelInteractionKind::AutoSizing {
+            if request.interaction_kind == mez_agent::ModelInteractionKind::AutoSizing {
                 return Err(MezError::invalid_state(
                     "OpenAI Responses API returned status 404: model `gpt-5.3-codex-spark` is not available",
                 )
@@ -685,7 +685,7 @@ reasoning_profile = "low"
     assert_eq!(provider.requests.borrow().len(), 1);
     assert_eq!(
         provider.requests.borrow()[0].interaction_kind,
-        crate::agent::ModelInteractionKind::AutoSizing
+        mez_agent::ModelInteractionKind::AutoSizing
     );
     assert_eq!(
         service

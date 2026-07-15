@@ -615,7 +615,7 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
         .agent_context_for_pane_prompt("%1", "continue", 0)
         .unwrap();
     assert!(context.blocks.iter().any(|block| {
-        block.source == crate::agent::ContextSourceKind::TranscriptUser
+        block.source == mez_agent::ContextSourceKind::TranscriptUser
             && block.content.contains("saved restart context")
     }));
     let _ = fs::remove_dir_all(cwd);

@@ -828,9 +828,9 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
     request.model = "test".to_string();
     request.agent_id = turn.agent_id.clone();
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::NetworkFetch);
-    request.messages = vec![crate::agent::ModelMessage {
-        role: crate::agent::ModelMessageRole::User,
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::NetworkFetch);
+    request.messages = vec![mez_agent::ModelMessage {
+        role: mez_agent::ModelMessageRole::User,
         source: ContextSourceKind::UserInstruction,
         content: "research provider docs".to_string(),
     }];

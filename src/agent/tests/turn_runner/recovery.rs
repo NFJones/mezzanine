@@ -619,7 +619,7 @@ fn turn_runner_recovers_mixed_capability_and_execution_batch_without_effects() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].interaction_kind,
-        crate::agent::ModelInteractionKind::ActionExecution
+        mez_agent::ModelInteractionKind::ActionExecution
     );
     let execution_actions = requests[1].allowed_actions.action_type_names();
     assert!(execution_actions.contains(&"shell_command"));
@@ -751,7 +751,7 @@ fn turn_runner_recovers_mixed_capability_batch_before_heredoc_validation() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].interaction_kind,
-        crate::agent::ModelInteractionKind::ActionExecution
+        mez_agent::ModelInteractionKind::ActionExecution
     );
     let recovery_context = requests[1]
         .messages
@@ -883,7 +883,7 @@ fn turn_runner_repairs_legacy_complete_during_capability_decision() {
     assert_eq!(requests.len(), 3);
     assert_eq!(
         requests[1].interaction_kind,
-        crate::agent::ModelInteractionKind::Repair
+        mez_agent::ModelInteractionKind::Repair
     );
     assert!(
         requests[1].messages.iter().any(|message| message
@@ -993,7 +993,7 @@ async fn turn_runner_repairs_malformed_failure_summary_response() {
     assert_eq!(requests.len(), 3);
     assert_eq!(
         requests[2].interaction_kind,
-        crate::agent::ModelInteractionKind::Repair
+        mez_agent::ModelInteractionKind::Repair
     );
     assert!(
         requests[2]
@@ -1111,7 +1111,7 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
     assert_eq!(requests.len(), 3);
     assert_eq!(
         requests[1].interaction_kind,
-        crate::agent::ModelInteractionKind::Repair
+        mez_agent::ModelInteractionKind::Repair
     );
     assert!(
         requests[1]
@@ -1822,7 +1822,7 @@ fn turn_runner_routes_repair_disallowed_shell_action_through_capability_recovery
     assert_eq!(requests.len(), 3);
     assert_eq!(
         requests[1].interaction_kind,
-        crate::agent::ModelInteractionKind::Repair
+        mez_agent::ModelInteractionKind::Repair
     );
     let recovery_request = &requests[2];
     let action_types = recovery_request.allowed_actions.action_type_names();

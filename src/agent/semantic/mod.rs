@@ -11,7 +11,7 @@ mod patch;
 use super::Result;
 use super::shell::validate_agent_authored_shell_command;
 use super::{AgentAction, AgentActionPayload};
-pub use mez_agent::{LocalActionKind, LocalActionPlan};
+use mez_agent::{LocalActionKind, LocalActionPlan};
 
 #[cfg(test)]
 pub(super) use patch::APPLY_PATCH_TIMEOUT_MS;
@@ -19,7 +19,6 @@ pub use patch::{
     ApplyPatchTransactionPhase, apply_patch_error_plan, apply_patch_read_plan_for_paths,
     apply_patch_touched_paths, apply_patch_transaction_phase,
     apply_patch_write_plan_from_read_output, apply_patch_write_plan_from_read_outputs,
-    try_convert_unified_diff_to_mez_patch,
 };
 
 /// Returns the local shell plan for a shell-backed MAAP action.

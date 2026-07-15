@@ -1184,13 +1184,13 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
             available_mcp_tools: Vec::new(),
             memory_actions_enabled: false,
             issue_actions_enabled: true,
-            interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
-            allowed_actions: crate::agent::AllowedActionSet::for_capability(
-                crate::agent::AgentCapability::Shell,
+            interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: mez_agent::AllowedActionSet::for_capability(
+                mez_agent::AgentCapability::Shell,
             ),
-            messages: vec![crate::agent::ModelMessage {
-                role: crate::agent::ModelMessageRole::User,
-                source: crate::agent::ContextSourceKind::UserInstruction,
+            messages: vec![mez_agent::ModelMessage {
+                role: mez_agent::ModelMessageRole::User,
+                source: mez_agent::ContextSourceKind::UserInstruction,
                 content: "write then inspect".to_string(),
             }],
         },

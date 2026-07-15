@@ -7,9 +7,8 @@
 
 use std::collections::BTreeMap;
 
-use mez_agent::ProviderHttpResult;
+use mez_agent::{ProviderHttpResult, shell_quote};
 
-use super::shell::shell_quote;
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnRecord,
     AsyncProviderHttpTransport, MezError, ProviderHttpRequest, ProviderHttpResponse, Result,

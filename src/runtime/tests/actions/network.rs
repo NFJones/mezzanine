@@ -162,12 +162,12 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
             available_mcp_tools: Vec::new(),
             memory_actions_enabled: false,
             issue_actions_enabled: true,
-            interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
-            allowed_actions: crate::agent::AllowedActionSet::for_capability(
-                crate::agent::AgentCapability::NetworkFetch,
+            interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: mez_agent::AllowedActionSet::for_capability(
+                mez_agent::AgentCapability::NetworkFetch,
             ),
-            messages: vec![crate::agent::ModelMessage {
-                role: crate::agent::ModelMessageRole::User,
+            messages: vec![mez_agent::ModelMessage {
+                role: mez_agent::ModelMessageRole::User,
                 source: ContextSourceKind::UserInstruction,
                 content: "research docs".to_string(),
             }],

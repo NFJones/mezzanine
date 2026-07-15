@@ -94,7 +94,7 @@ fn turn_runner_denies_issues_capability_when_issue_tracking_disabled() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].interaction_kind,
-        crate::agent::ModelInteractionKind::CapabilityDecision
+        mez_agent::ModelInteractionKind::CapabilityDecision
     );
     assert_eq!(
         requests[1].allowed_actions.action_type_names(),
@@ -197,7 +197,7 @@ fn turn_runner_exposes_mcp_actions_on_initial_surface_when_available() {
     assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].interaction_kind,
-        crate::agent::ModelInteractionKind::CapabilityDecision
+        mez_agent::ModelInteractionKind::CapabilityDecision
     );
     let allowed_actions = requests[0].allowed_actions.action_type_names();
     assert!(allowed_actions.contains(&"mcp_call"));
@@ -275,7 +275,7 @@ fn turn_runner_exposes_memory_actions_on_initial_surface_when_enabled() {
     assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].interaction_kind,
-        crate::agent::ModelInteractionKind::CapabilityDecision
+        mez_agent::ModelInteractionKind::CapabilityDecision
     );
     let allowed_actions = requests[0].allowed_actions.action_type_names();
     assert!(allowed_actions.contains(&"memory_search"));
@@ -400,7 +400,7 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[0].interaction_kind,
-        crate::agent::ModelInteractionKind::CapabilityDecision
+        mez_agent::ModelInteractionKind::CapabilityDecision
     );
     let initial_actions = requests[0].allowed_actions.action_type_names();
     assert!(initial_actions.contains(&"request_capability"));
@@ -408,7 +408,7 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
     assert!(!initial_actions.contains(&"fetch_url"));
     assert_eq!(
         requests[1].interaction_kind,
-        crate::agent::ModelInteractionKind::ActionExecution
+        mez_agent::ModelInteractionKind::ActionExecution
     );
     let execution_actions = requests[1].allowed_actions.action_type_names();
     assert!(execution_actions.contains(&"shell_command"));
@@ -518,7 +518,7 @@ fn turn_runner_grants_fetch_capability_without_context_url() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].interaction_kind,
-        crate::agent::ModelInteractionKind::ActionExecution
+        mez_agent::ModelInteractionKind::ActionExecution
     );
     let allowed_actions = requests[1].allowed_actions.action_type_names();
     assert!(allowed_actions.contains(&"fetch_url"));

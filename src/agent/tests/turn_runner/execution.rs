@@ -180,7 +180,7 @@ fn turn_runner_accepts_multiple_capability_requests_in_one_batch() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].interaction_kind,
-        crate::agent::ModelInteractionKind::ActionExecution
+        mez_agent::ModelInteractionKind::ActionExecution
     );
     let allowed_actions = requests[1].allowed_actions.action_type_names();
     assert!(allowed_actions.contains(&"shell_command"));
@@ -289,7 +289,7 @@ fn turn_runner_accepts_say_with_capability_request() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].interaction_kind,
-        crate::agent::ModelInteractionKind::ActionExecution
+        mez_agent::ModelInteractionKind::ActionExecution
     );
     assert!(
         requests[1]
@@ -523,6 +523,6 @@ fn turn_runner_plans_codex_style_apply_patch_after_capability_request() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].interaction_kind,
-        crate::agent::ModelInteractionKind::ActionExecution
+        mez_agent::ModelInteractionKind::ActionExecution
     );
 }

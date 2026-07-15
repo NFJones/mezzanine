@@ -216,12 +216,12 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
                 available_mcp_tools: Vec::new(),
                 memory_actions_enabled: false,
                 issue_actions_enabled: true,
-                interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
-                allowed_actions: crate::agent::AllowedActionSet::for_capability(
-                    crate::agent::AgentCapability::Shell,
+                interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+                allowed_actions: mez_agent::AllowedActionSet::for_capability(
+                    mez_agent::AgentCapability::Shell,
                 ),
-                messages: vec![crate::agent::ModelMessage {
-                    role: crate::agent::ModelMessageRole::User,
+                messages: vec![mez_agent::ModelMessage {
+                    role: mez_agent::ModelMessageRole::User,
                     source: ContextSourceKind::UserInstruction,
                     content: "run a command".to_string(),
                 }],

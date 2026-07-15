@@ -1255,7 +1255,7 @@ end\n\
 set -e MEZ_FISH_PRIVATE_WAS_SET MEZ_FISH_PRIVATE_SAVED\n"
 }
 
-pub use mez_agent::shell_quote;
+use mez_agent::shell_quote;
 
 /// Validates model-authored shell input before Mezzanine wraps it for pane
 /// execution.

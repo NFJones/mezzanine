@@ -4,7 +4,7 @@
 //! Mezzanine retains matching against filesystem snapshots and shell
 //! transaction generation, adapting parse failures into product errors here.
 
-pub use mez_agent::semantic_patch::try_convert_unified_diff_to_mez_patch;
+pub(super) use mez_agent::semantic_patch::try_convert_unified_diff_to_mez_patch;
 pub(super) use mez_agent::semantic_patch::{
     MezPatch, MezPatchHunk, MezPatchHunkLine, MezPatchOperation, MezPatchRangeHint,
     SemanticPatchResult,

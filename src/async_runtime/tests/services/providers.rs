@@ -228,13 +228,13 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
             available_mcp_tools: Vec::new(),
             memory_actions_enabled: false,
             issue_actions_enabled: true,
-            interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
-            allowed_actions: crate::agent::AllowedActionSet::for_capability(
-                crate::agent::AgentCapability::Shell,
+            interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: mez_agent::AllowedActionSet::for_capability(
+                mez_agent::AgentCapability::Shell,
             ),
-            messages: vec![crate::agent::ModelMessage {
-                role: crate::agent::ModelMessageRole::User,
-                source: crate::agent::ContextSourceKind::UserInstruction,
+            messages: vec![mez_agent::ModelMessage {
+                role: mez_agent::ModelMessageRole::User,
+                source: mez_agent::ContextSourceKind::UserInstruction,
                 content: "list files".to_string(),
             }],
         },
@@ -408,13 +408,13 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
             available_mcp_tools: Vec::new(),
             memory_actions_enabled: false,
             issue_actions_enabled: true,
-            interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
-            allowed_actions: crate::agent::AllowedActionSet::for_capability(
-                crate::agent::AgentCapability::NetworkFetch,
+            interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: mez_agent::AllowedActionSet::for_capability(
+                mez_agent::AgentCapability::NetworkFetch,
             ),
-            messages: vec![crate::agent::ModelMessage {
-                role: crate::agent::ModelMessageRole::User,
-                source: crate::agent::ContextSourceKind::UserInstruction,
+            messages: vec![mez_agent::ModelMessage {
+                role: mez_agent::ModelMessageRole::User,
+                source: mez_agent::ContextSourceKind::UserInstruction,
                 content: "research patch behavior".to_string(),
             }],
         },
@@ -540,13 +540,13 @@ async fn async_provider_worker_executes_network_actions_before_actor_completion(
             available_mcp_tools: Vec::new(),
             memory_actions_enabled: false,
             issue_actions_enabled: true,
-            interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
-            allowed_actions: crate::agent::AllowedActionSet::for_capability(
-                crate::agent::AgentCapability::NetworkFetch,
+            interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: mez_agent::AllowedActionSet::for_capability(
+                mez_agent::AgentCapability::NetworkFetch,
             ),
-            messages: vec![crate::agent::ModelMessage {
-                role: crate::agent::ModelMessageRole::User,
-                source: crate::agent::ContextSourceKind::UserInstruction,
+            messages: vec![mez_agent::ModelMessage {
+                role: mez_agent::ModelMessageRole::User,
+                source: mez_agent::ContextSourceKind::UserInstruction,
                 content: "research provider docs".to_string(),
             }],
         },

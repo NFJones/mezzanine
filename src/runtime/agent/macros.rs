@@ -8,10 +8,7 @@
 use super::*;
 #[cfg(test)]
 use crate::agent::ModelProvider;
-use crate::agent::{
-    AllowedActionSet, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile,
-    ModelRequest, ModelResponse,
-};
+use crate::agent::{ModelProfile, ModelRequest, ModelResponse};
 use crate::macros::{MacroCatalog, MacroDefinition, discover_macro_catalog, load_macro_definition};
 use crate::project::TrustDecision;
 use crate::runtime::agent_state::RuntimeAgentLoopCompletion;
@@ -23,6 +20,7 @@ use crate::runtime::{
     AgentShellCommandOutcome, AgentShellRuntimeContext, RuntimeAgentPromptTurnStart,
     execute_agent_shell_command_with_context,
 };
+use mez_agent::{AllowedActionSet, ModelInteractionKind, ModelMessage, ModelMessageRole};
 use mez_agent::{ScheduledWork, ScheduledWorkKind};
 
 impl RuntimeSessionService {
@@ -209,7 +207,7 @@ impl RuntimeSessionService {
             pane_id,
             &orchestration_prompt,
             Some("macro-orchestration".to_string()),
-            Some(crate::agent::AgentCapability::Subagent),
+            Some(mez_agent::AgentCapability::Subagent),
         )?;
         self.register_macro_managed_subagent(
             &child_agent_id,
@@ -577,7 +575,7 @@ impl RuntimeSessionService {
             issue_actions_enabled: false,
             interaction_kind: ModelInteractionKind::MacroJudge,
             allowed_actions: AllowedActionSet::for_capability(
-                crate::agent::AgentCapability::RespondOnly,
+                mez_agent::AgentCapability::RespondOnly,
             ),
             stop: None,
             messages: vec![
@@ -1307,7 +1305,7 @@ fn runtime_owned_macro_step_model_request(parent_turn: &AgentTurnRecord) -> Mode
         memory_actions_enabled: false,
         issue_actions_enabled: false,
         interaction_kind: ModelInteractionKind::ActionExecution,
-        allowed_actions: AllowedActionSet::for_capability(crate::agent::AgentCapability::Subagent),
+        allowed_actions: AllowedActionSet::for_capability(mez_agent::AgentCapability::Subagent),
         stop: None,
         messages: vec![ModelMessage {
             role: ModelMessageRole::User,

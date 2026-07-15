@@ -268,7 +268,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         .unwrap();
     assert_eq!(
         capability_schema["properties"]["capability"]["enum"],
-        serde_json::json!(crate::agent::AgentCapability::all_names())
+        serde_json::json!(mez_agent::AgentCapability::all_names())
     );
     let capability_description = capability_schema["properties"]["capability"]["description"]
         .as_str()

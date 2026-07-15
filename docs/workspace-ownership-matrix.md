@@ -31,15 +31,15 @@ persistence, transport, and composition adapters.
 | Root surface | Final owner / root role | State | Required migration |
 |---|---|---|---|
 | `src/agent/actions/` | `mez-agent` harness; root local-action, permission, transcript, and runtime adapters | temporary | Move deterministic gating, planning, recovery, result-context shaping, and turn execution state into `mez-agent`. Retain concrete shell/MCP/filesystem dispatch behind narrow ports. |
-| `src/agent/context/` | `mez-agent` | temporary | Move message/context assembly, compaction, evidence/provenance shaping, model selection preconditions, and intrinsic tests. Inject product guidance, memory, instructions, skills, and MCP summaries. |
+| `src/agent/context/` | `mez-agent` | temporary | Canonical capability, action-surface, context-source, and model-message records are imported directly from `mez-agent`; move remaining message/context assembly, compaction, evidence/provenance shaping, model selection preconditions, and intrinsic tests. Inject product guidance, memory, instructions, skills, and MCP summaries. |
 | `src/agent/maap.rs` | root error and shell-policy adapter over `mez-agent` | adapter | Canonical action/domain types, parsing, normalization, and validation are lower-owned; keep only product error projection, shell policy, and execution formatting here. |
 | `src/agent/provider/` | `mez-agent` provider behavior plus root credential/HTTP/runtime adapters | temporary | Move provider-independent OpenAI/Anthropic/DeepSeek request, response, schema, cache, and model behavior. Retain concrete auth stores, reqwest transport, refresh, and runtime event conversion in root adapters. |
-| `src/agent/prompt.rs` | `mez-agent` with root embedded-asset adapter | temporary | Move provider-neutral prompt assembly; inject repository instructions and product-owned embedded assets. |
-| `src/agent/semantic/` | `mez-agent` planning plus root filesystem adapter | temporary | Move deterministic snapshot interpretation, matching, and transaction planning. Retain filesystem reads/writes and shell execution behind `LocalActionExecutor`. |
+| `src/agent/prompt.rs` | `mez-agent` with root embedded-asset adapter | temporary | Prompt profile/error contracts are imported directly from `mez-agent`; move provider-neutral prompt assembly and inject repository instructions plus product-owned embedded assets. |
+| `src/agent/semantic/` | `mez-agent` planning plus root filesystem adapter | temporary | Canonical local-action plans and semantic-patch parsing are imported directly from `mez-agent`; move deterministic snapshot interpretation, matching, and transaction planning. Retain filesystem reads/writes and shell execution behind `LocalActionExecutor`. |
 | `src/agent/session.rs`, `turn.rs` | `mez-agent` | temporary | Move deterministic state machines and intrinsic tests; keep presentation and runtime mutation in product adapters. |
 | `src/agent/slash.rs` | root agent-shell execution adapter over `mez-agent` | adapter | Canonical slash registry, parser records, effects, and intrinsic parsing tests are lower-owned. Keep product session mutation, display rendering, runtime-effect routing, and product error projection here. |
 | `src/agent/network.rs`, `shell.rs` | `mez-agent` contracts plus root transport adapter | temporary | Move provider-independent protocol and action behavior; retain network I/O and pane-shell transport in root. |
-| `src/agent/mod.rs` | product composition facade | temporary | Canonical MAAP, action-result, turn-state, transcript, MCP execution, and provider-transcript records are no longer re-exported; continue replacing provider/context/prompt/semantic compatibility exports with explicit product adapters. |
+| `src/agent/mod.rs` | product composition facade | temporary | Canonical MAAP, action-result, turn-state, transcript, MCP, prompt, context, semantic, readiness, slash, and shell-helper contracts are no longer re-exported; finish provider compatibility cleanup and replace the remaining broad product facade with explicit adapters. |
 | `src/agent/tests/` | split by behavior owner | temporary | Readiness tests now run directly in `mez-agent`; move remaining intrinsic harness/provider/context/MAAP/patch tests and retain tests that exercise concrete product stores, transports, permissions, runtime, or UI. |
 
 ## Residual root mux and terminal audit
@@ -72,8 +72,8 @@ The following current exports are migration markers, not completion evidence:
 
 - `src/agent/mod.rs` exports root product implementations through one facade;
   its former broad canonical-contract block is private, and product consumers
-  import those records directly from `mez-agent`. Provider, context, prompt,
-  and semantic submodules still expose compatibility exports.
+  import those records directly from `mez-agent`. Only provider submodules
+  still expose compatibility exports.
 - `src/terminal/mod.rs` exposes product copy/render and host-I/O adapters; lower
   mux status, viewport, theme, and attached-client contracts are imported
   directly from `mez-mux`.

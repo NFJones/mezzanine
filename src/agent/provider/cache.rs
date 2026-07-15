@@ -98,7 +98,7 @@ pub(crate) fn openai_stable_prefix_material_for_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::AllowedActionSet;
+    use mez_agent::AllowedActionSet;
     use mez_agent::ProviderTranscriptEvent;
 
     /// Verifies OpenAI request rendering ignores hidden provider-native

@@ -38,9 +38,9 @@ fn deepseek_chat_completions_request_body_disables_thinking_when_profile_toggle_
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::Subagent);
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::Subagent);
 
     let http_request = build_deepseek_chat_completions_http_request(
         &request,
@@ -102,9 +102,9 @@ fn deepseek_chat_completions_request_body_dispatches_default_mcp_actions_on_init
     )
     .unwrap();
     request.allowed_actions.extend([
-        crate::agent::AllowedAction::McpCall,
-        crate::agent::AllowedAction::MemorySearch,
-        crate::agent::AllowedAction::MemoryStore,
+        mez_agent::AllowedAction::McpCall,
+        mez_agent::AllowedAction::MemorySearch,
+        mez_agent::AllowedAction::MemoryStore,
     ]);
     request.available_mcp_tools = vec![mez_agent::McpPromptTool {
         server_id: "gitlab".to_string(),
@@ -244,9 +244,9 @@ fn deepseek_chat_completions_request_body_enables_thinking_without_reasoning_eff
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::Subagent);
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::Subagent);
 
     let http_request = build_deepseek_chat_completions_http_request(
         &request,
@@ -387,9 +387,9 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::Subagent);
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::Subagent);
 
     let http_request = build_deepseek_chat_completions_http_request(
         &request,
@@ -465,8 +465,8 @@ fn deepseek_chat_completions_request_body_omits_tool_choice_for_no_tool_thinking
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::AutoSizing;
-    request.allowed_actions = crate::agent::AllowedActionSet::from_actions([]);
+    request.interaction_kind = mez_agent::ModelInteractionKind::AutoSizing;
+    request.allowed_actions = mez_agent::AllowedActionSet::from_actions([]);
 
     let http_request = build_deepseek_chat_completions_http_request(
         &request,
@@ -519,9 +519,9 @@ fn deepseek_chat_completions_request_body_uses_auto_maap_tool_with_thinking_when
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::Subagent);
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::Subagent);
 
     let http_request = build_deepseek_chat_completions_http_request(
         &request,
@@ -667,9 +667,9 @@ fn deepseek_provider_rejects_missing_maap_after_strict_retry() {
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::RespondOnly);
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
     let transport = SequencedFakeProviderHttpTransport::new(vec![
         ProviderHttpResponse {
             status_code: 200,
@@ -770,9 +770,9 @@ fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_prose()
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::RespondOnly);
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly);
     let arguments = serde_json::json!({
         "rationale": "fallback produced structured output",
         "status": "final",

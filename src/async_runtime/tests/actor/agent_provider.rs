@@ -160,13 +160,13 @@ async fn async_actor_applies_agent_provider_completion_events() {
             available_mcp_tools: Vec::new(),
                 memory_actions_enabled: false,
                 issue_actions_enabled: true,
-            interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
-            allowed_actions: crate::agent::AllowedActionSet::for_capability(
-                crate::agent::AgentCapability::RespondOnly,
+            interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: mez_agent::AllowedActionSet::for_capability(
+                mez_agent::AgentCapability::RespondOnly,
             ),
-            messages: vec![crate::agent::ModelMessage {
-                role: crate::agent::ModelMessageRole::User,
-                source: crate::agent::ContextSourceKind::UserInstruction,
+            messages: vec![mez_agent::ModelMessage {
+                role: mez_agent::ModelMessageRole::User,
+                source: mez_agent::ContextSourceKind::UserInstruction,
                 content: "summarize the pane".to_string(),
             }],
         },
@@ -338,13 +338,13 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
             available_mcp_tools: Vec::new(),
                 memory_actions_enabled: false,
                 issue_actions_enabled: true,
-            interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
-            allowed_actions: crate::agent::AllowedActionSet::for_capability(
-                crate::agent::AgentCapability::RespondOnly,
+            interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: mez_agent::AllowedActionSet::for_capability(
+                mez_agent::AgentCapability::RespondOnly,
             ),
-            messages: vec![crate::agent::ModelMessage {
-                role: crate::agent::ModelMessageRole::User,
-                source: crate::agent::ContextSourceKind::UserInstruction,
+            messages: vec![mez_agent::ModelMessage {
+                role: mez_agent::ModelMessageRole::User,
+                source: mez_agent::ContextSourceKind::UserInstruction,
                 content: "summarize the pane".to_string(),
             }],
         },

@@ -6,7 +6,7 @@
 
 use include_dir::{Dir, include_dir};
 
-pub use mez_agent::{
+use mez_agent::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptError, AgentPromptProfile,
     AgentPromptResult, validate_agent_prompt_required,
 };

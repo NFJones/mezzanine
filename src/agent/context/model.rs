@@ -5,13 +5,13 @@
 //! selected-profile metadata, request envelopes, and profile selection helpers.
 
 use super::{AllowedActionSet, ModelInteractionKind};
+use mez_agent::ModelMessage;
 use mez_agent::{
     AgentContextResult, McpPromptTool,
     known_model_context_window_tokens as agent_known_model_context_window_tokens,
     known_provider_model_context_window_tokens as agent_known_provider_model_context_window_tokens,
     validate_context_required,
 };
-pub use mez_agent::{ModelMessage, ModelMessageRole};
 
 /// Fallback context window when the model profile does not carry one.
 const MODEL_CONTEXT_FALLBACK_WINDOW_TOKENS: usize = 128 * 1024;

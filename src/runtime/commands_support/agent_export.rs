@@ -11,9 +11,9 @@ use super::super::{
     current_unix_seconds, json_escape,
 };
 use crate::agent::{
-    ContextSourceKind, ModelMessageRole, ModelRequest, append_mcp_context,
-    assemble_model_request_with_retained_tail_percent,
+    ModelRequest, append_mcp_context, assemble_model_request_with_retained_tail_percent,
 };
+use mez_agent::{ContextSourceKind, ModelMessageRole};
 
 /// Captures one assembled model request dump before it is written to a target.
 struct RuntimeAgentContextDump {

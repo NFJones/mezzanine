@@ -23,11 +23,13 @@ pub use compaction::{
     compact_model_context_for_budget, compact_model_context_for_budget_with_retained_tail_percent,
     model_context_text_word_count,
 };
-pub use mez_agent::{AgentCapability, AllowedAction, AllowedActionSet, ModelInteractionKind};
+use mez_agent::{
+    AllowedAction, AllowedActionSet, ContextSourceKind, ModelInteractionKind, ModelMessage,
+    ModelMessageRole,
+};
 pub use model::{
-    ModelMessage, ModelMessageRole, ModelProfile, ModelProfileOverrideSource,
-    ModelProfileOverrides, ModelRequest, SelectedModelProfile, known_model_context_window_tokens,
-    select_model_profile,
+    ModelProfile, ModelProfileOverrideSource, ModelProfileOverrides, ModelRequest,
+    SelectedModelProfile, known_model_context_window_tokens, select_model_profile,
 };
 pub use skills::constrain_skill_actions_for_loaded_context;
 
@@ -38,8 +40,6 @@ const MODEL_CONTEXT_COMPACTED_PREFIX: &str = "[context compacted]";
 /// Default raw suffix percent retained after local context compaction.
 pub const DEFAULT_MODEL_CONTEXT_RETAINED_TAIL_PERCENT: usize = 10;
 // Context blocks, model profiles, and context assembly.
-
-pub use mez_agent::ContextSourceKind;
 
 /// Trust domains for context assembly as required by the specification.
 /// Terminal output, project files, and web content are untrusted by default

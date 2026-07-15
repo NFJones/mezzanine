@@ -53,8 +53,7 @@ use super::{
     parse_openai_responses_http_body, parse_slash_command, persist_turn_execution_transcript,
     postprocess_shell_action_success_output, provider_quota_usage_from_headers,
     readiness_probe_command_for_classification, select_model_profile, set_project_guidance_context,
-    shell_quote, tool_discovery_script, transcript_entries_for_execution,
-    try_convert_unified_diff_to_mez_patch,
+    tool_discovery_script, transcript_entries_for_execution,
 };
 use super::{prompt, provider, semantic, shell};
 use crate::auth::{AuthStore, OpenAiProviderCredential};
@@ -65,11 +64,13 @@ use crate::test_support::temp::TestTempDir;
 use crate::transcript::{AgentTranscriptStore, TranscriptRole as DurableTranscriptRole};
 use base64::Engine;
 use mez_agent::instructions::DiscoveredInstructionFile;
+use mez_agent::semantic_patch::try_convert_unified_diff_to_mez_patch;
 use mez_agent::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload,
     AgentTranscriptRole as TranscriptRole, AgentTurnState, AgentTurnTrigger, MaapBatch,
     McpExecutionRequest, McpExecutionResponse, McpPromptTool, MemoryContextRecord,
     MemoryContextScope, ProviderTranscriptEvent, SlashCommandEffect, baseline_slash_commands,
+    shell_quote,
 };
 use std::cell::RefCell;
 use std::collections::BTreeSet;

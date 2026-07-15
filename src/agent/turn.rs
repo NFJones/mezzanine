@@ -76,7 +76,7 @@ pub struct AgentTurnRecord {
     /// When set, the first provider request uses `AllowedActionSet::for_capability`
     /// instead of `capability_decision()`, so the model can emit executable actions
     /// without a separate capability-request round-trip.
-    pub initial_capability: Option<crate::agent::AgentCapability>,
+    pub initial_capability: Option<mez_agent::AgentCapability>,
 }
 
 impl mez_agent::AgentTurnResultIdentity for AgentTurnRecord {

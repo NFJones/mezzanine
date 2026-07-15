@@ -239,7 +239,7 @@ impl RuntimeSessionService {
         let permission_policy = self.permission_policy_for_turn(&turn);
         let loop_allowed_actions = turn
             .initial_capability
-            .map(crate::agent::AllowedActionSet::for_capability);
+            .map(mez_agent::AllowedActionSet::for_capability);
         let mut provider_context = context;
         let mut context_limit_recovery_attempts = 0u32;
         let mut output_limit_recovery_attempts = 0u32;
@@ -518,7 +518,7 @@ impl RuntimeSessionService {
         let permission_policy = self.permission_policy_for_turn(&turn);
         let loop_allowed_actions = turn
             .initial_capability
-            .map(crate::agent::AllowedActionSet::for_capability);
+            .map(mez_agent::AllowedActionSet::for_capability);
         let mut provider_context = context;
         let mut context_limit_recovery_attempts = 0u32;
         let mut output_limit_recovery_attempts = 0u32;
@@ -711,7 +711,7 @@ impl RuntimeSessionService {
             );
             return Ok(true);
         }
-        if execution.request.interaction_kind == crate::agent::ModelInteractionKind::MacroJudge {
+        if execution.request.interaction_kind == mez_agent::ModelInteractionKind::MacroJudge {
             let Some(step_index) = self.macro_judge_step_index_for_turn(turn_id) else {
                 let error = MezError::invalid_state(
                     "macro judge completion has no pending macro judge step",

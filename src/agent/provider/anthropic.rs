@@ -1479,18 +1479,18 @@ mod tests {
             available_mcp_tools: Vec::new(),
             memory_actions_enabled: false,
             issue_actions_enabled: false,
-            interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
-            allowed_actions: crate::agent::AllowedActionSet::say_only(),
+            interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: mez_agent::AllowedActionSet::say_only(),
             stop: None,
             messages: vec![
-                crate::agent::ModelMessage {
-                    role: crate::agent::ModelMessageRole::System,
-                    source: crate::agent::ContextSourceKind::System,
+                mez_agent::ModelMessage {
+                    role: mez_agent::ModelMessageRole::System,
+                    source: mez_agent::ContextSourceKind::System,
                     content: "stable system prompt".to_string(),
                 },
-                crate::agent::ModelMessage {
-                    role: crate::agent::ModelMessageRole::User,
-                    source: crate::agent::ContextSourceKind::UserInstruction,
+                mez_agent::ModelMessage {
+                    role: mez_agent::ModelMessageRole::User,
+                    source: mez_agent::ContextSourceKind::UserInstruction,
                     content: "summarize this conversation".to_string(),
                 },
             ],
@@ -1538,12 +1538,12 @@ mod tests {
             available_mcp_tools: Vec::new(),
             memory_actions_enabled: false,
             issue_actions_enabled: false,
-            interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
-            allowed_actions: crate::agent::AllowedActionSet::say_only(),
+            interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: mez_agent::AllowedActionSet::say_only(),
             stop: None,
-            messages: vec![crate::agent::ModelMessage {
-                role: crate::agent::ModelMessageRole::User,
-                source: crate::agent::ContextSourceKind::UserInstruction,
+            messages: vec![mez_agent::ModelMessage {
+                role: mez_agent::ModelMessageRole::User,
+                source: mez_agent::ContextSourceKind::UserInstruction,
                 content: "summarize this conversation".to_string(),
             }],
         };
@@ -1582,23 +1582,23 @@ mod tests {
             available_mcp_tools: Vec::new(),
             memory_actions_enabled: false,
             issue_actions_enabled: false,
-            interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
-            allowed_actions: crate::agent::AllowedActionSet::say_only(),
+            interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: mez_agent::AllowedActionSet::say_only(),
             stop: None,
             messages: vec![
-                crate::agent::ModelMessage {
-                    role: crate::agent::ModelMessageRole::System,
-                    source: crate::agent::ContextSourceKind::System,
+                mez_agent::ModelMessage {
+                    role: mez_agent::ModelMessageRole::System,
+                    source: mez_agent::ContextSourceKind::System,
                     content: String::new(),
                 },
-                crate::agent::ModelMessage {
-                    role: crate::agent::ModelMessageRole::Developer,
-                    source: crate::agent::ContextSourceKind::DeveloperInstruction,
+                mez_agent::ModelMessage {
+                    role: mez_agent::ModelMessageRole::Developer,
+                    source: mez_agent::ContextSourceKind::DeveloperInstruction,
                     content: String::new(),
                 },
-                crate::agent::ModelMessage {
-                    role: crate::agent::ModelMessageRole::User,
-                    source: crate::agent::ContextSourceKind::UserInstruction,
+                mez_agent::ModelMessage {
+                    role: mez_agent::ModelMessageRole::User,
+                    source: mez_agent::ContextSourceKind::UserInstruction,
                     content: "summarize this conversation".to_string(),
                 },
             ],
@@ -1639,18 +1639,18 @@ mod tests {
             available_mcp_tools: Vec::new(),
             memory_actions_enabled: false,
             issue_actions_enabled: false,
-            interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
-            allowed_actions: crate::agent::AllowedActionSet::say_only(),
+            interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: mez_agent::AllowedActionSet::say_only(),
             stop: None,
             messages: vec![
-                crate::agent::ModelMessage {
-                    role: crate::agent::ModelMessageRole::System,
-                    source: crate::agent::ContextSourceKind::System,
+                mez_agent::ModelMessage {
+                    role: mez_agent::ModelMessageRole::System,
+                    source: mez_agent::ContextSourceKind::System,
                     content: "stable system prompt".to_string(),
                 },
-                crate::agent::ModelMessage {
-                    role: crate::agent::ModelMessageRole::User,
-                    source: crate::agent::ContextSourceKind::UserInstruction,
+                mez_agent::ModelMessage {
+                    role: mez_agent::ModelMessageRole::User,
+                    source: mez_agent::ContextSourceKind::UserInstruction,
                     content: "summarize this conversation".to_string(),
                 },
             ],
@@ -1683,12 +1683,12 @@ mod tests {
             available_mcp_tools: Vec::new(),
             memory_actions_enabled: false,
             issue_actions_enabled: false,
-            interaction_kind: crate::agent::ModelInteractionKind::ActionExecution,
-            allowed_actions: crate::agent::AllowedActionSet::say_only(),
+            interaction_kind: mez_agent::ModelInteractionKind::ActionExecution,
+            allowed_actions: mez_agent::AllowedActionSet::say_only(),
             stop: None,
-            messages: vec![crate::agent::ModelMessage {
-                role: crate::agent::ModelMessageRole::User,
-                source: crate::agent::ContextSourceKind::UserInstruction,
+            messages: vec![mez_agent::ModelMessage {
+                role: mez_agent::ModelMessageRole::User,
+                source: mez_agent::ContextSourceKind::UserInstruction,
                 content: "summarize this conversation".to_string(),
             }],
         };
@@ -1733,12 +1733,12 @@ mod tests {
             available_mcp_tools: Vec::new(),
             memory_actions_enabled: false,
             issue_actions_enabled: false,
-            interaction_kind: crate::agent::ModelInteractionKind::AutoSizing,
-            allowed_actions: crate::agent::AllowedActionSet::say_only(),
+            interaction_kind: mez_agent::ModelInteractionKind::AutoSizing,
+            allowed_actions: mez_agent::AllowedActionSet::say_only(),
             stop: None,
-            messages: vec![crate::agent::ModelMessage {
-                role: crate::agent::ModelMessageRole::User,
-                source: crate::agent::ContextSourceKind::UserInstruction,
+            messages: vec![mez_agent::ModelMessage {
+                role: mez_agent::ModelMessageRole::User,
+                source: mez_agent::ContextSourceKind::UserInstruction,
                 content: "pick the best provider".to_string(),
             }],
         };

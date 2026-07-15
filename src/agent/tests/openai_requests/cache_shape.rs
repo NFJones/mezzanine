@@ -143,9 +143,9 @@ fn openai_responses_request_body_summarizes_large_mcp_catalog_by_server() {
         .unwrap(),
     )
     .unwrap();
-    request.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    request.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     request.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::Mcp);
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::Mcp);
     request.available_mcp_tools = (0..22)
         .map(|index| McpPromptTool {
             server_id: format!("server{index:02}"),
@@ -216,9 +216,9 @@ fn openai_responses_request_body_uses_stable_derived_prompt_cache_key() {
     )
     .unwrap();
     let mut execution = second.clone();
-    execution.interaction_kind = crate::agent::ModelInteractionKind::ActionExecution;
+    execution.interaction_kind = mez_agent::ModelInteractionKind::ActionExecution;
     execution.allowed_actions =
-        crate::agent::AllowedActionSet::for_capability(crate::agent::AgentCapability::Shell);
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::Shell);
 
     let first_value: serde_json::Value =
         serde_json::from_str(&openai_responses_request_body(&first).unwrap()).unwrap();

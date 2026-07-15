@@ -40,11 +40,11 @@ use super::{
     shell_command_from_argv, unix_seconds_to_rfc3339,
 };
 use crate::agent::{
-    AllowedActionSet, AsyncModelProvider, ClaudeCodeProvider, DEFAULT_PROVIDER_TIMEOUT_MS,
-    ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest, ModelResponse,
-    ModelTokenUsage, ModelTokenUsageKey, ProviderApiCompatibility, ProviderCapabilities,
-    ProviderModelCatalog, ProviderModelInfo, ProviderQuotaUsage, ReqwestProviderHttpTransport,
-    append_mcp_context, deepseek_chat_completions_provider_from_auth_store_with_provider_options,
+    AsyncModelProvider, ClaudeCodeProvider, DEFAULT_PROVIDER_TIMEOUT_MS, ModelRequest,
+    ModelResponse, ModelTokenUsage, ModelTokenUsageKey, ProviderApiCompatibility,
+    ProviderCapabilities, ProviderModelCatalog, ProviderModelInfo, ProviderQuotaUsage,
+    ReqwestProviderHttpTransport, append_mcp_context,
+    deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     effective_provider_api, model_context_text_word_count,
     openai_compatible_provider_from_auth_store_with_provider_options,
     openai_default_reasoning_levels_for_model,
@@ -57,7 +57,9 @@ use crate::runtime::config::{
 };
 use crate::transcript::ConversationSummary;
 use base64::Engine;
-use mez_agent::AgentActionPayload;
+use mez_agent::{
+    AgentActionPayload, AllowedActionSet, ModelInteractionKind, ModelMessage, ModelMessageRole,
+};
 use mez_mux::readline::ReadlineEdit;
 use std::fs;
 
@@ -989,7 +991,7 @@ impl RuntimeSessionService {
         pane_id: &str,
         prompt: &str,
         cooperation_mode: Option<String>,
-        initial_capability: Option<crate::agent::AgentCapability>,
+        initial_capability: Option<mez_agent::AgentCapability>,
     ) -> Result<RuntimeAgentPromptTurnStart> {
         self.start_agent_prompt_turn_inner(pane_id, prompt, cooperation_mode, initial_capability)
     }
@@ -1004,7 +1006,7 @@ impl RuntimeSessionService {
         pane_id: &str,
         prompt: &str,
         cooperation_mode: Option<String>,
-        initial_capability: Option<crate::agent::AgentCapability>,
+        initial_capability: Option<mez_agent::AgentCapability>,
     ) -> Result<RuntimeAgentPromptTurnStart> {
         self.refresh_project_config_layers_for_pane(pane_id)?;
         if let Some(project_trust_request) = self

@@ -86,14 +86,12 @@ pub use actions::{
     transcript_entries_for_execution,
 };
 pub use context::{
-    AgentCapability, AgentContext, AllowedAction, AllowedActionSet, ContextBlock,
-    ContextCachePolicy, ContextSourceKind, ContextStability, ModelContextCompactionReport,
-    ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile, ModelProfileOverrideSource,
-    ModelProfileOverrides, ModelRequest, SelectedModelProfile, append_mcp_context,
-    append_memory_context, append_permission_policy_context, append_project_guidance_context,
-    append_scheduler_context, assemble_model_request,
-    assemble_model_request_with_retained_tail_percent, compact_model_context_for_budget,
-    compact_model_context_for_budget_with_retained_tail_percent,
+    AgentContext, ContextBlock, ContextCachePolicy, ContextStability, ModelContextCompactionReport,
+    ModelProfile, ModelProfileOverrideSource, ModelProfileOverrides, ModelRequest,
+    SelectedModelProfile, append_mcp_context, append_memory_context,
+    append_permission_policy_context, append_project_guidance_context, append_scheduler_context,
+    assemble_model_request, assemble_model_request_with_retained_tail_percent,
+    compact_model_context_for_budget, compact_model_context_for_budget_with_retained_tail_percent,
     constrain_skill_actions_for_loaded_context, invoked_mcp_tools_for_context,
     known_model_context_window_tokens, model_context_text_word_count, select_model_profile,
     set_project_guidance_context,
@@ -104,16 +102,17 @@ pub use maap::{
     parse_maap_action_batch_json, parse_maap_action_batch_json_for_turn,
 };
 use mez_agent::{
-    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTranscriptEntry,
-    AgentTranscriptRole, AgentTurnState, AgentTurnTrigger, MaapBatch, McpExecutionRequest,
-    McpExecutionResponse, ProviderTranscriptEvent, SayStatus, TranscriptPersistence,
+    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentCapability,
+    AgentPromptProfile, AgentTranscriptEntry, AgentTranscriptRole, AgentTurnState,
+    AgentTurnTrigger, AllowedAction, AllowedActionSet, ContextSourceKind, LocalActionPlan,
+    MaapBatch, McpExecutionRequest, McpExecutionResponse, ModelInteractionKind, ModelMessage,
+    ModelMessageRole, ProviderTranscriptEvent, SayStatus, TranscriptPersistence,
 };
 pub use network::{
     NetworkActionPlan, execute_network_action_with_transport_async, network_action_plan,
     network_action_structured_content_json, network_action_summary,
 };
 pub use prompt::{
-    AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptProfile,
     build_agent_system_prompt, build_agent_system_prompt_with_repository_instructions,
 };
 pub use provider::{
@@ -152,11 +151,10 @@ pub(crate) use provider::{
     provider_event_error_from_parts, provider_event_error_kind,
 };
 pub use semantic::{
-    ApplyPatchTransactionPhase, LocalActionKind, LocalActionPlan, action_is_local_shell_backed,
-    apply_patch_error_plan, apply_patch_read_plan_for_paths, apply_patch_touched_paths,
-    apply_patch_transaction_phase, apply_patch_write_plan_from_read_output,
-    apply_patch_write_plan_from_read_outputs, local_action_plan, local_action_summary,
-    try_convert_unified_diff_to_mez_patch,
+    ApplyPatchTransactionPhase, action_is_local_shell_backed, apply_patch_error_plan,
+    apply_patch_read_plan_for_paths, apply_patch_touched_paths, apply_patch_transaction_phase,
+    apply_patch_write_plan_from_read_output, apply_patch_write_plan_from_read_outputs,
+    local_action_plan, local_action_summary,
 };
 pub use session::{AgentLogLevel, AgentShellSession, AgentShellStore, AgentShellVisibility};
 pub use shell::{
@@ -165,7 +163,7 @@ pub use shell::{
     ShellTransactionOutputTransport, ToolDiscoveryCache, ToolInventory,
     agent_subshell_enter_command, bootstrap_script, bootstrap_script_for_classification,
     fish_bootstrap_script, fish_quote, parse_bootstrap_env_output,
-    readiness_probe_command_for_classification, shell_quote, tool_discovery_script,
+    readiness_probe_command_for_classification, tool_discovery_script,
 };
 pub(crate) use shell::{
     posix_shell_history_suppression_finish, posix_shell_history_suppression_start,

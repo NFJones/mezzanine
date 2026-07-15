@@ -19,8 +19,7 @@ mod snapshot;
 mod transaction;
 
 use matcher::apply_patch_hunks_to_file;
-pub use parser::try_convert_unified_diff_to_mez_patch;
-use parser::{MezPatch, MezPatchOperation, parse_mez_patch};
+use parser::{MezPatch, MezPatchOperation, parse_mez_patch, try_convert_unified_diff_to_mez_patch};
 use snapshot::{
     ApplyPatchFileChange, ApplyPatchOriginalState, ApplyPatchSnapshot, ApplyPatchTextFile,
     ensure_missing_state, ensure_regular_state, parse_apply_patch_snapshot_output,
