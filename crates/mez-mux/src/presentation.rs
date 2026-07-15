@@ -6,9 +6,29 @@
 
 use std::collections::BTreeMap;
 
-use mez_terminal::TerminalSize;
+use mez_terminal::{TerminalSize, TerminalStyleSpan};
 
 use crate::layout::{PaneGeometry, range_overlap_u16};
+
+/// Transport-neutral result of one attached-client planning step.
+///
+/// The mux owns the output presentation and lifecycle envelope while callers
+/// specialize the action and host-error role types at the product boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachedClientStepPlan<Action, ErrorRole> {
+    /// Input or mux actions selected during this planning step.
+    pub actions: Vec<Action>,
+    /// Rendered output lines ready for host presentation.
+    pub output_lines: Vec<String>,
+    /// Per-line non-default SGR style spans aligned with `output_lines`.
+    pub output_line_style_spans: Vec<Vec<TerminalStyleSpan>>,
+    /// Whether the attached input endpoint reported a hangup.
+    pub input_hangup: bool,
+    /// Whether the attached output endpoint reported a hangup.
+    pub output_hangup: bool,
+    /// Host endpoint roles that reported errors during this step.
+    pub error_roles: Vec<ErrorRole>,
+}
 
 /// Per-pane metadata consumed by mux frame and body presentation.
 ///
@@ -659,12 +679,12 @@ pub enum TerminalFrameStyle {
 
 #[cfg(test)]
 mod tests {
-    use mez_terminal::TerminalSize;
+    use mez_terminal::{TerminalSize, TerminalStyleSpan};
 
     use crate::layout::PaneGeometry;
 
     use super::{
-        TerminalFramePosition, TerminalFrameStyle, pane_canvas_placements,
+        AttachedClientStepPlan, TerminalFramePosition, TerminalFrameStyle, pane_canvas_placements,
         pane_content_size_for_geometry, pane_divider_cells, pane_divider_glyph,
         pane_frame_merges_into_divider, pane_render_region_size_for_geometry, place_group_frame,
         place_window_frame, rendered_window_body_size,
@@ -676,6 +696,29 @@ mod tests {
     fn frame_contract_defaults_remain_stable() {
         assert_eq!(TerminalFramePosition::default(), TerminalFramePosition::Top);
         assert_eq!(TerminalFrameStyle::default(), TerminalFrameStyle::Default);
+    }
+
+    /// Verifies the mux-owned attached-client result envelope remains generic
+    /// over product actions and host endpoint roles while retaining styles.
+    #[test]
+    fn attached_client_step_plan_is_transport_neutral() {
+        let plan = AttachedClientStepPlan {
+            actions: vec!["redraw"],
+            output_lines: vec!["pane".to_owned()],
+            output_line_style_spans: vec![vec![TerminalStyleSpan {
+                start: 0,
+                length: 4,
+                rendition: Default::default(),
+            }]],
+            input_hangup: false,
+            output_hangup: true,
+            error_roles: vec![7_u8],
+        };
+
+        assert_eq!(plan.actions, ["redraw"]);
+        assert_eq!(plan.output_lines, ["pane"]);
+        assert!(plan.output_hangup);
+        assert_eq!(plan.error_roles, [7]);
     }
 
     /// Verifies mux-owned frame placement preserves authoritative viewport

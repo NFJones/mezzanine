@@ -476,43 +476,9 @@ pub struct ReadlinePromptClientPresentation {
     pub cursor_visible: bool,
 }
 
-/// Carries Attached Terminal Client Step Plan state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AttachedTerminalClientStepPlan {
-    /// Stores the actions value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub actions: Vec<TerminalClientLoopAction>,
-    /// Stores the output lines value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub output_lines: Vec<String>,
-    /// Stores the output line style spans value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub output_line_style_spans: Vec<Vec<TerminalStyleSpan>>,
-    /// Stores the input hangup value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub input_hangup: bool,
-    /// Stores the output hangup value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub output_hangup: bool,
-    /// Stores the error roles value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub error_roles: Vec<AttachedTerminalFdRole>,
-}
+/// Product-specialized attached-client step result owned by the mux.
+pub type AttachedTerminalClientStepPlan =
+    mez_mux::presentation::AttachedClientStepPlan<TerminalClientLoopAction, AttachedTerminalFdRole>;
 
 /// Carries Attached Terminal Client Loop Config state for this subsystem.
 ///
