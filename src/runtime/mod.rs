@@ -25,20 +25,26 @@ use rustix::net::sockopt::socket_peercred;
 use rustix::process::geteuid;
 use serde_json::Value;
 
-#[cfg(test)]
-pub use crate::agent::ModelProvider;
-use crate::agent::{
-    AgentShellCommandOutcome, AgentShellRuntimeContext, AgentTurnExecution, AsyncMcpActionExecutor,
-    AsyncModelProvider, DeepSeekChatCompletionsProvider, EnvironmentSignature, MarkerToken,
-    McpActionExecutor, OpenAiCompatibleChatCompletionsProvider, OpenAiResponsesProvider,
-    ReqwestProviderHttpTransport, ShellClassification, ShellTransaction,
-    ShellTransactionOutputTransport, ToolDiscoveryCache, agent_subshell_enter_command,
-    assemble_model_request, decode_shell_output_transport_with_diagnostics,
-    execute_agent_shell_command_with_context, execute_mcp_action_through_runtime,
-    execute_mcp_action_through_runtime_async, execute_network_action_with_transport_async,
-    local_action_plan, local_action_summary, next_transcript_sequence, parse_slash_command,
+use crate::agent::actions::{
+    AsyncMcpActionExecutor, McpActionExecutor, execute_mcp_action_through_runtime,
+    execute_mcp_action_through_runtime_async, next_transcript_sequence,
     postprocess_shell_action_success_output, shell_command_result_content,
-    shell_command_structured_content_json, transcript_entries_for_execution,
+    shell_command_structured_content_json,
+};
+use crate::agent::context::assemble_model_request;
+use crate::agent::network::execute_network_action_with_transport_async;
+use crate::agent::provider::{
+    AsyncModelProvider, DeepSeekChatCompletionsProvider, OpenAiCompatibleChatCompletionsProvider,
+    OpenAiResponsesProvider, ReqwestProviderHttpTransport,
+};
+use crate::agent::semantic::{local_action_plan, local_action_summary};
+use crate::agent::shell::{
+    EnvironmentSignature, MarkerToken, ShellClassification, ShellTransaction,
+    ShellTransactionOutputTransport, ToolDiscoveryCache, agent_subshell_enter_command,
+};
+use crate::agent::slash::{
+    AgentShellCommandOutcome, AgentShellRuntimeContext, execute_agent_shell_command_with_context,
+    parse_slash_command,
 };
 use crate::audit::{
     AuditActor, AuditConfig, AuditDeferredWrite, AuditLog, AuditRecord, AuditRetentionPolicy,
@@ -134,14 +140,15 @@ use crate::transcript::{
 use mez_agent::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, ActionContentBlock, ActionResult,
     ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentLogLevel, AgentShellSession,
-    AgentShellStore, AgentShellVisibility, AgentTurnLedger, AgentTurnRecord, AgentTurnState,
-    AgentTurnTrigger, ContextBlock, ContextSourceKind, McpExecutionRequest, McpExecutionResponse,
-    ModelMessage, ModelMessageRole, ModelProfile, ModelProfileOverrides, ModelRequest,
-    ModelResponse, ModelTokenUsage, ModelTokenUsageKey, PaneReadinessOverrideStore,
+    AgentShellStore, AgentShellVisibility, AgentTurnExecution, AgentTurnLedger, AgentTurnRecord,
+    AgentTurnState, AgentTurnTrigger, ContextBlock, ContextSourceKind, McpExecutionRequest,
+    McpExecutionResponse, ModelMessage, ModelMessageRole, ModelProfile, ModelProfileOverrides,
+    ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey, PaneReadinessOverrideStore,
     PaneReadinessState, ProviderQuotaUsage, ReadinessOverrideRevocation,
     action_result_context_content, compact_model_context_for_budget_with_retained_tail_percent,
-    network_action_plan, network_action_summary, openai_default_reasoning_levels_for_model,
-    select_model_profile,
+    decode_shell_output_transport_with_diagnostics, network_action_plan, network_action_summary,
+    openai_default_reasoning_levels_for_model, select_model_profile,
+    transcript_entries_for_execution,
 };
 use mez_agent::{AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ScheduledWork, ScheduledWorkKind};
 use mez_agent::{ApprovalPolicy, PermissionPreset, RuleDecision};

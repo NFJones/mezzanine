@@ -233,7 +233,7 @@ fn runtime_stale_joined_spawn_result_is_unreachable_progress() {
     let spawn = runtime_spawn_agent_action("spawn-stale", "missing child");
     service.agent_turn_executions.insert(
         parent.turn_id.clone(),
-        crate::agent::AgentTurnExecution {
+        mez_agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&parent.turn_id, &parent.agent_id),
             response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),
@@ -368,7 +368,7 @@ fn runtime_unrecovered_failure_with_pending_sibling_explains_blocker() {
         vec!["local action accepted for pane execution".to_string()],
         None,
     );
-    let execution = crate::agent::AgentTurnExecution {
+    let execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
@@ -465,7 +465,7 @@ fn runtime_unrecovered_non_correctable_failure_explains_boundary() {
         "user denied the action",
     )
     .unwrap();
-    let execution = crate::agent::AgentTurnExecution {
+    let execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
@@ -600,7 +600,7 @@ fn runtime_spawn_limit_denial_queues_model_recovery() {
         "subagent spawn limit reached for agent-%1: active direct children 4, agents.max_root_subagents 4",
     )
     .unwrap();
-    let mut execution = crate::agent::AgentTurnExecution {
+    let mut execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),

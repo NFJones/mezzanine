@@ -6,7 +6,7 @@
 //! orchestration code.
 
 use super::*;
-use crate::agent::provider_event_error_from_parts;
+use crate::agent::provider::provider_event_error_from_parts;
 
 /// Builds a typed provider event error from serialized async-provider fields.
 ///

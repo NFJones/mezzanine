@@ -198,7 +198,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
     };
     service.agent_turn_executions.insert(
         "turn-1".to_string(),
-        crate::agent::AgentTurnExecution {
+        mez_agent::AgentTurnExecution {
             request: mez_agent::ModelRequest {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
@@ -1156,7 +1156,7 @@ fn runtime_shell_action_timeout_queues_model_self_correction() {
         "shell command timed out after 30000 ms",
     )
     .unwrap();
-    let mut execution = crate::agent::AgentTurnExecution {
+    let mut execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),

@@ -13,10 +13,8 @@ use super::super::{
     action_content_blocks_from_json_or_text, action_text_content_blocks, json_escape,
     local_action_plan, tool_discovery_script,
 };
-use super::{
-    ShellTransportDiagnostics, decode_shell_output_transport_with_diagnostics,
-    shell_command_structured_content_json,
-};
+use super::shell_command_structured_content_json;
+use mez_agent::{ShellTransportDiagnostics, decode_shell_output_transport_with_diagnostics};
 use std::time::{SystemTime, UNIX_EPOCH};
 /// Default turn-wide shell action timeout used by transport-neutral execution.
 const LOCAL_EXECUTION_DEFAULT_TIMEOUT_MS: u64 = 30 * 60 * 1000;

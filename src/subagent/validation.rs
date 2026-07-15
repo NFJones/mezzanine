@@ -5,7 +5,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use crate::agent::apply_patch_touched_paths;
+use crate::agent::semantic::apply_patch_touched_paths;
 use crate::error::Result;
 use crate::permissions::{EffectiveCommandEffects, classify_shell_command};
 

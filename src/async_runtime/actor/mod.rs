@@ -20,7 +20,7 @@ use super::{
     compose_client_presentation_with_styles, delivery_batch_json, encode_mmp_body, mpsc, oneshot,
     watch,
 };
-use crate::agent::{
+use crate::agent::provider::{
     provider_error_retry_class_from_parts, provider_event_error_from_parts,
     provider_event_error_kind,
 };

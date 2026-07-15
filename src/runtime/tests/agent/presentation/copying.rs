@@ -556,7 +556,7 @@ fn runtime_agent_copy_patches_writes_retained_patches_to_destinations() {
     };
     let result =
         mez_agent::ActionResult::succeeded(&turn, &action, vec!["patch applied".to_string()], None);
-    let execution = crate::agent::AgentTurnExecution {
+    let execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
@@ -680,7 +680,7 @@ fn runtime_agent_copy_patches_retains_reused_action_id_attempts() {
     let second_patch =
         "*** Begin Patch\n*** Update File: src/lib.rs\n@@\n-current\n+updated\n*** End Patch";
     let build_execution =
-        |patch: &str, result: mez_agent::ActionResult| crate::agent::AgentTurnExecution {
+        |patch: &str, result: mez_agent::ActionResult| mez_agent::AgentTurnExecution {
             request: runtime_model_request_fixture(&turn.turn_id),
             response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),

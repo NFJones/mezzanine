@@ -183,7 +183,7 @@ fn build_anthropic_messages_http_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::{
+    use crate::agent::provider::{
         AnthropicMessagesProvider, ReqwestProviderHttpTransport, provider_error_retry_class,
     };
     use crate::auth::{AuthPaths, AuthStore};

@@ -11,33 +11,40 @@
 
 // Agent module tests.
 
-use super::{
-    AgentCapability, AgentShellCommandOutcome, AgentTurnExecution, AgentTurnRunner,
-    AsyncModelProvider, AsyncProviderHttpTransport, CHATGPT_ACCOUNT_ID_HEADER, ContextSourceKind,
-    DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MarkerToken, McpActionExecutor,
-    ModelMessage, ModelMessageRole, ModelProfile, ModelProvider, ModelResponse,
-    OpenAiResponsesProvider, PaneShellExecutor, ProviderHttpTransport, Result, ShellClassification,
-    ShellExecutionOutput, ShellExecutionRequest, ShellTransaction, ShellTransactionInput,
-    ShellTransactionOutputTransport, ToolDiscoveryCache, ToolInventory,
-    agent_subshell_enter_command, assemble_model_request, bootstrap_script,
-    bootstrap_script_for_classification, build_agent_system_prompt,
-    build_deepseek_chat_completions_http_request,
+use super::actions::{
+    AgentTurnRunner, McpActionExecutor, PaneShellExecutor, ShellExecutionOutput,
+    ShellExecutionRequest, discover_tools_through_pane_shell, execute_mcp_action_through_runtime,
+    execute_shell_action_through_pane, persist_turn_execution_transcript,
+    postprocess_shell_action_success_output,
+};
+use super::context::assemble_model_request;
+use super::network::execute_network_action_with_transport_async;
+use super::prompt::build_agent_system_prompt;
+use super::provider::{
+    AsyncModelProvider, AsyncProviderHttpTransport, CHATGPT_ACCOUNT_ID_HEADER, ModelProvider,
+    OpenAiResponsesProvider, ProviderHttpTransport, build_deepseek_chat_completions_http_request,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
-    discover_tools_through_pane_shell, execute_agent_shell_command,
-    execute_agent_shell_command_with_mcp, execute_agent_shell_command_with_permissions,
-    execute_mcp_action_through_runtime, execute_network_action_with_transport_async,
-    execute_shell_action_through_pane, local_action_plan,
     openai_compatible_provider_from_auth_store_with_provider_options,
     openai_provider_from_auth_store_with_options,
     openai_provider_from_auth_store_with_provider_options,
     openai_provider_from_auth_store_with_transport,
-    openai_responses_provider_from_auth_store_with_provider_options, parse_bootstrap_env_output,
-    parse_openai_models_http_body, parse_slash_command, persist_turn_execution_transcript,
-    postprocess_shell_action_success_output, readiness_probe_command_for_classification,
-    tool_discovery_script, transcript_entries_for_execution,
+    openai_responses_provider_from_auth_store_with_provider_options, parse_openai_models_http_body,
+};
+use super::semantic::local_action_plan;
+use super::shell::{
+    DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MarkerToken, ShellClassification,
+    ShellTransaction, ShellTransactionInput, ShellTransactionOutputTransport, ToolDiscoveryCache,
+    ToolInventory, agent_subshell_enter_command, bootstrap_script,
+    bootstrap_script_for_classification, parse_bootstrap_env_output,
+    readiness_probe_command_for_classification, tool_discovery_script,
+};
+use super::slash::{
+    AgentShellCommandOutcome, execute_agent_shell_command, execute_agent_shell_command_with_mcp,
+    execute_agent_shell_command_with_permissions, parse_slash_command,
 };
 use super::{prompt, shell};
 use crate::auth::{AuthStore, OpenAiProviderCredential};
+use crate::error::Result;
 use crate::mcp::McpRegistry;
 use crate::permissions::{PathScopes, PermissionPolicy, SessionApprovalStore};
 use crate::test_support::agent::ActionBuilder;
@@ -45,17 +52,19 @@ use crate::test_support::temp::TestTempDir;
 use crate::transcript::{AgentTranscriptStore, TranscriptRole as DurableTranscriptRole};
 use base64::Engine;
 use mez_agent::{
-    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentLogLevel,
-    AgentPromptProfile, AgentShellStore, AgentShellVisibility,
-    AgentTranscriptRole as TranscriptRole, AgentTurnLedger, AgentTurnRecord, AgentTurnState,
-    AgentTurnTrigger, CHATGPT_RESPONSES_ENDPOINT, ContextBlock,
+    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentCapability, AgentContext,
+    AgentLogLevel, AgentPromptProfile, AgentShellStore, AgentShellVisibility,
+    AgentTranscriptRole as TranscriptRole, AgentTurnExecution, AgentTurnLedger, AgentTurnRecord,
+    AgentTurnState, AgentTurnTrigger, CHATGPT_RESPONSES_ENDPOINT, ContextBlock, ContextSourceKind,
     MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, MaapBatch, McpExecutionRequest,
-    McpExecutionResponse, McpPromptTool, ModelRequest, ModelTokenUsage, OPENAI_MODELS_ENDPOINT,
+    McpExecutionResponse, McpPromptTool, ModelMessage, ModelMessageRole, ModelProfile,
+    ModelRequest, ModelResponse, ModelTokenUsage, OPENAI_MODELS_ENDPOINT,
     OPENAI_RESPONSES_ENDPOINT, ProviderHttpRequest, ProviderHttpResponse, SlashCommandEffect,
     action_result_context_content, action_result_transcript_content, baseline_slash_commands,
     openai_models_endpoint_for_responses_endpoint, openai_prompt_cache_diagnostics_for_request,
     openai_responses_endpoint_for_base_url, openai_responses_request_body,
     openai_stable_prefix_material_for_request, provider_quota_usage_from_headers, shell_quote,
+    transcript_entries_for_execution,
 };
 use mez_agent::{
     DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,

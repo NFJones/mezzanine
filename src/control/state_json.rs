@@ -17,7 +17,7 @@ use super::{
     require_session_target_matches_value, resolve_pane_target_value, resolve_window_target_value,
     target_or_active_pane, target_value_has_pane_shape, unix_seconds_to_rfc3339, window_by_id,
 };
-use crate::agent::{AgentShellCommandOutcome, execute_agent_shell_command};
+use crate::agent::slash::{AgentShellCommandOutcome, execute_agent_shell_command};
 use crate::permissions::builtin_rules;
 use crate::terminal::TerminalFrameContext;
 use mez_mux::layout::LayoutNode;

@@ -820,7 +820,7 @@ fn runtime_shell_pane_not_ready_queues_model_self_correction() {
         })
         .to_string(),
     );
-    let mut execution = crate::agent::AgentTurnExecution {
+    let mut execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),

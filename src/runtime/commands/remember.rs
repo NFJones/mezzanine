@@ -7,7 +7,7 @@
 
 use super::compaction;
 use super::*;
-use crate::agent::anthropic_provider_from_auth_store_with_provider_options;
+use crate::agent::provider::anthropic_provider_from_auth_store_with_provider_options;
 use crate::memory::{MemoryKind, MemoryState};
 use crate::runtime::{AgentRememberEvent, RenderInvalidationReason, RuntimeTransition};
 use std::process::Command;

@@ -750,7 +750,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             actions: vec![action.clone()],
             final_turn: false,
         };
-        let execution = crate::agent::AgentTurnExecution {
+        let execution = mez_agent::AgentTurnExecution {
             request: mez_agent::ModelRequest {
                 provider: task.model_profile.provider.clone(),
                 model: task.model_profile.model.clone(),
@@ -895,7 +895,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             actions: vec![second_action.clone()],
             final_turn: false,
         };
-        let second_execution = crate::agent::AgentTurnExecution {
+        let second_execution = mez_agent::AgentTurnExecution {
             request: mez_agent::ModelRequest {
                 provider: next_task.model_profile.provider.clone(),
                 model: next_task.model_profile.model.clone(),

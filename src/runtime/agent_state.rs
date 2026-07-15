@@ -13,7 +13,7 @@ use super::{
     OpenAiCompatibleChatCompletionsProvider, OpenAiResponsesProvider, PathScopes, PermissionPolicy,
     ReqwestProviderHttpTransport, SessionApprovalStore, SubagentScopeDeclaration,
 };
-use crate::agent::{AnthropicMessagesProvider, ClaudeCodeProvider};
+use crate::agent::provider::{AnthropicMessagesProvider, ClaudeCodeProvider};
 use mez_agent::McpPromptTool;
 
 /// Carries Runtime Agent Provider Task state for this subsystem.

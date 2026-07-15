@@ -19,9 +19,9 @@ use super::{
     is_terminal_runtime_lifecycle_state, merge_attached_terminal_loop_report,
     run_async_attached_terminal_client_loop, sleep,
 };
-use crate::agent::{
-    AgentTurnExecution, AsyncModelProvider, ReqwestProviderHttpTransport,
-    execute_network_action_with_transport_async, provider_error_retry_class,
+use crate::agent::network::execute_network_action_with_transport_async;
+use crate::agent::provider::{
+    AsyncModelProvider, ReqwestProviderHttpTransport, provider_error_retry_class,
 };
 use crate::async_runtime::RenderInvalidationReason;
 use crate::error::MezErrorKind;
@@ -29,8 +29,8 @@ use crate::runtime::runtime_execute_auto_sizing_with_async_provider;
 use crate::terminal::TerminalFdInterest;
 use mez_agent::AgentTurnRecord;
 use mez_agent::{
-    ActionStatus, AgentActionPayload, AgentTurnState, ContextSourceKind, ModelMessage,
-    ModelMessageRole, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
+    ActionStatus, AgentActionPayload, AgentTurnExecution, AgentTurnState, ContextSourceKind,
+    ModelMessage, ModelMessageRole, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
     ModelTokenUsageKey, ProviderErrorRetryClass,
 };
 use mez_core::ids::AgentId;

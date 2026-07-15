@@ -7,17 +7,14 @@
 
 use super::super::AsyncModelProvider;
 #[cfg(test)]
-use super::super::ModelProvider;
-#[cfg(test)]
 use super::super::{ActionStatus, AgentAction, local_action_plan};
 use super::super::{
     AgentContext, AgentTurnLedger, AgentTurnRecord, AgentTurnState, AllowedActionSet,
-    MaapBatchProductValidation, McpPromptTool, MezError, ModelInteractionKind, ModelProfile,
-    ModelRequest, Result, assemble_model_request, provider_error_retry_class,
+    McpPromptTool, MezError, ModelInteractionKind, ModelProfile, ModelRequest, Result,
+    assemble_model_request, provider_error_retry_class,
 };
 #[cfg(test)]
 use super::super::{MarkerToken, McpExecutionRequest, Path};
-use super::AgentTurnExecution;
 #[cfg(test)]
 use super::execution::{
     LocalActionExecutor, McpActionExecutor, PaneShellExecutor, PaneShellLocalExecutor,
@@ -33,13 +30,17 @@ use super::recovery::{
     failed_maap_validation_execution_with_summary, summarize_controller_failure_execution,
     summarize_provider_failure_execution,
 };
+use crate::agent::maap::MaapBatchProductValidation;
+#[cfg(test)]
+use crate::agent::provider::ModelProvider;
 #[cfg(test)]
 use mez_agent::turn_state_from_action_results;
 use mez_agent::{
-    AgentTurnNegotiation, AgentTurnProviderFailureDecision, AgentTurnResponseDecision,
-    BatchContinuationError, BatchContinuationInput, BatchContinuationPlan, BatchValidationFailure,
-    ProviderResponseAcceptance, SubagentScopeDeclaration, apply_default_action_gates,
-    failed_turn_execution_without_batch, maap_repair_request, plan_turn_execution_from_batch,
+    AgentTurnExecution, AgentTurnNegotiation, AgentTurnProviderFailureDecision,
+    AgentTurnResponseDecision, BatchContinuationError, BatchContinuationInput,
+    BatchContinuationPlan, BatchValidationFailure, ProviderResponseAcceptance,
+    SubagentScopeDeclaration, apply_default_action_gates, failed_turn_execution_without_batch,
+    maap_repair_request, plan_turn_execution_from_batch,
 };
 
 /// Maximum number of ephemeral provider retries after a MAAP validation error.

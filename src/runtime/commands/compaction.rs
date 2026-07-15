@@ -7,7 +7,7 @@
 //! command dispatch.
 
 use super::*;
-use crate::agent::anthropic_provider_from_auth_store_with_provider_options;
+use crate::agent::provider::anthropic_provider_from_auth_store_with_provider_options;
 use crate::runtime::{AgentCompactionEvent, RenderInvalidationReason, RuntimeTransition};
 
 impl RuntimeSessionService {

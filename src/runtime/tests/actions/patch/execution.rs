@@ -823,7 +823,7 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
         "pane input write failed while sending shell action",
     )
     .unwrap();
-    let mut execution = crate::agent::AgentTurnExecution {
+    let mut execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),

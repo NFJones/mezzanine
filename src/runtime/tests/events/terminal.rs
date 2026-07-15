@@ -433,7 +433,7 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
             timeout_ms: None,
         },
     };
-    let execution = crate::agent::AgentTurnExecution {
+    let execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),

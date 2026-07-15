@@ -14,7 +14,7 @@ use super::{
     RuntimeAutoSizingFallbackPolicy, RuntimeAutoSizingTargetProfile, RuntimeProviderConfig,
     openai_default_reasoning_levels_for_model,
 };
-use crate::agent::effective_provider_api;
+use crate::agent::provider::effective_provider_api;
 use mez_agent::{
     AllowedActionSet, ModelInteractionKind, ProviderApiCompatibility, model_context_text_word_count,
 };
@@ -93,7 +93,9 @@ pub(crate) async fn runtime_execute_auto_sizing_with_async_provider<P: AsyncMode
 
 /// Executes an internal auto-sizing request with a synchronous test provider.
 #[cfg(test)]
-pub(crate) fn runtime_execute_auto_sizing_with_provider<P: crate::agent::ModelProvider>(
+pub(crate) fn runtime_execute_auto_sizing_with_provider<
+    P: crate::agent::provider::ModelProvider,
+>(
     provider: &P,
     auto_sizing: &RuntimeAutoSizingDispatch,
     turn: &AgentTurnRecord,

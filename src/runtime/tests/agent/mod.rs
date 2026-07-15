@@ -1,7 +1,7 @@
 //! Runtime agent test modules.
 
 use super::*;
-use crate::agent::AgentShellCommandOutcome;
+use crate::agent::slash::AgentShellCommandOutcome;
 pub(super) use crate::runtime::agent::runtime_validate_provider_completion_execution;
 use crate::runtime::commands_support;
 

@@ -16,21 +16,22 @@ use super::{
     AuthStore, AuxiliarySocketKind, BlockedApprovalRequest, CommandRuleScope, ConfigFormat,
     ConfigLayer, ConfigScope, ContextBlock, ContextSourceKind, ControlConnectionState,
     CooperationMode, EventAudience, EventKind, HookEvent, JoinedSubagentDependency,
-    MEZ_ENV_FIELD_SEPARATOR, MemoryRecord, ModelProfile, ModelProvider, OsString, PaneExitRecord,
-    PaneExitUpdate, PaneReadinessState, Path, PathBuf, ProjectTrustStore, Result, RuleDecision,
-    RuleMatch, RunningShellTransactionKind, RunningShellTransactionRef,
-    RuntimeAgentModifiedFileSummary, RuntimeEnv, RuntimeLifecycleState, RuntimeRegistryUpdatePlan,
-    RuntimeSessionService, RuntimeSideEffect, RuntimeSubagentLineage, RuntimeSubagentPlacement,
-    SenderIdentity, SocketDirectorySource, SplitDirection, SubagentWaitPolicy, TrustDecision,
-    UnixStream, authorize_unix_peer, authorize_unix_peer_uid,
-    auxiliary_socket_path_for_control_socket, bind_control_socket, default_socket_directory,
-    effective_uid, ensure_private_socket_directory, fs, json_escape, pane_environment,
-    pane_environment_with_term, prune_stale_socket_files_in_directory, runtime_cooperation_mode,
+    MEZ_ENV_FIELD_SEPARATOR, MemoryRecord, ModelProfile, OsString, PaneExitRecord, PaneExitUpdate,
+    PaneReadinessState, Path, PathBuf, ProjectTrustStore, Result, RuleDecision, RuleMatch,
+    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentModifiedFileSummary,
+    RuntimeEnv, RuntimeLifecycleState, RuntimeRegistryUpdatePlan, RuntimeSessionService,
+    RuntimeSideEffect, RuntimeSubagentLineage, RuntimeSubagentPlacement, SenderIdentity,
+    SocketDirectorySource, SplitDirection, SubagentWaitPolicy, TrustDecision, UnixStream,
+    authorize_unix_peer, authorize_unix_peer_uid, auxiliary_socket_path_for_control_socket,
+    bind_control_socket, default_socket_directory, effective_uid, ensure_private_socket_directory,
+    fs, json_escape, pane_environment, pane_environment_with_term,
+    prune_stale_socket_files_in_directory, runtime_cooperation_mode,
     runtime_hook_event_for_lifecycle, runtime_hook_event_name, runtime_marker_for_action,
     socket_path_for_name,
 };
 use crate::MezError;
-use crate::agent::AgentShellCommandOutcome;
+use crate::agent::provider::ModelProvider;
+use crate::agent::slash::AgentShellCommandOutcome;
 use crate::snapshot::SnapshotRepository;
 use crate::terminal::{
     AttachedTerminalClientStepPlan, HostClipboard, MouseAction, PaneAgentStatusField,
@@ -1083,7 +1084,7 @@ fn execute_runtime_send_message_action(
     payload: &str,
 ) -> (
     RuntimeSessionService,
-    crate::agent::AgentTurnExecution,
+    mez_agent::AgentTurnExecution,
     AgentId,
 ) {
     let mut service = test_runtime_service();

@@ -38,7 +38,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
     };
     service.agent_turn_executions.insert(
         turn.turn_id.clone(),
-        crate::agent::AgentTurnExecution {
+        mez_agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
             response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),
@@ -130,7 +130,7 @@ fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_block
     };
     service.agent_turn_executions.insert(
         turn.turn_id.clone(),
-        crate::agent::AgentTurnExecution {
+        mez_agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
             response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),
@@ -280,7 +280,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_shell_process_
     };
     service.agent_turn_executions.insert(
         turn.turn_id.clone(),
-        crate::agent::AgentTurnExecution {
+        mez_agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
             response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),
@@ -372,7 +372,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_cached_foregro
     };
     service.agent_turn_executions.insert(
         turn.turn_id.clone(),
-        crate::agent::AgentTurnExecution {
+        mez_agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
             response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),

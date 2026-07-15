@@ -14,7 +14,9 @@ use super::{
     RuleDecision, RuntimeHookPipelineBlock, RuntimeMcpTransportSet, RuntimeSessionService, Stdio,
     current_unix_millis, exact_command_sha256, json_escape,
 };
-use crate::agent::{posix_shell_history_suppression_finish, posix_shell_history_suppression_start};
+use crate::agent::shell::{
+    posix_shell_history_suppression_finish, posix_shell_history_suppression_start,
+};
 use wait_timeout::ChildExt;
 
 // Runtime hook result, hook executor, and MCP executor support.

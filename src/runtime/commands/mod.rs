@@ -39,7 +39,7 @@ use super::{
     runtime_write_agent_trace_log_for_pane, select_model_profile, session_state_name,
     shell_command_from_argv, unix_seconds_to_rfc3339,
 };
-use crate::agent::{
+use crate::agent::provider::{
     AsyncModelProvider, ClaudeCodeProvider, ReqwestProviderHttpTransport,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     effective_provider_api, openai_compatible_provider_from_auth_store_with_provider_options,

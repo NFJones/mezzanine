@@ -133,7 +133,7 @@ async fn async_actor_applies_agent_provider_completion_events() {
         actions: vec![action.clone()],
         final_turn: true,
     };
-    let execution = crate::agent::AgentTurnExecution {
+    let execution = mez_agent::AgentTurnExecution {
         request: mez_agent::ModelRequest {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),
@@ -311,7 +311,7 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
         actions: vec![action.clone()],
         final_turn: true,
     };
-    let execution = crate::agent::AgentTurnExecution {
+    let execution = mez_agent::AgentTurnExecution {
         request: mez_agent::ModelRequest {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),

@@ -47,18 +47,20 @@ use super::{
     shell_command_structured_content_json, transcript_entries_for_execution,
     validate_mmp_payload_metadata,
 };
-use crate::agent::assistant_context_content_for_execution;
 #[cfg(test)]
-use crate::agent::provider_error_retry_class;
+use crate::agent::actions::AgentTurnRunner;
 #[cfg(test)]
-use crate::agent::{AgentTurnRunner, ModelProvider};
-use crate::agent::{
-    ApplyPatchTransactionPhase, apply_patch_error_plan, apply_patch_read_plan_for_paths,
-    apply_patch_touched_paths, apply_patch_transaction_phase,
-    apply_patch_write_plan_from_read_output, apply_patch_write_plan_from_read_outputs,
+use crate::agent::provider::ModelProvider;
+#[cfg(test)]
+use crate::agent::provider::provider_error_retry_class;
+use crate::agent::provider::{
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     effective_provider_api, openai_compatible_provider_from_auth_store_with_provider_options,
     openai_responses_provider_from_auth_store_with_provider_options,
+};
+use crate::agent::semantic::{
+    apply_patch_touched_paths, apply_patch_write_plan_from_read_output,
+    apply_patch_write_plan_from_read_outputs,
 };
 use crate::command::CommandInvocation;
 use crate::config::{
@@ -67,10 +69,15 @@ use crate::config::{
 };
 #[cfg(test)]
 use mez_agent::AgentTurnLedger;
+use mez_agent::semantic_patch_planning::{
+    ApplyPatchTransactionPhase, apply_patch_error_plan, apply_patch_read_plan_for_paths,
+    apply_patch_transaction_phase,
+};
 use mez_agent::{
     DEFAULT_PROVIDER_TIMEOUT_MS, MaapBatch, ModelTokenUsage, ModelTokenUsageKey,
     ProviderApiCompatibility, ProviderQuotaUsage, SayStatus, append_mcp_context,
-    invoked_mcp_tools_for_context, set_project_guidance_context,
+    assistant_context_content_for_execution, invoked_mcp_tools_for_context,
+    set_project_guidance_context,
 };
 
 mod approvals;

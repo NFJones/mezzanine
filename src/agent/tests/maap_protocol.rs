@@ -5,7 +5,7 @@
 //! policy injected by the product adapter.
 
 use super::*;
-use crate::agent::MaapBatchProductValidation;
+use crate::agent::maap::MaapBatchProductValidation;
 
 #[test]
 /// Verifies model-authored heredoc shell payloads are rejected at the MAAP

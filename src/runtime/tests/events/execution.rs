@@ -341,7 +341,7 @@ fn runtime_action_failure_retry_budget_is_per_failed_action() {
         "network request returned HTTP 404 for second source",
     )
     .unwrap();
-    let mut execution = crate::agent::AgentTurnExecution {
+    let mut execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture("turn-1"),
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),

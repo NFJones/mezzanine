@@ -7,7 +7,7 @@
 
 use super::*;
 #[cfg(test)]
-use crate::agent::ModelProvider;
+use crate::agent::provider::ModelProvider;
 use crate::macros::{discover_macro_catalog, load_macro_definition};
 use crate::project::TrustDecision;
 use crate::runtime::agent_state::RuntimeAgentLoopCompletion;

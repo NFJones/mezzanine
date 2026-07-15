@@ -1157,7 +1157,7 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
         actions: vec![write_action, read_action],
         final_turn: false,
     };
-    let execution = crate::agent::AgentTurnExecution {
+    let execution = mez_agent::AgentTurnExecution {
         request: mez_agent::ModelRequest {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),

@@ -7,7 +7,9 @@
 //! async actor and tests.
 
 use super::*;
-use crate::agent::{ClaudeCodeProvider, anthropic_provider_from_auth_store_with_provider_options};
+use crate::agent::provider::{
+    ClaudeCodeProvider, anthropic_provider_from_auth_store_with_provider_options,
+};
 use crate::runtime::{RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition};
 use mez_agent::ProviderErrorRetryClass;
 

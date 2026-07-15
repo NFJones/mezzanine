@@ -614,10 +614,11 @@ fn deepseek_provider_accepts_openai_compatible_provider_identity() {
         })
         .to_string(),
     }]);
-    let provider = crate::agent::DeepSeekChatCompletionsProvider::new("compatible-key", transport)
-        .unwrap()
-        .with_provider_id("deepseek_compatible")
-        .unwrap();
+    let provider =
+        crate::agent::provider::DeepSeekChatCompletionsProvider::new("compatible-key", transport)
+            .unwrap()
+            .with_provider_id("deepseek_compatible")
+            .unwrap();
     let response = provider.send_request(&request).unwrap();
 
     assert_eq!(provider.provider_id(), "deepseek_compatible");
@@ -716,7 +717,8 @@ fn deepseek_provider_rejects_missing_maap_after_strict_retry() {
         },
     ]);
     let provider =
-        crate::agent::DeepSeekChatCompletionsProvider::new("deepseek-key", transport).unwrap();
+        crate::agent::provider::DeepSeekChatCompletionsProvider::new("deepseek-key", transport)
+            .unwrap();
 
     let error = provider.send_request(&request).unwrap_err();
 
@@ -836,7 +838,8 @@ fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_prose()
         },
     ]);
     let provider =
-        crate::agent::DeepSeekChatCompletionsProvider::new("deepseek-key", transport).unwrap();
+        crate::agent::provider::DeepSeekChatCompletionsProvider::new("deepseek-key", transport)
+            .unwrap();
 
     let response = provider.send_request(&request).unwrap();
 

@@ -7,9 +7,7 @@
 use super::super::{
     AgentTranscriptEntry, AgentTurnRecord, MezError, Result, TranscriptPersistence,
 };
-pub use mez_agent::{
-    AgentTurnExecution, assistant_context_content_for_execution, transcript_entries_for_execution,
-};
+use mez_agent::{AgentTurnExecution, transcript_entries_for_execution};
 
 /// Appends a completed bounded turn execution to the durable transcript store.
 pub fn persist_turn_execution_transcript<P>(

@@ -812,7 +812,7 @@ fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
     };
     service.agent_turn_executions.insert(
         parent.turn_id.clone(),
-        crate::agent::AgentTurnExecution {
+        mez_agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&parent.turn_id, &parent.agent_id),
             response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),

@@ -6,7 +6,7 @@
 
 use super::outcome::{runtime_agent_terminal_preview, runtime_humanize_agent_diagnostic};
 use super::{runtime_action_status_name, runtime_mezzanine_error_code};
-use crate::agent::assemble_model_request;
+use crate::agent::context::assemble_model_request;
 use crate::error::{MezError, Result};
 use crate::runtime::{RuntimeSessionService, runtime_agent_turn_state_name};
 use mez_agent::AgentTurnRecord;

@@ -161,7 +161,7 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
         actions: vec![action.clone()],
         final_turn: false,
     };
-    let execution = crate::agent::AgentTurnExecution {
+    let execution = mez_agent::AgentTurnExecution {
         request: mez_agent::ModelRequest {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),

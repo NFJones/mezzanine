@@ -4,18 +4,20 @@
 //! provider failure classification, provider retries, product error projection,
 //! and final failure-summary execution shaping.
 
-#[cfg(test)]
-use super::super::ModelProvider;
 use super::super::{
     ActionResult, AgentActionPayload, AgentTurnRecord, AgentTurnState, AllowedActionSet,
-    AsyncModelProvider, ContextSourceKind, MaapBatchProductValidation, McpPromptTool, MezError,
-    ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest, ModelResponse,
-    ModelTokenUsage, Result, SayStatus, provider_error_retry_class,
+    AsyncModelProvider, ContextSourceKind, McpPromptTool, MezError, ModelInteractionKind,
+    ModelMessage, ModelMessageRole, ModelRequest, ModelResponse, ModelTokenUsage, Result,
+    SayStatus, provider_error_retry_class,
 };
-use super::{AgentTurnExecution, FAILURE_SUMMARY_RAW_TEXT_LIMIT_BYTES};
+use super::FAILURE_SUMMARY_RAW_TEXT_LIMIT_BYTES;
+use crate::agent::maap::MaapBatchProductValidation;
+#[cfg(test)]
+use crate::agent::provider::ModelProvider;
 use mez_agent::{
     AgentFailureSummaryNegotiation, AgentFailureSummaryProviderDecision,
-    AgentFailureSummaryResponseDecision, maap_repair_request, validate_batch_allowed_actions,
+    AgentFailureSummaryResponseDecision, AgentTurnExecution, maap_repair_request,
+    validate_batch_allowed_actions,
 };
 
 /// Reports whether a provider error came from malformed model MAAP output that

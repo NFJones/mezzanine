@@ -734,7 +734,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
     let spawn_two = runtime_spawn_agent_action("spawn-two", "child two");
     service.agent_turn_executions.insert(
         parent.turn_id.clone(),
-        crate::agent::AgentTurnExecution {
+        mez_agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&parent.turn_id, &parent.agent_id),
             response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),

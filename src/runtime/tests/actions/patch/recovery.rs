@@ -59,7 +59,7 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
         })
         .to_string(),
     );
-    let mut execution = crate::agent::AgentTurnExecution {
+    let mut execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
@@ -219,7 +219,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_guides_context_refresh() {
         })
         .to_string(),
     );
-    let mut execution = crate::agent::AgentTurnExecution {
+    let mut execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
@@ -416,7 +416,7 @@ fn runtime_apply_patch_replacement_hint_recovery_guides_reconcile_or_skip() {
         })
         .to_string(),
     );
-    let mut execution = crate::agent::AgentTurnExecution {
+    let mut execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
@@ -549,7 +549,7 @@ fn runtime_apply_patch_missing_anchor_recovery_guides_anchor_refresh() {
         })
         .to_string(),
     );
-    let mut execution = crate::agent::AgentTurnExecution {
+    let mut execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
@@ -676,7 +676,7 @@ fn runtime_apply_patch_candidate_region_recovery_guides_ambiguous_ranges() {
         })
         .to_string(),
     );
-    let mut execution = crate::agent::AgentTurnExecution {
+    let mut execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
@@ -965,7 +965,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_is_unbounded_and_hides_retry_budge
             })
             .to_string(),
         );
-        crate::agent::AgentTurnExecution {
+        mez_agent::AgentTurnExecution {
             request: runtime_model_request_fixture(&turn.turn_id),
             response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),
@@ -1127,7 +1127,7 @@ fn runtime_apply_patch_unsafe_path_recovery_guides_relative_headers() {
         })
         .to_string(),
     );
-    let mut execution = crate::agent::AgentTurnExecution {
+    let mut execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
@@ -1278,7 +1278,7 @@ fn runtime_unrecovered_apply_patch_failure_logs_terminal_observation() {
         })
         .to_string(),
     );
-    let execution = crate::agent::AgentTurnExecution {
+    let execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture("turn-1"),
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),

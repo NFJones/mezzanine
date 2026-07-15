@@ -45,7 +45,7 @@ fn runtime_provider_completion_accepts_controller_failure_summary_state() {
         vec!["The provider request failed before any action could run.".to_string()],
         None,
     );
-    let mut execution = crate::agent::AgentTurnExecution {
+    let mut execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: mez_agent::ModelResponse {
             provider: "openai".to_string(),
@@ -114,7 +114,7 @@ fn runtime_provider_completion_accepts_terminal_maap_validation_failure_state() 
             arguments_json: "{}".to_string(),
         },
     };
-    let mut execution = crate::agent::AgentTurnExecution {
+    let mut execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: mez_agent::ModelResponse {
             provider: "openai".to_string(),
@@ -171,7 +171,7 @@ fn runtime_provider_completion_rejects_nonterminal_missing_batch_state() {
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .expect("started turn should be recorded");
-    let mut execution = crate::agent::AgentTurnExecution {
+    let mut execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: mez_agent::ModelResponse {
             provider: "openai".to_string(),
@@ -222,7 +222,7 @@ fn runtime_provider_completion_rejects_empty_nonfinal_batch_state() {
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .expect("started turn should be recorded");
-    let mut execution = crate::agent::AgentTurnExecution {
+    let mut execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
         response: mez_agent::ModelResponse {
             provider: "openai".to_string(),
@@ -786,7 +786,7 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
         &success_action,
         vec!["provider document body".to_string()],
         Some(
-            crate::agent::network_action_structured_content_json(
+            crate::agent::network::network_action_structured_content_json(
                 &success_action,
                 serde_json::Value::Null,
                 serde_json::json!({
@@ -812,7 +812,7 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
     )
     .unwrap();
     failed_result.structured_content_json = Some(
-        crate::agent::network_action_structured_content_json(
+        crate::agent::network::network_action_structured_content_json(
             &failed_action,
             serde_json::Value::Null,
             serde_json::json!({
@@ -834,7 +834,7 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
         source: ContextSourceKind::UserInstruction,
         content: "research provider docs".to_string(),
     }];
-    let execution = crate::agent::AgentTurnExecution {
+    let execution = mez_agent::AgentTurnExecution {
         request,
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),

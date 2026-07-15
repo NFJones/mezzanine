@@ -6,7 +6,7 @@
 //! permission, hook, and project-trust config domains.
 
 use super::*;
-use crate::agent::effective_provider_api;
+use crate::agent::provider::effective_provider_api;
 
 pub(in crate::runtime) fn runtime_provider_registry_from_config(
     root: &Value,

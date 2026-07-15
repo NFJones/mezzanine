@@ -10,11 +10,6 @@ use super::shell::validate_agent_authored_shell_command;
 use super::{AgentAction, AgentActionPayload};
 use mez_agent::{LocalActionKind, LocalActionPlan};
 
-pub use mez_agent::semantic_patch_planning::{
-    ApplyPatchTransactionPhase, apply_patch_error_plan, apply_patch_read_plan_for_paths,
-    apply_patch_transaction_phase,
-};
-
 /// Returns the sorted relative paths touched by one Mezzanine patch.
 pub fn apply_patch_touched_paths(patch: &str) -> Result<Vec<String>> {
     Ok(mez_agent::semantic_patch_planning::apply_patch_touched_paths(patch)?)
