@@ -6,13 +6,13 @@ use crate::terminal::tests::fixtures::{
 };
 use crate::terminal::{
     BTreeMap, ClientStatusKind, ClientStatusLine, ClientViewRole, ReadlinePromptRegion,
-    RenderedClientView, Size, TerminalClientLoopConfig, TerminalCursorStyle, TerminalFrameContext,
-    TerminalPaneFrameContext, Window, compose_prompt_overlay_presentation,
+    RenderedClientView, TerminalClientLoopConfig, TerminalCursorStyle, TerminalFrameContext,
+    TerminalPaneFrameContext, compose_prompt_overlay_presentation,
     compose_prompt_overlay_presentation_with_styles,
     compose_prompt_region_presentation_with_styles, compose_readline_prompt_client_presentation,
     render_attached_client_view, render_readline_prompt_status_row, terminal_text_width,
 };
-use mez_mux::layout::SplitDirection;
+use mez_mux::layout::{Size, SplitDirection, Window};
 use mez_mux::theme::{UiTheme, builtin_ui_theme_definition, resolve_ui_theme};
 use mez_terminal::TerminalColor;
 use mez_terminal::TerminalScreen;

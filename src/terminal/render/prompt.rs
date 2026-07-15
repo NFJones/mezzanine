@@ -6,12 +6,12 @@
 //! module through typed helpers instead of carrying prompt wrapping details
 //! inline.
 
-use crate::readline::ReadlinePromptKind;
+use crate::readline::{ReadlinePrompt, ReadlinePromptKind};
 use crate::terminal::{
-    ClientStatusKind, ClientStatusLine, ReadlinePrompt, ReadlinePromptClientPresentation,
-    ReadlinePromptRegion, ReadlinePromptStatusRow, RenderedClientView, Size,
-    TerminalPaneFrameContext,
+    ClientStatusKind, ClientStatusLine, ReadlinePromptClientPresentation, ReadlinePromptRegion,
+    ReadlinePromptStatusRow, RenderedClientView, TerminalPaneFrameContext,
 };
+use mez_mux::layout::Size;
 use mez_mux::theme::{UiColorPair, UiTheme};
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalStyledLine};
 

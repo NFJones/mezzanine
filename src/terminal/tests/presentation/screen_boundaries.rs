@@ -1,9 +1,10 @@
 //! Regression tests for presentation behavior adjacent to terminal screens.
 
 use crate::terminal::{
-    ClientStatusKind, ClientStatusLine, ClientViewRole, RenderedClientView, Size,
-    TerminalCursorStyle, compose_client_presentation, pane_divider_glyph_for_test,
+    ClientStatusKind, ClientStatusLine, ClientViewRole, RenderedClientView, TerminalCursorStyle,
+    compose_client_presentation, pane_divider_glyph_for_test,
 };
+use mez_mux::layout::Size;
 use mez_mux::theme::UiTheme;
 
 /// Verifies client presentation renders the status line inside the authoritative size.

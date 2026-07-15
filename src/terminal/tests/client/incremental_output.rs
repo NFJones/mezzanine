@@ -6,8 +6,9 @@ use crate::terminal::client_loop::{
     encode_attached_terminal_output_update_frame_with_styles,
 };
 use crate::terminal::tests::fixtures::{display_column_for_fragment, styled_line_rendition_at};
-use crate::terminal::{ClientViewRole, RenderedClientView, Size, TerminalCursorStyle};
+use crate::terminal::{ClientViewRole, RenderedClientView, TerminalCursorStyle};
 use mez_mux::copy::CopyPosition;
+use mez_mux::layout::Size;
 use mez_mux::theme::UiTheme;
 use mez_terminal::TerminalScreen;
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};

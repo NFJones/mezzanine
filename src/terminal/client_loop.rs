@@ -15,7 +15,7 @@ use super::{
 };
 use super::{
     AttachedTerminalFdReadiness, AttachedTerminalFdRole, BorrowedFd, CopyModeKeyAction, MezError,
-    MouseAction, MouseEvent, RawFd, Result, Size, TerminalClientLoopConfig, TerminalColor,
+    MouseAction, MouseEvent, RawFd, Result, TerminalClientLoopConfig, TerminalColor,
     TerminalCursorStyle, TerminalStyleSpan, classify_mouse_event,
     compose_client_presentation_with_styles, parse_sgr_mouse, terminal_grapheme_width,
     terminal_graphemes, terminal_text_width,
@@ -25,6 +25,7 @@ use mez_mux::input::{
     classify_prefix_binding, classify_terminal_input_with_command_bindings, key_chord_input_bytes,
     parse_key_chord_bytes,
 };
+use mez_mux::layout::Size;
 use mez_mux::theme::UiTheme;
 
 // Attached terminal loop planning and I/O abstraction.

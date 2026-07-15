@@ -6,10 +6,11 @@ use crate::terminal::client_loop::{
 use crate::terminal::{
     AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopIo, AttachedTerminalFdReadiness,
     AttachedTerminalFdRole, ClientStatusKind, ClientStatusLine, ClientViewRole, RenderedClientView,
-    Result, Size, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalCursorStyle,
+    Result, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalCursorStyle,
     TerminalFdInterest, run_attached_terminal_client_loop,
 };
 use mez_mux::input::MuxAction;
+use mez_mux::layout::Size;
 use mez_mux::theme::UiTheme;
 use mez_terminal::TerminalStyleSpan;
 

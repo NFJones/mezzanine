@@ -5,12 +5,12 @@ use crate::terminal::tests::fixtures::display_column_for_fragment;
 use crate::terminal::{
     BTreeMap, ClientViewRole, DEFAULT_PANE_FRAME_TEMPLATE,
     DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE, DEFAULT_WINDOW_FRAME_TEMPLATE, PaneRenderInput,
-    RenderedClientView, Size, TerminalClientLoopConfig, TerminalCursorStyle, TerminalFrameContext,
-    TerminalFrameRenderOptions, TerminalPaneFrameContext, Window, apply_client_view_offset,
+    RenderedClientView, TerminalClientLoopConfig, TerminalCursorStyle, TerminalFrameContext,
+    TerminalFrameRenderOptions, TerminalPaneFrameContext, apply_client_view_offset,
     compose_client_presentation, draw_window_from_screens, render_attached_client_view,
     render_window, render_window_with_pane_frame_template,
 };
-use mez_mux::layout::{PaneGeometry, SplitDirection};
+use mez_mux::layout::{PaneGeometry, Size, SplitDirection, Window};
 use mez_mux::presentation::{
     TerminalFramePosition, TerminalWindowFrameContext, TerminalWindowGroupFrameContext,
     TerminalWindowStatusContext, pane_render_region_size_for_geometry,

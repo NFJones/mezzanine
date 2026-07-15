@@ -19,8 +19,6 @@ use rustix::io::{read as rustix_read, write as rustix_write};
 use rustix::termios::{OptionalActions, Termios, tcgetattr, tcgetwinsize, tcsetattr};
 
 use crate::error::{MezError, Result};
-use crate::readline::ReadlinePrompt;
-use mez_mux::layout::{PaneGeometry, Size, Window};
 use mez_terminal::{
     GraphicRendition, MouseButton, MouseEvent, MouseEventKind, TerminalColor, TerminalScreen,
     TerminalStyleSpan, TerminalStyledLine, parse_sgr_mouse,

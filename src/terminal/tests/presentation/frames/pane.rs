@@ -4,11 +4,11 @@ use crate::ids::IdFactory;
 use crate::terminal::tests::fixtures::display_column_for_fragment;
 use crate::terminal::{
     BTreeMap, ClientViewRole, DEFAULT_PANE_FRAME_TEMPLATE, PaneAgentStatusField, PaneRenderInput,
-    Size, TerminalClientLoopConfig, TerminalFrameContext, TerminalFrameRenderOptions,
-    TerminalPaneFrameContext, Window, pane_frame_agent_status_pillbox_cells,
-    render_attached_client_view, render_window_with_pane_frame_template, rendered_pane_geometries,
+    TerminalClientLoopConfig, TerminalFrameContext, TerminalFrameRenderOptions,
+    TerminalPaneFrameContext, pane_frame_agent_status_pillbox_cells, render_attached_client_view,
+    render_window_with_pane_frame_template, rendered_pane_geometries,
 };
-use mez_mux::layout::{PaneGeometry, SplitDirection};
+use mez_mux::layout::{PaneGeometry, Size, SplitDirection, Window};
 use mez_mux::presentation::{TerminalFramePosition, TerminalFrameStyle};
 use mez_terminal::TerminalColor;
 

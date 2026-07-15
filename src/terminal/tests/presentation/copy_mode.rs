@@ -1,7 +1,8 @@
 //! Regression tests for terminal presentation copy mode behavior.
 
-use crate::terminal::{CopyMode, Size};
+use crate::terminal::CopyMode;
 use mez_mux::copy::{CopyPosition, SearchDirection};
+use mez_mux::layout::Size;
 use mez_mux::paste::PasteBuffers;
 use mez_terminal::TerminalColor;
 use mez_terminal::TerminalScreen;

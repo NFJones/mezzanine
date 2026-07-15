@@ -161,8 +161,8 @@ mod tests {
     use super::super::blank_render_cells;
     use super::*;
     use crate::ids::IdFactory;
-    use crate::terminal::{Size, Window};
     use mez_mux::layout::SplitDirection;
+    use mez_mux::layout::{Size, Window};
 
     /// Verifies pane divider styling still uses the active border palette when
     /// a divider cell touches the active pane border.
