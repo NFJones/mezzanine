@@ -21,15 +21,14 @@ use mez_mux::presentation::{
 pub(crate) use mez_mux::render::overlay_fixed_column_style_spans;
 use mez_mux::render::{
     FramePillboxEntry, FramePillboxSegment, FrameStatusSegment, FrameStatusValue,
-    PositionedFrameStatus, RenderedFrameStatus, TerminalRenderCell,
-    clip_style_spans as clipped_style_spans, compose_frame_pillbox_row, compose_frame_text_row,
-    compose_pane_frame_row, display_overlay_targets as agent_display_overlay_targets,
-    fit_styled_width, fit_width, fitted_text_width, frame_pillbox_segment_columns,
-    frame_style_rendition, overlay_display_lines as overlay_agent_display_lines,
-    position_frame_status, render_frame_pillbox_segments, render_frame_pillbox_text,
-    render_frame_status, sanitize_frame_text, style_span_overlaps_columns,
-    style_span_segments_outside_range, styled_frame_line_with_rendition,
-    write_text_cells_with_width as write_frame_text_cells,
+    PositionedFrameStatus, RenderedFrameStatus, TerminalRenderCell, compose_frame_pillbox_row,
+    compose_frame_text_row, compose_pane_frame_row,
+    display_overlay_targets as agent_display_overlay_targets, fit_styled_width, fit_width,
+    fitted_text_width, frame_pillbox_segment_columns, frame_style_rendition,
+    overlay_display_lines as overlay_agent_display_lines, position_frame_status,
+    render_frame_pillbox_segments, render_frame_pillbox_text, render_frame_status,
+    sanitize_frame_text, style_span_overlaps_columns, style_span_segments_outside_range,
+    styled_frame_line_with_rendition, write_text_cells_with_width as write_frame_text_cells,
 };
 pub(super) use mez_mux::render::{char_count, line_slice};
 use mez_mux::theme::{UiColorPair, UiTheme};
@@ -62,16 +61,14 @@ use mez_mux::presentation::{place_group_frame, place_window_frame};
 use mez_mux::render::{
     agent_status_running_gradient_palette, animated_scan_background, blend_terminal_color,
     contrasting_binary_foreground, gradient_highlight_for_offset, neutral_surface_step,
+    normalize_overlay_canvas, normalize_overlay_style_spans, overlay_text_style_width,
     push_or_extend_style_span,
 };
+pub(super) use overlay::status_line_rendition;
 pub use overlay::{
     compose_display_overlay_line_style_spans, compose_display_overlay_lines,
     compose_modal_display_overlay_line_style_spans, compose_modal_display_overlay_lines,
     modal_display_overlay_max_scroll, modal_display_overlay_page_rows,
-};
-pub(super) use overlay::{
-    normalize_overlay_canvas, normalize_overlay_style_spans, overlay_text_style_width,
-    status_line_rendition,
 };
 pub use panes::{
     draw_styled_window_from_screens, draw_window_from_screens, pane_content_size_for_geometry,

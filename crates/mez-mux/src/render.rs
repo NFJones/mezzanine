@@ -15,8 +15,14 @@ use crate::presentation::{
     PaneDividerCell, TerminalFrameStyle, pane_canvas_placements, pane_divider_cells,
 };
 
+mod overlay;
 mod style;
 
+pub use overlay::{
+    NormalizedOverlayCanvas, compose_bottom_overlay_lines, compose_modal_overlay_lines,
+    modal_overlay_max_scroll, modal_overlay_page_rows, normalize_overlay_canvas,
+    normalize_overlay_style_spans, overlay_text_style_width,
+};
 pub use style::{
     agent_status_running_gradient_palette, animated_scan_background, blend_terminal_color,
     contrasting_binary_foreground, gradient_highlight_for_offset, neutral_surface_step,
