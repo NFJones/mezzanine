@@ -59,11 +59,10 @@ mod shell;
 /// declaration makes the boundary available to the crate.
 mod slash;
 pub use actions::{
-    AgentTurnExecution, AgentTurnRunner, AsyncMcpActionExecutor, EnvironmentEquivalence,
-    EnvironmentEquivalenceProbe, LocalActionExecutor, LocalExecutionOutput, LocalExecutionRequest,
-    LocalExecutionTransport, McpActionExecutor, PaneShellExecutor, PaneShellLocalExecutor,
-    ShellExecutionOutput, ShellExecutionRequest, ShellTransportDecodeResult,
-    ShellTransportDiagnostics, assistant_context_content_for_execution,
+    AgentTurnExecution, AgentTurnRunner, AsyncMcpActionExecutor, LocalActionExecutor,
+    LocalExecutionOutput, LocalExecutionRequest, LocalExecutionTransport, McpActionExecutor,
+    PaneShellExecutor, PaneShellLocalExecutor, ShellExecutionOutput, ShellExecutionRequest,
+    ShellTransportDecodeResult, ShellTransportDiagnostics, assistant_context_content_for_execution,
     decode_shell_output_transport, decode_shell_output_transport_with_diagnostics,
     discover_tools_through_pane_shell, execute_local_action, execute_mcp_action_through_runtime,
     execute_mcp_action_through_runtime_async, execute_shell_action_through_pane,
