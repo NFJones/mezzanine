@@ -186,6 +186,39 @@ pub struct AttachedClientStepPlan<Action, ErrorRole> {
     pub error_roles: Vec<ErrorRole>,
 }
 
+/// Transport-neutral output work selected for one attached-client step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachedClientOutputDecision {
+    /// Output is not currently writable, so no host work can proceed.
+    WaitForOutput,
+    /// Previously encoded output must be flushed before accepting a new frame.
+    FlushPending,
+    /// A newly rendered frame should be presented to the attached client.
+    Present,
+    /// No output work is currently required.
+    Idle,
+}
+
+/// Selects the next host-output operation for an attached client.
+///
+/// Previously encoded output always takes precedence over a newly rendered
+/// frame so adapters never replace bytes that have not reached the client.
+pub const fn plan_attached_client_output(
+    output_writable: bool,
+    pending_output_bytes: usize,
+    rendered_output_available: bool,
+) -> AttachedClientOutputDecision {
+    if !output_writable {
+        AttachedClientOutputDecision::WaitForOutput
+    } else if pending_output_bytes > 0 {
+        AttachedClientOutputDecision::FlushPending
+    } else if rendered_output_available {
+        AttachedClientOutputDecision::Present
+    } else {
+        AttachedClientOutputDecision::Idle
+    }
+}
+
 /// Transport-neutral readiness for one attached-client endpoint.
 ///
 /// Product adapters identify which endpoints carry client input or output;
@@ -931,11 +964,12 @@ mod tests {
     use crate::layout::PaneGeometry;
 
     use super::{
-        AttachedClientEndpointReadiness, AttachedClientStepPlan, TerminalFramePosition,
-        TerminalFrameStyle, classify_attached_client_readiness, pane_canvas_placements,
-        pane_content_size_for_geometry, pane_divider_cells, pane_divider_glyph,
-        pane_frame_merges_into_divider, pane_render_region_size_for_geometry, place_group_frame,
-        place_window_frame, plan_attached_client_step, rendered_window_body_size,
+        AttachedClientEndpointReadiness, AttachedClientOutputDecision, AttachedClientStepPlan,
+        TerminalFramePosition, TerminalFrameStyle, classify_attached_client_readiness,
+        pane_canvas_placements, pane_content_size_for_geometry, pane_divider_cells,
+        pane_divider_glyph, pane_frame_merges_into_divider, pane_render_region_size_for_geometry,
+        place_group_frame, place_window_frame, plan_attached_client_output,
+        plan_attached_client_step, rendered_window_body_size,
     };
 
     /// Verifies neutral frame contracts retain the product's established
@@ -1022,6 +1056,28 @@ mod tests {
         assert!(plan.output_line_style_spans.is_empty());
         assert!(plan.output_hangup);
         assert_eq!(plan.error_roles, ["output"]);
+    }
+
+    /// Verifies pending output is flushed before a newly rendered frame and
+    /// that writable clients otherwise distinguish presentation from idling.
+    #[test]
+    fn attached_client_output_work_preserves_pending_frame_precedence() {
+        assert_eq!(
+            plan_attached_client_output(true, 12, true),
+            AttachedClientOutputDecision::FlushPending
+        );
+        assert_eq!(
+            plan_attached_client_output(true, 0, true),
+            AttachedClientOutputDecision::Present
+        );
+        assert_eq!(
+            plan_attached_client_output(true, 0, false),
+            AttachedClientOutputDecision::Idle
+        );
+        assert_eq!(
+            plan_attached_client_output(false, 12, true),
+            AttachedClientOutputDecision::WaitForOutput
+        );
     }
 
     /// Verifies mux-owned frame placement preserves authoritative viewport

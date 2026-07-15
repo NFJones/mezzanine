@@ -3028,11 +3028,16 @@ where
         report.host_bracketed_paste_buffer = host_bracketed_paste_buffer.clone();
         report.host_bracketed_paste_started_at = host_bracketed_paste_started_at;
 
-        if readiness
+        let output_writable = readiness
             .iter()
-            .any(|ready| ready.role == AttachedTerminalFdRole::Output && ready.writable)
-        {
-            if io.pending_output_bytes() > 0 {
+            .any(|ready| ready.role == AttachedTerminalFdRole::Output && ready.writable);
+        let output_decision = mez_mux::presentation::plan_attached_client_output(
+            output_writable,
+            io.pending_output_bytes(),
+            !step.output_lines.is_empty(),
+        );
+        match output_decision {
+            mez_mux::presentation::AttachedClientOutputDecision::FlushPending => {
                 let flush = io
                     .flush_pending_output(ATTACHED_TERMINAL_CLIENT_LOOP_OUTPUT_WRITE_LIMIT_BYTES)?;
                 report.bytes_written = report.bytes_written.saturating_add(flush.bytes_written);
@@ -3040,7 +3045,8 @@ where
                 if flush.is_partial() {
                     report.partial_writes = report.partial_writes.saturating_add(1);
                 }
-            } else if !step.output_lines.is_empty() {
+            }
+            mez_mux::presentation::AttachedClientOutputDecision::Present => {
                 let output_modes = AttachedTerminalOutputModes {
                     application_keypad: terminal_config.mouse_policy.pane_application_keypad_mode,
                     bracketed_paste: terminal_config.pane_bracketed_paste_mode,
@@ -3070,11 +3076,13 @@ where
                     report.partial_writes = report.partial_writes.saturating_add(1);
                 }
                 report.output_frames = report.output_frames.saturating_add(1);
-            } else {
+            }
+            mez_mux::presentation::AttachedClientOutputDecision::Idle => {
                 report.pending_output_bytes = 0;
             }
-        } else {
-            report.pending_output_bytes = io.pending_output_bytes();
+            mez_mux::presentation::AttachedClientOutputDecision::WaitForOutput => {
+                report.pending_output_bytes = io.pending_output_bytes();
+            }
         }
         report.actions.extend(step.actions);
         if step.input_hangup {
