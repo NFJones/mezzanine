@@ -7,22 +7,19 @@
 use super::{
     AuditLog, AuthStore, ClientId, CommandInvocation, CommandOutcome, ConfigMutation,
     ConfigMutationOperation, ConfigPaths, ConfigScope, KeyChord, MezError, PaneNavigationDirection,
-    PaneReadinessOverrideStore, PaneReadinessState, PathBuf, Result, Session,
-    attach_session_display, auth_status_display, auth_status_store_display, bind_key_args,
-    binding_config_key, capture_pane_display, choose_buffer_display, choose_client_display,
-    choose_group_display, choose_observer_display, choose_window_display, clear_history_display,
-    command_help_display, command_target_pane_id, config_set_string, config_unset,
-    copy_mode_display, copy_selection_display, create_buffer_display, export_history_display,
-    flag_value, key_chord_notation, list_baseline_commands, list_buffers_display, list_clients,
-    list_current_session, list_default_key_bindings, list_default_themes, list_groups,
-    list_observers, list_panes, list_windows, load_layout_selector, mark_pane_ready_audit_record,
-    mark_pane_ready_warning_display, mcp_server_id, mcp_status_plan_display,
-    mcp_status_store_display, mutated_pane_command_outcome, pane_readiness_state_name,
-    parse_command_sequence, parse_config_command_value, paste_buffer_display,
-    paste_clipboard_display, persist_command_config_mutation, persist_command_theme_config,
-    persist_config_text, pipe_pane_display, positional_args, save_buffer_display, save_layout_name,
-    search_history_display, set_option_args, set_theme_arg, show_default_options,
-    show_messages_display, show_metrics_display, validate_config_file,
+    PaneReadinessOverrideStore, PaneReadinessState, PathBuf, Result, Session, auth_status_display,
+    auth_status_store_display, bind_key_args, binding_config_key, capture_pane_display,
+    choose_buffer_display, clear_history_display, command_help_display, command_target_pane_id,
+    config_set_string, config_unset, copy_mode_display, copy_selection_display,
+    create_buffer_display, export_history_display, flag_value, key_chord_notation,
+    list_baseline_commands, list_buffers_display, list_default_key_bindings, list_default_themes,
+    load_layout_selector, mark_pane_ready_audit_record, mark_pane_ready_warning_display,
+    mcp_server_id, mcp_status_plan_display, mcp_status_store_display, mutated_pane_command_outcome,
+    pane_readiness_state_name, parse_command_sequence, parse_config_command_value,
+    paste_buffer_display, paste_clipboard_display, persist_command_config_mutation,
+    persist_command_theme_config, persist_config_text, pipe_pane_display, positional_args,
+    save_buffer_display, save_layout_name, search_history_display, set_option_args, set_theme_arg,
+    show_default_options, show_messages_display, show_metrics_display, validate_config_file,
 };
 
 use crate::mcp::{
@@ -32,6 +29,11 @@ use crate::mcp::{
 use mez_mux::command::plans::{
     CommandPlan, PaneSelectionPlan, ResizePanePlan, SwapPaneNeighbor, SwapPanePlan,
     SynchronizePanesMode, command_plan_from_invocation,
+};
+use mez_mux::command::presentation::{
+    attach_session_display, choose_client_display, choose_group_display, choose_observer_display,
+    choose_window_display, display_panes, list_clients, list_current_session, list_groups,
+    list_observers, list_panes, list_windows,
 };
 use std::fs;
 
@@ -626,22 +628,10 @@ pub fn execute_command(
     }
 
     match invocation.name.as_str() {
-        "display-panes" | "displayp" => {
-            let active = session
-                .active_window()
-                .ok_or_else(|| MezError::invalid_state("session has no active window"))?;
-            let mut body = String::new();
-            for pane in active.panes() {
-                body.push_str(&format!(
-                    "{}:{}:action=select-pane -t {}\n",
-                    pane.index, pane.id, pane.index
-                ));
-            }
-            Ok(CommandOutcome::Display {
-                command: invocation.name.clone(),
-                body,
-            })
-        }
+        "display-panes" | "displayp" => Ok(CommandOutcome::Display {
+            command: invocation.name.clone(),
+            body: display_panes(session)?,
+        }),
         "list-groups" | "listg" => Ok(CommandOutcome::Display {
             command: invocation.name.clone(),
             body: list_groups(session),

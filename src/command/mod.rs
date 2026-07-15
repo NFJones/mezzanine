@@ -112,15 +112,13 @@ pub use types::{
 };
 
 use display::{
-    attach_session_display, auth_status_display, capture_pane_display, choose_buffer_display,
-    choose_client_display, choose_group_display, choose_observer_display, choose_window_display,
-    clear_history_display, command_help_display, copy_mode_display, copy_selection_display,
-    create_buffer_display, export_history_display, list_baseline_commands, list_buffers_display,
-    list_clients, list_current_session, list_default_key_bindings, list_default_themes,
-    list_groups, list_observers, list_panes, list_windows, load_layout_selector,
-    mcp_status_plan_display, mutated_pane_command_outcome, parse_config_command_value,
-    paste_buffer_display, paste_clipboard_display, pipe_pane_display, save_buffer_display,
-    save_layout_name, search_history_display, set_option_args, set_theme_arg, show_default_options,
+    auth_status_display, capture_pane_display, choose_buffer_display, clear_history_display,
+    command_help_display, copy_mode_display, copy_selection_display, create_buffer_display,
+    export_history_display, list_baseline_commands, list_buffers_display,
+    list_default_key_bindings, list_default_themes, load_layout_selector, mcp_status_plan_display,
+    mutated_pane_command_outcome, parse_config_command_value, paste_buffer_display,
+    paste_clipboard_display, pipe_pane_display, save_buffer_display, save_layout_name,
+    search_history_display, set_option_args, set_theme_arg, show_default_options,
     show_messages_display, show_metrics_display,
 };
 use permissions::{

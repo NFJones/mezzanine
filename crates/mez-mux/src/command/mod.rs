@@ -8,6 +8,7 @@
 use crate::{MuxError, Result};
 
 pub mod plans;
+pub mod presentation;
 
 /// Parsed command name and ordered arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
