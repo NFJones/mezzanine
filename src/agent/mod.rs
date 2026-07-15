@@ -63,12 +63,6 @@ mod shell;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod slash;
-/// Exposes the turn module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-mod turn;
-
 pub(crate) use actions::apply_default_action_gates;
 pub use actions::{
     AgentTurnExecution, AgentTurnRunner, AsyncMcpActionExecutor, EnvironmentEquivalence,
@@ -87,17 +81,21 @@ pub use actions::{
 };
 pub use context::assemble_model_request;
 pub(crate) use maap::MaapBatchProductValidation;
+use maap::{
+    action_content_blocks_from_json_or_text, json_escape, string_array_json, validate_non_empty,
+};
 pub use maap::{
     parse_fenced_maap_action_batch, parse_fenced_maap_action_batch_for_turn,
     parse_maap_action_batch_json, parse_maap_action_batch_json_for_turn,
 };
+use mez_agent::action_text_content_blocks;
 use mez_agent::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentCapability, AgentContext,
-    AgentTranscriptEntry, AgentTranscriptRole, AgentTurnState, AgentTurnTrigger, AllowedAction,
-    AllowedActionSet, ContextSourceKind, LocalActionPlan, MaapBatch, McpExecutionRequest,
-    McpExecutionResponse, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest,
-    ModelTokenUsage, ModelTokenUsageKey, ProviderHttpRequest, ProviderHttpResponse,
-    ProviderTranscriptEvent, SayStatus, TranscriptPersistence,
+    AgentTranscriptEntry, AgentTranscriptRole, AgentTurnLedger, AgentTurnRecord, AgentTurnState,
+    AllowedAction, AllowedActionSet, ContextSourceKind, LocalActionPlan, MaapBatch,
+    McpExecutionRequest, McpExecutionResponse, ModelInteractionKind, ModelMessage,
+    ModelMessageRole, ModelRequest, ModelTokenUsage, ModelTokenUsageKey, ProviderHttpRequest,
+    ProviderHttpResponse, ProviderTranscriptEvent, SayStatus, TranscriptPersistence,
 };
 pub use network::{
     NetworkActionPlan, execute_network_action_with_transport_async, network_action_plan,
@@ -137,6 +135,10 @@ pub use semantic::{
     local_action_plan, local_action_summary,
 };
 pub use session::{AgentLogLevel, AgentShellSession, AgentShellStore, AgentShellVisibility};
+use session::{
+    agent_shell_help_display, agent_shell_mcp_display, agent_shell_permissions_display,
+    agent_shell_status_display,
+};
 pub use shell::{
     DEFAULT_BOOTSTRAP_TIMEOUT_MS, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature,
     MarkerToken, ShellClassification, ShellTransaction, ShellTransactionInput,
@@ -153,16 +155,6 @@ pub use slash::{
     execute_agent_shell_command_with_context, execute_agent_shell_command_with_mcp,
     execute_agent_shell_command_with_permissions, execute_agent_shell_command_with_runtime_context,
     parse_slash_command,
-};
-pub use turn::{AgentTurnLedger, AgentTurnRecord};
-
-use maap::{
-    action_content_blocks_from_json_or_text, json_escape, string_array_json, validate_non_empty,
-};
-use mez_agent::action_text_content_blocks;
-use session::{
-    agent_shell_help_display, agent_shell_mcp_display, agent_shell_permissions_display,
-    agent_shell_status_display,
 };
 
 /// Exposes the tests module boundary.

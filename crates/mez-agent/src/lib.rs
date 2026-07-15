@@ -104,6 +104,8 @@ pub mod surface;
 pub mod transcript;
 /// Provider-independent agent turn-ledger error contracts.
 pub mod turn;
+/// Provider-independent agent turn records and ledger state machine.
+pub mod turn_ledger;
 
 pub use accounting::{AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsageKey};
 pub use action_result::{
@@ -308,6 +310,7 @@ pub use turn::{
     AgentTurnLedgerError, AgentTurnLedgerErrorKind, AgentTurnLedgerResult, AgentTurnState,
     AgentTurnTrigger, validate_turn_required,
 };
+pub use turn_ledger::{AgentTurnLedger, AgentTurnRecord};
 
 /// Maximum number of issue records a model-authored query may request.
 pub const MAX_ISSUE_QUERY_LIMIT: u64 = 200;

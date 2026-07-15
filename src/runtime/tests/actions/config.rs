@@ -89,7 +89,7 @@ fn runtime_config_change_persists_generic_setting_and_applies_live() {
         .unwrap();
     let config_root = temp_root("runtime-agent-config-change-generic");
     service.set_config_root(config_root.clone());
-    let turn = crate::agent::AgentTurnRecord {
+    let turn = mez_agent::AgentTurnRecord {
         turn_id: "turn-config-generic".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
@@ -144,7 +144,7 @@ fn runtime_config_change_reset_removes_override_and_restores_default() {
         .unwrap();
     let config_root = temp_root("runtime-agent-config-change-reset");
     service.set_config_root(config_root.clone());
-    let turn = crate::agent::AgentTurnRecord {
+    let turn = mez_agent::AgentTurnRecord {
         turn_id: "turn-config-reset".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),
@@ -205,7 +205,7 @@ fn runtime_config_change_idempotency_uses_setting_payload() {
         .unwrap();
     let config_root = temp_root("runtime-agent-config-change-idempotency");
     service.set_config_root(config_root.clone());
-    let turn = crate::agent::AgentTurnRecord {
+    let turn = mez_agent::AgentTurnRecord {
         turn_id: "turn-config-idempotency".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),

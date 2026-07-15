@@ -167,7 +167,7 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
         .into_iter()
         .find(|task| task.turn_id == "turn-1")
         .expect("agent prompt should queue turn-1 provider task");
-    let turn = crate::agent::AgentTurnRecord {
+    let turn = mez_agent::AgentTurnRecord {
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         pane_id: task.pane_id.clone(),
@@ -340,7 +340,7 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
         .into_iter()
         .find(|task| task.turn_id == "turn-1")
         .expect("agent prompt should queue turn-1 provider task");
-    let turn = crate::agent::AgentTurnRecord {
+    let turn = mez_agent::AgentTurnRecord {
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         pane_id: task.pane_id.clone(),
@@ -499,7 +499,7 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
 /// the network executor without performing external HTTP during the test.
 #[tokio::test(flavor = "current_thread")]
 async fn async_provider_worker_executes_network_actions_before_actor_completion() {
-    let turn = crate::agent::AgentTurnRecord {
+    let turn = mez_agent::AgentTurnRecord {
         turn_id: "turn-network-worker".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),

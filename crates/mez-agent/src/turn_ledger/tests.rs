@@ -5,6 +5,23 @@
 
 use super::*;
 
+/// Builds one complete turn record for lower ledger regressions.
+fn turn() -> AgentTurnRecord {
+    AgentTurnRecord {
+        turn_id: "turn-1".to_string(),
+        agent_id: "agent-1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 1,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        state: AgentTurnState::Queued,
+        cooperation_mode: None,
+        initial_capability: None,
+    }
+}
+
 #[test]
 /// Verifies terminal turn states are immutable once recorded in the ledger. A
 /// failed, completed, or interrupted turn must not later be reclassified by a
@@ -87,7 +104,7 @@ fn turn_ledger_serializes_turns_for_one_agent() {
 
     assert_eq!(
         error.unwrap_err().kind(),
-        mez_agent::AgentTurnLedgerErrorKind::Conflict
+        crate::AgentTurnLedgerErrorKind::Conflict
     );
 
     ledger

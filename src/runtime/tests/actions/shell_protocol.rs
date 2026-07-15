@@ -7,7 +7,7 @@ use super::*;
 /// reusable marker tokens.
 #[test]
 fn runtime_marker_for_action_uses_fresh_entropy() {
-    let turn = crate::agent::AgentTurnRecord {
+    let turn = mez_agent::AgentTurnRecord {
         turn_id: "turn-1".to_string(),
         agent_id: "agent-%1".to_string(),
         pane_id: "%1".to_string(),

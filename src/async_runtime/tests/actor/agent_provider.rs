@@ -101,7 +101,7 @@ async fn async_actor_applies_agent_provider_completion_events() {
     let pending = service.pending_agent_provider_tasks();
     assert_eq!(pending.len(), 1);
     let task = pending[0].clone();
-    let turn = crate::agent::AgentTurnRecord {
+    let turn = mez_agent::AgentTurnRecord {
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         pane_id: task.pane_id.clone(),
@@ -279,7 +279,7 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
     let pending = service.pending_agent_provider_tasks();
     assert_eq!(pending.len(), 1);
     let task = pending[0].clone();
-    let turn = crate::agent::AgentTurnRecord {
+    let turn = mez_agent::AgentTurnRecord {
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         pane_id: task.pane_id.clone(),

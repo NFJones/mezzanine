@@ -1,11 +1,13 @@
-//! Agent Turn implementation.
+//! Provider-independent agent turn records and ledger state machine.
 //!
 //! This module owns the agent turn boundary for Mezzanine. It keeps related
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::{AgentTurnState, AgentTurnTrigger};
-use mez_agent::{AgentTurnLedgerError, AgentTurnLedgerResult, validate_turn_required};
+use crate::{
+    AgentTurnLedgerError, AgentTurnLedgerResult, AgentTurnState, AgentTurnTrigger,
+    validate_turn_required,
+};
 
 // Agent turn records and ledger.
 
@@ -76,10 +78,10 @@ pub struct AgentTurnRecord {
     /// When set, the first provider request uses `AllowedActionSet::for_capability`
     /// instead of `capability_decision()`, so the model can emit executable actions
     /// without a separate capability-request round-trip.
-    pub initial_capability: Option<mez_agent::AgentCapability>,
+    pub initial_capability: Option<crate::AgentCapability>,
 }
 
-impl mez_agent::AgentTurnResultIdentity for AgentTurnRecord {
+impl crate::AgentTurnResultIdentity for AgentTurnRecord {
     fn turn_id(&self) -> &str {
         &self.turn_id
     }
@@ -308,3 +310,6 @@ fn terminal_turn_state(state: AgentTurnState) -> bool {
         AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
     )
 }
+
+#[cfg(test)]
+mod tests;

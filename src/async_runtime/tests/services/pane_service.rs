@@ -716,7 +716,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             .into_iter()
             .find(|task| task.turn_id == "turn-1")
             .expect("agent prompt should queue turn-1 provider task");
-        let turn = crate::agent::AgentTurnRecord {
+        let turn = mez_agent::AgentTurnRecord {
             turn_id: task.turn_id.clone(),
             agent_id: task.agent_id.clone(),
             pane_id: task.pane_id.clone(),
@@ -861,7 +861,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
             .await
             .unwrap();
         assert!(ready_again.contains("override=applied"), "{ready_again}");
-        let second_turn = crate::agent::AgentTurnRecord {
+        let second_turn = mez_agent::AgentTurnRecord {
             turn_id: next_task.turn_id.clone(),
             agent_id: next_task.agent_id.clone(),
             pane_id: next_task.pane_id.clone(),

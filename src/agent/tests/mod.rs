@@ -14,8 +14,8 @@
 use super::actions::action_result_transcript_content;
 use super::{
     AgentCapability, AgentLogLevel, AgentShellCommandOutcome, AgentShellStore,
-    AgentShellVisibility, AgentTurnExecution, AgentTurnLedger, AgentTurnRecord, AgentTurnRunner,
-    AsyncModelProvider, AsyncProviderHttpTransport, CHATGPT_ACCOUNT_ID_HEADER, ContextSourceKind,
+    AgentShellVisibility, AgentTurnExecution, AgentTurnRunner, AsyncModelProvider,
+    AsyncProviderHttpTransport, CHATGPT_ACCOUNT_ID_HEADER, ContextSourceKind,
     DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MarkerToken, McpActionExecutor,
     ModelMessage, ModelMessageRole, ModelProfile, ModelProvider, ModelResponse,
     OpenAiResponsesProvider, PaneShellExecutor, ProviderHttpTransport, Result, ShellClassification,
@@ -54,8 +54,8 @@ use base64::Engine;
 use mez_agent::semantic_patch::try_convert_unified_diff_to_mez_patch;
 use mez_agent::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentPromptProfile,
-    AgentTranscriptRole as TranscriptRole, AgentTurnState, AgentTurnTrigger,
-    CHATGPT_RESPONSES_ENDPOINT, ContextBlock,
+    AgentTranscriptRole as TranscriptRole, AgentTurnLedger, AgentTurnRecord, AgentTurnState,
+    AgentTurnTrigger, CHATGPT_RESPONSES_ENDPOINT, ContextBlock,
     MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, MaapBatch, McpExecutionRequest,
     McpExecutionResponse, McpPromptTool, ModelRequest, ModelTokenUsage, OPENAI_MODELS_ENDPOINT,
     OPENAI_RESPONSES_ENDPOINT, ProviderHttpRequest, ProviderHttpResponse, ProviderTranscriptEvent,
@@ -1045,5 +1045,4 @@ mod shell_transport;
 mod system_prompt;
 mod tool_discovery;
 mod transcript;
-mod turn_ledger;
 mod turn_runner;

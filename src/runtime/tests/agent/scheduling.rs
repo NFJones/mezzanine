@@ -63,7 +63,7 @@ fn runtime_owns_agent_turn_start_and_finish_lifecycle() {
         .unwrap();
 
     let started = service
-        .start_agent_turn(crate::agent::AgentTurnRecord {
+        .start_agent_turn(mez_agent::AgentTurnRecord {
             turn_id: "turn-1".to_string(),
             agent_id: "agent-%1".to_string(),
             pane_id: "%1".to_string(),

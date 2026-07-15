@@ -51,7 +51,7 @@ use crate::agent::assistant_context_content_for_execution;
 #[cfg(test)]
 use crate::agent::provider_error_retry_class;
 #[cfg(test)]
-use crate::agent::{AgentTurnLedger, AgentTurnRunner, ModelProvider};
+use crate::agent::{AgentTurnRunner, ModelProvider};
 use crate::agent::{
     ApplyPatchTransactionPhase, apply_patch_error_plan, apply_patch_read_plan_for_paths,
     apply_patch_touched_paths, apply_patch_transaction_phase,
@@ -65,6 +65,8 @@ use crate::config::{
     ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
     ConfigPaths, ConfigScope,
 };
+#[cfg(test)]
+use mez_agent::AgentTurnLedger;
 use mez_agent::{
     DEFAULT_PROVIDER_TIMEOUT_MS, MaapBatch, ModelTokenUsage, ModelTokenUsageKey,
     ProviderApiCompatibility, ProviderQuotaUsage, SayStatus, append_mcp_context,

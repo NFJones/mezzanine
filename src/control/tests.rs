@@ -2048,7 +2048,7 @@ fn agent_state_dispatch_persists_visibility_and_lists_turns() {
 
     store.start_turn("%1", "turn-1").unwrap();
     ledger
-        .start_turn(crate::agent::AgentTurnRecord {
+        .start_turn(mez_agent::AgentTurnRecord {
             turn_id: "turn-1".to_string(),
             agent_id: "agent-%1".to_string(),
             pane_id: "%1".to_string(),

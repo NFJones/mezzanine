@@ -1091,7 +1091,7 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
         .into_iter()
         .next()
         .expect("prompt should queue a provider task");
-    let turn = crate::agent::AgentTurnRecord {
+    let turn = mez_agent::AgentTurnRecord {
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         pane_id: task.pane_id.clone(),

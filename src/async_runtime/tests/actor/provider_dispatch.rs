@@ -127,7 +127,7 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
     let pending = service.pending_agent_provider_tasks();
     assert_eq!(pending.len(), 1);
     let task = pending[0].clone();
-    let turn = crate::agent::AgentTurnRecord {
+    let turn = mez_agent::AgentTurnRecord {
         turn_id: task.turn_id.clone(),
         agent_id: task.agent_id.clone(),
         pane_id: task.pane_id.clone(),

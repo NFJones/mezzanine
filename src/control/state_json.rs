@@ -1434,7 +1434,7 @@ pub(super) fn agent_state_json_with_shell_session_and_model_profile(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn agent_task_state_json(turn: &crate::agent::AgentTurnRecord) -> String {
+pub(super) fn agent_task_state_json(turn: &mez_agent::AgentTurnRecord) -> String {
     let time = unix_seconds_to_rfc3339(turn.started_at_unix_seconds);
     let result_summary = if turn.state == AgentTurnState::Interrupted {
         r#""interrupted by snapshot resume; explicit user confirmation is required before retrying non-idempotent actions""#.to_string()
