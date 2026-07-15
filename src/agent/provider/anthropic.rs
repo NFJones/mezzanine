@@ -19,7 +19,8 @@ use mez_agent::{
     AnthropicMessagesOptions, anthropic_messages_endpoint_for_base_url,
     anthropic_messages_request_body, anthropic_overlay_usage,
     anthropic_provider_failure_event_json, anthropic_provider_failure_json,
-    anthropic_request_requires_maap, anthropic_usage_from_value, parse_sse_events_with,
+    anthropic_request_requires_maap, anthropic_stop_reason_response_error,
+    anthropic_usage_from_value, parse_sse_events_with,
 };
 use std::collections::BTreeMap;
 
@@ -501,83 +502,7 @@ fn anthropic_stop_reason_error(
     raw_text: &str,
     requires_maap: bool,
 ) -> Option<MezError> {
-    let stop_reason = stop_reason?;
-    let base = serde_json::json!({
-        "provider": "anthropic",
-        "stop_reason": stop_reason,
-        "raw_text_bytes": raw_text.len(),
-    });
-    match stop_reason {
-        "stop_sequence" | "tool_use" => None,
-        "end_turn" => {
-            if requires_maap {
-                Some(
-                    MezError::invalid_state(
-                        "Anthropic Messages response ended turn before producing MAAP output",
-                    )
-                    .with_provider_failure_json(base.to_string())
-                    .with_provider_raw_text(raw_text.to_string()),
-                )
-            } else {
-                None
-            }
-        }
-        "max_tokens" => Some(
-            MezError::invalid_state(if requires_maap {
-                "Anthropic Messages response hit max_tokens before completing MAAP output"
-            } else {
-                "Anthropic Messages response hit max_tokens before completing output"
-            })
-            .with_provider_failure_json(
-                serde_json::json!({
-                    "provider": "anthropic",
-                    "stop_reason": "max_tokens",
-                    "incomplete_details": {
-                        "reason": "max_output_tokens"
-                    },
-                    "raw_text_bytes": raw_text.len()
-                })
-                .to_string(),
-            )
-            .with_provider_raw_text(raw_text.to_string()),
-        ),
-        "model_context_window_exceeded" => Some(
-            MezError::invalid_state(
-                "Anthropic Messages response exceeded the model context window",
-            )
-            .with_provider_failure_json(
-                serde_json::json!({
-                    "provider": "anthropic",
-                    "stop_reason": "model_context_window_exceeded",
-                    "incomplete_details": {
-                        "reason": "model_context_window_exceeded"
-                    },
-                    "raw_text_bytes": raw_text.len()
-                })
-                .to_string(),
-            )
-            .with_provider_raw_text(raw_text.to_string()),
-        ),
-        "refusal" => Some(
-            MezError::invalid_state("Anthropic Messages response ended with refusal")
-                .with_provider_failure_json(base.to_string())
-                .with_provider_raw_text(raw_text.to_string()),
-        ),
-        "pause_turn" => Some(
-            MezError::invalid_state(
-                "Anthropic Messages response paused the turn before completion",
-            )
-            .with_provider_failure_json(base.to_string())
-            .with_provider_raw_text(raw_text.to_string()),
-        ),
-        _ => Some(
-            MezError::invalid_state(format!(
-                "Anthropic Messages response ended with unrecognized stop_reason `{stop_reason}`"
-            ))
-            .with_provider_failure_json(base.to_string())
-            .with_provider_raw_text(raw_text.to_string()),
-        ),
-    }
+    anthropic_stop_reason_response_error(stop_reason, raw_text, requires_maap).map(Into::into)
 }
 
 /// Builds a sanitized error from an Anthropic response or stream event.

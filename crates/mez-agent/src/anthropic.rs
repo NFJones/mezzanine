@@ -7,7 +7,7 @@
 use crate::{
     MAAP_ACTION_BATCH_TOOL_NAME, ModelMessageRole, ModelRequest, ModelTokenUsage,
     ProviderEndpointError, ProviderEndpointResult, ProviderRequestAssemblyError,
-    ProviderRequestAssemblyResult, maap_action_batch_schema,
+    ProviderRequestAssemblyResult, ProviderResponseError, maap_action_batch_schema,
     openai_maap_current_action_batch_description, provider_failure_event_json,
     provider_failure_json,
 };
@@ -344,6 +344,81 @@ pub fn anthropic_overlay_usage(current: &mut ModelTokenUsage, value: Option<&ser
     }
 }
 
+/// Converts an Anthropic stop reason into a typed recovery failure.
+pub fn anthropic_stop_reason_response_error(
+    stop_reason: Option<&str>,
+    raw_text: &str,
+    requires_maap: bool,
+) -> Option<ProviderResponseError> {
+    let stop_reason = stop_reason?;
+    let base = serde_json::json!({
+        "provider": "anthropic",
+        "stop_reason": stop_reason,
+        "raw_text_bytes": raw_text.len(),
+    });
+    match stop_reason {
+        "stop_sequence" | "tool_use" => None,
+        "end_turn" => requires_maap.then(|| {
+            ProviderResponseError::invalid_state(
+                "Anthropic Messages response ended turn before producing MAAP output",
+            )
+            .with_provider_failure_json(base.to_string())
+            .with_provider_raw_text(raw_text)
+        }),
+        "max_tokens" => Some(
+            ProviderResponseError::invalid_state(if requires_maap {
+                "Anthropic Messages response hit max_tokens before completing MAAP output"
+            } else {
+                "Anthropic Messages response hit max_tokens before completing output"
+            })
+            .with_provider_failure_json(
+                serde_json::json!({
+                    "provider": "anthropic",
+                    "stop_reason": "max_tokens",
+                    "incomplete_details": { "reason": "max_output_tokens" },
+                    "raw_text_bytes": raw_text.len()
+                })
+                .to_string(),
+            )
+            .with_provider_raw_text(raw_text),
+        ),
+        "model_context_window_exceeded" => Some(
+            ProviderResponseError::invalid_state(
+                "Anthropic Messages response exceeded the model context window",
+            )
+            .with_provider_failure_json(
+                serde_json::json!({
+                    "provider": "anthropic",
+                    "stop_reason": "model_context_window_exceeded",
+                    "incomplete_details": { "reason": "model_context_window_exceeded" },
+                    "raw_text_bytes": raw_text.len()
+                })
+                .to_string(),
+            )
+            .with_provider_raw_text(raw_text),
+        ),
+        "refusal" => Some(
+            ProviderResponseError::invalid_state("Anthropic Messages response ended with refusal")
+                .with_provider_failure_json(base.to_string())
+                .with_provider_raw_text(raw_text),
+        ),
+        "pause_turn" => Some(
+            ProviderResponseError::invalid_state(
+                "Anthropic Messages response paused the turn before completion",
+            )
+            .with_provider_failure_json(base.to_string())
+            .with_provider_raw_text(raw_text),
+        ),
+        _ => Some(
+            ProviderResponseError::invalid_state(format!(
+                "Anthropic Messages response ended with unrecognized stop_reason `{stop_reason}`"
+            ))
+            .with_provider_failure_json(base.to_string())
+            .with_provider_raw_text(raw_text),
+        ),
+    }
+}
+
 fn anthropic_usage_u64(value: &serde_json::Value, key: &str) -> u64 {
     value
         .get(key)
@@ -437,5 +512,22 @@ mod tests {
         );
 
         assert_eq!(overlaid.cache_write_input_tokens, Some(13));
+    }
+
+    /// Verifies Anthropic output exhaustion retains the structured recovery
+    /// reason and raw partial output required by the product retry classifier.
+    #[test]
+    fn anthropic_stop_reason_max_tokens_preserves_recovery_diagnostics() {
+        let error =
+            anthropic_stop_reason_response_error(Some("max_tokens"), "partial output", true)
+                .unwrap();
+
+        assert!(error.message().contains("before completing MAAP output"));
+        assert_eq!(error.provider_raw_text(), Some("partial output"));
+        assert!(
+            error
+                .provider_failure_json()
+                .is_some_and(|failure| failure.contains("max_output_tokens"))
+        );
     }
 }

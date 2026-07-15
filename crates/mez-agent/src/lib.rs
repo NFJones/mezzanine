@@ -102,7 +102,8 @@ pub use anthropic::{
     DEFAULT_ANTHROPIC_VERSION, anthropic_messages_endpoint_for_base_url,
     anthropic_messages_request_body, anthropic_overlay_usage,
     anthropic_provider_failure_event_json, anthropic_provider_failure_json,
-    anthropic_request_requires_maap, anthropic_usage_from_value,
+    anthropic_request_requires_maap, anthropic_stop_reason_response_error,
+    anthropic_usage_from_value,
 };
 pub use auth::{ProviderAuthMetadata, ProviderCredentialKind, ProviderCredentialSource};
 pub use config_change::{
