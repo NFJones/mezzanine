@@ -11,10 +11,9 @@ use super::super::ModelProvider;
 #[cfg(test)]
 use super::super::{ActionStatus, AgentAction, local_action_plan};
 use super::super::{
-    AgentContext, AgentTurnLedger, AgentTurnRecord, AgentTurnState, AllowedAction,
-    AllowedActionSet, MaapBatchProductValidation, McpPromptTool, MezError, ModelInteractionKind,
-    ModelProfile, ModelRequest, ModelTokenUsage, Result, assemble_model_request,
-    provider_error_retry_class,
+    AgentContext, AgentTurnLedger, AgentTurnRecord, AgentTurnState, AllowedActionSet,
+    MaapBatchProductValidation, McpPromptTool, MezError, ModelInteractionKind, ModelProfile,
+    ModelRequest, ModelTokenUsage, Result, assemble_model_request, provider_error_retry_class,
 };
 #[cfg(test)]
 use super::super::{MarkerToken, McpExecutionRequest, Path};
@@ -41,6 +40,7 @@ use mez_agent::turn_state_from_action_results;
 use mez_agent::{
     AgentTurnNegotiation, AgentTurnProviderFailureDecision, AgentTurnResponseDecision,
     MemoryActionBudget, ProviderResponseAcceptance, SubagentScopeDeclaration,
+    apply_default_action_gates,
 };
 
 /// Maximum number of ephemeral provider retries after a MAAP validation error.
@@ -50,48 +50,6 @@ use mez_agent::{
 /// durable transcripts and future model context when the corrected response is
 /// valid.
 const MAAP_REPAIR_ATTEMPT_LIMIT: usize = 2;
-
-/// Exposes persistent-memory actions on the main model action surface when enabled.
-fn expose_default_memory_actions(request: &mut ModelRequest, memory_actions_enabled: bool) {
-    request.memory_actions_enabled = memory_actions_enabled;
-    if !memory_actions_enabled {
-        return;
-    }
-    request
-        .allowed_actions
-        .extend([AllowedAction::MemorySearch, AllowedAction::MemoryStore]);
-}
-
-/// Exposes MCP tool calls on the main model action surface when tools are available.
-fn expose_default_mcp_actions(request: &mut ModelRequest, available_mcp_tools: &[McpPromptTool]) {
-    request.available_mcp_tools = available_mcp_tools.to_vec();
-    if available_mcp_tools.is_empty() {
-        return;
-    }
-    request.allowed_actions.extend([AllowedAction::McpCall]);
-}
-
-/// Carries the live issue-tracking action gate into provider requests.
-fn expose_issue_actions_gate(request: &mut ModelRequest, issue_actions_enabled: bool) {
-    request.issue_actions_enabled = issue_actions_enabled;
-}
-
-/// Applies runtime-owned default action gates to a model request.
-///
-/// The main selected-model surface starts as a capability-decision request and
-/// is then widened with concrete MCP, memory, and issue-tracking availability
-/// owned by the runtime. Keeping this mutation in one helper prevents provider
-/// diagnostics from drifting away from the live runner surface.
-pub(crate) fn apply_default_action_gates(
-    request: &mut ModelRequest,
-    available_mcp_tools: &[McpPromptTool],
-    memory_actions_enabled: bool,
-    issue_actions_enabled: bool,
-) {
-    expose_default_mcp_actions(request, available_mcp_tools);
-    expose_default_memory_actions(request, memory_actions_enabled);
-    expose_issue_actions_gate(request, issue_actions_enabled);
-}
 
 /// Plans post-batch action results and derives the resulting terminal state.
 fn planned_execution_from_batch(

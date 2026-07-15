@@ -10,6 +10,8 @@ use std::collections::BTreeSet;
 
 /// Provider-neutral model token accounting contracts.
 pub mod accounting;
+/// Default provider-facing MAAP action-surface policy.
+pub mod action_gates;
 /// Provider-independent MAAP action-result contracts.
 pub mod action_result;
 /// Provider-independent action-result context and transcript rendering.
@@ -116,6 +118,7 @@ pub mod turn;
 pub mod turn_ledger;
 
 pub use accounting::{AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsageKey};
+pub use action_gates::apply_default_action_gates;
 pub use action_result::{
     ActionContentBlock, ActionError, ActionResult, ActionResultContractError,
     ActionResultContractResult, ActionStatus, AgentActionResultIdentity, AgentTurnResultIdentity,

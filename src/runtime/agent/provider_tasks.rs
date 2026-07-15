@@ -519,7 +519,7 @@ impl RuntimeSessionService {
         if self.agent_debug_enabled(&turn.pane_id) {
             match assemble_model_request(&model_profile, &turn, &context) {
                 Ok(mut request) => {
-                    crate::agent::apply_default_action_gates(
+                    mez_agent::apply_default_action_gates(
                         &mut request,
                         &available_mcp_tools,
                         self.runtime_persistent_memory_enabled(),

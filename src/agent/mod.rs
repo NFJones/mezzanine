@@ -58,7 +58,6 @@ mod shell;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod slash;
-pub(crate) use actions::apply_default_action_gates;
 pub use actions::{
     AgentTurnExecution, AgentTurnRunner, AsyncMcpActionExecutor, EnvironmentEquivalence,
     EnvironmentEquivalenceProbe, LocalActionExecutor, LocalExecutionOutput, LocalExecutionRequest,

@@ -55,7 +55,7 @@ fn openai_available_mcp_keeps_memory_on_default_surface() {
         &context,
     )
     .unwrap();
-    crate::agent::apply_default_action_gates(&mut request, &[mcp_tool], true, false);
+    mez_agent::apply_default_action_gates(&mut request, &[mcp_tool], true, false);
 
     let body = openai_responses_request_body(&request).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();

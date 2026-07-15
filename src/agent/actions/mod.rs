@@ -25,7 +25,6 @@ pub use execution::{
     shell_command_result_content,
 };
 pub use runner::AgentTurnRunner;
-pub(crate) use runner::apply_default_action_gates;
 pub use shell_transport::{
     ShellTransportDecodeResult, ShellTransportDiagnostics, decode_shell_output_transport,
     decode_shell_output_transport_with_diagnostics,

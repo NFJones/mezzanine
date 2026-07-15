@@ -19,7 +19,7 @@ use super::{
     OpenAiResponsesProvider, PaneShellExecutor, ProviderHttpTransport, Result, ShellClassification,
     ShellExecutionOutput, ShellExecutionRequest, ShellTransaction, ShellTransactionInput,
     ShellTransactionOutputTransport, ToolDiscoveryCache, ToolInventory,
-    agent_subshell_enter_command, apply_default_action_gates, apply_patch_read_plan_for_paths,
+    agent_subshell_enter_command, apply_patch_read_plan_for_paths,
     apply_patch_write_plan_from_read_output, apply_patch_write_plan_from_read_outputs,
     assemble_model_request, bootstrap_script, bootstrap_script_for_classification,
     build_agent_system_prompt, build_deepseek_chat_completions_http_request,
