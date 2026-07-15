@@ -14,8 +14,6 @@ use std::time::Duration;
 use rustix::fd::BorrowedFd;
 use rustix::fs::fcntl_getfl;
 use rustix::io::Errno;
-#[cfg(test)]
-use rustix::io::{read as rustix_read, write as rustix_write};
 use rustix::termios::{OptionalActions, Termios, tcgetattr, tcgetwinsize, tcsetattr};
 
 use crate::error::{MezError, Result};
@@ -60,16 +58,14 @@ mod render;
 /// declaration makes the boundary available to the crate.
 mod screen;
 
+#[cfg(test)]
+pub use client_loop::AttachedTerminalClientLoopIo;
 pub(crate) use client_loop::route_client_input_actions;
 pub use client_loop::{
     AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, AttachedTerminalClientLoopConfig,
     AttachedTerminalClientLoopReport, AttachedTerminalClientStepPlan,
     ReadlinePromptClientPresentation, ReadlinePromptStatusRow, TerminalClientLoopAction,
     attached_terminal_output_disconnected, plan_attached_terminal_client_step, route_client_input,
-};
-#[cfg(test)]
-pub use client_loop::{
-    AttachedTerminalClientLoopIo, AttachedTerminalFdLoopIo, run_attached_terminal_client_loop,
 };
 pub(crate) use client_loop::{
     AttachedTerminalOutputFrameState, attached_terminal_enter_presentation_frame,

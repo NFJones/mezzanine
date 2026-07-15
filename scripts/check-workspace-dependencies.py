@@ -55,7 +55,9 @@ RETIRED_COMPATIBILITY_PATHS = {
 
 RETIRED_RUST_IDENTIFIERS = {
     "AgentHarness": "parallel agent acceptance contracts",
+    "struct AttachedTerminalFdLoopIo": "test-only synchronous terminal FD loop",
     "ReadlinePromptLoop": "test-only root prompt-loop contracts",
+    "run_attached_terminal_client_loop": "test-only synchronous terminal loop",
 }
 
 ROOT_RUNNER_FORBIDDEN_CALLS = {
