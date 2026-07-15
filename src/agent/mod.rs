@@ -130,10 +130,9 @@ pub use provider::{
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     deepseek_provider_from_auth_store_with_provider_options, effective_provider_api,
     openai_compatible_provider_from_auth_store_with_provider_options,
-    openai_prompt_cache_diagnostics_for_request, openai_provider_from_auth_store_with_options,
+    openai_provider_from_auth_store_with_options,
     openai_provider_from_auth_store_with_provider_options,
-    openai_responses_provider_from_auth_store_with_provider_options, openai_responses_request_body,
-    parse_openai_models_http_body,
+    openai_responses_provider_from_auth_store_with_provider_options, parse_openai_models_http_body,
 };
 #[cfg(test)]
 pub use provider::{

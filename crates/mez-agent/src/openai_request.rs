@@ -2,16 +2,15 @@
 //!
 //! This module owns provider request-body construction for OpenAI Responses.
 //! It depends on sibling modules for message rendering, cache keys, response
-//! formatting, and MAAP schema selection so the provider facade can stay
-//! focused on transport orchestration.
+//! formatting, and MAAP schema selection while remaining independent of
+//! credentials and transport orchestration.
 
-use super::OPENAI_MAAP_FUNCTION_TOOL_NAME;
-use super::cache::{
+use crate::openai_cache::{
     openai_prompt_cache_key, openai_render_request_messages, openai_response_format,
 };
-use super::schema::openai_maap_action_batch_tools;
-use mez_agent::ModelRequest;
-use mez_agent::{
+use crate::openai_schema::openai_maap_action_batch_tools;
+use crate::{
+    MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, ModelRequest,
     ProviderRequestAssemblyError, ProviderRequestAssemblyResult, openai_request_options,
     validate_provider_request_required,
 };
@@ -32,7 +31,7 @@ pub fn openai_responses_request_body(
 /// The provider facade uses this helper for HTTP request construction so the
 /// streaming and non-streaming request shapes remain identical except for the
 /// `stream` field.
-pub(super) fn openai_responses_request_body_with_stream(
+pub fn openai_responses_request_body_with_stream(
     request: &ModelRequest,
     stream: bool,
 ) -> ProviderRequestAssemblyResult<String> {
@@ -51,7 +50,7 @@ pub(super) fn openai_responses_request_body_with_stream(
 
 /// Builds the canonical OpenAI request-control shape shared by request
 /// emission and prompt-cache diagnostics.
-pub(super) fn openai_responses_request_control_shape_with_stream(
+pub(crate) fn openai_responses_request_control_shape_with_stream(
     request: &ModelRequest,
     stream: bool,
 ) -> ProviderRequestAssemblyResult<serde_json::Value> {

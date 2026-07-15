@@ -1,23 +1,20 @@
 //! OpenAI request rendering and prompt-cache diagnostics.
 //!
-//! This module owns the OpenAI-specific conversion from Mezzanine model
+//! This module owns the OpenAI-specific conversion from canonical model
 //! messages into Responses API `instructions` and `input` material. It also
 //! computes non-model-visible prompt-cache fingerprints used for diagnostics.
 
-use super::OPENAI_MAAP_FUNCTION_TOOL_NAME;
-use super::openai_request::openai_responses_request_control_shape_with_stream;
-use super::schema::openai_maap_action_batch_tools;
+use crate::openai_request::openai_responses_request_control_shape_with_stream;
+use crate::openai_schema::openai_maap_action_batch_tools;
+use crate::provider::MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME;
 #[cfg(test)]
-use crate::agent::{ContextSourceKind, ModelMessage, ModelMessageRole};
-use crate::agent::{ModelInteractionKind, ModelRequest};
-#[cfg(test)]
-use mez_agent::openai_stable_prefix_material;
-use mez_agent::{
-    OpenAiPromptCacheDiagnostics, OpenAiRenderedMessages, ProviderRequestAssemblyResult,
-    openai_allowed_action_surface_message, openai_auto_sizing_response_format,
-    openai_macro_judge_response_format, openai_prompt_cache_diagnostics,
-    openai_prompt_cache_key as provider_prompt_cache_key, openai_render_messages,
-    validate_provider_request_required,
+use crate::{ContextSourceKind, ModelMessage, ModelMessageRole};
+use crate::{
+    ModelInteractionKind, ModelRequest, OpenAiPromptCacheDiagnostics, OpenAiRenderedMessages,
+    ProviderRequestAssemblyResult, openai_allowed_action_surface_message,
+    openai_auto_sizing_response_format, openai_macro_judge_response_format,
+    openai_prompt_cache_diagnostics, openai_prompt_cache_key as provider_prompt_cache_key,
+    openai_render_messages, openai_stable_prefix_material, validate_provider_request_required,
 };
 
 /// Renders request messages and captures canonical stable-prefix material.
@@ -87,8 +84,7 @@ pub fn openai_prompt_cache_diagnostics_for_request_with_stream(
 }
 
 /// Returns canonical OpenAI stable-prefix material for tests and diagnostics.
-#[cfg(test)]
-pub(crate) fn openai_stable_prefix_material_for_request(
+pub fn openai_stable_prefix_material_for_request(
     request: &ModelRequest,
 ) -> ProviderRequestAssemblyResult<String> {
     let rendered = openai_render_request_messages(request)?;
@@ -98,8 +94,7 @@ pub(crate) fn openai_stable_prefix_material_for_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mez_agent::AllowedActionSet;
-    use mez_agent::ProviderTranscriptEvent;
+    use crate::{AllowedActionSet, ProviderTranscriptEvent};
 
     /// Verifies OpenAI request rendering ignores hidden provider-native
     /// transcript events.

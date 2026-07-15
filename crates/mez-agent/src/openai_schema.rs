@@ -1,16 +1,15 @@
-//! Product adapters for provider-neutral MAAP schema construction.
+//! OpenAI request-specific MAAP schema construction.
 //!
-//! `mez-agent` owns action-batch schemas, MCP argument normalization, provider
-//! descriptions, and legacy tool-surface identifiers. This module retains only
-//! request-specific OpenAI cache-shape policy and concrete function-tool
-//! envelope construction.
+//! This module owns request-specific OpenAI cache-shape policy and concrete
+//! function-tool envelope construction over the canonical MAAP schema.
 
-use super::{AllowedAction, AllowedActionSet, ModelRequest, OPENAI_MAAP_FUNCTION_TOOL_NAME};
-
-use mez_agent::maap_action_batch_schema;
+use crate::{
+    AllowedAction, AllowedActionSet, MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME,
+    ModelRequest, maap_action_batch_schema,
+};
 
 /// Builds the OpenAI MAAP function-tool list for the current request.
-pub(super) fn openai_maap_action_batch_tools(request: &ModelRequest) -> Vec<serde_json::Value> {
+pub(crate) fn openai_maap_action_batch_tools(request: &ModelRequest) -> Vec<serde_json::Value> {
     vec![openai_maap_current_action_batch_tool(request)]
 }
 
@@ -23,7 +22,7 @@ fn openai_maap_current_action_batch_tool(request: &ModelRequest) -> serde_json::
     serde_json::json!({
         "type": "function",
         "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
-        "description": maap_current_action_batch_description(request),
+        "description": openai_maap_current_action_batch_description(request),
         "strict": true,
         "parameters": maap_action_batch_schema(
             &openai_stable_schema_action_surface(request),
@@ -70,14 +69,9 @@ fn openai_stable_schema_action_surface(request: &ModelRequest) -> AllowedActionS
 }
 
 /// Returns the provider-facing description for the current MAAP action-batch tool.
-pub(super) fn maap_current_action_batch_description(request: &ModelRequest) -> String {
-    mez_agent::maap_current_action_batch_description(
+pub fn openai_maap_current_action_batch_description(request: &ModelRequest) -> String {
+    crate::schema::maap_current_action_batch_description(
         &request.allowed_actions,
         &request.available_mcp_tools,
     )
-}
-
-/// Returns the legacy OpenAI export name for the shared current-action-batch description.
-pub(super) fn openai_maap_current_action_batch_description(request: &ModelRequest) -> String {
-    maap_current_action_batch_description(request)
 }

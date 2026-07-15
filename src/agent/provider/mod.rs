@@ -16,7 +16,6 @@ use std::pin::Pin;
 // Model provider traits and OpenAI Responses adapter.
 
 mod anthropic;
-mod cache;
 mod catalog;
 mod chat_completions;
 mod claude_code;
@@ -24,12 +23,7 @@ mod deepseek;
 mod errors;
 mod http;
 mod openai_chat_completions;
-mod openai_request;
-mod schema;
 use anthropic::AnthropicMessagesDialect;
-pub use cache::openai_prompt_cache_diagnostics_for_request;
-#[cfg(test)]
-pub(crate) use cache::openai_stable_prefix_material_for_request;
 pub use catalog::parse_openai_models_http_body;
 pub use chat_completions::ChatCompletionsProvider;
 pub use claude_code::ClaudeCodeProvider;
@@ -45,7 +39,6 @@ pub use http::ProviderHttpTransport;
 pub use http::{AsyncProviderHttpTransport, ReqwestProviderHttpTransport};
 #[cfg(test)]
 use mez_agent::ANTHROPIC_MESSAGES_API;
-use mez_agent::parse_openai_responses_provider_body;
 use mez_agent::{
     DEFAULT_PROVIDER_TIMEOUT_MS, ModelRequest, ModelTokenUsage, ProviderApiCompatibility,
     ProviderAuthMetadata, ProviderCredentialKind, ProviderCredentialSource, ProviderHttpRequest,
@@ -58,13 +51,12 @@ use mez_agent::{
     openai_models_endpoint_for_responses_endpoint, openai_responses_endpoint_for_base_url,
     provider_catalog_reasoning_levels,
 };
+use mez_agent::{openai_responses_request_body_with_stream, parse_openai_responses_provider_body};
 use mez_agent::{
     provider_error_detail as openai_provider_error_detail,
     provider_failure_json as openai_provider_failure_json, resolve_provider_api,
 };
 use openai_chat_completions::OpenAiChatCompletionsDialect;
-pub use openai_request::openai_responses_request_body;
-use openai_request::openai_responses_request_body_with_stream;
 
 use mez_agent::{CHATGPT_RESPONSES_ENDPOINT, OPENAI_RESPONSES_ENDPOINT};
 /// Default DeepSeek Chat Completions API endpoint.

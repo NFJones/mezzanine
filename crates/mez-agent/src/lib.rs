@@ -38,8 +38,14 @@ pub mod maap;
 pub mod mcp;
 /// Prompt-facing memory context contracts.
 pub mod memory;
+/// OpenAI request rendering and prompt-cache diagnostics.
+pub mod openai_cache;
+/// Provider-independent OpenAI Responses request construction.
+pub mod openai_request;
 /// Provider-independent OpenAI Responses API response parsing.
 pub mod openai_response;
+/// OpenAI request-specific MAAP schema construction.
+pub mod openai_schema;
 /// Agent-facing permission identity contracts.
 pub mod permissions;
 /// Provider-neutral prompt profile contracts.
@@ -133,10 +139,19 @@ pub use mcp::{
     McpPromptUnavailableServer,
 };
 pub use memory::{MemoryContextRecord, MemoryContextScope};
+pub use openai_cache::{
+    openai_prompt_cache_diagnostics_for_request,
+    openai_prompt_cache_diagnostics_for_request_with_stream,
+    openai_stable_prefix_material_for_request,
+};
+pub use openai_request::{
+    openai_responses_request_body, openai_responses_request_body_with_stream,
+};
 pub use openai_response::{
     parse_openai_responses_http_body, parse_openai_responses_provider_body,
     parse_openai_responses_stream_body,
 };
+pub use openai_schema::openai_maap_current_action_batch_description;
 pub use permissions::{
     AgentShellPermissionSummary, ApprovalPolicy, PermissionPlanning, PermissionPreset, RuleDecision,
 };

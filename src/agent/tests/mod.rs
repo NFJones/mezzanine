@@ -12,9 +12,6 @@
 // Agent module tests.
 
 use super::actions::action_result_transcript_content;
-use super::provider::{
-    openai_prompt_cache_diagnostics_for_request, openai_stable_prefix_material_for_request,
-};
 use super::{
     AgentCapability, AgentContext, AgentLogLevel, AgentPromptProfile, AgentShellCommandOutcome,
     AgentShellStore, AgentShellVisibility, AgentTurnExecution, AgentTurnLedger, AgentTurnRecord,
@@ -44,8 +41,8 @@ use super::{
     openai_provider_from_auth_store_with_options,
     openai_provider_from_auth_store_with_provider_options,
     openai_provider_from_auth_store_with_transport,
-    openai_responses_provider_from_auth_store_with_provider_options, openai_responses_request_body,
-    parse_bootstrap_env_output, parse_fenced_maap_action_batch, parse_maap_action_batch_json,
+    openai_responses_provider_from_auth_store_with_provider_options, parse_bootstrap_env_output,
+    parse_fenced_maap_action_batch, parse_maap_action_batch_json,
     parse_maap_action_batch_json_for_turn, parse_openai_models_http_body, parse_slash_command,
     persist_turn_execution_transcript, postprocess_shell_action_success_output,
     readiness_probe_command_for_classification, select_model_profile, set_project_guidance_context,
@@ -69,7 +66,9 @@ use mez_agent::{
     MemoryContextScope, ModelRequest, ModelTokenUsage, OPENAI_MODELS_ENDPOINT,
     OPENAI_RESPONSES_ENDPOINT, ProviderHttpRequest, ProviderHttpResponse, ProviderTranscriptEvent,
     SlashCommandEffect, baseline_slash_commands, openai_models_endpoint_for_responses_endpoint,
-    openai_responses_endpoint_for_base_url, provider_quota_usage_from_headers, shell_quote,
+    openai_prompt_cache_diagnostics_for_request, openai_responses_endpoint_for_base_url,
+    openai_responses_request_body, openai_stable_prefix_material_for_request,
+    provider_quota_usage_from_headers, shell_quote,
 };
 use std::cell::RefCell;
 use std::collections::BTreeSet;
