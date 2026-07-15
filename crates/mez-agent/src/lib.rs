@@ -24,6 +24,8 @@ pub mod config_change;
 pub mod context;
 /// Provider-independent capability-continuation decisions.
 pub mod continuation;
+/// Provider-independent DeepSeek endpoint and protocol policy.
+pub mod deepseek;
 /// Provider-neutral terminal failure-summary progression.
 pub mod failure_summary;
 /// Provider-independent complete agent turn orchestration.
@@ -117,6 +119,9 @@ pub use context::{
 pub use continuation::{
     CapabilityAvailability, CapabilityDecision, CapabilityRequest, ProviderResponseAcceptance,
     accept_provider_response, continuation_surface, decide_capabilities,
+};
+pub use deepseek::{
+    deepseek_chat_completions_endpoint_for_base_url, deepseek_models_endpoint_for_base_url,
 };
 pub use failure_summary::{
     AgentFailureSummaryNegotiation, AgentFailureSummaryProviderDecision,

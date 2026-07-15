@@ -9,15 +9,18 @@ use super::chat_completions::{ChatCompletionsDialect, ChatCompletionsRetry};
 use super::errors::provider_maap_parse_error;
 use super::{
     AgentCapability, AllowedAction, AllowedActionSet, DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME,
-    DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_MODELS_ENDPOINT,
-    DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME, MaapBatch, McpPromptTool, MezError,
-    ModelInteractionKind, ModelMessageRole, ModelRequest, ModelResponse, ModelTokenUsage,
-    OPENAI_MAAP_FUNCTION_TOOL_NAME, ProviderCapabilities, ProviderHttpRequest,
-    ProviderHttpResponse, ProviderTranscriptEvent, Result, parse_fenced_maap_action_batch_for_turn,
-    parse_maap_action_batch_json_for_turn, provider_quota_usage_from_headers, validate_non_empty,
+    DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME,
+    MaapBatch, McpPromptTool, MezError, ModelInteractionKind, ModelMessageRole, ModelRequest,
+    ModelResponse, ModelTokenUsage, OPENAI_MAAP_FUNCTION_TOOL_NAME, ProviderCapabilities,
+    ProviderHttpRequest, ProviderHttpResponse, ProviderTranscriptEvent, Result,
+    parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
+    provider_quota_usage_from_headers, validate_non_empty,
+};
+use mez_agent::{
+    deepseek_chat_completions_endpoint_for_base_url, deepseek_models_endpoint_for_base_url,
+    parse_chat_completions_response_envelope, parse_sse_events,
 };
 use mez_agent::{maap_action_batch_schema, mcp_tool_manifest_for_description};
-use mez_agent::{parse_chat_completions_response_envelope, parse_sse_events};
 use std::collections::BTreeMap;
 
 /// DeepSeek request strategy for provider-native MAAP transport.
@@ -53,7 +56,7 @@ impl ChatCompletionsDialect for DeepSeekChatCompletionsDialect {
     }
 
     fn chat_endpoint_for_base_url(&self, base_url: &str) -> Result<String> {
-        deepseek_chat_completions_endpoint_for_base_url(base_url)
+        Ok(deepseek_chat_completions_endpoint_for_base_url(base_url)?)
     }
 
     fn build_chat_request(
@@ -216,19 +219,6 @@ pub fn build_deepseek_chat_completions_http_request(
         timeout_ms,
         deepseek_maap_request_strategy(request),
     )
-}
-
-/// Derives the DeepSeek Chat Completions endpoint from a configured base URL.
-pub(super) fn deepseek_chat_completions_endpoint_for_base_url(base_url: &str) -> Result<String> {
-    validate_non_empty("DeepSeek provider base URL", base_url)?;
-    let base_url = base_url.trim().trim_end_matches('/');
-    if base_url.ends_with("/chat/completions") {
-        return Ok(base_url.to_string());
-    }
-    if let Some(prefix) = base_url.strip_suffix("/models") {
-        return Ok(format!("{prefix}/chat/completions"));
-    }
-    Ok(format!("{base_url}/chat/completions"))
 }
 
 /// Builds a DeepSeek Chat Completions HTTP request with an explicit MAAP strategy.
@@ -1241,8 +1231,7 @@ pub(super) fn build_deepseek_models_http_request(
     if let Some(api_key) = api_key {
         validate_non_empty("DeepSeek model listing credential", api_key)?;
     }
-    let chat_endpoint = deepseek_chat_completions_endpoint_for_base_url(chat_endpoint)?;
-    let models_endpoint = chat_endpoint.replace("/chat/completions", "/models");
+    let models_endpoint = deepseek_models_endpoint_for_base_url(chat_endpoint)?;
     let mut headers = BTreeMap::new();
     headers.insert("Accept".to_string(), "application/json".to_string());
     if let Some(api_key) = api_key {
@@ -1250,11 +1239,7 @@ pub(super) fn build_deepseek_models_http_request(
     }
     Ok(ProviderHttpRequest {
         method: "GET".to_string(),
-        url: if models_endpoint == chat_endpoint {
-            DEEPSEEK_MODELS_ENDPOINT.to_string()
-        } else {
-            models_endpoint
-        },
+        url: models_endpoint,
         headers,
         body: String::new(),
         timeout_ms,
@@ -1291,45 +1276,6 @@ mod tests {
             stop: None,
             messages,
         }
-    }
-
-    /// Verifies configured DeepSeek base URLs expand to the current documented
-    /// Chat Completions and Models endpoints.
-    ///
-    /// User-facing configuration names this setting `base_url`, so callers must
-    /// be able to provide `https://api.deepseek.com` exactly as shown in the
-    /// DeepSeek SDK examples. Existing endpoint URLs remain accepted so tests
-    /// and advanced users can still target a proxy or explicit route.
-    #[test]
-    fn deepseek_base_url_derives_documented_chat_and_models_endpoints() {
-        assert_eq!(
-            deepseek_chat_completions_endpoint_for_base_url("https://api.deepseek.com").unwrap(),
-            "https://api.deepseek.com/chat/completions"
-        );
-        assert_eq!(
-            deepseek_chat_completions_endpoint_for_base_url("https://api.deepseek.com/").unwrap(),
-            "https://api.deepseek.com/chat/completions"
-        );
-        assert_eq!(
-            deepseek_chat_completions_endpoint_for_base_url(
-                "https://api.deepseek.com/chat/completions"
-            )
-            .unwrap(),
-            "https://api.deepseek.com/chat/completions"
-        );
-        assert_eq!(
-            deepseek_chat_completions_endpoint_for_base_url("https://proxy.example/models")
-                .unwrap(),
-            "https://proxy.example/chat/completions"
-        );
-
-        let models = build_deepseek_models_http_request(
-            Some("deepseek-key"),
-            "https://api.deepseek.com",
-            1000,
-        )
-        .unwrap();
-        assert_eq!(models.url, "https://api.deepseek.com/models");
     }
 
     /// Verifies DeepSeek usage parsing follows the documented nested reasoning
