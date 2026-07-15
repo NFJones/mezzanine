@@ -40,7 +40,7 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap semantic response".to_string(),
@@ -227,7 +227,7 @@ fn runtime_apply_patch_read_phase_truncation_dispatches_specific_error_plan() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap semantic response".to_string(),
@@ -372,7 +372,7 @@ fn runtime_apply_patch_uses_full_read_transport_when_preview_truncates() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap semantic response".to_string(),
@@ -530,7 +530,7 @@ fn runtime_agent_loop_continues_after_apply_patch_iteration() {
     assert!(start.contains(r#""kind":"mutated""#), "{start}");
     assert!(start.contains("state=running"), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap semantic response".to_string(),
@@ -578,7 +578,7 @@ fn runtime_agent_loop_continues_after_apply_patch_iteration() {
     }
     assert!(service.running_shell_transactions.is_empty());
     let completion_provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "done".to_string(),
@@ -825,7 +825,7 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
     .unwrap();
     let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "write transport failure".to_string(),

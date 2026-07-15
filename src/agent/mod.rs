@@ -11,7 +11,7 @@ use std::path::Path;
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::error::{MezError, Result};
-use mez_agent::{McpPromptTool, ModelProfile, RuleDecision};
+use mez_agent::{McpPromptTool, ModelProfile, ModelResponse, RuleDecision};
 
 /// Exposes the actions module boundary.
 ///
@@ -117,9 +117,7 @@ pub use prompt::{
 pub use provider::{
     AnthropicMessagesProvider, AsyncModelProvider, AsyncProviderHttpTransport,
     CHATGPT_ACCOUNT_ID_HEADER, ChatCompletionsProvider, ClaudeCodeProvider,
-    DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,
-    DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT, DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME,
-    DeepSeekChatCompletionsProvider, ModelResponse, OpenAiCompatibleChatCompletionsProvider,
+    DeepSeekChatCompletionsProvider, OpenAiCompatibleChatCompletionsProvider,
     OpenAiResponsesProvider, ReqwestProviderHttpTransport,
     anthropic_provider_from_auth_store_with_provider_options,
     build_deepseek_chat_completions_http_request, build_openai_models_http_request,

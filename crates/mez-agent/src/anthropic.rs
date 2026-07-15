@@ -19,6 +19,8 @@ use std::collections::BTreeMap;
 
 /// Default Anthropic Messages API version used when options omit one.
 pub const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
+/// Default Anthropic Messages API endpoint.
+pub const ANTHROPIC_MESSAGES_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 /// Conservative fallback output cap required by Anthropic Messages requests.
 pub const DEFAULT_ANTHROPIC_MAX_TOKENS: usize = 4096;
 /// Default prompt-caching policy for stable system prompt blocks.

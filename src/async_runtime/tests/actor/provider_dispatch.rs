@@ -198,7 +198,7 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
                 content: "print a marker".to_string(),
             }],
         },
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),
             raw_text: "shell command response".to_string(),

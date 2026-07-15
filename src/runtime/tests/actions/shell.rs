@@ -78,7 +78,7 @@ fn runtime_agent_shell_command_is_presented_before_pty_dispatch() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap shell response".to_string(),
@@ -226,7 +226,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
                     content: "run a command".to_string(),
                 }],
             },
-            response: crate::agent::ModelResponse {
+            response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
                 raw_text: "run shell".to_string(),
@@ -411,7 +411,7 @@ fn runtime_agent_shell_command_output_is_visible_in_verbose_mode() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap shell response".to_string(),
@@ -502,7 +502,7 @@ fn runtime_agent_shell_command_output_keeps_decoded_context() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap shell response".to_string(),
@@ -634,7 +634,7 @@ fn runtime_agent_shell_command_without_output_keeps_mez_framing_out_of_logs() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap shell response".to_string(),
@@ -746,7 +746,7 @@ fn runtime_agent_shell_command_preview_is_wrapped_and_capped() {
     assert!(start.contains(r#""state":"running""#), "{start}");
     let command = "printf 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu\\n'";
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap shell response".to_string(),
@@ -949,7 +949,7 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
     assert!(start.contains(r#""state":"running""#), "{start}");
     service.pending_agent_provider_tasks.remove("turn-1");
     let first_provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "failing shell".to_string(),
@@ -1072,7 +1072,7 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
 
     let second_provider = RuntimeRecordingProvider {
         provider: "runtime-batch",
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "corrected".to_string(),
@@ -1158,7 +1158,7 @@ fn runtime_shell_action_timeout_queues_model_self_correction() {
     .unwrap();
     let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "write file timed out".to_string(),
@@ -1238,7 +1238,7 @@ fn runtime_shell_command_heredoc_is_rejected_before_pane_dispatch() {
     assert!(start.contains(r#""state":"running""#), "{start}");
     service.pending_agent_provider_tasks.remove("turn-1");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "heredoc shell".to_string(),

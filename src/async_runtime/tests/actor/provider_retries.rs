@@ -1194,7 +1194,7 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
                 content: "write then inspect".to_string(),
             }],
         },
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),
             raw_text: "failed file action response".to_string(),

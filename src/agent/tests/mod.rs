@@ -17,12 +17,10 @@ use super::{
     AgentShellStore, AgentShellVisibility, AgentTurnExecution, AgentTurnLedger, AgentTurnRecord,
     AgentTurnRunner, AsyncModelProvider, AsyncProviderHttpTransport, CHATGPT_ACCOUNT_ID_HEADER,
     ContextBlock, ContextCachePolicy, ContextSourceKind, ContextStability,
-    DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,
-    DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS,
-    EnvironmentSignature, MarkerToken, McpActionExecutor, ModelMessage, ModelMessageRole,
-    ModelProfile, ModelProvider, ModelResponse, OpenAiResponsesProvider, PaneShellExecutor,
-    ProviderHttpTransport, Result, ShellClassification, ShellExecutionOutput,
-    ShellExecutionRequest, ShellTransaction, ShellTransactionInput,
+    DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MarkerToken, McpActionExecutor,
+    ModelMessage, ModelMessageRole, ModelProfile, ModelProvider, ModelResponse,
+    OpenAiResponsesProvider, PaneShellExecutor, ProviderHttpTransport, Result, ShellClassification,
+    ShellExecutionOutput, ShellExecutionRequest, ShellTransaction, ShellTransactionInput,
     ShellTransactionOutputTransport, ToolDiscoveryCache, ToolInventory,
     action_result_context_content, agent_subshell_enter_command, append_mcp_context,
     append_memory_context, append_permission_policy_context, append_project_guidance_context,
@@ -69,6 +67,10 @@ use mez_agent::{
     openai_prompt_cache_diagnostics_for_request, openai_responses_endpoint_for_base_url,
     openai_responses_request_body, openai_stable_prefix_material_for_request,
     provider_quota_usage_from_headers, shell_quote,
+};
+use mez_agent::{
+    DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,
+    DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME,
 };
 use std::cell::RefCell;
 use std::collections::BTreeSet;

@@ -338,7 +338,7 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
     }
     let action_count = actions.len();
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap config response".to_string(),
@@ -447,7 +447,7 @@ fn runtime_config_change_resumes_after_full_access_change() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap config response".to_string(),

@@ -46,6 +46,8 @@ pub mod mcp;
 pub mod memory;
 /// Provider-independent model profile records and selection policy.
 pub mod model_profile;
+/// Provider-independent successful model response contract.
+pub mod model_response;
 /// OpenAI request rendering and prompt-cache diagnostics.
 pub mod openai_cache;
 /// Provider-independent OpenAI-compatible Chat Completions request shaping.
@@ -104,11 +106,11 @@ pub use agent_shell::{
     validate_agent_shell_required,
 };
 pub use anthropic::{
-    AnthropicMessagesOptions, AnthropicMessagesResponse, AnthropicResponseError,
-    DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_PROMPT_CACHING, DEFAULT_ANTHROPIC_VERSION,
-    anthropic_messages_endpoint_for_base_url, anthropic_messages_request_body,
-    anthropic_provider_failure_json, anthropic_request_requires_maap,
-    parse_anthropic_messages_provider_body,
+    ANTHROPIC_MESSAGES_ENDPOINT, AnthropicMessagesOptions, AnthropicMessagesResponse,
+    AnthropicResponseError, DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_PROMPT_CACHING,
+    DEFAULT_ANTHROPIC_VERSION, anthropic_messages_endpoint_for_base_url,
+    anthropic_messages_request_body, anthropic_provider_failure_json,
+    anthropic_request_requires_maap, parse_anthropic_messages_provider_body,
 };
 pub use auth::{ProviderAuthMetadata, ProviderCredentialKind, ProviderCredentialSource};
 pub use config_change::{
@@ -173,6 +175,7 @@ pub use model_profile::{
     ModelProfile, ModelProfileOverrideSource, ModelProfileOverrides, SelectedModelProfile,
     select_model_profile, validate_model_profile_request,
 };
+pub use model_response::ModelResponse;
 pub use openai_cache::{
     openai_prompt_cache_diagnostics_for_request,
     openai_prompt_cache_diagnostics_for_request_with_stream,

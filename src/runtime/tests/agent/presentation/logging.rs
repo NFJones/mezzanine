@@ -29,7 +29,7 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
     assert!(start.contains(r#""state":"running""#), "{start}");
 
     let first_provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "progress".to_string(),
@@ -96,7 +96,7 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
 
     let second_provider = RuntimeRecordingProvider {
         provider: "runtime-batch",
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "done".to_string(),
@@ -153,7 +153,7 @@ fn runtime_agent_keeps_redundant_progress_say_updates_visible() {
 
     let first_progress = "The selector bug is in the real resume pager path.";
     let first_provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "progress".to_string(),
@@ -192,7 +192,7 @@ fn runtime_agent_keeps_redundant_progress_say_updates_visible() {
     let duplicate_progress = "The surviving selector bug is still in the real resume pager path.";
     let final_text = "The fix is complete.";
     let second_provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "done".to_string(),

@@ -28,7 +28,7 @@ fn runtime_agent_suppresses_batch_rationale_that_duplicates_say_text() {
     assert!(start.contains(r#""state":"running""#), "{start}");
     let visible = "I will handle the next step.";
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap say and complete response".to_string(),
@@ -114,7 +114,7 @@ fn runtime_agent_verbose_mode_injects_low_level_status_lines() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap say response".to_string(),
@@ -204,7 +204,7 @@ fn runtime_agent_thinking_mode_injects_action_rationales() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap say response".to_string(),
@@ -290,7 +290,7 @@ fn runtime_agent_trace_mode_prints_maap_request_response_and_results() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "trace-maap-raw-response".to_string(),
@@ -389,7 +389,7 @@ fn runtime_agent_debug_mode_prints_maap_without_shell_view() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "debug-maap-raw-response with debug-secret-command".to_string(),
@@ -486,7 +486,7 @@ fn runtime_agent_suppresses_redundant_same_turn_rationale() {
     assert!(start.contains(r#""state":"running""#), "{start}");
 
     let first_provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "owner located".to_string(),
@@ -524,7 +524,7 @@ fn runtime_agent_suppresses_redundant_same_turn_rationale() {
 
     let second_provider = RuntimeRecordingProvider {
         provider: "runtime-batch",
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "done".to_string(),
@@ -616,7 +616,7 @@ fn runtime_batch_thought_is_hidden_until_verbose_logging() {
         );
         assert!(start.contains(r#""state":"running""#), "{start}");
         let provider = RuntimeBatchProvider {
-            response: crate::agent::ModelResponse {
+            response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
                 raw_text: "done".to_string(),

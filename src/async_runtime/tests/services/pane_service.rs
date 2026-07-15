@@ -787,7 +787,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                     content: "print a marker".to_string(),
                 }],
             },
-            response: crate::agent::ModelResponse {
+            response: mez_agent::ModelResponse {
                 provider: task.model_profile.provider.clone(),
                 model: task.model_profile.model.clone(),
                 raw_text: "shell command response".to_string(),
@@ -932,7 +932,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                     content: "print a second marker".to_string(),
                 }],
             },
-            response: crate::agent::ModelResponse {
+            response: mez_agent::ModelResponse {
                 provider: next_task.model_profile.provider.clone(),
                 model: next_task.model_profile.model.clone(),
                 raw_text: "second shell command response".to_string(),

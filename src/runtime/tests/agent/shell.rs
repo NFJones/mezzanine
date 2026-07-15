@@ -1934,7 +1934,7 @@ fn runtime_agent_shell_planning_failure_hides_command_by_default() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap shell response".to_string(),

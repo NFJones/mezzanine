@@ -671,7 +671,7 @@ fn runtime_executes_memory_actions_and_audits_action_arguments() {
     };
     let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture("turn-1"),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "using memory".to_string(),
@@ -812,7 +812,7 @@ fn runtime_memory_store_rejects_episode_and_scratch_kinds() {
         .collect::<Vec<_>>();
     let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture("turn-1"),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "using memory".to_string(),
@@ -935,7 +935,7 @@ fn runtime_memory_disabled_failure_tells_model_to_continue_without_retrying_memo
     };
     let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture("turn-1"),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "using memory".to_string(),

@@ -438,7 +438,7 @@ fn runtime_explicit_skill_prompt_rejects_redundant_call_skill_loop() {
         .pending_agent_provider_tasks
         .remove(&started.turn_id);
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "load create skill again".to_string(),
@@ -537,7 +537,7 @@ fn runtime_explicit_skill_prompt_rejects_redundant_skill_catalog_lookup() {
         .pending_agent_provider_tasks
         .remove(&started.turn_id);
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "request skills again".to_string(),

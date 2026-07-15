@@ -6,15 +6,16 @@
 
 use super::chat_completions::ChatCompletionsDialect;
 use super::{
-    ANTHROPIC_MESSAGES_ENDPOINT, MezError, ModelRequest, ModelResponse, ProviderHttpRequest,
-    ProviderHttpResponse, Result, provider_quota_usage_from_headers, validate_non_empty,
+    MezError, ModelRequest, ModelResponse, ProviderHttpRequest, ProviderHttpResponse, Result,
+    provider_quota_usage_from_headers, validate_non_empty,
 };
 #[cfg(test)]
 use mez_agent::MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME;
 use mez_agent::{
-    AnthropicMessagesOptions, AnthropicMessagesResponse, anthropic_messages_endpoint_for_base_url,
-    anthropic_messages_request_body, anthropic_provider_failure_json,
-    anthropic_request_requires_maap, parse_anthropic_messages_provider_body,
+    ANTHROPIC_MESSAGES_ENDPOINT, AnthropicMessagesOptions, AnthropicMessagesResponse,
+    anthropic_messages_endpoint_for_base_url, anthropic_messages_request_body,
+    anthropic_provider_failure_json, anthropic_request_requires_maap,
+    parse_anthropic_messages_provider_body,
 };
 use std::collections::BTreeMap;
 

@@ -40,7 +40,7 @@ fn runtime_mixed_say_and_file_mutation_defers_say_until_after_diff() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap semantic response".to_string(),
@@ -192,7 +192,7 @@ fn runtime_agent_diff_say_renders_file_aware_syntax_spans() {
     assert!(start.contains(r#""state":"running""#), "{start}");
     let diff = "diff -- update file\n--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1,1 +1,1 @@\n-fn old() {}\n+fn new() {}";
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "diff say response".to_string(),
@@ -284,7 +284,7 @@ fn runtime_agent_complete_without_say_reports_visible_completion_status() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap complete response".to_string(),

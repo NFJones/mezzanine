@@ -47,7 +47,7 @@ fn runtime_provider_completion_accepts_controller_failure_summary_state() {
     );
     let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "openai".to_string(),
             model: "test".to_string(),
             raw_text:
@@ -116,7 +116,7 @@ fn runtime_provider_completion_accepts_terminal_maap_validation_failure_state() 
     };
     let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "openai".to_string(),
             model: "test".to_string(),
             raw_text: "bad maap action\nmaap_validation_error: unavailable server".to_string(),
@@ -173,7 +173,7 @@ fn runtime_provider_completion_rejects_nonterminal_missing_batch_state() {
         .expect("started turn should be recorded");
     let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "openai".to_string(),
             model: "test".to_string(),
             raw_text: "plain text without MAAP".to_string(),
@@ -224,7 +224,7 @@ fn runtime_provider_completion_rejects_empty_nonfinal_batch_state() {
         .expect("started turn should be recorded");
     let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "openai".to_string(),
             model: "test".to_string(),
             raw_text: "empty batch".to_string(),
@@ -533,7 +533,7 @@ fn runtime_maap_validation_failure_persists_provider_response_detail() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "bad maap action".to_string(),
@@ -641,7 +641,7 @@ fn runtime_provider_failure_after_nonzero_shell_result_does_not_report_running_r
     assert!(start.contains(r#""state":"running""#), "{start}");
     service.pending_agent_provider_tasks.remove("turn-1");
     let first_provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "failing shell".to_string(),
@@ -836,7 +836,7 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
     }];
     let execution = crate::agent::AgentTurnExecution {
         request,
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "provider docs fetch batch".to_string(),

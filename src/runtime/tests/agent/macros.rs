@@ -291,7 +291,7 @@ fn runtime_agent_macro_judge_dispatches_next_step_after_child_result() {
     );
 
     let judge_provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: r#"{"outcome":"continue","step_success":true,"rationale":"step one satisfied its intent","adapted_prompt":null,"user_message":null}"#.to_string(),
@@ -422,7 +422,7 @@ fn runtime_agent_macro_judge_retries_current_step_after_child_result() {
     );
 
     let judge_provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: r#"{"outcome":"retry_current_step","step_success":false,"rationale":"subagent asked for clarification but can retry with a direct prompt","adapted_prompt":"Inspect release notes directly and list blockers.","user_message":null}"#
@@ -550,7 +550,7 @@ fn runtime_agent_macro_judge_stop_failure_closes_successful_child_subagent() {
     );
 
     let judge_provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: r#"{"outcome":"stop_failure","step_success":false,"rationale":"child asked for clarification instead of inspecting","adapted_prompt":null,"user_message":"the subagent did not perform the requested inspection"}"#
@@ -685,7 +685,7 @@ fn runtime_agent_macro_judge_finish_success_closes_child_subagent_and_completes_
     );
 
     let judge_provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: r#"{"outcome":"finish_success","step_success":true,"rationale":"the only scripted step completed successfully","adapted_prompt":null,"user_message":null}"#
@@ -814,7 +814,7 @@ fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
         parent.turn_id.clone(),
         crate::agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&parent.turn_id, &parent.agent_id),
-            response: crate::agent::ModelResponse {
+            response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
                 raw_text: "send macro step".to_string(),

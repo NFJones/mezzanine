@@ -496,7 +496,7 @@ context_window_tokens = 64000
     service.pending_agent_provider_tasks.remove("turn-1");
     let provider = RuntimeRecordingProvider {
         provider: "runtime-batch",
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "done".to_string(),
@@ -736,7 +736,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
         parent.turn_id.clone(),
         crate::agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&parent.turn_id, &parent.agent_id),
-            response: crate::agent::ModelResponse {
+            response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
                 raw_text: "spawn children".to_string(),

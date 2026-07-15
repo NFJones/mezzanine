@@ -343,7 +343,7 @@ fn runtime_action_failure_retry_budget_is_per_failed_action() {
     .unwrap();
     let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture("turn-1"),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "two failed network fetches".to_string(),
@@ -411,7 +411,7 @@ fn runtime_cancelled_action_does_not_queue_failure_feedback() {
     assert!(start.contains(r#""state":"running""#), "{start}");
     service.pending_agent_provider_tasks.remove("turn-1");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "abort".to_string(),

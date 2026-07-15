@@ -154,7 +154,7 @@ fn runtime_agent_shell_copy_writes_latest_say_text_to_destinations() {
         .unwrap();
     assert_eq!(started.state, AgentTurnState::Running);
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "raw transport envelope should not be copied".to_string(),
@@ -321,7 +321,7 @@ fn runtime_agent_copy_trace_log_retains_hidden_trace_and_writes_destinations() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "trace raw sentinel".to_string(),
@@ -558,7 +558,7 @@ fn runtime_agent_copy_patches_writes_retained_patches_to_destinations() {
         mez_agent::ActionResult::succeeded(&turn, &action, vec!["patch applied".to_string()], None);
     let execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap patch response".to_string(),
@@ -682,7 +682,7 @@ fn runtime_agent_copy_patches_retains_reused_action_id_attempts() {
     let build_execution =
         |patch: &str, result: mez_agent::ActionResult| crate::agent::AgentTurnExecution {
             request: runtime_model_request_fixture(&turn.turn_id),
-            response: crate::agent::ModelResponse {
+            response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
                 raw_text: format!("patch attempt for {}", result.action_id),

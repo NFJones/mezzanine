@@ -238,7 +238,7 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
                 content: "list files".to_string(),
             }],
         },
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),
             raw_text: "shell command response".to_string(),
@@ -418,7 +418,7 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
                 content: "research patch behavior".to_string(),
             }],
         },
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),
             raw_text: "network completion response".to_string(),
@@ -550,7 +550,7 @@ async fn async_provider_worker_executes_network_actions_before_actor_completion(
                 content: "research provider docs".to_string(),
             }],
         },
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "fetch local file".to_string(),

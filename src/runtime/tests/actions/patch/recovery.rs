@@ -61,7 +61,7 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
     );
     let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "invalid patch".to_string(),
@@ -221,7 +221,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_guides_context_refresh() {
     );
     let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "hunk mismatch patch".to_string(),
@@ -418,7 +418,7 @@ fn runtime_apply_patch_replacement_hint_recovery_guides_reconcile_or_skip() {
     );
     let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "replacement hint patch".to_string(),
@@ -551,7 +551,7 @@ fn runtime_apply_patch_missing_anchor_recovery_guides_anchor_refresh() {
     );
     let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "missing anchor patch".to_string(),
@@ -678,7 +678,7 @@ fn runtime_apply_patch_candidate_region_recovery_guides_ambiguous_ranges() {
     );
     let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "ambiguous candidate patch".to_string(),
@@ -773,7 +773,7 @@ fn runtime_apply_patch_write_phase_hunk_mismatch_queues_model_recovery() {
     assert!(start.contains(r#""state":"running""#), "{start}");
     service.pending_agent_provider_tasks.remove("turn-1");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "patch response".to_string(),
@@ -967,7 +967,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_is_unbounded_and_hides_retry_budge
         );
         crate::agent::AgentTurnExecution {
             request: runtime_model_request_fixture(&turn.turn_id),
-            response: crate::agent::ModelResponse {
+            response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
                 raw_text: raw_text.to_string(),
@@ -1129,7 +1129,7 @@ fn runtime_apply_patch_unsafe_path_recovery_guides_relative_headers() {
     );
     let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "absolute path patch".to_string(),
@@ -1280,7 +1280,7 @@ fn runtime_unrecovered_apply_patch_failure_logs_terminal_observation() {
     );
     let execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture("turn-1"),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "failed patch".to_string(),

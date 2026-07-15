@@ -546,7 +546,7 @@ fn runtime_bash_agent_shell_transaction_keeps_parent_shell_alive() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap shell response".to_string(),
@@ -665,7 +665,7 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap shell response".to_string(),
@@ -719,7 +719,7 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
     assert!(service.pane_processes().contains_pane("%1"));
     if !service.pending_agent_provider_tasks().is_empty() {
         let completion_provider = RuntimeBatchProvider {
-            response: crate::agent::ModelResponse {
+            response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
                 raw_text: "done".to_string(),
@@ -785,7 +785,7 @@ fn runtime_shell_transaction_metadata_mismatch_fails_live_action() {
     assert!(start.contains(r#""state":"running""#), "{start}");
     service.pending_agent_provider_tasks.remove("turn-1");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "shell".to_string(),
@@ -1000,7 +1000,7 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
     assert!(start.contains(r#""state":"running""#), "{start}");
     service.pending_agent_provider_tasks.remove("turn-1");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "shell action".to_string(),

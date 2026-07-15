@@ -435,7 +435,7 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
     };
     let execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "shell batch".to_string(),

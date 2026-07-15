@@ -5,9 +5,9 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    BTreeMap, ExposeSecret, MaapBatch, MezError, ModelInteractionKind, ModelMessageRole,
-    ProviderTranscriptEvent, Result, SecretString, parse_fenced_maap_action_batch_for_turn,
-    parse_maap_action_batch_json_for_turn, validate_non_empty,
+    BTreeMap, ExposeSecret, MaapBatch, MezError, ModelInteractionKind, ModelMessageRole, Result,
+    SecretString, parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
+    validate_non_empty,
 };
 use std::future::Future;
 use std::pin::Pin;
@@ -38,12 +38,12 @@ pub use http::ProviderHttpTransport;
 pub use http::{AsyncProviderHttpTransport, ReqwestProviderHttpTransport};
 #[cfg(test)]
 use mez_agent::ANTHROPIC_MESSAGES_API;
+use mez_agent::provider_quota_usage_from_headers;
 use mez_agent::{
-    DEFAULT_PROVIDER_TIMEOUT_MS, ModelRequest, ModelTokenUsage, ProviderApiCompatibility,
-    ProviderAuthMetadata, ProviderCredentialKind, ProviderCredentialSource, ProviderHttpRequest,
-    ProviderHttpResponse, ProviderModelCatalog,
+    DEFAULT_PROVIDER_TIMEOUT_MS, ModelRequest, ModelResponse, ModelTokenUsage,
+    ProviderApiCompatibility, ProviderAuthMetadata, ProviderCredentialKind,
+    ProviderCredentialSource, ProviderHttpRequest, ProviderHttpResponse, ProviderModelCatalog,
 };
-use mez_agent::{ProviderQuotaUsage, provider_quota_usage_from_headers};
 #[cfg(test)]
 use mez_agent::{maap_mcp_call_action_schema_for_tool, normalize_openai_strict_schema};
 use mez_agent::{
@@ -58,13 +58,6 @@ use mez_agent::{
 use openai_chat_completions::OpenAiChatCompletionsDialect;
 
 use mez_agent::{CHATGPT_RESPONSES_ENDPOINT, OPENAI_RESPONSES_ENDPOINT};
-pub use mez_agent::{
-    DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,
-    DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT, DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME,
-};
-/// Default Anthropic Messages API endpoint.
-#[allow(dead_code)]
-pub const ANTHROPIC_MESSAGES_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 /// OpenAI organization routing header for multi-organization API keys.
 pub const OPENAI_ORGANIZATION_HEADER: &str = "OpenAI-Organization";
 /// OpenAI project routing header for project-scoped API accounting.
@@ -76,46 +69,6 @@ pub const CHATGPT_ACCOUNT_ID_HEADER: &str = "ChatGPT-Account-ID";
 pub fn effective_provider_api(kind: &str, api: Option<&str>) -> Result<ProviderApiCompatibility> {
     resolve_provider_api(kind, api).map_err(|error| MezError::config(error.to_string()))
 }
-/// Carries Model Response state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModelResponse {
-    /// Stores the provider value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub provider: String,
-    /// Stores the model value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub model: String,
-    /// Stores the raw text value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub raw_text: String,
-    /// Provider-reported token usage for the request or accumulated exchange.
-    pub usage: ModelTokenUsage,
-    /// Provider-reported usage for the last concrete request that produced this
-    /// response when `usage` carries an accumulated total.
-    pub latest_request_usage: Option<ModelTokenUsage>,
-    /// Provider-reported quota usage percentages for the request.
-    pub quota_usage: Vec<ProviderQuotaUsage>,
-    /// Stores the action batch value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub action_batch: Option<MaapBatch>,
-    /// Hidden provider-native transcript events required for future requests.
-    ///
-    /// Provider adapters populate this only when the provider API requires
-    /// non-neutral message fields to be replayed for multi-turn correctness.
-    pub provider_transcript_events: Vec<ProviderTranscriptEvent>,
-}
-
 /// Defines the Model Provider behavior contract for this subsystem.
 ///
 /// Implementors provide the concrete I/O or state transition boundary

@@ -184,7 +184,7 @@ fn runtime_agent_prompt_and_say_response_are_interleaved_in_pane_buffer() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "maap say response".to_string(),

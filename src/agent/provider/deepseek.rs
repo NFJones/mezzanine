@@ -7,12 +7,12 @@
 use super::chat_completions::{ChatCompletionsDialect, ChatCompletionsRetry};
 use super::errors::provider_maap_parse_error;
 use super::{
-    DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,
-    DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME, MezError, ModelRequest, ModelResponse,
-    ProviderHttpRequest, ProviderHttpResponse, Result, provider_quota_usage_from_headers,
-    validate_non_empty,
+    MezError, ModelRequest, ModelResponse, ProviderHttpRequest, ProviderHttpResponse, Result,
+    provider_quota_usage_from_headers, validate_non_empty,
 };
 use mez_agent::{
+    DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,
+    DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT, DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME,
     DeepSeekMaapRequestStrategy, DeepSeekResponse, deepseek_chat_completions_endpoint_for_base_url,
     deepseek_chat_completions_request_body_with_strategy, deepseek_effective_stream,
     deepseek_maap_request_strategy, deepseek_models_endpoint_for_base_url,
@@ -31,7 +31,7 @@ impl ChatCompletionsDialect for DeepSeekChatCompletionsDialect {
     }
 
     fn default_chat_endpoint(&self) -> &'static str {
-        super::DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT
+        DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT
     }
 
     fn provider_label(&self) -> &'static str {

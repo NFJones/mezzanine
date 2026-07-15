@@ -93,7 +93,7 @@ fn runtime_action_pressure_context_reaches_provider_continuation() {
 
     let second_provider = RuntimeRecordingProvider {
         provider: "runtime-batch",
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "done".to_string(),
@@ -235,7 +235,7 @@ fn runtime_stale_joined_spawn_result_is_unreachable_progress() {
         parent.turn_id.clone(),
         crate::agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&parent.turn_id, &parent.agent_id),
-            response: crate::agent::ModelResponse {
+            response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
                 raw_text: "spawn child".to_string(),
@@ -370,7 +370,7 @@ fn runtime_unrecovered_failure_with_pending_sibling_explains_blocker() {
     );
     let execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "partial batch".to_string(),
@@ -467,7 +467,7 @@ fn runtime_unrecovered_non_correctable_failure_explains_boundary() {
     .unwrap();
     let execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "denied write".to_string(),
@@ -602,7 +602,7 @@ fn runtime_spawn_limit_denial_queues_model_recovery() {
     .unwrap();
     let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "spawn over capacity".to_string(),

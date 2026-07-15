@@ -170,7 +170,7 @@ async fn async_actor_applies_agent_provider_completion_events() {
                 content: "summarize the pane".to_string(),
             }],
         },
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),
             raw_text: "Typed completion applied.".to_string(),
@@ -348,7 +348,7 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
                 content: "summarize the pane".to_string(),
             }],
         },
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),
             raw_text: "Typed transcript completion.".to_string(),

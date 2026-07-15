@@ -580,7 +580,7 @@ async fn runtime_executes_accepted_stdio_mcp_action_and_audits_call() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "calling mcp".to_string(),
@@ -689,7 +689,7 @@ async fn runtime_full_access_executes_prompt_stdio_mcp_action() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "calling mcp".to_string(),
@@ -783,7 +783,7 @@ async fn runtime_nonfinal_mcp_action_queues_provider_continuation() {
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let first_provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "calling mcp".to_string(),
@@ -833,7 +833,7 @@ async fn runtime_nonfinal_mcp_action_queues_provider_continuation() {
 
     let second_provider = RuntimeRecordingProvider {
         provider: "runtime-batch",
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "done".to_string(),

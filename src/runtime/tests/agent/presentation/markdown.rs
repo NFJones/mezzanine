@@ -27,7 +27,7 @@ fn runtime_agent_plain_say_does_not_render_markdown_divider() {
     assert!(start.contains(r#""state":"running""#), "{start}");
     let plain = "Plain say output without markdown framing.";
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "plain say response".to_string(),
@@ -109,7 +109,7 @@ fn runtime_agent_markdown_say_renders_styled_presentation_and_copies_raw_markdow
     assert!(start.contains(r#""state":"running""#), "{start}");
     let markdown = "**Important** and <u>underlined</u>\n- first";
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "markdown say response".to_string(),

@@ -8,7 +8,6 @@
 use super::*;
 #[cfg(test)]
 use crate::agent::ModelProvider;
-use crate::agent::ModelResponse;
 use crate::macros::{MacroCatalog, MacroDefinition, discover_macro_catalog, load_macro_definition};
 use crate::project::TrustDecision;
 use crate::runtime::agent_state::RuntimeAgentLoopCompletion;
@@ -20,6 +19,7 @@ use crate::runtime::{
     AgentShellCommandOutcome, AgentShellRuntimeContext, RuntimeAgentPromptTurnStart,
     execute_agent_shell_command_with_context,
 };
+use mez_agent::ModelResponse;
 use mez_agent::{
     AllowedActionSet, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile,
     ModelRequest,

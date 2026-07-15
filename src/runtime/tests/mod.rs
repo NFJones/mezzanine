@@ -297,11 +297,8 @@ impl ModelProvider for RuntimeEchoProvider {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn send_request(
-        &self,
-        request: &mez_agent::ModelRequest,
-    ) -> Result<crate::agent::ModelResponse> {
-        Ok(crate::agent::ModelResponse {
+    fn send_request(&self, request: &mez_agent::ModelRequest) -> Result<mez_agent::ModelResponse> {
+        Ok(mez_agent::ModelResponse {
             provider: self.provider_id().to_string(),
             model: request.model.clone(),
             raw_text: "done".to_string(),
@@ -335,10 +332,7 @@ impl ModelProvider for RuntimeFailingProvider {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn send_request(
-        &self,
-        _request: &mez_agent::ModelRequest,
-    ) -> Result<crate::agent::ModelResponse> {
+    fn send_request(&self, _request: &mez_agent::ModelRequest) -> Result<mez_agent::ModelResponse> {
         Err(MezError::invalid_state("provider API request failed").with_provider_failure_json(
             r#"{"status_code":400,"error":{"message":"stream must be set to true","type":"invalid_request_error","code":"missing_required_parameter"}}"#,
         ))
@@ -366,10 +360,7 @@ impl ModelProvider for RuntimeProviderRawTextFailingProvider {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn send_request(
-        &self,
-        _request: &mez_agent::ModelRequest,
-    ) -> Result<crate::agent::ModelResponse> {
+    fn send_request(&self, _request: &mez_agent::ModelRequest) -> Result<mez_agent::ModelResponse> {
         Err(
             MezError::invalid_args("provider MAAP output is malformed: missing turn_id")
                 .with_provider_raw_text("{\"protocol\":\"maap/1\",\"actions\":[]}")
@@ -389,7 +380,7 @@ struct RuntimeBatchProvider {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    response: crate::agent::ModelResponse,
+    response: mez_agent::ModelResponse,
 }
 
 /// Carries Runtime Batch Failing Provider state for this subsystem.
@@ -413,10 +404,7 @@ impl ModelProvider for RuntimeBatchFailingProvider {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn send_request(
-        &self,
-        _request: &mez_agent::ModelRequest,
-    ) -> Result<crate::agent::ModelResponse> {
+    fn send_request(&self, _request: &mez_agent::ModelRequest) -> Result<mez_agent::ModelResponse> {
         Err(MezError::invalid_state(
             "provider continuation failed after shell command result",
         ))
@@ -430,7 +418,7 @@ impl ModelProvider for RuntimeBatchFailingProvider {
 /// non-executing capability round-trip first, so test providers synthesize that
 /// request when their fixed response contains executable actions.
 fn runtime_capability_for_response(
-    response: &crate::agent::ModelResponse,
+    response: &mez_agent::ModelResponse,
 ) -> Option<mez_agent::AgentCapability> {
     response
         .action_batch
@@ -478,8 +466,8 @@ fn runtime_capability_response(
     provider_id: &str,
     request: &mez_agent::ModelRequest,
     capability: mez_agent::AgentCapability,
-) -> crate::agent::ModelResponse {
-    crate::agent::ModelResponse {
+) -> mez_agent::ModelResponse {
+    mez_agent::ModelResponse {
         provider: provider_id.to_string(),
         model: request.model.clone(),
         raw_text: format!("request {}", capability.as_str()),
@@ -538,10 +526,7 @@ impl ModelProvider for RuntimeBatchProvider {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn send_request(
-        &self,
-        request: &mez_agent::ModelRequest,
-    ) -> Result<crate::agent::ModelResponse> {
+    fn send_request(&self, request: &mez_agent::ModelRequest) -> Result<mez_agent::ModelResponse> {
         if request.interaction_kind == mez_agent::ModelInteractionKind::CapabilityDecision
             && let Some(capability) = runtime_capability_for_response(&self.response)
         {
@@ -556,11 +541,7 @@ impl ModelProvider for RuntimeBatchProvider {
 }
 
 /// Builds a simple `say` response for runtime provider tests.
-fn runtime_say_response(
-    turn_id: &str,
-    text: &str,
-    final_turn: bool,
-) -> crate::agent::ModelResponse {
+fn runtime_say_response(turn_id: &str, text: &str, final_turn: bool) -> mez_agent::ModelResponse {
     runtime_say_response_for_agent(turn_id, "agent-%1", text, final_turn)
 }
 
@@ -570,8 +551,8 @@ fn runtime_say_response_for_agent(
     agent_id: &str,
     text: &str,
     final_turn: bool,
-) -> crate::agent::ModelResponse {
-    crate::agent::ModelResponse {
+) -> mez_agent::ModelResponse {
+    mez_agent::ModelResponse {
         provider: "runtime-batch".to_string(),
         model: "test".to_string(),
         raw_text: text.to_string(),
@@ -667,7 +648,7 @@ struct RuntimeRecordingProvider {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    response: crate::agent::ModelResponse,
+    response: mez_agent::ModelResponse,
     /// Stores the last request value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -690,10 +671,7 @@ impl ModelProvider for RuntimeRecordingProvider {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    fn send_request(
-        &self,
-        request: &mez_agent::ModelRequest,
-    ) -> Result<crate::agent::ModelResponse> {
+    fn send_request(&self, request: &mez_agent::ModelRequest) -> Result<mez_agent::ModelResponse> {
         *self.last_request.borrow_mut() = Some(request.clone());
         if request.interaction_kind == mez_agent::ModelInteractionKind::CapabilityDecision
             && let Some(capability) = runtime_capability_for_response(&self.response)
@@ -722,10 +700,7 @@ impl ModelProvider for RuntimeContextLimitThenSuccessProvider {
     }
 
     /// Returns one context-limit error, then a successful completion response.
-    fn send_request(
-        &self,
-        request: &mez_agent::ModelRequest,
-    ) -> Result<crate::agent::ModelResponse> {
+    fn send_request(&self, request: &mez_agent::ModelRequest) -> Result<mez_agent::ModelResponse> {
         let mut requests = self.requests.borrow_mut();
         requests.push(request.clone());
         if requests.len() == 1 {
@@ -736,7 +711,7 @@ impl ModelProvider for RuntimeContextLimitThenSuccessProvider {
                 r#"{"status_code":400,"error":{"message":"This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens. Please reduce the length of the messages.","type":"invalid_request_error","code":"context_length_exceeded"}}"#,
             ));
         }
-        Ok(crate::agent::ModelResponse {
+        Ok(mez_agent::ModelResponse {
             provider: self.provider_id().to_string(),
             model: request.model.clone(),
             raw_text: "done after compaction".to_string(),
@@ -763,10 +738,7 @@ impl ModelProvider for RuntimeContextWindowErrorProvider {
     }
 
     /// Returns one context-window error, then a successful completion response.
-    fn send_request(
-        &self,
-        request: &mez_agent::ModelRequest,
-    ) -> Result<crate::agent::ModelResponse> {
+    fn send_request(&self, request: &mez_agent::ModelRequest) -> Result<mez_agent::ModelResponse> {
         let mut requests = self.requests.borrow_mut();
         requests.push(request.clone());
         if requests.len() == 1 {
@@ -774,7 +746,7 @@ impl ModelProvider for RuntimeContextWindowErrorProvider {
                 "Your input exceeds the context window of this model. Please adjust your input and try again.",
             ));
         }
-        Ok(crate::agent::ModelResponse {
+        Ok(mez_agent::ModelResponse {
             provider: self.provider_id().to_string(),
             model: request.model.clone(),
             raw_text: "done after compaction".to_string(),
@@ -801,10 +773,7 @@ impl ModelProvider for RuntimeOutputLimitThenSuccessProvider {
     }
 
     /// Returns two output-limit errors, then a successful completion response.
-    fn send_request(
-        &self,
-        request: &mez_agent::ModelRequest,
-    ) -> Result<crate::agent::ModelResponse> {
+    fn send_request(&self, request: &mez_agent::ModelRequest) -> Result<mez_agent::ModelResponse> {
         let mut requests = self.requests.borrow_mut();
         requests.push(request.clone());
         if requests.len() <= 2 {
@@ -815,7 +784,7 @@ impl ModelProvider for RuntimeOutputLimitThenSuccessProvider {
                 r#"{"incomplete_details":{"reason":"max_output_tokens"}}"#,
             ));
         }
-        Ok(crate::agent::ModelResponse {
+        Ok(mez_agent::ModelResponse {
             provider: self.provider_id().to_string(),
             model: request.model.clone(),
             raw_text: "done after compact retry".to_string(),
@@ -843,13 +812,10 @@ impl ModelProvider for RuntimeAutoSizingProvider {
 
     /// Returns a structured router decision for auto-sizing requests and a
     /// simple `say` response for the selected model request.
-    fn send_request(
-        &self,
-        request: &mez_agent::ModelRequest,
-    ) -> Result<crate::agent::ModelResponse> {
+    fn send_request(&self, request: &mez_agent::ModelRequest) -> Result<mez_agent::ModelResponse> {
         self.requests.borrow_mut().push(request.clone());
         if request.interaction_kind == mez_agent::ModelInteractionKind::AutoSizing {
-            return Ok(crate::agent::ModelResponse {
+            return Ok(mez_agent::ModelResponse {
                 provider: self.provider_id().to_string(),
                 model: request.model.clone(),
                 raw_text: r#"{"version":1,"size":"large","reasoning_effort":"high","confidence":0.92,"rationale":"multi-file feature work"}"#.to_string(),
@@ -1070,8 +1036,8 @@ fn wait_for_any_tracked_pane_activity_after(
 }
 
 /// Builds the synthetic model response used by compaction completion tests.
-fn runtime_test_compaction_response(summary: &str) -> crate::agent::ModelResponse {
-    crate::agent::ModelResponse {
+fn runtime_test_compaction_response(summary: &str) -> mez_agent::ModelResponse {
+    mez_agent::ModelResponse {
         provider: "test".to_string(),
         model: "gpt-compact-test".to_string(),
         raw_text: summary.to_string(),
@@ -1152,7 +1118,7 @@ fn execute_runtime_send_message_action(
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "send message".to_string(),
@@ -1224,7 +1190,7 @@ fn dispatch_protocol_test_shell_action(
     assert!(start.contains(r#""state":"running""#), "{start}");
     service.pending_agent_provider_tasks.remove("turn-1");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "shell".to_string(),

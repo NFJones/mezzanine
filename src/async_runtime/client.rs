@@ -20,9 +20,8 @@ use super::{
     run_async_attached_terminal_client_loop, sleep,
 };
 use crate::agent::{
-    AgentTurnExecution, AgentTurnRecord, AsyncModelProvider, ModelResponse,
-    ReqwestProviderHttpTransport, execute_network_action_with_transport_async,
-    provider_error_retry_class,
+    AgentTurnExecution, AgentTurnRecord, AsyncModelProvider, ReqwestProviderHttpTransport,
+    execute_network_action_with_transport_async, provider_error_retry_class,
 };
 use crate::async_runtime::RenderInvalidationReason;
 use crate::error::MezErrorKind;
@@ -30,8 +29,8 @@ use crate::runtime::runtime_execute_auto_sizing_with_async_provider;
 use crate::terminal::TerminalFdInterest;
 use mez_agent::{
     ActionStatus, AgentActionPayload, AgentTurnState, ContextSourceKind, ModelMessage,
-    ModelMessageRole, ModelProfile, ModelRequest, ModelTokenUsage, ModelTokenUsageKey,
-    ProviderErrorRetryClass,
+    ModelMessageRole, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
+    ModelTokenUsageKey, ProviderErrorRetryClass,
 };
 use mez_core::ids::AgentId;
 use mez_terminal::TerminalStyleSpan;
@@ -1331,7 +1330,7 @@ fn provider_worker_event(
 /// Converts a compaction worker result into a runtime event.
 fn compaction_worker_event(
     pane_id: String,
-    result: std::result::Result<Result<crate::agent::ModelResponse>, tokio::task::JoinError>,
+    result: std::result::Result<Result<mez_agent::ModelResponse>, tokio::task::JoinError>,
 ) -> (RuntimeEvent, bool) {
     match result {
         Ok(Ok(response)) => (
@@ -1367,7 +1366,7 @@ fn compaction_worker_event(
 /// Converts a durable memory worker result into a runtime event.
 fn remember_worker_event(
     pane_id: String,
-    result: std::result::Result<Result<crate::agent::ModelResponse>, tokio::task::JoinError>,
+    result: std::result::Result<Result<mez_agent::ModelResponse>, tokio::task::JoinError>,
 ) -> (RuntimeEvent, bool) {
     match result {
         Ok(Ok(response)) => (
@@ -1855,7 +1854,7 @@ fn merge_model_token_usage_by_model(
 /// Executes one model-backed conversation compaction request.
 async fn execute_runtime_agent_compaction_dispatch(
     dispatch: RuntimeAgentCompactionDispatch,
-) -> Result<crate::agent::ModelResponse> {
+) -> Result<mez_agent::ModelResponse> {
     let RuntimeAgentCompactionDispatch { task, provider } = dispatch;
     match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
@@ -1904,7 +1903,7 @@ async fn execute_runtime_agent_compaction_dispatch(
 /// Executes one model-backed durable memory generation request.
 async fn execute_runtime_agent_remember_dispatch(
     dispatch: RuntimeAgentRememberDispatch,
-) -> Result<crate::agent::ModelResponse> {
+) -> Result<mez_agent::ModelResponse> {
     let RuntimeAgentRememberDispatch { task, provider } = dispatch;
     match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {

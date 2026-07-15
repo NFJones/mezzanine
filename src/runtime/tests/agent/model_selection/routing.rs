@@ -588,7 +588,7 @@ fn runtime_agent_turn_routing_provider_error_fails_turn() {
         fn send_request(
             &self,
             request: &mez_agent::ModelRequest,
-        ) -> Result<crate::agent::ModelResponse> {
+        ) -> Result<mez_agent::ModelResponse> {
             self.requests.borrow_mut().push(request.clone());
             if request.interaction_kind == mez_agent::ModelInteractionKind::AutoSizing {
                 return Err(MezError::invalid_state(
@@ -822,7 +822,7 @@ fn runtime_shell_pane_not_ready_queues_model_self_correction() {
     );
     let mut execution = crate::agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&turn.turn_id),
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "pane not ready".to_string(),

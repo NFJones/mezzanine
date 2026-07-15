@@ -172,7 +172,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
                 content: "research docs".to_string(),
             }],
         },
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "mixed network fetches".to_string(),

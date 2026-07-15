@@ -40,7 +40,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
         turn.turn_id.clone(),
         crate::agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
-            response: crate::agent::ModelResponse {
+            response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
                 raw_text: "run shell action".to_string(),
@@ -132,7 +132,7 @@ fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_block
         turn.turn_id.clone(),
         crate::agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
-            response: crate::agent::ModelResponse {
+            response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
                 raw_text: "run shell action".to_string(),
@@ -282,7 +282,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_shell_process_
         turn.turn_id.clone(),
         crate::agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
-            response: crate::agent::ModelResponse {
+            response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
                 raw_text: "run shell action".to_string(),
@@ -374,7 +374,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_cached_foregro
         turn.turn_id.clone(),
         crate::agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
-            response: crate::agent::ModelResponse {
+            response: mez_agent::ModelResponse {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
                 raw_text: "run shell action".to_string(),
@@ -463,7 +463,7 @@ fn runtime_shell_command_dispatch_uses_action_timeout() {
     assert!(start.contains(r#""state":"running""#), "{start}");
     service.pending_agent_provider_tasks.remove("turn-1");
     let provider = RuntimeBatchProvider {
-        response: crate::agent::ModelResponse {
+        response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             raw_text: "shell action".to_string(),
