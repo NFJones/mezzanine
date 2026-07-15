@@ -10,7 +10,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rustix::process::geteuid;
 
-use crate::agent::{AgentShellSession, AgentShellStore, AgentShellVisibility};
 use crate::audit::{AuditActor, AuditLog, AuditRecord};
 use crate::config::{
     ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,
@@ -28,7 +27,9 @@ use crate::permissions::{
 };
 use crate::project::{ProjectTrustRecord, ProjectTrustStore, TrustDecision};
 use crate::snapshot::{LayoutLoadPlan, SnapshotKind, SnapshotRepository, SnapshotState};
-use mez_agent::{AgentTurnLedger, AgentTurnState};
+use mez_agent::{
+    AgentShellSession, AgentShellStore, AgentShellVisibility, AgentTurnLedger, AgentTurnState,
+};
 use mez_core::ids::ClientId;
 use mez_mux::layout::{PaneSizeSpec, ResizeAxis, ResizeDirection, SplitDirection, Window};
 use mez_mux::session::{ClientRole, ClientState, ObserverDecisionState, Session, SessionState};

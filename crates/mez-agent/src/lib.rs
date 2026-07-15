@@ -14,6 +14,8 @@ pub mod accounting;
 pub mod action_result;
 /// Provider-independent agent-shell session error contracts.
 pub mod agent_shell;
+/// Provider-independent agent-shell session state and display policy.
+pub mod agent_shell_session;
 /// Provider-independent Anthropic Messages request shaping.
 pub mod anthropic;
 /// Provider authentication routing contracts.
@@ -116,6 +118,12 @@ pub use action_result::{
 pub use agent_shell::{
     AgentShellSessionError, AgentShellSessionErrorKind, AgentShellSessionResult,
     validate_agent_shell_required,
+};
+pub use agent_shell_session::{
+    AgentLogLevel, AgentShellSession, AgentShellStore, AgentShellVisibility,
+    agent_shell_help_display, agent_shell_mcp_display, agent_shell_permissions_display,
+    agent_shell_status_display, agent_shell_visibility_name, approval_policy_name,
+    permission_preset_name,
 };
 pub use anthropic::{
     ANTHROPIC_MESSAGES_ENDPOINT, AnthropicMessagesOptions, AnthropicMessagesResponse,

@@ -28,8 +28,7 @@ use serde_json::Value;
 #[cfg(test)]
 pub use crate::agent::ModelProvider;
 use crate::agent::{
-    AgentLogLevel, AgentShellCommandOutcome, AgentShellRuntimeContext, AgentShellSession,
-    AgentShellStore, AgentShellVisibility, AgentTurnExecution, AsyncMcpActionExecutor,
+    AgentShellCommandOutcome, AgentShellRuntimeContext, AgentTurnExecution, AsyncMcpActionExecutor,
     AsyncModelProvider, DeepSeekChatCompletionsProvider, EnvironmentSignature, MarkerToken,
     McpActionExecutor, OpenAiCompatibleChatCompletionsProvider, OpenAiResponsesProvider,
     ReqwestProviderHttpTransport, ShellClassification, ShellTransaction,
@@ -137,10 +136,11 @@ use crate::transcript::{
 };
 use mez_agent::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, ActionContentBlock, ActionResult,
-    ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentTurnLedger, AgentTurnRecord,
-    AgentTurnState, AgentTurnTrigger, ContextBlock, ContextSourceKind, McpExecutionRequest,
-    McpExecutionResponse, ModelMessage, ModelMessageRole, ModelProfile, ModelProfileOverrides,
-    ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey, PaneReadinessOverrideStore,
+    ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentLogLevel, AgentShellSession,
+    AgentShellStore, AgentShellVisibility, AgentTurnLedger, AgentTurnRecord, AgentTurnState,
+    AgentTurnTrigger, ContextBlock, ContextSourceKind, McpExecutionRequest, McpExecutionResponse,
+    ModelMessage, ModelMessageRole, ModelProfile, ModelProfileOverrides, ModelRequest,
+    ModelResponse, ModelTokenUsage, ModelTokenUsageKey, PaneReadinessOverrideStore,
     PaneReadinessState, ProviderQuotaUsage, ReadinessOverrideRevocation,
     compact_model_context_for_budget_with_retained_tail_percent,
     openai_default_reasoning_levels_for_model, select_model_profile,

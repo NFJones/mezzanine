@@ -48,11 +48,6 @@ mod provider;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod semantic;
-/// Exposes the session module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-mod session;
 /// Exposes the shell module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -91,11 +86,13 @@ pub use maap::{
 use mez_agent::action_text_content_blocks;
 use mez_agent::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentCapability, AgentContext,
-    AgentTranscriptEntry, AgentTranscriptRole, AgentTurnLedger, AgentTurnRecord, AgentTurnState,
-    AllowedAction, AllowedActionSet, ContextSourceKind, LocalActionPlan, MaapBatch,
-    McpExecutionRequest, McpExecutionResponse, ModelInteractionKind, ModelMessage,
-    ModelMessageRole, ModelRequest, ModelTokenUsage, ModelTokenUsageKey, ProviderHttpRequest,
-    ProviderHttpResponse, ProviderTranscriptEvent, SayStatus, TranscriptPersistence,
+    AgentLogLevel, AgentShellStore, AgentShellVisibility, AgentTranscriptEntry,
+    AgentTranscriptRole, AgentTurnLedger, AgentTurnRecord, AgentTurnState, AllowedAction,
+    AllowedActionSet, ContextSourceKind, LocalActionPlan, MaapBatch, McpExecutionRequest,
+    McpExecutionResponse, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest,
+    ModelTokenUsage, ModelTokenUsageKey, ProviderHttpRequest, ProviderHttpResponse,
+    ProviderTranscriptEvent, SayStatus, TranscriptPersistence, agent_shell_help_display,
+    agent_shell_mcp_display, agent_shell_permissions_display, agent_shell_status_display,
 };
 pub use network::{
     NetworkActionPlan, execute_network_action_with_transport_async, network_action_plan,
@@ -133,11 +130,6 @@ pub use semantic::{
     apply_patch_read_plan_for_paths, apply_patch_touched_paths, apply_patch_transaction_phase,
     apply_patch_write_plan_from_read_output, apply_patch_write_plan_from_read_outputs,
     local_action_plan, local_action_summary,
-};
-pub use session::{AgentLogLevel, AgentShellSession, AgentShellStore, AgentShellVisibility};
-use session::{
-    agent_shell_help_display, agent_shell_mcp_display, agent_shell_permissions_display,
-    agent_shell_status_display,
 };
 pub use shell::{
     DEFAULT_BOOTSTRAP_TIMEOUT_MS, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature,

@@ -661,7 +661,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
         .unwrap();
     service
         .agent_shell_store_mut()
-        .set_log_level("%1", crate::agent::AgentLogLevel::Verbose)
+        .set_log_level("%1", mez_agent::AgentLogLevel::Verbose)
         .unwrap();
     service.permission_policy_mut().set_approval_bypass(true);
 

@@ -155,7 +155,7 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
         .unwrap();
     service
         .agent_shell_store_mut()
-        .set_log_level("%1", crate::agent::AgentLogLevel::Trace)
+        .set_log_level("%1", mez_agent::AgentLogLevel::Trace)
         .unwrap();
     service.permission_policy_mut().set_approval_bypass(true);
     let start = service

@@ -1,11 +1,12 @@
-//! Agent Session implementation.
+//! Provider-independent agent-shell session state and display policy.
 //!
 //! This module owns the agent session boundary for Mezzanine. It keeps related
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::BTreeMap;
-use mez_agent::{
+use std::collections::BTreeMap;
+
+use crate::{
     AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellPermissionSummary,
     AgentShellSessionError, AgentShellSessionResult, baseline_slash_commands,
     validate_agent_shell_required,
@@ -680,7 +681,7 @@ fn new_agent_session_uuid() -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn agent_shell_help_display() -> String {
+pub fn agent_shell_help_display() -> String {
     let mut specs = baseline_slash_commands();
     specs.sort_by(|left, right| {
         agent_shell_command_category(left.name)
@@ -820,7 +821,7 @@ fn agent_shell_command_description(name: &str) -> &'static str {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn agent_shell_status_display(session: &AgentShellSession) -> String {
+pub fn agent_shell_status_display(session: &AgentShellSession) -> String {
     format!(
         "pane: {}\nsession: {}\nvisibility: {}\nrunning turn: {}\ntranscript entries: {}\nlog level: {}\ndirective: {}",
         session.pane_id,
@@ -842,7 +843,7 @@ pub(super) fn agent_shell_status_display(session: &AgentShellSession) -> String 
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn agent_shell_permissions_display(summary: AgentShellPermissionSummary) -> String {
+pub fn agent_shell_permissions_display(summary: AgentShellPermissionSummary) -> String {
     format!(
         "preset={} approval_policy={} bypass={} command_rules={} source=runtime-policy",
         permission_preset_name(summary.preset),
@@ -857,7 +858,7 @@ pub(super) fn agent_shell_permissions_display(summary: AgentShellPermissionSumma
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn permission_preset_name(preset: mez_agent::PermissionPreset) -> &'static str {
+pub fn permission_preset_name(preset: crate::PermissionPreset) -> &'static str {
     preset.as_str()
 }
 
@@ -866,7 +867,7 @@ pub(super) fn permission_preset_name(preset: mez_agent::PermissionPreset) -> &'s
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn approval_policy_name(policy: mez_agent::ApprovalPolicy) -> &'static str {
+pub fn approval_policy_name(policy: crate::ApprovalPolicy) -> &'static str {
     policy.as_str()
 }
 
@@ -875,7 +876,7 @@ pub(super) fn approval_policy_name(policy: mez_agent::ApprovalPolicy) -> &'stati
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn agent_shell_mcp_display(summary: &AgentShellMcpSummary) -> String {
+pub fn agent_shell_mcp_display(summary: &AgentShellMcpSummary) -> String {
     let tools = summary
         .servers
         .iter()
@@ -957,7 +958,7 @@ fn agent_shell_mcp_display_text(value: &str) -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn agent_shell_visibility_name(visibility: AgentShellVisibility) -> &'static str {
+pub fn agent_shell_visibility_name(visibility: AgentShellVisibility) -> &'static str {
     match visibility {
         AgentShellVisibility::Hidden => "hidden",
         AgentShellVisibility::Visible => "visible",
