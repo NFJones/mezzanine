@@ -17,3 +17,6 @@ pub use decoder::{
     readline_input_is_ctrl_r, readline_input_is_ctrl_shift_r,
 };
 pub use prompt::{ReadlinePromptMode, ReadlinePromptState};
+
+#[cfg(test)]
+mod tests;

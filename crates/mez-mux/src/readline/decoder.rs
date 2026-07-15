@@ -38,15 +38,6 @@ impl ReadlineTerminalInputDecoder {
         self.pending.len()
     }
 
-    /// Consumes a pending standalone Escape key.
-    pub fn flush_pending_escape(&mut self) -> bool {
-        if self.bracketed_paste_active || self.pending.as_slice() != b"\x1b" {
-            return false;
-        }
-        self.pending.clear();
-        true
-    }
-
     /// Decodes complete input items while preserving incomplete suffixes.
     pub fn decode(&mut self, input: &[u8]) -> Result<Vec<ReadlineDecodedInput>> {
         if input.is_empty() && self.pending.is_empty() {

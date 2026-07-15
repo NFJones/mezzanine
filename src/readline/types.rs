@@ -3,14 +3,10 @@
 //! These definitions describe edits, outcomes, prompt kinds, loop configuration,
 //! and state containers while leaving behavior to focused sibling modules.
 
-#[cfg(test)]
-use crate::error::Result;
 use crate::selector::{ActiveSelector, SelectorExtraCandidate};
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 
-#[cfg(test)]
-use mez_mux::readline::ReadlineOutcome;
 use mez_mux::readline::ReadlinePromptState;
 
 /// The interactive surface using a readline buffer.
@@ -72,96 +68,6 @@ impl DerefMut for ReadlinePrompt {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.state
     }
-}
-
-/// Bounded driver settings for a live readline prompt surface.
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ReadlinePromptLoopConfig {
-    /// Stores the max iterations value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub max_iterations: usize,
-    /// Stores the max input bytes value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub max_input_bytes: usize,
-    /// Stores the redraw on noop value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub redraw_on_noop: bool,
-}
-
-/// Summary of a bounded prompt-loop run.
-#[cfg(test)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReadlinePromptLoopReport {
-    /// Stores the iterations value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub iterations: usize,
-    /// Stores the outcomes value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub outcomes: Vec<ReadlineOutcome>,
-    /// Stores the submissions value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub submissions: Vec<String>,
-    /// Stores the cancelled value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub cancelled: bool,
-    /// Stores the eof value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub eof: bool,
-    /// Stores the prompts rendered value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub prompts_rendered: usize,
-    /// Stores the bytes written value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub bytes_written: usize,
-    /// Stores the pending input bytes value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub pending_input_bytes: usize,
-}
-
-/// Minimal IO boundary for command, configuration, and agent prompt loops.
-#[cfg(test)]
-pub trait ReadlinePromptLoopIo {
-    /// Runs the input ready operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn input_ready(&mut self) -> Result<bool>;
-    /// Runs the read input operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn read_input(&mut self, max_bytes: usize) -> Result<Vec<u8>>;
-    /// Runs the write prompt operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn write_prompt(&mut self, prompt: &ReadlinePrompt) -> Result<usize>;
 }
 
 /// Stateful terminal-input decoder for readline prompt surfaces.

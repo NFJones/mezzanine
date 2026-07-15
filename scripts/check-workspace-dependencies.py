@@ -33,6 +33,8 @@ REQUIRED_OWNER_PATHS = {
     "crates/mez-core/src/ids.rs",
     "crates/mez-mux/src/layout/mod.rs",
     "crates/mez-mux/src/process/mod.rs",
+    "crates/mez-mux/src/readline/tests/buffer.rs",
+    "crates/mez-mux/src/readline/tests/prompt.rs",
     "crates/mez-mux/src/session/mod.rs",
     "crates/mez-terminal/src/screen.rs",
     "docs/workspace-ownership-matrix.md",
@@ -45,6 +47,7 @@ RETIRED_COMPATIBILITY_PATHS = {
     "src/layout/mod.rs",
     "src/process.rs",
     "src/process/mod.rs",
+    "src/readline/prompt_loop.rs",
     "src/scheduler.rs",
     "src/session.rs",
     "src/session/mod.rs",
@@ -52,6 +55,7 @@ RETIRED_COMPATIBILITY_PATHS = {
 
 RETIRED_RUST_IDENTIFIERS = {
     "AgentHarness": "parallel agent acceptance contracts",
+    "ReadlinePromptLoop": "test-only root prompt-loop contracts",
 }
 
 ROOT_RUNNER_FORBIDDEN_CALLS = {

@@ -16,18 +16,6 @@ impl ReadlineInputDecoder {
         self.inner.pending_len()
     }
 
-    /// Converts a pending standalone Escape key into prompt cancellation.
-    ///
-    /// Escape-prefixed terminal sequences are buffered so split arrow-key and
-    /// function-key reads can still complete. Interactive prompt loops call this
-    /// after a readiness poll with no new input so a literal Escape key can still
-    /// leave the prompt instead of waiting forever for a sequence suffix.
-    pub fn flush_pending_escape_as_cancel(&mut self) -> Option<ReadlineOutcome> {
-        self.inner
-            .flush_pending_escape()
-            .then_some(ReadlineOutcome::Cancelled)
-    }
-
     /// Apply a terminal byte batch to a prompt, preserving incomplete input.
     pub fn apply_to_prompt(
         &mut self,

@@ -19,12 +19,6 @@ mod decoder;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod prompt;
-/// Exposes the prompt loop module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-#[cfg(test)]
-mod prompt_loop;
 /// Exposes the types module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -32,12 +26,8 @@ mod prompt_loop;
 mod types;
 
 #[cfg(test)]
-use mez_mux::readline::{ReadlineBuffer, ReadlineEdit, ReadlineOutcome};
-#[cfg(test)]
-pub use prompt_loop::run_readline_prompt_loop;
+use mez_mux::readline::{ReadlineEdit, ReadlineOutcome};
 pub use types::{ReadlineInputDecoder, ReadlinePrompt, ReadlinePromptKind};
-#[cfg(test)]
-pub use types::{ReadlinePromptLoopConfig, ReadlinePromptLoopIo, ReadlinePromptLoopReport};
 
 /// Exposes the tests module boundary.
 ///
