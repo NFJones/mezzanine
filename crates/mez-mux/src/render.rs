@@ -433,6 +433,57 @@ pub fn frame_pillbox_segment_columns(
     start..end
 }
 
+/// One terminal cell occupied by a semantic frame segment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameHitCell<K> {
+    /// Terminal column occupied by the segment.
+    pub column: u16,
+    /// Terminal row occupied by the segment.
+    pub row: u16,
+    /// Caller-owned semantic target used to adapt the hit into an action.
+    pub target: K,
+}
+
+/// Expands clipped frame-pill segments into terminal hit cells.
+pub fn frame_pillbox_hit_cells<K: Clone>(
+    segments: &[FramePillboxSegment<K>],
+    row: u16,
+    frame_width: u16,
+) -> Vec<FrameHitCell<K>> {
+    segments
+        .iter()
+        .flat_map(|segment| {
+            frame_pillbox_segment_columns(segment.start, segment.width, usize::from(frame_width))
+                .filter_map(|column| u16::try_from(column).ok())
+                .map(|column| FrameHitCell {
+                    column,
+                    row,
+                    target: segment.target.clone(),
+                })
+        })
+        .collect()
+}
+
+/// Expands clipped right-status segments into terminal hit cells.
+pub fn frame_status_hit_cells<K: Clone>(
+    segments: &[FrameStatusSegment<K>],
+    row: u16,
+    frame_width: u16,
+) -> Vec<FrameHitCell<K>> {
+    segments
+        .iter()
+        .flat_map(|segment| {
+            frame_pillbox_segment_columns(segment.start, segment.width, usize::from(frame_width))
+                .filter_map(|column| u16::try_from(column).ok())
+                .map(|column| FrameHitCell {
+                    column,
+                    row,
+                    target: segment.key.clone(),
+                })
+        })
+        .collect()
+}
+
 /// One semantic segment within a right-aligned frame status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrameStatusSegment<K> {
@@ -860,8 +911,9 @@ mod tests {
     use super::{
         FramePillboxEntry, FrameStatusValue, blank_render_row, char_count, collect_text_cells,
         compose_frame_pillbox_row, compose_pane_frame_row, display_overlay_targets,
-        fit_styled_width, frame_pillbox_segment_columns, frame_style_rendition, line_slice,
-        overlay_display_lines, overlay_fixed_column_style_spans, pane_frame_left_pill_style_width,
+        fit_styled_width, frame_pillbox_hit_cells, frame_pillbox_segment_columns,
+        frame_status_hit_cells, frame_style_rendition, line_slice, overlay_display_lines,
+        overlay_fixed_column_style_spans, pane_frame_left_pill_style_width,
         pane_frame_text_with_fill, position_frame_status, render_frame_pillbox_segments,
         render_frame_pillbox_text, render_frame_status, sanitize_frame_text,
         styled_frame_line_with_rendition, write_single_width_cell, write_text_cells,
@@ -879,6 +931,49 @@ mod tests {
         write_single_width_cell(&mut row, 1, '│');
 
         assert_eq!(collect_text_cells(row), " │x ");
+    }
+
+    /// Verifies frame hit-cell expansion clips semantic pill and status
+    /// targets to the visible frame width while preserving the terminal row.
+    #[test]
+    fn frame_hit_cells_clip_and_preserve_semantic_targets() {
+        let entries = vec![FramePillboxEntry {
+            target: "window",
+            text: " window ".to_string(),
+            active: true,
+            subagent: false,
+        }];
+        let pill_cells = frame_pillbox_hit_cells(&render_frame_pillbox_segments(&entries), 3, 4);
+        let status = position_frame_status(
+            render_frame_status(&[FrameStatusValue {
+                key: "action",
+                value: "open".to_string(),
+                display: " open ".to_string(),
+            }]),
+            5,
+        )
+        .expect("status should fit the requested frame width");
+        let status_cells = frame_status_hit_cells(&status.segments, 7, 3);
+
+        assert_eq!(
+            pill_cells
+                .iter()
+                .map(|cell| (cell.column, cell.row, cell.target))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, 3, "window"),
+                (1, 3, "window"),
+                (2, 3, "window"),
+                (3, 3, "window")
+            ]
+        );
+        assert_eq!(
+            status_cells
+                .iter()
+                .map(|cell| (cell.column, cell.row, cell.target))
+                .collect::<Vec<_>>(),
+            vec![(0, 7, "action"), (1, 7, "action"), (2, 7, "action")]
+        );
     }
 
     /// Verifies styled fitting clips spans and terminal slicing never returns
