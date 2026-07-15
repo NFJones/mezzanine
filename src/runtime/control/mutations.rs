@@ -647,7 +647,7 @@ impl RuntimeSessionService {
         if let (Some(params), Some(view)) = (params, view.as_mut())
             && let Some((row, column)) = runtime_json_optional_view_offset(params)?
         {
-            crate::terminal::apply_client_view_offset(view, row, column);
+            mez_mux::presentation::apply_client_view_offset(view, row, column);
         }
         let view_json = view
             .as_ref()

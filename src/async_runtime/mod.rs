@@ -7,7 +7,9 @@
 //! can run concurrently while all session mutations remain serialized through a
 //! single actor.
 
-use mez_mux::presentation::{AttachedTerminalOutputModes, ClientViewRole, RenderedClientView};
+use mez_mux::presentation::{
+    AttachedTerminalOutputModes, ClientStatusLine, ClientViewRole, RenderedClientView,
+};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::os::fd::AsRawFd;
@@ -41,7 +43,7 @@ use crate::runtime::{
 use crate::terminal::{
     AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopReport,
     AttachedTerminalClientStepPlan, AttachedTerminalFdReadiness, AttachedTerminalFdRole,
-    ClientStatusLine, MouseAction, TerminalClientLoopAction, TerminalClientLoopConfig,
+    MouseAction, TerminalClientLoopAction, TerminalClientLoopConfig,
     compose_client_presentation_with_styles, plan_attached_terminal_client_step,
     plan_attached_terminal_client_step_with_host_paste_buffer,
 };

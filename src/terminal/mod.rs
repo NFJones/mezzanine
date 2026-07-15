@@ -91,8 +91,6 @@ pub use fd::{
     TerminalRawModeGuard, read_attached_terminal_size,
 };
 pub use host_clipboard::{HostClipboard, HostClipboardCommand};
-pub use mez_mux::presentation::{ClientStatusKind, ClientStatusLine};
-pub use mez_mux::presentation::{apply_client_view_offset, max_viewport_column, max_viewport_row};
 pub use mouse::{
     MouseAction, MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MouseWindowActionFrameCell,
     PaneAgentStatusField, WindowFrameAction, WindowFrameCommandKind, classify_mouse_event,

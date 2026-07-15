@@ -66,13 +66,13 @@ use crate::runtime::RuntimeEventConnectionTable;
 use crate::shell::resolve_shell;
 use crate::terminal::{
     AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopIo, AttachedTerminalFdReadiness,
-    AttachedTerminalFdRole, ClientStatusKind, ClientStatusLine, TerminalClientLoopAction,
-    TerminalClientLoopConfig, TerminalFdInterest,
+    AttachedTerminalFdRole, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFdInterest,
 };
 use crate::test_support::async_runtime::AsyncRuntimeActorFixture;
 use crate::transcript::AgentTranscriptStore;
 use mez_mux::input::MuxAction;
 use mez_mux::layout::Size;
+use mez_mux::presentation::{ClientStatusKind, ClientStatusLine};
 use mez_mux::session::{ClientState, Session};
 use mez_terminal::TerminalStyleSpan;
 

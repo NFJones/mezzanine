@@ -32,7 +32,7 @@ persistence, transport, and composition adapters.
 |---|---|---|---|
 | `src/agent/actions/` | `mez-agent` harness; root local-action, permission, transcript, and runtime adapters | temporary | Move deterministic gating, planning, recovery, result-context shaping, and turn execution state into `mez-agent`. Retain concrete shell/MCP/filesystem dispatch behind narrow ports. |
 | `src/agent/context/` | `mez-agent` | temporary | Move message/context assembly, compaction, evidence/provenance shaping, model selection preconditions, and intrinsic tests. Inject product guidance, memory, instructions, skills, and MCP summaries. |
-| `src/agent/maap.rs` | `mez-agent` | temporary | Move MAAP action/domain parsing and validation. Keep product execution and error adaptation outside the crate. |
+| `src/agent/maap.rs` | root error and shell-policy adapter over `mez-agent` | adapter | Canonical action/domain types, parsing, normalization, and validation are lower-owned; keep only product error projection, shell policy, and execution formatting here. |
 | `src/agent/provider/` | `mez-agent` provider behavior plus root credential/HTTP/runtime adapters | temporary | Move provider-independent OpenAI/Anthropic/DeepSeek request, response, schema, cache, and model behavior. Retain concrete auth stores, reqwest transport, refresh, and runtime event conversion in root adapters. |
 | `src/agent/prompt.rs` | `mez-agent` with root embedded-asset adapter | temporary | Move provider-neutral prompt assembly; inject repository instructions and product-owned embedded assets. |
 | `src/agent/semantic/` | `mez-agent` planning plus root filesystem adapter | temporary | Move deterministic snapshot interpretation, matching, and transaction planning. Retain filesystem reads/writes and shell execution behind `LocalActionExecutor`. |
@@ -51,7 +51,7 @@ persistence, transport, and composition adapters.
 | `src/terminal/host_clipboard.rs` | root host clipboard process adapter | adapter | Keep platform command discovery and process execution product-owned; generic paste-buffer state is owned by `mez-mux`. |
 | `src/terminal/fd.rs` | root host terminal adapter | adapter | Keep raw terminal mode, FD polling, and host restoration product-owned; depend on mux/terminal contracts directly. |
 | `src/terminal/screen.rs` | root OSC 133 product adapter over `mez-terminal` | adapter | Keep the explicitly named shell-transaction decoder product-owned; do not restore the removed profile facade or add terminal-screen forwarding here. |
-| `src/terminal/mod.rs` | product presentation/host facade | temporary | Mux theme and attached-client view/output/cursor forwarding are removed; continue removing broad copy/render exports and split host I/O from product presentation adapters. |
+| `src/terminal/mod.rs` | product presentation/host adapter facade | adapter | Lower mux status, viewport, theme, attached-client view/output, and cursor contracts are imported directly. The remaining exports name product host, copy-normalization, mouse-action, and presentation adapters. |
 | `src/terminal/tests/` | split by behavior owner | temporary | Move neutral rendering/input/copy tests to `mez-mux`; retain real host-loop, product overlay, agent annotation, and raw-mode integration tests. |
 | `src/readline/` | `mez-mux` generic prompt behavior plus root command/selector adapter | adapter | Prompt buffer ownership, reverse history search, multiline navigation, baseline terminal-input transitions, and decoding are mux-owned. Root retains product command completion, selector discovery/cycling, prefixes, runtime effects, and agent-specific presentation policy. |
 
@@ -71,9 +71,9 @@ The following current exports are migration markers, not completion evidence:
 
 - `src/agent/mod.rs` broadly re-exports `mez-agent` contracts and product
   implementations through one facade.
-- `src/terminal/mod.rs` still forwards product copy/render surfaces; mux theme
-  and attached-client presentation contracts are imported directly from
-  `mez-mux`.
+- `src/terminal/mod.rs` exposes product copy/render and host-I/O adapters; lower
+  mux status, viewport, theme, and attached-client contracts are imported
+  directly from `mez-mux`.
 - `src/readline/` specializes mux-owned prompt state with product command and agent selector policy; it no longer owns neutral reverse-search or multiline transition state.
 - Product permission, MCP, instruction, subagent, provider, config, and runtime
   modules still forward selected `mez-agent` contracts.

@@ -8,11 +8,12 @@
 
 use crate::readline::{ReadlinePrompt, ReadlinePromptKind};
 use crate::terminal::{
-    ClientStatusKind, ClientStatusLine, ReadlinePromptClientPresentation, ReadlinePromptStatusRow,
-    TerminalPaneFrameContext,
+    ReadlinePromptClientPresentation, ReadlinePromptStatusRow, TerminalPaneFrameContext,
 };
 use mez_mux::layout::Size;
-use mez_mux::presentation::{ReadlinePromptRegion, RenderedClientView};
+use mez_mux::presentation::{
+    ClientStatusKind, ClientStatusLine, ReadlinePromptRegion, RenderedClientView,
+};
 use mez_mux::render::{
     PromptShadowSpan, WrappedPromptLayout, char_count, clipped_prompt_region, fit_width,
     layout_wrapped_prompt, offset_style_span, write_line_segment,
