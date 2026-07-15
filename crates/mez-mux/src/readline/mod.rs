@@ -6,6 +6,7 @@
 
 mod buffer;
 mod decoder;
+mod prompt;
 
 pub use buffer::{
     DEFAULT_READLINE_HISTORY_LIMIT, ReadlineBuffer, ReadlineEdit, ReadlineOutcome,
@@ -15,3 +16,4 @@ pub use decoder::{
     ReadlineDecodedInput, ReadlineTerminalInputDecoder, apply_readline_terminal_input,
     readline_input_is_ctrl_r, readline_input_is_ctrl_shift_r,
 };
+pub use prompt::{ReadlinePromptMode, ReadlinePromptState};

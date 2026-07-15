@@ -22,7 +22,7 @@ persistence, transport, and composition adapters.
 |---|---|---|---|---|
 | Stable identifiers | `mez-core` | `crates/mez-core/src/ids.rs` | owned | Remove the root `mez_core::ids` forwarding export and import IDs directly. |
 | Terminal geometry, history, protocol, state, style, width, profiles, and screen parser | `mez-terminal` | `crates/mez-terminal/src/{geometry,history,protocol,state,style,width,profile,screen}.rs` and crate-owned screen tests | owned | The unused root profile facade is removed; remove remaining screen/style/state forwarding exports while keeping explicitly named product adapters for OSC 133 and host policy. |
-| Layout, session state/effects, PTY processes, input contracts, theme, and copy/readline primitives | `mez-mux` | `crates/mez-mux/src/{layout,session,process,input,theme,copy,readline}` | owned | The lower-crate fake pane-output-to-terminal-screen-to-headless-client flow covers input routing, resize/focus/layout effects, copy-mode transitions, and redraw. Styled terminal-derived copy state is mux-owned; product transcript/Markdown normalization remains an adapter concern. |
+| Layout, session state/effects, PTY processes, input contracts, theme, and copy/readline primitives | `mez-mux` | `crates/mez-mux/src/{layout,session,process,input,theme,copy,readline}` | owned | The lower-crate fake pane-output-to-terminal-screen-to-headless-client flow covers input routing, resize/focus/layout effects, copy-mode transitions, and redraw. Styled terminal-derived copy state plus prompt buffer ownership, reverse history search, multiline navigation, and baseline terminal-input transitions are mux-owned; product transcript/Markdown normalization and selector candidate policy remain adapter concerns. |
 | Mux presentation geometry and canvas primitives | `mez-mux` | `crates/mez-mux/src/{presentation,render}.rs` and `crates/mez-mux/src/render/{overlay,prompt,style}.rs` | owned | Neutral window render planning (including zoom selection, pane geometry, frame reservations, and divider-frame merging), pane-to-canvas composition, divider rendering, exact-width pane/window/group frame-row composition, generic frame/status template expansion, semantic right-status composition and placement, attached-client status-row composition, Unicode-aware window/group frame pillbox layout, and prompt wrapping/viewport/cursor/shadow-region layout are mux-owned. Product pane content, prompt kinds and summary policy, field resolution, merged-frame overlays, palettes, animation, and hit-action policy remain adapters. |
 | Agent contracts and extracted pure policy | `mez-agent` | `crates/mez-agent/src/` owns action surfaces, schemas, context validation, provider contracts, scheduler, patch parsing, and ports | owned | Move the reusable turn harness and provider-independent execution/state machines, not just their DTOs. |
 
@@ -53,7 +53,7 @@ persistence, transport, and composition adapters.
 | `src/terminal/screen.rs` | root OSC 133 product adapter over `mez-terminal` | adapter | Keep the explicitly named shell-transaction decoder product-owned; do not restore the removed profile facade or add terminal-screen forwarding here. |
 | `src/terminal/mod.rs` | product presentation/host facade | temporary | Mux theme and attached-client view/output/cursor forwarding are removed; continue removing broad copy/render exports and split host I/O from product presentation adapters. |
 | `src/terminal/tests/` | split by behavior owner | temporary | Move neutral rendering/input/copy tests to `mez-mux`; retain real host-loop, product overlay, agent annotation, and raw-mode integration tests. |
-| `src/readline/` | `mez-mux` generic prompt behavior plus root command/selector adapter | temporary | Move remaining neutral prompt and decoder integration. Retain product command completion, selectors, runtime effects, and agent-specific semantics. |
+| `src/readline/` | `mez-mux` generic prompt behavior plus root command/selector adapter | adapter | Prompt buffer ownership, reverse history search, multiline navigation, baseline terminal-input transitions, and decoding are mux-owned. Root retains product command completion, selector discovery/cycling, prefixes, runtime effects, and agent-specific presentation policy. |
 
 ## Other root subsystem audit
 
@@ -75,7 +75,7 @@ The following current exports are migration markers, not completion evidence:
 - `src/terminal/mod.rs` still forwards product copy/render surfaces; mux theme
   and attached-client presentation contracts are imported directly from
   `mez-mux`.
-- `src/readline/mod.rs` and `src/readline/types.rs` forward mux readline types.
+- `src/readline/` specializes mux-owned prompt state with product command and agent selector policy; it no longer owns neutral reverse-search or multiline transition state.
 - Product permission, MCP, instruction, subagent, provider, config, and runtime
   modules still forward selected `mez-agent` contracts.
 

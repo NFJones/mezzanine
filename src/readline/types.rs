@@ -6,9 +6,10 @@
 #[cfg(test)]
 use crate::error::Result;
 use crate::selector::{ActiveSelector, SelectorExtraCandidate};
+use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 
-pub use mez_mux::readline::{ReadlineBuffer, ReadlineEdit, ReadlineOutcome};
+pub use mez_mux::readline::{ReadlineOutcome, ReadlinePromptMode, ReadlinePromptState};
 
 /// The interactive surface using a readline buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,7 +38,7 @@ pub struct ReadlinePrompt {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub buffer: ReadlineBuffer,
+    pub state: ReadlinePromptState,
     /// Stores the selector value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -55,27 +56,20 @@ pub struct ReadlinePrompt {
     /// so selector filesystem candidates resolve against the active pane cwd
     /// instead of the Mez server process working directory.
     pub selector_working_directory: Option<PathBuf>,
-    /// Active incremental reverse history search state, when `Ctrl+R` is open.
-    pub(super) reverse_search: Option<ReadlineReverseSearch>,
-    /// Display cells available for the editable prompt body, when known.
-    ///
-    /// Runtime-owned prompt surfaces refresh this width before applying input so
-    /// vertical arrow navigation can move through soft-wrapped visible rows
-    /// before falling back to history traversal.
-    pub(super) prompt_body_columns: Option<usize>,
 }
 
-/// Incremental reverse history search state for one prompt.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ReadlineReverseSearch {
-    /// Prompt text before reverse search started.
-    pub draft_line: String,
-    /// Cursor byte offset before reverse search started.
-    pub draft_cursor: usize,
-    /// User-entered search substring.
-    pub query: String,
-    /// Currently selected history index, when one matches `query`.
-    pub matched_index: Option<usize>,
+impl Deref for ReadlinePrompt {
+    type Target = ReadlinePromptState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
+}
+
+impl DerefMut for ReadlinePrompt {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.state
+    }
 }
 
 /// Bounded driver settings for a live readline prompt surface.
