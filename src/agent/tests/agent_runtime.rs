@@ -140,41 +140,6 @@ fn fish_stateful_wrapper_uses_active_shell_eval_block() {
 }
 
 #[test]
-/// Verifies shell action result context preserves the recorded output preview
-/// bytes exactly instead of stripping echoed commands or Mezzanine wrapper
-/// lines.
-fn shell_action_result_context_preserves_raw_recorded_output_preview() {
-    use mez_agent::ActionContentBlock;
-
-    let result = ActionResult {
-        protocol: "maap/1".to_string(),
-        turn_id: "turn-1".to_string(),
-        agent_id: "agent-1".to_string(),
-        action_id: "shell-raw".to_string(),
-        action_type: "shell_command",
-        status: ActionStatus::Succeeded,
-        content: vec![ActionContentBlock::text(
-            "shell command exited with status 0".to_string(),
-        )],
-        structured_content_json: Some(
-            serde_json::json!({
-                "command": "printf 'hello\\n'",
-                "terminal_observation": {
-                    "exit_code": 0,
-                    "combined_output_preview": "$ printf 'hello\\n'\nMEZ_MARKER_TOKEN=abc\nhello\n"
-                }
-            })
-            .to_string(),
-        ),
-        is_error: false,
-        error: None,
-    };
-
-    let context = action_result_context_content(&result);
-    assert!(context.contains("output:\n$ printf 'hello\\n'\nMEZ_MARKER_TOKEN=abc\nhello\n"));
-}
-
-#[test]
 /// Verifies semantic action names remain valid as ordinary shell arguments.
 ///
 /// The semantic-action guard should reject command-position mistakes without
@@ -244,32 +209,6 @@ fn shell_command_rejects_semantic_action_invocation_as_shell_program() {
         "{}",
         error.message()
     );
-}
-
-#[test]
-/// Verifies structured shell-read extraction scopes targets to each shell
-/// segment instead of stealing the last file-looking token from a later
-/// unrelated command.
-fn shell_read_observations_scope_targets_per_shell_segment() {
-    let observations = mez_agent::shell_read_observations_for_command(
-        "sed -n '300,420p' src/runtime/render/overlay.rs && cat README.md",
-    );
-
-    assert_eq!(observations.len(), 2, "{observations:?}");
-    assert_eq!(
-        observations[0].kind,
-        mez_agent::ShellReadObservationKind::Read
-    );
-    assert_eq!(observations[0].target, "src/runtime/render/overlay.rs");
-    assert_eq!(observations[0].ranges.len(), 1);
-    assert_eq!(observations[0].ranges[0].start_line, 300);
-    assert_eq!(observations[0].ranges[0].end_line, 420);
-    assert_eq!(
-        observations[1].kind,
-        mez_agent::ShellReadObservationKind::Read
-    );
-    assert_eq!(observations[1].target, "README.md");
-    assert!(observations[1].ranges.is_empty());
 }
 
 #[test]

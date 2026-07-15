@@ -8,6 +8,9 @@
 
 use crate::{ActionResult, ActionStatus, ShellReadObservation};
 
+#[cfg(test)]
+mod tests;
+
 /// Maximum action-result content bytes included in one model-facing context
 /// block before native truncation metadata is appended.
 const MODEL_ACTION_RESULT_CONTENT_LIMIT_BYTES: u64 = 256 * 1024;

@@ -431,6 +431,46 @@ mod tests {
         assert!(running.validate_invariants().is_err());
     }
 
+    #[test]
+    /// Verifies action result invariants match status.
+    ///
+    /// This regression scenario documents the behavior being protected so a
+    /// failure points at a concrete contract change rather than an incidental
+    /// implementation detail.
+    fn action_result_invariants_match_status() {
+        let running = ActionResult::running(
+            &Turn,
+            &Action,
+            vec!["accepted".to_string()],
+            Some("{\"command\":\"pwd\"}".to_string()),
+        );
+        let succeeded = ActionResult::succeeded(
+            &Turn,
+            &Action,
+            vec!["ok".to_string()],
+            Some("{\"command\":\"pwd\"}".to_string()),
+        );
+        let blocked = ActionResult::blocked(
+            &Turn,
+            &Action,
+            vec!["approval pending".to_string()],
+            "{\"approval\":{\"state\":\"pending\"}}".to_string(),
+        );
+        let failed = ActionResult::failed(
+            &Turn,
+            &Action,
+            ActionStatus::Denied,
+            "policy_forbidden",
+            "command denied",
+        )
+        .unwrap();
+
+        running.validate_invariants().unwrap();
+        succeeded.validate_invariants().unwrap();
+        blocked.validate_invariants().unwrap();
+        failed.validate_invariants().unwrap();
+    }
+
     /// Verifies canonical turn-state derivation preserves blocked and failed
     /// precedence while rejecting empty non-final batches as completion.
     #[test]
