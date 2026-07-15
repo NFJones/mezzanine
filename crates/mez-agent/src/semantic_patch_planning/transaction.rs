@@ -11,8 +11,8 @@ use super::{
     APPLY_PATCH_READ_END_MARKER, APPLY_PATCH_READ_PHASE_MARKER, ApplyPatchFileChange,
     ApplyPatchOriginalState,
 };
+use crate::shell_quote;
 use base64::Engine;
-use mez_agent::shell_quote;
 use std::collections::BTreeSet;
 
 /// Maximum base64 payload bytes emitted on one generated shell-source line.

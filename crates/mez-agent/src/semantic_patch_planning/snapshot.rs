@@ -10,11 +10,11 @@ use super::{
     APPLY_PATCH_FILE_BEGIN_MARKER, APPLY_PATCH_FILE_END_MARKER, APPLY_PATCH_READ_BEGIN_MARKER,
     APPLY_PATCH_READ_END_MARKER, apply_patch_parse_error,
 };
-use base64::Engine;
-use mez_agent::semantic_patch::{
+use crate::semantic_patch::{
     SemanticPatchPlanningError, SemanticPatchPlanningError as MezError,
     SemanticPatchPlanningResult as Result,
 };
+use base64::Engine;
 use std::collections::BTreeMap;
 
 /// One path snapshot emitted by the apply-patch read phase.

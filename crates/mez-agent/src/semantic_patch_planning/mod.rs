@@ -1,25 +1,22 @@
-//! Mezzanine patch planning, parsing, matching, and shell transaction generation.
+//! Mezzanine patch matching and shell transaction planning.
 //!
-//! This module owns the deterministic patch pipeline behind the semantic
-//! facade: validating model-authored Mezzanine patches, reading remote file
-//! snapshots, matching hunks, producing diagnostics, and generating the shell
-//! write transaction that applies verified bytes.
+//! This module owns deterministic interpretation of shell-produced snapshots,
+//! hunk matching and diagnostics, and shell read/write transaction generation.
+//! Product adapters retain pane execution and project error conversion.
 
-use super::{LocalActionKind, LocalActionPlan};
-use mez_agent::semantic_patch::{
-    SemanticPatchPlanningError, SemanticPatchPlanningResult as Result, is_mez_patch_payload,
+use crate::semantic_patch::{
+    MezPatch, MezPatchOperation, SemanticPatchPlanningError, SemanticPatchPlanningResult as Result,
+    is_mez_patch_payload, parse_mez_patch, try_convert_unified_diff_to_mez_patch,
     validate_apply_patch_payload,
 };
-use mez_agent::shell_quote;
+use crate::{LocalActionKind, LocalActionPlan, shell_quote};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod matcher;
-mod parser;
 mod snapshot;
 mod transaction;
 
 use matcher::apply_patch_hunks_to_file;
-use parser::{MezPatch, MezPatchOperation, parse_mez_patch, try_convert_unified_diff_to_mez_patch};
 use snapshot::{
     ApplyPatchFileChange, ApplyPatchOriginalState, ApplyPatchSnapshot, ApplyPatchTextFile,
     ensure_missing_state, ensure_regular_state, parse_apply_patch_snapshot_output,
@@ -36,7 +33,7 @@ use transaction::{
 /// Patch actions should either apply quickly or fail with a diagnostic that the
 /// model can repair. Keeping them below the turn-wide shell-action timeout avoids
 /// making a malformed patch look like an indefinite stalled turn.
-pub(in crate::agent) const APPLY_PATCH_TIMEOUT_MS: u64 = 30 * 1000;
+pub const APPLY_PATCH_TIMEOUT_MS: u64 = 30 * 1000;
 /// Marker that identifies the shell-backed read phase for `apply_patch`.
 pub(super) const APPLY_PATCH_READ_PHASE_MARKER: &str = "__MEZ_APPLY_PATCH_READ_PHASE__";
 /// Marker that identifies the shell-backed write phase for `apply_patch`.
@@ -196,7 +193,7 @@ pub fn apply_patch_error_plan(message: &str) -> LocalActionPlan {
     }
 }
 
-pub(super) fn apply_patch_plan(patch: &str, strip: Option<u64>) -> Result<LocalActionPlan> {
+pub fn apply_patch_plan(patch: &str, strip: Option<u64>) -> Result<LocalActionPlan> {
     let effective =
         try_convert_unified_diff_to_mez_patch(patch).unwrap_or_else(|| patch.to_string());
     validate_apply_patch_payload(&effective)

@@ -106,6 +106,8 @@ pub mod scheduler;
 pub mod schema;
 /// Deterministic semantic-patch parsing and path validation.
 pub mod semantic_patch;
+/// Deterministic semantic-patch matching and shell transaction planning.
+pub mod semantic_patch_planning;
 /// Provider-independent shell-source construction helpers.
 pub mod shell;
 /// Structured shell-read observation extraction.

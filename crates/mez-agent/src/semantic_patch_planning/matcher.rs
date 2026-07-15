@@ -5,10 +5,10 @@
 //! structural-anchor scoping, replacement construction, and model-facing
 //! mismatch diagnostics out of the patch facade.
 
-use super::parser::{MezPatchHunk, MezPatchHunkLine, MezPatchRangeHint};
 use super::snapshot::ApplyPatchTextFile;
-use mez_agent::semantic_patch::{
-    SemanticPatchPlanningError as MezError, SemanticPatchPlanningResult as Result,
+use crate::semantic_patch::{
+    MezPatchHunk, MezPatchHunkLine, MezPatchRangeHint, SemanticPatchPlanningError as MezError,
+    SemanticPatchPlanningResult as Result,
 };
 
 /// Applies parsed update hunks to one text file.
