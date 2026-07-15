@@ -114,6 +114,8 @@ pub mod semantic_patch_planning;
 pub mod shell;
 /// Structured shell-read observation extraction.
 pub mod shell_read_observation;
+/// Provider-independent shell-output transport decoding.
+pub mod shell_transport;
 /// Dependency-neutral agent slash-command registry and parsing.
 pub mod slash;
 /// Provider-independent subagent cooperation and scope contracts.
@@ -344,6 +346,11 @@ pub use shell::{
 pub use shell_read_observation::{
     ShellReadObservation, ShellReadObservationKind, ShellReadRange,
     shell_read_observations_for_command,
+};
+pub use shell_transport::{
+    SHELL_OUTPUT_BASE64_BEGIN_MARKER, SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER,
+    SHELL_OUTPUT_BASE64_END_MARKER, ShellTransportDecodeResult, ShellTransportDiagnostics,
+    decode_shell_output_transport, decode_shell_output_transport_with_diagnostics,
 };
 pub use slash::{
     SlashCommandEffect, SlashCommandInvocation, SlashCommandParseError, SlashCommandSpec,

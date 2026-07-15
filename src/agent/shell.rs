@@ -7,6 +7,10 @@
 use super::{BTreeMap, MezError, Path, Result};
 use base64::Engine;
 use mez_agent::instructions::{DiscoveredInstructionFile, parse_instruction_discovery_output};
+pub(super) use mez_agent::{
+    SHELL_OUTPUT_BASE64_BEGIN_MARKER, SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER,
+    SHELL_OUTPUT_BASE64_END_MARKER,
+};
 use mez_agent::{validate_resolved_shell_path, validate_shell_marker_token};
 use sha2::Digest;
 
@@ -317,14 +321,6 @@ const AGENT_SUBSHELL_PROMPT_ENV: &[(&str, &str)] = &[
 pub(super) const SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES: usize = 768;
 /// Maximum raw output bytes emitted through one base64 shell-output transport.
 pub(super) const SHELL_OUTPUT_BASE64_MAX_RAW_BYTES: usize = 256 * 1024;
-/// Marker that begins one base64-encoded shell-output transport block.
-pub(super) const SHELL_OUTPUT_BASE64_BEGIN_MARKER: &str = "__MEZ_SHELL_OUTPUT_BASE64_BEGIN__";
-/// Marker that ends one base64-encoded shell-output transport block.
-pub(super) const SHELL_OUTPUT_BASE64_END_MARKER: &str = "__MEZ_SHELL_OUTPUT_BASE64_END__";
-/// Marker that reports raw bytes dropped before base64 output emission.
-pub(super) const SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER: &str =
-    "__MEZ_SHELL_OUTPUT_BASE64_DROPPED_BYTES__";
-
 /// Output transport used by isolated shell transactions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellTransactionOutputTransport {

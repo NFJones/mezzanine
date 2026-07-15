@@ -10,7 +10,6 @@ mod execution;
 mod planning;
 mod recovery;
 mod runner;
-mod shell_transport;
 mod transcript;
 
 pub use execution::{
@@ -22,11 +21,11 @@ pub use execution::{
     execute_shell_action_through_pane, postprocess_shell_action_success_output,
     shell_command_result_content,
 };
-pub use runner::AgentTurnRunner;
-pub use shell_transport::{
+pub use mez_agent::{
     ShellTransportDecodeResult, ShellTransportDiagnostics, decode_shell_output_transport,
     decode_shell_output_transport_with_diagnostics,
 };
+pub use runner::AgentTurnRunner;
 pub use transcript::{
     AgentTurnExecution, assistant_context_content_for_execution, next_transcript_sequence,
     persist_turn_execution_transcript, transcript_entries_for_execution,

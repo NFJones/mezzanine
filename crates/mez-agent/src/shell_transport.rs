@@ -5,13 +5,17 @@
 //! wrapper scaffolding. This module keeps that decoding separate from turn
 //! execution and action-result construction.
 
-use super::super::shell::{
-    SHELL_OUTPUT_BASE64_BEGIN_MARKER, SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER,
-    SHELL_OUTPUT_BASE64_END_MARKER,
-};
 use base64::Engine;
 
 const OUTSIDE_FRAME_PREVIEW_LIMIT: usize = 160;
+
+/// Marker that begins one base64-encoded shell-output transport block.
+pub const SHELL_OUTPUT_BASE64_BEGIN_MARKER: &str = "__MEZ_SHELL_OUTPUT_BASE64_BEGIN__";
+/// Marker that ends one base64-encoded shell-output transport block.
+pub const SHELL_OUTPUT_BASE64_END_MARKER: &str = "__MEZ_SHELL_OUTPUT_BASE64_END__";
+/// Marker that reports raw bytes dropped before base64 output emission.
+pub const SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER: &str =
+    "__MEZ_SHELL_OUTPUT_BASE64_DROPPED_BYTES__";
 
 /// Decoded shell-output transport payload plus integrity diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -235,5 +239,121 @@ fn decode_base64_transport_block(
             diagnostics.invalid_base64_blocks = diagnostics.invalid_base64_blocks.saturating_add(1);
             String::new()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    /// Verifies partial base64 quartets are counted as structured diagnostics
+    /// while preserving the complete retained prefix.
+    fn shell_output_transport_counts_partial_base64_bytes() {
+        let stdout = format!("{SHELL_OUTPUT_BASE64_BEGIN_MARKER}\nZm9vY\n");
+        let decoded = decode_shell_output_transport_with_diagnostics(&stdout);
+
+        assert_eq!(decoded.output, "foo");
+        assert_eq!(decoded.diagnostics.partial_base64_bytes_dropped, 1);
+        assert!(decoded.diagnostics.missing_end_marker);
+    }
+
+    #[test]
+    /// Verifies truncated encoded shell-output observations keep diagnostics
+    /// separate from decoded command output.
+    fn shell_output_transport_decodes_complete_prefix_when_truncated() {
+        let stdout = format!("{SHELL_OUTPUT_BASE64_BEGIN_MARKER}\nZm9v\n");
+        let decoded = decode_shell_output_transport_with_diagnostics(&stdout);
+
+        assert_eq!(decoded.output, "foo");
+        assert!(decoded.diagnostics.missing_end_marker);
+        assert!(decoded.diagnostics.output_truncated());
+    }
+
+    #[test]
+    /// Verifies shell-output transport decoding discards Mezzanine wrapper echo
+    /// around an encoded child-output block.
+    ///
+    /// Plain commands can print large text, and the model must see only command
+    /// output rather than transaction scaffolding used to drive the pane shell.
+    fn shell_output_transport_discards_wrapper_echo_around_encoded_output() {
+        let stdout = format!(
+            "stty -echo\n{SHELL_OUTPUT_BASE64_BEGIN_MARKER}\nQXBhY2hlIExpY2Vuc2UKVmVyc2lvbiAyLjAK\n{SHELL_OUTPUT_BASE64_END_MARKER}\n}}\n"
+        );
+
+        let decoded = decode_shell_output_transport(&stdout);
+
+        assert_eq!(decoded, "Apache License\nVersion 2.0\n");
+        assert!(!decoded.contains("stty"), "{decoded:?}");
+    }
+
+    #[test]
+    /// Verifies dropped-byte markers become structured truncation diagnostics
+    /// rather than command output or wrapper noise.
+    fn shell_output_transport_records_dropped_byte_marker_as_truncation() {
+        let stdout = format!(
+            "{SHELL_OUTPUT_BASE64_BEGIN_MARKER}\nZm9v\n{SHELL_OUTPUT_BASE64_END_MARKER}\n{SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER} 17\n"
+        );
+
+        let decoded = decode_shell_output_transport_with_diagnostics(&stdout);
+
+        assert_eq!(decoded.output, "foo");
+        assert_eq!(decoded.diagnostics.output_bytes_dropped, 17);
+        assert!(decoded.diagnostics.output_truncated());
+        assert_eq!(decoded.diagnostics.outside_frame_bytes, 0);
+    }
+
+    #[test]
+    /// Verifies raw text after an encoded block is reported as transport
+    /// diagnostics rather than command output.
+    fn shell_output_transport_records_non_wrapper_tail_after_encoded_output_as_diagnostics() {
+        let stdout = format!(
+            "{SHELL_OUTPUT_BASE64_BEGIN_MARKER}\nZmlyc3QgbGluZQo=\n{SHELL_OUTPUT_BASE64_END_MARKER}\n}}\nfinal output\n"
+        );
+
+        let decoded = decode_shell_output_transport_with_diagnostics(&stdout);
+
+        assert_eq!(decoded.output, "first line\n");
+        assert!(
+            decoded.diagnostics.outside_frame_bytes >= "final output\n".len(),
+            "{:?}",
+            decoded.diagnostics
+        );
+        assert!(
+            decoded
+                .diagnostics
+                .outside_frame_preview
+                .as_deref()
+                .unwrap_or_default()
+                .contains("final output\\n"),
+            "{:?}",
+            decoded.diagnostics
+        );
+    }
+
+    #[test]
+    /// Verifies wrapper-only leakage produces empty output and structured
+    /// missing-frame diagnostics so empty-output fallbacks remain available.
+    fn shell_output_transport_records_wrapper_only_output_as_missing_frame() {
+        let decoded = decode_shell_output_transport_with_diagnostics("else\nfi\nTE_STATUS=1; fi\n");
+
+        assert_eq!(decoded.output, "");
+        assert!(decoded.diagnostics.missing_frame);
+        assert!(decoded.diagnostics.transport_incomplete());
+        assert!(decoded.diagnostics.outside_frame_bytes > 0);
+    }
+
+    #[test]
+    /// Verifies missing base64 end markers are reported as structured transport
+    /// diagnostics rather than command-output text.
+    fn shell_output_transport_reports_missing_end_marker_as_diagnostics() {
+        let stdout = format!("{SHELL_OUTPUT_BASE64_BEGIN_MARKER}\nZm9v\n");
+
+        let decoded = decode_shell_output_transport_with_diagnostics(&stdout);
+
+        assert_eq!(decoded.output, "foo");
+        assert!(decoded.diagnostics.missing_end_marker);
+        assert!(decoded.diagnostics.transport_incomplete());
+        assert!(decoded.diagnostics.output_truncated());
     }
 }
