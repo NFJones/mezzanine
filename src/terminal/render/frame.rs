@@ -31,35 +31,26 @@ pub(super) fn styled_group_frame_line(
         return None;
     }
     let entries = group_frame_pillbox_entries(frame_context);
-    let mut row = blank_render_row(width, ' ');
-    write_frame_text_cells(
-        &mut row,
-        0,
-        width,
-        &window_frame_pillbox_text_from_entries(&entries),
-    );
+    let row = compose_frame_pillbox_row::<_, WindowStatusSegmentKind>(&entries, None, width, ' ');
     let style_spans = subtle_frame_fill_span(width, frame_style, ui_theme)
         .into_iter()
         .chain(
-            window_frame_pillbox_segments(&entries)
+            row.pillbox_segments
                 .into_iter()
-                .filter_map(|segment| {
-                    Some(TerminalStyleSpan {
-                        start: segment.start,
-                        length: segment.width.min(width.saturating_sub(segment.start)),
-                        rendition: window_pillbox_rendition(
-                            segment.active,
-                            segment.subagent,
-                            frame_style,
-                            ui_theme,
-                        ),
-                    })
-                    .filter(|span| span.length > 0 && span.start < width)
+                .map(|segment| TerminalStyleSpan {
+                    start: segment.start,
+                    length: segment.width,
+                    rendition: window_pillbox_rendition(
+                        segment.active,
+                        segment.subagent,
+                        frame_style,
+                        ui_theme,
+                    ),
                 }),
         )
         .collect::<Vec<_>>();
     Some(TerminalStyledLine {
-        text: collect_text_cells(row),
+        text: row.text,
         style_spans,
         copy_text: None,
     })
@@ -108,51 +99,62 @@ pub(super) fn styled_window_pillbox_line(
     ui_theme: &UiTheme,
 ) -> TerminalStyledLine {
     let entries = window_frame_pillbox_entries(window, frame_context);
-    let right_status = window_right_status_layout(frame_context, width);
-    let left_width = right_status
-        .as_ref()
-        .map(|status| status.start)
-        .unwrap_or(width);
-    let mut row = blank_render_row(width, ' ');
-    write_frame_text_cells(
-        &mut row,
-        0,
-        left_width,
-        &window_frame_pillbox_text_from_entries(&entries),
+    let row = compose_frame_pillbox_row(
+        &entries,
+        frame_context
+            .window_status
+            .as_ref()
+            .filter(|status| !status.template.trim().is_empty() && width > 0)
+            .map(|status| render_window_status_template(frame_context, status)),
+        width,
+        ' ',
     );
-    if let Some(status) = right_status.as_ref() {
-        write_frame_text_cells(&mut row, status.start, status.width, &status.text);
-    }
     let style_spans = subtle_frame_fill_span(width, frame_style, ui_theme)
         .into_iter()
         .chain(
-            window_frame_pillbox_segments(&entries)
+            row.pillbox_segments
                 .into_iter()
-                .filter_map(|segment| {
-                    clip_style_span(
-                        TerminalStyleSpan {
-                            start: segment.start,
-                            length: segment.width,
-                            rendition: window_pillbox_rendition(
-                                segment.active,
-                                segment.subagent,
-                                frame_style,
-                                ui_theme,
-                            ),
-                        },
-                        left_width,
-                    )
+                .map(|segment| TerminalStyleSpan {
+                    start: segment.start,
+                    length: segment.width,
+                    rendition: window_pillbox_rendition(
+                        segment.active,
+                        segment.subagent,
+                        frame_style,
+                        ui_theme,
+                    ),
                 }),
         )
         .chain(
-            right_status
-                .as_ref()
-                .into_iter()
-                .flat_map(|status| window_status_style_spans(status, ui_theme)),
+            row.right_status_segments
+                .iter()
+                .map(|segment| TerminalStyleSpan {
+                    start: segment.start,
+                    length: segment.width,
+                    rendition: match &segment.key {
+                        WindowStatusSegmentKind::Action { pressed, .. } => {
+                            window_pillbox_rendition(
+                                *pressed,
+                                false,
+                                TerminalFrameStyle::Default,
+                                ui_theme,
+                            )
+                        }
+                        WindowStatusSegmentKind::Uptime => {
+                            ui_theme.colors.window_status_uptime.rendition()
+                        }
+                        WindowStatusSegmentKind::DateTime => {
+                            ui_theme.colors.window_status_datetime.rendition()
+                        }
+                        WindowStatusSegmentKind::StatusPill => {
+                            ui_theme.colors.window_status_uptime.rendition()
+                        }
+                    },
+                }),
         )
         .collect::<Vec<_>>();
     TerminalStyledLine {
-        text: collect_text_cells(row),
+        text: row.text,
         style_spans,
         copy_text: None,
     }
@@ -1047,14 +1049,17 @@ pub(super) fn render_window_frame_text(
         return String::new();
     }
     let text = render_window_frame_template(window, frame_context, template);
-    let Some(status) = window_right_status_layout(frame_context, width) else {
-        return fit_width(&text, width);
-    };
-    let mut row = blank_render_row(width, ' ');
-    let left_width = status.start.saturating_sub(1);
-    write_frame_text_cells(&mut row, 0, left_width, &text);
-    write_frame_text_cells(&mut row, status.start, status.width, &status.text);
-    collect_text_cells(row)
+    compose_frame_text_row(
+        &text,
+        frame_context
+            .window_status
+            .as_ref()
+            .filter(|status| !status.template.trim().is_empty())
+            .map(|status| render_window_status_template(frame_context, status)),
+        width,
+        ' ',
+    )
+    .text
 }
 
 /// Carries Window Status Segment Kind state for this subsystem.

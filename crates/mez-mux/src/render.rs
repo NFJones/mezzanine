@@ -490,6 +490,17 @@ pub struct PaneFrameRowLayout<K> {
     pub right_status_segments: Vec<FrameStatusSegment<K>>,
 }
 
+/// Exact-width window or group frame row with semantic pill and status placement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FramePillboxRowLayout<P, S> {
+    /// Exact-width rendered frame text.
+    pub text: String,
+    /// Left-side pill segments clipped before the right-aligned status.
+    pub pillbox_segments: Vec<FramePillboxSegment<P>>,
+    /// Right-status segments in absolute row columns.
+    pub right_status_segments: Vec<FrameStatusSegment<S>>,
+}
+
 /// Renders caller-owned status values with one separating cell.
 pub fn render_frame_status<K: Clone>(values: &[FrameStatusValue<K>]) -> RenderedFrameStatus<K> {
     let mut text = String::new();
@@ -551,7 +562,7 @@ pub fn position_frame_status<K>(
 }
 
 /// Composes a pane title and optional right status into one exact-width row.
-pub fn compose_pane_frame_row<K>(
+pub fn compose_frame_text_row<K>(
     left_text: &str,
     right_status: Option<RenderedFrameStatus<K>>,
     width: usize,
@@ -611,6 +622,59 @@ pub fn compose_pane_frame_row<K>(
         left_text_width,
         right_status_segments,
     }
+}
+
+/// Composes caller-owned frame pills and an optional right status into one row.
+pub fn compose_frame_pillbox_row<P: Clone, S>(
+    entries: &[FramePillboxEntry<P>],
+    right_status: Option<RenderedFrameStatus<S>>,
+    width: usize,
+    fill: char,
+) -> FramePillboxRowLayout<P, S> {
+    let left_text = render_frame_pillbox_text(entries);
+    let mut row = blank_render_row(width, fill);
+    let positioned_status = right_status.and_then(|status| position_frame_status(status, width));
+    let left_width = positioned_status
+        .as_ref()
+        .map(|status| status.start)
+        .unwrap_or(width);
+    write_text_cells_with_width(&mut row, 0, left_width, &left_text);
+    if let Some(status) = positioned_status.as_ref() {
+        write_text_cells_with_width(&mut row, status.start, status.width, &status.text);
+    }
+    let pillbox_segments = render_frame_pillbox_segments(entries)
+        .into_iter()
+        .filter_map(|mut segment| {
+            let span = clip_style_span(
+                TerminalStyleSpan {
+                    start: segment.start,
+                    length: segment.width,
+                    rendition: GraphicRendition::default(),
+                },
+                left_width,
+            )?;
+            segment.start = span.start;
+            segment.width = span.length;
+            Some(segment)
+        })
+        .collect();
+    FramePillboxRowLayout {
+        text: collect_text_cells(row),
+        pillbox_segments,
+        right_status_segments: positioned_status
+            .map(|status| status.segments)
+            .unwrap_or_default(),
+    }
+}
+
+/// Composes a pane title and optional right status into one exact-width row.
+pub fn compose_pane_frame_row<K>(
+    left_text: &str,
+    right_status: Option<RenderedFrameStatus<K>>,
+    width: usize,
+    fill: char,
+) -> PaneFrameRowLayout<K> {
+    compose_frame_text_row(left_text, right_status, width, fill)
 }
 
 fn right_aligned_status_bounds(text: &str, width: usize) -> Option<(usize, usize)> {
@@ -794,10 +858,10 @@ fn active_grapheme_width(grapheme: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        FramePillboxEntry, FrameStatusValue, blank_render_row, collect_text_cells,
-        compose_pane_frame_row, display_overlay_targets, fit_styled_width,
-        frame_pillbox_segment_columns, frame_style_rendition, line_slice, overlay_display_lines,
-        overlay_fixed_column_style_spans, pane_frame_left_pill_style_width,
+        FramePillboxEntry, FrameStatusValue, blank_render_row, char_count, collect_text_cells,
+        compose_frame_pillbox_row, compose_pane_frame_row, display_overlay_targets,
+        fit_styled_width, frame_pillbox_segment_columns, frame_style_rendition, line_slice,
+        overlay_display_lines, overlay_fixed_column_style_spans, pane_frame_left_pill_style_width,
         pane_frame_text_with_fill, position_frame_status, render_frame_pillbox_segments,
         render_frame_pillbox_text, render_frame_status, sanitize_frame_text,
         styled_frame_line_with_rendition, write_single_width_cell, write_text_cells,
@@ -973,6 +1037,33 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![10, 11]
         );
+    }
+
+    /// Verifies exact-width frame rows clip left pills before a right-aligned
+    /// status while preserving semantic pill and status targets.
+    #[test]
+    fn frame_pillbox_rows_preserve_clipped_semantic_segments() {
+        let entries = vec![FramePillboxEntry {
+            target: "window",
+            text: " 1 shell ".to_string(),
+            active: true,
+            subagent: false,
+        }];
+        let status = render_frame_status(&[FrameStatusValue {
+            key: "status",
+            value: "ready".to_string(),
+            display: " ready ".to_string(),
+        }]);
+        let row = compose_frame_pillbox_row(&entries, Some(status), 12, ' ');
+
+        assert_eq!(char_count(&row.text), 12);
+        assert_eq!(row.pillbox_segments.len(), 1);
+        assert_eq!(row.pillbox_segments[0].target, "window");
+        assert_eq!(row.pillbox_segments[0].width, 4);
+        assert_eq!(row.right_status_segments.len(), 1);
+        assert_eq!(row.right_status_segments[0].key, "status");
+        assert_eq!(row.right_status_segments[0].value, "ready");
+        assert_eq!(row.right_status_segments[0].start, 4);
     }
 
     /// Verifies display overlays prefer blank bottom rows, fall back to

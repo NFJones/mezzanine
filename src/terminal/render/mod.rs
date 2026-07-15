@@ -23,14 +23,14 @@ pub(crate) use mez_mux::render::overlay_fixed_column_style_spans;
 use mez_mux::render::{
     FramePillboxEntry, FramePillboxSegment, FrameStatusSegment, FrameStatusValue,
     PositionedFrameStatus, RenderedFrameStatus, TerminalRenderCell, blank_render_cells,
-    blank_render_row, clip_style_span, collect_text_cells, compose_pane_frame_row,
-    display_overlay_targets as agent_display_overlay_targets, fit_styled_width, fit_width,
-    fitted_text_width, frame_pillbox_segment_columns, frame_style_rendition, offset_style_span,
-    overlay_display_lines as overlay_agent_display_lines, position_frame_status,
-    render_frame_pillbox_segments, render_frame_pillbox_text, render_frame_status,
-    sanitize_frame_text, style_span_overlaps_columns, style_span_segments_outside_range,
-    styled_frame_line_with_rendition, write_single_width_cell, write_text_cells,
-    write_text_cells_with_width as write_frame_text_cells,
+    clip_style_span, collect_text_cells, compose_frame_pillbox_row, compose_frame_text_row,
+    compose_pane_frame_row, display_overlay_targets as agent_display_overlay_targets,
+    fit_styled_width, fit_width, fitted_text_width, frame_pillbox_segment_columns,
+    frame_style_rendition, offset_style_span, overlay_display_lines as overlay_agent_display_lines,
+    position_frame_status, render_frame_pillbox_segments, render_frame_pillbox_text,
+    render_frame_status, sanitize_frame_text, style_span_overlaps_columns,
+    style_span_segments_outside_range, styled_frame_line_with_rendition, write_single_width_cell,
+    write_text_cells, write_text_cells_with_width as write_frame_text_cells,
 };
 pub(super) use mez_mux::render::{char_count, line_slice};
 use mez_mux::theme::{UiColorPair, UiTheme};
