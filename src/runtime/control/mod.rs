@@ -1229,8 +1229,8 @@ fn runtime_mutating_response_is_cacheable(_method: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transcript::{TranscriptEntry, TranscriptRole};
     use mez_agent::ProviderTranscriptEvent;
+    use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
 
     /// Verifies only provider-native system transcript entries become model
     /// context.

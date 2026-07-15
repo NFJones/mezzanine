@@ -3,25 +3,50 @@
 //! Summaries are derived from decoded entries rather than separate index files
 //! so listing reflects the durable transcript contents.
 
-use super::types::{ConversationSummary, TranscriptEntry};
+use super::{TranscriptEntry, TranscriptRole};
+
+/// Summary of one saved conversation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationSummary {
+    /// Conversation identity.
+    pub conversation_id: String,
+    /// Number of entries in the conversation.
+    pub entries: usize,
+    /// Creation time of the first entry.
+    pub first_created_at_unix_seconds: u64,
+    /// Creation time of the last entry.
+    pub last_created_at_unix_seconds: u64,
+    /// Last turn id in the conversation.
+    pub last_turn_id: String,
+    /// Agent id from the last entry.
+    pub agent_id: String,
+    /// Pane id from the last entry.
+    pub pane_id: String,
+    /// Best-known project root or working directory for the conversation.
+    pub directory: Option<String>,
+    /// Bounded text from the first user-authored prompt in the conversation.
+    pub initial_prompt: Option<String>,
+    /// Bounded text from the most recent user-authored prompt in the conversation.
+    pub latest_user_prompt: Option<String>,
+}
 
 /// Runs the summarize conversation operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn summarize_conversation(entries: Vec<TranscriptEntry>) -> Option<ConversationSummary> {
+pub fn summarize_conversation(entries: Vec<TranscriptEntry>) -> Option<ConversationSummary> {
     let first = entries.first()?;
     let last = entries.last()?;
     let directory = conversation_directory(&entries);
     let initial_prompt = entries
         .iter()
-        .find(|entry| entry.role == super::types::TranscriptRole::User)
+        .find(|entry| entry.role == TranscriptRole::User)
         .map(|entry| bounded_summary_text(&entry.content, 120));
     let latest_user_prompt = entries
         .iter()
         .rev()
-        .find(|entry| entry.role == super::types::TranscriptRole::User)
+        .find(|entry| entry.role == TranscriptRole::User)
         .map(|entry| bounded_summary_text(&entry.content, 120));
     Some(ConversationSummary {
         conversation_id: first.conversation_id.clone(),

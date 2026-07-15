@@ -50,10 +50,10 @@ use crate::error::MezErrorKind;
 use crate::runtime::config::{
     runtime_default_models_for_provider, runtime_recommended_model_for_provider,
 };
-use crate::transcript::ConversationSummary;
 use base64::Engine;
 use mez_agent::ModelResponse;
 use mez_agent::model_context_text_word_count;
+use mez_agent::transcript::ConversationSummary;
 use mez_agent::{
     AgentActionPayload, AllowedActionSet, DEFAULT_PROVIDER_TIMEOUT_MS, ModelInteractionKind,
     ModelMessage, ModelMessageRole, ModelRequest, ModelTokenUsage, ModelTokenUsageKey,

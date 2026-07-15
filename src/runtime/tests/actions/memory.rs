@@ -102,11 +102,11 @@ context_window_tokens = 4500
 
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-compact-prune"));
     transcript_store
-        .append(&crate::transcript::TranscriptEntry {
+        .append(&mez_agent::transcript::TranscriptEntry {
             conversation_id: "compact-prune".to_string(),
             sequence: 1,
             created_at_unix_seconds: 1,
-            role: crate::transcript::TranscriptRole::User,
+            role: mez_agent::transcript::TranscriptRole::User,
             turn_id: "turn-1".to_string(),
             agent_id: "agent-%1".to_string(),
             pane_id: "%1".to_string(),
@@ -304,29 +304,29 @@ context_window_tokens = 4500
     for sequence in 1..=12 {
         let (role, content) = match sequence {
             1 => (
-                crate::transcript::TranscriptRole::User,
+                mez_agent::transcript::TranscriptRole::User,
                 format!("summarize release plan {}", "summary-word ".repeat(28)),
             ),
             2 => (
-                crate::transcript::TranscriptRole::Tool,
+                mez_agent::transcript::TranscriptRole::Tool,
                 format!(
                     "api_key sk-secret should be hidden {}",
                     "secret-word ".repeat(28)
                 ),
             ),
             3 => (
-                crate::transcript::TranscriptRole::Assistant,
+                mez_agent::transcript::TranscriptRole::Assistant,
                 format!(
                     "release plan summary is ready {}",
                     "release-word ".repeat(28)
                 ),
             ),
             _ if sequence % 2 == 0 => (
-                crate::transcript::TranscriptRole::User,
+                mez_agent::transcript::TranscriptRole::User,
                 format!("filler user turn {sequence} {}", "user-word ".repeat(28)),
             ),
             _ => (
-                crate::transcript::TranscriptRole::Assistant,
+                mez_agent::transcript::TranscriptRole::Assistant,
                 format!(
                     "filler assistant turn {sequence} {}",
                     "assistant-word ".repeat(28)
@@ -334,7 +334,7 @@ context_window_tokens = 4500
             ),
         };
         transcript_store
-            .append(&crate::transcript::TranscriptEntry {
+            .append(&mez_agent::transcript::TranscriptEntry {
                 conversation_id: "as1".to_string(),
                 sequence,
                 created_at_unix_seconds: sequence,

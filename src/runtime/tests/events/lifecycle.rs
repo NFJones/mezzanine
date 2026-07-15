@@ -466,11 +466,11 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
     let cwd = temp_root("runtime-agent-active-restore-cwd");
     fs::create_dir_all(&cwd).unwrap();
     transcript_store
-        .append(&crate::transcript::TranscriptEntry {
+        .append(&mez_agent::transcript::TranscriptEntry {
             conversation_id: "saved".to_string(),
             sequence: 1,
             created_at_unix_seconds: 1,
-            role: crate::transcript::TranscriptRole::User,
+            role: mez_agent::transcript::TranscriptRole::User,
             turn_id: "turn-old".to_string(),
             agent_id: "agent-%1".to_string(),
             pane_id: "%1".to_string(),
@@ -629,7 +629,7 @@ fn runtime_does_not_restore_agent_metadata_for_other_sessions() {
     transcript_store
         .save_agent_session_metadata(
             "$foreign",
-            &[crate::transcript::AgentSessionMetadata {
+            &[mez_agent::transcript::AgentSessionMetadata {
                 mezzanine_session_id: "$foreign".to_string(),
                 pane_id: "%1".to_string(),
                 conversation_id: "foreign".to_string(),

@@ -210,17 +210,13 @@ impl RuntimeSessionService {
             sequence = sequence.saturating_add(1);
             entries.push(entry);
         }
-        entries.extend(
-            transcript_entries_for_execution(
-                conversation_id,
-                sequence,
-                created_at_unix_seconds,
-                turn,
-                execution,
-            )?
-            .iter()
-            .map(TranscriptEntry::from),
-        );
+        entries.extend(transcript_entries_for_execution(
+            conversation_id,
+            sequence,
+            created_at_unix_seconds,
+            turn,
+            execution,
+        )?);
         Ok(entries)
     }
 

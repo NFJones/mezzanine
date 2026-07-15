@@ -338,7 +338,7 @@ fn runtime_provider_failure_persists_and_finishes_turn() {
     );
     let entries = transcript_store.inspect(&conversation_id).unwrap();
     assert!(entries.iter().any(|entry| {
-        entry.role == crate::transcript::TranscriptRole::Assistant
+        entry.role == mez_agent::transcript::TranscriptRole::Assistant
             && entry.content.contains("provider_error")
     }));
     let audit = fs::read_to_string(&audit_path).unwrap();
@@ -445,7 +445,7 @@ fn runtime_provider_parse_failure_persists_raw_provider_text() {
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
     let entries = transcript_store.inspect(&conversation_id).unwrap();
     assert!(entries.iter().any(|entry| {
-        entry.role == crate::transcript::TranscriptRole::Assistant
+        entry.role == mez_agent::transcript::TranscriptRole::Assistant
             && entry
                 .content
                 .contains("{\"protocol\":\"maap/1\",\"actions\":[]}")
@@ -581,7 +581,7 @@ fn runtime_maap_validation_failure_persists_provider_response_detail() {
     assert_eq!(service.agent_scheduler().snapshot().running, 0);
     let entries = transcript_store.inspect(&conversation_id).unwrap();
     assert!(entries.iter().any(|entry| {
-        entry.role == crate::transcript::TranscriptRole::Assistant
+        entry.role == mez_agent::transcript::TranscriptRole::Assistant
             && entry.content.contains("bad maap action")
             && entry.content.contains("maap_validation_error")
             && entry.content.contains("unavailable server")

@@ -7,10 +7,9 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use super::{
-    AgentPresentationEntry, AgentSessionMetadata, AgentTranscriptStore, TranscriptEntry,
-    TranscriptRole,
-};
+use super::encoding::{decode_transcript_entry, encode_transcript_entry};
+use super::{AgentPresentationEntry, AgentTranscriptStore};
+use mez_agent::transcript::{AgentSessionMetadata, TranscriptEntry, TranscriptRole};
 
 /// Builds a per-test temporary root that is unique within the current process.
 fn temp_root(name: &str) -> PathBuf {
@@ -646,7 +645,7 @@ fn transcript_entry_round_trips_escaped_content() {
         ..entry("conv1", 1, TranscriptRole::Tool)
     };
 
-    let decoded = TranscriptEntry::decode(&original.encode().unwrap()).unwrap();
+    let decoded = decode_transcript_entry(&encode_transcript_entry(&original).unwrap()).unwrap();
 
     assert_eq!(decoded, original);
 }

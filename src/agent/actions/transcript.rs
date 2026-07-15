@@ -4,9 +4,7 @@
 //! This module supplies the product transcript store, sequence allocation, and
 //! `MezError` projection used by runtime composition.
 
-use super::super::{
-    AgentTranscriptEntry, AgentTurnRecord, MezError, Result, TranscriptPersistence,
-};
+use super::super::{AgentTurnRecord, MezError, Result, TranscriptEntry, TranscriptPersistence};
 use mez_agent::{AgentTurnExecution, transcript_entries_for_execution};
 
 /// Appends a completed bounded turn execution to the durable transcript store.
@@ -16,7 +14,7 @@ pub fn persist_turn_execution_transcript<P>(
     created_at_unix_seconds: u64,
     turn: &AgentTurnRecord,
     execution: &AgentTurnExecution,
-) -> Result<Vec<AgentTranscriptEntry>>
+) -> Result<Vec<TranscriptEntry>>
 where
     P: TranscriptPersistence<Error = MezError>,
 {

@@ -28,7 +28,8 @@ use crate::hooks::{
 };
 use crate::runtime::apply_registry_update_async;
 use crate::terminal::attached_terminal_output_disconnected;
-use crate::transcript::{AgentTranscriptStore, TranscriptEntry};
+use crate::transcript::AgentTranscriptStore;
+use mez_agent::transcript::TranscriptEntry;
 
 // Async side-effect worker scaffolding.
 

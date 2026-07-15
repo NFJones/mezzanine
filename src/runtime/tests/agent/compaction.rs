@@ -233,11 +233,11 @@ context_window_tokens = 1024
         .unwrap();
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-compact-preflight"));
     transcript_store
-        .append(&crate::transcript::TranscriptEntry {
+        .append(&mez_agent::transcript::TranscriptEntry {
             conversation_id: "as-preflight".to_string(),
             sequence: 1,
             created_at_unix_seconds: 1,
-            role: crate::transcript::TranscriptRole::Assistant,
+            role: mez_agent::transcript::TranscriptRole::Assistant,
             turn_id: "turn-previous".to_string(),
             agent_id: "agent-%1".to_string(),
             pane_id: "%1".to_string(),
@@ -838,11 +838,11 @@ context_window_tokens = 128000
     let transcript_store = AgentTranscriptStore::new(transcript_root);
     for sequence in 1..=4 {
         transcript_store
-            .append(&crate::transcript::TranscriptEntry {
+            .append(&mez_agent::transcript::TranscriptEntry {
                 conversation_id: "output-limit-auto".to_string(),
                 sequence,
                 created_at_unix_seconds: sequence,
-                role: crate::transcript::TranscriptRole::Assistant,
+                role: mez_agent::transcript::TranscriptRole::Assistant,
                 turn_id: format!("turn-{sequence}"),
                 agent_id: "agent-%1".to_string(),
                 pane_id: "%1".to_string(),
@@ -1151,25 +1151,25 @@ context_window_tokens = 5000
     for sequence in 1..=12 {
         let (role, content) = match sequence {
             1 => (
-                crate::transcript::TranscriptRole::User,
+                mez_agent::transcript::TranscriptRole::User,
                 format!(
                     "old raw marker should be summary only {}",
                     "old-word ".repeat(28)
                 ),
             ),
             8 => (
-                crate::transcript::TranscriptRole::Assistant,
+                mez_agent::transcript::TranscriptRole::Assistant,
                 format!(
                     "Recent targets:\n1. Preserve raw tail after compaction.\n2. Keep memory summary. {}",
                     "recent-word ".repeat(28)
                 ),
             ),
             _ if sequence % 2 == 0 => (
-                crate::transcript::TranscriptRole::User,
+                mez_agent::transcript::TranscriptRole::User,
                 format!("filler user turn {sequence} {}", "tail-user ".repeat(28)),
             ),
             _ => (
-                crate::transcript::TranscriptRole::Assistant,
+                mez_agent::transcript::TranscriptRole::Assistant,
                 format!(
                     "filler assistant turn {sequence} {}",
                     "tail-assistant ".repeat(28)
@@ -1177,7 +1177,7 @@ context_window_tokens = 5000
             ),
         };
         transcript_store
-            .append(&crate::transcript::TranscriptEntry {
+            .append(&mez_agent::transcript::TranscriptEntry {
                 conversation_id: "as-tail".to_string(),
                 sequence,
                 created_at_unix_seconds: sequence,
@@ -1299,11 +1299,11 @@ context_window_tokens = 128000
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-compact-forced"));
     for sequence in 1..=3 {
         transcript_store
-            .append(&crate::transcript::TranscriptEntry {
+            .append(&mez_agent::transcript::TranscriptEntry {
                 conversation_id: "as-forced".to_string(),
                 sequence,
                 created_at_unix_seconds: sequence,
-                role: crate::transcript::TranscriptRole::Assistant,
+                role: mez_agent::transcript::TranscriptRole::Assistant,
                 turn_id: format!("turn-{sequence}"),
                 agent_id: "agent-%1".to_string(),
                 pane_id: "%1".to_string(),

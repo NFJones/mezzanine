@@ -117,9 +117,7 @@ use crate::terminal::{
     pane_border_cells_for_geometries, render_attached_client_view, rendered_pane_geometries,
     route_client_input_actions, window_frame_action_pillbox_cells, window_frame_pillbox_cells,
 };
-use crate::transcript::{
-    AgentSessionMetadata, AgentTranscriptStore, TranscriptEntry, TranscriptRole,
-};
+use crate::transcript::AgentTranscriptStore;
 use mez_agent::memory::{MemoryRecord, MemoryScope, MemorySource, SessionMemoryStore};
 use mez_agent::messaging::{
     Envelope, MessageConnection, MessageService, MessageServiceSnapshot, Recipient, SenderIdentity,
@@ -133,6 +131,7 @@ use mez_agent::permissions::{
     RuleMatch, SessionApprovalStore, compare_approval_policy_authority,
     compare_permission_preset_authority, exact_command_sha256, normalize_exact_command_text,
 };
+use mez_agent::transcript::{AgentSessionMetadata, TranscriptEntry, TranscriptRole};
 use mez_agent::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, ActionContentBlock, ActionResult,
     ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentLogLevel, AgentShellSession,

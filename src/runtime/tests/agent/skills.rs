@@ -341,32 +341,32 @@ fn runtime_agent_context_omits_persisted_skill_payloads_from_replay() {
     for (sequence, role, content) in [
         (
             1,
-            crate::transcript::TranscriptRole::User,
+            mez_agent::transcript::TranscriptRole::User,
             "# Skill: review\n\nSource: project\nPath: skills/review/SKILL.md\n\nInvocation state: this skill is already loaded for the current turn.\n\nReview workflow body.",
         ),
         (
             2,
-            crate::transcript::TranscriptRole::Tool,
+            mez_agent::transcript::TranscriptRole::Tool,
             "action_id=skill-1 action_type=call_skill status=Succeeded\ncontent:\n# Skill: review\n\nReview workflow body.",
         ),
         (
             3,
-            crate::transcript::TranscriptRole::Tool,
+            mez_agent::transcript::TranscriptRole::Tool,
             "action_id=catalog-1 action_type=request_skills status=Succeeded\ncontent:\nAvailable skills:\n- review (project) - Review workflow body.",
         ),
         (
             4,
-            crate::transcript::TranscriptRole::User,
+            mez_agent::transcript::TranscriptRole::User,
             "$review focus src/lib.rs",
         ),
         (
             5,
-            crate::transcript::TranscriptRole::Assistant,
+            mez_agent::transcript::TranscriptRole::Assistant,
             "I reviewed the requested area.",
         ),
     ] {
         transcript_store
-            .append(&crate::transcript::TranscriptEntry {
+            .append(&mez_agent::transcript::TranscriptEntry {
                 conversation_id: conversation_id.clone(),
                 sequence,
                 created_at_unix_seconds: 100,

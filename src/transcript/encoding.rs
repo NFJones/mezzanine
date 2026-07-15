@@ -7,7 +7,8 @@
 use crate::error::{MezError, Result};
 use crate::terminal::{agent_log_wrap_width, terminal_text_width, wrap_agent_log_lines};
 
-use super::types::{AgentPresentationEntry, AgentSessionMetadata, TranscriptEntry, TranscriptRole};
+use super::types::AgentPresentationEntry;
+use mez_agent::transcript::{AgentSessionMetadata, TranscriptEntry, TranscriptRole};
 use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
 use std::collections::BTreeMap;
 
@@ -32,72 +33,44 @@ const AGENT_SESSION_METADATA_VERSION: &str = "mez-agent-session-metadata/1";
 /// boundary and avoids relying on call-site inference.
 const AGENT_PRESENTATION_VERSION: &str = "mez-agent-presentation/1";
 
-impl TranscriptEntry {
-    /// Validates identifiers, sequence metadata, and non-empty content.
-    ///
-    /// Returns invalid-arguments errors for malformed conversation ids, zero
-    /// sequence or timestamp values, or empty required text fields.
-    pub fn validate(&self) -> Result<()> {
-        validate_conversation_id(&self.conversation_id)?;
-        if self.sequence == 0 || self.created_at_unix_seconds == 0 {
-            return Err(MezError::invalid_args(
-                "transcript sequence and creation time must be non-zero",
-            ));
-        }
-        validate_non_empty("turn id", &self.turn_id)?;
-        validate_non_empty("agent id", &self.agent_id)?;
-        validate_non_empty("pane id", &self.pane_id)?;
-        validate_non_empty("transcript content", &self.content)?;
-        Ok(())
-    }
+/// Encodes one canonical transcript entry into the durable TSV format.
+pub(super) fn encode_transcript_entry(entry: &TranscriptEntry) -> Result<String> {
+    entry.validate()?;
+    Ok([
+        TRANSCRIPT_VERSION.to_string(),
+        entry.conversation_id.clone(),
+        entry.sequence.to_string(),
+        entry.created_at_unix_seconds.to_string(),
+        role_name(entry.role).to_string(),
+        entry.turn_id.clone(),
+        entry.agent_id.clone(),
+        entry.pane_id.clone(),
+        entry.content.clone(),
+    ]
+    .into_iter()
+    .map(|field| escape_field(&field))
+    .collect::<Vec<String>>()
+    .join("\t"))
+}
 
-    /// Runs the encode operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn encode(&self) -> Result<String> {
-        self.validate()?;
-        Ok([
-            TRANSCRIPT_VERSION.to_string(),
-            self.conversation_id.clone(),
-            self.sequence.to_string(),
-            self.created_at_unix_seconds.to_string(),
-            role_name(self.role).to_string(),
-            self.turn_id.clone(),
-            self.agent_id.clone(),
-            self.pane_id.clone(),
-            self.content.clone(),
-        ]
-        .into_iter()
-        .map(|field| escape_field(&field))
-        .collect::<Vec<String>>()
-        .join("\t"))
+/// Decodes one canonical transcript entry from the durable TSV format.
+pub(super) fn decode_transcript_entry(line: &str) -> Result<TranscriptEntry> {
+    let fields = split_fields(line)?;
+    if fields.len() != 9 || fields[0] != TRANSCRIPT_VERSION {
+        return Err(MezError::invalid_args("invalid transcript entry"));
     }
-
-    /// Runs the decode operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn decode(line: &str) -> Result<Self> {
-        let fields = split_fields(line)?;
-        if fields.len() != 9 || fields[0] != TRANSCRIPT_VERSION {
-            return Err(MezError::invalid_args("invalid transcript entry"));
-        }
-        let entry = Self {
-            conversation_id: fields[1].clone(),
-            sequence: parse_u64(&fields[2], "sequence")?,
-            created_at_unix_seconds: parse_u64(&fields[3], "created_at_unix_seconds")?,
-            role: parse_role(&fields[4])?,
-            turn_id: fields[5].clone(),
-            agent_id: fields[6].clone(),
-            pane_id: fields[7].clone(),
-            content: fields[8].clone(),
-        };
-        entry.validate()?;
-        Ok(entry)
-    }
+    let entry = TranscriptEntry {
+        conversation_id: fields[1].clone(),
+        sequence: parse_u64(&fields[2], "sequence")?,
+        created_at_unix_seconds: parse_u64(&fields[3], "created_at_unix_seconds")?,
+        role: parse_role(&fields[4])?,
+        turn_id: fields[5].clone(),
+        agent_id: fields[6].clone(),
+        pane_id: fields[7].clone(),
+        content: fields[8].clone(),
+    };
+    entry.validate()?;
+    Ok(entry)
 }
 
 impl AgentPresentationEntry {
@@ -283,297 +256,247 @@ pub(super) fn decode_prompt_history_entry(line: &str) -> Result<String> {
     Ok(fields[1].clone())
 }
 
-impl AgentSessionMetadata {
-    /// Validates active agent session metadata before it is persisted or used.
-    pub fn validate(&self) -> Result<()> {
-        validate_non_empty("mezzanine session id", &self.mezzanine_session_id)?;
-        validate_non_empty("pane id", &self.pane_id)?;
-        validate_conversation_id(&self.conversation_id)?;
-        validate_non_empty("prompt cache lineage id", &self.prompt_cache_lineage_id)?;
-        validate_agent_visibility(&self.visibility)?;
-        if let Some(turn_id) = self.running_turn_id.as_deref() {
-            validate_non_empty("running turn id", turn_id)?;
-        }
-        validate_log_level(&self.log_level)?;
-        if let Some(profile) = self.pane_model_profile.as_deref() {
-            validate_non_empty("pane model profile", profile)?;
-        }
-        if let Some(style) = self.response_style.as_deref() {
-            validate_non_empty("response style", style)?;
-        }
-        if let Some(directive) = self.directive.as_deref() {
-            validate_non_empty("directive", directive)?;
-        }
-        if let Some(working_directory) = self.working_directory.as_deref() {
-            validate_non_empty("working directory", working_directory)?;
-        }
-        if let Some(project_root) = self.project_root.as_deref() {
-            validate_non_empty("project root", project_root)?;
-        }
-        if let Some(approval_policy) = self.approval_policy.as_deref() {
-            validate_agent_approval_policy(approval_policy)?;
-        }
-        if let Some(context_usage) = self.context_usage.as_deref() {
-            validate_non_empty("context usage", context_usage)?;
-        }
-        if let Some(snapshot) = self.context_usage_snapshot {
-            if snapshot.input_tokens == 0 {
-                return Err(MezError::invalid_args(
-                    "context usage snapshot input_tokens must be greater than zero",
-                ));
-            }
-            if snapshot.context_window_tokens == 0 {
-                return Err(MezError::invalid_args(
-                    "context usage snapshot context_window_tokens must be greater than zero",
-                ));
-            }
-        }
-        for key in self.token_usage_by_model.keys() {
-            validate_non_empty("token usage provider", &key.provider)?;
-            validate_non_empty("token usage model", &key.model)?;
-        }
-        Ok(())
-    }
+/// Encodes one agent-session metadata row into the store's TSV format.
+pub(super) fn encode_agent_session_metadata(metadata: &AgentSessionMetadata) -> Result<String> {
+    metadata.validate()?;
+    let token_usage_by_model = encode_token_usage_by_model(&metadata.token_usage_by_model)?;
+    let context_usage_snapshot =
+        encode_context_usage_snapshot(metadata.context_usage_snapshot.as_ref())?;
+    Ok([
+        AGENT_SESSION_METADATA_VERSION.to_string(),
+        metadata.mezzanine_session_id.clone(),
+        metadata.pane_id.clone(),
+        metadata.conversation_id.clone(),
+        metadata.prompt_cache_lineage_id.clone(),
+        metadata.visibility.clone(),
+        metadata.running_turn_id.clone().unwrap_or_default(),
+        metadata.transcript_entries.to_string(),
+        metadata.log_level.clone(),
+        metadata.pane_model_profile.clone().unwrap_or_default(),
+        metadata.planning_enabled.to_string(),
+        metadata.response_style.clone().unwrap_or_default(),
+        metadata.directive.clone().unwrap_or_default(),
+        metadata
+            .routing_enabled
+            .map(|enabled| enabled.to_string())
+            .unwrap_or_default(),
+        metadata.working_directory.clone().unwrap_or_default(),
+        metadata.project_root.clone().unwrap_or_default(),
+        metadata.token_usage.input_tokens.to_string(),
+        metadata.token_usage.output_tokens.to_string(),
+        metadata.token_usage.reasoning_tokens.to_string(),
+        metadata
+            .token_usage
+            .cached_input_tokens
+            .map(|tokens| tokens.to_string())
+            .unwrap_or_default(),
+        metadata
+            .token_usage
+            .cache_write_input_tokens
+            .map(|tokens| tokens.to_string())
+            .unwrap_or_default(),
+        metadata.approval_policy.clone().unwrap_or_default(),
+        metadata.context_usage.clone().unwrap_or_default(),
+        token_usage_by_model,
+        context_usage_snapshot,
+    ]
+    .into_iter()
+    .map(|field| escape_field(&field))
+    .collect::<Vec<String>>()
+    .join("\t"))
+}
 
-    /// Encodes one agent-session metadata row into the store's TSV format.
-    pub(super) fn encode(&self) -> Result<String> {
-        self.validate()?;
-        let token_usage_by_model = encode_token_usage_by_model(&self.token_usage_by_model)?;
-        let context_usage_snapshot =
-            encode_context_usage_snapshot(self.context_usage_snapshot.as_ref())?;
-        Ok([
-            AGENT_SESSION_METADATA_VERSION.to_string(),
-            self.mezzanine_session_id.clone(),
-            self.pane_id.clone(),
-            self.conversation_id.clone(),
-            self.prompt_cache_lineage_id.clone(),
-            self.visibility.clone(),
-            self.running_turn_id.clone().unwrap_or_default(),
-            self.transcript_entries.to_string(),
-            self.log_level.clone(),
-            self.pane_model_profile.clone().unwrap_or_default(),
-            self.planning_enabled.to_string(),
-            self.response_style.clone().unwrap_or_default(),
-            self.directive.clone().unwrap_or_default(),
-            self.routing_enabled
-                .map(|enabled| enabled.to_string())
-                .unwrap_or_default(),
-            self.working_directory.clone().unwrap_or_default(),
-            self.project_root.clone().unwrap_or_default(),
-            self.token_usage.input_tokens.to_string(),
-            self.token_usage.output_tokens.to_string(),
-            self.token_usage.reasoning_tokens.to_string(),
-            self.token_usage
-                .cached_input_tokens
-                .map(|tokens| tokens.to_string())
-                .unwrap_or_default(),
-            self.token_usage
-                .cache_write_input_tokens
-                .map(|tokens| tokens.to_string())
-                .unwrap_or_default(),
-            self.approval_policy.clone().unwrap_or_default(),
-            self.context_usage.clone().unwrap_or_default(),
-            token_usage_by_model,
-            context_usage_snapshot,
-        ]
-        .into_iter()
-        .map(|field| escape_field(&field))
-        .collect::<Vec<String>>()
-        .join("\t"))
+/// Decodes one agent-session metadata row from the store's TSV format.
+pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMetadata> {
+    let fields = split_fields(line)?;
+    if !(fields.len() == 11
+        || fields.len() == 12
+        || fields.len() == 14
+        || fields.len() == 18
+        || fields.len() == 19
+        || fields.len() == 20
+        || fields.len() == 21
+        || fields.len() == 22
+        || fields.len() == 23
+        || fields.len() == 24
+        || fields.len() == 25)
+        || fields[0] != AGENT_SESSION_METADATA_VERSION
+    {
+        return Err(MezError::invalid_args(
+            "invalid agent session metadata entry",
+        ));
     }
-
-    /// Decodes one agent-session metadata row from the store's TSV format.
-    pub(super) fn decode(line: &str) -> Result<Self> {
-        let fields = split_fields(line)?;
-        if !(fields.len() == 11
-            || fields.len() == 12
-            || fields.len() == 14
-            || fields.len() == 18
-            || fields.len() == 19
-            || fields.len() == 20
-            || fields.len() == 21
-            || fields.len() == 22
-            || fields.len() == 23
-            || fields.len() == 24
-            || fields.len() == 25)
-            || fields[0] != AGENT_SESSION_METADATA_VERSION
-        {
-            return Err(MezError::invalid_args(
-                "invalid agent session metadata entry",
-            ));
-        }
-        let legacy_layout = fields.len() <= 22;
-        let current_without_directive_layout = fields.len() == 23;
-        let current_with_cache_write_layout = fields.len() == 25;
-        let prompt_cache_lineage_id = if legacy_layout {
-            fields[3].clone()
-        } else {
-            fields[4].clone()
-        };
-        let visibility_index = if legacy_layout { 4 } else { 5 };
-        let running_turn_index = if legacy_layout { 5 } else { 6 };
-        let transcript_entries_index = if legacy_layout { 6 } else { 7 };
-        let log_level_index = if legacy_layout { 7 } else { 8 };
-        let pane_model_profile_index = if legacy_layout { 8 } else { 9 };
-        let planning_enabled_index = if legacy_layout { 9 } else { 10 };
-        let response_style_index = if legacy_layout { 10 } else { 11 };
-        let directive_index = if legacy_layout || current_without_directive_layout {
-            None
-        } else {
-            Some(12)
-        };
-        let routing_enabled_index = if legacy_layout {
-            11
-        } else if current_without_directive_layout {
-            12
-        } else {
-            13
-        };
-        let working_directory_index = if legacy_layout {
-            12
-        } else if current_without_directive_layout {
-            13
-        } else {
-            14
-        };
-        let project_root_index = if legacy_layout {
-            13
-        } else if current_without_directive_layout {
-            14
-        } else {
-            15
-        };
-        let token_usage_start = if legacy_layout {
-            14
-        } else if current_without_directive_layout {
-            15
-        } else {
-            16
-        };
-        let approval_policy_index = if legacy_layout {
-            18
-        } else if current_without_directive_layout {
-            19
-        } else if current_with_cache_write_layout {
-            21
-        } else {
-            20
-        };
-        let context_usage_index = if legacy_layout {
-            19
-        } else if current_without_directive_layout {
-            20
-        } else if current_with_cache_write_layout {
-            22
-        } else {
-            21
-        };
-        let token_usage_by_model_index = if legacy_layout {
-            20
-        } else if current_without_directive_layout {
-            21
-        } else if current_with_cache_write_layout {
-            23
-        } else {
-            22
-        };
-        let context_usage_snapshot_index = if legacy_layout {
-            21
-        } else if current_without_directive_layout {
-            22
-        } else if current_with_cache_write_layout {
-            24
-        } else {
-            23
-        };
-        let token_usage = if fields.len() >= 18 {
-            ModelTokenUsage {
-                input_tokens: parse_u64(&fields[token_usage_start], "agent session input_tokens")?,
-                output_tokens: parse_u64(
-                    &fields[token_usage_start + 1],
-                    "agent session output_tokens",
-                )?,
-                reasoning_tokens: parse_u64(
-                    &fields[token_usage_start + 2],
-                    "agent session reasoning_tokens",
-                )?,
-                cached_input_tokens: fields
-                    .get(token_usage_start + 3)
-                    .filter(|value| !value.is_empty())
-                    .map(|value| parse_u64(value, "agent session cached_input_tokens"))
-                    .transpose()?,
-                cache_write_input_tokens: if current_with_cache_write_layout {
-                    fields
-                        .get(token_usage_start + 4)
-                        .filter(|value| !value.is_empty())
-                        .map(|value| parse_u64(value, "agent session cache_write_input_tokens"))
-                        .transpose()?
-                } else {
-                    None
-                },
-            }
-        } else {
-            ModelTokenUsage::default()
-        };
-        let metadata = Self {
-            mezzanine_session_id: fields[1].clone(),
-            pane_id: fields[2].clone(),
-            conversation_id: fields[3].clone(),
-            prompt_cache_lineage_id,
-            visibility: fields[visibility_index].clone(),
-            running_turn_id: (!fields[running_turn_index].is_empty())
-                .then(|| fields[running_turn_index].clone()),
-            transcript_entries: parse_u64(
-                &fields[transcript_entries_index],
-                "agent session transcript_entries",
+    let legacy_layout = fields.len() <= 22;
+    let current_without_directive_layout = fields.len() == 23;
+    let current_with_cache_write_layout = fields.len() == 25;
+    let prompt_cache_lineage_id = if legacy_layout {
+        fields[3].clone()
+    } else {
+        fields[4].clone()
+    };
+    let visibility_index = if legacy_layout { 4 } else { 5 };
+    let running_turn_index = if legacy_layout { 5 } else { 6 };
+    let transcript_entries_index = if legacy_layout { 6 } else { 7 };
+    let log_level_index = if legacy_layout { 7 } else { 8 };
+    let pane_model_profile_index = if legacy_layout { 8 } else { 9 };
+    let planning_enabled_index = if legacy_layout { 9 } else { 10 };
+    let response_style_index = if legacy_layout { 10 } else { 11 };
+    let directive_index = if legacy_layout || current_without_directive_layout {
+        None
+    } else {
+        Some(12)
+    };
+    let routing_enabled_index = if legacy_layout {
+        11
+    } else if current_without_directive_layout {
+        12
+    } else {
+        13
+    };
+    let working_directory_index = if legacy_layout {
+        12
+    } else if current_without_directive_layout {
+        13
+    } else {
+        14
+    };
+    let project_root_index = if legacy_layout {
+        13
+    } else if current_without_directive_layout {
+        14
+    } else {
+        15
+    };
+    let token_usage_start = if legacy_layout {
+        14
+    } else if current_without_directive_layout {
+        15
+    } else {
+        16
+    };
+    let approval_policy_index = if legacy_layout {
+        18
+    } else if current_without_directive_layout {
+        19
+    } else if current_with_cache_write_layout {
+        21
+    } else {
+        20
+    };
+    let context_usage_index = if legacy_layout {
+        19
+    } else if current_without_directive_layout {
+        20
+    } else if current_with_cache_write_layout {
+        22
+    } else {
+        21
+    };
+    let token_usage_by_model_index = if legacy_layout {
+        20
+    } else if current_without_directive_layout {
+        21
+    } else if current_with_cache_write_layout {
+        23
+    } else {
+        22
+    };
+    let context_usage_snapshot_index = if legacy_layout {
+        21
+    } else if current_without_directive_layout {
+        22
+    } else if current_with_cache_write_layout {
+        24
+    } else {
+        23
+    };
+    let token_usage = if fields.len() >= 18 {
+        ModelTokenUsage {
+            input_tokens: parse_u64(&fields[token_usage_start], "agent session input_tokens")?,
+            output_tokens: parse_u64(
+                &fields[token_usage_start + 1],
+                "agent session output_tokens",
             )?,
-            log_level: fields[log_level_index].clone(),
-            pane_model_profile: (!fields[pane_model_profile_index].is_empty())
-                .then(|| fields[pane_model_profile_index].clone()),
-            planning_enabled: parse_bool(&fields[planning_enabled_index], "planning_enabled")?,
-            response_style: (!fields[response_style_index].is_empty())
-                .then(|| fields[response_style_index].clone()),
-            directive: directive_index
-                .and_then(|index| fields.get(index))
+            reasoning_tokens: parse_u64(
+                &fields[token_usage_start + 2],
+                "agent session reasoning_tokens",
+            )?,
+            cached_input_tokens: fields
+                .get(token_usage_start + 3)
                 .filter(|value| !value.is_empty())
-                .cloned(),
-            routing_enabled: fields
-                .get(routing_enabled_index)
-                .filter(|value| !value.is_empty())
-                .map(|value| parse_bool(value, "routing_enabled"))
+                .map(|value| parse_u64(value, "agent session cached_input_tokens"))
                 .transpose()?,
-            working_directory: fields
-                .get(working_directory_index)
-                .filter(|value| !value.is_empty())
-                .cloned(),
-            project_root: fields
-                .get(project_root_index)
-                .filter(|value| !value.is_empty())
-                .cloned(),
-            token_usage,
-            token_usage_by_model: fields
-                .get(token_usage_by_model_index)
-                .filter(|value| !value.is_empty())
-                .map(|value| decode_token_usage_by_model(value))
-                .transpose()?
-                .unwrap_or_default(),
-            context_usage_snapshot: fields
-                .get(context_usage_snapshot_index)
-                .filter(|value| !value.is_empty())
-                .map(|value| decode_context_usage_snapshot(value))
-                .transpose()?,
-            approval_policy: fields
-                .get(approval_policy_index)
-                .filter(|value| !value.is_empty())
-                .cloned(),
-            context_usage: fields
-                .get(context_usage_index)
-                .filter(|value| !value.is_empty())
-                .cloned(),
-        };
-        metadata.validate()?;
-        Ok(metadata)
-    }
+            cache_write_input_tokens: if current_with_cache_write_layout {
+                fields
+                    .get(token_usage_start + 4)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| parse_u64(value, "agent session cache_write_input_tokens"))
+                    .transpose()?
+            } else {
+                None
+            },
+        }
+    } else {
+        ModelTokenUsage::default()
+    };
+    let metadata = AgentSessionMetadata {
+        mezzanine_session_id: fields[1].clone(),
+        pane_id: fields[2].clone(),
+        conversation_id: fields[3].clone(),
+        prompt_cache_lineage_id,
+        visibility: fields[visibility_index].clone(),
+        running_turn_id: (!fields[running_turn_index].is_empty())
+            .then(|| fields[running_turn_index].clone()),
+        transcript_entries: parse_u64(
+            &fields[transcript_entries_index],
+            "agent session transcript_entries",
+        )?,
+        log_level: fields[log_level_index].clone(),
+        pane_model_profile: (!fields[pane_model_profile_index].is_empty())
+            .then(|| fields[pane_model_profile_index].clone()),
+        planning_enabled: parse_bool(&fields[planning_enabled_index], "planning_enabled")?,
+        response_style: (!fields[response_style_index].is_empty())
+            .then(|| fields[response_style_index].clone()),
+        directive: directive_index
+            .and_then(|index| fields.get(index))
+            .filter(|value| !value.is_empty())
+            .cloned(),
+        routing_enabled: fields
+            .get(routing_enabled_index)
+            .filter(|value| !value.is_empty())
+            .map(|value| parse_bool(value, "routing_enabled"))
+            .transpose()?,
+        working_directory: fields
+            .get(working_directory_index)
+            .filter(|value| !value.is_empty())
+            .cloned(),
+        project_root: fields
+            .get(project_root_index)
+            .filter(|value| !value.is_empty())
+            .cloned(),
+        token_usage,
+        token_usage_by_model: fields
+            .get(token_usage_by_model_index)
+            .filter(|value| !value.is_empty())
+            .map(|value| decode_token_usage_by_model(value))
+            .transpose()?
+            .unwrap_or_default(),
+        context_usage_snapshot: fields
+            .get(context_usage_snapshot_index)
+            .filter(|value| !value.is_empty())
+            .map(|value| decode_context_usage_snapshot(value))
+            .transpose()?,
+        approval_policy: fields
+            .get(approval_policy_index)
+            .filter(|value| !value.is_empty())
+            .cloned(),
+        context_usage: fields
+            .get(context_usage_index)
+            .filter(|value| !value.is_empty())
+            .cloned(),
+    };
+    metadata.validate()?;
+    Ok(metadata)
 }
 
 /// Encodes per-model token usage into one stable TSV field.
@@ -751,34 +674,6 @@ fn validate_non_empty(label: &str, value: &str) -> Result<()> {
         Err(MezError::invalid_args(format!("{label} must not be empty")))
     } else {
         Ok(())
-    }
-}
-
-/// Validates the persisted agent shell visibility spelling.
-fn validate_agent_visibility(value: &str) -> Result<()> {
-    match value {
-        "hidden" | "visible" | "hide-pending-task-completion" => Ok(()),
-        _ => Err(MezError::invalid_args(
-            "agent session visibility is invalid",
-        )),
-    }
-}
-
-/// Validates the persisted agent log level spelling.
-fn validate_log_level(value: &str) -> Result<()> {
-    match value {
-        "normal" | "verbose" | "debug" | "trace" => Ok(()),
-        _ => Err(MezError::invalid_args("agent session log level is invalid")),
-    }
-}
-
-/// Validates the persisted approval-policy spelling.
-fn validate_agent_approval_policy(value: &str) -> Result<()> {
-    match value {
-        "ask" | "auto-allow" | "full-access" => Ok(()),
-        _ => Err(MezError::invalid_args(
-            "agent session approval policy is invalid",
-        )),
     }
 }
 

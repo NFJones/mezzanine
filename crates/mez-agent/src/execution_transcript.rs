@@ -5,10 +5,10 @@
 //! shaping separate from the turn runner and shell/MCP action executors.
 
 use crate::{
-    ActionResult, AgentAction, AgentActionPayload, AgentTranscriptEntry, AgentTranscriptRole,
-    AgentTurnRecord, AgentTurnState, ContextSourceKind, MaapBatch, ModelMessage, ModelMessageRole,
-    ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey, ProviderTranscriptEvent,
-    TranscriptContractError, action_result_transcript_content,
+    ActionResult, AgentAction, AgentActionPayload, AgentTurnRecord, AgentTurnState,
+    ContextSourceKind, MaapBatch, ModelMessage, ModelMessageRole, ModelRequest, ModelResponse,
+    ModelTokenUsage, ModelTokenUsageKey, ProviderTranscriptEvent, TranscriptContractError,
+    TranscriptEntry, TranscriptRole, action_result_transcript_content,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,7 +55,7 @@ pub fn transcript_entries_for_execution(
     created_at_unix_seconds: u64,
     turn: &AgentTurnRecord,
     execution: &AgentTurnExecution,
-) -> Result<Vec<AgentTranscriptEntry>, TranscriptContractError> {
+) -> Result<Vec<TranscriptEntry>, TranscriptContractError> {
     if first_sequence == 0 || created_at_unix_seconds == 0 {
         return Err(TranscriptContractError::new(
             "transcript sequence and creation time must be non-zero",
@@ -67,11 +67,11 @@ pub fn transcript_entries_for_execution(
         let Some(content) = durable_request_transcript_content(message) else {
             continue;
         };
-        entries.push(AgentTranscriptEntry {
+        entries.push(TranscriptEntry {
             conversation_id: conversation_id.to_string(),
             sequence,
             created_at_unix_seconds,
-            role: AgentTranscriptRole::User,
+            role: TranscriptRole::User,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             pane_id: turn.pane_id.clone(),
@@ -80,11 +80,11 @@ pub fn transcript_entries_for_execution(
         sequence = sequence.saturating_add(1);
     }
     for event in provider_transcript_entries_for_execution(execution) {
-        entries.push(AgentTranscriptEntry {
+        entries.push(TranscriptEntry {
             conversation_id: conversation_id.to_string(),
             sequence,
             created_at_unix_seconds,
-            role: AgentTranscriptRole::System,
+            role: TranscriptRole::System,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             pane_id: turn.pane_id.clone(),
@@ -92,11 +92,11 @@ pub fn transcript_entries_for_execution(
         });
         sequence = sequence.saturating_add(1);
     }
-    entries.push(AgentTranscriptEntry {
+    entries.push(TranscriptEntry {
         conversation_id: conversation_id.to_string(),
         sequence,
         created_at_unix_seconds,
-        role: AgentTranscriptRole::Assistant,
+        role: TranscriptRole::Assistant,
         turn_id: turn.turn_id.clone(),
         agent_id: turn.agent_id.clone(),
         pane_id: turn.pane_id.clone(),
@@ -105,11 +105,11 @@ pub fn transcript_entries_for_execution(
     sequence = sequence.saturating_add(1);
 
     for result in &execution.action_results {
-        entries.push(AgentTranscriptEntry {
+        entries.push(TranscriptEntry {
             conversation_id: conversation_id.to_string(),
             sequence,
             created_at_unix_seconds,
-            role: AgentTranscriptRole::Tool,
+            role: TranscriptRole::Tool,
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),
             pane_id: turn.pane_id.clone(),
@@ -668,7 +668,7 @@ mod tests {
             transcript_entries_for_execution("conv1", 1, 200, &turn(), &execution).unwrap();
         let users = entries
             .iter()
-            .filter(|entry| entry.role == AgentTranscriptRole::User)
+            .filter(|entry| entry.role == TranscriptRole::User)
             .collect::<Vec<_>>();
 
         assert_eq!(users.len(), 1, "{entries:?}");
@@ -713,7 +713,7 @@ mod tests {
         let entries =
             transcript_entries_for_execution("conv1", 1, 200, &turn(), &execution).unwrap();
 
-        assert_eq!(entries[0].role, AgentTranscriptRole::User);
+        assert_eq!(entries[0].role, TranscriptRole::User);
         assert_eq!(entries[0].content, "create test.txt");
         assert!(
             entries
@@ -723,7 +723,7 @@ mod tests {
         assert!(
             entries
                 .iter()
-                .all(|entry| entry.role != AgentTranscriptRole::System)
+                .all(|entry| entry.role != TranscriptRole::System)
         );
     }
 
@@ -759,7 +759,7 @@ mod tests {
             transcript_entries_for_execution("conv1", 1, 200, &turn(), &execution).unwrap();
         let assistant = entries
             .iter()
-            .find(|entry| entry.role == AgentTranscriptRole::Assistant)
+            .find(|entry| entry.role == TranscriptRole::Assistant)
             .unwrap();
 
         assert_eq!(assistant.content, visible_text);
@@ -803,7 +803,7 @@ mod tests {
         let entries = transcript_entries_for_execution("conv1", 1, 200, &turn, &execution).unwrap();
         let hidden = entries
             .iter()
-            .filter(|entry| entry.role == AgentTranscriptRole::System)
+            .filter(|entry| entry.role == TranscriptRole::System)
             .map(|entry| ProviderTranscriptEvent::from_transcript_content(&entry.content).unwrap())
             .collect::<Vec<_>>();
 
@@ -819,7 +819,7 @@ mod tests {
         assert!(content.contains("[action_result a1 shell_command running]"));
         let visible = entries
             .iter()
-            .filter(|entry| entry.role != AgentTranscriptRole::System)
+            .filter(|entry| entry.role != TranscriptRole::System)
             .map(|entry| entry.content.as_str())
             .collect::<Vec<_>>()
             .join("\n");
@@ -872,7 +872,7 @@ mod tests {
             transcript_entries_for_execution("conv1", 1, 200, &turn(), &execution).unwrap();
         let assistant = entries
             .iter()
-            .find(|entry| entry.role == AgentTranscriptRole::Assistant)
+            .find(|entry| entry.role == TranscriptRole::Assistant)
             .unwrap();
 
         assert!(assistant.content.contains("thinking: The patch summary"));
@@ -903,7 +903,7 @@ mod tests {
             transcript_entries_for_execution("conv1", 1, 200, &turn(), &execution).unwrap();
         let assistant = entries
             .iter()
-            .find(|entry| entry.role == AgentTranscriptRole::Assistant)
+            .find(|entry| entry.role == TranscriptRole::Assistant)
             .unwrap();
 
         assert_eq!(

@@ -178,11 +178,11 @@ fn runtime_agent_prompt_resume_autocompletes_saved_session_uuid() {
     let mut service = test_runtime_service();
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-resume-complete"));
     transcript_store
-        .append(&crate::transcript::TranscriptEntry {
+        .append(&mez_agent::transcript::TranscriptEntry {
             conversation_id: "018f6b3a-1b2c-7000-9000-cafebabefeed".to_string(),
             sequence: 1,
             created_at_unix_seconds: 1,
-            role: crate::transcript::TranscriptRole::User,
+            role: mez_agent::transcript::TranscriptRole::User,
             turn_id: "turn-saved".to_string(),
             agent_id: "agent-%9".to_string(),
             pane_id: "%9".to_string(),
@@ -238,20 +238,20 @@ fn runtime_agent_prompt_resume_displays_saved_transcript_context() {
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-resume-display"));
     let conversation_id = "018f6b3a-1b2c-7000-9000-cafebabefeed";
     for (sequence, role, content) in [
-        (1, crate::transcript::TranscriptRole::User, "aGVsbG8K"),
+        (1, mez_agent::transcript::TranscriptRole::User, "aGVsbG8K"),
         (
             2,
-            crate::transcript::TranscriptRole::Assistant,
+            mez_agent::transcript::TranscriptRole::Assistant,
             "I inspected the repo and started the change",
         ),
         (
             3,
-            crate::transcript::TranscriptRole::Tool,
+            mez_agent::transcript::TranscriptRole::Tool,
             r#"action_id=action-1 action_type=say status=succeeded content: ignored structured_content: {"kind":"say","status":"final","content_type":"text/plain; charset=utf-8","text":"Implemented the change"}"#,
         ),
     ] {
         transcript_store
-            .append(&crate::transcript::TranscriptEntry {
+            .append(&mez_agent::transcript::TranscriptEntry {
                 conversation_id: conversation_id.to_string(),
                 sequence,
                 created_at_unix_seconds: sequence,
@@ -821,11 +821,11 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
     let cwd = temp_root("runtime-agent-resume-cwd");
     fs::create_dir_all(&cwd).unwrap();
     transcript_store
-        .append(&crate::transcript::TranscriptEntry {
+        .append(&mez_agent::transcript::TranscriptEntry {
             conversation_id: "saved".to_string(),
             sequence: 1,
             created_at_unix_seconds: 1,
-            role: crate::transcript::TranscriptRole::System,
+            role: mez_agent::transcript::TranscriptRole::System,
             turn_id: "turn-old".to_string(),
             agent_id: "agent-%9".to_string(),
             pane_id: "%9".to_string(),
@@ -833,11 +833,11 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         })
         .unwrap();
     transcript_store
-        .append(&crate::transcript::TranscriptEntry {
+        .append(&mez_agent::transcript::TranscriptEntry {
             conversation_id: "saved".to_string(),
             sequence: 2,
             created_at_unix_seconds: 1,
-            role: crate::transcript::TranscriptRole::User,
+            role: mez_agent::transcript::TranscriptRole::User,
             turn_id: "turn-old".to_string(),
             agent_id: "agent-%9".to_string(),
             pane_id: "%9".to_string(),
@@ -845,11 +845,11 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         })
         .unwrap();
     transcript_store
-        .append(&crate::transcript::TranscriptEntry {
+        .append(&mez_agent::transcript::TranscriptEntry {
             conversation_id: "saved".to_string(),
             sequence: 3,
             created_at_unix_seconds: 2,
-            role: crate::transcript::TranscriptRole::User,
+            role: mez_agent::transcript::TranscriptRole::User,
             turn_id: "turn-new".to_string(),
             agent_id: "agent-%9".to_string(),
             pane_id: "%9".to_string(),
@@ -860,11 +860,11 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         .append_prompt_history("saved", "find files")
         .unwrap();
     transcript_store
-        .append(&crate::transcript::TranscriptEntry {
+        .append(&mez_agent::transcript::TranscriptEntry {
             conversation_id: "latest".to_string(),
             sequence: 1,
             created_at_unix_seconds: 10,
-            role: crate::transcript::TranscriptRole::User,
+            role: mez_agent::transcript::TranscriptRole::User,
             turn_id: "turn-latest".to_string(),
             agent_id: "agent-%8".to_string(),
             pane_id: "%8".to_string(),
@@ -1065,11 +1065,11 @@ fn runtime_resume_picker_view_keeps_selected_link_styling_off_previous_cell() {
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-picker-view"));
     let session_id = "018f6b3a-1b2c-7000-9000-cafebabefeed";
     transcript_store
-        .append(&crate::transcript::TranscriptEntry {
+        .append(&mez_agent::transcript::TranscriptEntry {
             conversation_id: session_id.to_string(),
             sequence: 1,
             created_at_unix_seconds: 10,
-            role: crate::transcript::TranscriptRole::User,
+            role: mez_agent::transcript::TranscriptRole::User,
             turn_id: "turn-saved".to_string(),
             agent_id: "agent-%9".to_string(),
             pane_id: "%9".to_string(),
@@ -1077,11 +1077,11 @@ fn runtime_resume_picker_view_keeps_selected_link_styling_off_previous_cell() {
         })
         .unwrap();
     transcript_store
-        .append(&crate::transcript::TranscriptEntry {
+        .append(&mez_agent::transcript::TranscriptEntry {
             conversation_id: "latest".to_string(),
             sequence: 1,
             created_at_unix_seconds: 11,
-            role: crate::transcript::TranscriptRole::User,
+            role: mez_agent::transcript::TranscriptRole::User,
             turn_id: "turn-latest".to_string(),
             agent_id: "agent-%8".to_string(),
             pane_id: "%8".to_string(),
@@ -1230,11 +1230,11 @@ fn runtime_resume_picker_attached_frame_keeps_selected_link_styling_off_previous
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-resume-picker-frame"));
     let session_id = "018f6b3a-1b2c-7000-9000-cafebabefeed";
     transcript_store
-        .append(&crate::transcript::TranscriptEntry {
+        .append(&mez_agent::transcript::TranscriptEntry {
             conversation_id: session_id.to_string(),
             sequence: 1,
             created_at_unix_seconds: 10,
-            role: crate::transcript::TranscriptRole::User,
+            role: mez_agent::transcript::TranscriptRole::User,
             turn_id: "turn-saved".to_string(),
             agent_id: "agent-%9".to_string(),
             pane_id: "%9".to_string(),
@@ -1242,11 +1242,11 @@ fn runtime_resume_picker_attached_frame_keeps_selected_link_styling_off_previous
         })
         .unwrap();
     transcript_store
-        .append(&crate::transcript::TranscriptEntry {
+        .append(&mez_agent::transcript::TranscriptEntry {
             conversation_id: "latest".to_string(),
             sequence: 1,
             created_at_unix_seconds: 11,
-            role: crate::transcript::TranscriptRole::User,
+            role: mez_agent::transcript::TranscriptRole::User,
             turn_id: "turn-latest".to_string(),
             agent_id: "agent-%8".to_string(),
             pane_id: "%8".to_string(),
@@ -1415,11 +1415,11 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
     let mut service = test_runtime_service();
     let mezzanine_session_id = service.session().id.as_str().to_string();
     transcript_store
-        .append(&crate::transcript::TranscriptEntry {
+        .append(&mez_agent::transcript::TranscriptEntry {
             conversation_id: "saved-tokens".to_string(),
             sequence: 1,
             created_at_unix_seconds: 1,
-            role: crate::transcript::TranscriptRole::User,
+            role: mez_agent::transcript::TranscriptRole::User,
             turn_id: "turn-old".to_string(),
             agent_id: "agent-%1".to_string(),
             pane_id: "%1".to_string(),
@@ -1437,7 +1437,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
     transcript_store
         .save_agent_session_metadata(
             &mezzanine_session_id,
-            &[crate::transcript::AgentSessionMetadata {
+            &[mez_agent::transcript::AgentSessionMetadata {
                 mezzanine_session_id: mezzanine_session_id.clone(),
                 pane_id: "%1".to_string(),
                 conversation_id: "saved-tokens".to_string(),

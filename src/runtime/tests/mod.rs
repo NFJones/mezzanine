@@ -38,9 +38,10 @@ use crate::terminal::{
     TerminalClientLoopAction, TerminalClientLoopConfig,
 };
 use crate::test_support::runtime::{RuntimeServiceFixture, SessionFixture};
-use crate::transcript::{AgentTranscriptStore, TranscriptEntry, TranscriptRole};
+use crate::transcript::AgentTranscriptStore;
 use base64::Engine;
 use mez_agent::AgentLogLevel;
+use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
 use mez_agent::{ScheduledWork, ScheduledWorkKind, SubagentSpawnRequest};
 use mez_mux::copy::CopyPosition;
 use mez_mux::input::{MuxAction, PaneFocusDirection};

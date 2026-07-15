@@ -14,16 +14,18 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::error::{MezError, MezErrorKind, Result};
 
 use super::encoding::{
-    decode_prompt_history_entry, encode_prompt_history_entry, validate_conversation_id,
+    decode_agent_session_metadata, decode_prompt_history_entry, decode_transcript_entry,
+    encode_agent_session_metadata, encode_prompt_history_entry, encode_transcript_entry,
+    validate_conversation_id,
 };
 use super::fs::{
     set_private_dir_permissions, set_private_dir_permissions_async, set_private_file_permissions,
     set_private_file_permissions_async,
 };
-use super::summary::summarize_conversation;
-use super::types::{
-    AgentPresentationEntry, AgentSessionMetadata, AgentTranscriptStore, ConversationSummary,
-    TranscriptEntry,
+use super::types::{AgentPresentationEntry, AgentTranscriptStore};
+use mez_agent::transcript::{
+    AgentSessionMetadata, ConversationSummary, TranscriptEntry, TranscriptRole,
+    summarize_conversation,
 };
 
 /// Defines the SESSION TRANSCRIPT FILE NAME const used by this subsystem.
@@ -252,7 +254,7 @@ impl AgentTranscriptStore {
         let new_conversation = !self.conversation_exists(&entry.conversation_id)?;
         self.ensure_session_dir(&entry.conversation_id)?;
         let path = self.transcript_path_for(&entry.conversation_id)?;
-        let encoded = entry.encode()?;
+        let encoded = encode_transcript_entry(entry)?;
         let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
         file.write_all(encoded.as_bytes())?;
         file.write_all(b"\n")?;
@@ -367,7 +369,7 @@ impl AgentTranscriptStore {
         self.ensure_session_dir_async(&entry.conversation_id)
             .await?;
         let path = self.transcript_path_for(&entry.conversation_id)?;
-        let encoded = entry.encode()?;
+        let encoded = encode_transcript_entry(entry)?;
         let mut file = TokioOpenOptions::new()
             .create(true)
             .append(true)
@@ -399,7 +401,7 @@ impl AgentTranscriptStore {
         std_fs::File::open(path)?.read_to_string(&mut data)?;
         data.lines()
             .filter(|line| !line.trim().is_empty())
-            .map(TranscriptEntry::decode)
+            .map(decode_transcript_entry)
             .collect()
     }
 
@@ -460,7 +462,7 @@ impl AgentTranscriptStore {
             .collect::<Vec<_>>();
         let decoded = lines
             .into_iter()
-            .map(TranscriptEntry::decode)
+            .map(decode_transcript_entry)
             .collect::<Result<Vec<_>>>()?;
         let first = decoded.len().saturating_sub(max_entries);
         Ok(decoded[first..].to_vec())
@@ -572,7 +574,7 @@ impl AgentTranscriptStore {
         std_fs::File::open(path)?.read_to_string(&mut data)?;
         data.lines()
             .filter(|line| !line.trim().is_empty())
-            .map(AgentSessionMetadata::decode)
+            .map(decode_agent_session_metadata)
             .filter_map(|decoded| match decoded {
                 Ok(metadata) if metadata.mezzanine_session_id == mezzanine_session_id => {
                     Some(Ok(metadata))
@@ -613,7 +615,7 @@ impl AgentTranscriptStore {
             let mut data = String::new();
             std_fs::File::open(&path)?.read_to_string(&mut data)?;
             for line in data.lines().filter(|line| !line.trim().is_empty()) {
-                let metadata = AgentSessionMetadata::decode(line)?;
+                let metadata = decode_agent_session_metadata(line)?;
                 if metadata.mezzanine_session_id != mezzanine_session_id {
                     merged.push(metadata);
                 }
@@ -628,7 +630,7 @@ impl AgentTranscriptStore {
                 .truncate(true)
                 .open(&temp_path)?;
             for metadata in &merged {
-                file.write_all(metadata.encode()?.as_bytes())?;
+                file.write_all(encode_agent_session_metadata(metadata)?.as_bytes())?;
                 file.write_all(b"\n")?;
             }
             file.sync_all()?;
@@ -966,7 +968,7 @@ impl AgentTranscriptStore {
         } else if let Some(directory) = transcript_entry_project_root(entry) {
             summary.directory = Some(directory);
         }
-        if entry.role == super::types::TranscriptRole::User {
+        if entry.role == TranscriptRole::User {
             let preview = bounded_summary_text(&entry.content, 120);
             if summary.initial_prompt.is_none() {
                 summary.initial_prompt = Some(preview.clone());
@@ -1031,12 +1033,12 @@ impl AgentTranscriptStore {
         }
         let initial_prompt = first
             .as_ref()
-            .filter(|entry| entry.role == super::types::TranscriptRole::User)
+            .filter(|entry| entry.role == TranscriptRole::User)
             .map(|entry| bounded_summary_text(&entry.content, 120));
         let latest_user_prompt = tail
             .iter()
             .rev()
-            .find(|entry| entry.role == super::types::TranscriptRole::User)
+            .find(|entry| entry.role == TranscriptRole::User)
             .map(|entry| bounded_summary_text(&entry.content, 120))
             .or_else(|| initial_prompt.clone());
         Ok(Some(ConversationSummary {
@@ -1069,7 +1071,7 @@ impl AgentTranscriptStore {
                 return Ok(None);
             }
             if !line.trim().is_empty() {
-                return TranscriptEntry::decode(line.trim_end_matches(['\r', '\n'])).map(Some);
+                return decode_transcript_entry(line.trim_end_matches(['\r', '\n'])).map(Some);
             }
         }
     }

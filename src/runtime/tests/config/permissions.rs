@@ -855,7 +855,7 @@ fn runtime_agent_session_restore_does_not_narrow_configured_approval_default() {
     transcript_store
         .save_agent_session_metadata(
             &mezzanine_session_id,
-            &[crate::transcript::AgentSessionMetadata {
+            &[mez_agent::transcript::AgentSessionMetadata {
                 mezzanine_session_id: mezzanine_session_id.clone(),
                 pane_id: "%1".to_string(),
                 conversation_id: "legacy-ask".to_string(),

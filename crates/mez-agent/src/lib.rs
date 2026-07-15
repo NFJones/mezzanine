@@ -391,7 +391,7 @@ pub use subagent::{
 };
 pub use surface::{AgentCapability, AllowedAction, AllowedActionSet, ModelInteractionKind};
 pub use transcript::{
-    AgentTranscriptEntry, AgentTranscriptRole, TranscriptContractError, TranscriptPersistence,
+    TranscriptContractError, TranscriptEntry, TranscriptPersistence, TranscriptRole,
 };
 pub use turn::{
     AgentTurnLedgerError, AgentTurnLedgerErrorKind, AgentTurnLedgerResult, AgentTurnState,

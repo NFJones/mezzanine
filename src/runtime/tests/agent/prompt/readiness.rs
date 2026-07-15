@@ -266,7 +266,7 @@ fn runtime_provider_execution_completes_running_prompt_turn() {
     let entries = transcript_store.inspect(&conversation_id).unwrap();
     let assistant_entry = entries
         .iter()
-        .find(|entry| entry.role == crate::transcript::TranscriptRole::Assistant)
+        .find(|entry| entry.role == mez_agent::transcript::TranscriptRole::Assistant)
         .expect("assistant transcript entry should be persisted");
     assert_eq!(assistant_entry.content, "done");
     assert!(

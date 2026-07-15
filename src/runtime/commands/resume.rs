@@ -170,7 +170,7 @@ impl RuntimeSessionService {
     /// # Parameters
     /// - `summaries`: The saved conversation summaries to sort.
     fn runtime_latest_agent_saved_session_id(
-        summaries: &[crate::transcript::ConversationSummary],
+        summaries: &[mez_agent::transcript::ConversationSummary],
     ) -> Option<String> {
         let mut sorted_summaries = summaries.iter().collect::<Vec<_>>();
         sorted_summaries.sort_by(|left, right| {
@@ -329,7 +329,7 @@ impl RuntimeSessionService {
 
     /// Formats saved agent conversations as a nested resume list.
     fn runtime_agent_saved_sessions_display(
-        summaries: &[crate::transcript::ConversationSummary],
+        summaries: &[mez_agent::transcript::ConversationSummary],
         width: usize,
     ) -> String {
         let mut lines = vec!["## Agent Sessions".to_string(), String::new()];

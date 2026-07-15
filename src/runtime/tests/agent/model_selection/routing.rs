@@ -158,7 +158,7 @@ fn runtime_provider_failure_reports_only_safe_model_fallbacks() {
     let failure = entries
         .iter()
         .find(|entry| {
-            entry.role == crate::transcript::TranscriptRole::Assistant
+            entry.role == mez_agent::transcript::TranscriptRole::Assistant
                 && entry.content.contains("provider_error")
         })
         .unwrap();
@@ -700,7 +700,7 @@ reasoning_profile = "low"
     let failure = entries
         .iter()
         .find(|entry| {
-            entry.role == crate::transcript::TranscriptRole::Assistant
+            entry.role == mez_agent::transcript::TranscriptRole::Assistant
                 && entry.content.contains("provider_error")
         })
         .unwrap();

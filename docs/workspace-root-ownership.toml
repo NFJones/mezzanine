@@ -163,5 +163,5 @@ role = "Shared root integration fixtures used by multiple product test owners."
 
 [[surface]]
 path = "src/transcript"
-state = "temporary"
-role = "Filesystem transcript repository still contains duplicate canonical agent transcript records and summary policy."
+state = "adapter"
+role = "Filesystem transcript compatibility codecs, retention, compression, prompt history, private permissions, and terminal presentation replay over canonical mez-agent transcript contracts."
