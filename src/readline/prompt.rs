@@ -11,7 +11,8 @@ use crate::selector::{
 };
 use std::path::PathBuf;
 
-use super::types::{ReadlineOutcome, ReadlinePrompt, ReadlinePromptKind, ReadlinePromptMode};
+use super::types::{ReadlinePrompt, ReadlinePromptKind};
+use mez_mux::readline::{ReadlineOutcome, ReadlinePromptMode};
 use unicode_width::UnicodeWidthStr;
 
 impl ReadlinePrompt {

@@ -1,15 +1,22 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-Mezzanine is a Rust 2024 crate that builds the `mez` binary. Keep user-visible
-behavior aligned with `SPEC.md`, and keep implementation logic in
-subsystem modules rather than expanding `src/main.rs`.
+Mezzanine is a five-package Rust 2024 workspace whose root package builds the
+`mez` binary. Keep user-visible behavior aligned with `SPEC.md`, and keep
+implementation logic in subsystem modules rather than expanding `src/main.rs`.
 
 - `SPEC.md`: normative behavior for the multiplexer, agent harness,
   configuration, protocol, and security posture.
 - `AGENTS.md`: repository workflow and implementation guidance for agents.
-- `Cargo.toml` and `Cargo.lock`: crate metadata, binary target, and dependency
-  lockfile.
+- `Cargo.toml` and `Cargo.lock`: workspace and root-package metadata, binary
+  target, and shared dependency lockfile.
+- `crates/mez-core/`: stable low-dependency contracts shared by lower crates.
+- `crates/mez-terminal/`: one-terminal parsing, state, history, width, and
+  protocol engine.
+- `crates/mez-mux/`: multiplexer domain, PTY, layout, input, and presentation
+  behavior.
+- `crates/mez-agent/`: provider-independent agent harness, protocols, and
+  deterministic policy.
 - `justfile`: local development command entry points.
 - `src/main.rs`: thin binary entry point for `mez`.
 - `src/lib.rs`: library module root for testable subsystem code.
@@ -19,6 +26,8 @@ subsystem modules rather than expanding `src/main.rs`.
   permissions, and the agent harness.
 - `src/<subsystem>/*.rs`: focused components that implement decomposed
   subsystem behavior behind the subsystem `mod.rs` facade.
+- Root subsystem modules are product adapters. Import lower-crate contracts
+  directly rather than forwarding them through root compatibility exports.
 - `src/<subsystem>/tests/`: purpose-named test modules grouped by production
   behavior or domain and connected with true Rust `mod` declarations. Do not
   flatten test files with `include!` or use numbered chunk names such as

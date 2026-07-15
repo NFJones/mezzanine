@@ -14,8 +14,10 @@ use super::{
     SubagentSpawnRequest, SystemTime, UNIX_EPOCH, Value, WindowFocusTarget, json_escape,
     runtime_string_array_json, shell_command_from_argv, unix_seconds_to_rfc3339,
 };
-use crate::terminal::compose_client_presentation_with_styles;
-use mez_mux::presentation::{TerminalCursorStyle, max_viewport_column, max_viewport_row};
+use mez_mux::presentation::{
+    TerminalCursorStyle, compose_client_presentation_with_styles, max_viewport_column,
+    max_viewport_row,
+};
 use mez_mux::theme::{UiColorPair, UiTheme};
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 

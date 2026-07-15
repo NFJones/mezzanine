@@ -16,8 +16,8 @@ use super::{
 use super::{
     AttachedTerminalFdReadiness, AttachedTerminalFdRole, BorrowedFd, MezError, MouseAction,
     MouseEvent, RawFd, Result, TerminalClientLoopConfig, TerminalColor, TerminalStyleSpan,
-    classify_mouse_event, compose_client_presentation_with_styles, parse_sgr_mouse,
-    terminal_grapheme_width, terminal_graphemes, terminal_text_width,
+    classify_mouse_event, parse_sgr_mouse, terminal_grapheme_width, terminal_graphemes,
+    terminal_text_width,
 };
 use mez_mux::copy::{CopyModeKeyAction, classify_copy_mode_key_action};
 use mez_mux::input::{
@@ -27,7 +27,10 @@ use mez_mux::input::{
 };
 #[cfg(test)]
 use mez_mux::layout::Size;
-use mez_mux::presentation::{AttachedTerminalOutputModes, ClientStatusLine, RenderedClientView};
+use mez_mux::presentation::{
+    AttachedTerminalOutputModes, ClientStatusLine, RenderedClientView,
+    compose_client_presentation_with_styles,
+};
 #[cfg(test)]
 use mez_mux::presentation::{ClientViewRole, TerminalCursorStyle};
 #[cfg(test)]

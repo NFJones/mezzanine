@@ -31,9 +31,9 @@ reference documentation.
   interactive command surfaces, explicit skill usage, and common operator
   workflows.
 - [workspace-architecture.md](workspace-architecture.md): workspace package
-  ownership, allowed dependency edges, and extraction rules.
+  ownership, dependency edges, and boundary rules.
 - [workspace-ownership-matrix.md](workspace-ownership-matrix.md): audited
-  module ownership, residual compatibility surfaces, and extraction acceptance
+  module ownership, final adapter surfaces, and decomposition acceptance
   evidence.
 - [examples/config.toml](examples/config.toml): the generated baseline config
   example.

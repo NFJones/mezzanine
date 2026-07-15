@@ -1,10 +1,9 @@
 //! Terminal emulation and compatibility for one terminal surface.
 //!
-//! This crate will own pane-facing terminal parsing, screen state, history,
-//! capability profiles, and mode-aware input encoding. Multiplexer layout,
-//! frames, overlays, attached-client policy, and agent presentation remain
-//! outside this boundary. The initial empty facade allows those responsibilities
-//! to be separated in place before production modules move across packages.
+//! This crate owns pane-facing control parsing, screen and buffer state,
+//! history, profiles, styles, width behavior, mouse packets, and terminal-mode
+//! input encoding. Multiplexer layout, frames, overlays, attached-client policy,
+//! and agent presentation remain outside this boundary.
 
 /// Positive dimensions for one terminal surface.
 pub mod geometry;

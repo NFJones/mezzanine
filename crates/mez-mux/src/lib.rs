@@ -1,10 +1,9 @@
 //! Agent-independent terminal multiplexer domain and presentation.
 //!
-//! This crate will own pane, window, group, layout, process, input-routing, and
-//! multi-surface presentation behavior. It may consume terminal surfaces and
-//! shared contracts, but it must not depend on the agent harness or product
-//! composition crate. The initial empty facade records that direction before
-//! effect-driven mux boundaries are extracted from the root package.
+//! This crate owns pane, window, group, session, layout, PTY process, input,
+//! copy/readline, theme, command-planning, and multi-surface presentation
+//! behavior. It consumes terminal surfaces and shared identifiers but remains
+//! independent of the agent harness and product composition crate.
 
 pub mod command;
 pub mod copy;

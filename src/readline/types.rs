@@ -9,7 +9,9 @@ use crate::selector::{ActiveSelector, SelectorExtraCandidate};
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 
-pub use mez_mux::readline::{ReadlineOutcome, ReadlinePromptMode, ReadlinePromptState};
+#[cfg(test)]
+use mez_mux::readline::ReadlineOutcome;
+use mez_mux::readline::ReadlinePromptState;
 
 /// The interactive surface using a readline buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

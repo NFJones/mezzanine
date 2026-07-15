@@ -7,7 +7,7 @@
 use super::{BTreeMap, MezError, Path, Result};
 use base64::Engine;
 use mez_agent::instructions::{DiscoveredInstructionFile, parse_instruction_discovery_output};
-pub(super) use mez_agent::{
+use mez_agent::{
     SHELL_OUTPUT_BASE64_BEGIN_MARKER, SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER,
     SHELL_OUTPUT_BASE64_END_MARKER,
 };

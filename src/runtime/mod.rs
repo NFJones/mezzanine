@@ -51,8 +51,8 @@ use crate::audit::{
 };
 use crate::auth::AuthStore;
 use crate::command::{
-    CommandInvocation, CommandOutcome, bind_key_args, binding_config_key, execute_auth_command,
-    execute_command, execute_mark_pane_ready_command, key_chord_notation, parse_command_sequence,
+    CommandOutcome, bind_key_args, binding_config_key, execute_auth_command, execute_command,
+    execute_mark_pane_ready_command, key_chord_notation, parse_command_sequence,
 };
 use crate::config::{
     ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,
@@ -157,6 +157,7 @@ use mez_agent::{
     SubagentSpawnRequest, builtin_subagent_profiles,
 };
 use mez_core::ids::{AgentId, ClientId, PaneId, SessionId, WindowId};
+use mez_mux::command::CommandInvocation;
 use mez_mux::copy::CopyModeKeyAction;
 use mez_mux::copy::{CopyPosition, SearchDirection};
 use mez_mux::input::{
@@ -315,8 +316,8 @@ pub use agent_state::{
 };
 pub use deferred::AttachedClientStepApplication;
 pub use env::{
-    AuxiliarySocketKind, DEFAULT_SOCKET_NAME, MEZ_ENV_FIELD_SEPARATOR, PaneEnvironment, RuntimeEnv,
-    SocketDirectory, SocketDirectorySource,
+    AuxiliarySocketKind, DEFAULT_SOCKET_NAME, MEZ_ENV_FIELD_SEPARATOR, RuntimeEnv, SocketDirectory,
+    SocketDirectorySource,
 };
 pub use fanout::{
     RuntimeEventConnection, RuntimeEventConnectionTable, RuntimeEventFanoutSink,
@@ -325,6 +326,7 @@ pub use fanout::{
     flush_runtime_event_wakeup, flush_runtime_event_wakeups, flush_runtime_message_wakeup,
     flush_runtime_message_wakeups,
 };
+use mez_mux::process::PaneProcessEnvironment as PaneEnvironment;
 use pane_io::{ActivePanePipe, PaneExitRecord, StoppedPanePipe};
 pub use pane_io::{
     PaneExitUpdate, PaneInputDispatch, PaneOutputUpdate, PaneProcessStart, PaneResizeUpdate,

@@ -1363,7 +1363,6 @@ name = "mez-agent"
 version = "0.1.0"
 dependencies = [
  "base64",
- "mez-core",
  "rand 0.10.1",
  "serde",
  "serde_json",
@@ -1395,7 +1394,6 @@ dependencies = [
 name = "mez-terminal"
 version = "0.1.0"
 dependencies = [
- "mez-core",
  "unicode-segmentation",
  "unicode-width",
 ]

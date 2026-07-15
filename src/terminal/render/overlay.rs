@@ -7,7 +7,7 @@
 
 use super::*;
 
-pub(crate) use mez_mux::render::{normalize_overlay_style_spans, overlay_text_style_width};
+use mez_mux::render::{normalize_overlay_style_spans, overlay_text_style_width};
 
 /// Runs the compose display overlay lines operation for this subsystem.
 ///

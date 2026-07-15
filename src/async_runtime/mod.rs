@@ -44,12 +44,12 @@ use crate::terminal::{
     AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopReport,
     AttachedTerminalClientStepPlan, AttachedTerminalFdReadiness, AttachedTerminalFdRole,
     MouseAction, TerminalClientLoopAction, TerminalClientLoopConfig,
-    compose_client_presentation_with_styles, plan_attached_terminal_client_step,
-    plan_attached_terminal_client_step_with_host_paste_buffer,
+    plan_attached_terminal_client_step, plan_attached_terminal_client_step_with_host_paste_buffer,
 };
 use mez_agent::{AgentTurnExecution, AgentTurnLedger};
 use mez_core::ids::{AgentId, ClientId};
 use mez_mux::layout::Size;
+use mez_mux::presentation::compose_client_presentation_with_styles;
 use mez_mux::process::{PaneExitStatus, PaneProcess};
 use mez_mux::session::ClientState;
 use mez_terminal::TerminalStyleSpan;

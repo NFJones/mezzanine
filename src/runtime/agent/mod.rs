@@ -62,7 +62,6 @@ use crate::agent::semantic::{
     apply_patch_touched_paths, apply_patch_write_plan_from_read_output,
     apply_patch_write_plan_from_read_outputs,
 };
-use crate::command::CommandInvocation;
 use crate::config::{
     ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
     ConfigPaths, ConfigScope,
@@ -79,6 +78,7 @@ use mez_agent::{
     assistant_context_content_for_execution, invoked_mcp_tools_for_context,
     set_project_guidance_context,
 };
+use mez_mux::command::CommandInvocation;
 
 mod approvals;
 mod audit;

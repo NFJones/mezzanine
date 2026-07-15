@@ -12,7 +12,8 @@ use super::{
     TerminalClientLoopConfig, plan_attached_terminal_client_step_with_host_paste_buffer,
     run_async_client_output_flush_service,
 };
-use crate::terminal::{TerminalClientLoopAction, compose_client_presentation_with_styles};
+use crate::terminal::TerminalClientLoopAction;
+use mez_mux::presentation::compose_client_presentation_with_styles;
 use std::future::Future;
 use std::time::Duration;
 use tokio::time::timeout;

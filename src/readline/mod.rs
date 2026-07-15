@@ -32,7 +32,7 @@ mod prompt_loop;
 mod types;
 
 #[cfg(test)]
-pub use mez_mux::readline::{ReadlineBuffer, ReadlineEdit, ReadlineOutcome};
+use mez_mux::readline::{ReadlineBuffer, ReadlineEdit, ReadlineOutcome};
 #[cfg(test)]
 pub use prompt_loop::run_readline_prompt_loop;
 pub use types::{ReadlineInputDecoder, ReadlinePrompt, ReadlinePromptKind};

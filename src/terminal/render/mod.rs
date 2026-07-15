@@ -19,19 +19,19 @@ use mez_mux::presentation::{
     TerminalFramePosition, TerminalFrameStyle, TerminalWindowFrameContext,
     TerminalWindowGroupFrameContext, TerminalWindowStatusContext, plan_window_render,
 };
-pub(crate) use mez_mux::render::overlay_fixed_column_style_spans;
+use mez_mux::render::line_slice;
 use mez_mux::render::{
     FramePillboxEntry, FramePillboxSegment, FrameStatusSegment, FrameStatusValue,
     PositionedFrameStatus, RenderedFrameStatus, TerminalRenderCell, compose_frame_pillbox_row,
     compose_frame_text_row, compose_pane_frame_row,
     display_overlay_targets as agent_display_overlay_targets, fit_styled_width, fit_width,
     fitted_text_width, frame_pillbox_segment_columns, frame_style_rendition,
-    overlay_display_lines as overlay_agent_display_lines, position_frame_status,
-    render_frame_pillbox_segments, render_frame_pillbox_text, render_frame_status,
-    sanitize_frame_text, style_span_overlaps_columns, style_span_segments_outside_range,
-    styled_frame_line_with_rendition, write_text_cells_with_width as write_frame_text_cells,
+    overlay_display_lines as overlay_agent_display_lines, overlay_fixed_column_style_spans,
+    position_frame_status, render_frame_pillbox_segments, render_frame_pillbox_text,
+    render_frame_status, sanitize_frame_text, style_span_overlaps_columns,
+    style_span_segments_outside_range, styled_frame_line_with_rendition,
+    write_text_cells_with_width as write_frame_text_cells,
 };
-pub(super) use mez_mux::render::{char_count, line_slice};
 use mez_mux::theme::{UiColorPair, UiTheme};
 
 // Client view composition and pane/window rendering.
@@ -43,8 +43,8 @@ mod prompt;
 
 mod text;
 
+pub use dividers::pane_border_cells_for_geometries;
 use dividers::{merged_pane_frame_boundary_style_spans, pane_divider_rendition};
-pub use dividers::{pane_border_cells_for_geometries, pane_frame_merges_into_divider};
 use frame::{
     AGENT_STATUS_SCAN_BAND_WIDTH, group_frame_text, pane_agent_prompt_space_reserved,
     pane_agent_prompt_transparent, pane_agent_shell_visible, pane_border_rendition,
@@ -56,10 +56,10 @@ pub use frame::{
     pane_frame_agent_status_pillbox_cells, window_frame_action_pillbox_cells,
     window_frame_pillbox_cells, window_group_frame_pillbox_cells,
 };
-pub use mez_mux::presentation::{
-    compose_client_presentation, compose_client_presentation_with_styles,
+use mez_mux::presentation::{
+    compose_client_presentation_with_styles, pane_frame_merges_into_divider, place_group_frame,
+    place_window_frame,
 };
-use mez_mux::presentation::{place_group_frame, place_window_frame};
 use mez_mux::render::{
     agent_status_running_gradient_palette, animated_scan_background, blend_terminal_color,
     contrasting_binary_foreground, gradient_highlight_for_offset, neutral_surface_step,
@@ -90,7 +90,7 @@ pub use prompt::{
     render_readline_prompt_status_row,
 };
 pub(crate) use text::{
-    DEFAULT_AGENT_WRAP_COLUMN_CAP, TerminalEmojiWidth, agent_log_wrap_width, agent_wrap_column_cap,
+    DEFAULT_AGENT_WRAP_COLUMN_CAP, agent_log_wrap_width, agent_wrap_column_cap,
     set_agent_wrap_column_cap, set_terminal_emoji_width, terminal_grapheme_width,
     terminal_graphemes, terminal_text_width, wrap_agent_log_lines,
 };

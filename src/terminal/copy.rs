@@ -6,9 +6,10 @@
 
 use std::ops::{Deref, DerefMut};
 
-use super::{Result, TerminalScreen, char_count, line_slice};
+use super::{Result, TerminalScreen};
 use mez_mux::copy::{CopyPosition, StyledCopyMode, normalize_selection, validate_position};
 use mez_mux::paste::PasteBuffers;
+use mez_mux::render::{char_count, line_slice};
 
 // Copy mode, selection, and search primitives.
 

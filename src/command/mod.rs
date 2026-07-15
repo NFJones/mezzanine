@@ -105,7 +105,7 @@ pub use dispatch::{
 pub(crate) use display::{
     bind_key_args, binding_config_key, command_help_display_with_key_bindings, key_chord_notation,
 };
-pub use mez_mux::command::CommandInvocation;
+use mez_mux::command::CommandInvocation;
 pub use parser::parse_command_sequence;
 pub use types::{
     BaselineCommand, BaselineCommandStatus, CommandOutcome, LayoutLoadSelector, baseline_commands,

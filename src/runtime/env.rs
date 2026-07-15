@@ -9,8 +9,6 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-pub use mez_mux::process::PaneProcessEnvironment as PaneEnvironment;
-
 use super::sockets::current_effective_uid;
 
 /// Separates fields inside the `MEZ` pane-environment value.

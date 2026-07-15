@@ -10,7 +10,6 @@ use mez_mux::theme::UiTheme;
 use mez_terminal::{GraphicRendition, TerminalStyleSpan};
 
 use mez_mux::presentation::pane_divider_cells;
-pub use mez_mux::presentation::pane_frame_merges_into_divider;
 
 /// Returns the rendered cells occupied by mux-managed pane dividers.
 pub fn pane_border_cells_for_geometries(

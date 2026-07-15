@@ -308,9 +308,9 @@ fn marker() -> MarkerToken {
 fn framed_shell_output(text: &str) -> String {
     format!(
         "{}\n{}\n{}\n",
-        super::shell::SHELL_OUTPUT_BASE64_BEGIN_MARKER,
+        mez_agent::SHELL_OUTPUT_BASE64_BEGIN_MARKER,
         base64::engine::general_purpose::STANDARD.encode(text.as_bytes()),
-        super::shell::SHELL_OUTPUT_BASE64_END_MARKER
+        mez_agent::SHELL_OUTPUT_BASE64_END_MARKER
     )
 }
 

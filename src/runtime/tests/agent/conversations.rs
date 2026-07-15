@@ -1338,9 +1338,9 @@ fn runtime_resume_picker_attached_frame_keeps_selected_link_styling_off_previous
         ..mez_mux::presentation::AttachedTerminalOutputModes::default()
     };
     let (previous_lines, previous_spans) =
-        crate::terminal::compose_client_presentation_with_styles(&previous_view, None);
+        mez_mux::presentation::compose_client_presentation_with_styles(&previous_view, None);
     let (current_lines, current_spans) =
-        crate::terminal::compose_client_presentation_with_styles(&current_view, None);
+        mez_mux::presentation::compose_client_presentation_with_styles(&current_view, None);
     let previous_frame = crate::terminal::encode_attached_terminal_output_update_frame_with_styles(
         &previous_lines,
         &previous_spans,

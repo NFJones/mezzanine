@@ -26,7 +26,7 @@ pub(super) fn unix_mode(path: &Path) -> u32 {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn test_pane_environment() -> crate::runtime::PaneEnvironment {
+pub(super) fn test_pane_environment() -> mez_mux::process::PaneProcessEnvironment {
     let mut ids = IdFactory::default();
     pane_environment(
         Path::new("/tmp/mez-async-runtime-test.sock"),

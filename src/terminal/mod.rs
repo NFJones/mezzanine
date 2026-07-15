@@ -95,13 +95,11 @@ pub use mouse::{
     MouseAction, MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MouseWindowActionFrameCell,
     PaneAgentStatusField, WindowFrameAction, WindowFrameCommandKind, classify_mouse_event,
 };
-pub(crate) use render::overlay_fixed_column_style_spans;
 pub use render::{
     DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_PANE_FRAME_VISIBLE_FIELDS,
     DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE, DEFAULT_WINDOW_FRAME_TEMPLATE,
     DEFAULT_WINDOW_FRAME_VISIBLE_FIELDS, TerminalFrameRenderOptions,
-    agent_prompt_reserved_line_count, compose_client_presentation,
-    compose_client_presentation_with_styles, compose_display_overlay_line_style_spans,
+    agent_prompt_reserved_line_count, compose_display_overlay_line_style_spans,
     compose_display_overlay_lines, compose_display_region_overlay_line_style_spans,
     compose_display_region_overlay_lines, compose_modal_display_overlay_line_style_spans,
     compose_modal_display_overlay_lines, compose_prompt_overlay_lines,
@@ -118,11 +116,10 @@ pub(crate) use screen::parse_mez_shell_transaction_osc;
 
 use client_loop::borrow_raw_fd;
 pub(crate) use render::{
-    DEFAULT_AGENT_WRAP_COLUMN_CAP, TerminalEmojiWidth, agent_log_wrap_width, agent_wrap_column_cap,
+    DEFAULT_AGENT_WRAP_COLUMN_CAP, agent_log_wrap_width, agent_wrap_column_cap,
     set_agent_wrap_column_cap, set_terminal_emoji_width, terminal_grapheme_width,
     terminal_graphemes, terminal_text_width, wrap_agent_log_lines,
 };
-use render::{char_count, line_slice};
 
 /// Exposes the tests module boundary.
 ///

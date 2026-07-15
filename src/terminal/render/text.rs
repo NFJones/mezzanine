@@ -15,7 +15,7 @@ static AGENT_WRAP_COLUMN_CAP: AtomicUsize = AtomicUsize::new(DEFAULT_AGENT_WRAP_
 
 /// Selects how explicit emoji-presentation status symbols are measured in
 /// terminal display cells.
-pub(crate) use mez_terminal::TerminalEmojiWidth;
+use mez_terminal::TerminalEmojiWidth;
 
 /// Applies the process-wide terminal emoji width policy.
 ///

@@ -28,12 +28,12 @@ use super::{
     runtime_cooperation_mode, runtime_cooperation_mode_name, runtime_json_string_field,
     runtime_json_value, unix_seconds_to_rfc3339, valid_color_alias_name, validate_config_text,
 };
-use crate::terminal::TerminalEmojiWidth;
 use crate::transcript::DEFAULT_SAVED_AGENT_SESSION_LIMIT;
 use mez_mux::theme::{
     DEFAULT_UI_THEME_NAME, UiTheme, UiThemeDefinition, builtin_ui_theme_definition,
     resolve_ui_theme,
 };
+use mez_terminal::TerminalEmojiWidth;
 
 mod agents;
 mod audit;
@@ -358,7 +358,8 @@ pub(super) fn optional_i32_json(value: Option<i32>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::terminal::{DEFAULT_AGENT_WRAP_COLUMN_CAP, TerminalEmojiWidth, terminal_text_width};
+    use crate::terminal::{DEFAULT_AGENT_WRAP_COLUMN_CAP, terminal_text_width};
+    use mez_terminal::TerminalEmojiWidth;
 
     use super::{
         runtime_fit_status_line, runtime_terminal_agent_wrap_column_cap_from_config,

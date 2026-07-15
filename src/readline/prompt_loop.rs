@@ -6,9 +6,10 @@
 use crate::error::{MezError, Result};
 
 use super::types::{
-    ReadlineInputDecoder, ReadlineOutcome, ReadlinePrompt, ReadlinePromptLoopConfig,
-    ReadlinePromptLoopIo, ReadlinePromptLoopReport,
+    ReadlineInputDecoder, ReadlinePrompt, ReadlinePromptLoopConfig, ReadlinePromptLoopIo,
+    ReadlinePromptLoopReport,
 };
+use mez_mux::readline::ReadlineOutcome;
 
 impl Default for ReadlinePromptLoopConfig {
     /// Runs the default operation for this subsystem.

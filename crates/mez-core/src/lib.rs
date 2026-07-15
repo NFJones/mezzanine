@@ -1,10 +1,8 @@
 //! Stable contracts shared by independent Mezzanine subsystems.
 //!
-//! This crate is the dependency root for the Mezzanine workspace. It will own
-//! only low-dependency value types that have multiple lower-level consumers;
-//! product policy, I/O, persistence, and general-purpose helpers do not belong
-//! here. The initial empty facade establishes that boundary before production
-//! types are extracted from the root package.
+//! This crate is the workspace dependency root and owns canonical identifiers
+//! plus their validation invariants. Product policy, I/O, persistence, runtime
+//! orchestration, and a general-purpose utility layer do not belong here.
 
 /// Stable opaque identifiers shared across Mezzanine subsystems.
 pub mod ids;

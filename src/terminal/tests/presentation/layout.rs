@@ -4,16 +4,16 @@ use crate::terminal::tests::fixtures::display_column_for_fragment;
 use crate::terminal::{
     BTreeMap, DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE,
     DEFAULT_WINDOW_FRAME_TEMPLATE, PaneRenderInput, TerminalClientLoopConfig, TerminalFrameContext,
-    TerminalFrameRenderOptions, TerminalPaneFrameContext, compose_client_presentation,
-    draw_window_from_screens, render_attached_client_view, render_window,
-    render_window_with_pane_frame_template,
+    TerminalFrameRenderOptions, TerminalPaneFrameContext, draw_window_from_screens,
+    render_attached_client_view, render_window, render_window_with_pane_frame_template,
 };
 use mez_core::ids::IdFactory;
 use mez_mux::layout::{PaneGeometry, Size, SplitDirection, Window};
 use mez_mux::presentation::{ClientViewRole, RenderedClientView, TerminalCursorStyle};
 use mez_mux::presentation::{
     TerminalFramePosition, TerminalWindowFrameContext, TerminalWindowGroupFrameContext,
-    TerminalWindowStatusContext, apply_client_view_offset, pane_render_region_size_for_geometry,
+    TerminalWindowStatusContext, apply_client_view_offset, compose_client_presentation,
+    pane_render_region_size_for_geometry,
 };
 use mez_mux::theme::UiTheme;
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalScreen, TerminalStyleSpan};
