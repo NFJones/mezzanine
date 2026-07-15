@@ -32,6 +32,7 @@ REQUIRED_OWNER_PATHS = {
     "crates/mez-agent/src/turn_runner.rs",
     "crates/mez-core/src/ids.rs",
     "crates/mez-mux/src/layout/mod.rs",
+    "crates/mez-mux/src/host_input.rs",
     "crates/mez-mux/src/process/mod.rs",
     "crates/mez-mux/src/readline/tests/buffer.rs",
     "crates/mez-mux/src/readline/tests/prompt.rs",

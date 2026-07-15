@@ -8,6 +8,7 @@
 pub mod command;
 pub mod copy;
 mod error;
+pub mod host_input;
 pub mod input;
 pub mod layout;
 pub mod paste;

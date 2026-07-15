@@ -5,7 +5,7 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use std::io::ErrorKind;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::mouse::mouse_copy_position;
 use super::{
@@ -38,12 +38,6 @@ use mez_mux::theme::UiTheme;
 /// Renderers advance the scan phase at this interval, and attach clients use
 /// the same value to request fresh views only while animation is active.
 pub const AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS: u64 = 180;
-
-/// Maximum buffered attached-terminal host bracketed-paste payload.
-///
-/// Malformed terminal paste frames must not swallow ordinary input forever or
-/// grow without bound if the closing delimiter never arrives.
-pub const HOST_BRACKETED_PASTE_MAX_BUFFER_BYTES: usize = 1024 * 1024;
 
 /// Carries Terminal Client Loop Action state for this subsystem.
 ///
@@ -1788,11 +1782,7 @@ pub(crate) fn route_client_input_actions_with_host_paste_state(
             break;
         };
         let action = route_client_input(&remaining[..mouse_len], &config)?;
-        apply_batched_mouse_action_side_effects(
-            &mut config,
-            &action,
-            BatchedMouseSideEffectMode::ImmediateForwarding,
-        );
+        apply_batched_mouse_action_side_effects(&mut config, &action);
         actions.push(action);
         remaining = &remaining[mouse_len..];
     }
@@ -1829,172 +1819,34 @@ fn route_client_input_actions_with_host_paste_buffer_state(
     config: &TerminalClientLoopConfig,
     host_paste: &mut HostBracketedPasteBufferState<'_>,
 ) -> Result<Vec<TerminalClientLoopAction>> {
-    const HOST_BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
-    const HOST_BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
-    const HOST_BRACKETED_PASTE_STALE_AFTER: Duration = Duration::from_millis(500);
+    let mut decoder = mez_mux::host_input::HostBracketedPasteDecoder::from_parts(
+        *host_paste.active,
+        host_paste.buffer.clone(),
+        *host_paste.started_at,
+    );
+    let segments = decoder.decode_at(input, Instant::now());
+    *host_paste.active = decoder.active();
+    host_paste.buffer.clear();
+    host_paste.buffer.extend_from_slice(decoder.buffer());
+    *host_paste.started_at = decoder.started_at();
 
-    let mut remaining = input;
     let mut actions = Vec::new();
-    let mut config = config.clone();
-    let prefix = key_chord_input_bytes(config.bindings.escape);
-
-    while !remaining.is_empty() {
-        if *host_paste.active {
-            config.prefix_key_pending = false;
-            if host_paste
-                .started_at
-                .is_some_and(|started_at| started_at.elapsed() >= HOST_BRACKETED_PASTE_STALE_AFTER)
-            {
-                let buffered = std::mem::take(host_paste.buffer);
-                *host_paste.active = false;
-                *host_paste.started_at = None;
-                if !buffered.is_empty() {
-                    actions.push(TerminalClientLoopAction::ForwardToPane(buffered));
-                }
-                continue;
+    for segment in segments {
+        match segment {
+            mez_mux::host_input::HostInputSegment::BracketedPaste(bytes) => {
+                actions.push(TerminalClientLoopAction::ForwardToPane(bytes));
             }
-            host_paste.buffer.extend_from_slice(remaining);
-            if host_paste.buffer.len() > HOST_BRACKETED_PASTE_MAX_BUFFER_BYTES {
-                let buffered = std::mem::take(host_paste.buffer);
-                *host_paste.active = false;
-                *host_paste.started_at = None;
-                actions.push(TerminalClientLoopAction::ForwardToPane(buffered));
-                return Ok(actions);
-            }
-            let Some(end_start) = input_sequence_start(host_paste.buffer, HOST_BRACKETED_PASTE_END)
-            else {
-                return Ok(actions);
-            };
-            let consumed = end_start.saturating_add(HOST_BRACKETED_PASTE_END.len());
-            let suffix = host_paste.buffer[consumed..].to_vec();
-            actions.push(TerminalClientLoopAction::ForwardToPane(
-                host_paste.buffer[..consumed].to_vec(),
-            ));
-            host_paste.buffer.clear();
-            *host_paste.active = false;
-            *host_paste.started_at = None;
-            if !suffix.is_empty() {
-                actions.extend(route_client_input_actions_with_host_paste_buffer_state(
-                    &suffix, &config, host_paste,
+            mez_mux::host_input::HostInputSegment::Ordinary(bytes) => {
+                let mut paste_active = false;
+                actions.extend(route_client_input_actions_with_host_paste_state(
+                    &bytes,
+                    config,
+                    &mut paste_active,
                 )?);
             }
-            return Ok(actions);
         }
-
-        let paste_start = input_sequence_start(remaining, HOST_BRACKETED_PASTE_START);
-        if paste_start == Some(0) {
-            config.prefix_key_pending = false;
-            if let Some(end_start) = input_sequence_start(remaining, HOST_BRACKETED_PASTE_END) {
-                let consumed = end_start.saturating_add(HOST_BRACKETED_PASTE_END.len());
-                actions.push(TerminalClientLoopAction::ForwardToPane(
-                    remaining[..consumed].to_vec(),
-                ));
-                remaining = &remaining[consumed..];
-                continue;
-            }
-            host_paste.buffer.extend_from_slice(remaining);
-            if host_paste.buffer.len() > HOST_BRACKETED_PASTE_MAX_BUFFER_BYTES {
-                let buffered = std::mem::take(host_paste.buffer);
-                *host_paste.started_at = None;
-                actions.push(TerminalClientLoopAction::ForwardToPane(buffered));
-                break;
-            }
-            *host_paste.active = true;
-            *host_paste.started_at = Some(Instant::now());
-            break;
-        }
-
-        if config.prefix_key_pending {
-            let Some((action, consumed)) =
-                route_pending_prefix_client_input_action(remaining, &config)?
-            else {
-                actions.push(TerminalClientLoopAction::ReportUnboundPrefix(
-                    config.bindings.escape,
-                ));
-                config.prefix_key_pending = false;
-                break;
-            };
-            let enters_prompt = action_enters_client_prompt(&action);
-            actions.push(action);
-            config.prefix_key_pending = false;
-            remaining = &remaining[consumed..];
-            if enters_prompt {
-                break;
-            }
-            continue;
-        }
-
-        let mouse_start = sgr_mouse_sequence_start(remaining);
-        let prefix_start = prefix
-            .as_deref()
-            .and_then(|prefix| input_sequence_start(remaining, prefix));
-        let Some(special_start) = earliest_sequence_start(
-            earliest_sequence_start(paste_start, mouse_start),
-            prefix_start,
-        ) else {
-            actions.push(route_client_input(remaining, &config)?);
-            break;
-        };
-
-        if special_start > 0 {
-            actions.push(route_client_input(&remaining[..special_start], &config)?);
-            remaining = &remaining[special_start..];
-            continue;
-        }
-
-        let prefix_first = prefix_start == Some(0) && mouse_start != Some(0);
-        if prefix_first && let Some(prefix) = prefix.as_deref() {
-            let Some((action, consumed)) =
-                route_prefix_client_input_action(remaining, prefix, &config)?
-            else {
-                actions.push(route_client_input(remaining, &config)?);
-                break;
-            };
-            let enters_prompt = action_enters_client_prompt(&action);
-            let enters_prefix_key_mode =
-                matches!(action, TerminalClientLoopAction::EnterPrefixKeyMode);
-            actions.push(action);
-            if enters_prefix_key_mode {
-                config.prefix_key_pending = true;
-            }
-            remaining = &remaining[consumed..];
-            if enters_prompt {
-                break;
-            }
-            continue;
-        }
-
-        let Some(mouse_len) = sgr_mouse_sequence_len(remaining) else {
-            if let Some(malformed_mouse_prefix_len) = malformed_sgr_mouse_prefix_len(remaining) {
-                actions.push(TerminalClientLoopAction::HandleMouse(MouseAction::Ignore));
-                remaining = &remaining[malformed_mouse_prefix_len..];
-                continue;
-            }
-            actions.push(TerminalClientLoopAction::HandleMouse(MouseAction::Ignore));
-            break;
-        };
-        let action = route_client_input(&remaining[..mouse_len], &config)?;
-        apply_batched_mouse_action_side_effects(
-            &mut config,
-            &action,
-            BatchedMouseSideEffectMode::BufferedPaste,
-        );
-        actions.push(action);
-        remaining = &remaining[mouse_len..];
     }
-
     Ok(actions)
-}
-
-/// Selects compatibility behavior for batched mouse side-effect tracking.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BatchedMouseSideEffectMode {
-    /// Applies the full historical side-effect set used by the immediate
-    /// forwarding router.
-    ImmediateForwarding,
-    /// Preserves the narrower historical side-effect set used by the paste
-    /// buffering router.
-    BufferedPaste,
 }
 
 /// Applies routing state transitions for mouse actions emitted from a batched
@@ -2002,7 +1854,6 @@ enum BatchedMouseSideEffectMode {
 fn apply_batched_mouse_action_side_effects(
     config: &mut TerminalClientLoopConfig,
     action: &TerminalClientLoopAction,
-    _mode: BatchedMouseSideEffectMode,
 ) {
     match action {
         TerminalClientLoopAction::HandleMouse(MouseAction::ResizePane { .. }) => {
