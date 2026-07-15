@@ -707,7 +707,7 @@ impl RuntimeSessionService {
     fn append_config_reload_permission_audits(
         &mut self,
         caller_client_id: &mez_core::ids::ClientId,
-        previous: &crate::permissions::PermissionPolicy,
+        previous: &mez_agent::permissions::PermissionPolicy,
     ) -> Result<()> {
         if self.audit_log.is_none() {
             return Ok(());

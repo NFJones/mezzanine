@@ -10,10 +10,10 @@ use super::rules::sha256_hex;
 use super::{
     ApprovalDecision, ApprovalPolicy, ApprovalScope, ArgumentPolicy, BlockedApprovalQueue,
     BlockedApprovalRequest, BlockedApprovalState, CommandRule, CommandRuleScope, CommandRuleStore,
-    DEFAULT_COMMAND_SHELL_CLASSIFICATION, PathScopes, PermissionAuthorityChange, PermissionPolicy,
-    PermissionPreset, RuleDecision, RuleMatch, SessionApprovalStore, classify_shell_command,
-    compare_approval_policy_authority, compare_permission_preset_authority,
-    normalize_exact_command_text,
+    DEFAULT_COMMAND_SHELL_CLASSIFICATION, PathScopes, PermissionAuthorityChange,
+    PermissionErrorKind, PermissionPolicy, PermissionPreset, RuleDecision, RuleMatch,
+    SessionApprovalStore, classify_shell_command, compare_approval_policy_authority,
+    compare_permission_preset_authority, normalize_exact_command_text,
 };
 
 /// Runs the shell resolved scopes operation for this subsystem.
@@ -336,25 +336,28 @@ fn auto_allow_preserves_unproven_effects_for_model_self_assessment() {
 fn blocked_approval_queue_tracks_pending_and_decisions() {
     let mut queue = BlockedApprovalQueue::default();
     let id = queue
-        .create(BlockedApprovalRequest {
-            id: String::new(),
-            requesting_agent_id: "a1".to_string(),
-            pane_id: "%1".to_string(),
-            parent_agent_chain: vec!["a0".to_string()],
-            action_kind: "shell_command".to_string(),
-            action_summary: "cargo test".to_string(),
-            declared_effects: vec!["read".to_string()],
-            matched_rules: vec!["prompt cargo".to_string()],
-            read_scopes: vec!["/repo".to_string()],
-            write_scopes: vec!["/repo".to_string()],
-            cooperation_mode: None,
-            created_at_unix_seconds: None,
-            decided_at_unix_seconds: None,
-            decided_by_client_id: None,
-            state: BlockedApprovalState::Approved,
-            decision: Some(ApprovalDecision::Approve),
-            redirect_instruction: Some("stale".to_string()),
-        })
+        .create_at(
+            BlockedApprovalRequest {
+                id: String::new(),
+                requesting_agent_id: "a1".to_string(),
+                pane_id: "%1".to_string(),
+                parent_agent_chain: vec!["a0".to_string()],
+                action_kind: "shell_command".to_string(),
+                action_summary: "cargo test".to_string(),
+                declared_effects: vec!["read".to_string()],
+                matched_rules: vec!["prompt cargo".to_string()],
+                read_scopes: vec!["/repo".to_string()],
+                write_scopes: vec!["/repo".to_string()],
+                cooperation_mode: None,
+                created_at_unix_seconds: None,
+                decided_at_unix_seconds: None,
+                decided_by_client_id: None,
+                state: BlockedApprovalState::Approved,
+                decision: Some(ApprovalDecision::Approve),
+                redirect_instruction: Some("stale".to_string()),
+            },
+            10,
+        )
         .unwrap();
 
     assert_eq!(id, "ba1");
@@ -363,11 +366,13 @@ fn blocked_approval_queue_tracks_pending_and_decisions() {
         queue.get(&id).unwrap().parent_agent_chain,
         vec!["a0".to_string()]
     );
-    assert!(queue.get(&id).unwrap().created_at_unix_seconds.is_some());
+    assert_eq!(queue.get(&id).unwrap().created_at_unix_seconds, Some(10));
 
-    let decided = queue.decide(&id, ApprovalDecision::Approve, None).unwrap();
+    let decided = queue
+        .decide_at(&id, ApprovalDecision::Approve, None, 20)
+        .unwrap();
     assert_eq!(decided.state, BlockedApprovalState::Approved);
-    assert!(decided.decided_at_unix_seconds.is_some());
+    assert_eq!(decided.decided_at_unix_seconds, Some(20));
     assert!(queue.pending().is_empty());
 }
 
@@ -380,37 +385,41 @@ fn blocked_approval_queue_tracks_pending_and_decisions() {
 fn blocked_approval_redirect_requires_instruction() {
     let mut queue = BlockedApprovalQueue::default();
     let id = queue
-        .create(BlockedApprovalRequest {
-            id: String::new(),
-            requesting_agent_id: "a1".to_string(),
-            pane_id: "%1".to_string(),
-            parent_agent_chain: Vec::new(),
-            action_kind: "shell_command".to_string(),
-            action_summary: "rm target".to_string(),
-            declared_effects: vec!["delete".to_string()],
-            matched_rules: vec!["deny rm".to_string()],
-            read_scopes: Vec::new(),
-            write_scopes: vec!["/repo".to_string()],
-            cooperation_mode: None,
-            created_at_unix_seconds: None,
-            decided_at_unix_seconds: None,
-            decided_by_client_id: None,
-            state: BlockedApprovalState::Pending,
-            decision: None,
-            redirect_instruction: None,
-        })
+        .create_at(
+            BlockedApprovalRequest {
+                id: String::new(),
+                requesting_agent_id: "a1".to_string(),
+                pane_id: "%1".to_string(),
+                parent_agent_chain: Vec::new(),
+                action_kind: "shell_command".to_string(),
+                action_summary: "rm target".to_string(),
+                declared_effects: vec!["delete".to_string()],
+                matched_rules: vec!["deny rm".to_string()],
+                read_scopes: Vec::new(),
+                write_scopes: vec!["/repo".to_string()],
+                cooperation_mode: None,
+                created_at_unix_seconds: None,
+                decided_at_unix_seconds: None,
+                decided_by_client_id: None,
+                state: BlockedApprovalState::Pending,
+                decision: None,
+                redirect_instruction: None,
+            },
+            10,
+        )
         .unwrap();
 
     let error = queue
-        .decide(&id, ApprovalDecision::Redirect, None)
+        .decide_at(&id, ApprovalDecision::Redirect, None, 20)
         .unwrap_err();
-    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert_eq!(error.kind(), PermissionErrorKind::InvalidArgs);
 
     let redirected = queue
-        .decide(
+        .decide_at(
             &id,
             ApprovalDecision::Redirect,
             Some("explain why deletion is needed".to_string()),
+            30,
         )
         .unwrap();
     assert_eq!(redirected.state, BlockedApprovalState::Redirected);
@@ -500,7 +509,7 @@ fn command_rule_store_removes_rules_by_stable_display_id() {
     assert_eq!(store.rules()[0].pattern, vec!["cargo", "test"]);
     assert_eq!(
         store.remove("rule9").unwrap_err().kind(),
-        crate::error::MezErrorKind::NotFound
+        PermissionErrorKind::NotFound
     );
 }
 
@@ -636,7 +645,7 @@ fn command_rule_store_rejects_built_in_persistence() {
         )
         .unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert_eq!(error.kind(), PermissionErrorKind::InvalidArgs);
 }
 
 /// Verifies git status allows only safe status arguments.

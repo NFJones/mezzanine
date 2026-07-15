@@ -103,8 +103,8 @@ role = "Product content-length framing and concrete fanout writes over canonical
 
 [[surface]]
 path = "src/permissions"
-state = "temporary"
-role = "Product permission persistence still contains the lower-owned deterministic permission engine."
+state = "adapter"
+role = "Borrowed planning adapter binding canonical mez-agent permission policy to live approval and path-scope state."
 
 [[surface]]
 path = "src/project"
@@ -148,8 +148,8 @@ role = "Cross-crate product snapshot encoding, repository, compatibility, and re
 
 [[surface]]
 path = "src/subagent"
-state = "temporary"
-role = "Product subagent naming still contains lower-owned scope enforcement."
+state = "adapter"
+role = "Product-friendly pane and status display names over canonical mez-agent subagent contracts and scope enforcement."
 
 [[surface]]
 path = "src/terminal"

@@ -1,14 +1,18 @@
 //! Provider-independent subagent cooperation and scope contracts.
 //!
-//! These values describe authority inherited by a child agent. Product-owned
-//! adapters remain responsible for classifying shell commands and patches,
-//! enforcing filesystem scopes, coordinating active writers, and spawning the
-//! child execution environment.
+//! These values describe authority inherited by a child agent and provide the
+//! default deterministic shell/patch scope enforcer. Product adapters remain
+//! responsible for concrete shell and patch execution, active process state,
+//! control authorization, and spawning the child environment.
 
 use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::PermissionPreset;
+
+mod scope;
+
+pub use scope::{DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT, DefaultSubagentScopeEnforcement};
 
 /// Stable categories for provider-independent subagent contract failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +83,9 @@ pub trait SubagentScopeEnforcement: Send + Sync {
         patch: &str,
     ) -> Result<Option<String>, String>;
 }
+
+#[cfg(test)]
+mod scope_tests;
 
 /// Declares how a subagent may interact with shared repository state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

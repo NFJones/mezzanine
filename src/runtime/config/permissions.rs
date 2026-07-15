@@ -134,7 +134,7 @@ pub(in crate::runtime) fn runtime_blocked_approval_request(
         created_at_unix_seconds: None,
         decided_at_unix_seconds: None,
         decided_by_client_id: None,
-        state: crate::permissions::BlockedApprovalState::Pending,
+        state: mez_agent::permissions::BlockedApprovalState::Pending,
         decision: None,
         redirect_instruction: None,
     }

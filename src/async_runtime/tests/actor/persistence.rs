@@ -621,7 +621,7 @@ async fn async_actor_defers_project_approval_config_to_persistence_worker() {
         )
         .unwrap();
     let approval_id = service
-        .queue_blocked_approval(crate::permissions::BlockedApprovalRequest {
+        .queue_blocked_approval(mez_agent::permissions::BlockedApprovalRequest {
             id: String::new(),
             requesting_agent_id: "agent-%1".to_string(),
             pane_id: "%1".to_string(),
@@ -636,13 +636,13 @@ async fn async_actor_defers_project_approval_config_to_persistence_worker() {
             created_at_unix_seconds: None,
             decided_at_unix_seconds: None,
             decided_by_client_id: None,
-            state: crate::permissions::BlockedApprovalState::Pending,
+            state: mez_agent::permissions::BlockedApprovalState::Pending,
             decision: None,
             redirect_instruction: None,
         })
         .unwrap();
     let deny_id = service
-        .queue_blocked_approval(crate::permissions::BlockedApprovalRequest {
+        .queue_blocked_approval(mez_agent::permissions::BlockedApprovalRequest {
             id: String::new(),
             requesting_agent_id: "agent-%1".to_string(),
             pane_id: "%1".to_string(),
@@ -657,7 +657,7 @@ async fn async_actor_defers_project_approval_config_to_persistence_worker() {
             created_at_unix_seconds: None,
             decided_at_unix_seconds: None,
             decided_by_client_id: None,
-            state: crate::permissions::BlockedApprovalState::Pending,
+            state: mez_agent::permissions::BlockedApprovalState::Pending,
             decision: None,
             redirect_instruction: None,
         })

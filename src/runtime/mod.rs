@@ -97,13 +97,6 @@ use crate::mcp::{
 };
 use crate::memory::{MemoryRecord, MemoryScope, MemorySource, SessionMemoryStore};
 use crate::message::{decode_mmp_frame, encode_mmp_body, handle_mmp_frame};
-use crate::permissions::{
-    ApprovalDecision, ApprovalGrant, ApprovalScope, ArgumentPolicy, BlockedApprovalQueue,
-    BlockedApprovalRequest, BlockedApprovalState, CommandRule, CommandRuleScope,
-    DEFAULT_COMMAND_SHELL_CLASSIFICATION, PathScopes, PermissionAuthorityChange, PermissionPolicy,
-    RuleMatch, SessionApprovalStore, compare_approval_policy_authority,
-    compare_permission_preset_authority, exact_command_sha256, normalize_exact_command_text,
-};
 use crate::project::{
     ProjectTrustRecord, ProjectTrustStore, TrustDecision, default_trust_database_path,
     discover_existing_overlays, discover_project_root,
@@ -132,6 +125,13 @@ use mez_agent::messaging::{
     Envelope, MessageConnection, MessageService, MessageServiceSnapshot, Recipient, SenderIdentity,
     TaskResultPayload, TaskState, TaskStatusPayload, delivery_batch_json,
     validate_mmp_payload_metadata,
+};
+use mez_agent::permissions::{
+    ApprovalDecision, ApprovalGrant, ApprovalScope, ArgumentPolicy, BlockedApprovalQueue,
+    BlockedApprovalRequest, BlockedApprovalState, CommandRule, CommandRuleScope,
+    DEFAULT_COMMAND_SHELL_CLASSIFICATION, PathScopes, PermissionAuthorityChange, PermissionPolicy,
+    RuleMatch, SessionApprovalStore, compare_approval_policy_authority,
+    compare_permission_preset_authority, exact_command_sha256, normalize_exact_command_text,
 };
 use mez_agent::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, ActionContentBlock, ActionResult,

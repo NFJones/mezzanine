@@ -18,8 +18,8 @@ use super::{
     target_or_active_pane, target_value_has_pane_shape, unix_seconds_to_rfc3339, window_by_id,
 };
 use crate::agent::slash::{AgentShellCommandOutcome, execute_agent_shell_command};
-use crate::permissions::builtin_rules;
 use crate::terminal::TerminalFrameContext;
+use mez_agent::permissions::builtin_rules;
 use mez_mux::layout::LayoutNode;
 use mez_mux::process::PaneExitStatus;
 use mez_mux::session::ClientTerminalDescriptor;

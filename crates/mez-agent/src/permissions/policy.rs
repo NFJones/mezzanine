@@ -13,8 +13,6 @@ use super::{
     normalize_exact_command_text, tokenize_shell_words, tokenize_single_candidate,
     writes_escape_scopes,
 };
-use std::time::{SystemTime, UNIX_EPOCH};
-
 // Permission policy evaluation and authority comparisons.
 
 /// Runs the approval prefix for shell command operation for this subsystem.
@@ -48,7 +46,11 @@ impl BlockedApprovalQueue {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn create(&mut self, mut request: BlockedApprovalRequest) -> Result<String> {
+    pub fn create_at(
+        &mut self,
+        mut request: BlockedApprovalRequest,
+        now_unix_seconds: u64,
+    ) -> Result<String> {
         if request.requesting_agent_id.is_empty()
             || request.pane_id.is_empty()
             || request.action_kind.is_empty()
@@ -61,7 +63,7 @@ impl BlockedApprovalQueue {
         let id = format!("ba{}", self.next_id);
         self.next_id += 1;
         request.id = id.clone();
-        request.created_at_unix_seconds = Some(current_unix_seconds());
+        request.created_at_unix_seconds = Some(now_unix_seconds);
         request.decided_at_unix_seconds = None;
         request.decided_by_client_id = None;
         request.state = BlockedApprovalState::Pending;
@@ -76,13 +78,20 @@ impl BlockedApprovalQueue {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn decide(
+    pub fn decide_at(
         &mut self,
         request_id: &str,
         decision: ApprovalDecision,
         redirect_instruction: Option<String>,
+        now_unix_seconds: u64,
     ) -> Result<&BlockedApprovalRequest> {
-        self.decide_with_client(request_id, decision, redirect_instruction, None)
+        self.decide_with_client_at(
+            request_id,
+            decision,
+            redirect_instruction,
+            None,
+            now_unix_seconds,
+        )
     }
 
     /// Runs the decide with client operation for this subsystem.
@@ -90,19 +99,18 @@ impl BlockedApprovalQueue {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn decide_with_client(
+    pub fn decide_with_client_at(
         &mut self,
         request_id: &str,
         decision: ApprovalDecision,
         redirect_instruction: Option<String>,
         decided_by_client_id: Option<String>,
+        now_unix_seconds: u64,
     ) -> Result<&BlockedApprovalRequest> {
-        let request = self.requests.get_mut(request_id).ok_or_else(|| {
-            MezError::new(
-                crate::error::MezErrorKind::NotFound,
-                "approval request not found",
-            )
-        })?;
+        let request = self
+            .requests
+            .get_mut(request_id)
+            .ok_or_else(|| MezError::not_found("approval request not found"))?;
         if request.state != BlockedApprovalState::Pending {
             return Err(MezError::conflict(
                 "blocked approval request has already been decided",
@@ -124,7 +132,7 @@ impl BlockedApprovalQueue {
         };
         request.decision = Some(decision);
         request.redirect_instruction = redirect_instruction;
-        request.decided_at_unix_seconds = Some(current_unix_seconds());
+        request.decided_at_unix_seconds = Some(now_unix_seconds);
         request.decided_by_client_id = decided_by_client_id;
         Ok(request)
     }
@@ -160,18 +168,6 @@ impl BlockedApprovalQueue {
     }
 }
 
-/// Runs the current unix seconds operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn current_unix_seconds() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0)
-}
-
 impl CommandRuleStore {
     /// Runs the new operation for this subsystem.
     ///
@@ -205,10 +201,7 @@ impl CommandRuleStore {
     pub fn remove(&mut self, rule_id: &str) -> Result<CommandRule> {
         let index = parse_rule_id(rule_id)?;
         if index >= self.rules.len() {
-            return Err(MezError::new(
-                crate::error::MezErrorKind::NotFound,
-                "command rule not found",
-            ));
+            return Err(MezError::not_found("command rule not found"));
         }
         Ok(self.rules.remove(index))
     }
@@ -296,10 +289,7 @@ impl PermissionPolicy {
     pub fn remove_rule(&mut self, rule_id: &str) -> Result<CommandRule> {
         let index = parse_rule_id(rule_id)?;
         if index >= self.rules.len() {
-            return Err(MezError::new(
-                crate::error::MezErrorKind::NotFound,
-                "command rule not found",
-            ));
+            return Err(MezError::not_found("command rule not found"));
         }
         if self.rules[index].scope == CommandRuleScope::BuiltIn {
             return Err(MezError::invalid_args(
@@ -341,8 +331,8 @@ impl PermissionPolicy {
     ///
     /// Command rules, path scopes, approval persistence, and enforcement stay
     /// owned by Mezzanine; the agent shell receives only user-visible scalars.
-    pub fn agent_shell_summary(&self) -> mez_agent::AgentShellPermissionSummary {
-        mez_agent::AgentShellPermissionSummary {
+    pub fn agent_shell_summary(&self) -> super::AgentShellPermissionSummary {
+        super::AgentShellPermissionSummary {
             preset: self.preset,
             approval_policy: self.approval_policy,
             approval_bypass: self.approval_bypass(),

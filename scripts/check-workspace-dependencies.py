@@ -33,6 +33,9 @@ REQUIRED_OWNER_PATHS = {
     "crates/mez-agent/src/instructions/planning.rs",
     "crates/mez-agent/src/messaging/mod.rs",
     "crates/mez-agent/src/messaging/service.rs",
+    "crates/mez-agent/src/permissions/mod.rs",
+    "crates/mez-agent/src/permissions/classification.rs",
+    "crates/mez-agent/src/subagent/scope.rs",
     "crates/mez-agent/src/shell/mod.rs",
     "crates/mez-agent/src/turn_runner.rs",
     "crates/mez-core/src/ids.rs",
@@ -91,6 +94,8 @@ ROOT_FORBIDDEN_DECLARATIONS = {
     "struct InstructionDiscoveryConfig": "instruction discovery configuration",
     "struct InstructionDiscoveryPlan": "instruction discovery command plan",
     "struct MessageService": "MMP delivery service state",
+    "struct PermissionPolicy": "deterministic permission policy",
+    "struct CommandRule {": "permission command rule contract",
     "struct SelectorCandidate": "selector candidate contract",
     "struct SelectorPlan": "selector replacement plan",
     "struct SelectorShadowHint": "selector shadow-hint contract",
@@ -99,6 +104,7 @@ ROOT_FORBIDDEN_DECLARATIONS = {
     "trait LocalActionExecutor": "local action execution port",
     "trait McpActionExecutor": "MCP execution port",
     "trait PaneShellExecutor": "pane shell execution port",
+    "trait SubagentScopeEnforcement": "default subagent scope enforcement",
     "fn plan_instruction_discovery": "instruction discovery command planning",
 }
 

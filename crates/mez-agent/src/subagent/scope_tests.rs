@@ -1,7 +1,9 @@
 //! Tests for subagent spawn validation and write-scope conflict policy.
 
-use super::SubagentScopeEnforcement;
-use mez_agent::{CooperationMode, SubagentScopeDeclaration};
+use super::{
+    CooperationMode, DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT, SubagentScopeDeclaration,
+    SubagentScopeEnforcement,
+};
 
 /// Verifies that later shell commands from an explore-only subagent are checked
 /// against declared read scopes and still reject classified mutation-shaped
@@ -17,27 +19,27 @@ fn explore_only_scope_declaration_rejects_out_of_scope_or_mutating_commands() {
     };
 
     assert_eq!(
-        declaration
-            .shell_command_violation("cat src/lib.rs")
+        DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT
+            .shell_command_violation(&declaration, "cat src/lib.rs")
             .unwrap(),
         None
     );
     assert!(
-        declaration
-            .shell_command_violation("cat ../secret.txt")
+        DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT
+            .shell_command_violation(&declaration, "cat ../secret.txt")
             .unwrap()
             .unwrap()
             .contains("outside declared read scopes")
     );
     assert_eq!(
-        declaration
-            .shell_command_violation("python3 - <<'PY'\nprint('metadata')\nPY")
+        DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT
+            .shell_command_violation(&declaration, "python3 - <<'PY'\nprint('metadata')\nPY",)
             .unwrap(),
         None
     );
     assert!(
-        declaration
-            .shell_command_violation("rm src/generated.txt")
+        DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT
+            .shell_command_violation(&declaration, "rm src/generated.txt")
             .unwrap()
             .unwrap()
             .contains("cannot write path")
@@ -58,14 +60,14 @@ fn write_scope_declaration_rejects_out_of_scope_write_effects() {
     };
 
     assert_eq!(
-        declaration
-            .shell_command_violation("rm src/parser/generated.rs")
+        DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT
+            .shell_command_violation(&declaration, "rm src/parser/generated.rs")
             .unwrap(),
         None
     );
     assert!(
-        declaration
-            .shell_command_violation("rm src/other/generated.rs")
+        DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT
+            .shell_command_violation(&declaration, "rm src/other/generated.rs")
             .unwrap()
             .unwrap()
             .contains("outside declared write scopes")

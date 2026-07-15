@@ -6,10 +6,8 @@
 
 use std::collections::BTreeMap;
 
-use mez_agent::{ApprovalPolicy, PermissionPreset, RuleDecision};
-
 use super::{
-    MezError, Result,
+    ApprovalPolicy, MezError, PermissionPreset, Result, RuleDecision,
     classification::{
         find_args_are_read_only, git_read_only_args_are_safe, literal_output_args_are_safe,
         remaining_args_are_executable_probes, remaining_args_are_read_paths,

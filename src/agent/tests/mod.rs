@@ -38,10 +38,10 @@ use super::slash::{
 use crate::auth::{AuthStore, OpenAiProviderCredential};
 use crate::error::Result;
 use crate::mcp::McpRegistry;
-use crate::permissions::{PathScopes, PermissionPolicy, SessionApprovalStore};
 use crate::test_support::agent::ActionBuilder;
 use crate::transcript::{AgentTranscriptStore, TranscriptRole as DurableTranscriptRole};
 use base64::Engine;
+use mez_agent::permissions::{PathScopes, PermissionPolicy, SessionApprovalStore};
 use mez_agent::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentCapability, AgentContext,
     AgentLogLevel, AgentPromptProfile, AgentShellStore, AgentShellVisibility,

@@ -13,7 +13,7 @@ use super::{
     persist_config_mutation, persist_config_mutation_async, plan_config_mutation,
     validate_config_file, validate_config_file_async, validate_config_text,
 };
-use crate::permissions::{exact_command_sha256, normalize_exact_command_text};
+use mez_agent::permissions::{exact_command_sha256, normalize_exact_command_text};
 /// Runs the temp root operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

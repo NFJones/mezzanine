@@ -56,8 +56,8 @@ fn runtime_control_approval_methods_use_runtime_owned_queue() {
             created_at_unix_seconds: None,
             decided_at_unix_seconds: None,
             decided_by_client_id: None,
-            state: crate::permissions::BlockedApprovalState::Approved,
-            decision: Some(crate::permissions::ApprovalDecision::Disapprove),
+            state: mez_agent::permissions::BlockedApprovalState::Approved,
+            decision: Some(mez_agent::permissions::ApprovalDecision::Disapprove),
             redirect_instruction: Some("ignored by create".to_string()),
         })
         .unwrap();
@@ -94,7 +94,7 @@ fn runtime_control_approval_methods_use_runtime_owned_queue() {
     );
     assert_eq!(
         service.blocked_approvals().get(&approval_id).unwrap().state,
-        crate::permissions::BlockedApprovalState::Approved
+        mez_agent::permissions::BlockedApprovalState::Approved
     );
     assert_eq!(
         service
@@ -200,7 +200,7 @@ fn runtime_control_project_approval_decisions_persist_exact_command_rules() {
             created_at_unix_seconds: None,
             decided_at_unix_seconds: None,
             decided_by_client_id: None,
-            state: crate::permissions::BlockedApprovalState::Pending,
+            state: mez_agent::permissions::BlockedApprovalState::Pending,
             decision: None,
             redirect_instruction: None,
         })
@@ -221,7 +221,7 @@ fn runtime_control_project_approval_decisions_persist_exact_command_rules() {
             created_at_unix_seconds: None,
             decided_at_unix_seconds: None,
             decided_by_client_id: None,
-            state: crate::permissions::BlockedApprovalState::Pending,
+            state: mez_agent::permissions::BlockedApprovalState::Pending,
             decision: None,
             redirect_instruction: None,
         })
@@ -344,7 +344,7 @@ fn runtime_approval_disapproval_focuses_blocked_agent_pane() {
             created_at_unix_seconds: None,
             decided_at_unix_seconds: None,
             decided_by_client_id: None,
-            state: crate::permissions::BlockedApprovalState::Pending,
+            state: mez_agent::permissions::BlockedApprovalState::Pending,
             decision: None,
             redirect_instruction: None,
         })

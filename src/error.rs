@@ -308,6 +308,22 @@ impl From<mez_agent::messaging::MessageError> for MezError {
     }
 }
 
+impl From<mez_agent::permissions::PermissionError> for MezError {
+    fn from(error: mez_agent::permissions::PermissionError) -> Self {
+        match error.kind() {
+            mez_agent::permissions::PermissionErrorKind::InvalidArgs => {
+                Self::invalid_args(error.message())
+            }
+            mez_agent::permissions::PermissionErrorKind::Conflict => {
+                Self::conflict(error.message())
+            }
+            mez_agent::permissions::PermissionErrorKind::NotFound => {
+                Self::new(MezErrorKind::NotFound, error.message())
+            }
+        }
+    }
+}
+
 impl From<mez_mux::MuxError> for MezError {
     fn from(error: mez_mux::MuxError) -> Self {
         match error.kind() {

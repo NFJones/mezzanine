@@ -11,7 +11,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::error::{MezError, Result};
-use crate::permissions::{exact_command_sha256, normalize_exact_command_text};
+use mez_agent::permissions::{exact_command_sha256, normalize_exact_command_text};
 
 /// Exposes the defaults module boundary.
 ///

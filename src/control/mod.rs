@@ -22,11 +22,11 @@ use crate::framing::{
     FrameContext, FrameOverflow, ProtocolFrame, decode_frame, encode_frame, render_frame_template,
 };
 use crate::mcp::{McpRegistry, McpServerKind, McpServerStatus};
-use crate::permissions::{
-    ApprovalDecision, BlockedApprovalQueue, BlockedApprovalRequest, BlockedApprovalState,
-};
 use crate::project::{ProjectTrustRecord, ProjectTrustStore, TrustDecision};
 use crate::snapshot::{LayoutLoadPlan, SnapshotKind, SnapshotRepository, SnapshotState};
+use mez_agent::permissions::{
+    ApprovalDecision, BlockedApprovalQueue, BlockedApprovalRequest, BlockedApprovalState,
+};
 use mez_agent::{
     AgentShellSession, AgentShellStore, AgentShellVisibility, AgentTurnLedger, AgentTurnState,
 };

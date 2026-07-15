@@ -148,11 +148,12 @@ impl RuntimeSessionService {
                 })?;
             let decided = self
                 .blocked_approvals
-                .decide_with_client(
+                .decide_with_client_at(
                     &approval_id,
-                    crate::permissions::ApprovalDecision::Approve,
+                    mez_agent::permissions::ApprovalDecision::Approve,
                     None,
                     Some(controller.to_string()),
+                    current_unix_seconds(),
                 )?
                 .clone();
             let count =
@@ -182,7 +183,7 @@ impl RuntimeSessionService {
         approval_id: &str,
         approval: &BlockedApprovalRequest,
     ) -> Result<bool> {
-        if approval.state != crate::permissions::BlockedApprovalState::Pending {
+        if approval.state != mez_agent::permissions::BlockedApprovalState::Pending {
             return Ok(false);
         }
         let Some(approval_ref) = self.blocked_agent_approval_refs.get(approval_id) else {
@@ -224,10 +225,12 @@ impl RuntimeSessionService {
                 let subagent_scope = self.subagent_scope_declaration_for_turn(turn);
                 if let Some(scope) = subagent_scope.as_ref()
                     && let Some(_message) =
-                        crate::subagent::SubagentScopeEnforcement::shell_command_violation(
+                        mez_agent::SubagentScopeEnforcement::shell_command_violation(
+                            &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
                             scope,
                             &plan.policy_command,
-                        )?
+                        )
+                        .map_err(MezError::invalid_args)?
                 {
                     return Ok(false);
                 }
@@ -381,9 +384,10 @@ impl RuntimeSessionService {
                 ) {
                     RuleDecision::Allow => {}
                     RuleDecision::Prompt
-                        if approval.state == crate::permissions::BlockedApprovalState::Approved
+                        if approval.state
+                            == mez_agent::permissions::BlockedApprovalState::Approved
                             && approval.decision
-                                == Some(crate::permissions::ApprovalDecision::Approve) => {}
+                                == Some(mez_agent::permissions::ApprovalDecision::Approve) => {}
                     RuleDecision::Prompt => {
                         return Err(MezError::conflict(
                             "approved shell action still requires approval",
@@ -438,9 +442,10 @@ impl RuntimeSessionService {
                 ) {
                     RuleDecision::Allow => {}
                     RuleDecision::Prompt
-                        if approval.state == crate::permissions::BlockedApprovalState::Approved
+                        if approval.state
+                            == mez_agent::permissions::BlockedApprovalState::Approved
                             && approval.decision
-                                == Some(crate::permissions::ApprovalDecision::Approve) => {}
+                                == Some(mez_agent::permissions::ApprovalDecision::Approve) => {}
                     RuleDecision::Prompt => {
                         return Err(MezError::conflict(
                             "approved network action still requires approval",
@@ -587,8 +592,8 @@ impl RuntimeSessionService {
         };
         if !matches!(
             decision,
-            crate::permissions::ApprovalDecision::Disapprove
-                | crate::permissions::ApprovalDecision::Redirect
+            mez_agent::permissions::ApprovalDecision::Disapprove
+                | mez_agent::permissions::ApprovalDecision::Redirect
         ) {
             return Ok(None);
         }
@@ -632,7 +637,7 @@ impl RuntimeSessionService {
         }
 
         match decision {
-            crate::permissions::ApprovalDecision::Disapprove => {
+            mez_agent::permissions::ApprovalDecision::Disapprove => {
                 self.append_agent_trace_turn_event(
                     &turn.pane_id,
                     &turn.turn_id,
@@ -699,7 +704,7 @@ impl RuntimeSessionService {
                 )?;
                 Ok(Some(1))
             }
-            crate::permissions::ApprovalDecision::Redirect => {
+            mez_agent::permissions::ApprovalDecision::Redirect => {
                 let instruction = approval.redirect_instruction.as_deref().ok_or_else(|| {
                     MezError::invalid_state("redirect approval has no instruction")
                 })?;
@@ -797,7 +802,7 @@ impl RuntimeSessionService {
                     .insert(turn.turn_id.clone(), execution);
                 Ok(Some(1))
             }
-            crate::permissions::ApprovalDecision::Approve => Ok(None),
+            mez_agent::permissions::ApprovalDecision::Approve => Ok(None),
         }
     }
 }
@@ -810,11 +815,18 @@ fn runtime_subagent_scope_violation(
 ) -> Result<Option<String>> {
     match &action.payload {
         mez_agent::AgentActionPayload::ApplyPatch { patch, .. } => {
-            crate::subagent::SubagentScopeEnforcement::apply_patch_violation(scope, patch)
+            mez_agent::SubagentScopeEnforcement::apply_patch_violation(
+                &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
+                scope,
+                patch,
+            )
+            .map_err(MezError::invalid_args)
         }
-        _ => crate::subagent::SubagentScopeEnforcement::shell_command_violation(
+        _ => mez_agent::SubagentScopeEnforcement::shell_command_violation(
+            &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
             scope,
             policy_command,
-        ),
+        )
+        .map_err(MezError::invalid_args),
     }
 }

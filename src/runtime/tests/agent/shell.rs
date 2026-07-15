@@ -1924,7 +1924,7 @@ fn runtime_agent_shell_planning_failure_hides_command_by_default() {
         .unwrap();
     mark_test_pane_ready(&mut service, "%1");
     service.permission_policy_mut().add_rule(
-        crate::permissions::CommandRule::new(["ls"], RuleDecision::Forbid, RuleMatch::Prefix)
+        mez_agent::permissions::CommandRule::new(["ls"], RuleDecision::Forbid, RuleMatch::Prefix)
             .unwrap(),
     );
 

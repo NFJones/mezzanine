@@ -606,11 +606,12 @@ pub fn dispatch_control_request_with_approvals(
                     .ok_or_else(|| MezError::invalid_args("approval/decide requires decision"))?;
                 approval_decide_scope_persistence(params)?;
                 let instruction = json_string_field(params, "instruction");
-                let approval = approval_queue.decide_with_client(
+                let approval = approval_queue.decide_with_client_at(
                     &approval_id,
                     decision,
                     instruction,
                     Some(primary_client_id.to_string()),
+                    control_current_unix_seconds(),
                 )?;
                 Ok(format!(r#"{{"approval":{}}}"#, approval_json(approval)))
             })
@@ -696,11 +697,12 @@ pub fn dispatch_control_request_with_approvals_and_audit(
                     pending,
                     "started",
                 ))?;
-                let approval = approval_queue.decide_with_client(
+                let approval = approval_queue.decide_with_client_at(
                     &approval_id,
                     decision,
                     instruction,
                     Some(primary_client_id.to_string()),
+                    control_current_unix_seconds(),
                 )?;
                 audit_log.append(approval_audit_record(
                     session,
@@ -1713,11 +1715,12 @@ pub(super) fn dispatch_parsed_request(
             approval_decide_scope_persistence(params)?;
             let instruction = json_string_field(params, "instruction");
             let mut approval_queue = BlockedApprovalQueue::default();
-            let approval = approval_queue.decide_with_client(
+            let approval = approval_queue.decide_with_client_at(
                 &approval_id,
                 decision,
                 instruction,
                 Some(primary_client_id.to_string()),
+                control_current_unix_seconds(),
             )?;
             Ok(format!(r#"{{"approval":{}}}"#, approval_json(approval)))
         }
@@ -1828,6 +1831,14 @@ pub(super) fn dispatch_parsed_request(
         }
         ControlDispatchKind::Config => dispatch_config_parsed_request(request, &[]),
     }
+}
+
+/// Returns the wall-clock timestamp supplied to lower approval state changes.
+fn control_current_unix_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
 }
 
 /// Runs the validate control method params schema operation for this subsystem.

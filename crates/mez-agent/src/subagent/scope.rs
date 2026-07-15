@@ -1,86 +1,36 @@
-//! Subagent spawn validation and role naming helpers.
+//! Default deterministic enforcement for declared subagent scopes.
 //!
-//! Request validation lives separately from active scope state so spawn checks
-//! can run before any registry mutation or pane creation occurs.
+//! Shell effects use the canonical permission classifier and semantic patches
+//! use the canonical patch parser. Unknown or privileged effects fail closed.
 
 use std::path::{Component, Path, PathBuf};
 
-use crate::agent::semantic::apply_patch_touched_paths;
-use crate::error::Result;
 use crate::permissions::{EffectiveCommandEffects, classify_shell_command};
+use crate::semantic_patch_planning::apply_patch_touched_paths;
 
-use mez_agent::{CooperationMode, SubagentScopeDeclaration};
+use super::{CooperationMode, SubagentScopeDeclaration, SubagentScopeEnforcement};
 
-/// Product-owned enforcement for agent-owned subagent scope declarations.
-///
-/// Command and patch classification remain in Mezzanine because they depend
-/// on product permission rules and semantic-patch parsing.
-pub trait SubagentScopeEnforcement {
-    /// Returns a user-facing violation message when a shell command is outside
-    /// the child agent's declared subagent scope.
-    ///
-    /// Scope enforcement runs before normal permission approval so a human
-    /// approval for a command prefix cannot silently expand a subagent's
-    /// authority. Commands whose effects cannot be classified fail closed and
-    /// must be returned to the parent or retried after an explicit scope
-    /// expansion.
-    fn shell_command_violation(&self, command: &str) -> Result<Option<String>>;
-
-    /// Returns a user-facing violation when an `apply_patch` action touches
-    /// paths outside the child agent's declared write scope.
-    fn apply_patch_violation(&self, patch: &str) -> Result<Option<String>>;
-}
-
-impl SubagentScopeEnforcement for SubagentScopeDeclaration {
-    fn shell_command_violation(&self, command: &str) -> Result<Option<String>> {
-        if self.cooperation_mode == CooperationMode::Unrestricted {
-            return Ok(None);
-        }
-        let effects = classify_shell_command(command, None)?;
-        for effect in effects {
-            if let Some(message) = effect_violation(self, &effect) {
-                return Ok(Some(message));
-            }
-        }
-        Ok(None)
-    }
-
-    fn apply_patch_violation(&self, patch: &str) -> Result<Option<String>> {
-        if self.cooperation_mode == CooperationMode::Unrestricted {
-            return Ok(None);
-        }
-        for path in apply_patch_touched_paths(patch)? {
-            if self.cooperation_mode == CooperationMode::ExploreOnly {
-                return Ok(Some(format!(
-                    "explore-only subagent cannot write path `{path}`"
-                )));
-            }
-            if !path_in_declared_scopes(&self.current_directory, &path, &self.write_scopes) {
-                return Ok(Some(format!(
-                    "subagent write path `{path}` is outside declared write scopes"
-                )));
-            }
-        }
-        Ok(None)
-    }
-}
-
-/// Product adapter for the agent-owned subagent scope-enforcement port.
+/// Canonical stateless enforcer for declared subagent scope.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct ProductSubagentScopeEnforcement;
+pub struct DefaultSubagentScopeEnforcement;
 
-/// Shared stateless scope-enforcement adapter used by agent turn runners.
-pub static AGENT_SUBAGENT_SCOPE_ENFORCEMENT: ProductSubagentScopeEnforcement =
-    ProductSubagentScopeEnforcement;
+/// Shared stateless scope enforcer used by agent turn runners.
+pub static DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT: DefaultSubagentScopeEnforcement =
+    DefaultSubagentScopeEnforcement;
 
-impl mez_agent::SubagentScopeEnforcement for ProductSubagentScopeEnforcement {
+impl SubagentScopeEnforcement for DefaultSubagentScopeEnforcement {
     fn shell_command_violation(
         &self,
         scope: &SubagentScopeDeclaration,
         command: &str,
     ) -> std::result::Result<Option<String>, String> {
-        SubagentScopeEnforcement::shell_command_violation(scope, command)
-            .map_err(|error| error.to_string())
+        if scope.cooperation_mode == CooperationMode::Unrestricted {
+            return Ok(None);
+        }
+        let effects = classify_shell_command(command, None).map_err(|error| error.to_string())?;
+        Ok(effects
+            .iter()
+            .find_map(|effects| effect_violation(scope, effects)))
     }
 
     fn apply_patch_violation(
@@ -88,8 +38,22 @@ impl mez_agent::SubagentScopeEnforcement for ProductSubagentScopeEnforcement {
         scope: &SubagentScopeDeclaration,
         patch: &str,
     ) -> std::result::Result<Option<String>, String> {
-        SubagentScopeEnforcement::apply_patch_violation(scope, patch)
-            .map_err(|error| error.to_string())
+        if scope.cooperation_mode == CooperationMode::Unrestricted {
+            return Ok(None);
+        }
+        for path in apply_patch_touched_paths(patch).map_err(|error| error.to_string())? {
+            if scope.cooperation_mode == CooperationMode::ExploreOnly {
+                return Ok(Some(format!(
+                    "explore-only subagent cannot write path `{path}`"
+                )));
+            }
+            if !path_in_declared_scopes(&scope.current_directory, &path, &scope.write_scopes) {
+                return Ok(Some(format!(
+                    "subagent write path `{path}` is outside declared write scopes"
+                )));
+            }
+        }
+        Ok(None)
     }
 }
 

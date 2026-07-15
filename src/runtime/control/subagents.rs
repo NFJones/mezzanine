@@ -353,7 +353,7 @@ impl RuntimeSessionService {
         }
         if let Some(preset) = profile.permission_preset
             && compare_permission_preset_authority(self.permission_policy.preset, preset)
-                == crate::permissions::PermissionAuthorityChange::Broadening
+                == mez_agent::permissions::PermissionAuthorityChange::Broadening
         {
             return Err(MezError::forbidden(
                 "subagent profile permission override cannot broaden parent policy",

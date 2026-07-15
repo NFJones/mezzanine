@@ -29,9 +29,6 @@ use super::{
 use crate::event::{EventKind, EventLog, EventVisibility};
 use crate::mcp::McpRegistry;
 use crate::mcp::{McpServerConfig, McpToolEffects, McpToolState};
-use crate::permissions::{
-    BlockedApprovalQueue, BlockedApprovalRequest, BlockedApprovalState, builtin_rules,
-};
 use crate::project::ProjectTrustStore;
 use crate::shell::{ResolvedShell, ShellSource};
 use crate::snapshot::{
@@ -41,6 +38,9 @@ use crate::snapshot::{
 use crate::test_support::control::JsonRpcRequestBuilder;
 use crate::test_support::runtime::SessionFixture;
 use crate::test_support::temp::TestTempDir;
+use mez_agent::permissions::{
+    BlockedApprovalQueue, BlockedApprovalRequest, BlockedApprovalState, builtin_rules,
+};
 use mez_core::ids::ClientId;
 use mez_mux::layout::SplitDirection;
 use mez_mux::layout::{LayoutPolicy, Size};
@@ -2827,25 +2827,28 @@ fn approval_control_methods_list_and_decide_blocked_requests() {
     let (mut session, primary) = test_session();
     let mut queue = BlockedApprovalQueue::default();
     let approval_id = queue
-        .create(BlockedApprovalRequest {
-            id: String::new(),
-            requesting_agent_id: "agent-1".to_string(),
-            pane_id: "%1".to_string(),
-            parent_agent_chain: vec!["agent-0".to_string()],
-            action_kind: "shell_command".to_string(),
-            action_summary: "git diff".to_string(),
-            declared_effects: vec!["read_filesystem".to_string()],
-            matched_rules: vec!["git diff".to_string()],
-            read_scopes: vec![".".to_string()],
-            write_scopes: Vec::new(),
-            cooperation_mode: None,
-            created_at_unix_seconds: None,
-            decided_at_unix_seconds: None,
-            decided_by_client_id: None,
-            state: BlockedApprovalState::Pending,
-            decision: None,
-            redirect_instruction: None,
-        })
+        .create_at(
+            BlockedApprovalRequest {
+                id: String::new(),
+                requesting_agent_id: "agent-1".to_string(),
+                pane_id: "%1".to_string(),
+                parent_agent_chain: vec!["agent-0".to_string()],
+                action_kind: "shell_command".to_string(),
+                action_summary: "git diff".to_string(),
+                declared_effects: vec!["read_filesystem".to_string()],
+                matched_rules: vec!["git diff".to_string()],
+                read_scopes: vec![".".to_string()],
+                write_scopes: Vec::new(),
+                cooperation_mode: None,
+                created_at_unix_seconds: None,
+                decided_at_unix_seconds: None,
+                decided_by_client_id: None,
+                state: BlockedApprovalState::Pending,
+                decision: None,
+                redirect_instruction: None,
+            },
+            10,
+        )
         .unwrap();
 
     let list_response = dispatch_control_request_with_approvals(
@@ -2976,25 +2979,28 @@ fn approval_decision_control_can_emit_required_audit_records() {
     let (mut session, primary) = test_session();
     let mut queue = BlockedApprovalQueue::default();
     let approval_id = queue
-        .create(BlockedApprovalRequest {
-            id: String::new(),
-            requesting_agent_id: "agent-1".to_string(),
-            pane_id: "%1".to_string(),
-            parent_agent_chain: Vec::new(),
-            action_kind: "shell_command".to_string(),
-            action_summary: "git status".to_string(),
-            declared_effects: vec!["read_filesystem".to_string()],
-            matched_rules: vec!["git status".to_string()],
-            read_scopes: vec![".".to_string()],
-            write_scopes: Vec::new(),
-            cooperation_mode: None,
-            created_at_unix_seconds: None,
-            decided_at_unix_seconds: None,
-            decided_by_client_id: None,
-            state: BlockedApprovalState::Pending,
-            decision: None,
-            redirect_instruction: None,
-        })
+        .create_at(
+            BlockedApprovalRequest {
+                id: String::new(),
+                requesting_agent_id: "agent-1".to_string(),
+                pane_id: "%1".to_string(),
+                parent_agent_chain: Vec::new(),
+                action_kind: "shell_command".to_string(),
+                action_summary: "git status".to_string(),
+                declared_effects: vec!["read_filesystem".to_string()],
+                matched_rules: vec!["git status".to_string()],
+                read_scopes: vec![".".to_string()],
+                write_scopes: Vec::new(),
+                cooperation_mode: None,
+                created_at_unix_seconds: None,
+                decided_at_unix_seconds: None,
+                decided_by_client_id: None,
+                state: BlockedApprovalState::Pending,
+                decision: None,
+                redirect_instruction: None,
+            },
+            10,
+        )
         .unwrap();
     let root = temp_root("approval-audit");
     let path = root.join("audit.jsonl");

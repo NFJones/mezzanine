@@ -1599,7 +1599,9 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn queue_blocked_approval(&mut self, request: BlockedApprovalRequest) -> Result<String> {
-        let approval_id = self.blocked_approvals.create(request)?;
+        let approval_id = self
+            .blocked_approvals
+            .create_at(request, current_unix_seconds())?;
         let approval = self
             .blocked_approvals
             .get(&approval_id)

@@ -384,10 +384,10 @@ pub use slash::{
     baseline_slash_commands, parse_slash_command,
 };
 pub use subagent::{
-    ActiveWriteScope, BuiltinSubagentRole, CooperationMode, ScopeConflict, ScopeRegistry,
-    SubagentContractError, SubagentContractErrorKind, SubagentContractResult, SubagentProfile,
-    SubagentScopeDeclaration, SubagentScopeEnforcement, SubagentSpawnRequest, builtin_role_name,
-    builtin_subagent_profiles,
+    ActiveWriteScope, BuiltinSubagentRole, CooperationMode, DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
+    DefaultSubagentScopeEnforcement, ScopeConflict, ScopeRegistry, SubagentContractError,
+    SubagentContractErrorKind, SubagentContractResult, SubagentProfile, SubagentScopeDeclaration,
+    SubagentScopeEnforcement, SubagentSpawnRequest, builtin_role_name, builtin_subagent_profiles,
 };
 pub use surface::{AgentCapability, AllowedAction, AllowedActionSet, ModelInteractionKind};
 pub use transcript::{
