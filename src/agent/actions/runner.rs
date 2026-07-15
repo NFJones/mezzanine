@@ -38,7 +38,7 @@ use super::recovery::{
 };
 use super::{AgentTurnExecution, turn_state_from_action_results};
 use mez_agent::{
-    AgentTurnRecoveryBudget, ProviderResponseAcceptance, ProviderResponseProgress,
+    AgentTurnNegotiation, ProviderResponseAcceptance, ProviderResponseProgress,
     SubagentScopeDeclaration, accept_provider_response,
 };
 
@@ -326,7 +326,6 @@ enum BatchContinuationPlan {
 /// Borrows the product-owned inputs used to validate one provider MAAP batch.
 struct BatchContinuationInput<'a> {
     response_request: &'a ModelRequest,
-    durable_response_request: &'a ModelRequest,
     response_raw_text: &'a str,
     batch: &'a super::super::MaapBatch,
     request: &'a ModelRequest,
@@ -342,18 +341,18 @@ struct BatchContinuationInput<'a> {
 /// paths because those summaries can require synchronous or asynchronous I/O.
 fn plan_batch_continuation(
     input: BatchContinuationInput<'_>,
-    repair_budget: &mut AgentTurnRecoveryBudget,
+    negotiation: &mut AgentTurnNegotiation<ModelRequest>,
 ) -> std::result::Result<BatchContinuationPlan, (MezError, &'static str)> {
     if let Some(next_request) =
         mixed_capability_continuation_request(input.response_request, input.batch)
     {
-        repair_budget.reset();
+        negotiation.reset_recovery();
         return Ok(BatchContinuationPlan::Continue(Box::new(next_request)));
     }
     if let Err(error) = validate_batch_allowed_actions(input.batch, input.request) {
         let capability_recovery_base =
             if input.response_request.interaction_kind == ModelInteractionKind::Repair {
-                input.durable_response_request
+                negotiation.durable_request()
             } else {
                 input.response_request
             };
@@ -362,16 +361,16 @@ fn plan_batch_continuation(
             input.batch,
             &error,
         ) {
-            repair_budget.reset();
+            negotiation.reset_recovery();
             return Ok(BatchContinuationPlan::Continue(Box::new(next_request)));
         }
-        if repair_budget.record_attempt() {
+        if negotiation.record_recovery_attempt() {
             return Ok(BatchContinuationPlan::Continue(Box::new(
                 maap_repair_request(
                     input.response_request,
                     error.message(),
                     input.response_raw_text,
-                    repair_budget.attempts(),
+                    negotiation.recovery_attempts(),
                 ),
             )));
         }
@@ -382,13 +381,13 @@ fn plan_batch_continuation(
         input.available_mcp_servers,
         input.available_mcp_tools,
     ) {
-        if repair_budget.record_attempt() {
+        if negotiation.record_recovery_attempt() {
             return Ok(BatchContinuationPlan::Continue(Box::new(
                 maap_repair_request(
                     input.response_request,
                     error.message(),
                     input.response_raw_text,
-                    repair_budget.attempts(),
+                    negotiation.recovery_attempts(),
                 ),
             )));
         }
@@ -396,18 +395,18 @@ fn plan_batch_continuation(
     }
     match capability_requests_from_batch(input.batch) {
         Ok(Some(capability_request)) => {
-            repair_budget.reset();
+            negotiation.reset_recovery();
             Ok(BatchContinuationPlan::Continue(Box::new(
                 capability_continuation_request(input.response_request, &capability_request),
             )))
         }
         Ok(None) => Ok(BatchContinuationPlan::Execute),
-        Err(error) if repair_budget.record_attempt() => Ok(BatchContinuationPlan::Continue(
+        Err(error) if negotiation.record_recovery_attempt() => Ok(BatchContinuationPlan::Continue(
             Box::new(maap_repair_request(
                 input.response_request,
                 error.message(),
                 input.response_raw_text,
-                repair_budget.attempts(),
+                negotiation.recovery_attempts(),
             )),
         )),
         Err(error) => Err((error, "capability_negotiation")),
@@ -488,9 +487,8 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             self.memory_actions_enabled,
             self.issue_actions_enabled,
         );
-        let mut repair_budget = AgentTurnRecoveryBudget::new(MAAP_REPAIR_ATTEMPT_LIMIT);
+        let mut negotiation = AgentTurnNegotiation::new(request.clone(), MAAP_REPAIR_ATTEMPT_LIMIT);
         let mut response_request: ModelRequest;
-        let mut durable_response_request = request.clone();
         let mut response_progress = ProviderResponseProgress::default();
         let mut response = loop {
             response_request = request.clone();
@@ -498,13 +496,13 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                 Ok(response) => response,
                 Err(error)
                     if maap_provider_error_is_repairable(&error)
-                        && repair_budget.record_attempt() =>
+                        && negotiation.record_recovery_attempt() =>
                 {
                     request = maap_repair_request(
                         &response_request,
                         error.message(),
                         error.provider_raw_text().unwrap_or(""),
-                        repair_budget.attempts(),
+                        negotiation.recovery_attempts(),
                     );
                     continue;
                 }
@@ -573,7 +571,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                     promote_durable_request: true
                 }
             ) {
-                durable_response_request = response_request.clone();
+                negotiation.promote_durable_request(response_request.clone());
             }
             let Some(batch) = &response.action_batch else {
                 debug_assert_eq!(
@@ -583,12 +581,12 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                 let error = MezError::invalid_args(
                     "provider response did not include a parsed MAAP action_batch",
                 );
-                if repair_budget.record_attempt() {
+                if negotiation.record_recovery_attempt() {
                     request = maap_repair_request(
                         &response_request,
                         error.message(),
                         &response.raw_text,
-                        repair_budget.attempts(),
+                        negotiation.recovery_attempts(),
                     );
                     continue;
                 }
@@ -599,7 +597,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                 return Ok(failed_maap_validation_execution_with_summary(
                     self.provider,
                     &turn,
-                    durable_response_request,
+                    negotiation.durable_request().clone(),
                     response,
                     response_progress.latest_response_usage(),
                     &error,
@@ -613,7 +611,6 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             match plan_batch_continuation(
                 BatchContinuationInput {
                     response_request: &response_request,
-                    durable_response_request: &durable_response_request,
                     response_raw_text: &response.raw_text,
                     batch,
                     request: &request,
@@ -621,7 +618,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                     available_mcp_servers: &self.available_mcp_servers,
                     available_mcp_tools: self.available_mcp_tools,
                 },
-                &mut repair_budget,
+                &mut negotiation,
             ) {
                 Ok(BatchContinuationPlan::Continue(next_request)) => {
                     request = *next_request;
@@ -636,7 +633,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                     return Ok(failed_maap_validation_execution_with_summary(
                         self.provider,
                         &turn,
-                        durable_response_request,
+                        negotiation.durable_request().clone(),
                         response,
                         response_progress.latest_response_usage(),
                         &error,
@@ -656,7 +653,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
         let Some(batch) = response.action_batch.clone() else {
             ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
             return Ok(AgentTurnExecution {
-                request: durable_response_request,
+                request: negotiation.durable_request().clone(),
                 response,
                 latest_response_usage: response_progress.latest_response_usage(),
                 routing_token_usage_by_model: std::collections::BTreeMap::new(),
@@ -670,7 +667,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             self,
             &turn,
             context,
-            durable_response_request,
+            negotiation.durable_request().clone(),
             response,
             response_progress.latest_response_usage(),
             batch,
@@ -853,9 +850,8 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             self.memory_actions_enabled,
             self.issue_actions_enabled,
         );
-        let mut repair_budget = AgentTurnRecoveryBudget::new(MAAP_REPAIR_ATTEMPT_LIMIT);
+        let mut negotiation = AgentTurnNegotiation::new(request.clone(), MAAP_REPAIR_ATTEMPT_LIMIT);
         let mut response_request: ModelRequest;
-        let mut durable_response_request = request.clone();
         let mut response_progress = ProviderResponseProgress::default();
         let mut response = loop {
             response_request = request.clone();
@@ -863,13 +859,13 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                 Ok(response) => response,
                 Err(error)
                     if maap_provider_error_is_repairable(&error)
-                        && repair_budget.record_attempt() =>
+                        && negotiation.record_recovery_attempt() =>
                 {
                     request = maap_repair_request(
                         &response_request,
                         error.message(),
                         error.provider_raw_text().unwrap_or(""),
-                        repair_budget.attempts(),
+                        negotiation.recovery_attempts(),
                     );
                     continue;
                 }
@@ -942,7 +938,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                     promote_durable_request: true
                 }
             ) {
-                durable_response_request = response_request.clone();
+                negotiation.promote_durable_request(response_request.clone());
             }
             let Some(batch) = &response.action_batch else {
                 debug_assert_eq!(
@@ -952,12 +948,12 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                 let error = MezError::invalid_args(
                     "provider response did not include a parsed MAAP action_batch",
                 );
-                if repair_budget.record_attempt() {
+                if negotiation.record_recovery_attempt() {
                     request = maap_repair_request(
                         &response_request,
                         error.message(),
                         &response.raw_text,
-                        repair_budget.attempts(),
+                        negotiation.recovery_attempts(),
                     );
                     continue;
                 }
@@ -968,7 +964,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                 return Ok(failed_maap_validation_execution_with_summary_async(
                     self.provider,
                     &turn,
-                    durable_response_request,
+                    negotiation.durable_request().clone(),
                     response,
                     response_progress.latest_response_usage(),
                     &error,
@@ -983,7 +979,6 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             match plan_batch_continuation(
                 BatchContinuationInput {
                     response_request: &response_request,
-                    durable_response_request: &durable_response_request,
                     response_raw_text: &response.raw_text,
                     batch,
                     request: &request,
@@ -991,7 +986,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                     available_mcp_servers: &self.available_mcp_servers,
                     available_mcp_tools: self.available_mcp_tools,
                 },
-                &mut repair_budget,
+                &mut negotiation,
             ) {
                 Ok(BatchContinuationPlan::Continue(next_request)) => {
                     request = *next_request;
@@ -1006,7 +1001,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                     return Ok(failed_maap_validation_execution_with_summary_async(
                         self.provider,
                         &turn,
-                        durable_response_request,
+                        negotiation.durable_request().clone(),
                         response,
                         response_progress.latest_response_usage(),
                         &error,
@@ -1027,7 +1022,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         let Some(batch) = response.action_batch.clone() else {
             ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
             return Ok(AgentTurnExecution {
-                request: durable_response_request,
+                request: negotiation.durable_request().clone(),
                 response,
                 latest_response_usage: response_progress.latest_response_usage(),
                 routing_token_usage_by_model: std::collections::BTreeMap::new(),
@@ -1041,7 +1036,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             self,
             &turn,
             context,
-            durable_response_request,
+            negotiation.durable_request().clone(),
             response,
             response_progress.latest_response_usage(),
             batch,

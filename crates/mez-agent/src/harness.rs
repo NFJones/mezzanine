@@ -56,6 +56,62 @@ impl AgentTurnRecoveryBudget {
     }
 }
 
+/// Provider-negotiation state shared by portable and product turn runners.
+///
+/// The state keeps the durable request separate from ephemeral repair and
+/// capability-continuation requests while owning the bounded recovery budget.
+/// Concrete request and response types remain adapter-defined.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentTurnNegotiation<Request> {
+    durable_request: Request,
+    recovery_budget: AgentTurnRecoveryBudget,
+}
+
+impl<Request> AgentTurnNegotiation<Request> {
+    /// Starts provider negotiation from the request that may be persisted.
+    pub const fn new(durable_request: Request, recovery_limit: usize) -> Self {
+        Self {
+            durable_request,
+            recovery_budget: AgentTurnRecoveryBudget::new(recovery_limit),
+        }
+    }
+
+    /// Returns the request currently eligible for durable transcript context.
+    pub const fn durable_request(&self) -> &Request {
+        &self.durable_request
+    }
+
+    /// Replaces the durable request after an accepted non-repair response.
+    pub fn promote_durable_request(&mut self, request: Request) {
+        self.durable_request = request;
+    }
+
+    /// Records one recoverable negotiation attempt when capacity remains.
+    pub const fn record_recovery_attempt(&mut self) -> bool {
+        self.recovery_budget.record_attempt()
+    }
+
+    /// Returns the number of accepted recovery attempts in this phase.
+    pub const fn recovery_attempts(&self) -> usize {
+        self.recovery_budget.attempts()
+    }
+
+    /// Starts a fresh recovery phase after a valid continuation decision.
+    pub const fn reset_recovery(&mut self) {
+        self.recovery_budget.reset();
+    }
+
+    /// Borrows the recovery budget for canonical MAAP continuation planning.
+    pub const fn recovery_budget_mut(&mut self) -> &mut AgentTurnRecoveryBudget {
+        &mut self.recovery_budget
+    }
+
+    /// Consumes the state and returns the durable request.
+    pub fn into_durable_request(self) -> Request {
+        self.durable_request
+    }
+}
+
 /// One provider request in a portable agent turn.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentHarnessRequest {
@@ -221,14 +277,16 @@ where
         allowed_actions: turn.allowed_actions,
     };
     let mut provider_request_count = 0usize;
-    let mut recovery_budget = AgentTurnRecoveryBudget::new(turn.recovery_limit);
+    let mut negotiation = AgentTurnNegotiation::new(request.clone(), turn.recovery_limit);
     let mut action_results = Vec::new();
 
     loop {
         provider_request_count = provider_request_count.saturating_add(1);
         let response = match provider.send(&request) {
             Ok(response) => response,
-            Err(error) if provider.is_recoverable(&error) && recovery_budget.record_attempt() => {
+            Err(error)
+                if provider.is_recoverable(&error) && negotiation.record_recovery_attempt() =>
+            {
                 request.messages.push(ModelMessage {
                     role: ModelMessageRole::Developer,
                     source: crate::ContextSourceKind::RuntimeHint,
@@ -275,7 +333,7 @@ where
             )?;
             return Ok(AgentHarnessOutcome {
                 provider_request_count,
-                recovery_count: recovery_budget.attempts(),
+                recovery_count: negotiation.recovery_attempts(),
                 action_results,
             });
         }
