@@ -362,6 +362,77 @@ pub fn sanitize_frame_text(value: &str) -> String {
     value.chars().filter(|ch| !ch.is_control()).collect()
 }
 
+/// One caller-identified pill rendered in a window or group frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FramePillboxEntry<K> {
+    /// Caller-owned semantic target used for actions and hit testing.
+    pub target: K,
+    /// Copyable display text for the pill.
+    pub text: String,
+    /// Whether the pill uses the active presentation state.
+    pub active: bool,
+    /// Whether the pill represents a spawned-subagent window.
+    pub subagent: bool,
+}
+
+/// Display-column placement of one rendered frame pill.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FramePillboxSegment<K> {
+    /// Display-column offset within the containing frame row.
+    pub start: usize,
+    /// Terminal display width occupied by the pill.
+    pub width: usize,
+    /// Caller-owned semantic target used for actions and hit testing.
+    pub target: K,
+    /// Whether the pill uses the active presentation state.
+    pub active: bool,
+    /// Whether the pill represents a spawned-subagent window.
+    pub subagent: bool,
+}
+
+/// Joins frame pills with one separating terminal cell.
+pub fn render_frame_pillbox_text<K>(entries: &[FramePillboxEntry<K>]) -> String {
+    entries
+        .iter()
+        .map(|entry| entry.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Computes terminal display-column placements for caller-owned frame pills.
+pub fn render_frame_pillbox_segments<K: Clone>(
+    entries: &[FramePillboxEntry<K>],
+) -> Vec<FramePillboxSegment<K>> {
+    let mut segments = Vec::with_capacity(entries.len());
+    let mut start = 0usize;
+    for (entry_index, entry) in entries.iter().enumerate() {
+        if entry_index > 0 {
+            start = start.saturating_add(1);
+        }
+        let width = char_count(&entry.text);
+        segments.push(FramePillboxSegment {
+            start,
+            width,
+            target: entry.target.clone(),
+            active: entry.active,
+            subagent: entry.subagent,
+        });
+        start = start.saturating_add(width);
+    }
+    segments
+}
+
+/// Returns clipped local columns occupied by one frame-pill segment.
+pub fn frame_pillbox_segment_columns(
+    start: usize,
+    width: usize,
+    frame_width: usize,
+) -> impl Iterator<Item = usize> {
+    let start = start.min(frame_width);
+    let end = start.saturating_add(width).min(frame_width);
+    start..end
+}
+
 /// One semantic segment within a right-aligned frame status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrameStatusSegment<K> {
@@ -676,12 +747,13 @@ fn active_grapheme_width(grapheme: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        FrameStatusValue, blank_render_row, collect_text_cells, compose_pane_frame_row,
-        display_overlay_targets, fit_styled_width, frame_style_rendition, line_slice,
-        overlay_display_lines, overlay_fixed_column_style_spans, pane_frame_left_pill_style_width,
-        pane_frame_text_with_fill, render_frame_status, sanitize_frame_text,
-        styled_frame_line_with_rendition, write_single_width_cell, write_text_cells,
-        write_text_cells_with_width,
+        FramePillboxEntry, FrameStatusValue, blank_render_row, collect_text_cells,
+        compose_pane_frame_row, display_overlay_targets, fit_styled_width,
+        frame_pillbox_segment_columns, frame_style_rendition, line_slice, overlay_display_lines,
+        overlay_fixed_column_style_spans, pane_frame_left_pill_style_width,
+        pane_frame_text_with_fill, render_frame_pillbox_segments, render_frame_pillbox_text,
+        render_frame_status, sanitize_frame_text, styled_frame_line_with_rendition,
+        write_single_width_cell, write_text_cells, write_text_cells_with_width,
     };
     use crate::presentation::TerminalFrameStyle;
     use mez_terminal::{GraphicRendition, TerminalStyleSpan, TerminalStyledLine};
@@ -801,6 +873,38 @@ mod tests {
         assert_eq!(layout.right_status_segments[1].key, "state");
         assert_eq!(layout.right_status_segments[1].value, "running");
         assert!(layout.right_status_segments[0].start > layout.left_text_width);
+    }
+
+    /// Verifies generic window/group pill composition remains Unicode-width
+    /// aware and preserves caller-owned targets for styling and hit testing.
+    #[test]
+    fn frame_pillbox_composition_preserves_targets_and_columns() {
+        let entries = vec![
+            FramePillboxEntry {
+                target: "first",
+                text: " 1 shell ".to_string(),
+                active: true,
+                subagent: false,
+            },
+            FramePillboxEntry {
+                target: "second",
+                text: " 界 ".to_string(),
+                active: false,
+                subagent: true,
+            },
+        ];
+        let segments = render_frame_pillbox_segments(&entries);
+
+        assert_eq!(render_frame_pillbox_text(&entries), " 1 shell   界 ");
+        assert_eq!(segments[0].target, "first");
+        assert_eq!(segments[1].target, "second");
+        assert_eq!(segments[1].start, segments[0].width + 1);
+        assert_eq!(segments[1].width, 4);
+        assert_eq!(
+            frame_pillbox_segment_columns(segments[1].start, segments[1].width, 12)
+                .collect::<Vec<_>>(),
+            vec![10, 11]
+        );
     }
 
     /// Verifies display overlays prefer blank bottom rows, fall back to

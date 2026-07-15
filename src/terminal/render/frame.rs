@@ -1321,7 +1321,7 @@ pub(super) fn window_action_status_component(
     frame_context: &TerminalFrameContext,
     action: WindowFrameAction,
 ) -> WindowStatusFieldComponent {
-    let entries = vec![WindowFramePillboxEntry::action(action, frame_context)];
+    let entries = vec![window_frame_action_entry(action, frame_context)];
     let text = window_frame_pillbox_text_from_entries(&entries);
     let segments = window_frame_pillbox_segments(&entries)
         .into_iter()
@@ -1588,9 +1588,7 @@ fn pillbox_segment_local_columns(
     width: usize,
     frame_width: usize,
 ) -> impl Iterator<Item = usize> {
-    let start = start.min(frame_width);
-    let end = start.saturating_add(width).min(frame_width);
-    start..end
+    frame_pillbox_segment_columns(start, width, frame_width)
 }
 
 /// Returns clipped terminal columns occupied by one window pillbox segment.
@@ -1623,92 +1621,40 @@ pub(super) enum WindowFramePillboxTarget {
     Action(WindowFrameAction),
 }
 
-/// Carries Window Frame Pillbox Entry state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct WindowFramePillboxEntry {
-    /// Target represented by the rendered pill.
-    target: WindowFramePillboxTarget,
-    /// Copyable display text for the rendered pill.
-    text: String,
-    /// Whether the pill should use the active/pressed rendition.
-    active: bool,
-    /// Whether this entry represents a spawned-subagent window.
-    subagent: bool,
-}
+type WindowFramePillboxEntry = FramePillboxEntry<WindowFramePillboxTarget>;
+type WindowFramePillboxSegment = FramePillboxSegment<WindowFramePillboxTarget>;
 
-impl WindowFramePillboxEntry {
-    /// Builds an entry for a built-in window action control.
-    fn action(action: WindowFrameAction, frame_context: &TerminalFrameContext) -> Self {
-        let text = format!(" {} ", action.icon());
-        let active = frame_context.pressed_window_action.as_ref() == Some(&action);
-        Self {
-            target: WindowFramePillboxTarget::Action(action),
-            text,
-            active,
-            subagent: false,
-        }
+/// Builds an entry for a built-in window action control.
+fn window_frame_action_entry(
+    action: WindowFrameAction,
+    frame_context: &TerminalFrameContext,
+) -> WindowFramePillboxEntry {
+    let text = format!(" {} ", action.icon());
+    let active = frame_context.pressed_window_action.as_ref() == Some(&action);
+    WindowFramePillboxEntry {
+        target: WindowFramePillboxTarget::Action(action),
+        text,
+        active,
+        subagent: false,
     }
 }
 
-impl From<&TerminalWindowFrameContext> for WindowFramePillboxEntry {
-    /// Runs the from operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn from(window: &TerminalWindowFrameContext) -> Self {
-        Self {
-            target: WindowFramePillboxTarget::Window(window.index),
-            text: format!(" {} {} ", window.index, sanitize_frame_text(&window.title)),
-            active: window.active,
-            subagent: window.subagent,
-        }
+fn window_frame_entry(window: &TerminalWindowFrameContext) -> WindowFramePillboxEntry {
+    WindowFramePillboxEntry {
+        target: WindowFramePillboxTarget::Window(window.index),
+        text: format!(" {} {} ", window.index, sanitize_frame_text(&window.title)),
+        active: window.active,
+        subagent: window.subagent,
     }
 }
 
-impl From<&TerminalWindowGroupFrameContext> for WindowFramePillboxEntry {
-    /// Builds a pillbox entry for a window group.
-    fn from(group: &TerminalWindowGroupFrameContext) -> Self {
-        Self {
-            target: WindowFramePillboxTarget::Group(group.index),
-            text: format!(" {} {} ", group.index, sanitize_frame_text(&group.title)),
-            active: group.active,
-            subagent: false,
-        }
+fn window_group_frame_entry(group: &TerminalWindowGroupFrameContext) -> WindowFramePillboxEntry {
+    WindowFramePillboxEntry {
+        target: WindowFramePillboxTarget::Group(group.index),
+        text: format!(" {} {} ", group.index, sanitize_frame_text(&group.title)),
+        active: group.active,
+        subagent: false,
     }
-}
-
-/// Carries Window Frame Pillbox Segment state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct WindowFramePillboxSegment {
-    /// Stores the start value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    start: usize,
-    /// Stores the width value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    width: usize,
-    /// Stores the target value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    target: WindowFramePillboxTarget,
-    /// Stores the active value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    active: bool,
-    /// Whether this segment represents a spawned-subagent window.
-    subagent: bool,
 }
 
 /// Runs the window frame pillbox entries operation for this subsystem.
@@ -1735,7 +1681,7 @@ pub(super) fn window_frame_pillbox_entries(
     frame_context
         .windows
         .iter()
-        .map(WindowFramePillboxEntry::from)
+        .map(window_frame_entry)
         .collect()
 }
 
@@ -1746,7 +1692,7 @@ pub(super) fn window_frame_pillbox_entries_from_context(
     frame_context
         .windows
         .iter()
-        .map(WindowFramePillboxEntry::from)
+        .map(window_frame_entry)
         .collect()
 }
 
@@ -1756,7 +1702,7 @@ pub(super) fn window_action_pillbox_entries(
 ) -> Vec<WindowFramePillboxEntry> {
     WindowFrameAction::all()
         .into_iter()
-        .map(|action| WindowFramePillboxEntry::action(action, frame_context))
+        .map(|action| window_frame_action_entry(action, frame_context))
         .collect()
 }
 
@@ -1767,7 +1713,7 @@ pub(super) fn group_frame_pillbox_entries(
     frame_context
         .groups
         .iter()
-        .map(WindowFramePillboxEntry::from)
+        .map(window_group_frame_entry)
         .collect()
 }
 
@@ -1791,11 +1737,7 @@ pub(super) fn window_frame_pillbox_text(
 pub(super) fn window_frame_pillbox_text_from_entries(
     entries: &[WindowFramePillboxEntry],
 ) -> String {
-    entries
-        .iter()
-        .map(|entry| entry.text.clone())
-        .collect::<Vec<_>>()
-        .join(" ")
+    render_frame_pillbox_text(entries)
 }
 
 /// Runs the window frame pillbox segments operation for this subsystem.
@@ -1806,23 +1748,7 @@ pub(super) fn window_frame_pillbox_text_from_entries(
 pub(super) fn window_frame_pillbox_segments(
     entries: &[WindowFramePillboxEntry],
 ) -> Vec<WindowFramePillboxSegment> {
-    let mut segments = Vec::with_capacity(entries.len());
-    let mut start = 0usize;
-    for (entry_index, entry) in entries.iter().enumerate() {
-        if entry_index > 0 {
-            start = start.saturating_add(1);
-        }
-        let width = char_count(&entry.text);
-        segments.push(WindowFramePillboxSegment {
-            start,
-            width,
-            target: entry.target.clone(),
-            active: entry.active,
-            subagent: entry.subagent,
-        });
-        start = start.saturating_add(width);
-    }
-    segments
+    render_frame_pillbox_segments(entries)
 }
 
 /// Runs the window frame field value operation for this subsystem.
