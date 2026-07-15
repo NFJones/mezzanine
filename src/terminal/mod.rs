@@ -66,7 +66,8 @@ pub use client_loop::{
     AttachedTerminalClientLoopReport, AttachedTerminalClientStepPlan, AttachedTerminalOutputModes,
     ClientStatusKind, ClientStatusLine, ClientViewRole, ReadlinePromptClientPresentation,
     ReadlinePromptRegion, ReadlinePromptStatusRow, RenderedClientView, TerminalClientLoopAction,
-    attached_terminal_output_disconnected, plan_attached_terminal_client_step, route_client_input,
+    TerminalCursorStyle, attached_terminal_output_disconnected, plan_attached_terminal_client_step,
+    route_client_input,
 };
 #[cfg(test)]
 pub use client_loop::{
@@ -88,8 +89,8 @@ pub(crate) use copy::{
 pub use fd::poll_attached_terminal_fd_readiness;
 pub use fd::{
     AttachedTerminalFd, AttachedTerminalFdReadiness, AttachedTerminalFdRole, PaneRenderInput,
-    TerminalClientLoopConfig, TerminalCursorStyle, TerminalFdInterest, TerminalFrameContext,
-    TerminalPaneFrameContext, TerminalRawModeGuard, read_attached_terminal_size,
+    TerminalClientLoopConfig, TerminalFdInterest, TerminalFrameContext, TerminalPaneFrameContext,
+    TerminalRawModeGuard, read_attached_terminal_size,
 };
 pub use host_clipboard::{HostClipboard, HostClipboardCommand};
 pub use mouse::{

@@ -77,35 +77,9 @@ pub type TerminalPaneFrameContext =
     mez_mux::presentation::TerminalPaneFrameContext<ReadlinePrompt, Vec<String>>;
 
 use mez_mux::presentation::{
-    TerminalFramePosition, TerminalFrameStyle, TerminalWindowFrameContext,
+    TerminalCursorStyle, TerminalFramePosition, TerminalFrameStyle, TerminalWindowFrameContext,
     TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
 };
-
-/// Cursor shape used when Mezzanine presents the active interactive surface.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum TerminalCursorStyle {
-    /// A full-cell block cursor.
-    #[default]
-    Block,
-    /// An underline cursor.
-    Underline,
-    /// A vertical bar cursor.
-    Bar,
-}
-
-impl TerminalCursorStyle {
-    /// Returns the DECSCUSR parameter for this shape and blink behavior.
-    pub const fn decscusr_parameter(self, blink: bool) -> u8 {
-        match (self, blink) {
-            (Self::Block, true) => 1,
-            (Self::Block, false) => 2,
-            (Self::Underline, true) => 3,
-            (Self::Underline, false) => 4,
-            (Self::Bar, true) => 5,
-            (Self::Bar, false) => 6,
-        }
-    }
-}
 
 /// Carries Terminal Client Loop Config state for this subsystem.
 ///

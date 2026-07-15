@@ -16,16 +16,21 @@ use super::{
 use super::{
     AttachedTerminalFdReadiness, AttachedTerminalFdRole, BorrowedFd, CopyModeKeyAction, MezError,
     MouseAction, MouseEvent, RawFd, Result, TerminalClientLoopConfig, TerminalColor,
-    TerminalCursorStyle, TerminalStyleSpan, classify_mouse_event,
-    compose_client_presentation_with_styles, parse_sgr_mouse, terminal_grapheme_width,
-    terminal_graphemes, terminal_text_width,
+    TerminalStyleSpan, classify_mouse_event, compose_client_presentation_with_styles,
+    parse_sgr_mouse, terminal_grapheme_width, terminal_graphemes, terminal_text_width,
 };
 use mez_mux::input::{
     KeyChord, KeyCode, MousePolicy, MuxAction, TerminalInputClassification, WindowFocusTarget,
     classify_prefix_binding, classify_terminal_input_with_command_bindings, key_chord_input_bytes,
     parse_key_chord_bytes,
 };
+#[cfg(test)]
 use mez_mux::layout::Size;
+pub use mez_mux::presentation::{
+    AttachedTerminalOutputModes, ClientViewRole, ReadlinePromptRegion, RenderedClientView,
+    TerminalCursorStyle,
+};
+#[cfg(test)]
 use mez_mux::theme::UiTheme;
 
 // Attached terminal loop planning and I/O abstraction.
@@ -105,175 +110,6 @@ pub enum TerminalClientLoopAction {
     ReportUnboundPrefix(KeyChord),
 }
 
-/// Carries Client View Role state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClientViewRole {
-    /// Represents the Primary case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Primary,
-    /// Represents the Pending Observer case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    PendingObserver,
-    /// Represents the Observer case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Observer,
-}
-
-/// Carries Rendered Client View state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RenderedClientView {
-    /// Stores the role value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub role: ClientViewRole,
-    /// Stores the authoritative size value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub authoritative_size: Size,
-    /// Stores the client size value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub client_size: Size,
-    /// Stores the lines value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub lines: Vec<String>,
-    /// Per-line non-default SGR style spans aligned to `lines`.
-    pub line_style_spans: Vec<Vec<super::TerminalStyleSpan>>,
-    /// Active copy-mode selection range, including submitted pager search matches.
-    pub selection: Option<(mez_mux::copy::CopyPosition, mez_mux::copy::CopyPosition)>,
-    /// Stores the requires client scroll value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub requires_client_scroll: bool,
-    /// Stores the viewport row value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub viewport_row: usize,
-    /// Stores the viewport column value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub viewport_column: usize,
-    /// Stores the cursor row value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub cursor_row: usize,
-    /// Stores the cursor column value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub cursor_column: usize,
-    /// Stores the cursor visible value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub cursor_visible: bool,
-    /// Stores the cursor style value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub cursor_style: TerminalCursorStyle,
-    /// Stores the cursor blink value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub cursor_blink: bool,
-    /// Stores the cursor blink interval ms value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub cursor_blink_interval_ms: u64,
-    /// Stores the application keypad value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub application_keypad: bool,
-    /// Whether host bracketed paste should be enabled for the attached terminal.
-    ///
-    /// This mirrors the active pane application mode so host clipboard pastes
-    /// arrive with `CSI 200~`/`CSI 201~` delimiters and can be routed opaquely.
-    pub bracketed_paste: bool,
-    /// Whether host focus event reporting should be enabled for the attached terminal.
-    ///
-    /// This mirrors the active pane application mode so focus in/out events
-    /// reach full-screen applications through the attached host terminal.
-    pub focus_events: bool,
-    /// Whether the active pane expects alternate-screen host presentation semantics.
-    ///
-    /// This records the pane-local presentation mode so attached-terminal
-    /// redraws can retain full-screen host behavior across incremental updates.
-    pub alternate_screen: bool,
-    /// Whether the attached terminal should request host mouse reporting.
-    ///
-    /// This mirrors the foreground client mouse policy so serialized client
-    /// views can preserve the same host-mouse capture decision as local frames.
-    pub host_mouse_reporting: bool,
-    /// Milliseconds between client-requested animation refreshes.
-    ///
-    /// A zero value means the view does not require animation refreshes.
-    pub animation_refresh_interval_ms: u64,
-    /// Stores the ui theme value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub ui_theme: UiTheme,
-    /// Stores the agent prompt region value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub agent_prompt_region: Option<ReadlinePromptRegion>,
-    /// Stores the primary prompt active value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub primary_prompt_active: bool,
-}
-
-/// Absolute client-space region where pane-scoped overlays can be drawn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ReadlinePromptRegion {
-    /// Stores the row value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub row: usize,
-    /// Stores the column value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub column: usize,
-    /// Stores the columns value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub columns: usize,
-    /// Stores the rows value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub rows: usize,
-}
-
 /// Carries Client Status Kind state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -318,106 +154,6 @@ pub struct ClientStatusLine {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub text: String,
-}
-
-/// Carries Attached Terminal Output Modes state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AttachedTerminalOutputModes {
-    /// Stores the application keypad value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub application_keypad: bool,
-    /// Whether the attached terminal should request host bracketed paste.
-    ///
-    /// When enabled, paste payloads are delimited by the host terminal and can
-    /// be forwarded to the pane without interpreting Mezzanine prefix commands
-    /// or mouse reports embedded in the pasted bytes.
-    pub bracketed_paste: bool,
-    /// Whether host focus event reporting should be enabled for a frame.
-    ///
-    /// This mirrors the active pane application mode so full-screen
-    /// applications continue to receive focus changes while attached.
-    pub focus_events: bool,
-    /// Whether the active pane is using its pane-local alternate screen.
-    ///
-    /// This state is kept for structured clients and diagnostics. Attached
-    /// terminal redraws intentionally keep the containing terminal on its
-    /// normal screen so host scrollback remains available while Mezzanine owns
-    /// pane-local alternate-screen rendering.
-    pub alternate_screen: bool,
-    /// Whether the attached terminal should request host mouse reporting.
-    ///
-    /// This mirrors the foreground client's configured mouse policy so
-    /// Mezzanine only captures host mouse input when mouse support is enabled.
-    pub host_mouse_reporting: bool,
-    /// Stores the cursor style value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub cursor_style: TerminalCursorStyle,
-    /// Stores the cursor blink value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub cursor_blink: bool,
-    /// Stores the cursor blink interval ms value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub cursor_blink_interval_ms: u64,
-    /// Stores the cursor blink elapsed ms value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub cursor_blink_elapsed_ms: u64,
-    /// Milliseconds between client-requested animation refreshes.
-    ///
-    /// A zero value means the view does not require animation refreshes.
-    pub animation_refresh_interval_ms: u64,
-    /// Stores the cursor visible value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub cursor_visible: bool,
-    /// Stores the cursor row value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub cursor_row: usize,
-    /// Stores the cursor column value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub cursor_column: usize,
-}
-
-impl Default for AttachedTerminalOutputModes {
-    /// Runs the default operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    fn default() -> Self {
-        Self {
-            application_keypad: false,
-            bracketed_paste: false,
-            focus_events: false,
-            alternate_screen: false,
-            host_mouse_reporting: true,
-            cursor_style: TerminalCursorStyle::default(),
-            cursor_blink: false,
-            cursor_blink_interval_ms: 500,
-            cursor_blink_elapsed_ms: 0,
-            animation_refresh_interval_ms: 0,
-            cursor_visible: false,
-            cursor_row: 0,
-            cursor_column: 0,
-        }
-    }
 }
 
 /// Carries Readline Prompt Status Row state for this subsystem.

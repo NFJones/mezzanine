@@ -8,7 +8,163 @@ use std::collections::BTreeMap;
 
 use mez_terminal::{TerminalSize, TerminalStyleSpan};
 
+use crate::copy::CopyPosition;
 use crate::layout::{PaneGeometry, range_overlap_u16};
+use crate::theme::UiTheme;
+
+/// Cursor shape used when presenting an attached interactive surface.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TerminalCursorStyle {
+    /// A full-cell block cursor.
+    #[default]
+    Block,
+    /// An underline cursor.
+    Underline,
+    /// A vertical bar cursor.
+    Bar,
+}
+
+impl TerminalCursorStyle {
+    /// Returns the DECSCUSR parameter for this shape and blink behavior.
+    pub const fn decscusr_parameter(self, blink: bool) -> u8 {
+        match (self, blink) {
+            (Self::Block, true) => 1,
+            (Self::Block, false) => 2,
+            (Self::Underline, true) => 3,
+            (Self::Underline, false) => 4,
+            (Self::Bar, true) => 5,
+            (Self::Bar, false) => 6,
+        }
+    }
+}
+
+/// Role of one rendered attached-client view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientViewRole {
+    /// Primary interactive client.
+    Primary,
+    /// Observer awaiting promotion or initial synchronization.
+    PendingObserver,
+    /// Read-only observer client.
+    Observer,
+}
+
+/// Absolute client-space region reserved for a readline prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadlinePromptRegion {
+    /// Top row of the region.
+    pub row: usize,
+    /// Left column of the region.
+    pub column: usize,
+    /// Width of the region in terminal cells.
+    pub columns: usize,
+    /// Height of the region in terminal cells.
+    pub rows: usize,
+}
+
+/// Transport-neutral rendered attached-client viewport.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedClientView {
+    /// Client role for which this view was rendered.
+    pub role: ClientViewRole,
+    /// Authoritative multiplexer size used to compose the view.
+    pub authoritative_size: TerminalSize,
+    /// Actual attached-client size.
+    pub client_size: TerminalSize,
+    /// Rendered text rows.
+    pub lines: Vec<String>,
+    /// Per-line non-default SGR style spans aligned with `lines`.
+    pub line_style_spans: Vec<Vec<TerminalStyleSpan>>,
+    /// Active copy-mode selection range.
+    pub selection: Option<(CopyPosition, CopyPosition)>,
+    /// Whether presenting the view requires host-client scrolling.
+    pub requires_client_scroll: bool,
+    /// First visible source row.
+    pub viewport_row: usize,
+    /// First visible source column.
+    pub viewport_column: usize,
+    /// Cursor row in client coordinates.
+    pub cursor_row: usize,
+    /// Cursor column in client coordinates.
+    pub cursor_column: usize,
+    /// Whether the cursor is visible.
+    pub cursor_visible: bool,
+    /// Cursor shape requested from the host terminal.
+    pub cursor_style: TerminalCursorStyle,
+    /// Whether the host cursor should blink.
+    pub cursor_blink: bool,
+    /// Cursor blink interval in milliseconds.
+    pub cursor_blink_interval_ms: u64,
+    /// Whether application-keypad mode is active.
+    pub application_keypad: bool,
+    /// Whether host bracketed paste should be enabled.
+    pub bracketed_paste: bool,
+    /// Whether host focus reporting should be enabled.
+    pub focus_events: bool,
+    /// Whether the active pane is using its alternate screen.
+    pub alternate_screen: bool,
+    /// Whether host mouse reporting should be enabled.
+    pub host_mouse_reporting: bool,
+    /// Requested animation refresh cadence in milliseconds, or zero.
+    pub animation_refresh_interval_ms: u64,
+    /// Resolved UI theme used for this view.
+    pub ui_theme: UiTheme,
+    /// Absolute client-space prompt region, when present.
+    pub agent_prompt_region: Option<ReadlinePromptRegion>,
+    /// Whether the primary prompt is active.
+    pub primary_prompt_active: bool,
+}
+
+/// Host-terminal modes required to present one attached-client frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AttachedTerminalOutputModes {
+    /// Whether application-keypad mode should be enabled.
+    pub application_keypad: bool,
+    /// Whether bracketed-paste mode should be enabled.
+    pub bracketed_paste: bool,
+    /// Whether focus-event reporting should be enabled.
+    pub focus_events: bool,
+    /// Whether the active pane is using its alternate screen.
+    pub alternate_screen: bool,
+    /// Whether host mouse reporting should be enabled.
+    pub host_mouse_reporting: bool,
+    /// Host cursor shape.
+    pub cursor_style: TerminalCursorStyle,
+    /// Whether the host cursor should blink.
+    pub cursor_blink: bool,
+    /// Cursor blink interval in milliseconds.
+    pub cursor_blink_interval_ms: u64,
+    /// Elapsed cursor blink phase in milliseconds.
+    pub cursor_blink_elapsed_ms: u64,
+    /// Requested animation refresh cadence in milliseconds, or zero.
+    pub animation_refresh_interval_ms: u64,
+    /// Whether the cursor should be visible in this phase.
+    pub cursor_visible: bool,
+    /// Cursor row in client coordinates.
+    pub cursor_row: usize,
+    /// Cursor column in client coordinates.
+    pub cursor_column: usize,
+}
+
+impl Default for AttachedTerminalOutputModes {
+    fn default() -> Self {
+        Self {
+            application_keypad: false,
+            bracketed_paste: false,
+            focus_events: false,
+            alternate_screen: false,
+            host_mouse_reporting: true,
+            cursor_style: TerminalCursorStyle::default(),
+            cursor_blink: false,
+            cursor_blink_interval_ms: 500,
+            cursor_blink_elapsed_ms: 0,
+            animation_refresh_interval_ms: 0,
+            cursor_visible: false,
+            cursor_row: 0,
+            cursor_column: 0,
+        }
+    }
+}
 
 /// Transport-neutral result of one attached-client planning step.
 ///
