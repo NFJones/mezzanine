@@ -198,20 +198,7 @@ fn project_guidance_is_templated_into_system_prompt() {
         2,
     )
     .unwrap();
-    let request = assemble_model_request(
-        &ModelProfile {
-            provider: "openai".to_string(),
-            model: "default".to_string(),
-            reasoning_profile: None,
-            latency_preference: None,
-            multimodal_required: false,
-            provider_options: std::collections::BTreeMap::new(),
-            safety_tier: None,
-        },
-        &turn(),
-        &context,
-    )
-    .unwrap();
+    let request = assemble_test_model_request(&context);
 
     assert_eq!(request.messages[0].role, ModelMessageRole::System);
     assert!(
@@ -246,7 +233,7 @@ fn scheduler_context_keeps_relevant_idle_state_compact() {
         content: "spawn subagents for this task".to_string(),
     }])
     .unwrap();
-    let scheduler = mez_agent::AgentScheduler::new(2).unwrap();
+    let scheduler = AgentScheduler::new(2).unwrap();
 
     let context = append_scheduler_context(context, &scheduler).unwrap();
     let scheduler_context = context
@@ -275,7 +262,7 @@ fn scheduler_context_omits_unrelated_idle_state() {
         content: "do the task".to_string(),
     }])
     .unwrap();
-    let scheduler = mez_agent::AgentScheduler::new(2).unwrap();
+    let scheduler = AgentScheduler::new(2).unwrap();
 
     let context = append_scheduler_context(context, &scheduler).unwrap();
 
@@ -308,15 +295,13 @@ fn scheduler_context_precedes_project_and_user_context_without_permission_contex
         },
     ])
     .unwrap();
-    let mut policy = PermissionPolicy::default();
-    policy.set_approval_bypass(true);
-    let mut scheduler = mez_agent::AgentScheduler::new(2).unwrap();
+    let mut scheduler = AgentScheduler::new(2).unwrap();
     scheduler
-        .enqueue(mez_agent::ScheduledWork {
+        .enqueue(crate::ScheduledWork {
             turn_id: "turn-queued".to_string(),
             agent_id: "agent-queued".to_string(),
             pane_id: Some("%1".to_string()),
-            kind: mez_agent::ScheduledWorkKind::ShellCapable,
+            kind: crate::ScheduledWorkKind::ShellCapable,
         })
         .unwrap();
 

@@ -683,3 +683,6 @@ fn block_should_precede_project_guidance(source: ContextSourceKind) -> bool {
             | ContextSourceKind::ProjectGuidance
     )
 }
+
+#[cfg(test)]
+mod tests;

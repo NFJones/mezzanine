@@ -20,8 +20,8 @@ fn mcp_context_does_not_emit_routing_match_for_verbatim_server_purpose() {
     .unwrap();
     let context = append_mcp_context(
         context,
-        &mez_agent::McpPromptSummary {
-            available_servers: vec![mez_agent::McpPromptServer {
+        &McpPromptSummary {
+            available_servers: vec![McpPromptServer {
                 server_id: "gitlab".to_string(),
                 display_name: "GitLab".to_string(),
                 purpose: "GitLab issue and merge request operations".to_string(),
@@ -29,7 +29,7 @@ fn mcp_context_does_not_emit_routing_match_for_verbatim_server_purpose() {
                 tool_count: 1,
                 approval_required_tool_count: 0,
             }],
-            available_tools: vec![mez_agent::McpPromptTool {
+            available_tools: vec![McpPromptTool {
                 server_id: "gitlab".to_string(),
                 tool_name: "get_issue".to_string(),
                 description: "Read one issue".to_string(),
@@ -70,7 +70,7 @@ fn mcp_context_includes_all_tools_for_explicit_server_invocation() {
     }])
     .unwrap();
     let tools = (0..10)
-        .map(|index| mez_agent::McpPromptTool {
+        .map(|index| McpPromptTool {
             server_id: "fs".to_string(),
             tool_name: format!("tool_{index:02}"),
             description: format!("Tool {index} description"),
@@ -80,8 +80,8 @@ fn mcp_context_includes_all_tools_for_explicit_server_invocation() {
         .collect::<Vec<_>>();
     let context = append_mcp_context(
         context,
-        &mez_agent::McpPromptSummary {
-            available_servers: vec![mez_agent::McpPromptServer {
+        &McpPromptSummary {
+            available_servers: vec![McpPromptServer {
                 server_id: "fs".to_string(),
                 display_name: "Filesystem".to_string(),
                 purpose: "Read project files through MCP".to_string(),
@@ -120,8 +120,8 @@ fn mcp_context_omits_integrations_without_explicit_server_invocation() {
     .unwrap();
     let context = append_mcp_context(
         context,
-        &mez_agent::McpPromptSummary {
-            available_servers: vec![mez_agent::McpPromptServer {
+        &McpPromptSummary {
+            available_servers: vec![McpPromptServer {
                 server_id: "fs".to_string(),
                 display_name: "Filesystem".to_string(),
                 purpose: "Read project files through MCP".to_string(),
@@ -130,14 +130,14 @@ fn mcp_context_omits_integrations_without_explicit_server_invocation() {
                 tool_count: 1,
                 approval_required_tool_count: 1,
             }],
-            available_tools: vec![mez_agent::McpPromptTool {
+            available_tools: vec![McpPromptTool {
                 server_id: "fs".to_string(),
                 tool_name: "read_file".to_string(),
                 description: "Read files".to_string(),
                 approval_required: true,
                 input_schema_json: r#"{\"type\":\"object\"}"#.to_string(),
             }],
-            unavailable_servers: vec![mez_agent::McpPromptUnavailableServer {
+            unavailable_servers: vec![crate::McpPromptUnavailableServer {
                 server_id: "gitlab".to_string(),
                 purpose: "GitLab issue and merge request operations".to_string(),
                 usage_instructions: "Use for GitLab issue and merge request tasks.".to_string(),
@@ -165,8 +165,8 @@ fn mcp_context_quotes_and_normalizes_tool_descriptions() {
     .unwrap();
     let context = append_mcp_context(
         context,
-        &mez_agent::McpPromptSummary {
-            available_servers: vec![mez_agent::McpPromptServer {
+        &McpPromptSummary {
+            available_servers: vec![McpPromptServer {
                 server_id: "fs".to_string(),
                 display_name: "Filesystem".to_string(),
                 purpose: "Read project files through MCP".to_string(),
@@ -175,7 +175,7 @@ fn mcp_context_quotes_and_normalizes_tool_descriptions() {
                 tool_count: 1,
                 approval_required_tool_count: 1,
             }],
-            available_tools: vec![mez_agent::McpPromptTool {
+            available_tools: vec![McpPromptTool {
                 server_id: "fs".to_string(),
                 tool_name: "read_file".to_string(),
                 description: "Read files\nfrom MCP".to_string(),
@@ -211,8 +211,8 @@ fn mcp_context_refresh_replaces_previous_integration_block() {
         content: "call @fs and then @git".to_string(),
     }])
     .unwrap();
-    let first = mez_agent::McpPromptSummary {
-        available_servers: vec![mez_agent::McpPromptServer {
+    let first = McpPromptSummary {
+        available_servers: vec![McpPromptServer {
             server_id: "fs".to_string(),
             display_name: "Filesystem".to_string(),
             purpose: "Read project files through MCP".to_string(),
@@ -220,7 +220,7 @@ fn mcp_context_refresh_replaces_previous_integration_block() {
             tool_count: 1,
             approval_required_tool_count: 1,
         }],
-        available_tools: vec![mez_agent::McpPromptTool {
+        available_tools: vec![McpPromptTool {
             server_id: "fs".to_string(),
             tool_name: "read_file".to_string(),
             description: "Read files".to_string(),
@@ -229,8 +229,8 @@ fn mcp_context_refresh_replaces_previous_integration_block() {
         }],
         unavailable_servers: Vec::new(),
     };
-    let second = mez_agent::McpPromptSummary {
-        available_servers: vec![mez_agent::McpPromptServer {
+    let second = McpPromptSummary {
+        available_servers: vec![McpPromptServer {
             server_id: "git".to_string(),
             display_name: "Git".to_string(),
             purpose: "Read Git state through MCP".to_string(),
@@ -238,7 +238,7 @@ fn mcp_context_refresh_replaces_previous_integration_block() {
             tool_count: 1,
             approval_required_tool_count: 0,
         }],
-        available_tools: vec![mez_agent::McpPromptTool {
+        available_tools: vec![McpPromptTool {
             server_id: "git".to_string(),
             tool_name: "status".to_string(),
             description: "Read status".to_string(),
@@ -334,20 +334,7 @@ fn memory_context_appends_after_active_context_in_priority_order() {
     ];
 
     let context = append_memory_context(context, &records, 2).unwrap();
-    let request = assemble_model_request(
-        &ModelProfile {
-            provider: "openai".to_string(),
-            model: "default".to_string(),
-            reasoning_profile: None,
-            latency_preference: None,
-            multimodal_required: false,
-            provider_options: std::collections::BTreeMap::new(),
-            safety_tier: None,
-        },
-        &turn(),
-        &context,
-    )
-    .unwrap();
+    let request = assemble_test_model_request(&context);
 
     assert_eq!(context.blocks[0].source, ContextSourceKind::UserInstruction);
     assert_eq!(context.blocks[1].source, ContextSourceKind::Memory);

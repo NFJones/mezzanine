@@ -6,5 +6,3 @@
 use super::*;
 
 mod assembly;
-mod guidance;
-mod integrations;

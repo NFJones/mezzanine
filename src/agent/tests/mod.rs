@@ -51,22 +51,18 @@ use crate::test_support::agent::ActionBuilder;
 use crate::test_support::temp::TestTempDir;
 use crate::transcript::{AgentTranscriptStore, TranscriptRole as DurableTranscriptRole};
 use base64::Engine;
-use mez_agent::instructions::DiscoveredInstructionFile;
 use mez_agent::semantic_patch::try_convert_unified_diff_to_mez_patch;
 use mez_agent::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentPromptProfile,
     AgentTranscriptRole as TranscriptRole, AgentTurnState, AgentTurnTrigger,
     CHATGPT_RESPONSES_ENDPOINT, ContextBlock,
     MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, MaapBatch, McpExecutionRequest,
-    McpExecutionResponse, McpPromptTool, MemoryContextRecord, MemoryContextScope, ModelRequest,
-    ModelTokenUsage, OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT, ProviderHttpRequest,
-    ProviderHttpResponse, ProviderTranscriptEvent, SlashCommandEffect, append_mcp_context,
-    append_memory_context, append_permission_policy_context, append_project_guidance_context,
-    append_scheduler_context, baseline_slash_commands,
+    McpExecutionResponse, McpPromptTool, ModelRequest, ModelTokenUsage, OPENAI_MODELS_ENDPOINT,
+    OPENAI_RESPONSES_ENDPOINT, ProviderHttpRequest, ProviderHttpResponse, ProviderTranscriptEvent,
+    SlashCommandEffect, append_mcp_context, baseline_slash_commands,
     openai_models_endpoint_for_responses_endpoint, openai_prompt_cache_diagnostics_for_request,
     openai_responses_endpoint_for_base_url, openai_responses_request_body,
-    openai_stable_prefix_material_for_request, provider_quota_usage_from_headers,
-    set_project_guidance_context, shell_quote,
+    openai_stable_prefix_material_for_request, provider_quota_usage_from_headers, shell_quote,
 };
 use mez_agent::{
     DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,
