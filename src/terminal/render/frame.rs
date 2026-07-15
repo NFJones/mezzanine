@@ -1094,56 +1094,11 @@ impl WindowStatusSegmentKind {
     }
 }
 
-/// Carries Window Status Segment state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct WindowStatusSegment {
-    /// Stores the start value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    start: usize,
-    /// Stores the width value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    width: usize,
-    /// Stores the kind value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    kind: WindowStatusSegmentKind,
-}
+/// Product semantic key carried through mux-owned frame status placement.
+pub(super) type WindowStatusSegment = FrameStatusSegment<WindowStatusSegmentKind>;
 
-/// Carries Window Right Status Layout state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct WindowRightStatusLayout {
-    /// Stores the text value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    text: String,
-    /// Stores the start value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    start: usize,
-    /// Stores the width value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    width: usize,
-    /// Stores the segments value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    segments: Vec<WindowStatusSegment>,
-}
+/// Product-specialized right-aligned status placement owned by `mez-mux`.
+pub(super) type WindowRightStatusLayout = PositionedFrameStatus<WindowStatusSegmentKind>;
 
 /// Runs the window right status layout operation for this subsystem.
 ///
@@ -1158,68 +1113,14 @@ pub(super) fn window_right_status_layout(
     if status.template.trim().is_empty() || width == 0 {
         return None;
     }
-    let rendered = render_window_status_template(frame_context, status);
-    let text = rendered.text;
-    let status_limit = width.saturating_sub(usize::from(width > 1));
-    let status_width = fitted_text_width(&text, status_limit);
-    if status_width == 0 {
-        return None;
-    }
-    let trailing_padding = usize::from(width > status_width);
-    let start = width.saturating_sub(status_width.saturating_add(trailing_padding));
-    let segments = rendered
-        .segments
-        .into_iter()
-        .filter_map(|segment| {
-            clip_style_span(
-                TerminalStyleSpan {
-                    start: segment.start,
-                    length: segment.width,
-                    rendition: GraphicRendition::default(),
-                },
-                status_width,
-            )
-            .map(|span| WindowStatusSegment {
-                start: start.saturating_add(span.start),
-                width: span.length,
-                kind: segment.kind,
-            })
-        })
-        .collect();
-    Some(WindowRightStatusLayout {
-        text,
-        start,
-        width: status_width,
-        segments,
-    })
+    position_frame_status(render_window_status_template(frame_context, status), width)
 }
 
-/// Carries Rendered Window Status Template state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct RenderedWindowStatusTemplate {
-    /// Stores the text value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    text: String,
-    /// Stores the segments value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    segments: Vec<WindowStatusSegment>,
-}
+/// Product-specialized rendered status retained before mux placement.
+pub(super) type RenderedWindowStatusTemplate = RenderedFrameStatus<WindowStatusSegmentKind>;
 
-/// Carries one expanded window-status template field.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct WindowStatusFieldComponent {
-    /// Rendered field text.
-    text: String,
-    /// Style/action segments relative to the field text.
-    segments: Vec<WindowStatusSegment>,
-}
+/// Product-specialized template field retained before mux placement.
+pub(super) type WindowStatusFieldComponent = RenderedFrameStatus<WindowStatusSegmentKind>;
 
 /// Runs the render window status template operation for this subsystem.
 ///
@@ -1283,7 +1184,8 @@ pub(super) fn window_status_field_component(
         .map(|kind| WindowStatusSegment {
             start: 0,
             width: fitted_text_width(&text, usize::MAX),
-            kind,
+            key: kind,
+            value: text.clone(),
         })
         .into_iter()
         .filter(|segment| segment.width > 0)
@@ -1306,10 +1208,11 @@ pub(super) fn window_actions_status_component(
             Some(WindowStatusSegment {
                 start: segment.start,
                 width: segment.width,
-                kind: WindowStatusSegmentKind::Action {
+                key: WindowStatusSegmentKind::Action {
                     action,
                     pressed: segment.active,
                 },
+                value: text.clone(),
             })
         })
         .collect();
@@ -1332,10 +1235,11 @@ pub(super) fn window_action_status_component(
             Some(WindowStatusSegment {
                 start: segment.start,
                 width: segment.width,
-                kind: WindowStatusSegmentKind::Action {
+                key: WindowStatusSegmentKind::Action {
                     action,
                     pressed: segment.active,
                 },
+                value: text.clone(),
             })
         })
         .collect();
@@ -1415,7 +1319,7 @@ pub(super) fn window_status_style_spans(
         .map(|segment| TerminalStyleSpan {
             start: segment.start,
             length: segment.width,
-            rendition: match &segment.kind {
+            rendition: match &segment.key {
                 WindowStatusSegmentKind::Action { pressed, .. } => {
                     window_pillbox_rendition(*pressed, false, TerminalFrameStyle::Default, ui_theme)
                 }
@@ -1468,7 +1372,7 @@ pub fn window_frame_action_pillbox_cells(
         .segments
         .into_iter()
         .flat_map(|segment| {
-            let Some(action) = segment.kind.action().cloned() else {
+            let Some(action) = segment.key.action().cloned() else {
                 return Vec::new();
             };
             pillbox_status_segment_hit_columns(segment.start, segment.width, width)

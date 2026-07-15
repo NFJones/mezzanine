@@ -466,6 +466,19 @@ pub struct RenderedFrameStatus<K> {
     pub segments: Vec<FrameStatusSegment<K>>,
 }
 
+/// Right-aligned frame status placed within an authoritative row width.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PositionedFrameStatus<K> {
+    /// Sanitized status text.
+    pub text: String,
+    /// Absolute display-column offset within the frame row.
+    pub start: usize,
+    /// Display width occupied by the status text.
+    pub width: usize,
+    /// Semantic segments translated to absolute frame-row columns.
+    pub segments: Vec<FrameStatusSegment<K>>,
+}
+
 /// Exact-width pane frame row with semantic right-status placement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaneFrameRowLayout<K> {
@@ -501,6 +514,40 @@ pub fn render_frame_status<K: Clone>(values: &[FrameStatusValue<K>]) -> Rendered
         text: sanitize_frame_text(&text),
         segments,
     }
+}
+
+/// Places a rendered status at the right edge of an authoritative frame row.
+pub fn position_frame_status<K>(
+    status: RenderedFrameStatus<K>,
+    width: usize,
+) -> Option<PositionedFrameStatus<K>> {
+    let (start, status_width) = right_aligned_status_bounds(&status.text, width)?;
+    let segments = status
+        .segments
+        .into_iter()
+        .filter_map(|segment| {
+            clip_style_span(
+                TerminalStyleSpan {
+                    start: segment.start,
+                    length: segment.width,
+                    rendition: GraphicRendition::default(),
+                },
+                status_width,
+            )
+            .map(|span| FrameStatusSegment {
+                start: start.saturating_add(span.start),
+                width: span.length,
+                key: segment.key,
+                value: segment.value,
+            })
+        })
+        .collect();
+    Some(PositionedFrameStatus {
+        text: status.text,
+        start,
+        width: status_width,
+        segments,
+    })
 }
 
 /// Composes a pane title and optional right status into one exact-width row.
@@ -751,9 +798,10 @@ mod tests {
         compose_pane_frame_row, display_overlay_targets, fit_styled_width,
         frame_pillbox_segment_columns, frame_style_rendition, line_slice, overlay_display_lines,
         overlay_fixed_column_style_spans, pane_frame_left_pill_style_width,
-        pane_frame_text_with_fill, render_frame_pillbox_segments, render_frame_pillbox_text,
-        render_frame_status, sanitize_frame_text, styled_frame_line_with_rendition,
-        write_single_width_cell, write_text_cells, write_text_cells_with_width,
+        pane_frame_text_with_fill, position_frame_status, render_frame_pillbox_segments,
+        render_frame_pillbox_text, render_frame_status, sanitize_frame_text,
+        styled_frame_line_with_rendition, write_single_width_cell, write_text_cells,
+        write_text_cells_with_width,
     };
     use crate::presentation::TerminalFrameStyle;
     use mez_terminal::{GraphicRendition, TerminalStyleSpan, TerminalStyledLine};
@@ -873,6 +921,26 @@ mod tests {
         assert_eq!(layout.right_status_segments[1].key, "state");
         assert_eq!(layout.right_status_segments[1].value, "running");
         assert!(layout.right_status_segments[0].start > layout.left_text_width);
+    }
+
+    /// Verifies generic frame-status placement clips semantic segments and
+    /// translates retained targets into authoritative row columns.
+    #[test]
+    fn frame_status_placement_clips_and_offsets_segments() {
+        let status = render_frame_status(&[FrameStatusValue {
+            key: "action",
+            value: "open".to_string(),
+            display: " open ".to_string(),
+        }]);
+        let positioned = position_frame_status(status, 5)
+            .expect("non-empty status should fit within the frame row");
+
+        assert_eq!(positioned.text, " open ");
+        assert_eq!((positioned.start, positioned.width), (0, 4));
+        assert_eq!(positioned.segments.len(), 1);
+        assert_eq!(positioned.segments[0].start, 0);
+        assert_eq!(positioned.segments[0].width, 4);
+        assert_eq!(positioned.segments[0].key, "action");
     }
 
     /// Verifies generic window/group pill composition remains Unicode-width
