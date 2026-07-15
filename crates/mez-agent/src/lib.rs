@@ -14,6 +14,8 @@ pub mod accounting;
 pub mod action_result;
 /// Provider-independent agent-shell session error contracts.
 pub mod agent_shell;
+/// Provider-independent Anthropic Messages request shaping.
+pub mod anthropic;
 /// Provider authentication routing contracts.
 pub mod auth;
 /// Model-facing live configuration mutation contracts.
@@ -94,6 +96,10 @@ pub use action_result::{
 pub use agent_shell::{
     AgentShellSessionError, AgentShellSessionErrorKind, AgentShellSessionResult,
     validate_agent_shell_required,
+};
+pub use anthropic::{
+    AnthropicMessagesOptions, DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_PROMPT_CACHING,
+    DEFAULT_ANTHROPIC_VERSION, anthropic_messages_request_body, anthropic_request_requires_maap,
 };
 pub use auth::{ProviderAuthMetadata, ProviderCredentialKind, ProviderCredentialSource};
 pub use config_change::{

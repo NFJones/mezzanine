@@ -16,118 +16,11 @@ use super::{
     provider_quota_usage_from_headers, validate_non_empty,
 };
 use mez_agent::{
-    maap_action_batch_schema,
-    openai_maap_current_action_batch_description as maap_current_action_batch_description,
-};
-use mez_agent::{
+    AnthropicMessagesOptions, anthropic_messages_request_body, anthropic_request_requires_maap,
     parse_sse_events_with, provider_failure_event_json as openai_provider_failure_event_json,
     provider_failure_json as openai_provider_failure_json,
 };
 use std::collections::BTreeMap;
-
-/// Default Anthropic Messages API version used when provider options omit one.
-const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
-/// Conservative fallback output cap required by Anthropic Messages requests.
-const DEFAULT_ANTHROPIC_MAX_TOKENS: usize = 4096;
-/// Anthropic prompt caching is enabled by default because cache-control markers
-/// only establish provider-side cache breakpoints for otherwise identical
-/// request content.
-const DEFAULT_ANTHROPIC_PROMPT_CACHING: bool = true;
-
-/// Provider-level options for Anthropic Messages requests.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct AnthropicMessagesOptions {
-    anthropic_version: String,
-    default_max_tokens: usize,
-    prompt_caching: bool,
-}
-
-impl Default for AnthropicMessagesOptions {
-    fn default() -> Self {
-        Self {
-            anthropic_version: DEFAULT_ANTHROPIC_VERSION.to_string(),
-            default_max_tokens: DEFAULT_ANTHROPIC_MAX_TOKENS,
-            prompt_caching: DEFAULT_ANTHROPIC_PROMPT_CACHING,
-        }
-    }
-}
-
-impl AnthropicMessagesOptions {
-    /// Parses Anthropic-specific provider options while rejecting option names
-    /// that only make sense for OpenAI-compatible or DeepSeek request shapes.
-    fn from_provider_options(provider_options: &BTreeMap<String, String>) -> Result<Self> {
-        let mut options = Self::default();
-        for (key, value) in provider_options {
-            match key.as_str() {
-                "anthropic_version" | "anthropic-version" => {
-                    validate_non_empty("Anthropic provider option `anthropic_version`", value)?;
-                    options.anthropic_version = value.trim().to_string();
-                }
-                "max_tokens" | "default_max_tokens" => {
-                    options.default_max_tokens = parse_positive_usize(
-                        "Anthropic provider option `default_max_tokens`",
-                        value,
-                    )?;
-                }
-                "prompt_caching" | "prompt-caching" => {
-                    options.prompt_caching =
-                        parse_bool_option("Anthropic provider option `prompt_caching`", value)?;
-                }
-                "max_output_tokens"
-                | "context_window_tokens"
-                | "context_limit_tokens"
-                | "privacy_tier"
-                | "residency"
-                | "approval_policy"
-                | "reasoning_effort" => {}
-                "maap_output"
-                | "maap_output_mode"
-                | "structured_output"
-                | "response_format"
-                | "tool_choice"
-                | "maap_tool_choice"
-                | "parallel_tool_calls"
-                | "supports_parallel_tool_calls"
-                | "tool_calls"
-                | "supports_tool_calls"
-                | "output_token_field"
-                | "maap_surface"
-                | "thinking" => {
-                    return Err(MezError::invalid_args(format!(
-                        "Anthropic provider option `{key}` is not supported by the Anthropic Messages API"
-                    )));
-                }
-                _ => {}
-            }
-        }
-        Ok(options)
-    }
-}
-
-/// Parses a positive integer provider option.
-fn parse_positive_usize(label: &str, value: &str) -> Result<usize> {
-    let parsed = value
-        .trim()
-        .parse::<usize>()
-        .map_err(|_| MezError::invalid_args(format!("{label} must be a positive integer")))?;
-    if parsed == 0 {
-        return Err(MezError::invalid_args(format!(
-            "{label} must be a positive integer"
-        )));
-    }
-    Ok(parsed)
-}
-
-/// Parses a boolean-like provider option.
-fn parse_bool_option(label: &str, value: &str) -> Result<bool> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "true" | "1" | "yes" | "on" | "enabled" => Ok(true),
-        "false" | "0" | "no" | "off" | "disabled" => Ok(false),
-        _ => Err(MezError::invalid_args(format!(
-            "{label} must be true or false"
-        ))),
-    }
-}
 
 /// Chat Completions transport dialect implementation for Anthropic Messages.
 #[derive(Debug, Clone, Default)]
@@ -283,7 +176,7 @@ fn build_anthropic_messages_http_request(
     headers.insert("Content-Type".to_string(), "application/json".to_string());
     headers.insert(
         "anthropic-version".to_string(),
-        options.anthropic_version.clone(),
+        options.anthropic_version().to_string(),
     );
     if let Some(api_key) = api_key {
         headers.insert("x-api-key".to_string(), api_key.to_string());
@@ -296,126 +189,6 @@ fn build_anthropic_messages_http_request(
         timeout_ms,
         max_response_bytes: None,
     })
-}
-
-/// Builds an Anthropic-compliant Messages API JSON body.
-fn anthropic_messages_request_body(
-    request: &ModelRequest,
-    stream: bool,
-    options: &AnthropicMessagesOptions,
-) -> Result<String> {
-    let mut system_parts = Vec::new();
-    let mut messages = Vec::<serde_json::Value>::new();
-    for message in &request.messages {
-        let role = match message.role {
-            super::ModelMessageRole::System | super::ModelMessageRole::Developer => {
-                if !message.content.is_empty() {
-                    system_parts.push(message.content.clone());
-                }
-                continue;
-            }
-            super::ModelMessageRole::Assistant => "assistant",
-            super::ModelMessageRole::User | super::ModelMessageRole::Tool => "user",
-        };
-        if message.content.is_empty() {
-            continue;
-        }
-        if let Some(last) = messages.last_mut()
-            && last.get("role").and_then(serde_json::Value::as_str) == Some(role)
-        {
-            let previous = last
-                .get("content")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            last["content"] = serde_json::json!(format!("{previous}\n\n{}", message.content));
-            continue;
-        }
-        messages.push(serde_json::json!({
-            "role": role,
-            "content": message.content,
-        }));
-    }
-    if messages.is_empty() {
-        return Err(MezError::invalid_args(
-            "Anthropic Messages request requires at least one user or assistant message",
-        ));
-    }
-    let max_tokens = request
-        .max_output_tokens
-        .filter(|tokens| *tokens > 0)
-        .unwrap_or(options.default_max_tokens);
-    let mut body = serde_json::json!({
-        "model": request.model,
-        "max_tokens": max_tokens,
-        "messages": messages,
-        "stream": stream,
-    });
-    if let Some(effort) = request
-        .reasoning_effort
-        .as_deref()
-        .filter(|effort| !effort.is_empty())
-    {
-        body["output_config"] = serde_json::json!({ "effort": effort });
-    }
-    if !system_parts.is_empty() {
-        let system_text = system_parts.join("\n\n");
-        body["system"] = if options.prompt_caching {
-            serde_json::json!([{
-                "type": "text",
-                "text": system_text,
-                "cache_control": { "type": "ephemeral" },
-            }])
-        } else {
-            serde_json::json!(system_text)
-        };
-    }
-    if anthropic_request_requires_maap(request) {
-        body["tools"] = serde_json::json!([anthropic_maap_tool(request)]);
-        body["tool_choice"] = anthropic_maap_tool_choice();
-    }
-    if let Some(temperature) = request
-        .temperature
-        .as_deref()
-        .and_then(|temperature| temperature.parse::<f64>().ok())
-        .filter(|temperature| temperature.is_finite())
-    {
-        body["temperature"] = serde_json::json!(temperature);
-    }
-    if let Some(stop) = request.stop.as_ref().filter(|stop| !stop.is_empty()) {
-        body["stop_sequences"] = serde_json::json!(stop);
-    }
-    serde_json::to_string(&body).map_err(|error| {
-        MezError::invalid_state(format!(
-            "Anthropic Messages request encoding failed: {error}"
-        ))
-    })
-}
-
-/// Builds the Anthropic-native MAAP carrier tool for action turns.
-fn anthropic_maap_tool(request: &ModelRequest) -> serde_json::Value {
-    serde_json::json!({
-        "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
-        "description": maap_current_action_batch_description(request),
-        "input_schema": maap_action_batch_schema(
-            &request.allowed_actions,
-            &request.available_mcp_tools,
-        )
-    })
-}
-
-/// Forces Anthropic action turns through the canonical MAAP carrier tool.
-fn anthropic_maap_tool_choice() -> serde_json::Value {
-    serde_json::json!({
-        "type": "tool",
-        "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
-        "disable_parallel_tool_use": true,
-    })
-}
-
-/// Returns whether this Anthropic request must produce a MAAP action batch.
-fn anthropic_request_requires_maap(request: &ModelRequest) -> bool {
-    request.interaction_kind.expects_maap_batch() && !request.allowed_actions.actions.is_empty()
 }
 
 /// Parses one Anthropic provider body using the transport mode selected for
