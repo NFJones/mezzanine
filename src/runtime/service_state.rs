@@ -921,11 +921,11 @@ pub(super) enum RuntimeRecordBrowserOverlaySource {
     /// Memory browser filters and bounded result limit.
     Memories {
         /// Optional exact memory scope; `None` means all scopes.
-        scope: Option<crate::memory::MemoryScope>,
+        scope: Option<mez_agent::memory::MemoryScope>,
         /// Optional memory kind filter.
-        kind: Option<crate::memory::MemoryKind>,
+        kind: Option<mez_agent::memory::MemoryKind>,
         /// Optional memory state filter.
-        state: Option<crate::memory::MemoryState>,
+        state: Option<mez_agent::memory::MemoryState>,
         /// Optional full-text query.
         text: Option<String>,
         /// Maximum number of displayed records.

@@ -1265,7 +1265,8 @@ impl RuntimeSessionService {
         };
         for record in &records {
             match &record.scope {
-                crate::memory::MemoryScope::Global | crate::memory::MemoryScope::Project { .. }
+                mez_agent::memory::MemoryScope::Global
+                | mez_agent::memory::MemoryScope::Project { .. }
                     if record.validate_for_session().is_ok() =>
                 {
                     let _ = self.session_memory.upsert(record.clone());
@@ -1285,7 +1286,8 @@ impl RuntimeSessionService {
         let store = crate::memory::PersistentMemoryStore::under_config_root(config_root);
         for record in self.session_memory.export() {
             match &record.scope {
-                crate::memory::MemoryScope::Global | crate::memory::MemoryScope::Project { .. }
+                mez_agent::memory::MemoryScope::Global
+                | mez_agent::memory::MemoryScope::Project { .. }
                     if record.validate_for_persistence().is_ok() =>
                 {
                     let _ = store.upsert(record);

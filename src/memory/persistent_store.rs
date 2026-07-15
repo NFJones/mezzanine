@@ -624,10 +624,10 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryRecord> {
     let priority: i64 = row.get(5)?;
     Ok(MemoryRecord {
         id: row.get(0)?,
-        scope: decode_scope(&scope).map_err(rusqlite_from_mez_error)?,
+        scope: decode_scope(&scope).map_err(|error| rusqlite_from_mez_error(error.into()))?,
         created_at_unix_seconds: row_u64(row, 2, "invalid memory created_at")?,
         updated_at_unix_seconds: row_u64(row, 3, "invalid memory updated_at")?,
-        source: parse_source(&source).map_err(rusqlite_from_mez_error)?,
+        source: parse_source(&source).map_err(|error| rusqlite_from_mez_error(error.into()))?,
         priority: u8::try_from(priority).map_err(|_| {
             rusqlite::Error::FromSqlConversionFailure(
                 5,
@@ -635,8 +635,8 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryRecord> {
                 Box::new(MezError::invalid_args("invalid memory priority")),
             )
         })?,
-        kind: parse_kind(&kind).map_err(rusqlite_from_mez_error)?,
-        state: parse_state(&state).map_err(rusqlite_from_mez_error)?,
+        kind: parse_kind(&kind).map_err(|error| rusqlite_from_mez_error(error.into()))?,
+        state: parse_state(&state).map_err(|error| rusqlite_from_mez_error(error.into()))?,
         last_used_at_unix_seconds: optional_row_u64(row, 8, "invalid memory last_used_at")?,
         use_count: row_u64(row, 9, "invalid memory use_count")?,
         confirmed_count: row_u64(row, 10, "invalid memory confirmed_count")?,

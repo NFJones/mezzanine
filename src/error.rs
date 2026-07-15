@@ -324,6 +324,12 @@ impl From<mez_agent::permissions::PermissionError> for MezError {
     }
 }
 
+impl From<mez_agent::memory::MemoryRecordError> for MezError {
+    fn from(error: mez_agent::memory::MemoryRecordError) -> Self {
+        Self::invalid_args(error.message())
+    }
+}
+
 impl From<mez_mux::MuxError> for MezError {
     fn from(error: mez_mux::MuxError) -> Self {
         match error.kind() {

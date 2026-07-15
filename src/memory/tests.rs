@@ -2,8 +2,8 @@
 
 use super::{
     MemoryKind, MemoryRecord, MemoryRetentionPolicy, MemoryRetrievalRequest, MemoryScope,
-    MemorySearchRequest, MemorySource, MemoryState, PersistentMemoryStore, SessionMemoryStore,
-    decode_scope, encode_scope, fs, retrieve_persistent_memory,
+    MemorySearchRequest, MemorySource, MemoryState, PersistentMemoryStore, fs,
+    retrieve_persistent_memory,
 };
 /// Runs the record operation for this subsystem.
 ///
@@ -12,56 +12,6 @@ use super::{
 /// on duplicated control-flow logic.
 fn record(id: &str, scope: MemoryScope, content: &str) -> MemoryRecord {
     MemoryRecord::new_with_defaults(id, scope, 10, 10, MemorySource::Agent, 10, content)
-}
-
-/// Verifies persistent memory accepts user-managed sensitive content.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
-#[test]
-fn persistent_memory_accepts_sensitive_content_without_heuristic_rejection() {
-    let record = record("m1", MemoryScope::Global, "api_key = sk-secret");
-
-    record.validate_for_persistence().unwrap();
-}
-
-/// Verifies session memory clears records for deleted session.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
-#[test]
-fn session_memory_clears_session_and_persistent_cache_records_for_deleted_session() {
-    let mut store = SessionMemoryStore::default();
-    store
-        .upsert(record(
-            "m1",
-            MemoryScope::Session {
-                session_id: "$1".to_string(),
-            },
-            "session note",
-        ))
-        .unwrap();
-    store
-        .upsert(record(
-            "m2",
-            MemoryScope::Pane {
-                session_id: "$1".to_string(),
-                pane_id: "%1".to_string(),
-            },
-            "pane note",
-        ))
-        .unwrap();
-    store
-        .upsert(record("m3", MemoryScope::Global, "global note"))
-        .unwrap();
-
-    assert_eq!(store.clear_session("$1"), 3);
-
-    assert!(store.inspect("m1").is_none());
-    assert!(store.inspect("m2").is_none());
-    assert!(store.inspect("m3").is_none());
 }
 
 /// Verifies persistent memory can inspect edit export and delete.
@@ -217,35 +167,6 @@ fn persistent_memory_tracks_usage_confirmation_supersession_and_retention() {
     assert_eq!(store.inspect("old").unwrap().state, MemoryState::Archived);
 
     let _ = fs::remove_dir_all(root);
-}
-
-/// Verifies TSV export preserves every extended memory metadata field.
-///
-/// This regression scenario covers the 16-field export format produced by
-/// `MemoryRecord::encode()` so imports do not silently reset kind, lifecycle,
-/// reinforcement, supersession, expiry, or retention-duration metadata.
-#[test]
-fn memory_record_tsv_round_trip_preserves_extended_metadata() {
-    let mut original = record(
-        "metadata",
-        MemoryScope::Project {
-            root: "/work/repo".to_string(),
-        },
-        "remember the full metadata contract",
-    );
-    original.kind = MemoryKind::Research;
-    original.state = MemoryState::Stale;
-    original.last_used_at_unix_seconds = Some(20);
-    original.use_count = 3;
-    original.confirmed_count = 2;
-    original.last_confirmed_at_unix_seconds = Some(21);
-    original.supersedes_id = Some("older".to_string());
-    original.expires_at_unix_seconds = Some(1_000);
-    original.expiration_duration_seconds = Some(600);
-
-    let decoded = MemoryRecord::decode(&original.encode().unwrap()).unwrap();
-
-    assert_eq!(decoded, original);
 }
 
 /// Verifies persistent memory applies metadata filters before final limits.
@@ -459,18 +380,4 @@ fn persistent_memory_search_uses_fallback_when_fts_is_disabled() {
     assert_eq!(fts_table_count, 0);
 
     let _ = fs::remove_dir_all(root);
-}
-
-/// Verifies memory scope round trips escaped project paths.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
-#[test]
-fn memory_scope_round_trips_escaped_project_paths() {
-    let scope = MemoryScope::Project {
-        root: "/work/repo:with:colon".to_string(),
-    };
-
-    assert_eq!(decode_scope(&encode_scope(&scope)).unwrap(), scope);
 }

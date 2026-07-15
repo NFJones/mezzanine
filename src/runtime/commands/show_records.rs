@@ -128,7 +128,7 @@ impl RuntimeSessionService {
                     .unwrap_or_else(|| self.runtime_remember_scope_for_pane(pane_id)),
             )
         };
-        let memory_state = Some(args.state.unwrap_or(crate::memory::MemoryState::Active));
+        let memory_state = Some(args.state.unwrap_or(mez_agent::memory::MemoryState::Active));
         let source =
             args.detail_id
                 .is_none()
@@ -327,9 +327,9 @@ impl RuntimeSessionService {
                     if value.is_empty() {
                         None
                     } else if value == "global" {
-                        Some(crate::memory::MemoryScope::Global)
+                        Some(mez_agent::memory::MemoryScope::Global)
                     } else {
-                        Some(crate::memory::MemoryScope::Project {
+                        Some(mez_agent::memory::MemoryScope::Project {
                             root: value.to_string(),
                         })
                     }
@@ -382,9 +382,9 @@ struct ShowIssuesArgs {
 #[derive(Debug, Default)]
 struct ShowMemoriesArgs {
     all_scopes: bool,
-    scope: Option<crate::memory::MemoryScope>,
-    kind: Option<crate::memory::MemoryKind>,
-    state: Option<crate::memory::MemoryState>,
+    scope: Option<mez_agent::memory::MemoryScope>,
+    kind: Option<mez_agent::memory::MemoryKind>,
+    state: Option<mez_agent::memory::MemoryState>,
     text: Option<String>,
     limit: usize,
     save_path: Option<String>,
@@ -473,7 +473,7 @@ fn parse_show_memories_args(args: &str) -> Result<ShowMemoriesArgs> {
                 let value = required_show_value(&tokens, index, "scope")?;
                 match value {
                     "all" => parsed.all_scopes = true,
-                    "global" => parsed.scope = Some(crate::memory::MemoryScope::Global),
+                    "global" => parsed.scope = Some(mez_agent::memory::MemoryScope::Global),
                     "project" => parsed.scope = None,
                     _ => {
                         return Err(MezError::invalid_args(
@@ -596,7 +596,7 @@ fn issue_record_markdown(record: &crate::issues::IssueRecord) -> String {
     lines.join("\n")
 }
 
-fn memory_browser_record(record: crate::memory::MemoryRecord) -> RuntimeRecordBrowserRecord {
+fn memory_browser_record(record: mez_agent::memory::MemoryRecord) -> RuntimeRecordBrowserRecord {
     RuntimeRecordBrowserRecord {
         id: record.id.clone(),
         open_command: Some(format!("/show-memories {}", record.id)),
@@ -633,7 +633,7 @@ fn memory_browser_record(record: crate::memory::MemoryRecord) -> RuntimeRecordBr
     }
 }
 
-fn memory_record_title(record: &crate::memory::MemoryRecord) -> String {
+fn memory_record_title(record: &mez_agent::memory::MemoryRecord) -> String {
     record
         .content
         .lines()
@@ -666,94 +666,96 @@ fn memory_kind_filter_choices() -> Vec<RuntimeRecordBrowserFilterChoice> {
             value: String::new(),
         },
         RuntimeRecordBrowserFilterChoice {
-            label: memory_kind_name_for_show(crate::memory::MemoryKind::Preference).to_string(),
-            value: memory_kind_name_for_show(crate::memory::MemoryKind::Preference).to_string(),
+            label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Preference).to_string(),
+            value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Preference).to_string(),
         },
         RuntimeRecordBrowserFilterChoice {
-            label: memory_kind_name_for_show(crate::memory::MemoryKind::Fact).to_string(),
-            value: memory_kind_name_for_show(crate::memory::MemoryKind::Fact).to_string(),
+            label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Fact).to_string(),
+            value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Fact).to_string(),
         },
         RuntimeRecordBrowserFilterChoice {
-            label: memory_kind_name_for_show(crate::memory::MemoryKind::Procedure).to_string(),
-            value: memory_kind_name_for_show(crate::memory::MemoryKind::Procedure).to_string(),
+            label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Procedure).to_string(),
+            value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Procedure).to_string(),
         },
         RuntimeRecordBrowserFilterChoice {
-            label: memory_kind_name_for_show(crate::memory::MemoryKind::Documentation).to_string(),
-            value: memory_kind_name_for_show(crate::memory::MemoryKind::Documentation).to_string(),
+            label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Documentation)
+                .to_string(),
+            value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Documentation)
+                .to_string(),
         },
         RuntimeRecordBrowserFilterChoice {
-            label: memory_kind_name_for_show(crate::memory::MemoryKind::Research).to_string(),
-            value: memory_kind_name_for_show(crate::memory::MemoryKind::Research).to_string(),
+            label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Research).to_string(),
+            value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Research).to_string(),
         },
         RuntimeRecordBrowserFilterChoice {
-            label: memory_kind_name_for_show(crate::memory::MemoryKind::Episode).to_string(),
-            value: memory_kind_name_for_show(crate::memory::MemoryKind::Episode).to_string(),
+            label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Episode).to_string(),
+            value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Episode).to_string(),
         },
         RuntimeRecordBrowserFilterChoice {
-            label: memory_kind_name_for_show(crate::memory::MemoryKind::Warning).to_string(),
-            value: memory_kind_name_for_show(crate::memory::MemoryKind::Warning).to_string(),
+            label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Warning).to_string(),
+            value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Warning).to_string(),
         },
         RuntimeRecordBrowserFilterChoice {
-            label: memory_kind_name_for_show(crate::memory::MemoryKind::Scratch).to_string(),
-            value: memory_kind_name_for_show(crate::memory::MemoryKind::Scratch).to_string(),
+            label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Scratch).to_string(),
+            value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Scratch).to_string(),
         },
     ]
 }
 
-fn parse_memory_kind_for_show(value: &str) -> Result<crate::memory::MemoryKind> {
+fn parse_memory_kind_for_show(value: &str) -> Result<mez_agent::memory::MemoryKind> {
     match value {
-        "preference" => Ok(crate::memory::MemoryKind::Preference),
-        "fact" => Ok(crate::memory::MemoryKind::Fact),
-        "procedure" => Ok(crate::memory::MemoryKind::Procedure),
-        "documentation" => Ok(crate::memory::MemoryKind::Documentation),
-        "research" => Ok(crate::memory::MemoryKind::Research),
-        "episode" => Ok(crate::memory::MemoryKind::Episode),
-        "warning" => Ok(crate::memory::MemoryKind::Warning),
-        "scratch" => Ok(crate::memory::MemoryKind::Scratch),
+        "preference" => Ok(mez_agent::memory::MemoryKind::Preference),
+        "fact" => Ok(mez_agent::memory::MemoryKind::Fact),
+        "procedure" => Ok(mez_agent::memory::MemoryKind::Procedure),
+        "documentation" => Ok(mez_agent::memory::MemoryKind::Documentation),
+        "research" => Ok(mez_agent::memory::MemoryKind::Research),
+        "episode" => Ok(mez_agent::memory::MemoryKind::Episode),
+        "warning" => Ok(mez_agent::memory::MemoryKind::Warning),
+        "scratch" => Ok(mez_agent::memory::MemoryKind::Scratch),
         _ => Err(MezError::invalid_args("unknown memory kind")),
     }
 }
 
-fn parse_memory_state_for_show(value: &str) -> Result<crate::memory::MemoryState> {
+fn parse_memory_state_for_show(value: &str) -> Result<mez_agent::memory::MemoryState> {
     match value {
-        "active" => Ok(crate::memory::MemoryState::Active),
-        "stale" => Ok(crate::memory::MemoryState::Stale),
-        "superseded" => Ok(crate::memory::MemoryState::Superseded),
-        "archived" => Ok(crate::memory::MemoryState::Archived),
-        "expired" => Ok(crate::memory::MemoryState::Expired),
+        "active" => Ok(mez_agent::memory::MemoryState::Active),
+        "stale" => Ok(mez_agent::memory::MemoryState::Stale),
+        "superseded" => Ok(mez_agent::memory::MemoryState::Superseded),
+        "archived" => Ok(mez_agent::memory::MemoryState::Archived),
+        "expired" => Ok(mez_agent::memory::MemoryState::Expired),
         _ => Err(MezError::invalid_args("unknown memory state")),
     }
 }
 
-fn memory_kind_name_for_show(kind: crate::memory::MemoryKind) -> &'static str {
+fn memory_kind_name_for_show(kind: mez_agent::memory::MemoryKind) -> &'static str {
     match kind {
-        crate::memory::MemoryKind::Preference => "preference",
-        crate::memory::MemoryKind::Fact => "fact",
-        crate::memory::MemoryKind::Procedure => "procedure",
-        crate::memory::MemoryKind::Documentation => "documentation",
-        crate::memory::MemoryKind::Research => "research",
-        crate::memory::MemoryKind::Episode => "episode",
-        crate::memory::MemoryKind::Warning => "warning",
-        crate::memory::MemoryKind::Scratch => "scratch",
+        mez_agent::memory::MemoryKind::Preference => "preference",
+        mez_agent::memory::MemoryKind::Fact => "fact",
+        mez_agent::memory::MemoryKind::Procedure => "procedure",
+        mez_agent::memory::MemoryKind::Documentation => "documentation",
+        mez_agent::memory::MemoryKind::Research => "research",
+        mez_agent::memory::MemoryKind::Episode => "episode",
+        mez_agent::memory::MemoryKind::Warning => "warning",
+        mez_agent::memory::MemoryKind::Scratch => "scratch",
     }
 }
 
-fn memory_state_name_for_show(state: crate::memory::MemoryState) -> &'static str {
+fn memory_state_name_for_show(state: mez_agent::memory::MemoryState) -> &'static str {
     match state {
-        crate::memory::MemoryState::Active => "active",
-        crate::memory::MemoryState::Stale => "stale",
-        crate::memory::MemoryState::Superseded => "superseded",
-        crate::memory::MemoryState::Archived => "archived",
-        crate::memory::MemoryState::Expired => "expired",
+        mez_agent::memory::MemoryState::Active => "active",
+        mez_agent::memory::MemoryState::Stale => "stale",
+        mez_agent::memory::MemoryState::Superseded => "superseded",
+        mez_agent::memory::MemoryState::Archived => "archived",
+        mez_agent::memory::MemoryState::Expired => "expired",
     }
 }
 
-fn memory_source_name_for_show(source: crate::memory::MemorySource) -> &'static str {
+fn memory_source_name_for_show(source: mez_agent::memory::MemorySource) -> &'static str {
     match source {
-        crate::memory::MemorySource::User => "user",
-        crate::memory::MemorySource::Agent => "agent",
-        crate::memory::MemorySource::Imported => "imported",
-        crate::memory::MemorySource::Configuration => "configuration",
+        mez_agent::memory::MemorySource::User => "user",
+        mez_agent::memory::MemorySource::Agent => "agent",
+        mez_agent::memory::MemorySource::Imported => "imported",
+        mez_agent::memory::MemorySource::Configuration => "configuration",
     }
 }
 
@@ -804,8 +806,11 @@ mod tests {
         .unwrap();
 
         assert!(parsed.all_scopes);
-        assert_eq!(parsed.kind, Some(crate::memory::MemoryKind::Documentation));
-        assert_eq!(parsed.state, Some(crate::memory::MemoryState::Stale));
+        assert_eq!(
+            parsed.kind,
+            Some(mez_agent::memory::MemoryKind::Documentation)
+        );
+        assert_eq!(parsed.state, Some(mez_agent::memory::MemoryState::Stale));
         assert_eq!(parsed.text.as_deref(), Some("maap"));
         assert_eq!(parsed.limit, DEFAULT_SHOW_RECORD_LIMIT);
         assert_eq!(parsed.detail_id.as_deref(), Some("memory-1"));

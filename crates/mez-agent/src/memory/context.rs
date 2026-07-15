@@ -1,8 +1,7 @@
-//! Prompt-facing memory context contracts.
+//! Prompt-facing projections of canonical memory records.
 //!
-//! This module defines the bounded memory data the agent harness needs while
-//! assembling model context. Durable record lifecycle, validation, retrieval,
-//! and persistence remain responsibilities of the product adapter.
+//! These bounded values are consumed while assembling model context. Durable
+//! records convert into this projection without product-specific adapters.
 
 /// Identifies the scope shown for one prompt-facing memory record.
 #[derive(Debug, Clone, PartialEq, Eq)]

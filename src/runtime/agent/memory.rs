@@ -188,17 +188,17 @@ impl RuntimeSessionService {
         keywords: &[String],
         content: &str,
         expires_in_days: Option<u64>,
-    ) -> Result<crate::memory::MemoryRecord> {
+    ) -> Result<mez_agent::memory::MemoryRecord> {
         let now = current_unix_seconds();
         let priority = priority.unwrap_or(50).min(100) as u8;
         let scope = self.memory_action_scope(turn, scope);
         let body = memory_action_content(content, keywords);
-        let mut record = crate::memory::MemoryRecord::new_with_defaults(
+        let mut record = mez_agent::memory::MemoryRecord::new_with_defaults(
             memory_action_record_id(turn, action),
             scope,
             now,
             now,
-            crate::memory::MemorySource::Agent,
+            mez_agent::memory::MemorySource::Agent,
             priority,
             body,
         );
@@ -228,8 +228,8 @@ impl RuntimeSessionService {
     fn memory_action_search_scopes(
         &self,
         turn: &AgentTurnRecord,
-    ) -> Vec<crate::memory::MemoryScope> {
-        let mut scopes = vec![crate::memory::MemoryScope::Global];
+    ) -> Vec<mez_agent::memory::MemoryScope> {
+        let mut scopes = vec![mez_agent::memory::MemoryScope::Global];
         if let Some(project_scope) = self.memory_action_project_scope(&turn.pane_id) {
             scopes.push(project_scope);
         }
@@ -237,9 +237,9 @@ impl RuntimeSessionService {
     }
 
     /// Returns the current pane project scope used by runtime memory actions.
-    fn memory_action_project_scope(&self, pane_id: &str) -> Option<crate::memory::MemoryScope> {
+    fn memory_action_project_scope(&self, pane_id: &str) -> Option<mez_agent::memory::MemoryScope> {
         self.pane_current_working_directory(pane_id).map(|root| {
-            crate::memory::MemoryScope::Project {
+            mez_agent::memory::MemoryScope::Project {
                 root: crate::project::discover_project_root(&root)
                     .to_string_lossy()
                     .into_owned(),
@@ -252,13 +252,13 @@ impl RuntimeSessionService {
         &self,
         turn: &AgentTurnRecord,
         scope: Option<&str>,
-    ) -> crate::memory::MemoryScope {
+    ) -> mez_agent::memory::MemoryScope {
         match scope.unwrap_or("project") {
-            "global" => crate::memory::MemoryScope::Global,
+            "global" => mez_agent::memory::MemoryScope::Global,
             "project" => self
                 .memory_action_project_scope(&turn.pane_id)
-                .unwrap_or(crate::memory::MemoryScope::Global),
-            _ => crate::memory::MemoryScope::Global,
+                .unwrap_or(mez_agent::memory::MemoryScope::Global),
+            _ => mez_agent::memory::MemoryScope::Global,
         }
     }
 }
@@ -267,7 +267,7 @@ impl RuntimeSessionService {
 fn search_runtime_memory_scopes(
     store: &crate::memory::PersistentMemoryStore,
     query: &str,
-    scopes: &[crate::memory::MemoryScope],
+    scopes: &[mez_agent::memory::MemoryScope],
     limit: usize,
 ) -> Result<Vec<crate::memory::MemorySearchResult>> {
     let mut results = Vec::new();
@@ -276,7 +276,7 @@ fn search_runtime_memory_scopes(
             query: Some(query.to_string()),
             scope: Some(scope.clone()),
             kind: None,
-            state: Some(crate::memory::MemoryState::Active),
+            state: Some(mez_agent::memory::MemoryState::Active),
             source: None,
             limit,
         })?);
@@ -313,14 +313,14 @@ fn memory_action_limit(limit: Option<u64>) -> usize {
 }
 
 /// Parses the model-facing kind label into the durable memory taxonomy.
-fn memory_action_kind(kind: &str) -> Result<crate::memory::MemoryKind> {
+fn memory_action_kind(kind: &str) -> Result<mez_agent::memory::MemoryKind> {
     match kind.trim().to_ascii_lowercase().as_str() {
-        "preference" => Ok(crate::memory::MemoryKind::Preference),
-        "fact" => Ok(crate::memory::MemoryKind::Fact),
-        "procedure" => Ok(crate::memory::MemoryKind::Procedure),
-        "documentation" => Ok(crate::memory::MemoryKind::Documentation),
-        "research" => Ok(crate::memory::MemoryKind::Research),
-        "warning" => Ok(crate::memory::MemoryKind::Warning),
+        "preference" => Ok(mez_agent::memory::MemoryKind::Preference),
+        "fact" => Ok(mez_agent::memory::MemoryKind::Fact),
+        "procedure" => Ok(mez_agent::memory::MemoryKind::Procedure),
+        "documentation" => Ok(mez_agent::memory::MemoryKind::Documentation),
+        "research" => Ok(mez_agent::memory::MemoryKind::Research),
+        "warning" => Ok(mez_agent::memory::MemoryKind::Warning),
         "episode" | "scratch" => Err(MezError::invalid_args(
             "memory_store kind must be preference, fact, procedure, documentation, research, or warning",
         )),
@@ -413,7 +413,7 @@ fn memory_search_action_result(
 fn memory_store_action_result(
     turn: &AgentTurnRecord,
     action: &AgentAction,
-    record: &crate::memory::MemoryRecord,
+    record: &mez_agent::memory::MemoryRecord,
 ) -> ActionResult {
     ActionResult::succeeded(
         turn,

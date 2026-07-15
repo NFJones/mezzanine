@@ -95,7 +95,6 @@ use crate::mcp::{
     discover_streamable_http_mcp_server_with_auth_token, execute_streamable_http_exchange,
     mcp_tools_call_operation, spawn_stdio_mcp_connection,
 };
-use crate::memory::{MemoryRecord, MemoryScope, MemorySource, SessionMemoryStore};
 use crate::message::{decode_mmp_frame, encode_mmp_body, handle_mmp_frame};
 use crate::project::{
     ProjectTrustRecord, ProjectTrustStore, TrustDecision, default_trust_database_path,
@@ -121,6 +120,7 @@ use crate::terminal::{
 use crate::transcript::{
     AgentSessionMetadata, AgentTranscriptStore, TranscriptEntry, TranscriptRole,
 };
+use mez_agent::memory::{MemoryRecord, MemoryScope, MemorySource, SessionMemoryStore};
 use mez_agent::messaging::{
     Envelope, MessageConnection, MessageService, MessageServiceSnapshot, Recipient, SenderIdentity,
     TaskResultPayload, TaskState, TaskStatusPayload, delivery_batch_json,

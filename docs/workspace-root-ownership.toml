@@ -93,8 +93,8 @@ role = "Concrete MCP transports and configuration still contain lower-owned prot
 
 [[surface]]
 path = "src/memory"
-state = "temporary"
-role = "SQLite memory repository still contains canonical agent memory records and retrieval policy."
+state = "adapter"
+role = "SQLite/FTS memory repository, legacy migration, configured paths, filesystem permissions, and retrieval I/O over canonical mez-agent memory records."
 
 [[surface]]
 path = "src/message"

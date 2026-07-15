@@ -17,12 +17,12 @@ fn runtime_service_owns_session_memory_and_clears_it_on_kill() {
     service
         .upsert_session_memory(MemoryRecord::new_with_defaults(
             "runtime-note",
-            crate::memory::MemoryScope::Session {
+            mez_agent::memory::MemoryScope::Session {
                 session_id: service.session().id.to_string(),
             },
             120,
             120,
-            crate::memory::MemorySource::User,
+            mez_agent::memory::MemorySource::User,
             20,
             "prefer focused regression tests",
         ))
@@ -76,22 +76,22 @@ context_window_tokens = 4500
     let config_root = temp_root("runtime-agent-compact-prune-memory");
     service.set_config_root(config_root.clone());
     let store = crate::memory::PersistentMemoryStore::under_config_root(&config_root);
-    let mut expired = crate::memory::MemoryRecord::new_with_defaults(
+    let mut expired = mez_agent::memory::MemoryRecord::new_with_defaults(
         "expired-compact-memory".to_string(),
-        crate::memory::MemoryScope::Global,
+        mez_agent::memory::MemoryScope::Global,
         1,
         1,
-        crate::memory::MemorySource::User,
+        mez_agent::memory::MemorySource::User,
         100,
         "expired compact memory".to_string(),
     );
     expired.expires_at_unix_seconds = Some(2);
-    let live = crate::memory::MemoryRecord::new_with_defaults(
+    let live = mez_agent::memory::MemoryRecord::new_with_defaults(
         "live-compact-memory".to_string(),
-        crate::memory::MemoryScope::Global,
+        mez_agent::memory::MemoryScope::Global,
         1,
         1,
-        crate::memory::MemorySource::User,
+        mez_agent::memory::MemorySource::User,
         100,
         "live compact memory".to_string(),
     );
@@ -199,22 +199,22 @@ context_window_tokens = 4500
     let config_root = temp_root("runtime-agent-remember-prune-memory");
     service.set_config_root(config_root.clone());
     let store = crate::memory::PersistentMemoryStore::under_config_root(&config_root);
-    let mut expired = crate::memory::MemoryRecord::new_with_defaults(
+    let mut expired = mez_agent::memory::MemoryRecord::new_with_defaults(
         "expired-remember-memory".to_string(),
-        crate::memory::MemoryScope::Global,
+        mez_agent::memory::MemoryScope::Global,
         1,
         1,
-        crate::memory::MemorySource::User,
+        mez_agent::memory::MemorySource::User,
         100,
         "expired remember memory".to_string(),
     );
     expired.expires_at_unix_seconds = Some(2);
-    let live = crate::memory::MemoryRecord::new_with_defaults(
+    let live = mez_agent::memory::MemoryRecord::new_with_defaults(
         "live-remember-memory".to_string(),
-        crate::memory::MemoryScope::Global,
+        mez_agent::memory::MemoryScope::Global,
         1,
         1,
-        crate::memory::MemorySource::User,
+        mez_agent::memory::MemorySource::User,
         100,
         "live remember memory".to_string(),
     );
@@ -486,12 +486,12 @@ fn runtime_agent_context_injects_only_active_compact_memory() {
     service
         .upsert_session_memory(MemoryRecord::new_with_defaults(
             "runtime-note",
-            crate::memory::MemoryScope::Session {
+            mez_agent::memory::MemoryScope::Session {
                 session_id: service.session().id.to_string(),
             },
             1,
             1,
-            crate::memory::MemorySource::User,
+            mez_agent::memory::MemorySource::User,
             255,
             "generic memory should not be automatic context",
         ))
@@ -499,13 +499,13 @@ fn runtime_agent_context_injects_only_active_compact_memory() {
     service
         .upsert_session_memory(MemoryRecord::new_with_defaults(
             "compact-other",
-            crate::memory::MemoryScope::Pane {
+            mez_agent::memory::MemoryScope::Pane {
                 session_id: service.session().id.to_string(),
                 pane_id: "%1".to_string(),
             },
             2,
             2,
-            crate::memory::MemorySource::Agent,
+            mez_agent::memory::MemorySource::Agent,
             255,
             "other compaction should not leak",
         ))
@@ -513,13 +513,13 @@ fn runtime_agent_context_injects_only_active_compact_memory() {
     service
         .upsert_session_memory(MemoryRecord::new_with_defaults(
             "compact-as1",
-            crate::memory::MemoryScope::Pane {
+            mez_agent::memory::MemoryScope::Pane {
                 session_id: service.session().id.to_string(),
                 pane_id: "%1".to_string(),
             },
             3,
             3,
-            crate::memory::MemorySource::Agent,
+            mez_agent::memory::MemorySource::Agent,
             128,
             "active compact summary",
         ))
@@ -622,16 +622,16 @@ fn runtime_executes_memory_actions_and_audits_action_arguments() {
         .unwrap();
     let store = crate::memory::PersistentMemoryStore::under_config_root(&config_root);
     store
-        .upsert(crate::memory::MemoryRecord::new_with_defaults(
+        .upsert(mez_agent::memory::MemoryRecord::new_with_defaults(
             "seed-memory".to_string(),
-            crate::memory::MemoryScope::Project {
+            mez_agent::memory::MemoryScope::Project {
                 root: crate::project::discover_project_root(&std::env::current_dir().unwrap())
                     .to_string_lossy()
                     .into_owned(),
             },
             1,
             1,
-            crate::memory::MemorySource::User,
+            mez_agent::memory::MemorySource::User,
             50,
             "prompt cache details".to_string(),
         ))

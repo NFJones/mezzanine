@@ -10,7 +10,7 @@ use super::{MemoryKind, MemoryScope, MemorySource, MemoryState, MezError, Result
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn encode_scope(scope: &MemoryScope) -> String {
+pub fn encode_scope(scope: &MemoryScope) -> String {
     match scope {
         MemoryScope::Global => "global".to_string(),
         MemoryScope::Project { root } => format!("project:{}", escape_component(root)),
@@ -47,7 +47,7 @@ pub(super) fn encode_scope(scope: &MemoryScope) -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn decode_scope(encoded: &str) -> Result<MemoryScope> {
+pub fn decode_scope(encoded: &str) -> Result<MemoryScope> {
     let parts = split_components(encoded)?;
     match parts.as_slice() {
         [kind] if kind == "global" => Ok(MemoryScope::Global),
@@ -76,7 +76,7 @@ pub(super) fn decode_scope(encoded: &str) -> Result<MemoryScope> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn source_name(source: MemorySource) -> &'static str {
+pub fn source_name(source: MemorySource) -> &'static str {
     match source {
         MemorySource::User => "user",
         MemorySource::Agent => "agent",
@@ -90,7 +90,7 @@ pub(super) fn source_name(source: MemorySource) -> &'static str {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn parse_source(value: &str) -> Result<MemorySource> {
+pub fn parse_source(value: &str) -> Result<MemorySource> {
     match value {
         "user" => Ok(MemorySource::User),
         "agent" => Ok(MemorySource::Agent),
@@ -101,7 +101,7 @@ pub(super) fn parse_source(value: &str) -> Result<MemorySource> {
 }
 
 /// Returns the serialized name for one memory kind.
-pub(super) fn kind_name(kind: MemoryKind) -> &'static str {
+pub fn kind_name(kind: MemoryKind) -> &'static str {
     match kind {
         MemoryKind::Preference => "preference",
         MemoryKind::Fact => "fact",
@@ -115,7 +115,7 @@ pub(super) fn kind_name(kind: MemoryKind) -> &'static str {
 }
 
 /// Parses a serialized memory kind label.
-pub(super) fn parse_kind(value: &str) -> Result<MemoryKind> {
+pub fn parse_kind(value: &str) -> Result<MemoryKind> {
     match value {
         "preference" => Ok(MemoryKind::Preference),
         "fact" => Ok(MemoryKind::Fact),
@@ -130,7 +130,7 @@ pub(super) fn parse_kind(value: &str) -> Result<MemoryKind> {
 }
 
 /// Returns the serialized name for one memory lifecycle state.
-pub(super) fn state_name(state: MemoryState) -> &'static str {
+pub fn state_name(state: MemoryState) -> &'static str {
     match state {
         MemoryState::Active => "active",
         MemoryState::Stale => "stale",
@@ -141,7 +141,7 @@ pub(super) fn state_name(state: MemoryState) -> &'static str {
 }
 
 /// Parses a serialized memory lifecycle state label.
-pub(super) fn parse_state(value: &str) -> Result<MemoryState> {
+pub fn parse_state(value: &str) -> Result<MemoryState> {
     match value {
         "active" => Ok(MemoryState::Active),
         "stale" => Ok(MemoryState::Stale),
@@ -157,14 +157,14 @@ pub(super) fn parse_state(value: &str) -> Result<MemoryState> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn parse_u64(value: &str, label: &str) -> Result<u64> {
+pub fn parse_u64(value: &str, label: &str) -> Result<u64> {
     value
         .parse::<u64>()
         .map_err(|_| MezError::invalid_args(format!("invalid {label}")))
 }
 
 /// Parses an optional unsigned integer field from persistent memory storage.
-pub(super) fn parse_optional_u64(value: &str, label: &str) -> Result<Option<u64>> {
+pub fn parse_optional_u64(value: &str, label: &str) -> Result<Option<u64>> {
     if value.is_empty() {
         Ok(None)
     } else {
@@ -177,7 +177,7 @@ pub(super) fn parse_optional_u64(value: &str, label: &str) -> Result<Option<u64>
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn escape_field(value: &str) -> String {
+pub fn escape_field(value: &str) -> String {
     value
         .replace('\\', "\\\\")
         .replace('\t', "\\t")
@@ -190,7 +190,7 @@ pub(super) fn escape_field(value: &str) -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn split_fields(line: &str) -> Result<Vec<String>> {
+pub fn split_fields(line: &str) -> Result<Vec<String>> {
     split_escaped(line, '\t')
 }
 
@@ -199,7 +199,7 @@ pub(super) fn split_fields(line: &str) -> Result<Vec<String>> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn escape_component(value: &str) -> String {
+pub fn escape_component(value: &str) -> String {
     value.replace('\\', "\\\\").replace(':', "\\:")
 }
 
@@ -208,7 +208,7 @@ pub(super) fn escape_component(value: &str) -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn split_components(value: &str) -> Result<Vec<String>> {
+pub fn split_components(value: &str) -> Result<Vec<String>> {
     split_escaped(value, ':')
 }
 
@@ -217,7 +217,7 @@ pub(super) fn split_components(value: &str) -> Result<Vec<String>> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn split_escaped(value: &str, separator: char) -> Result<Vec<String>> {
+pub fn split_escaped(value: &str, separator: char) -> Result<Vec<String>> {
     let mut fields = Vec::new();
     let mut field = String::new();
     let mut chars = value.chars();

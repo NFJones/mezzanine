@@ -1,9 +1,8 @@
-//! Validation and permission helpers for memory records.
+//! Validation helpers for canonical memory records.
 //!
-//! The validation layer centralizes sensitive-content checks, scope ownership,
-//! non-empty constraints, and private filesystem permissions.
+//! The validation layer centralizes scope ownership and non-empty constraints.
 
-use super::{MemoryScope, MezError, Path, Result, fs};
+use super::{MemoryScope, MezError, Result};
 
 /// Runs the validate scope operation for this subsystem.
 ///
@@ -65,40 +64,4 @@ pub(super) fn validate_non_empty(label: &str, value: &str) -> Result<()> {
     } else {
         Ok(())
     }
-}
-
-/// Runs the set private dir permissions operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn set_private_dir_permissions(path: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-    }
-    Ok(())
-}
-
-/// Runs the set private file permissions operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn set_private_file_permissions(path: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-    }
-    Ok(())
 }

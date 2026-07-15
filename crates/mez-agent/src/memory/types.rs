@@ -4,9 +4,9 @@
 //! persistence and session-specific operations in sibling modules.
 
 use super::{
-    BTreeMap, MezError, PathBuf, Result, decode_scope, encode_scope, escape_field, kind_name,
-    parse_kind, parse_optional_u64, parse_source, parse_state, parse_u64, source_name,
-    split_fields, state_name, validate_non_empty, validate_scope,
+    BTreeMap, MezError, Result, decode_scope, encode_scope, escape_field, kind_name, parse_kind,
+    parse_optional_u64, parse_source, parse_state, parse_u64, source_name, split_fields,
+    state_name, validate_non_empty, validate_scope,
 };
 
 /// Carries Memory Scope state for this subsystem.
@@ -232,7 +232,7 @@ pub struct MemoryRecord {
     pub content: String,
 }
 
-impl From<&MemoryRecord> for mez_agent::MemoryContextRecord {
+impl From<&MemoryRecord> for super::MemoryContextRecord {
     /// Adapts one validated product memory record for prompt-context assembly.
     fn from(record: &MemoryRecord) -> Self {
         Self {
@@ -245,7 +245,7 @@ impl From<&MemoryRecord> for mez_agent::MemoryContextRecord {
     }
 }
 
-impl From<&MemoryScope> for mez_agent::MemoryContextScope {
+impl From<&MemoryScope> for super::MemoryContextScope {
     /// Adapts product memory scope metadata without exposing persistence types.
     fn from(scope: &MemoryScope) -> Self {
         match scope {
@@ -290,21 +290,6 @@ pub struct SessionMemoryStore {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) records: BTreeMap<String, MemoryRecord>,
-}
-
-/// Carries Persistent Memory Store state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PersistentMemoryStore {
-    /// Stores the path value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) path: PathBuf,
-    /// Whether SQLite FTS tables and query paths are enabled for this store.
-    pub(super) fts_enabled: bool,
 }
 
 impl MemoryRecord {
@@ -430,7 +415,7 @@ impl MemoryRecord {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(super) fn encode(&self) -> Result<String> {
+    pub fn encode(&self) -> Result<String> {
         self.validate_for_persistence()?;
         Ok([
             self.id.clone(),
@@ -461,7 +446,7 @@ impl MemoryRecord {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(super) fn decode(line: &str) -> Result<Self> {
+    pub fn decode(line: &str) -> Result<Self> {
         let fields = split_fields(line)?;
         if fields.len() != 7 && fields.len() != 15 && fields.len() != 16 {
             return Err(MezError::invalid_args(

@@ -39,10 +39,7 @@ use crate::config::{
 use crate::control::{decode_control_frame, encode_control_body};
 use crate::error::{MezError, Result};
 use crate::mcp::McpRegistry;
-use crate::memory::{
-    MemoryKind, MemoryRecord, MemoryRetentionPolicy, MemoryScope, MemorySearchRequest,
-    MemorySource, MemoryState, PersistentMemoryStore,
-};
+use crate::memory::{MemoryRetentionPolicy, MemorySearchRequest, PersistentMemoryStore};
 use crate::project::{
     ProjectTrustRecord, ProjectTrustStore, TrustDecision, default_trust_database_path,
     discover_existing_overlays, discover_project_root,
@@ -66,6 +63,7 @@ use crate::terminal::{
     attached_terminal_output_disconnected,
 };
 use crate::transcript::AgentTranscriptStore;
+use mez_agent::memory::{MemoryKind, MemoryRecord, MemoryScope, MemorySource, MemoryState};
 use mez_core::ids::ClientId;
 use mez_mux::layout::Size;
 use mez_mux::session::Session;

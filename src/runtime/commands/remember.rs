@@ -8,8 +8,8 @@
 use super::compaction;
 use super::*;
 use crate::agent::provider::anthropic_provider_from_auth_store_with_provider_options;
-use crate::memory::{MemoryKind, MemoryState};
 use crate::runtime::{AgentRememberEvent, RenderInvalidationReason, RuntimeTransition};
+use mez_agent::memory::{MemoryKind, MemoryState};
 use std::process::Command;
 
 /// Normalized memory candidate returned by the `/remember` model request.
