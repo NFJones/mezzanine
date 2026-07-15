@@ -1,15 +1,19 @@
-//! Provider-independent Anthropic Messages request shaping.
+//! Provider-independent Anthropic Messages request and response policy.
 //!
-//! This module owns non-secret option parsing and deterministic Messages API
-//! JSON construction. Product adapters retain endpoint derivation, credentials,
-//! HTTP headers, timeouts, transport, response parsing, and error projection.
+//! This module owns non-secret option parsing, deterministic Messages API JSON
+//! construction, response content interpretation, diagnostics, token usage,
+//! and stop-reason recovery. Product adapters retain credentials, HTTP
+//! metadata, transport, JSON/SSE envelope parsing, quota attachment, and error
+//! projection until those remaining provider-independent parsers move here.
 
 use crate::{
-    MAAP_ACTION_BATCH_TOOL_NAME, ModelMessageRole, ModelRequest, ModelTokenUsage,
-    ProviderEndpointError, ProviderEndpointResult, ProviderRequestAssemblyError,
-    ProviderRequestAssemblyResult, ProviderResponseError, maap_action_batch_schema,
-    openai_maap_current_action_batch_description, provider_failure_event_json,
-    provider_failure_json,
+    MAAP_ACTION_BATCH_TOOL_NAME, MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME,
+    MaapBatch, ModelMessageRole, ModelRequest, ModelTokenUsage, ProviderEndpointError,
+    ProviderEndpointResult, ProviderErrorKind, ProviderMalformedOutputError,
+    ProviderRequestAssemblyError, ProviderRequestAssemblyResult, ProviderResponseError,
+    maap_action_batch_schema, openai_maap_current_action_batch_description,
+    parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
+    provider_failure_event_json, provider_failure_json, provider_malformed_output_error,
 };
 use std::collections::BTreeMap;
 
@@ -344,6 +348,163 @@ pub fn anthropic_overlay_usage(current: &mut ModelTokenUsage, value: Option<&ser
     }
 }
 
+/// Failure returned while interpreting Anthropic response content blocks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnthropicResponseError {
+    /// The provider returned an unsupported response content shape.
+    Provider(ProviderResponseError),
+    /// Provider-authored MAAP output was malformed.
+    MalformedOutput(ProviderMalformedOutputError),
+}
+
+impl std::fmt::Display for AnthropicResponseError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Provider(error) => error.fmt(formatter),
+            Self::MalformedOutput(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for AnthropicResponseError {}
+
+impl From<ProviderResponseError> for AnthropicResponseError {
+    fn from(error: ProviderResponseError) -> Self {
+        Self::Provider(error)
+    }
+}
+
+impl From<ProviderMalformedOutputError> for AnthropicResponseError {
+    fn from(error: ProviderMalformedOutputError) -> Self {
+        Self::MalformedOutput(error)
+    }
+}
+
+/// Converts Anthropic content blocks into response text and an optional MAAP
+/// action batch.
+pub fn anthropic_content_to_output(
+    content: &[serde_json::Value],
+    turn_id: &str,
+    agent_id: &str,
+    requires_maap: bool,
+) -> Result<(String, Option<MaapBatch>), AnthropicResponseError> {
+    let mut raw_text = String::new();
+    let mut maap_inputs = Vec::new();
+    let mut saw_tool_use = false;
+
+    for block in content {
+        let block_type = block
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        match block_type {
+            "text" => {
+                raw_text.push_str(
+                    block
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default(),
+                );
+            }
+            "tool_use" => {
+                saw_tool_use = true;
+                if block.get("name").and_then(serde_json::Value::as_str)
+                    == Some(OPENAI_MAAP_FUNCTION_TOOL_NAME)
+                {
+                    let input = block
+                        .get("input")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!({}));
+                    maap_inputs.push(serde_json::to_string(&input).map_err(|error| {
+                        ProviderResponseError::invalid_state(format!(
+                            "Anthropic tool_use input encoding failed: {error}"
+                        ))
+                    })?);
+                }
+            }
+            "thinking" | "redacted_thinking" => {}
+            "server_tool_use" | "server_tool_result" => {
+                return Err(anthropic_unsupported_content_block_error(block).into());
+            }
+            _ => return Err(anthropic_unsupported_content_block_error(block).into()),
+        }
+    }
+
+    let action_batch = if requires_maap {
+        if maap_inputs.len() > 1 {
+            return Err(anthropic_malformed_output(
+                "Anthropic returned extra MAAP tool_use blocks; pack the complete MAAP batch into exactly one submit_maap_action_batch tool_use",
+                &serde_json::Value::Array(content.to_vec()).to_string(),
+            )
+            .into());
+        }
+        if let Some(arguments) = maap_inputs.first() {
+            Some(
+                parse_maap_action_batch_json_for_turn(arguments, turn_id, agent_id)
+                    .map_err(|error| anthropic_malformed_output(error.message(), arguments))?,
+            )
+        } else if saw_tool_use {
+            return Err(anthropic_malformed_output(
+                "Anthropic response did not include submit_maap_action_batch input in its tool_use block",
+                &serde_json::Value::Array(content.to_vec()).to_string(),
+            )
+            .into());
+        } else {
+            anthropic_text_maap_action_batch(&raw_text, turn_id, agent_id)?
+        }
+    } else {
+        None
+    };
+
+    let raw_text = if action_batch.is_some() && raw_text.trim().is_empty() {
+        "executing".to_string()
+    } else {
+        raw_text
+    };
+    Ok((raw_text, action_batch))
+}
+
+/// Parses fallback MAAP output from Anthropic text when no native tool block
+/// was returned.
+fn anthropic_text_maap_action_batch(
+    raw_text: &str,
+    turn_id: &str,
+    agent_id: &str,
+) -> Result<Option<MaapBatch>, ProviderMalformedOutputError> {
+    let trimmed = raw_text.trim();
+    if trimmed.starts_with('{') {
+        return parse_maap_action_batch_json_for_turn(trimmed, turn_id, agent_id)
+            .map(Some)
+            .map_err(|error| anthropic_malformed_output(error.message(), raw_text));
+    }
+    parse_fenced_maap_action_batch_for_turn(raw_text, turn_id, agent_id)
+        .map_err(|error| anthropic_malformed_output(error.message(), raw_text))
+}
+
+/// Shapes malformed Anthropic MAAP output with the shared corrective
+/// diagnostics.
+fn anthropic_malformed_output(error_message: &str, raw_text: &str) -> ProviderMalformedOutputError {
+    provider_malformed_output_error(ProviderErrorKind::InvalidArgs, error_message, raw_text)
+}
+
+/// Builds a structured provider failure for one unsupported Anthropic content
+/// block.
+pub fn anthropic_unsupported_content_block_error(
+    block: &serde_json::Value,
+) -> ProviderResponseError {
+    let block_type = block
+        .get("type")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    ProviderResponseError::invalid_state(format!(
+        "Anthropic response contained unsupported content block type `{block_type}`"
+    ))
+    .with_provider_failure_json(anthropic_provider_failure_event_json(&serde_json::json!({
+        "content_block": block
+    })))
+    .with_provider_raw_text(block.to_string())
+}
+
 /// Converts an Anthropic stop reason into a typed recovery failure.
 pub fn anthropic_stop_reason_response_error(
     stop_reason: Option<&str>,
@@ -512,6 +673,135 @@ mod tests {
         );
 
         assert_eq!(overlaid.cache_write_input_tokens, Some(13));
+    }
+
+    /// Verifies Anthropic native `tool_use` blocks are translated into one
+    /// canonical MAAP action batch and preserve execution-mode placeholder
+    /// text when the provider omits visible assistant text.
+    #[test]
+    fn anthropic_content_blocks_parse_single_maap_tool_use_batch() {
+        let content = vec![serde_json::json!({
+            "type": "tool_use",
+            "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+            "input": {
+                "rationale": "Return the final answer now.",
+                "actions": [{
+                    "type": "say",
+                    "status": "final",
+                    "content_type": "text/plain; charset=utf-8",
+                    "text": "done"
+                }]
+            }
+        })];
+
+        let (raw_text, action_batch) =
+            anthropic_content_to_output(&content, "turn-1", "agent-1", true).unwrap();
+
+        assert_eq!(raw_text, "executing");
+        let batch = action_batch.unwrap();
+        assert_eq!(batch.rationale, "Return the final answer now.");
+        assert_eq!(batch.actions.len(), 1);
+    }
+
+    /// Verifies Anthropic thinking content blocks are ignored because they are
+    /// model-private reasoning artifacts and do not carry MAAP-relevant text or
+    /// tool input.
+    #[test]
+    fn anthropic_content_blocks_skip_thinking_blocks() {
+        let content = vec![
+            serde_json::json!({
+                "type": "thinking",
+                "thinking": "private chain of thought"
+            }),
+            serde_json::json!({
+                "type": "redacted_thinking",
+                "data": "opaque-redacted-payload"
+            }),
+            serde_json::json!({
+                "type": "tool_use",
+                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                "input": {
+                    "rationale": "Return the final answer now.",
+                    "actions": [{
+                        "type": "say",
+                        "status": "final",
+                        "content_type": "text/plain; charset=utf-8",
+                        "text": "done"
+                    }]
+                }
+            }),
+        ];
+
+        let (raw_text, action_batch) =
+            anthropic_content_to_output(&content, "turn-1", "agent-1", true).unwrap();
+
+        assert_eq!(raw_text, "executing");
+        let batch = action_batch.unwrap();
+        assert_eq!(batch.rationale, "Return the final answer now.");
+        assert_eq!(batch.actions.len(), 1);
+    }
+
+    /// Verifies Anthropic server-side tool blocks remain rejected because they
+    /// represent provider tool activity outside Mezzanine's MAAP action
+    /// contract.
+    #[test]
+    fn anthropic_content_blocks_reject_server_tool_blocks() {
+        let content = vec![serde_json::json!({
+            "type": "server_tool_use",
+            "name": "web_search"
+        })];
+
+        let error = anthropic_content_to_output(&content, "turn-1", "agent-1", true).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported content block type `server_tool_use`"),
+            "{error}"
+        );
+    }
+
+    /// Verifies Anthropic rejects multiple MAAP carrier `tool_use` blocks so
+    /// one turn cannot smuggle extra carrier calls past the action-batch
+    /// contract.
+    #[test]
+    fn anthropic_content_blocks_reject_extra_maap_tool_use_blocks() {
+        let content = vec![
+            serde_json::json!({
+                "type": "tool_use",
+                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                "input": {
+                    "rationale": "First.",
+                    "actions": [{
+                        "type": "say",
+                        "status": "progress",
+                        "content_type": "text/plain; charset=utf-8",
+                        "text": "one"
+                    }]
+                }
+            }),
+            serde_json::json!({
+                "type": "tool_use",
+                "name": OPENAI_MAAP_FUNCTION_TOOL_NAME,
+                "input": {
+                    "rationale": "Second.",
+                    "actions": [{
+                        "type": "say",
+                        "status": "final",
+                        "content_type": "text/plain; charset=utf-8",
+                        "text": "two"
+                    }]
+                }
+            }),
+        ];
+
+        let error = anthropic_content_to_output(&content, "turn-1", "agent-1", true).unwrap_err();
+
+        assert!(error.to_string().contains("extra MAAP tool_use blocks"));
+        assert!(matches!(
+            error,
+            AnthropicResponseError::MalformedOutput(ref error) if !error.raw_text().is_empty()
+        ));
     }
 
     /// Verifies Anthropic output exhaustion retains the structured recovery

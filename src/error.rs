@@ -233,6 +233,15 @@ impl From<mez_agent::OpenAiChatCompletionsResponseError> for MezError {
     }
 }
 
+impl From<mez_agent::AnthropicResponseError> for MezError {
+    fn from(error: mez_agent::AnthropicResponseError) -> Self {
+        match error {
+            mez_agent::AnthropicResponseError::Provider(error) => error.into(),
+            mez_agent::AnthropicResponseError::MalformedOutput(error) => error.into(),
+        }
+    }
+}
+
 impl From<mez_agent::ProviderModelCatalogParseError> for MezError {
     fn from(error: mez_agent::ProviderModelCatalogParseError) -> Self {
         Self::invalid_state(error.message())
