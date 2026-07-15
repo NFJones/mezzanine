@@ -46,9 +46,7 @@ use crate::audit::{
 use crate::auth::AuthStore;
 use crate::command::{
     CommandInvocation, CommandOutcome, bind_key_args, binding_config_key, execute_auth_command,
-    execute_command, execute_mark_pane_ready_command, key_chord_notation, new_window_name,
-    new_window_shell_command, parse_command_sequence, resize_spec_from_invocation,
-    split_window_selects_new_pane, split_window_shell_command,
+    execute_command, execute_mark_pane_ready_command, key_chord_notation, parse_command_sequence,
 };
 use crate::config::{
     ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,

@@ -6,7 +6,6 @@
 
 // Command module tests.
 
-use super::plans::{CommandPlan, command_plan_from_invocation};
 use super::{
     AuditLog, AuthStore, CommandOutcome, LayoutLoadSelector, PaneReadinessOverrideStore,
     PaneReadinessState, baseline_commands, execute_auth_command, execute_command,
@@ -17,7 +16,6 @@ use crate::auth::AuthPaths;
 use crate::config::ConfigPaths;
 use crate::shell::{ResolvedShell, ShellSource};
 use mez_core::ids::ClientId;
-use mez_mux::command::plans::ResizePanePlan;
 use mez_mux::layout::Size;
 use mez_mux::session::{ClientState, Session};
 use std::fs;
@@ -434,32 +432,6 @@ fn split_window_selects_new_pane_unless_detached() {
 
     execute_command_sequence(&mut session, &primary, "split-window -d").unwrap();
     assert_eq!(session.active_window().unwrap().active_pane().index, 1);
-}
-
-/// Verifies that mutating pane commands are parsed into typed plans before
-/// execution. This guards the refactor boundary that keeps flag/default parsing
-/// separate from session mutation.
-#[test]
-fn typed_command_plan_parses_resize_pane_before_execution() {
-    let invocation = parse_command_sequence("resize-pane -t 1 --percent 50 --axis rows")
-        .unwrap()
-        .remove(0);
-
-    let plan = command_plan_from_invocation(&invocation).unwrap();
-
-    match plan {
-        CommandPlan::ResizePane(ResizePanePlan::Resize { target, spec, .. }) => {
-            assert_eq!(target.as_deref(), Some("1"));
-            assert_eq!(
-                spec,
-                mez_mux::layout::PaneSizeSpec::Percent {
-                    percent: 50,
-                    axis: mez_mux::layout::ResizeAxis::Rows,
-                }
-            );
-        }
-        other => panic!("expected resize-pane plan, got {other:?}"),
-    }
 }
 
 /// Verifies that the direction commands advertised by the default key-binding

@@ -18,12 +18,8 @@ use crate::config::{
 use crate::error::{MezError, Result};
 use mez_agent::{PaneReadinessOverrideStore, PaneReadinessState};
 use mez_core::ids::ClientId;
-pub(crate) use mez_mux::command::plans::{
-    RuntimePaneLayoutPlan, SwapPaneNeighbor, SwapPanePlan, resize_spec_from_invocation,
-    runtime_pane_layout_plan_from_invocation, split_window_selects_new_pane,
-};
 use mez_mux::input::{KeyBindings, KeyChord, KeyCode};
-use mez_mux::layout::{PaneNavigationDirection, SplitDirection};
+use mez_mux::layout::PaneNavigationDirection;
 use mez_mux::session::Session;
 
 /// Builds stable `key=value` command output lines with a caller-selected separator.
@@ -86,11 +82,6 @@ mod parser;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod permissions;
-/// Exposes the plans module boundary.
-///
-/// The nested module converts parsed invocations into typed command plans before
-/// execution mutates session state.
-mod plans;
 /// Exposes the shell module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -113,7 +104,6 @@ pub use dispatch::{
 };
 pub(crate) use display::{
     bind_key_args, binding_config_key, command_help_display_with_key_bindings, key_chord_notation,
-    new_window_name, new_window_shell_command, split_window_shell_command,
 };
 pub use mez_mux::command::CommandInvocation;
 pub use parser::parse_command_sequence;
@@ -137,10 +127,7 @@ use permissions::{
     command_target_pane_id, credential_store_kind_name, mark_pane_ready_audit_record,
     mark_pane_ready_warning_display, pane_readiness_state_name, validate_command_identifier,
 };
-use shell::{
-    explicit_shell_command_flag, flag_value, positional_args, positional_args_before_double_dash,
-    shell_command_after_double_dash, shell_command_from_words,
-};
+use shell::{flag_value, positional_args};
 use stores::{
     auth_status_store_display, config_set_string, config_unset, mcp_server_id,
     mcp_status_store_display, persist_command_config_mutation, persist_command_theme_config,

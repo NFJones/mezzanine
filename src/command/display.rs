@@ -6,9 +6,8 @@
 
 use super::{
     CommandInvocation, CommandOutcome, ConfigMutationValue, KeyBindings, KeyChord, KeyCode,
-    KeyValueLine, LayoutLoadSelector, MezError, Result, Session, baseline_commands,
-    explicit_shell_command_flag, flag_value, mcp_server_id, positional_args,
-    positional_args_before_double_dash, shell_command_after_double_dash, shell_command_from_words,
+    KeyValueLine, LayoutLoadSelector, MezError, Result, Session, baseline_commands, flag_value,
+    mcp_server_id, positional_args,
 };
 
 // Command display helpers and state renderers.
@@ -700,66 +699,6 @@ pub(super) fn mutated_pane_command_outcome(
             command: invocation.name.clone(),
         },
     }
-}
-
-/// Runs the new window name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(crate) fn new_window_name(invocation: &CommandInvocation) -> String {
-    flag_value(&invocation.args, "-n")
-        .or_else(|| flag_value(&invocation.args, "--name"))
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            if invocation.args.iter().any(|arg| arg == "--")
-                || flag_value(&invocation.args, "--shell-command").is_some()
-                || flag_value(&invocation.args, "--command").is_some()
-            {
-                None
-            } else {
-                positional_args_before_double_dash(invocation)
-                    .first()
-                    .map(|value| (*value).to_string())
-            }
-        })
-        .unwrap_or_else(|| "shell".to_string())
-}
-
-/// Runs the new window shell command operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(crate) fn new_window_shell_command(invocation: &CommandInvocation) -> Result<Option<String>> {
-    if let Some(command) = explicit_shell_command_flag(invocation)? {
-        return Ok(Some(command));
-    }
-    if let Some(command) = shell_command_after_double_dash(invocation)? {
-        return Ok(Some(command));
-    }
-    if flag_value(&invocation.args, "-n")
-        .or_else(|| flag_value(&invocation.args, "--name"))
-        .is_some()
-    {
-        return shell_command_from_words(positional_args_before_double_dash(invocation));
-    }
-    Ok(None)
-}
-
-/// Runs the split window shell command operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(crate) fn split_window_shell_command(invocation: &CommandInvocation) -> Result<Option<String>> {
-    if let Some(command) = explicit_shell_command_flag(invocation)? {
-        return Ok(Some(command));
-    }
-    if let Some(command) = shell_command_after_double_dash(invocation)? {
-        return Ok(Some(command));
-    }
-    shell_command_from_words(positional_args_before_double_dash(invocation))
 }
 
 /// Runs the copy mode display operation for this subsystem.

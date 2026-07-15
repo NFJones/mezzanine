@@ -7,17 +7,18 @@
 
 use super::super::{
     CommandInvocation, CommandOutcome, MezError, Result, RuntimeLifecycleState,
-    RuntimeSessionService, current_unix_seconds, json_escape, new_window_name,
-    new_window_shell_command, resize_spec_from_invocation, split_window_selects_new_pane,
-    split_window_shell_command,
+    RuntimeSessionService, current_unix_seconds, json_escape,
 };
 use super::runtime_expand_user_path;
-use crate::command::{
-    LayoutLoadSelector, RuntimePaneLayoutPlan, SwapPaneNeighbor, SwapPanePlan,
-    runtime_pane_layout_plan_from_invocation,
-};
+use crate::command::LayoutLoadSelector;
 use crate::control::ControlConnectionState;
 use crate::snapshot::{SnapshotRepository, SnapshotState};
+use mez_mux::command::plans::{
+    RuntimePaneLayoutPlan, SwapPaneNeighbor, SwapPanePlan, new_window_name,
+    new_window_shell_command, resize_spec_from_invocation,
+    runtime_pane_layout_plan_from_invocation, split_window_selects_new_pane,
+    split_window_shell_command,
+};
 use mez_mux::layout::SplitDirection;
 
 /// Resolves typed snapshot command outcomes through the live runtime snapshot repository.
