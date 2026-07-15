@@ -34,7 +34,6 @@ subsystem modules rather than expanding `src/main.rs`.
 - `target/`: generated Cargo build output; do not edit or commit files from it.
 
 ## Build, Test, and Development Commands
-- Wrap or replace shell commands with `rtk` or `rtk run` if it is available (reference its `--help` text to discover the possibilities).
 - Always wrap tests in a 60 second `timeout` or greater to check for hangs.
 - `just`: build all targets and features in release mode.
 - `just build`: build all targets and features in debug mode.
