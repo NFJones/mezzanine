@@ -4,9 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::{
-    AgentAction, AgentActionPayload, MezError, Result, SayStatus, json_escape, local_action_plan,
-};
+use super::{AgentAction, MezError, Result, local_action_plan};
 
 mod execution;
 mod planning;
@@ -36,22 +34,10 @@ pub use transcript::{
 
 // Shell/MCP executors, action execution, and transcript persistence.
 
-use mez_agent::shell_read_observations_for_command;
-
 /// Maximum previous-response bytes included in one ephemeral MAAP repair prompt.
 const MAAP_REPAIR_RAW_TEXT_LIMIT_BYTES: usize = 12 * 1024;
 /// Maximum previous-response bytes included in a terminal failure summary prompt.
 const FAILURE_SUMMARY_RAW_TEXT_LIMIT_BYTES: usize = 8 * 1024;
-
-/// Builds the structured result payload for a `say` action.
-fn say_structured_content_json(status: SayStatus, content_type: &str, text: &str) -> String {
-    format!(
-        r#"{{"kind":"say","status":"{}","content_type":"{}","text":"{}"}}"#,
-        status.as_str(),
-        json_escape(content_type),
-        json_escape(text),
-    )
-}
 
 /// Executes the `shell_command_structured_content_json` operation for the owning subsystem.
 ///
@@ -70,29 +56,13 @@ pub fn shell_command_structured_content_json(
             "shell structured content requires a shell-backed action",
         ));
     };
-    let generated_command_elided =
-        !matches!(action.payload, AgentActionPayload::ShellCommand { .. });
-    let command = if generated_command_elided {
-        plan.policy_command.clone()
-    } else {
-        plan.command.clone()
-    };
-    let read_observations = shell_read_observations_for_command(&command);
-    let value = serde_json::json!({
-        "kind": action.action_type(),
-        "summary": plan.summary,
-        "command": command,
-        "read_observations": read_observations,
-        "generated_command_elided": generated_command_elided,
-        "generated_command_bytes": if generated_command_elided { Some(plan.command.len()) } else { None },
-        "execution_transport": execution_transport.unwrap_or("pane_shell"),
-        "sent_to_pane": sent_to_pane,
-        "stateful": plan.stateful,
-        "approval": approval,
-        "matched_rules": matched_rules,
-        "terminal_observation": terminal_observation
-    });
-    serde_json::to_string(&value).map_err(|error| {
-        MezError::invalid_state(format!("shell structured content encoding failed: {error}"))
-    })
+    Ok(mez_agent::shell_action_structured_content_json(
+        action,
+        &plan,
+        execution_transport,
+        sent_to_pane,
+        approval,
+        matched_rules,
+        terminal_observation,
+    ))
 }

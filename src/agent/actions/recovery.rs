@@ -15,7 +15,6 @@ use super::super::{
 };
 use super::{
     AgentTurnExecution, FAILURE_SUMMARY_RAW_TEXT_LIMIT_BYTES, MAAP_REPAIR_RAW_TEXT_LIMIT_BYTES,
-    say_structured_content_json,
 };
 use mez_agent::{
     AgentFailureSummaryNegotiation, AgentFailureSummaryProviderDecision,
@@ -522,7 +521,11 @@ fn failure_summary_execution_from_response(
                 turn,
                 action,
                 vec![text.clone()],
-                Some(say_structured_content_json(*status, content_type, text)),
+                Some(mez_agent::say_action_structured_content_json(
+                    *status,
+                    content_type,
+                    text,
+                )),
             )),
             _ => Err(MezError::invalid_args(
                 "failure summary response must contain only say actions",

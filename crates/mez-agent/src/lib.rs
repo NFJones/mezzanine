@@ -12,6 +12,8 @@ use std::collections::BTreeSet;
 pub mod accounting;
 /// Default provider-facing MAAP action-surface policy.
 pub mod action_gates;
+/// Provider-independent initial action-result planning.
+pub mod action_planning;
 /// Provider-independent MAAP action-result contracts.
 pub mod action_result;
 /// Provider-independent action-result context and transcript rendering.
@@ -121,6 +123,11 @@ pub mod turn_ledger;
 
 pub use accounting::{AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsageKey};
 pub use action_gates::apply_default_action_gates;
+pub use action_planning::{
+    ActionPlanningError, ActionPlanningInput, ActionPlanningResult, action_auto_allow_reason,
+    action_supports_auto_allow, plan_action_result, say_action_structured_content_json,
+    shell_action_structured_content_json,
+};
 pub use action_result::{
     ActionContentBlock, ActionError, ActionResult, ActionResultContractError,
     ActionResultContractResult, ActionStatus, AgentActionResultIdentity, AgentTurnResultIdentity,

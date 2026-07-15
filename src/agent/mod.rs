@@ -11,7 +11,7 @@ use std::path::Path;
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::error::{MezError, Result};
-use mez_agent::{McpPromptTool, ModelProfile, ModelResponse, RuleDecision};
+use mez_agent::{McpPromptTool, ModelProfile, ModelResponse};
 
 /// Exposes the actions module boundary.
 ///
@@ -73,9 +73,7 @@ pub use actions::{
 };
 pub use context::assemble_model_request;
 pub(crate) use maap::MaapBatchProductValidation;
-use maap::{
-    action_content_blocks_from_json_or_text, json_escape, string_array_json, validate_non_empty,
-};
+use maap::{action_content_blocks_from_json_or_text, json_escape, validate_non_empty};
 pub use maap::{
     parse_fenced_maap_action_batch, parse_fenced_maap_action_batch_for_turn,
     parse_maap_action_batch_json, parse_maap_action_batch_json_for_turn,

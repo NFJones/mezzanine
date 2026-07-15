@@ -125,22 +125,6 @@ pub(super) fn validate_non_empty(field: &str, value: &str) -> Result<()> {
     }
 }
 
-/// Runs the string array json operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn string_array_json(values: &[String]) -> String {
-    format!(
-        "[{}]",
-        values
-            .iter()
-            .map(|value| format!(r#""{}""#, json_escape(value)))
-            .collect::<Vec<_>>()
-            .join(",")
-    )
-}
-
 /// Runs the json escape operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
