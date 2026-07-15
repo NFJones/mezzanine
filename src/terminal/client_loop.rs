@@ -2937,21 +2937,11 @@ pub(crate) fn plan_attached_terminal_client_step_with_host_paste_buffer(
         ));
     }
 
-    let (output_lines, output_line_style_spans) = if readiness.output_writable {
-        view.map(|view| compose_client_presentation_with_styles(view, status))
-            .unwrap_or_default()
-    } else {
-        (Vec::new(), Vec::new())
-    };
+    let output = view.map(|view| compose_client_presentation_with_styles(view, status));
 
-    Ok(AttachedTerminalClientStepPlan {
-        actions,
-        output_lines,
-        output_line_style_spans,
-        input_hangup: readiness.input_hangup,
-        output_hangup: readiness.output_hangup,
-        error_roles: readiness.error_roles,
-    })
+    Ok(mez_mux::presentation::plan_attached_client_step(
+        readiness, actions, output,
+    ))
 }
 
 /// Runs the run attached terminal client loop operation for this subsystem.

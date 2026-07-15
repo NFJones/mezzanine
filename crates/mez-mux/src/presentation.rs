@@ -250,6 +250,33 @@ pub fn classify_attached_client_readiness<Role: Copy>(
     state
 }
 
+/// Completes one transport-neutral attached-client planning step.
+///
+/// Product adapters remain responsible for decoding host input and composing
+/// styled viewport rows. The mux owns the final readiness gate and lifecycle
+/// envelope so headless clients do not need to duplicate output suppression or
+/// hangup/error propagation.
+pub fn plan_attached_client_step<Action, ErrorRole>(
+    readiness: AttachedClientReadiness<ErrorRole>,
+    actions: Vec<Action>,
+    output: Option<(Vec<String>, Vec<Vec<TerminalStyleSpan>>)>,
+) -> AttachedClientStepPlan<Action, ErrorRole> {
+    let (output_lines, output_line_style_spans) = if readiness.output_writable {
+        output.unwrap_or_default()
+    } else {
+        (Vec::new(), Vec::new())
+    };
+
+    AttachedClientStepPlan {
+        actions,
+        output_lines,
+        output_line_style_spans,
+        input_hangup: readiness.input_hangup,
+        output_hangup: readiness.output_hangup,
+        error_roles: readiness.error_roles,
+    }
+}
+
 /// Per-pane metadata consumed by mux frame and body presentation.
 ///
 /// Scalar fields are presentation-only values. The prompt and supplemental
@@ -908,7 +935,7 @@ mod tests {
         TerminalFrameStyle, classify_attached_client_readiness, pane_canvas_placements,
         pane_content_size_for_geometry, pane_divider_cells, pane_divider_glyph,
         pane_frame_merges_into_divider, pane_render_region_size_for_geometry, place_group_frame,
-        place_window_frame, rendered_window_body_size,
+        place_window_frame, plan_attached_client_step, rendered_window_body_size,
     };
 
     /// Verifies neutral frame contracts retain the product's established
@@ -972,6 +999,29 @@ mod tests {
         assert!(readiness.input_hangup);
         assert!(!readiness.output_hangup);
         assert_eq!(readiness.error_roles, ["output"]);
+    }
+
+    /// Verifies headless step planning gates rendered output on host readiness
+    /// while retaining actions and propagating lifecycle/error observations.
+    #[test]
+    fn attached_client_step_planning_is_transport_neutral() {
+        let plan = plan_attached_client_step(
+            super::AttachedClientReadiness {
+                input_readable: true,
+                output_writable: false,
+                input_hangup: false,
+                output_hangup: true,
+                error_roles: vec!["output"],
+            },
+            vec!["forward-input"],
+            Some((vec!["pane".to_owned()], vec![Vec::new()])),
+        );
+
+        assert_eq!(plan.actions, ["forward-input"]);
+        assert!(plan.output_lines.is_empty());
+        assert!(plan.output_line_style_spans.is_empty());
+        assert!(plan.output_hangup);
+        assert_eq!(plan.error_roles, ["output"]);
     }
 
     /// Verifies mux-owned frame placement preserves authoritative viewport
