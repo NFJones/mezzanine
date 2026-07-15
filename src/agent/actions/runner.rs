@@ -18,6 +18,7 @@ use super::super::{
 use super::super::{ActionStatus, local_action_plan};
 #[cfg(test)]
 use super::super::{MarkerToken, McpExecutionRequest, Path};
+use super::AgentTurnExecution;
 #[cfg(test)]
 use super::execution::{
     LocalActionExecutor, McpActionExecutor, PaneShellExecutor, PaneShellLocalExecutor,
@@ -36,7 +37,7 @@ use super::recovery::{
     failed_maap_validation_execution_with_summary, summarize_controller_failure_execution,
     summarize_provider_failure_execution,
 };
-use super::{AgentTurnExecution, turn_state_from_action_results};
+use mez_agent::turn_state_from_action_results;
 use mez_agent::{
     AgentTurnNegotiation, AgentTurnProviderFailureDecision, AgentTurnResponseDecision,
     ProviderResponseAcceptance, SubagentScopeDeclaration,

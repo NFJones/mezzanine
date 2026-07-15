@@ -7,6 +7,38 @@
 
 use std::fmt;
 
+/// Source that queued one agent turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentTurnTrigger {
+    /// A user submitted a prompt through the agent shell.
+    UserPrompt,
+    /// Another local actor sent an agent message.
+    LocalMessage,
+    /// Runtime scheduling policy queued the turn.
+    ScheduledTask,
+    /// A child or peer agent emitted an event.
+    SubagentEvent,
+    /// A previously blocked action received approval.
+    ApprovedContinuation,
+}
+
+/// Lifecycle state for one agent turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentTurnState {
+    /// The turn is waiting for execution capacity.
+    Queued,
+    /// The turn is negotiating with a provider or executing actions.
+    Running,
+    /// The turn is waiting at a resumable boundary.
+    Blocked,
+    /// The turn completed successfully.
+    Completed,
+    /// The turn reached a terminal failure.
+    Failed,
+    /// The turn was interrupted before completion.
+    Interrupted,
+}
+
 /// Result type returned by agent turn-ledger operations.
 pub type AgentTurnLedgerResult<T> = Result<T, AgentTurnLedgerError>;
 

@@ -72,7 +72,13 @@ impl RuntimeSessionService {
         code: &'static str,
         message: impl Into<String>,
     ) -> Result<ActionResult> {
-        ActionResult::failed(turn, action, ActionStatus::Failed, code, message.into())
+        Ok(ActionResult::failed(
+            turn,
+            action,
+            ActionStatus::Failed,
+            code,
+            message.into(),
+        )?)
     }
 
     /// Executes a runtime-owned skill lookup or skill-load action.
@@ -126,13 +132,13 @@ impl RuntimeSessionService {
                 additional_context,
             } => {
                 if !is_valid_skill_name(name) {
-                    return ActionResult::failed(
+                    return Ok(ActionResult::failed(
                         turn,
                         action,
                         ActionStatus::Failed,
                         "invalid_skill_name",
                         "skill name must contain only lowercase letters, digits, and hyphens",
-                    );
+                    )?);
                 }
                 let Some(summary) = catalog.get(name) else {
                     let available = if catalog.skills.is_empty() {
@@ -140,13 +146,13 @@ impl RuntimeSessionService {
                     } else {
                         catalog.names().join(",")
                     };
-                    return ActionResult::failed(
+                    return Ok(ActionResult::failed(
                         turn,
                         action,
                         ActionStatus::Failed,
                         "skill_not_found",
                         format!("skill {name:?} is not available; available skills: {available}"),
-                    );
+                    )?);
                 };
                 if skill_context.loaded_skills.contains(name) {
                     return Self::redundant_skill_action_failure(
@@ -161,13 +167,13 @@ impl RuntimeSessionService {
                 let document = match load_skill_document(summary) {
                     Ok(document) => document,
                     Err(error) => {
-                        return ActionResult::failed(
+                        return Ok(ActionResult::failed(
                             turn,
                             action,
                             ActionStatus::Failed,
                             runtime_mezzanine_error_code(error.kind()),
                             error.message().to_string(),
-                        );
+                        )?);
                     }
                 };
                 let content = self

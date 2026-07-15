@@ -63,6 +63,12 @@ impl From<mez_agent::AgentContextError> for MezError {
     }
 }
 
+impl From<mez_agent::ActionResultContractError> for MezError {
+    fn from(error: mez_agent::ActionResultContractError) -> Self {
+        Self::invalid_args(error.message())
+    }
+}
+
 impl From<mez_agent::AgentRequestAssemblyError> for MezError {
     fn from(error: mez_agent::AgentRequestAssemblyError) -> Self {
         match error.kind() {

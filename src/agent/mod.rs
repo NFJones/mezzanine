@@ -109,17 +109,17 @@ pub use context::{
 };
 pub use maap::{
     AGENT_OUTPUT_TEXT_DIFF_CONTENT_TYPE, AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
-    AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, ActionContentBlock, ActionError, ActionResult,
-    ActionStatus, AgentAction, AgentActionPayload, MaapBatch, SayStatus,
+    AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, AgentAction, AgentActionPayload, MaapBatch, SayStatus,
     agent_output_content_type_is_diff, agent_output_content_type_is_markdown, is_valid_skill_name,
     normalize_agent_output_content_type, parse_fenced_maap_action_batch,
     parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json,
     parse_maap_action_batch_json_for_turn,
 };
 pub use mez_agent::{
-    AgentTranscriptEntry, AgentTranscriptRole, McpExecutionRequest, McpExecutionResponse,
-    PROVIDER_TRANSCRIPT_EVENT_MARKER, ProviderTranscriptEvent, TranscriptContractError,
-    TranscriptPersistence,
+    ActionContentBlock, ActionError, ActionResult, ActionStatus, AgentTranscriptEntry,
+    AgentTranscriptRole, AgentTurnState, AgentTurnTrigger, McpExecutionRequest,
+    McpExecutionResponse, PROVIDER_TRANSCRIPT_EVENT_MARKER, ProviderTranscriptEvent,
+    TranscriptContractError, TranscriptPersistence,
 };
 pub use network::{
     NetworkActionPlan, execute_network_action_with_transport_async, network_action_plan,
@@ -176,10 +176,7 @@ pub use semantic::{
     apply_patch_write_plan_from_read_outputs, local_action_plan, local_action_summary,
     try_convert_unified_diff_to_mez_patch,
 };
-pub use session::{
-    AgentLogLevel, AgentShellSession, AgentShellStore, AgentShellVisibility, AgentTurnState,
-    AgentTurnTrigger,
-};
+pub use session::{AgentLogLevel, AgentShellSession, AgentShellStore, AgentShellVisibility};
 pub use shell::{
     DEFAULT_BOOTSTRAP_TIMEOUT_MS, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature,
     MarkerToken, ShellClassification, ShellTransaction, ShellTransactionInput,
@@ -202,9 +199,9 @@ pub use turn::{AgentTurnLedger, AgentTurnRecord};
 
 use actions::role_for_source;
 use maap::{
-    action_content_blocks_from_json_or_text, action_text_content_blocks, json_escape,
-    string_array_json, validate_non_empty,
+    action_content_blocks_from_json_or_text, json_escape, string_array_json, validate_non_empty,
 };
+use mez_agent::action_text_content_blocks;
 use session::{
     agent_shell_help_display, agent_shell_mcp_display, agent_shell_permissions_display,
     agent_shell_status_display,

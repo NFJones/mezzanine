@@ -96,22 +96,22 @@ impl RuntimeSessionService {
         action: &AgentAction,
     ) -> Result<ActionResult> {
         if !self.runtime_persistent_memory_enabled() {
-            return ActionResult::failed(
+            return Ok(ActionResult::failed(
                 turn,
                 action,
                 ActionStatus::Failed,
                 "memory_disabled",
                 "memory actions require memory.enabled to be true; continue with current action results, MCP, shell, web, or a bounded report instead of retrying memory actions".to_string(),
-            );
+            )?);
         }
         let Some(config_root) = self.config_root.clone() else {
-            return ActionResult::failed(
+            return Ok(ActionResult::failed(
                 turn,
                 action,
                 ActionStatus::Failed,
                 "memory_store_unavailable",
                 "persistent memory actions require a configured config root; continue with direct artifacts, current action results, MCP, shell, web, or a bounded report instead of retrying memory actions".to_string(),
-            );
+            )?);
         };
         let store = crate::memory::PersistentMemoryStore::under_config_root(config_root);
         match &action.payload {
@@ -120,13 +120,13 @@ impl RuntimeSessionService {
                 let scopes = self.memory_action_search_scopes(turn);
                 match search_runtime_memory_scopes(&store, query, &scopes, limit) {
                     Ok(results) => Ok(memory_search_action_result(turn, action, query, &results)),
-                    Err(error) => ActionResult::failed(
+                    Err(error) => Ok(ActionResult::failed(
                         turn,
                         action,
                         ActionStatus::Failed,
                         runtime_mezzanine_error_code(error.kind()),
                         error.message().to_string(),
-                    ),
+                    )?),
                 }
             }
             AgentActionPayload::MemoryStore {
@@ -150,24 +150,24 @@ impl RuntimeSessionService {
                 let record = match result {
                     Ok(record) => record,
                     Err(error) => {
-                        return ActionResult::failed(
+                        return Ok(ActionResult::failed(
                             turn,
                             action,
                             ActionStatus::Failed,
                             runtime_mezzanine_error_code(error.kind()),
                             error.message().to_string(),
-                        );
+                        )?);
                     }
                 };
                 match store.upsert(record.clone()) {
                     Ok(()) => Ok(memory_store_action_result(turn, action, &record)),
-                    Err(error) => ActionResult::failed(
+                    Err(error) => Ok(ActionResult::failed(
                         turn,
                         action,
                         ActionStatus::Failed,
                         runtime_mezzanine_error_code(error.kind()),
                         error.message().to_string(),
-                    ),
+                    )?),
                 }
             }
             _ => Err(MezError::invalid_args(

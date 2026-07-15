@@ -8,7 +8,7 @@ use super::semantic::try_convert_unified_diff_to_mez_patch;
 use super::shell::validate_agent_authored_shell_command;
 use super::{AgentCapability, AgentTurnRecord, BTreeSet, McpPromptTool, MezError, Result};
 use mez_agent::{
-    IssueQueryValidation, IssueUpdateValidation,
+    ActionContentBlock, IssueQueryValidation, IssueUpdateValidation,
     validate_apply_patch_payload as validate_agent_apply_patch_payload,
 };
 use serde_json::Value;
@@ -430,6 +430,26 @@ pub struct AgentAction {
     pub payload: AgentActionPayload,
 }
 
+impl mez_agent::AgentActionResultIdentity for AgentAction {
+    fn action_id(&self) -> &str {
+        &self.id
+    }
+
+    fn action_type(&self) -> &'static str {
+        self.action_type()
+    }
+}
+
+impl mez_agent::AgentTurnResultIdentity for AgentTurnRecord {
+    fn turn_id(&self) -> &str {
+        &self.turn_id
+    }
+
+    fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
+}
+
 /// Carries Maap Batch state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -472,185 +492,6 @@ pub struct MaapBatch {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub final_turn: bool,
-}
-
-/// Carries Action Status state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActionStatus {
-    /// Represents the Rejected case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Rejected,
-    /// Represents the Blocked case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Blocked,
-    /// Represents the Denied case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Denied,
-    /// Represents the Running case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Running,
-    /// Represents the Succeeded case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Succeeded,
-    /// Represents the Failed case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Failed,
-    /// Represents the Cancelled case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Cancelled,
-    /// Represents the Timed Out case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    TimedOut,
-    /// Represents the Interrupted case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Interrupted,
-}
-
-/// Carries Action Error state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ActionError {
-    /// Stores the code value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub code: String,
-    /// Stores the message value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub message: String,
-    /// Stores the data json value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub data_json: Option<String>,
-}
-
-/// Carries Action Content Block state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ActionContentBlock {
-    /// Stores the block type value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub block_type: &'static str,
-    /// Stores the text value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub text: String,
-}
-
-impl ActionContentBlock {
-    /// Runs the text operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn text(text: impl Into<String>) -> Self {
-        Self {
-            block_type: "text",
-            text: text.into(),
-        }
-    }
-
-    /// Runs the to json operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn to_json(&self) -> String {
-        let json = serde_json::json!({
-            "type": self.block_type,
-            "text": self.text,
-        });
-        json.to_string()
-    }
-}
-
-/// Carries Action Result state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ActionResult {
-    /// Stores the protocol value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub protocol: String,
-    /// Stores the turn id value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub turn_id: String,
-    /// Stores the agent id value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub agent_id: String,
-    /// Stores the action id value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub action_id: String,
-    /// Stores the action type value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub action_type: &'static str,
-    /// Stores the status value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub status: ActionStatus,
-    /// Stores the content value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub content: Vec<ActionContentBlock>,
-    /// Stores the structured content json value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub structured_content_json: Option<String>,
-    /// Stores the is error value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub is_error: bool,
-    /// Stores the error value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub error: Option<ActionError>,
 }
 
 impl MaapBatch {
@@ -1760,208 +1601,6 @@ fn optional_json_or_string(
         Some(serde_json::Value::String(value)) => Ok(Some(value.clone())),
         Some(_) => required_json_compact(object, field).map(Some),
     }
-}
-
-impl ActionResult {
-    /// Runs the running operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn running(
-        turn: &AgentTurnRecord,
-        action: &AgentAction,
-        content: Vec<String>,
-        structured_content_json: Option<String>,
-    ) -> Self {
-        Self {
-            protocol: "maap/1".to_string(),
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
-            action_id: action.id.clone(),
-            action_type: action.action_type(),
-            status: ActionStatus::Running,
-            content: action_text_content_blocks(content),
-            structured_content_json,
-            is_error: false,
-            error: None,
-        }
-    }
-
-    /// Runs the succeeded operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn succeeded(
-        turn: &AgentTurnRecord,
-        action: &AgentAction,
-        content: Vec<String>,
-        structured_content_json: Option<String>,
-    ) -> Self {
-        Self {
-            protocol: "maap/1".to_string(),
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
-            action_id: action.id.clone(),
-            action_type: action.action_type(),
-            status: ActionStatus::Succeeded,
-            content: action_text_content_blocks(content),
-            structured_content_json,
-            is_error: false,
-            error: None,
-        }
-    }
-
-    /// Runs the blocked operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn blocked(
-        turn: &AgentTurnRecord,
-        action: &AgentAction,
-        content: Vec<String>,
-        structured_content_json: String,
-    ) -> Self {
-        Self {
-            protocol: "maap/1".to_string(),
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
-            action_id: action.id.clone(),
-            action_type: action.action_type(),
-            status: ActionStatus::Blocked,
-            content: action_text_content_blocks(content),
-            structured_content_json: Some(structured_content_json),
-            is_error: false,
-            error: None,
-        }
-    }
-
-    /// Runs the failed operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn failed(
-        turn: &AgentTurnRecord,
-        action: &AgentAction,
-        status: ActionStatus,
-        code: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Result<Self> {
-        if matches!(
-            status,
-            ActionStatus::Running | ActionStatus::Succeeded | ActionStatus::Blocked
-        ) {
-            return Err(MezError::invalid_args(
-                "failed action result requires an error status",
-            ));
-        }
-        Ok(Self {
-            protocol: "maap/1".to_string(),
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
-            action_id: action.id.clone(),
-            action_type: action.action_type(),
-            status,
-            content: Vec::new(),
-            structured_content_json: None,
-            is_error: true,
-            error: Some(ActionError {
-                code: code.into(),
-                message: message.into(),
-                data_json: None,
-            }),
-        })
-    }
-
-    /// Runs the validate invariants operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn validate_invariants(&self) -> Result<()> {
-        match self.status {
-            ActionStatus::Succeeded | ActionStatus::Running => {
-                if self.is_error || self.error.is_some() {
-                    return Err(MezError::invalid_args(
-                        "successful or running action results must not carry errors",
-                    ));
-                }
-            }
-            ActionStatus::Blocked => {
-                if self.is_error || self.error.is_some() || self.structured_content_json.is_none() {
-                    return Err(MezError::invalid_args(
-                        "blocked action results must include approval structure without error",
-                    ));
-                }
-            }
-            ActionStatus::Rejected
-            | ActionStatus::Denied
-            | ActionStatus::Failed
-            | ActionStatus::Cancelled
-            | ActionStatus::TimedOut
-            | ActionStatus::Interrupted => {
-                if !self.is_error || self.error.is_none() {
-                    return Err(MezError::invalid_args(
-                        "error action results must set is_error and include an error",
-                    ));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Runs the content texts operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn content_texts(&self) -> Vec<String> {
-        self.content
-            .iter()
-            .map(|block| block.text.clone())
-            .collect()
-    }
-
-    /// Runs the content text operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn content_text(&self) -> String {
-        self.content
-            .iter()
-            .map(|block| block.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    /// Runs the content json operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn content_json(&self) -> String {
-        format!(
-            "[{}]",
-            self.content
-                .iter()
-                .map(ActionContentBlock::to_json)
-                .collect::<Vec<_>>()
-                .join(",")
-        )
-    }
-}
-
-/// Runs the action text content blocks operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn action_text_content_blocks(content: Vec<String>) -> Vec<ActionContentBlock> {
-    content.into_iter().map(ActionContentBlock::text).collect()
 }
 
 /// Runs the action content blocks from json or text operation for this subsystem.

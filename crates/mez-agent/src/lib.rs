@@ -10,6 +10,8 @@ use std::collections::BTreeSet;
 
 /// Provider-neutral model token accounting contracts.
 pub mod accounting;
+/// Provider-independent MAAP action-result contracts.
+pub mod action_result;
 /// Provider-independent agent-shell session error contracts.
 pub mod agent_shell;
 /// Provider authentication routing contracts.
@@ -72,6 +74,11 @@ pub mod transcript;
 pub mod turn;
 
 pub use accounting::{AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsageKey};
+pub use action_result::{
+    ActionContentBlock, ActionError, ActionResult, ActionResultContractError,
+    ActionResultContractResult, ActionStatus, AgentActionResultIdentity, AgentTurnResultIdentity,
+    action_text_content_blocks, turn_state_from_action_results,
+};
 pub use agent_shell::{
     AgentShellSessionError, AgentShellSessionErrorKind, AgentShellSessionResult,
     validate_agent_shell_required,
@@ -182,7 +189,8 @@ pub use transcript::{
     AgentTranscriptEntry, AgentTranscriptRole, TranscriptContractError, TranscriptPersistence,
 };
 pub use turn::{
-    AgentTurnLedgerError, AgentTurnLedgerErrorKind, AgentTurnLedgerResult, validate_turn_required,
+    AgentTurnLedgerError, AgentTurnLedgerErrorKind, AgentTurnLedgerResult, AgentTurnState,
+    AgentTurnTrigger, validate_turn_required,
 };
 
 /// Maximum number of issue records a model-authored query may request.

@@ -6,7 +6,8 @@
 //! separate from turn execution while preserving raw shell output bytes inside
 //! ordinary model context.
 
-use super::{ActionResult, ActionStatus, ShellReadObservation};
+use super::ShellReadObservation;
+use mez_agent::{ActionResult, ActionStatus};
 
 /// Maximum action-result content bytes included in one model-facing context
 /// block before native truncation metadata is appended.

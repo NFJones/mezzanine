@@ -360,13 +360,13 @@ impl RuntimeSessionService {
                     ))
                 }
             }
-            Err(error) => ActionResult::failed(
+            Err(error) => Ok(ActionResult::failed(
                 turn,
                 action,
                 ActionStatus::Failed,
                 runtime_mezzanine_error_code(error.kind()),
                 error.message().to_string(),
-            ),
+            )?),
         }
     }
 
@@ -389,13 +389,13 @@ impl RuntimeSessionService {
         let theme = match runtime_config_change_string_value(setting_path, value) {
             Ok(theme) => theme,
             Err(error) => {
-                return ActionResult::failed(
+                return Ok(ActionResult::failed(
                     turn,
                     action,
                     ActionStatus::Failed,
                     runtime_mezzanine_error_code(error.kind()),
                     error.message().to_string(),
-                );
+                )?);
             }
         };
         let invocation = CommandInvocation {

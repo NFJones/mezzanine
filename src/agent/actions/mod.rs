@@ -5,8 +5,8 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnState, ContextSourceKind,
-    MezError, ModelMessageRole, Result, SayStatus, json_escape, local_action_plan,
+    AgentAction, AgentActionPayload, ContextSourceKind, MezError, ModelMessageRole, Result,
+    SayStatus, json_escape, local_action_plan,
 };
 
 mod execution;
@@ -50,51 +50,6 @@ pub use transcript::{
 const MAAP_REPAIR_RAW_TEXT_LIMIT_BYTES: usize = 12 * 1024;
 /// Maximum previous-response bytes included in a terminal failure summary prompt.
 const FAILURE_SUMMARY_RAW_TEXT_LIMIT_BYTES: usize = 8 * 1024;
-
-/// Executes the `turn_state_from_action_results` operation for the owning subsystem.
-///
-/// Callers receive a typed result or error with context from the underlying
-/// runtime operation.
-pub(super) fn turn_state_from_action_results(
-    results: &[ActionResult],
-    final_turn: bool,
-) -> AgentTurnState {
-    if results
-        .iter()
-        .any(|result| result.status == ActionStatus::Blocked)
-    {
-        AgentTurnState::Blocked
-    } else if results.iter().any(|result| result.is_error) {
-        AgentTurnState::Failed
-    } else if results
-        .iter()
-        .any(|result| result.status == ActionStatus::Running)
-    {
-        AgentTurnState::Running
-    } else if final_turn || results_are_display_only_completion(results) {
-        AgentTurnState::Completed
-    } else {
-        AgentTurnState::Running
-    }
-}
-
-/// Reports whether action results represent an explicit display-only
-/// completion.
-///
-/// Empty result sets are not completions. Treating them as such through
-/// vacuous `all(...)` semantics can mask missing provider output or missing
-/// action planning as a settled turn.
-fn results_are_display_only_completion(results: &[ActionResult]) -> bool {
-    !results.is_empty() && results.iter().all(result_is_display_only)
-}
-
-/// Executes the `result_is_display_only` operation for the owning subsystem.
-///
-/// Callers receive a typed result or error with context from the underlying
-/// runtime operation.
-pub(super) fn result_is_display_only(result: &ActionResult) -> bool {
-    matches!(result.action_type, "complete")
-}
 
 /// Builds the structured result payload for a `say` action.
 fn say_structured_content_json(status: SayStatus, content_type: &str, text: &str) -> String {

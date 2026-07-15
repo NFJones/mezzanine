@@ -93,22 +93,22 @@ impl RuntimeSessionService {
         action: &AgentAction,
     ) -> Result<ActionResult> {
         if !runtime_issues_enabled(self) {
-            return ActionResult::failed(
+            return Ok(ActionResult::failed(
                 turn,
                 action,
                 ActionStatus::Failed,
                 "issues_disabled",
                 "issue actions require issues.enabled to be true".to_string(),
-            );
+            )?);
         }
         let Some(config_root) = self.config_root.clone() else {
-            return ActionResult::failed(
+            return Ok(ActionResult::failed(
                 turn,
                 action,
                 ActionStatus::Failed,
                 "issue_store_unavailable",
                 "issue actions require a configured config root".to_string(),
-            );
+            )?);
         };
         let store = crate::issues::IssueStore::from_database_path(runtime_issue_database_path(
             self,
@@ -136,13 +136,13 @@ impl RuntimeSessionService {
                 );
                 match result {
                     Ok(record) => Ok(issue_record_action_result(turn, action, "added", &record)),
-                    Err(error) => ActionResult::failed(
+                    Err(error) => Ok(ActionResult::failed(
                         turn,
                         action,
                         ActionStatus::Failed,
                         runtime_mezzanine_error_code(error.kind()),
                         error.message().to_string(),
-                    ),
+                    )?),
                 }
             }
             AgentActionPayload::IssueUpdate {
@@ -181,13 +181,13 @@ impl RuntimeSessionService {
                 );
                 match result {
                     Ok(result) => Ok(issue_update_action_result(turn, action, &result)),
-                    Err(error) => ActionResult::failed(
+                    Err(error) => Ok(ActionResult::failed(
                         turn,
                         action,
                         ActionStatus::Failed,
                         runtime_mezzanine_error_code(error.kind()),
                         error.message().to_string(),
-                    ),
+                    )?),
                 }
             }
             AgentActionPayload::IssueQuery {
@@ -214,25 +214,25 @@ impl RuntimeSessionService {
                 )?;
                 match store.query_issues(&query) {
                     Ok(records) => Ok(issue_query_action_result(turn, action, &records)),
-                    Err(error) => ActionResult::failed(
+                    Err(error) => Ok(ActionResult::failed(
                         turn,
                         action,
                         ActionStatus::Failed,
                         runtime_mezzanine_error_code(error.kind()),
                         error.message().to_string(),
-                    ),
+                    )?),
                 }
             }
             AgentActionPayload::IssueDelete { id } => match store.delete_issue(project, id.clone())
             {
                 Ok(result) => Ok(issue_delete_action_result(turn, action, &result)),
-                Err(error) => ActionResult::failed(
+                Err(error) => Ok(ActionResult::failed(
                     turn,
                     action,
                     ActionStatus::Failed,
                     runtime_mezzanine_error_code(error.kind()),
                     error.message().to_string(),
-                ),
+                )?),
             },
             _ => Err(MezError::invalid_args(
                 "issue execution requires an issue action",

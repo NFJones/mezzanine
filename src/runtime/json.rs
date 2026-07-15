@@ -5,7 +5,7 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    ActionResult, ActionStatus, AgentShellCommandOutcome, AgentShellVisibility, AgentTurnExecution,
+    ActionStatus, AgentShellCommandOutcome, AgentShellVisibility, AgentTurnExecution,
     AgentTurnState, AttachedClientStepApplication, ClientViewRole, CommandOutcome, CooperationMode,
     CopyMode, CopyPosition, HookExecutionStatus, MezError, MouseAction, MuxAction,
     PaneFocusDirection, PaneNavigationDirection, PaneReadinessState, PaneSizeSpec, Path, PathBuf,
@@ -296,47 +296,6 @@ pub(super) fn runtime_hook_execution_status_name(status: HookExecutionStatus) ->
         HookExecutionStatus::TimedOut => "timed_out",
         HookExecutionStatus::Queued => "queued",
     }
-}
-
-/// Runs the runtime agent turn state from action results operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn runtime_agent_turn_state_from_action_results(
-    results: &[ActionResult],
-    final_turn: bool,
-) -> AgentTurnState {
-    if results
-        .iter()
-        .any(|result| result.status == ActionStatus::Blocked)
-    {
-        AgentTurnState::Blocked
-    } else if results.iter().any(|result| result.is_error) {
-        AgentTurnState::Failed
-    } else if results
-        .iter()
-        .any(|result| result.status == ActionStatus::Running)
-    {
-        AgentTurnState::Running
-    } else if final_turn || runtime_action_results_are_display_only_completion(results) {
-        AgentTurnState::Completed
-    } else {
-        AgentTurnState::Running
-    }
-}
-
-/// Reports whether action results represent an explicit display-only
-/// completion.
-///
-/// Empty result sets are not completions. Treating them as completed through
-/// vacuous `all(...)` semantics can hide missing action planning or provider
-/// output at the runtime boundary.
-fn runtime_action_results_are_display_only_completion(results: &[ActionResult]) -> bool {
-    !results.is_empty()
-        && results
-            .iter()
-            .all(|result| matches!(result.action_type, "complete"))
 }
 
 /// Runs the runtime execution ready for provider continuation operation for this subsystem.

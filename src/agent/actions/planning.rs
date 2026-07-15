@@ -67,13 +67,13 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                         &plan.policy_command,
                     )?
                 {
-                    return ActionResult::failed(
+                    return Ok(ActionResult::failed(
                         turn,
                         action,
                         ActionStatus::Denied,
                         "subagent_scope_violation",
                         message,
-                    );
+                    )?);
                 }
                 match self.permissions.evaluate_command(&plan.policy_command) {
                     RuleDecision::Allow => Ok(ActionResult::running(
@@ -130,13 +130,13 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                             serde_json::json!({"state":"pending_approval"}),
                         )?,
                     )),
-                    RuleDecision::Forbid => ActionResult::failed(
+                    RuleDecision::Forbid => Ok(ActionResult::failed(
                         turn,
                         action,
                         ActionStatus::Denied,
                         "policy_forbidden",
                         "local action denied by permission policy",
-                    ),
+                    )?),
                 }
             }
             _ if network_plan.is_some() => {
@@ -191,13 +191,13 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                             serde_json::json!({"state":"pending_approval"}),
                         )?,
                     )),
-                    RuleDecision::Forbid => ActionResult::failed(
+                    RuleDecision::Forbid => Ok(ActionResult::failed(
                         turn,
                         action,
                         ActionStatus::Denied,
                         "policy_forbidden",
                         "network action denied by permission policy",
-                    ),
+                    )?),
                 }
             }
             AgentActionPayload::SendMessage {
@@ -363,13 +363,13 @@ impl<'a, P> AgentTurnRunner<'a, P> {
                 vec!["turn complete".to_string()],
                 Some(r#"{"complete":true}"#.to_string()),
             )),
-            AgentActionPayload::Abort { reason } => ActionResult::failed(
+            AgentActionPayload::Abort { reason } => Ok(ActionResult::failed(
                 turn,
                 action,
                 ActionStatus::Cancelled,
                 "agent_aborted",
                 reason,
-            ),
+            )?),
             _ => Err(MezError::invalid_state(
                 "shell-backed action was not planned before action-result planning",
             )),

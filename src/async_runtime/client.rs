@@ -20,11 +20,11 @@ use super::{
     run_async_attached_terminal_client_loop, sleep,
 };
 use crate::agent::{
-    ActionResult, ActionStatus, AgentActionPayload, AgentTurnExecution, AgentTurnRecord,
-    AgentTurnState, AsyncModelProvider, ContextSourceKind, ModelMessage, ModelMessageRole,
-    ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey,
-    ProviderErrorRetryClass, ReqwestProviderHttpTransport,
-    execute_network_action_with_transport_async, provider_error_retry_class,
+    ActionStatus, AgentActionPayload, AgentTurnExecution, AgentTurnRecord, AgentTurnState,
+    AsyncModelProvider, ContextSourceKind, ModelMessage, ModelMessageRole, ModelProfile,
+    ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey, ProviderErrorRetryClass,
+    ReqwestProviderHttpTransport, execute_network_action_with_transport_async,
+    provider_error_retry_class,
 };
 use crate::async_runtime::RenderInvalidationReason;
 use crate::error::MezErrorKind;
@@ -1835,37 +1835,8 @@ pub(super) async fn execute_provider_worker_network_actions(
             execute_network_action_with_transport_async(turn, &action, &transport).await?;
     }
     execution.terminal_state =
-        async_agent_turn_state_from_action_results(&execution.action_results, execution.final_turn);
+        mez_agent::turn_state_from_action_results(&execution.action_results, execution.final_turn);
     Ok(execution)
-}
-
-/// Computes the provider-worker terminal state after network actions settle.
-fn async_agent_turn_state_from_action_results(
-    results: &[ActionResult],
-    final_turn: bool,
-) -> AgentTurnState {
-    if results
-        .iter()
-        .any(|result| result.status == ActionStatus::Blocked)
-    {
-        AgentTurnState::Blocked
-    } else if results.iter().any(|result| result.is_error) {
-        AgentTurnState::Failed
-    } else if results
-        .iter()
-        .any(|result| result.status == ActionStatus::Running)
-    {
-        AgentTurnState::Running
-    } else if final_turn
-        || (!results.is_empty()
-            && results
-                .iter()
-                .all(|result| matches!(result.action_type, "complete")))
-    {
-        AgentTurnState::Completed
-    } else {
-        AgentTurnState::Running
-    }
 }
 
 /// Merges per-model token usage maps with saturating counters.
