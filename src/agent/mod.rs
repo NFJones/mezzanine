@@ -50,11 +50,6 @@ pub mod provider;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 pub mod semantic;
-/// Exposes the shell module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-pub mod shell;
 /// Exposes the slash module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -73,13 +68,13 @@ use mez_agent::{
     SayStatus, TranscriptPersistence, agent_shell_help_display, agent_shell_mcp_display,
     agent_shell_permissions_display, agent_shell_status_display,
 };
-use provider::provider_error_retry_class;
-use provider::{AsyncModelProvider, AsyncProviderHttpTransport};
-use semantic::local_action_plan;
-use shell::{
+use mez_agent::{
     DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MarkerToken, ShellTransaction,
     ShellTransactionOutputTransport, ToolDiscoveryCache, ToolInventory, tool_discovery_script,
 };
+use provider::provider_error_retry_class;
+use provider::{AsyncModelProvider, AsyncProviderHttpTransport};
+use semantic::local_action_plan;
 
 /// Exposes the tests module boundary.
 ///

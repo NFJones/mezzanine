@@ -351,7 +351,16 @@ pub use schema::{
 pub use semantic_patch::{is_mez_patch_payload, validate_apply_patch_payload};
 pub use shell::{
     AgentShellValidationError, AgentShellValidationErrorKind, AgentShellValidationResult,
-    shell_quote, validate_resolved_shell_path, validate_shell_marker_token,
+    DEFAULT_BOOTSTRAP_TIMEOUT_MS, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature,
+    MarkerToken, SHELL_OUTPUT_BASE64_MAX_RAW_BYTES, SHELL_TRANSACTION_COMMAND_BASE64_LINE_BYTES,
+    ShellClassification, ShellTransaction, ShellTransactionInput, ShellTransactionOutputTransport,
+    ToolDiscoveryCache, ToolInventory, ToolProbe, agent_subshell_enter_command, bootstrap_script,
+    bootstrap_script_for_classification, fish_bootstrap_script, fish_quote,
+    fish_tool_discovery_script, parse_bootstrap_env_output, posix_shell_history_suppression_finish,
+    posix_shell_history_suppression_start, readiness_probe_command_for_classification,
+    shell_command_contains_unquoted_heredoc, shell_command_invokes_semantic_action, shell_quote,
+    tool_discovery_script, validate_agent_authored_shell_command, validate_resolved_shell_path,
+    validate_shell_marker_token,
 };
 pub use shell_read_observation::{
     ShellReadObservation, ShellReadObservationKind, ShellReadRange,

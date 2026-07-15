@@ -513,7 +513,7 @@ mod tests {
             "if true; then echo \"ok\"; fi",
             80,
             10,
-            crate::agent::shell::ShellClassification::Bash,
+            mez_agent::ShellClassification::Bash,
             &ui_theme,
         );
 

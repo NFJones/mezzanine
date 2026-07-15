@@ -1,7 +1,7 @@
 # Workspace ownership matrix
 
-This matrix records the completed production-module audit against the
-five-package workspace architecture. A legal Cargo dependency graph is
+This matrix records the current production-module audit against the five-package
+workspace architecture. A legal Cargo dependency graph is
 necessary but not sufficient: deterministic subsystem behavior lives with its
 owning lower crate, while the root package contains product policy,
 persistence, transport, and composition adapters.
@@ -24,7 +24,7 @@ persistence, transport, and composition adapters.
 | Terminal geometry, history, protocol, state, style, width, profiles, and screen parser | `mez-terminal` | `crates/mez-terminal/src/{geometry,history,protocol,state,style,width,profile,screen}.rs` and crate-owned screen tests | owned | Root consumers import terminal contracts directly. The root retains only the explicitly named OSC 133 decoder and host-policy adapters. |
 | Layout, session state/effects, PTY processes, input contracts, theme, and copy/readline primitives | `mez-mux` | `crates/mez-mux/src/{layout,session,process,input,theme,copy,readline}` | owned | The lower-crate fake pane-output-to-terminal-screen-to-headless-client flow covers input routing, resize/focus/layout effects, copy-mode transitions, and redraw. Styled terminal-derived copy state plus prompt buffer ownership, reverse history search, multiline navigation, and baseline terminal-input transitions are mux-owned; product transcript/Markdown normalization and selector candidate policy remain adapter concerns. |
 | Mux presentation geometry and canvas primitives | `mez-mux` | `crates/mez-mux/src/{presentation,render}.rs` and `crates/mez-mux/src/render/{overlay,prompt,style}.rs` | owned | Neutral window render planning (including zoom selection, pane geometry, frame reservations, and divider-frame merging), pane-to-canvas composition, divider rendering, exact-width pane/window/group frame-row composition, generic frame/status template expansion, semantic right-status composition and placement, attached-client status-row composition, Unicode-aware window/group frame pillbox layout, and prompt wrapping/viewport/cursor/shadow-region layout are mux-owned. Product pane content, prompt kinds and summary policy, field resolution, merged-frame overlays, palettes, animation, and hit-action policy remain adapters. |
-| Agent contracts and provider-independent policy | `mez-agent` | `crates/mez-agent/src/` owns action surfaces, schemas, context policy, provider contracts, scheduler, canonical turn records/ledger, patch parsing, the execution harness, and ports | owned | The fake-provider/fake-port harness covers context, recovery, MAAP action execution, result replay, transcript persistence, and completion without root dependencies. |
+| Agent contracts and provider-independent policy | `mez-agent` | `crates/mez-agent/src/` owns action surfaces, schemas, context policy, provider contracts, scheduler, canonical turn records/ledger, patch parsing, and shell transaction contracts | temporary | Shell classification, transaction rendering, bootstrap parsing, environment signatures, tool discovery, and intrinsic regressions are lower-owned. The lower fake-provider/fake-port harness still uses parallel acceptance DTOs while the production turn runner and execution ports remain in root, so this surface is not yet complete. |
 
 ## Root agent adapter audit
 
@@ -38,9 +38,10 @@ persistence, transport, and composition adapters.
 | `src/agent/semantic/` | `mez-agent` planning plus root shell-policy/error adapter | adapter | Canonical local-action plans plus semantic-patch parsing, snapshot interpretation, hunk matching/diagnostics, and read/write transaction generation are lower-owned. Root validates product-authored shell commands, projects lower planning errors into `MezError`, and leaves filesystem reads/writes and pane-shell execution behind `LocalActionExecutor`. |
 | Agent-shell session/store policy | `mez-agent` | owned | Visibility/log policy, pane session records, conversation and ephemeral-lineage binding, transcript counters, running-turn transitions, UUID generation, and help/status/permission/MCP display shaping are lower-owned. The root session module and type facade are removed; two exact store regressions run lower while root agent-shell coverage is limited to slash, permission, and live MCP integration. |
 | `src/agent/slash.rs` | root agent-shell execution adapter over `mez-agent` | adapter | Canonical slash registry, parser records, effects, and intrinsic parsing tests are lower-owned. Keep product session mutation, display rendering, runtime-effect routing, and product error projection here. |
-| `src/agent/network.rs`, `shell.rs` | `mez-agent` contracts plus root transport adapter | adapter | Network action plans, summaries, permission-facing pseudo commands, and structured result shaping are lower-owned with no root plan forwarding. Root retains HTTP transport, response caps/parsing, product error projection, and pane-shell transport. |
-| `src/agent/mod.rs` | product adapter namespace | adapter | Canonical lower contracts and helpers are imported directly from `mez-agent`. Product consumers import explicit `actions`, `context`, `maap`, `network`, `prompt`, `provider`, `semantic`, `shell`, or `slash` adapters; the module root retains only private sibling wiring and no compatibility exports. |
-| `src/agent/tests/` | product adapter integrations | adapter | Intrinsic readiness, context, provider policy, semantic planning, transcript projection, shell decoding, and MAAP contract scenarios run directly in `mez-agent`. The audited root leaves exercise embedded prompt assets, product shell/bootstrap/wrapper policy, concrete auth and HTTP/process providers, real transcript storage, and permissions/MCP/network/pane/runtime adapters. |
+| `src/agent/network.rs` | `mez-agent` contracts plus root HTTP transport adapter | adapter | Network action plans, summaries, permission-facing pseudo commands, and structured result shaping are lower-owned with no root plan forwarding. Root retains HTTP transport, response caps/parsing, and product error projection. |
+| Shell transaction boundary | `mez-agent` | owned | `crates/mez-agent/src/shell/` owns classification, transaction rendering, authored-command policy, bootstrap scripts/parsing, environment signatures, tool inventory/cache state, and intrinsic tests. `src/agent/shell.rs` is retired; root retains pane execution, timeout, output observation, and product error mapping only. |
+| `src/agent/mod.rs` | product adapter namespace | adapter | Canonical lower contracts and helpers are imported directly from `mez-agent`. Product consumers import explicit `actions`, `context`, `maap`, `network`, `prompt`, `provider`, `semantic`, or `slash` adapters; the module root retains only private sibling wiring and no compatibility exports. |
+| `src/agent/tests/` | product adapter integrations | temporary | Intrinsic shell transaction/bootstrap/tool-cache tests now run in `mez-agent`; root retains pane-executor discovery and output-decoding integration. Turn-runner and execution-port regressions still exercise root-owned production orchestration and must move with that boundary. |
 
 ## Root mux and terminal adapter audit
 
@@ -72,7 +73,7 @@ The root package now exposes explicit product adapter namespaces rather than
 lower-contract compatibility facades:
 
 - `src/agent/mod.rs` exposes product action, context, MAAP, network, prompt,
-  provider, semantic, shell, and slash adapters. Canonical contracts are
+  provider, semantic, and slash adapters. Canonical contracts are
   imported directly from `mez-agent`.
 - `src/terminal/mod.rs` exposes product copy/render and host-I/O adapters; lower
   terminal and mux contracts are imported directly from their owning crates.

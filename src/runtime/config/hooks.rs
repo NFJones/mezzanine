@@ -44,7 +44,7 @@ pub(in crate::runtime) fn runtime_random_marker_token(material: &str) -> Result<
         let _ = std::fmt::Write::write_fmt(&mut token, format_args!("{byte:02x}"));
     }
     token.push_str(&exact_command_sha256(DEFAULT_COMMAND_SHELL_CLASSIFICATION, material)[..32]);
-    MarkerToken::new(token)
+    Ok(MarkerToken::new(token)?)
 }
 
 /// Runs the runtime pre shell hook payload operation for this subsystem.

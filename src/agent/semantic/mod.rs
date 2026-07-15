@@ -6,8 +6,8 @@
 //! transactions so they execute in the user's active environment.
 
 use super::Result;
-use super::shell::validate_agent_authored_shell_command;
 use super::{AgentAction, AgentActionPayload};
+use mez_agent::validate_agent_authored_shell_command;
 use mez_agent::{LocalActionKind, LocalActionPlan};
 
 /// Returns the sorted relative paths touched by one Mezzanine patch.

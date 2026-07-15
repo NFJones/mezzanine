@@ -19,6 +19,7 @@ use super::actions::{
 };
 use super::context::assemble_model_request;
 use super::network::execute_network_action_with_transport_async;
+use super::prompt;
 use super::prompt::build_agent_system_prompt;
 use super::provider::{
     AsyncModelProvider, AsyncProviderHttpTransport, CHATGPT_ACCOUNT_ID_HEADER, ModelProvider,
@@ -31,24 +32,15 @@ use super::provider::{
     openai_responses_provider_from_auth_store_with_provider_options, parse_openai_models_http_body,
 };
 use super::semantic::local_action_plan;
-use super::shell::{
-    DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MarkerToken, ShellClassification,
-    ShellTransaction, ShellTransactionInput, ShellTransactionOutputTransport, ToolDiscoveryCache,
-    ToolInventory, agent_subshell_enter_command, bootstrap_script,
-    bootstrap_script_for_classification, parse_bootstrap_env_output,
-    readiness_probe_command_for_classification, tool_discovery_script,
-};
 use super::slash::{
     AgentShellCommandOutcome, execute_agent_shell_command, execute_agent_shell_command_with_mcp,
     execute_agent_shell_command_with_permissions, parse_slash_command,
 };
-use super::{prompt, shell};
 use crate::auth::{AuthStore, OpenAiProviderCredential};
 use crate::error::Result;
 use crate::mcp::McpRegistry;
 use crate::permissions::{PathScopes, PermissionPolicy, SessionApprovalStore};
 use crate::test_support::agent::ActionBuilder;
-use crate::test_support::temp::TestTempDir;
 use crate::transcript::{AgentTranscriptStore, TranscriptRole as DurableTranscriptRole};
 use base64::Engine;
 use mez_agent::{
@@ -63,12 +55,16 @@ use mez_agent::{
     action_result_context_content, action_result_transcript_content, baseline_slash_commands,
     openai_models_endpoint_for_responses_endpoint, openai_prompt_cache_diagnostics_for_request,
     openai_responses_endpoint_for_base_url, openai_responses_request_body,
-    openai_stable_prefix_material_for_request, provider_quota_usage_from_headers, shell_quote,
+    openai_stable_prefix_material_for_request, provider_quota_usage_from_headers,
     transcript_entries_for_execution,
 };
 use mez_agent::{
     DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,
     DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME,
+};
+use mez_agent::{
+    DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MarkerToken, ShellClassification,
+    ShellTransaction, ShellTransactionInput, ShellTransactionOutputTransport, ToolDiscoveryCache,
 };
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -314,16 +310,6 @@ fn framed_shell_output(text: &str) -> String {
     )
 }
 
-/// Runs one POSIX shell script through stdin rather than `sh -c`.
-///
-/// Transaction wrappers intentionally stream their command payload after the
-/// wrapper function invocation, so tests must execute them through the same
-/// input channel used by live pane shells.
-fn run_sh_stdin(script: &str) -> Output {
-    let mut command = Command::new("/bin/sh");
-    run_command_stdin(&mut command, script)
-}
-
 /// Runs one streamed transaction through POSIX shell stdin.
 ///
 /// # Parameters
@@ -356,28 +342,6 @@ fn run_command_transaction_stdin(
     thread::sleep(Duration::from_millis(50));
     stdin.write_all(input.payload.as_bytes()).unwrap();
     stdin.write_all(suffix.as_bytes()).unwrap();
-    drop(child.stdin.take());
-    child.wait_with_output().unwrap()
-}
-
-/// Runs one command while writing a script to its stdin.
-///
-/// # Parameters
-/// - `command`: The process builder to spawn.
-/// - `script`: The exact stdin bytes supplied to the process.
-fn run_command_stdin(command: &mut Command, script: &str) -> Output {
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .as_mut()
-        .unwrap()
-        .write_all(script.as_bytes())
-        .unwrap();
     drop(child.stdin.take());
     child.wait_with_output().unwrap()
 }
@@ -481,13 +445,6 @@ fn config_change_action(id: &str) -> AgentAction {
 /// exercise executable actions after the first provider round-trip.
 fn capability_action(id: &str, capability: AgentCapability) -> AgentAction {
     ActionBuilder::capability(id, capability)
-}
-
-/// Creates a unique temporary directory for tests without adding another
-/// dependency to the crate under test. Callers remove the directory after the
-/// assertions that need it complete.
-fn test_temp_dir(label: &str) -> TestTempDir {
-    TestTempDir::new(label)
 }
 
 /// Builds a Mezzanine add-file patch for one relative path and exact content.
@@ -947,7 +904,6 @@ mod openai_provider;
 mod openai_requests;
 mod provider_contract;
 mod semantic_patch;
-mod shell_bootstrap;
 mod shell_execution;
 mod shell_transport;
 mod system_prompt;

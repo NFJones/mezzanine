@@ -38,10 +38,6 @@ use crate::agent::provider::{
     OpenAiResponsesProvider, ReqwestProviderHttpTransport,
 };
 use crate::agent::semantic::{local_action_plan, local_action_summary};
-use crate::agent::shell::{
-    EnvironmentSignature, MarkerToken, ShellClassification, ShellTransaction,
-    ShellTransactionOutputTransport, ToolDiscoveryCache, agent_subshell_enter_command,
-};
 use crate::agent::slash::{
     AgentShellCommandOutcome, AgentShellRuntimeContext, execute_agent_shell_command_with_context,
     parse_slash_command,
@@ -155,6 +151,10 @@ use mez_agent::{ApprovalPolicy, PermissionPreset, RuleDecision};
 use mez_agent::{
     CooperationMode, ScopeRegistry, SubagentProfile, SubagentScopeDeclaration,
     SubagentSpawnRequest, builtin_subagent_profiles,
+};
+use mez_agent::{
+    EnvironmentSignature, MarkerToken, ShellClassification, ShellTransaction,
+    ShellTransactionOutputTransport, ToolDiscoveryCache, agent_subshell_enter_command,
 };
 use mez_core::ids::{AgentId, ClientId, PaneId, SessionId, WindowId};
 use mez_mux::command::CommandInvocation;

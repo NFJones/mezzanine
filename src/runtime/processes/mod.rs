@@ -35,10 +35,6 @@ use super::{
     runtime_random_marker_token, shell_command_result_content,
     shell_command_structured_content_json, validate_pane_size_for_resize,
 };
-use crate::agent::shell::{
-    DEFAULT_BOOTSTRAP_TIMEOUT_MS, bootstrap_script_for_classification, parse_bootstrap_env_output,
-    readiness_probe_command_for_classification,
-};
 use crate::runtime::{
     PaneEvent, ProcessEvent, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition,
 };
@@ -46,6 +42,10 @@ use crate::terminal::parse_mez_shell_transaction_osc;
 use mez_agent::AgentActionPayload;
 use mez_agent::semantic_patch_planning::{
     ApplyPatchTransactionPhase, apply_patch_transaction_phase,
+};
+use mez_agent::{
+    DEFAULT_BOOTSTRAP_TIMEOUT_MS, bootstrap_script_for_classification, parse_bootstrap_env_output,
+    readiness_probe_command_for_classification,
 };
 use mez_mux::process::PaneProcess;
 use mez_terminal::TerminalStyledLine;

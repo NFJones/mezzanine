@@ -4,8 +4,8 @@
 //! `mez-agent`. This module supplies the product-owned shell-input policy and
 //! retains small formatting helpers used by provider and execution adapters.
 
-use super::shell::validate_agent_authored_shell_command;
 use super::{AgentTurnRecord, McpPromptTool, MezError, Result};
+use mez_agent::validate_agent_authored_shell_command;
 use mez_agent::{
     ActionContentBlock, MaapBatch, MaapContractError, MaapValidationContext,
     parse_fenced_maap_action_batch as parse_fenced_maap_action_batch_contract,
