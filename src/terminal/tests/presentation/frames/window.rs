@@ -2,13 +2,13 @@
 
 use crate::ids::IdFactory;
 use crate::terminal::{
-    BTreeMap, ClientViewRole, DEFAULT_PANE_FRAME_TEMPLATE,
-    DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE, DEFAULT_WINDOW_FRAME_TEMPLATE, PaneRenderInput,
-    TerminalClientLoopConfig, TerminalFrameContext, TerminalFrameRenderOptions, WindowFrameAction,
-    render_attached_client_view, render_window_with_pane_frame_template,
-    window_frame_action_pillbox_cells,
+    BTreeMap, DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE,
+    DEFAULT_WINDOW_FRAME_TEMPLATE, PaneRenderInput, TerminalClientLoopConfig, TerminalFrameContext,
+    TerminalFrameRenderOptions, WindowFrameAction, render_attached_client_view,
+    render_window_with_pane_frame_template, window_frame_action_pillbox_cells,
 };
 use mez_mux::layout::{Size, SplitDirection, Window};
+use mez_mux::presentation::ClientViewRole;
 use mez_mux::presentation::{
     TerminalFramePosition, TerminalWindowFrameContext, TerminalWindowStatusContext,
 };

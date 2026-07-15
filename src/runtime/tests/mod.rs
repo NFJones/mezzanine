@@ -34,8 +34,8 @@ use crate::agent::{AgentLogLevel, AgentShellCommandOutcome};
 use crate::snapshot::SnapshotRepository;
 use crate::subagent::SubagentSpawnRequest;
 use crate::terminal::{
-    AttachedTerminalClientStepPlan, ClientViewRole, HostClipboard, MouseAction,
-    PaneAgentStatusField, TerminalClientLoopAction, TerminalClientLoopConfig,
+    AttachedTerminalClientStepPlan, HostClipboard, MouseAction, PaneAgentStatusField,
+    TerminalClientLoopAction, TerminalClientLoopConfig,
 };
 use crate::test_support::runtime::{RuntimeServiceFixture, SessionFixture};
 use crate::transcript::{AgentTranscriptStore, TranscriptEntry, TranscriptRole};
@@ -43,6 +43,7 @@ use base64::Engine;
 use mez_agent::{ScheduledWork, ScheduledWorkKind};
 use mez_mux::copy::CopyPosition;
 use mez_mux::input::{MuxAction, PaneFocusDirection};
+use mez_mux::presentation::ClientViewRole;
 use mez_mux::session::{Session, SessionState};
 use mez_mux::theme::UI_COLOR_SLOT_NAMES;
 use mez_terminal::DEFAULT_PANE_TERM;

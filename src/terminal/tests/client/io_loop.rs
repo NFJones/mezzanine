@@ -1,16 +1,16 @@
 //! Regression tests for terminal client io loop behavior.
 
-use crate::terminal::client_loop::{
-    AttachedTerminalOutputModes, AttachedTerminalOutputWriteReport,
-};
+use crate::terminal::client_loop::AttachedTerminalOutputWriteReport;
 use crate::terminal::{
     AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopIo, AttachedTerminalFdReadiness,
-    AttachedTerminalFdRole, ClientStatusKind, ClientStatusLine, ClientViewRole, RenderedClientView,
-    Result, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalCursorStyle,
-    TerminalFdInterest, run_attached_terminal_client_loop,
+    AttachedTerminalFdRole, ClientStatusKind, ClientStatusLine, Result, TerminalClientLoopAction,
+    TerminalClientLoopConfig, TerminalFdInterest, run_attached_terminal_client_loop,
 };
 use mez_mux::input::MuxAction;
 use mez_mux::layout::Size;
+use mez_mux::presentation::{
+    AttachedTerminalOutputModes, ClientViewRole, RenderedClientView, TerminalCursorStyle,
+};
 use mez_mux::theme::UiTheme;
 use mez_terminal::TerminalStyleSpan;
 

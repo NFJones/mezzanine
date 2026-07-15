@@ -15,9 +15,9 @@ use super::{
     runtime_string_array_json, shell_command_from_argv, unix_seconds_to_rfc3339,
 };
 use crate::terminal::{
-    TerminalCursorStyle, compose_client_presentation_with_styles, max_viewport_column,
-    max_viewport_row,
+    compose_client_presentation_with_styles, max_viewport_column, max_viewport_row,
 };
+use mez_mux::presentation::TerminalCursorStyle;
 use mez_mux::theme::{UiColorPair, UiTheme};
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 

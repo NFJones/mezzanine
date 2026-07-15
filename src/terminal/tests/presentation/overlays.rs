@@ -2,7 +2,6 @@
 
 use crate::terminal::render::compose_client_presentation_with_styles;
 use crate::terminal::{
-    ClientViewRole, ReadlinePromptRegion, RenderedClientView, TerminalCursorStyle,
     compose_display_overlay_line_style_spans, compose_display_overlay_lines,
     compose_display_region_overlay_line_style_spans, compose_display_region_overlay_lines,
     compose_modal_display_overlay_line_style_spans, compose_modal_display_overlay_lines,
@@ -10,6 +9,9 @@ use crate::terminal::{
 };
 use mez_mux::copy::CopyPosition;
 use mez_mux::layout::Size;
+use mez_mux::presentation::{
+    ClientViewRole, ReadlinePromptRegion, RenderedClientView, TerminalCursorStyle,
+};
 use mez_mux::theme::UiTheme;
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 

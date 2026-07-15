@@ -349,7 +349,7 @@ impl RuntimeSessionService {
                 .iter()
                 .map(|field| (*field).to_string())
                 .collect(),
-            terminal_cursor_style: crate::terminal::TerminalCursorStyle::Block,
+            terminal_cursor_style: mez_mux::presentation::TerminalCursorStyle::Block,
             terminal_cursor_blink: false,
             terminal_cursor_blink_interval_ms: 500,
             terminal_emoji_width,

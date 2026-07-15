@@ -63,11 +63,10 @@ mod screen;
 pub(crate) use client_loop::route_client_input_actions;
 pub use client_loop::{
     AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, AttachedTerminalClientLoopConfig,
-    AttachedTerminalClientLoopReport, AttachedTerminalClientStepPlan, AttachedTerminalOutputModes,
-    ClientStatusKind, ClientStatusLine, ClientViewRole, ReadlinePromptClientPresentation,
-    ReadlinePromptRegion, ReadlinePromptStatusRow, RenderedClientView, TerminalClientLoopAction,
-    TerminalCursorStyle, attached_terminal_output_disconnected, plan_attached_terminal_client_step,
-    route_client_input,
+    AttachedTerminalClientLoopReport, AttachedTerminalClientStepPlan, ClientStatusKind,
+    ClientStatusLine, ReadlinePromptClientPresentation, ReadlinePromptStatusRow,
+    TerminalClientLoopAction, attached_terminal_output_disconnected,
+    plan_attached_terminal_client_step, route_client_input,
 };
 #[cfg(test)]
 pub use client_loop::{

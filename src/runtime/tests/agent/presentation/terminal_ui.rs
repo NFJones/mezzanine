@@ -25,7 +25,7 @@ fn runtime_applies_cursor_presentation_options_from_config_layers() {
 
     assert_eq!(
         config.cursor_style,
-        crate::terminal::TerminalCursorStyle::Bar
+        mez_mux::presentation::TerminalCursorStyle::Bar
     );
     assert!(!config.cursor_blink);
     assert_eq!(config.cursor_blink_interval_ms, 250);

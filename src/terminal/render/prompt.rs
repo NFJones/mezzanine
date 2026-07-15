@@ -8,10 +8,11 @@
 
 use crate::readline::{ReadlinePrompt, ReadlinePromptKind};
 use crate::terminal::{
-    ClientStatusKind, ClientStatusLine, ReadlinePromptClientPresentation, ReadlinePromptRegion,
-    ReadlinePromptStatusRow, RenderedClientView, TerminalPaneFrameContext,
+    ClientStatusKind, ClientStatusLine, ReadlinePromptClientPresentation, ReadlinePromptStatusRow,
+    TerminalPaneFrameContext,
 };
 use mez_mux::layout::Size;
+use mez_mux::presentation::{ReadlinePromptRegion, RenderedClientView};
 use mez_mux::theme::{UiColorPair, UiTheme};
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalStyledLine};
 

@@ -2771,7 +2771,7 @@ fn terminal_step_response_output_modes_parse_cursor_metadata() {
     assert!(modes.cursor_visible);
     assert_eq!(
         modes.cursor_style,
-        crate::terminal::TerminalCursorStyle::Bar
+        mez_mux::presentation::TerminalCursorStyle::Bar
     );
     assert!(modes.cursor_blink);
     assert_eq!(modes.cursor_blink_interval_ms, 250);

@@ -1,13 +1,13 @@
 //! Regression tests for terminal input bracketed paste behavior.
 
 use crate::terminal::client_loop::{
-    AttachedTerminalOutputModes, HOST_BRACKETED_PASTE_MAX_BUFFER_BYTES,
-    encode_attached_terminal_output_frame_with_styles,
+    HOST_BRACKETED_PASTE_MAX_BUFFER_BYTES, encode_attached_terminal_output_frame_with_styles,
     route_client_input_actions_with_host_paste_buffer,
     route_client_input_actions_with_host_paste_state,
 };
 use crate::terminal::{MouseAction, TerminalClientLoopAction, TerminalClientLoopConfig};
 use mez_mux::input::{MuxAction, PasteBufferTarget};
+use mez_mux::presentation::AttachedTerminalOutputModes;
 
 /// Verifies host bracketed paste payloads are forwarded without interpreting
 /// bytes that look like Mezzanine prefix commands or mouse reports. Clipboard

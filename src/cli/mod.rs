@@ -4,6 +4,7 @@
 //! command behavior, initializes default configuration, and dispatches local or
 //! control-socket-backed commands.
 
+use mez_mux::presentation::{AttachedTerminalOutputModes, ClientViewRole, TerminalCursorStyle};
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs;
@@ -62,8 +63,8 @@ use crate::snapshot::{
     SnapshotRestoreResult, SnapshotRollbackPlan, SnapshotState,
 };
 use crate::terminal::{
-    AttachedTerminalClientLoopConfig, AttachedTerminalOutputModes, ClientViewRole,
-    TerminalClientLoopConfig, TerminalCursorStyle, attached_terminal_output_disconnected,
+    AttachedTerminalClientLoopConfig, TerminalClientLoopConfig,
+    attached_terminal_output_disconnected,
 };
 use crate::transcript::AgentTranscriptStore;
 use mez_mux::layout::Size;

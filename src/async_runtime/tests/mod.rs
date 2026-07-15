@@ -50,7 +50,8 @@ use crate::registry::SessionRegistry;
 use crate::runtime::{
     RuntimeLifecycleState, RuntimeSessionService, current_effective_uid, pane_environment,
 };
-use crate::terminal::{AttachedTerminalClientStepPlan, AttachedTerminalOutputModes};
+use crate::terminal::AttachedTerminalClientStepPlan;
+use mez_mux::presentation::{AttachedTerminalOutputModes, ClientViewRole};
 use mez_mux::process::{PaneProcessLaunch, spawn_pane_process};
 use std::ffi::OsString;
 use std::io::{Read, Write};
@@ -65,8 +66,8 @@ use crate::runtime::RuntimeEventConnectionTable;
 use crate::shell::resolve_shell;
 use crate::terminal::{
     AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopIo, AttachedTerminalFdReadiness,
-    AttachedTerminalFdRole, ClientStatusKind, ClientStatusLine, ClientViewRole,
-    TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFdInterest,
+    AttachedTerminalFdRole, ClientStatusKind, ClientStatusLine, TerminalClientLoopAction,
+    TerminalClientLoopConfig, TerminalFdInterest,
 };
 use crate::test_support::async_runtime::AsyncRuntimeActorFixture;
 use crate::transcript::AgentTranscriptStore;

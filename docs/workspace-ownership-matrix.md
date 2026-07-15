@@ -46,12 +46,12 @@ persistence, transport, and composition adapters.
 | Root surface | Final owner / root role | State | Required migration |
 |---|---|---|---|
 | `src/terminal/render/` | `mez-mux` composition plus root product presentation adapter | temporary | Move neutral canvas writes, frame/divider/status composition, pane placement, copy presentation, and intrinsic tests. Inject agent/prompt/permission/overlay view models and product styles. |
-| `src/terminal/client_loop.rs` | `mez-mux` headless client policy plus root host I/O adapter | temporary | Neutral readiness, lifecycle, pending-output precedence, and pane-output presentation planning are mux-owned and covered headlessly. Move redraw/invalidation and remaining neutral input planning; retain OS polling, raw-mode lifecycle, async runtime, and terminal FD operations in root. |
+| `src/terminal/client_loop.rs` | `mez-mux` headless client policy plus root host I/O adapter | adapter | Neutral readiness, lifecycle, output precedence, input, layout/focus/resize, copy-state, and redraw planning are mux-owned and covered headlessly. The root loop now consumes those contracts directly and retains OS polling, raw-mode lifecycle, terminal encoding, and terminal FD operations. |
 | `src/terminal/copy.rs`, `client_loop.rs`, `mouse.rs` | `mez-mux` domain plus root product policy adapters | temporary | Copy-mode key actions and classification are mux-owned. Move remaining generic styled-copy/client behavior while retaining transcript normalization, agent selectors, templated actions, overlays, and attached-host policy in root. |
 | `src/terminal/host_clipboard.rs` | root host clipboard process adapter | adapter | Keep platform command discovery and process execution product-owned; generic paste-buffer state is owned by `mez-mux`. |
 | `src/terminal/fd.rs` | root host terminal adapter | adapter | Keep raw terminal mode, FD polling, and host restoration product-owned; depend on mux/terminal contracts directly. |
 | `src/terminal/screen.rs` | root OSC 133 product adapter over `mez-terminal` | adapter | Keep the explicitly named shell-transaction decoder product-owned; do not restore the removed profile facade or add terminal-screen forwarding here. |
-| `src/terminal/mod.rs` | product presentation/host facade | temporary | Mux theme forwarding is removed; continue removing broad copy/render/client exports and split host I/O from product presentation adapters. |
+| `src/terminal/mod.rs` | product presentation/host facade | temporary | Mux theme and attached-client view/output/cursor forwarding are removed; continue removing broad copy/render exports and split host I/O from product presentation adapters. |
 | `src/terminal/tests/` | split by behavior owner | temporary | Move neutral rendering/input/copy tests to `mez-mux`; retain real host-loop, product overlay, agent annotation, and raw-mode integration tests. |
 | `src/readline/` | `mez-mux` generic prompt behavior plus root command/selector adapter | temporary | Move remaining neutral prompt and decoder integration. Retain product command completion, selectors, runtime effects, and agent-specific semantics. |
 
@@ -72,8 +72,9 @@ The following current exports are migration markers, not completion evidence:
 - `src/lib.rs` re-exports `mez_core::ids`.
 - `src/agent/mod.rs` broadly re-exports `mez-agent` contracts and product
   implementations through one facade.
-- `src/terminal/mod.rs` still forwards product copy/render/client surfaces; mux
-  theme contracts are now imported directly from `mez-mux`.
+- `src/terminal/mod.rs` still forwards product copy/render surfaces; mux theme
+  and attached-client presentation contracts are imported directly from
+  `mez-mux`.
 - `src/readline/mod.rs` and `src/readline/types.rs` forward mux readline types.
 - Product permission, MCP, instruction, subagent, provider, config, and runtime
   modules still forward selected `mez-agent` contracts.
@@ -88,9 +89,8 @@ product behavior. Consumers should otherwise import the owning crate directly.
    transcript persistence, and completion.
 2. A headless `mez-mux` fake-process/fake-client flow covering terminal output,
    viewport composition, input routing, resize/focus/layout effects, copy mode,
-   and redraw. The pane-output-to-`TerminalScreen`-to-writable-client segment is
-   covered by `headless_client_presents_fake_pane_process_output`; the remaining
-   input, layout-effect, copy-mode, and redraw segments are still required.
+   and redraw. This is covered by the `headless_client_*` presentation tests;
+   retain product integration coverage for host I/O and runtime effect adapters.
 3. Independent `mez-terminal` tests covering the complete one-surface engine.
 4. Root end-to-end tests for real PTY/host restoration and product agent-to-mux
    adapters.

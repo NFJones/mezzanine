@@ -27,10 +27,9 @@ use mez_mux::input::{
 };
 #[cfg(test)]
 use mez_mux::layout::Size;
-pub use mez_mux::presentation::{
-    AttachedTerminalOutputModes, ClientViewRole, ReadlinePromptRegion, RenderedClientView,
-    TerminalCursorStyle,
-};
+use mez_mux::presentation::{AttachedTerminalOutputModes, RenderedClientView};
+#[cfg(test)]
+use mez_mux::presentation::{ClientViewRole, TerminalCursorStyle};
 #[cfg(test)]
 use mez_mux::theme::UiTheme;
 

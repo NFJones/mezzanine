@@ -1326,7 +1326,7 @@ fn runtime_resume_picker_attached_frame_keeps_selected_link_styling_off_previous
         .unwrap()
         .unwrap();
 
-    let modes = crate::terminal::AttachedTerminalOutputModes {
+    let modes = mez_mux::presentation::AttachedTerminalOutputModes {
         cursor_visible: current_view.cursor_visible,
         cursor_blink: current_view.cursor_blink,
         cursor_blink_interval_ms: current_view.cursor_blink_interval_ms,
@@ -1335,7 +1335,7 @@ fn runtime_resume_picker_attached_frame_keeps_selected_link_styling_off_previous
         application_keypad: current_view.application_keypad,
         bracketed_paste: current_view.bracketed_paste,
         host_mouse_reporting: current_view.host_mouse_reporting,
-        ..crate::terminal::AttachedTerminalOutputModes::default()
+        ..mez_mux::presentation::AttachedTerminalOutputModes::default()
     };
     let (previous_lines, previous_spans) =
         crate::terminal::compose_client_presentation_with_styles(&previous_view, None);
