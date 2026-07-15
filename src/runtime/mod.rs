@@ -36,10 +36,9 @@ use crate::agent::{
     assemble_model_request, decode_shell_output_transport_with_diagnostics,
     execute_agent_shell_command_with_context, execute_mcp_action_through_runtime,
     execute_mcp_action_through_runtime_async, execute_network_action_with_transport_async,
-    local_action_plan, local_action_summary, network_action_plan, network_action_summary,
-    next_transcript_sequence, parse_slash_command, postprocess_shell_action_success_output,
-    shell_command_result_content, shell_command_structured_content_json,
-    transcript_entries_for_execution,
+    local_action_plan, local_action_summary, next_transcript_sequence, parse_slash_command,
+    postprocess_shell_action_success_output, shell_command_result_content,
+    shell_command_structured_content_json, transcript_entries_for_execution,
 };
 use crate::audit::{
     AuditActor, AuditConfig, AuditDeferredWrite, AuditLog, AuditRecord, AuditRetentionPolicy,
@@ -143,7 +142,8 @@ use mez_agent::{
     ModelResponse, ModelTokenUsage, ModelTokenUsageKey, PaneReadinessOverrideStore,
     PaneReadinessState, ProviderQuotaUsage, ReadinessOverrideRevocation,
     action_result_context_content, compact_model_context_for_budget_with_retained_tail_percent,
-    openai_default_reasoning_levels_for_model, select_model_profile,
+    network_action_plan, network_action_summary, openai_default_reasoning_levels_for_model,
+    select_model_profile,
 };
 use mez_agent::{AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ScheduledWork, ScheduledWorkKind};
 use mez_agent::{ApprovalPolicy, PermissionPreset, RuleDecision};

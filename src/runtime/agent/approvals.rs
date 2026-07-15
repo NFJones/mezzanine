@@ -246,8 +246,8 @@ impl RuntimeSessionService {
                 ) || (permission_policy.approval_policy == mez_agent::ApprovalPolicy::AutoAllow
                     && runtime_action_supports_auto_allow(action)))
             }
-            _ if network_action_plan(action)?.is_some() => {
-                let Some(plan) = network_action_plan(action)? else {
+            _ if network_action_plan(action).is_some() => {
+                let Some(plan) = network_action_plan(action) else {
                     return Ok(false);
                 };
                 Ok(matches!(
@@ -424,8 +424,8 @@ impl RuntimeSessionService {
                 )?;
                 self.dispatch_running_shell_actions_to_panes(&turn, &mut execution)?;
             }
-            _ if network_action_plan(&action)?.is_some() => {
-                let Some(plan) = network_action_plan(&action)? else {
+            _ if network_action_plan(&action).is_some() => {
+                let Some(plan) = network_action_plan(&action) else {
                     return Err(MezError::invalid_state(
                         "approved network action has no network action plan",
                     ));

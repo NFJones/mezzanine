@@ -805,7 +805,7 @@ pub(super) fn runtime_action_supports_auto_allow(action: &AgentAction) -> bool {
     local_action_summary(action)
         .ok()
         .flatten()
-        .or_else(|| network_action_summary(action).ok().flatten())
+        .or_else(|| network_action_summary(action))
         .is_some_and(|summary| !summary.trim().is_empty())
 }
 
@@ -1693,7 +1693,7 @@ pub(super) fn runtime_agent_action_summary(action: &AgentAction) -> Option<Strin
     let summary = local_action_summary(action)
         .ok()
         .flatten()
-        .or_else(|| network_action_summary(action).ok().flatten())?;
+        .or_else(|| network_action_summary(action))?;
     let summary = runtime_agent_terminal_preview(&summary);
     (!summary.trim().is_empty()).then_some(summary)
 }
@@ -1881,7 +1881,7 @@ pub(super) fn runtime_agent_user_action_phrase(
         };
         return Some((kind, runtime_agent_terminal_preview(&plan.command)));
     }
-    if let Ok(Some(plan)) = network_action_plan(action) {
+    if let Some(plan) = network_action_plan(action) {
         let kind = match action.payload {
             AgentActionPayload::WebSearch { .. } => "web search",
             AgentActionPayload::FetchUrl { .. } => "URL fetch",
@@ -2041,8 +2041,8 @@ pub(super) fn runtime_agent_action_outcome_line(
     show_shell_details: bool,
 ) -> Option<(bool, String)> {
     let (kind, target) = runtime_agent_user_action_phrase(action)?;
-    let runtime_owned_action = local_action_plan(action).ok().flatten().is_some()
-        || network_action_plan(action).ok().flatten().is_some();
+    let runtime_owned_action =
+        local_action_plan(action).ok().flatten().is_some() || network_action_plan(action).is_some();
     let target = if runtime_owned_action && !show_shell_details {
         None
     } else {
@@ -2070,13 +2070,12 @@ pub(super) fn runtime_agent_action_outcome_line(
                 return Some((false, line));
             }
             let detail = runtime_agent_action_error_suffix(result);
-            let failure_phase = if network_action_plan(action).ok().flatten().is_some()
-                && result.content.is_empty()
-            {
-                ""
-            } else {
-                " before execution"
-            };
+            let failure_phase =
+                if network_action_plan(action).is_some() && result.content.is_empty() {
+                    ""
+                } else {
+                    " before execution"
+                };
             Some((
                 true,
                 if let Some(summary) =

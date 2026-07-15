@@ -92,8 +92,7 @@ use mez_agent::{
     agent_shell_mcp_display, agent_shell_permissions_display, agent_shell_status_display,
 };
 pub use network::{
-    NetworkActionPlan, execute_network_action_with_transport_async, network_action_plan,
-    network_action_structured_content_json, network_action_summary,
+    execute_network_action_with_transport_async, network_action_structured_content_json,
 };
 pub use prompt::{
     build_agent_system_prompt, build_agent_system_prompt_with_repository_instructions,

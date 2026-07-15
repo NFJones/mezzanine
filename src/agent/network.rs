@@ -7,7 +7,10 @@
 
 use std::collections::BTreeMap;
 
-use mez_agent::{ProviderHttpResult, shell_quote};
+use mez_agent::{
+    ProviderHttpResult,
+    network_action_structured_content_json as lower_network_action_structured_content_json,
+};
 
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnRecord,
@@ -25,75 +28,14 @@ const DEFAULT_WEB_SEARCH_MAX_BYTES: usize = 1024 * 1024;
 /// Timeout applied to runtime-owned network actions.
 const NETWORK_ACTION_TIMEOUT_MS: u64 = 30_000;
 
-/// Runtime-generated execution data for one network-backed semantic action.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NetworkActionPlan {
-    /// Concise user-facing summary shown before the network request starts.
-    pub summary: String,
-    /// Classifier-friendly pseudo command representing the same network effect.
-    pub policy_command: String,
-}
-
-/// Returns the runtime-owned network plan for a network-backed MAAP action.
-pub fn network_action_plan(action: &AgentAction) -> Result<Option<NetworkActionPlan>> {
-    match &action.payload {
-        AgentActionPayload::WebSearch { query, domains, .. } => {
-            let mut full_query = query.to_string();
-            for domain in domains {
-                full_query.push_str(" site:");
-                full_query.push_str(domain);
-            }
-            let url = format!(
-                "https://duckduckgo.com/html/?q={}",
-                urlencoding::encode(&full_query)
-            );
-            Ok(Some(NetworkActionPlan {
-                summary: format!("I’ll search the web for `{query}`."),
-                policy_command: format!("curl {}", shell_quote(&url)),
-            }))
-        }
-        AgentActionPayload::FetchUrl { url, format, .. } => {
-            let mut summary = format!("I’ll fetch `{url}`.");
-            if let Some(format) = format {
-                summary.push_str(&format!(" Format hint: {format}."));
-            }
-            Ok(Some(NetworkActionPlan {
-                summary,
-                policy_command: format!("curl {}", shell_quote(url)),
-            }))
-        }
-        _ => Ok(None),
-    }
-}
-
-/// Returns the user-facing summary for a network-backed action.
-pub fn network_action_summary(action: &AgentAction) -> Result<Option<String>> {
-    Ok(network_action_plan(action)?.map(|plan| plan.summary))
-}
-
 /// Builds compact structured content for a network-backed action result.
 pub fn network_action_structured_content_json(
     action: &AgentAction,
     approval: serde_json::Value,
     response: serde_json::Value,
 ) -> Result<String> {
-    let Some(plan) = network_action_plan(action)? else {
-        return Err(MezError::invalid_args(
-            "network structured content requires a network-backed action",
-        ));
-    };
-    let value = serde_json::json!({
-        "kind": action.action_type(),
-        "summary": plan.summary,
-        "policy_command": plan.policy_command,
-        "approval": approval,
-        "response": response
-    });
-    serde_json::to_string(&value).map_err(|error| {
-        MezError::invalid_state(format!(
-            "network structured content encoding failed: {error}"
-        ))
-    })
+    lower_network_action_structured_content_json(action, approval, response)
+        .map_err(|error| MezError::invalid_args(error.message()))
 }
 
 /// Executes a network-backed semantic action through a runtime HTTP transport.

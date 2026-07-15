@@ -226,7 +226,7 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("running network result does not match an action")
                 })?;
-            let Some(plan) = network_action_plan(&action)? else {
+            let Some(plan) = network_action_plan(&action) else {
                 continue;
             };
             let request_key = plan.policy_command.clone();
@@ -334,7 +334,7 @@ impl RuntimeSessionService {
         action: &AgentAction,
         result: &ActionResult,
     ) -> Result<()> {
-        let Some(plan) = network_action_plan(action)? else {
+        let Some(plan) = network_action_plan(action) else {
             return Ok(());
         };
         if !self.append_agent_action_execution_text_to_terminal_buffer(&turn.pane_id, action)? {
@@ -385,7 +385,7 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         action: &AgentAction,
     ) -> Result<ActionResult> {
-        let Some(plan) = network_action_plan(action)? else {
+        let Some(plan) = network_action_plan(action) else {
             return Err(MezError::invalid_args(
                 "network action execution requires a network-backed action",
             ));

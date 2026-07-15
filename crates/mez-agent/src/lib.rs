@@ -66,6 +66,8 @@ pub mod memory_guardrail;
 pub mod model_profile;
 /// Provider-independent successful model response contract.
 pub mod model_response;
+/// Provider-independent network action planning and result shaping.
+pub mod network_action;
 /// OpenAI request rendering and prompt-cache diagnostics.
 pub mod openai_cache;
 /// Provider-independent OpenAI-compatible Chat Completions request shaping.
@@ -233,6 +235,10 @@ pub use model_profile::{
     select_model_profile, validate_model_profile_request,
 };
 pub use model_response::ModelResponse;
+pub use network_action::{
+    NetworkActionPlan, NetworkActionPlanError, NetworkActionPlanResult, network_action_plan,
+    network_action_structured_content_json, network_action_summary,
+};
 pub use openai_cache::{
     openai_prompt_cache_diagnostics_for_request,
     openai_prompt_cache_diagnostics_for_request_with_stream,

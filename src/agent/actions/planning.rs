@@ -7,10 +7,11 @@
 
 use super::super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnRecord, MezError, Result,
-    RuleDecision, json_escape, local_action_plan, local_action_summary, network_action_plan,
-    network_action_structured_content_json, network_action_summary, string_array_json,
+    RuleDecision, json_escape, local_action_plan, local_action_summary,
+    network_action_structured_content_json, string_array_json,
 };
 use super::{AgentTurnRunner, say_structured_content_json, shell_command_structured_content_json};
+use mez_agent::{network_action_plan, network_action_summary};
 
 impl<'a, P> AgentTurnRunner<'a, P> {
     /// Executes the `plan_action_result` operation for the owning subsystem.
@@ -23,7 +24,7 @@ impl<'a, P> AgentTurnRunner<'a, P> {
         action: &AgentAction,
     ) -> Result<ActionResult> {
         let local_plan = local_action_plan(action)?;
-        let network_plan = network_action_plan(action)?;
+        let network_plan = network_action_plan(action);
         match &action.payload {
             AgentActionPayload::Say {
                 status,
@@ -425,7 +426,7 @@ fn action_auto_allow_reason(action: &AgentAction) -> String {
     {
         return summary;
     }
-    if let Ok(Some(summary)) = network_action_summary(action)
+    if let Some(summary) = network_action_summary(action)
         && !summary.trim().is_empty()
     {
         return summary;
