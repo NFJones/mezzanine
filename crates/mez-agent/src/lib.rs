@@ -48,6 +48,8 @@ pub mod continuation;
 pub mod deepseek;
 /// Provider-independent DeepSeek Chat Completions response parsing.
 pub mod deepseek_response;
+/// Provider-independent agent execution transcript projection.
+pub mod execution_transcript;
 /// Provider-neutral terminal failure-summary progression.
 pub mod failure_summary;
 /// Provider-independent complete agent turn orchestration.
@@ -215,6 +217,9 @@ pub use deepseek::{
 pub use deepseek_response::{
     DeepSeekResponse, DeepSeekResponseError, DeepSeekResponseResult,
     deepseek_request_requires_maap, parse_deepseek_chat_completions_provider_body,
+};
+pub use execution_transcript::{
+    AgentTurnExecution, assistant_context_content_for_execution, transcript_entries_for_execution,
 };
 pub use failure_summary::{
     AgentFailureSummaryNegotiation, AgentFailureSummaryProviderDecision,
