@@ -143,11 +143,11 @@ use crate::subagent::{
 };
 use crate::terminal::{
     AttachedTerminalClientStepPlan, ClientViewRole, CopyMode, CopyModeKeyAction, HostClipboard,
-    HostClipboardCommand, MouseAction, MouseWindowActionFrameCell, PasteBuffer, PasteBuffers,
-    RenderedClientView, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalCursorStyle,
-    TerminalFrameContext, WindowFrameAction, agent_prompt_reserved_line_count,
-    pane_border_cells_for_geometries, render_attached_client_view, rendered_pane_geometries,
-    route_client_input_actions, window_frame_action_pillbox_cells, window_frame_pillbox_cells,
+    HostClipboardCommand, MouseAction, MouseWindowActionFrameCell, RenderedClientView,
+    TerminalClientLoopAction, TerminalClientLoopConfig, TerminalCursorStyle, TerminalFrameContext,
+    WindowFrameAction, agent_prompt_reserved_line_count, pane_border_cells_for_geometries,
+    render_attached_client_view, rendered_pane_geometries, route_client_input_actions,
+    window_frame_action_pillbox_cells, window_frame_pillbox_cells,
 };
 use crate::transcript::{
     AgentSessionMetadata, AgentTranscriptStore, TranscriptEntry, TranscriptRole,
@@ -162,6 +162,7 @@ use mez_mux::layout::{
     MIN_PANE_COLUMNS, MIN_PANE_ROWS, PaneGeometry, PaneNavigationDirection, PaneSizeSpec,
     ResizeAxis, ResizeDirection, Size, SplitDirection,
 };
+use mez_mux::paste::{PasteBuffer, PasteBuffers};
 use mez_mux::process::{
     ExitedPaneProcess, PaneExitStatus, PaneProcessManager, PaneProcessOutput,
     shell_command_from_argv,

@@ -4,12 +4,11 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::{
-    MezError, PasteBuffers, Result, TerminalScreen, TerminalStyledLine, char_count, line_slice,
-};
+use super::{MezError, Result, TerminalScreen, TerminalStyledLine, char_count, line_slice};
 use mez_mux::copy::{
     CopyBuffer, CopyPosition, SearchDirection, normalize_selection, validate_position,
 };
+use mez_mux::paste::PasteBuffers;
 
 // Copy mode, selection, and search primitives.
 
@@ -467,7 +466,7 @@ impl CopyMode {
         buffers: &mut PasteBuffers,
         name: impl Into<String>,
     ) -> Result<()> {
-        buffers.set(name, self.copy_selection()?)
+        Ok(buffers.set(name, self.copy_selection()?)?)
     }
 }
 

@@ -1,7 +1,8 @@
 //! Regression tests for terminal presentation copy mode behavior.
 
-use crate::terminal::{CopyMode, PasteBuffers, Size};
+use crate::terminal::{CopyMode, Size};
 use mez_mux::copy::{CopyPosition, SearchDirection};
+use mez_mux::paste::PasteBuffers;
 use mez_terminal::TerminalColor;
 use mez_terminal::TerminalScreen;
 
@@ -382,11 +383,11 @@ fn paste_buffers_reject_invalid_names_and_oversized_content() {
 
     assert_eq!(
         buffers.set("bad/name", "x").unwrap_err().kind(),
-        crate::error::MezErrorKind::InvalidArgs
+        mez_mux::MuxErrorKind::InvalidArgs
     );
     assert_eq!(
         buffers.set("main", "12345").unwrap_err().kind(),
-        crate::error::MezErrorKind::InvalidArgs
+        mez_mux::MuxErrorKind::InvalidArgs
     );
     buffers.set("main", "1234").unwrap();
     assert!(buffers.delete("main"));

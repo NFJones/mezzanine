@@ -10,7 +10,6 @@ use std::collections::BTreeMap;
 use std::os::fd::RawFd;
 #[cfg(test)]
 use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use rustix::fd::BorrowedFd;
 use rustix::fs::fcntl_getfl;
@@ -42,11 +41,6 @@ mod copy;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod fd;
-/// Exposes the keys module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-mod keys;
 /// Exposes the mouse module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -99,13 +93,12 @@ pub use fd::{
     TerminalClientLoopConfig, TerminalCursorStyle, TerminalFdInterest, TerminalFrameContext,
     TerminalPaneFrameContext, TerminalRawModeGuard, read_attached_terminal_size,
 };
-pub use keys::DEFAULT_PASTE_BUFFER_LIMIT_BYTES;
 pub use mouse::{
     CopyModeKeyAction, MouseAction, MousePaneAgentSelectorCell, MousePaneAgentStatusCell,
     MouseWindowActionFrameCell, PaneAgentStatusField, WindowFrameAction, WindowFrameCommandKind,
     classify_mouse_event,
 };
-pub use paste::{HostClipboard, HostClipboardCommand, PasteBuffer, PasteBuffers};
+pub use paste::{HostClipboard, HostClipboardCommand};
 pub(crate) use render::overlay_fixed_column_style_spans;
 #[cfg(test)]
 pub(crate) use render::pane_divider_glyph_for_test;

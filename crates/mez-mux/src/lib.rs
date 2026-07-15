@@ -10,6 +10,7 @@ pub mod copy;
 mod error;
 pub mod input;
 pub mod layout;
+pub mod paste;
 pub mod presentation;
 pub mod process;
 pub mod readline;
