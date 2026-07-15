@@ -3,7 +3,7 @@
 //! These definitions describe edits, outcomes, prompt kinds, loop configuration,
 //! and state containers while leaving behavior to focused sibling modules.
 
-use crate::selector::{ActiveSelector, SelectorExtraCandidate};
+use crate::selector::{SelectorExtraCandidate, SelectorSurface};
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 
@@ -41,7 +41,7 @@ pub struct ReadlinePrompt {
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub selector: Option<ActiveSelector>,
+    pub selector: Option<mez_mux::selector::ActiveSelector<SelectorSurface>>,
     /// Runtime-provided selector candidates scoped to this prompt instance.
     ///
     /// These values are refreshed by the owning runtime before user input is

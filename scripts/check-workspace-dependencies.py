@@ -36,6 +36,7 @@ REQUIRED_OWNER_PATHS = {
     "crates/mez-mux/src/process/mod.rs",
     "crates/mez-mux/src/readline/tests/buffer.rs",
     "crates/mez-mux/src/readline/tests/prompt.rs",
+    "crates/mez-mux/src/selector.rs",
     "crates/mez-mux/src/session/mod.rs",
     "crates/mez-terminal/src/screen.rs",
     "docs/workspace-ownership-matrix.md",
@@ -52,6 +53,7 @@ RETIRED_COMPATIBILITY_PATHS = {
     "src/scheduler.rs",
     "src/session.rs",
     "src/session/mod.rs",
+    "src/terminal/tests/client/io_loop.rs",
 }
 
 RETIRED_RUST_IDENTIFIERS = {
@@ -66,6 +68,21 @@ ROOT_RUNNER_FORBIDDEN_CALLS = {
     "advance_provider_response(": "provider-response negotiation",
     "plan_batch_continuation(": "batch-continuation negotiation",
 }
+
+ROOT_FORBIDDEN_DECLARATIONS = {
+    "enum SelectorCandidateKind": "selector candidate category",
+    "struct ActiveSelector": "active selector state",
+    "struct HostBracketedPasteDecoder": "host-input framing state",
+    "struct SelectorCandidate": "selector candidate contract",
+    "struct SelectorPlan": "selector replacement plan",
+    "struct SelectorShadowHint": "selector shadow-hint contract",
+    "trait AsyncMcpActionExecutor": "async MCP execution port",
+    "trait LocalActionExecutor": "local action execution port",
+    "trait McpActionExecutor": "MCP execution port",
+    "trait PaneShellExecutor": "pane shell execution port",
+}
+
+LOWER_CRATE_PREFIXES = ("mez_agent::", "mez_core::", "mez_mux::", "mez_terminal::")
 
 
 def workspace_metadata() -> dict[str, object]:
@@ -95,6 +112,20 @@ def source_ownership_violations() -> list[str]:
     for call, ownership in ROOT_RUNNER_FORBIDDEN_CALLS.items():
         if call in runner_source:
             violations.append(f"{root_runner}: lower-owned {ownership} `{call}`")
+
+    for path in sorted(Path("src").rglob("*.rs")):
+        source = path.read_text(encoding="utf-8")
+        for declaration, ownership in ROOT_FORBIDDEN_DECLARATIONS.items():
+            if declaration in source:
+                violations.append(f"{path}: lower-owned {ownership} `{declaration}`")
+        for line_number, line in enumerate(source.splitlines(), start=1):
+            stripped = line.strip()
+            if stripped.startswith(("pub use ", "pub(crate) use ")) and any(
+                prefix in stripped for prefix in LOWER_CRATE_PREFIXES
+            ):
+                violations.append(
+                    f"{path}:{line_number}: root lower-crate forwarding export `{stripped}`"
+                )
 
     return violations
 

@@ -55,7 +55,7 @@ persistence, transport, and composition adapters.
 | `src/terminal/screen.rs` | root OSC 133 product adapter over `mez-terminal` | adapter | Keep the explicitly named shell-transaction decoder product-owned; do not restore the removed profile facade or add terminal-screen forwarding here. |
 | `src/terminal/mod.rs` | product presentation/host adapter facade | adapter | Lower mux status, viewport, theme, attached-client view/output, and cursor contracts are imported directly. The remaining exports name product host, copy-normalization, mouse-action, and presentation adapters. |
 | `src/terminal/tests/` | product presentation and host integrations | adapter | Pure key/default-binding and SGR-mouse parsing, built-in theme contracts, and status/divider presentation boundaries run directly in `mez-mux`. Root retains product mouse routing, copy normalization, pane/frame/agent/readline/overlay composition, configured prompt styling, real fd/raw-mode behavior, and attached-client host-loop integrations. |
-| `src/readline/` | `mez-mux` generic prompt behavior plus root command/selector adapter | adapter | Prompt buffer ownership, reverse history search, multiline navigation, baseline terminal-input transitions, decoding, and their intrinsic tests are mux-owned. The unused `cfg(test)` prompt-loop implementation, DTOs, I/O trait, and escape-flush compatibility hook are removed and architecture-guarded as retired. The 23 remaining root tests cross product prompt-kind/prefix, command/agent selector, body-width injection, or decoded-input-to-product-prompt boundaries. |
+| `src/readline/` | `mez-mux` generic prompt behavior plus root command/selector adapter | adapter | Prompt buffer ownership, reverse history search, multiline navigation, baseline terminal-input transitions, decoding, selector candidate/plan contracts, and active-selection cycling are mux-owned. The unused `cfg(test)` prompt-loop implementation, DTOs, I/O trait, and escape-flush compatibility hook are removed and architecture-guarded as retired. The remaining root tests cross product prompt-kind/prefix, command/agent selector policy, body-width injection, or decoded-input-to-product-prompt boundaries. |
 
 ## Other root subsystem audit
 
@@ -64,6 +64,7 @@ persistence, transport, and composition adapters.
 | `src/macros/` | `mez-agent` macro contracts plus root asset/discovery adapter | adapter | Macro identities, ordered-step/document/invocation parsing, validation, catalog precedence, and model/JSON projection are lower-owned. Root retains bounded filesystem discovery, embedded product assets, source/path attachment, product error projection, and runtime dispatch. Six intrinsic tests run lower; five asset/filesystem integrations remain root-owned. |
 | `src/subagent/` | `mez-agent` spawn/profile/scope state plus root effect-classification adapter | adapter | Canonical records, validation, profiles, and scope conflicts are imported directly from `mez-agent`. Root retains only friendly presentation names and shell/patch permission-path classification implementing the lower enforcement port. |
 | `src/command/` | `mez-mux` command grammar/plans/presentation plus product dispatch | adapter | Typed session-mutation plans, command defaults, shell-argument reconstruction, mux validation, and session list/chooser presentation are lower-owned. Root retains product error projection, concrete session mutation/process lifecycle, registry/help/status and product outcomes, cross-cutting dispatch, and auth/config/audit/agent/store adapters. |
+| `src/selector.rs` | `mez-mux` selector engine plus root product candidate providers | temporary | Candidate categories/records, replacement plans, shadow-hint records, candidate application, and generic active-selection cycling are lower-owned and imported directly. Root still owns dependency-neutral token context plus filtering/scoring alongside product command/slash catalogs, dynamic runtime candidates, and filesystem discovery; the engine portion must move before completion. |
 | `src/runtime/`, `src/async_runtime/` | product composition | adapter | Keep serialized ownership, supervision, persistence, scheduling, transport, and effect execution. Ensure deterministic lower-crate transitions are invoked rather than duplicated. |
 | auth, config, control, audit, hooks, MCP, memory, issues, snapshot, transcript stores | product policy/persistence/transport | adapter | Keep concrete stores and transports in root; implement narrow lower-crate ports and convert errors once at boundaries. |
 
@@ -104,6 +105,20 @@ behavior.
    contents. The reopened audit still requires readline test cleanup, the mux
    effect/client/render ownership review, stronger source guardrails, and a
    fresh final package and public-API audit before completion can be claimed.
+
+## Final mux behavior audit
+
+The reopened client/render/effect audit traced production behavior rather than
+classifying files by size. Pane composition calls lower neutral render plans,
+geometry, canvases, dividers, and frame-row layout. Root frame code resolves
+product `Terminal*FrameContext` fields, configured `UiTheme` renditions, agent
+status animation, and mouse hit actions. Root prompt/overlay code binds product
+readline selectors, agent live state, and display overlays to lower layout and
+style primitives. Session layout mutations execute in `mez-mux::session` and
+return typed pane-resize transitions; runtime code translates those effects to
+PTY resize and render invalidation I/O. The duplicate sync client loop and
+generic host-paste decoder were the remaining ownership violations found by
+that audit, and both are now removed from root.
 
 Update this matrix whenever ownership or an adapter boundary changes. The
 decomposition acceptance criteria remain open while the reopened audit items

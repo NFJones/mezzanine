@@ -513,9 +513,9 @@ fn prompt_region_presentation_styles_agent_skill_shadow_hint() {
     prompt.set_selector_extra_candidates([crate::selector::SelectorExtraCandidate::new(
         crate::selector::SelectorSurface::AgentCommand,
         "$",
-        crate::selector::SelectorCandidate::new(
+        mez_mux::selector::SelectorCandidate::new(
             "$review",
-            crate::selector::SelectorCandidateKind::Value,
+            mez_mux::selector::SelectorCandidateKind::Value,
             true,
         )
         .with_detail("Review workflow"),
@@ -568,9 +568,9 @@ fn prompt_region_presentation_styles_agent_mcp_shadow_hint() {
     prompt.set_selector_extra_candidates([crate::selector::SelectorExtraCandidate::new(
         crate::selector::SelectorSurface::AgentCommand,
         "@",
-        crate::selector::SelectorCandidate::new(
+        mez_mux::selector::SelectorCandidate::new(
             "@fixture",
-            crate::selector::SelectorCandidateKind::Value,
+            mez_mux::selector::SelectorCandidateKind::Value,
             true,
         )
         .with_detail("available"),

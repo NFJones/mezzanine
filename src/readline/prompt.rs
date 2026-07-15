@@ -6,13 +6,14 @@
 
 use crate::error::Result;
 use crate::selector::{
-    ActiveSelector, SelectorExtraCandidate, SelectorShadowHint, SelectorSurface,
-    shadow_hint_with_extra_in_working_directory,
+    SelectorExtraCandidate, SelectorSurface, shadow_hint_with_extra_in_working_directory,
+    start_active_selector_with_extra_in_working_directory,
 };
 use std::path::PathBuf;
 
 use super::types::{ReadlinePrompt, ReadlinePromptKind};
 use mez_mux::readline::{ReadlineOutcome, ReadlinePromptMode};
+use mez_mux::selector::SelectorShadowHint;
 use unicode_width::UnicodeWidthStr;
 
 impl ReadlinePrompt {
@@ -164,7 +165,7 @@ impl ReadlinePrompt {
                 selector
             }
             _ => {
-                let Some(selector) = ActiveSelector::start_with_extra_in_working_directory(
+                let Some(selector) = start_active_selector_with_extra_in_working_directory(
                     surface,
                     self.state.buffer.line(),
                     self.state.buffer.cursor(),

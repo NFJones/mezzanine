@@ -43,9 +43,7 @@ const DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS: u64 = 500;
 
 use crate::command::baseline_commands;
 use crate::mcp::McpServerStatus;
-use crate::selector::{
-    SelectorCandidate, SelectorCandidateKind, SelectorExtraCandidate, SelectorSurface,
-};
+use crate::selector::{SelectorExtraCandidate, SelectorSurface};
 use crate::terminal::{
     MousePaneAgentSelectorCell, MousePaneAgentStatusCell, PaneAgentStatusField,
     WindowFrameCommandKind, compose_modal_display_overlay_lines,
@@ -65,6 +63,7 @@ use mez_mux::presentation::{
     TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
 };
 use mez_mux::readline::DEFAULT_READLINE_HISTORY_LIMIT;
+use mez_mux::selector::{SelectorCandidate, SelectorCandidateKind};
 use mez_mux::theme::UiTheme;
 use mez_terminal::{GraphicRendition, TerminalStyleSpan, TerminalStyledLine};
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};

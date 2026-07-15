@@ -8,6 +8,9 @@
 
 use crate::command::baseline_commands;
 use mez_agent::baseline_slash_commands;
+use mez_mux::selector::{
+    ActiveSelector, SelectorCandidate, SelectorCandidateKind, SelectorPlan, SelectorShadowHint,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -18,54 +21,6 @@ pub enum SelectorSurface {
     MezzanineCommand,
     /// The pane-local agent prompt when slash-command input is active.
     AgentCommand,
-}
-
-/// Category for one selectable candidate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SelectorCandidateKind {
-    /// A top-level Mezzanine or agent command.
-    Command,
-    /// An accepted command alias.
-    Alias,
-    /// A command-line flag or option.
-    Flag,
-    /// A value for the preceding or current argument.
-    Value,
-}
-
-/// A selectable value with optional display metadata.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SelectorCandidate {
-    /// Text inserted into the prompt when selected.
-    pub value: String,
-    /// User-facing text shown in selector UIs.
-    pub label: String,
-    /// Short explanation for selector UIs that have room for details.
-    pub detail: Option<String>,
-    /// Candidate category.
-    pub kind: SelectorCandidateKind,
-    /// Whether selecting this candidate should leave a trailing separator.
-    pub append_space: bool,
-}
-
-impl SelectorCandidate {
-    /// Builds a candidate whose display label is the inserted value.
-    pub fn new(value: impl Into<String>, kind: SelectorCandidateKind, append_space: bool) -> Self {
-        let value = value.into();
-        Self {
-            label: value.clone(),
-            value,
-            detail: None,
-            kind,
-            append_space,
-        }
-    }
-
-    /// Attaches a short detail string to a selector candidate.
-    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
-        self.detail = Some(detail.into());
-        self
-    }
 }
 
 /// A runtime-supplied candidate scoped to one prompt surface and command.
@@ -94,156 +49,33 @@ impl SelectorExtraCandidate {
     }
 }
 
-/// Replacement plan for one selector invocation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SelectorPlan {
-    /// Start byte of the token to replace.
-    pub replacement_start: usize,
-    /// End byte of the token to replace.
-    pub replacement_end: usize,
-    /// User query extracted from the token being replaced.
-    pub query: String,
-    /// Sorted candidates matching `query`.
-    pub candidates: Vec<SelectorCandidate>,
+/// Starts active selection from one product-authored plan.
+pub fn start_active_selector(
+    surface: SelectorSurface,
+    line: &str,
+    cursor: usize,
+    reverse: bool,
+) -> Option<ActiveSelector<SelectorSurface>> {
+    start_active_selector_with_extra_in_working_directory(surface, line, cursor, reverse, &[], None)
 }
 
-/// Non-mutating completion hint rendered as shadow text in a prompt line.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SelectorShadowHint {
-    /// Byte offset in the prompt buffer where the hint should be inserted.
-    pub insert_at: usize,
-    /// Shadow text to render without adding it to the editable buffer.
-    pub text: String,
-    /// Candidate category represented by the hint.
-    pub kind: SelectorCandidateKind,
-}
-
-/// Stateful selection over an immutable base line.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ActiveSelector {
-    /// Surface used to produce this selection.
-    pub surface: SelectorSurface,
-    /// Prompt line before the selector inserted any candidate.
-    pub base_line: String,
-    /// Cursor byte offset before the selector inserted any candidate.
-    pub base_cursor: usize,
-    /// Current replacement plan.
-    pub plan: SelectorPlan,
-    /// Currently selected candidate index.
-    pub selected_index: usize,
-}
-
-impl ActiveSelector {
-    /// Starts a selector from the current prompt line.
-    pub fn start(
-        surface: SelectorSurface,
-        line: &str,
-        cursor: usize,
-        reverse: bool,
-    ) -> Option<Self> {
-        Self::start_with_extra(surface, line, cursor, reverse, &[])
-    }
-
-    /// Starts a selector from the current prompt line with runtime candidates.
-    pub fn start_with_extra(
-        surface: SelectorSurface,
-        line: &str,
-        cursor: usize,
-        reverse: bool,
-        extra_candidates: &[SelectorExtraCandidate],
-    ) -> Option<Self> {
-        Self::start_with_extra_in_working_directory(
-            surface,
-            line,
-            cursor,
-            reverse,
-            extra_candidates,
-            None,
-        )
-    }
-
-    /// Starts a selector from the current prompt line with runtime candidates
-    /// resolved relative to one explicit working directory.
-    pub fn start_with_extra_in_working_directory(
-        surface: SelectorSurface,
-        line: &str,
-        cursor: usize,
-        reverse: bool,
-        extra_candidates: &[SelectorExtraCandidate],
-        working_directory: Option<&Path>,
-    ) -> Option<Self> {
-        let plan = plan_selector_with_extra_in_working_directory(
-            surface,
-            line,
-            cursor,
-            extra_candidates,
-            working_directory,
-        )?;
-        let selected_index = if reverse {
-            plan.candidates.len().saturating_sub(1)
-        } else {
-            0
-        };
-        Some(Self {
-            surface,
-            base_line: line.to_string(),
-            base_cursor: cursor,
-            plan,
-            selected_index,
-        })
-    }
-
-    /// Moves to the next candidate, wrapping at the end.
-    pub fn select_next(&mut self) {
-        if self.plan.candidates.is_empty() {
-            return;
-        }
-        self.selected_index = (self.selected_index + 1) % self.plan.candidates.len();
-    }
-
-    /// Moves to the previous candidate, wrapping at the beginning.
-    pub fn select_previous(&mut self) {
-        if self.plan.candidates.is_empty() {
-            return;
-        }
-        self.selected_index = if self.selected_index == 0 {
-            self.plan.candidates.len() - 1
-        } else {
-            self.selected_index - 1
-        };
-    }
-
-    /// Returns the prompt line after applying the current candidate.
-    pub fn selected_line(&self) -> Option<(String, usize)> {
-        let candidate = self.plan.candidates.get(self.selected_index)?;
-        Some(apply_selector_candidate(
-            &self.base_line,
-            &self.plan,
-            candidate,
-        ))
-    }
-
-    /// Returns whether the current prompt should start a fresh selector inside
-    /// a just-completed directory instead of cycling the previous candidate set.
-    ///
-    /// # Parameters
-    /// - `line`: Current prompt line after a selected candidate was applied.
-    /// - `cursor`: Current prompt cursor byte offset.
-    pub fn should_refresh_from_selected_directory(&self, line: &str, cursor: usize) -> bool {
-        let Some(candidate) = self.plan.candidates.get(self.selected_index) else {
-            return false;
-        };
-        if candidate.append_space
-            || !candidate.value.ends_with('/')
-            || !self.plan.query.ends_with('/')
-        {
-            return false;
-        }
-        self.selected_line()
-            .is_some_and(|(selected_line, selected_cursor)| {
-                selected_line == line && selected_cursor == cursor
-            })
-    }
+/// Starts active selection with runtime candidates and explicit path context.
+pub fn start_active_selector_with_extra_in_working_directory(
+    surface: SelectorSurface,
+    line: &str,
+    cursor: usize,
+    reverse: bool,
+    extra_candidates: &[SelectorExtraCandidate],
+    working_directory: Option<&Path>,
+) -> Option<ActiveSelector<SelectorSurface>> {
+    let plan = plan_selector_with_extra_in_working_directory(
+        surface,
+        line,
+        cursor,
+        extra_candidates,
+        working_directory,
+    )?;
+    Some(ActiveSelector::new(surface, line, cursor, plan, reverse))
 }
 
 /// Builds a selector plan for the token at `cursor`.
@@ -323,26 +155,6 @@ pub fn shadow_hint_with_extra_in_working_directory(
 }
 
 /// Applies a selected candidate to a line according to a selector plan.
-pub fn apply_selector_candidate(
-    line: &str,
-    plan: &SelectorPlan,
-    candidate: &SelectorCandidate,
-) -> (String, usize) {
-    let mut next = String::new();
-    next.push_str(&line[..plan.replacement_start]);
-    next.push_str(&candidate.value);
-    let mut cursor = plan.replacement_start.saturating_add(candidate.value.len());
-    if candidate.append_space && should_append_separator(line, plan) {
-        next.push(' ');
-        cursor = cursor.saturating_add(1);
-    }
-    next.push_str(&line[plan.replacement_end..]);
-    (next, cursor)
-}
-
-/// Runs the prefix shadow hint operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn prefix_shadow_hint(
@@ -1456,23 +1268,7 @@ fn is_subsequence(query: &str, value: &str) -> bool {
     query.chars().all(|query_ch| chars.any(|ch| ch == query_ch))
 }
 
-/// Runs the should append separator operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn should_append_separator(line: &str, plan: &SelectorPlan) -> bool {
-    line[plan.replacement_end..]
-        .chars()
-        .next()
-        .is_none_or(|ch| !ch.is_whitespace())
-}
-
-/// Runs the clamp to char boundary operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
+/// Clamps a byte cursor to a valid character boundary in `value`.
 fn clamp_to_char_boundary(value: &str, cursor: usize) -> usize {
     let mut cursor = cursor.min(value.len());
     while cursor > 0 && !value.is_char_boundary(cursor) {
@@ -1488,10 +1284,11 @@ fn clamp_to_char_boundary(value: &str, cursor: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActiveSelector, SelectorCandidate, SelectorCandidateKind, SelectorExtraCandidate,
-        SelectorSurface, apply_selector_candidate, plan_selector, plan_selector_with_extra,
-        plan_selector_with_extra_in_working_directory, shadow_hint, shadow_hint_with_extra,
+        SelectorCandidate, SelectorCandidateKind, SelectorExtraCandidate, SelectorSurface,
+        plan_selector, plan_selector_with_extra, plan_selector_with_extra_in_working_directory,
+        shadow_hint, shadow_hint_with_extra, start_active_selector,
     };
+    use mez_mux::selector::apply_selector_candidate;
     use std::fs;
     use std::sync::Mutex;
 
@@ -2031,7 +1828,7 @@ mod tests {
         fs::create_dir_all(root.join("src")).unwrap();
         std::env::set_current_dir(&root).unwrap();
 
-        let selector = ActiveSelector::start(
+        let selector = start_active_selector(
             SelectorSurface::AgentCommand,
             "/list-mcp ./sr",
             "/list-mcp ./sr".len(),
@@ -2059,7 +1856,7 @@ mod tests {
         fs::create_dir_all(root.join("src")).unwrap();
         std::env::set_current_dir(&root).unwrap();
 
-        let selector = ActiveSelector::start(
+        let selector = start_active_selector(
             SelectorSurface::AgentCommand,
             "/list-mcp ./sr/",
             "/list-mcp ./sr/".len(),
@@ -2079,7 +1876,7 @@ mod tests {
     /// candidate set instead of forcing a fresh selector.
     #[test]
     fn active_selector_keeps_argument_candidate_selection_active() {
-        let selector = ActiveSelector::start(
+        let selector = start_active_selector(
             SelectorSurface::MezzanineCommand,
             "set-theme to",
             "set-theme to".len(),
