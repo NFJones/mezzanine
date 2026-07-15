@@ -99,7 +99,8 @@ pub use agent_shell::{
 };
 pub use anthropic::{
     AnthropicMessagesOptions, DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_PROMPT_CACHING,
-    DEFAULT_ANTHROPIC_VERSION, anthropic_messages_request_body, anthropic_request_requires_maap,
+    DEFAULT_ANTHROPIC_VERSION, anthropic_messages_endpoint_for_base_url,
+    anthropic_messages_request_body, anthropic_request_requires_maap,
 };
 pub use auth::{ProviderAuthMetadata, ProviderCredentialKind, ProviderCredentialSource};
 pub use config_change::{

@@ -5,9 +5,9 @@
 //! HTTP headers, timeouts, transport, response parsing, and error projection.
 
 use crate::{
-    MAAP_ACTION_BATCH_TOOL_NAME, ModelMessageRole, ModelRequest, ProviderRequestAssemblyError,
-    ProviderRequestAssemblyResult, maap_action_batch_schema,
-    openai_maap_current_action_batch_description,
+    MAAP_ACTION_BATCH_TOOL_NAME, ModelMessageRole, ModelRequest, ProviderEndpointError,
+    ProviderEndpointResult, ProviderRequestAssemblyError, ProviderRequestAssemblyResult,
+    maap_action_batch_schema, openai_maap_current_action_batch_description,
 };
 use std::collections::BTreeMap;
 
@@ -92,6 +92,23 @@ impl AnthropicMessagesOptions {
     pub fn anthropic_version(&self) -> &str {
         &self.anthropic_version
     }
+}
+
+/// Derives an Anthropic Messages endpoint from a configured base URL.
+pub fn anthropic_messages_endpoint_for_base_url(base_url: &str) -> ProviderEndpointResult<String> {
+    if base_url.trim().is_empty() {
+        return Err(ProviderEndpointError::invalid_args(
+            "Anthropic provider base URL must not be empty",
+        ));
+    }
+    let base_url = base_url.trim().trim_end_matches('/');
+    if base_url.ends_with("/v1/messages") || base_url.ends_with("/messages") {
+        return Ok(base_url.to_string());
+    }
+    if base_url.ends_with("/v1") {
+        return Ok(format!("{base_url}/messages"));
+    }
+    Ok(format!("{base_url}/v1/messages"))
 }
 
 fn validate_non_empty(label: &str, value: &str) -> ProviderRequestAssemblyResult<()> {
@@ -260,5 +277,29 @@ mod tests {
             crate::ProviderRequestAssemblyErrorKind::InvalidArgs
         );
         assert!(error.message().contains("not supported"));
+    }
+
+    /// Verifies Anthropic base URL normalization accepts documented root,
+    /// versioned-root, and full Messages endpoint forms without producing an
+    /// OpenAI-compatible path.
+    #[test]
+    fn anthropic_base_url_derives_documented_messages_endpoints() {
+        assert_eq!(
+            anthropic_messages_endpoint_for_base_url("https://api.anthropic.com").unwrap(),
+            "https://api.anthropic.com/v1/messages"
+        );
+        assert_eq!(
+            anthropic_messages_endpoint_for_base_url("https://api.anthropic.com/v1").unwrap(),
+            "https://api.anthropic.com/v1/messages"
+        );
+        assert_eq!(
+            anthropic_messages_endpoint_for_base_url("https://api.anthropic.com/messages").unwrap(),
+            "https://api.anthropic.com/messages"
+        );
+        assert_eq!(
+            anthropic_messages_endpoint_for_base_url("https://api.anthropic.com/v1/messages")
+                .unwrap(),
+            "https://api.anthropic.com/v1/messages"
+        );
     }
 }

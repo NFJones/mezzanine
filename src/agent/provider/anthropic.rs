@@ -16,8 +16,9 @@ use super::{
     provider_quota_usage_from_headers, validate_non_empty,
 };
 use mez_agent::{
-    AnthropicMessagesOptions, anthropic_messages_request_body, anthropic_request_requires_maap,
-    parse_sse_events_with, provider_failure_event_json as openai_provider_failure_event_json,
+    AnthropicMessagesOptions, anthropic_messages_endpoint_for_base_url,
+    anthropic_messages_request_body, anthropic_request_requires_maap, parse_sse_events_with,
+    provider_failure_event_json as openai_provider_failure_event_json,
     provider_failure_json as openai_provider_failure_json,
 };
 use std::collections::BTreeMap;
@@ -62,7 +63,7 @@ impl ChatCompletionsDialect for AnthropicMessagesDialect {
 
     /// Derives the Anthropic Messages endpoint from a configured base URL.
     fn chat_endpoint_for_base_url(&self, base_url: &str) -> Result<String> {
-        anthropic_messages_endpoint_for_base_url(base_url)
+        Ok(anthropic_messages_endpoint_for_base_url(base_url)?)
     }
 
     /// Shapes sanitized Anthropic failure JSON while retaining the provider
@@ -130,19 +131,6 @@ impl ChatCompletionsDialect for AnthropicMessagesDialect {
             "Anthropic provider model listing is not implemented yet",
         ))
     }
-}
-
-/// Derives the Anthropic Messages endpoint from a configured base URL.
-pub(super) fn anthropic_messages_endpoint_for_base_url(base_url: &str) -> Result<String> {
-    validate_non_empty("Anthropic provider base URL", base_url)?;
-    let base_url = base_url.trim().trim_end_matches('/');
-    if base_url.ends_with("/v1/messages") || base_url.ends_with("/messages") {
-        return Ok(base_url.to_string());
-    }
-    if base_url.ends_with("/v1") {
-        return Ok(format!("{base_url}/messages"));
-    }
-    Ok(format!("{base_url}/v1/messages"))
 }
 
 /// Builds one Anthropic Messages API HTTP request.
@@ -854,30 +842,6 @@ mod tests {
     use crate::error::MezErrorKind;
     use mez_agent::{DEFAULT_PROVIDER_TIMEOUT_MS, ProviderErrorRetryClass};
     use std::fs;
-
-    /// Verifies Anthropic base URL normalization accepts the documented root,
-    /// versioned root, and full Messages endpoint forms without producing an
-    /// OpenAI-compatible path.
-    #[test]
-    fn anthropic_base_url_derives_documented_messages_endpoints() {
-        assert_eq!(
-            anthropic_messages_endpoint_for_base_url("https://api.anthropic.com").unwrap(),
-            "https://api.anthropic.com/v1/messages"
-        );
-        assert_eq!(
-            anthropic_messages_endpoint_for_base_url("https://api.anthropic.com/v1").unwrap(),
-            "https://api.anthropic.com/v1/messages"
-        );
-        assert_eq!(
-            anthropic_messages_endpoint_for_base_url("https://api.anthropic.com/messages").unwrap(),
-            "https://api.anthropic.com/messages"
-        );
-        assert_eq!(
-            anthropic_messages_endpoint_for_base_url("https://api.anthropic.com/v1/messages")
-                .unwrap(),
-            "https://api.anthropic.com/v1/messages"
-        );
-    }
 
     /// Verifies Anthropic provider construction scopes credentials to the
     /// configured provider id rather than only the literal `anthropic` name.
