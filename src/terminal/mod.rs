@@ -99,10 +99,7 @@ pub use fd::{
     TerminalClientLoopConfig, TerminalCursorStyle, TerminalFdInterest, TerminalFrameContext,
     TerminalPaneFrameContext, TerminalRawModeGuard, read_attached_terminal_size,
 };
-pub use keys::{
-    DEFAULT_MEZZANINE_TERMINFO, DEFAULT_PANE_TERM, DEFAULT_PASTE_BUFFER_LIMIT_BYTES,
-    MEZZANINE_TERMINFO_NAMES, TERMINFO_FALLBACK_ORDER,
-};
+pub use keys::DEFAULT_PASTE_BUFFER_LIMIT_BYTES;
 pub use mouse::{
     CopyModeKeyAction, MouseAction, MousePaneAgentSelectorCell, MousePaneAgentStatusCell,
     MouseWindowActionFrameCell, PaneAgentStatusField, WindowFrameAction, WindowFrameCommandKind,

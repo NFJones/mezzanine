@@ -39,7 +39,6 @@ use crate::snapshot::{
     PaneSnapshotPayload, SessionSnapshotPayload, SnapshotFrameState, SnapshotPaneGeometry,
     SnapshotRepository, SnapshotSessionState, SnapshotShellMetadata, WindowSnapshotPayload,
 };
-use crate::terminal::DEFAULT_PANE_TERM;
 use crate::test_support::control::JsonRpcRequestBuilder;
 use crate::test_support::runtime::SessionFixture;
 use crate::test_support::temp::TestTempDir;
@@ -47,6 +46,7 @@ use mez_mux::layout::SplitDirection;
 use mez_mux::layout::{LayoutPolicy, Size};
 use mez_mux::session::Session;
 use mez_terminal::DEFAULT_HISTORY_LIMIT;
+use mez_terminal::DEFAULT_PANE_TERM;
 use mez_terminal::{
     GraphicRendition, TerminalColor, TerminalModeState, TerminalSavedState, TerminalStyleSpan,
 };

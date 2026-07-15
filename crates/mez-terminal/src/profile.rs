@@ -10,6 +10,18 @@ use std::fmt::{self, Display, Formatter};
 /// Stable name of the default pane-facing compatibility profile.
 pub const DEFAULT_TERMINAL_PROFILE_NAME: &str = "xterm-compatible";
 
+/// Default pane-facing TERM used when a Mezzanine terminfo entry is unavailable.
+pub const DEFAULT_PANE_TERM: &str = "screen-256color";
+
+/// Preferred Mezzanine-owned terminfo entry.
+pub const DEFAULT_MEZZANINE_TERMINFO: &str = "mez-256color";
+
+/// Mezzanine-owned terminfo entry names in preference order.
+pub const MEZZANINE_TERMINFO_NAMES: &[&str] = &["mez-256color", "mezzanine-256color"];
+
+/// Capability-safe installed terminfo fallbacks in preference order.
+pub const TERMINFO_FALLBACK_ORDER: &[&str] = &["screen-256color", "screen", "vt100", "dumb"];
+
 /// Reports an invalid terminal compatibility profile name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalProfileError {

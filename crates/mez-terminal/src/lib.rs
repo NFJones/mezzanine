@@ -54,8 +54,9 @@ pub use state::{
 };
 
 pub use profile::{
-    CapabilitySupport, DEFAULT_TERMINAL_PROFILE_NAME, DecPrivateModeCapabilities,
-    MEZZANINE_TERMINFO_PROFILES, SaveRestoreCapabilities, SgrCapabilities,
+    CapabilitySupport, DEFAULT_MEZZANINE_TERMINFO, DEFAULT_PANE_TERM,
+    DEFAULT_TERMINAL_PROFILE_NAME, DecPrivateModeCapabilities, MEZZANINE_TERMINFO_NAMES,
+    MEZZANINE_TERMINFO_PROFILES, SaveRestoreCapabilities, SgrCapabilities, TERMINFO_FALLBACK_ORDER,
     TERMINFO_FALLBACK_PROFILES, TerminalCapabilities, TerminalCompatibilityProfile,
     TerminalDiagnostic, TerminalDiagnosticSeverity, TerminalProfile, TerminalProfileError,
     TerminfoCapabilityProfile, TerminfoSelection, TerminfoSource, select_installed_terminfo,

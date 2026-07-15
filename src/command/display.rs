@@ -241,7 +241,7 @@ fn client_terminal_display(
             "{}x{}:term={}",
             session.authoritative_size.columns,
             session.authoritative_size.rows,
-            crate::terminal::DEFAULT_PANE_TERM
+            mez_terminal::DEFAULT_PANE_TERM
         );
     }
     if let Some(terminal) = client.terminal.as_ref() {
