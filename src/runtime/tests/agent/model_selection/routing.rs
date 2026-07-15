@@ -437,22 +437,22 @@ reasoning_profile = "high"
         .unwrap()
         .blocks
         .extend([
-            crate::agent::ContextBlock {
+            mez_agent::ContextBlock {
                 source: ContextSourceKind::TranscriptAssistant,
                 label: "old minified assistant context for pane %1".to_string(),
                 content: format!("minified-context:{}", "x".repeat(200 * 1024)),
             },
-            crate::agent::ContextBlock {
+            mez_agent::ContextBlock {
                 source: ContextSourceKind::TranscriptAssistant,
                 label: "transcript assistant entry 2 for pane %1".to_string(),
                 content: "Recommended next tasks:\n1. Document the model picker.\n2. Clean up stale quota UI.\n3. Implement multi-file runtime auto-sizing.".to_string(),
             },
-            crate::agent::ContextBlock {
+            mez_agent::ContextBlock {
                 source: ContextSourceKind::TranscriptTool,
                 label: "previous tool output for pane %1".to_string(),
                 content: "tool-only output should not reach the router".to_string(),
             },
-            crate::agent::ContextBlock {
+            mez_agent::ContextBlock {
                 source: ContextSourceKind::Policy,
                 label: "policy context".to_string(),
                 content: "policy-only context should not reach the router".to_string(),

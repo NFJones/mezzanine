@@ -54,6 +54,246 @@ pub enum ContextSourceKind {
     ActionResult,
 }
 
+/// Trust domain assigned to one model-context block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustDomain {
+    /// User-provided instructions or agent-to-agent messages.
+    UserInput,
+    /// Project instruction files discovered through the product adapter.
+    ProjectFile,
+    /// Configuration, policy, and system instructions.
+    Configuration,
+    /// External web or API content retrieved by the agent.
+    WebContent,
+    /// Previous model responses and action results.
+    ModelOutput,
+}
+
+impl TrustDomain {
+    /// Derives the trust domain for one context provenance class.
+    pub fn for_source(source: ContextSourceKind) -> Self {
+        match source {
+            ContextSourceKind::System
+            | ContextSourceKind::DeveloperInstruction
+            | ContextSourceKind::Policy
+            | ContextSourceKind::Configuration => Self::Configuration,
+            ContextSourceKind::UserInstruction | ContextSourceKind::LocalMessage => Self::UserInput,
+            ContextSourceKind::SkillInstruction | ContextSourceKind::ProjectGuidance => {
+                Self::ProjectFile
+            }
+            ContextSourceKind::RuntimeHint => Self::Configuration,
+            ContextSourceKind::Memory | ContextSourceKind::TranscriptUser => Self::UserInput,
+            ContextSourceKind::Transcript
+            | ContextSourceKind::TranscriptAssistant
+            | ContextSourceKind::TranscriptTool
+            | ContextSourceKind::EvidenceLedger
+            | ContextSourceKind::CommittedEvidence
+            | ContextSourceKind::ActionResult => Self::ModelOutput,
+        }
+    }
+
+    /// Returns whether providers must treat this domain as untrusted by default.
+    pub fn is_untrusted_by_default(self) -> bool {
+        matches!(self, Self::ProjectFile | Self::WebContent)
+    }
+
+    /// Returns the stable prompt annotation for this trust domain.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UserInput => "user-input",
+            Self::ProjectFile => "project-file",
+            Self::Configuration => "configuration",
+            Self::WebContent => "web-content",
+            Self::ModelOutput => "model-output",
+        }
+    }
+}
+
+/// Stability class used for provider prompt-cache grouping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ContextStability {
+    /// Static product instructions or configuration.
+    Static,
+    /// Guidance scoped to repository contents.
+    RepoScoped,
+    /// Session-scoped summaries, transcripts, or memory.
+    SessionStable,
+    /// State that may change on every agent turn.
+    TurnVolatile,
+}
+
+/// Provider prompt-cache eligibility for one context block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextCachePolicy {
+    /// The block may appear in a reusable provider prefix.
+    Eligible,
+    /// The block must remain outside reusable prefix calculations.
+    Ineligible,
+    /// The block may establish a provider-specific cache breakpoint.
+    ProviderBreakpoint,
+}
+
+/// One ordered unit of model-visible context.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextBlock {
+    /// Provenance and role class for the block.
+    pub source: ContextSourceKind,
+    /// Human-readable block label used in provider message framing.
+    pub label: String,
+    /// Exact model-visible block contents.
+    pub content: String,
+}
+
+impl ContextBlock {
+    /// Returns the block's derived trust domain.
+    pub fn trust_domain(&self) -> TrustDomain {
+        TrustDomain::for_source(self.source)
+    }
+
+    /// Returns the provider-cache stability class for this block.
+    pub fn stability(&self) -> ContextStability {
+        if self.source == ContextSourceKind::Policy && self.label == "scheduler state" {
+            return ContextStability::TurnVolatile;
+        }
+        if self.source == ContextSourceKind::Configuration
+            && configuration_context_is_turn_volatile(&self.label)
+        {
+            return ContextStability::TurnVolatile;
+        }
+        match self.source {
+            ContextSourceKind::System
+            | ContextSourceKind::DeveloperInstruction
+            | ContextSourceKind::Policy
+            | ContextSourceKind::Configuration => ContextStability::Static,
+            ContextSourceKind::ProjectGuidance => ContextStability::RepoScoped,
+            ContextSourceKind::Memory
+            | ContextSourceKind::Transcript
+            | ContextSourceKind::TranscriptUser
+            | ContextSourceKind::TranscriptAssistant
+            | ContextSourceKind::TranscriptTool
+            | ContextSourceKind::CommittedEvidence => ContextStability::SessionStable,
+            ContextSourceKind::UserInstruction
+            | ContextSourceKind::SkillInstruction
+            | ContextSourceKind::LocalMessage
+            | ContextSourceKind::RuntimeHint
+            | ContextSourceKind::EvidenceLedger
+            | ContextSourceKind::ActionResult => ContextStability::TurnVolatile,
+        }
+    }
+
+    /// Returns the provider-cache policy for this block.
+    pub fn cache_policy(&self) -> ContextCachePolicy {
+        match self.source {
+            ContextSourceKind::System
+            | ContextSourceKind::DeveloperInstruction
+            | ContextSourceKind::Policy
+            | ContextSourceKind::Configuration
+            | ContextSourceKind::ProjectGuidance
+            | ContextSourceKind::Memory
+            | ContextSourceKind::Transcript
+            | ContextSourceKind::TranscriptUser
+            | ContextSourceKind::TranscriptAssistant
+            | ContextSourceKind::TranscriptTool
+            | ContextSourceKind::CommittedEvidence => {
+                if self.stability() == ContextStability::TurnVolatile {
+                    ContextCachePolicy::Ineligible
+                } else if self.source == ContextSourceKind::ProjectGuidance {
+                    ContextCachePolicy::ProviderBreakpoint
+                } else {
+                    ContextCachePolicy::Eligible
+                }
+            }
+            ContextSourceKind::UserInstruction
+            | ContextSourceKind::SkillInstruction
+            | ContextSourceKind::LocalMessage
+            | ContextSourceKind::RuntimeHint
+            | ContextSourceKind::EvidenceLedger
+            | ContextSourceKind::ActionResult => ContextCachePolicy::Ineligible,
+        }
+    }
+
+    /// Returns whether the block may participate in a reusable prefix.
+    pub fn stable_prefix_eligible(&self) -> bool {
+        self.cache_policy() != ContextCachePolicy::Ineligible
+            && self.stability() != ContextStability::TurnVolatile
+    }
+
+    /// Returns whether exact content can be recovered outside model context.
+    pub fn recoverable_for_compaction(&self) -> bool {
+        matches!(
+            self.source,
+            ContextSourceKind::Transcript
+                | ContextSourceKind::TranscriptUser
+                | ContextSourceKind::TranscriptAssistant
+                | ContextSourceKind::TranscriptTool
+                | ContextSourceKind::EvidenceLedger
+                | ContextSourceKind::CommittedEvidence
+                | ContextSourceKind::RuntimeHint
+                | ContextSourceKind::ActionResult
+                | ContextSourceKind::LocalMessage
+        )
+    }
+}
+
+/// Ordered context supplied to provider request assembly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentContext {
+    /// Ordered model-context blocks.
+    pub blocks: Vec<ContextBlock>,
+}
+
+impl AgentContext {
+    /// Creates validated non-empty agent context.
+    pub fn new(blocks: Vec<ContextBlock>) -> AgentContextResult<Self> {
+        if blocks.is_empty() {
+            return Err(AgentContextError::new(
+                "agent context must contain at least one context block",
+            ));
+        }
+        for block in &blocks {
+            validate_context_required("context label", &block.label)?;
+        }
+        Ok(Self { blocks })
+    }
+}
+
+/// Counts deterministic compaction performed on provider-bound context.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ModelContextCompactionReport {
+    /// Number of blocks replaced with compact local summaries.
+    pub compacted_blocks: usize,
+    /// Number of compacted blocks omitted after summaries exceeded budget.
+    pub omitted_blocks: usize,
+    /// Original estimated words represented by omitted blocks.
+    pub omitted_original_words: usize,
+}
+
+impl ModelContextCompactionReport {
+    /// Returns whether provider context changed during compaction.
+    pub fn changed(self) -> bool {
+        self.compacted_blocks > 0 || self.omitted_blocks > 0
+    }
+}
+
+/// Builds the bracketed provider-message header for one context block.
+pub fn model_context_block_header(block: &ContextBlock) -> String {
+    let trust = block.trust_domain();
+    let domain_annotation = if trust.is_untrusted_by_default() {
+        format!(" [untrusted:{}]", trust.as_str())
+    } else {
+        String::new()
+    };
+    format!("[{}{}]\n", block.label, domain_annotation)
+}
+
+/// Returns whether a configuration value is turn-volatile cache material.
+fn configuration_context_is_turn_volatile(label: &str) -> bool {
+    label == "session identity"
+        || label == "pane identity"
+        || label == "provider output-limit retry guidance"
+        || label.starts_with("environment signature for pane ")
+}
+
 /// Provider-independent role of one model message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelMessageRole {
@@ -230,10 +470,73 @@ pub fn validate_context_required(field: &str, value: &str) -> AgentContextResult
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentContextError, AgentRequestAssemblyError, AgentRequestAssemblyErrorKind,
-        validate_context_required,
+        AgentContextError, AgentRequestAssemblyError, AgentRequestAssemblyErrorKind, ContextBlock,
+        ContextCachePolicy, ContextSourceKind, ContextStability, validate_context_required,
     };
     use crate::AgentPromptError;
+
+    /// Verifies context blocks expose cache-stability metadata without changing
+    /// the stored source, label, and content shape.
+    #[test]
+    fn context_block_cache_metadata_classifies_stable_and_volatile_sources() {
+        let project = ContextBlock {
+            source: ContextSourceKind::ProjectGuidance,
+            label: "project guidance".to_string(),
+            content: "follow repo guidance".to_string(),
+        };
+        let scheduler = ContextBlock {
+            source: ContextSourceKind::Policy,
+            label: "scheduler state".to_string(),
+            content: "state=idle".to_string(),
+        };
+        let action = ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            label: "action result".to_string(),
+            content: "command output".to_string(),
+        };
+        let transcript_tool = ContextBlock {
+            source: ContextSourceKind::TranscriptTool,
+            label: "historical tool result".to_string(),
+            content: "prior command output".to_string(),
+        };
+        let committed_evidence = ContextBlock {
+            source: ContextSourceKind::CommittedEvidence,
+            label: "committed evidence".to_string(),
+            content: "compact prior action evidence".to_string(),
+        };
+        let pane_identity = ContextBlock {
+            source: ContextSourceKind::Configuration,
+            label: "pane identity".to_string(),
+            content: "pane_id=%1 window_name=0".to_string(),
+        };
+
+        assert_eq!(project.stability(), ContextStability::RepoScoped);
+        assert_eq!(
+            project.cache_policy(),
+            ContextCachePolicy::ProviderBreakpoint
+        );
+        assert!(project.stable_prefix_eligible());
+        assert_eq!(scheduler.stability(), ContextStability::TurnVolatile);
+        assert_eq!(scheduler.cache_policy(), ContextCachePolicy::Ineligible);
+        assert!(!scheduler.stable_prefix_eligible());
+        assert_eq!(transcript_tool.stability(), ContextStability::SessionStable);
+        assert_eq!(transcript_tool.cache_policy(), ContextCachePolicy::Eligible);
+        assert!(transcript_tool.stable_prefix_eligible());
+        assert_eq!(
+            committed_evidence.stability(),
+            ContextStability::SessionStable
+        );
+        assert_eq!(
+            committed_evidence.cache_policy(),
+            ContextCachePolicy::Eligible
+        );
+        assert!(committed_evidence.stable_prefix_eligible());
+        assert!(committed_evidence.recoverable_for_compaction());
+        assert_eq!(pane_identity.stability(), ContextStability::TurnVolatile);
+        assert_eq!(pane_identity.cache_policy(), ContextCachePolicy::Ineligible);
+        assert!(!pane_identity.stable_prefix_eligible());
+        assert!(action.recoverable_for_compaction());
+    }
 
     /// Required context validation accepts substantive values and rejects
     /// whitespace-only values with a stable field-specific diagnostic.

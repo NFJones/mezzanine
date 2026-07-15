@@ -490,7 +490,7 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
         .insert(turn.turn_id.clone(), execution);
     service.agent_turn_contexts.insert(
         turn.turn_id.clone(),
-        crate::agent::AgentContext::new(vec![crate::agent::ContextBlock {
+        mez_agent::AgentContext::new(vec![mez_agent::ContextBlock {
             source: ContextSourceKind::Configuration,
             label: "test context".to_string(),
             content: "present".to_string(),

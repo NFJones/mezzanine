@@ -86,7 +86,6 @@ pub use actions::{
     transcript_entries_for_execution,
 };
 pub use context::{
-    AgentContext, ContextBlock, ContextCachePolicy, ContextStability, ModelContextCompactionReport,
     append_mcp_context, append_memory_context, append_permission_policy_context,
     append_project_guidance_context, append_scheduler_context, assemble_model_request,
     assemble_model_request_with_retained_tail_percent, compact_model_context_for_budget,
@@ -100,7 +99,7 @@ pub use maap::{
     parse_maap_action_batch_json, parse_maap_action_batch_json_for_turn,
 };
 use mez_agent::{
-    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentCapability,
+    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentCapability, AgentContext,
     AgentPromptProfile, AgentTranscriptEntry, AgentTranscriptRole, AgentTurnState,
     AgentTurnTrigger, AllowedAction, AllowedActionSet, ContextSourceKind, LocalActionPlan,
     MaapBatch, McpExecutionRequest, McpExecutionResponse, ModelInteractionKind, ModelMessage,

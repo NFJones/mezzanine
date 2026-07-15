@@ -77,7 +77,7 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
         .expect("progress say ledger should be active turn context");
     assert_eq!(
         ledger_block.cache_policy(),
-        crate::agent::ContextCachePolicy::Ineligible
+        mez_agent::ContextCachePolicy::Ineligible
     );
     assert!(
         ledger_block

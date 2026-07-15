@@ -131,9 +131,11 @@ pub use config_change::{
     CONFIG_CHANGE_VALUE_DESCRIPTION,
 };
 pub use context::{
-    AgentContextError, AgentContextResult, AgentRequestAssemblyError,
-    AgentRequestAssemblyErrorKind, AgentRequestAssemblyResult, ContextSourceKind, ModelMessage,
-    ModelMessageRole, ModelRequest, validate_context_required,
+    AgentContext, AgentContextError, AgentContextResult, AgentRequestAssemblyError,
+    AgentRequestAssemblyErrorKind, AgentRequestAssemblyResult, ContextBlock, ContextCachePolicy,
+    ContextSourceKind, ContextStability, ModelContextCompactionReport, ModelMessage,
+    ModelMessageRole, ModelRequest, TrustDomain, model_context_block_header,
+    validate_context_required,
 };
 pub use continuation::{
     CapabilityAvailability, CapabilityDecision, CapabilityRequest, ProviderResponseAcceptance,

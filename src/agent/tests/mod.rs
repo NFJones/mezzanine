@@ -13,10 +13,9 @@
 
 use super::actions::action_result_transcript_content;
 use super::{
-    AgentCapability, AgentContext, AgentLogLevel, AgentPromptProfile, AgentShellCommandOutcome,
-    AgentShellStore, AgentShellVisibility, AgentTurnExecution, AgentTurnLedger, AgentTurnRecord,
-    AgentTurnRunner, AsyncModelProvider, AsyncProviderHttpTransport, CHATGPT_ACCOUNT_ID_HEADER,
-    ContextBlock, ContextCachePolicy, ContextSourceKind, ContextStability,
+    AgentCapability, AgentLogLevel, AgentPromptProfile, AgentShellCommandOutcome, AgentShellStore,
+    AgentShellVisibility, AgentTurnExecution, AgentTurnLedger, AgentTurnRecord, AgentTurnRunner,
+    AsyncModelProvider, AsyncProviderHttpTransport, CHATGPT_ACCOUNT_ID_HEADER, ContextSourceKind,
     DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MarkerToken, McpActionExecutor,
     ModelMessage, ModelMessageRole, ModelProfile, ModelProvider, ModelResponse,
     OpenAiResponsesProvider, PaneShellExecutor, ProviderHttpTransport, Result, ShellClassification,
@@ -57,16 +56,16 @@ use base64::Engine;
 use mez_agent::instructions::DiscoveredInstructionFile;
 use mez_agent::semantic_patch::try_convert_unified_diff_to_mez_patch;
 use mez_agent::{
-    ActionResult, ActionStatus, AgentAction, AgentActionPayload,
+    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext,
     AgentTranscriptRole as TranscriptRole, AgentTurnState, AgentTurnTrigger,
-    CHATGPT_RESPONSES_ENDPOINT, MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME,
-    MaapBatch, McpExecutionRequest, McpExecutionResponse, McpPromptTool, MemoryContextRecord,
-    MemoryContextScope, ModelRequest, ModelTokenUsage, OPENAI_MODELS_ENDPOINT,
-    OPENAI_RESPONSES_ENDPOINT, ProviderHttpRequest, ProviderHttpResponse, ProviderTranscriptEvent,
-    SlashCommandEffect, baseline_slash_commands, openai_models_endpoint_for_responses_endpoint,
-    openai_prompt_cache_diagnostics_for_request, openai_responses_endpoint_for_base_url,
-    openai_responses_request_body, openai_stable_prefix_material_for_request,
-    provider_quota_usage_from_headers, shell_quote,
+    CHATGPT_RESPONSES_ENDPOINT, ContextBlock,
+    MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, MaapBatch, McpExecutionRequest,
+    McpExecutionResponse, McpPromptTool, MemoryContextRecord, MemoryContextScope, ModelRequest,
+    ModelTokenUsage, OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT, ProviderHttpRequest,
+    ProviderHttpResponse, ProviderTranscriptEvent, SlashCommandEffect, baseline_slash_commands,
+    openai_models_endpoint_for_responses_endpoint, openai_prompt_cache_diagnostics_for_request,
+    openai_responses_endpoint_for_base_url, openai_responses_request_body,
+    openai_stable_prefix_material_for_request, provider_quota_usage_from_headers, shell_quote,
 };
 use mez_agent::{
     DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,

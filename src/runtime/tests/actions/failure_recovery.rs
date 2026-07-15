@@ -62,7 +62,7 @@ fn runtime_action_pressure_context_reaches_provider_continuation() {
         .expect("action pressure should be active turn context");
     assert_eq!(
         pressure_block.cache_policy(),
-        crate::agent::ContextCachePolicy::Ineligible
+        mez_agent::ContextCachePolicy::Ineligible
     );
     assert!(
         pressure_block

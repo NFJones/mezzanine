@@ -28,14 +28,14 @@ use serde_json::Value;
 #[cfg(test)]
 pub use crate::agent::ModelProvider;
 use crate::agent::{
-    AgentContext, AgentLogLevel, AgentShellCommandOutcome, AgentShellRuntimeContext,
-    AgentShellSession, AgentShellStore, AgentShellVisibility, AgentTurnExecution, AgentTurnLedger,
-    AgentTurnRecord, AsyncMcpActionExecutor, AsyncModelProvider, ContextBlock,
-    DeepSeekChatCompletionsProvider, EnvironmentSignature, MarkerToken, McpActionExecutor,
-    OpenAiCompatibleChatCompletionsProvider, OpenAiResponsesProvider, ReqwestProviderHttpTransport,
-    ShellClassification, ShellTransaction, ShellTransactionOutputTransport, ToolDiscoveryCache,
-    action_result_context_content, agent_subshell_enter_command, append_mcp_context,
-    append_memory_context, append_permission_policy_context, append_scheduler_context,
+    AgentLogLevel, AgentShellCommandOutcome, AgentShellRuntimeContext, AgentShellSession,
+    AgentShellStore, AgentShellVisibility, AgentTurnExecution, AgentTurnLedger, AgentTurnRecord,
+    AsyncMcpActionExecutor, AsyncModelProvider, DeepSeekChatCompletionsProvider,
+    EnvironmentSignature, MarkerToken, McpActionExecutor, OpenAiCompatibleChatCompletionsProvider,
+    OpenAiResponsesProvider, ReqwestProviderHttpTransport, ShellClassification, ShellTransaction,
+    ShellTransactionOutputTransport, ToolDiscoveryCache, action_result_context_content,
+    agent_subshell_enter_command, append_mcp_context, append_memory_context,
+    append_permission_policy_context, append_scheduler_context,
     assemble_model_request_with_retained_tail_percent,
     compact_model_context_for_budget_with_retained_tail_percent,
     decode_shell_output_transport_with_diagnostics, execute_agent_shell_command_with_context,
@@ -141,11 +141,12 @@ use crate::transcript::{
 };
 use mez_agent::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, ActionContentBlock, ActionResult,
-    ActionStatus, AgentAction, AgentActionPayload, AgentTurnState, AgentTurnTrigger,
-    ContextSourceKind, McpExecutionRequest, McpExecutionResponse, ModelMessage, ModelMessageRole,
-    ModelProfile, ModelProfileOverrides, ModelRequest, ModelResponse, ModelTokenUsage,
-    ModelTokenUsageKey, PaneReadinessOverrideStore, PaneReadinessState, ProviderQuotaUsage,
-    ReadinessOverrideRevocation, openai_default_reasoning_levels_for_model, select_model_profile,
+    ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentTurnState, AgentTurnTrigger,
+    ContextBlock, ContextSourceKind, McpExecutionRequest, McpExecutionResponse, ModelMessage,
+    ModelMessageRole, ModelProfile, ModelProfileOverrides, ModelRequest, ModelResponse,
+    ModelTokenUsage, ModelTokenUsageKey, PaneReadinessOverrideStore, PaneReadinessState,
+    ProviderQuotaUsage, ReadinessOverrideRevocation, openai_default_reasoning_levels_for_model,
+    select_model_profile,
 };
 use mez_agent::{AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ScheduledWork, ScheduledWorkKind};
 use mez_agent::{ApprovalPolicy, PermissionPreset, RuleDecision};

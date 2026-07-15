@@ -193,69 +193,6 @@ fn assemble_model_request_system_prompt_uses_mcp_context_availability() {
 }
 
 #[test]
-/// Verifies context blocks expose cache-stability metadata without changing the
-/// stored source, label, and content shape.
-fn context_block_cache_metadata_classifies_stable_and_volatile_sources() {
-    let project = ContextBlock {
-        source: ContextSourceKind::ProjectGuidance,
-        label: "project guidance".to_string(),
-        content: "follow repo guidance".to_string(),
-    };
-    let scheduler = ContextBlock {
-        source: ContextSourceKind::Policy,
-        label: "scheduler state".to_string(),
-        content: "state=idle".to_string(),
-    };
-    let action = ContextBlock {
-        source: ContextSourceKind::ActionResult,
-        label: "action result".to_string(),
-        content: "command output".to_string(),
-    };
-    let transcript_tool = ContextBlock {
-        source: ContextSourceKind::TranscriptTool,
-        label: "historical tool result".to_string(),
-        content: "prior command output".to_string(),
-    };
-    let committed_evidence = ContextBlock {
-        source: ContextSourceKind::CommittedEvidence,
-        label: "committed evidence".to_string(),
-        content: "compact prior action evidence".to_string(),
-    };
-    let pane_identity = ContextBlock {
-        source: ContextSourceKind::Configuration,
-        label: "pane identity".to_string(),
-        content: "pane_id=%1 window_name=0".to_string(),
-    };
-
-    assert_eq!(project.stability(), ContextStability::RepoScoped);
-    assert_eq!(
-        project.cache_policy(),
-        ContextCachePolicy::ProviderBreakpoint
-    );
-    assert!(project.stable_prefix_eligible());
-    assert_eq!(scheduler.stability(), ContextStability::TurnVolatile);
-    assert_eq!(scheduler.cache_policy(), ContextCachePolicy::Ineligible);
-    assert!(!scheduler.stable_prefix_eligible());
-    assert_eq!(transcript_tool.stability(), ContextStability::SessionStable);
-    assert_eq!(transcript_tool.cache_policy(), ContextCachePolicy::Eligible);
-    assert!(transcript_tool.stable_prefix_eligible());
-    assert_eq!(
-        committed_evidence.stability(),
-        ContextStability::SessionStable
-    );
-    assert_eq!(
-        committed_evidence.cache_policy(),
-        ContextCachePolicy::Eligible
-    );
-    assert!(committed_evidence.stable_prefix_eligible());
-    assert!(committed_evidence.recoverable_for_compaction());
-    assert_eq!(pane_identity.stability(), ContextStability::TurnVolatile);
-    assert_eq!(pane_identity.cache_policy(), ContextCachePolicy::Ineligible);
-    assert!(!pane_identity.stable_prefix_eligible());
-    assert!(action.recoverable_for_compaction());
-}
-
-#[test]
 /// Verifies provider request assembly no longer generates a synthetic helper
 /// block for prior action history.
 fn model_request_does_not_generate_evidence_ledger_block() {
