@@ -67,7 +67,7 @@ pub(super) fn pane_divider_rendition(ui_theme: &UiTheme) -> GraphicRendition {
 mod tests {
     use super::super::pane_border_rendition;
     use super::*;
-    use crate::ids::IdFactory;
+    use mez_core::ids::IdFactory;
     use mez_mux::layout::SplitDirection;
     use mez_mux::layout::{Size, Window};
     use mez_mux::render::blank_render_cells;

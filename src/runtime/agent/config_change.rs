@@ -288,7 +288,7 @@ impl RuntimeSessionService {
         &mut self,
         turn: &AgentTurnRecord,
         action: &AgentAction,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
         approval_state: &str,
     ) -> Result<ActionResult> {
         let AgentActionPayload::ConfigChange {

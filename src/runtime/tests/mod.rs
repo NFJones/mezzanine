@@ -108,9 +108,9 @@ pub(crate) fn effective_uid_for_tests() -> u32 {
 }
 
 use crate::control::{decode_control_frame, encode_control_body};
-use crate::ids::IdFactory;
 use crate::registry::{RegistrySessionState, SessionRegistry};
 use crate::shell::{ResolvedShell, ShellSource};
+use mez_core::ids::IdFactory;
 use mez_mux::layout::Size;
 use std::sync::Mutex;
 use std::thread;
@@ -1209,7 +1209,7 @@ fn execute_runtime_send_message_action(
 /// agent execution.
 fn dispatch_protocol_test_shell_action(
     service: &mut RuntimeSessionService,
-    primary: &crate::ids::ClientId,
+    primary: &mez_core::ids::ClientId,
     action_id: &str,
 ) -> (String, String) {
     mark_test_pane_ready(service, "%1");

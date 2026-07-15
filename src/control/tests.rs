@@ -27,7 +27,6 @@ use super::{
     initialize_result_json, json_escape, parse_json_rpc_request,
 };
 use crate::event::{EventKind, EventLog, EventVisibility};
-use crate::ids::ClientId;
 use crate::mcp::McpRegistry;
 use crate::mcp::{McpServerConfig, McpToolEffects, McpToolState};
 use crate::permissions::{
@@ -42,6 +41,7 @@ use crate::snapshot::{
 use crate::test_support::control::JsonRpcRequestBuilder;
 use crate::test_support::runtime::SessionFixture;
 use crate::test_support::temp::TestTempDir;
+use mez_core::ids::ClientId;
 use mez_mux::layout::SplitDirection;
 use mez_mux::layout::{LayoutPolicy, Size};
 use mez_mux::session::Session;

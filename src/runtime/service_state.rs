@@ -594,7 +594,7 @@ pub(crate) struct RuntimeSnapshotControlAsyncWork {
     /// Parsed JSON-RPC request.
     pub request: crate::control::JsonRpcRequest,
     /// Client authorized to make the request.
-    pub caller_client_id: crate::ids::ClientId,
+    pub caller_client_id: mez_core::ids::ClientId,
     /// Operation-specific repository work.
     pub kind: RuntimeSnapshotControlAsyncWorkKind,
 }

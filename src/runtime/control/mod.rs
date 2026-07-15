@@ -177,7 +177,7 @@ impl RuntimeSessionService {
                 }
             }
         }
-        let agent_id = crate::ids::AgentId::opaque(format!("agent-{pane_id}"))
+        let agent_id = mez_core::ids::AgentId::opaque(format!("agent-{pane_id}"))
             .ok_or_else(|| MezError::invalid_args("agent id must be non-empty"))?;
         let pending_messages = self
             .message_service
@@ -546,7 +546,7 @@ impl RuntimeSessionService {
     pub(super) fn dispatch_runtime_control_body(
         &mut self,
         body: &str,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
     ) -> String {
         let request = match parse_json_rpc_request(body) {
             Ok(request) => request,

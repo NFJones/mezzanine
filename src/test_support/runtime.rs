@@ -2,10 +2,10 @@
 
 use std::path::PathBuf;
 
-use crate::ids::ClientId;
 use crate::runtime::RuntimeSessionService;
 use crate::shell::{ResolvedShell, ShellSource};
 use crate::terminal::HostClipboard;
+use mez_core::ids::ClientId;
 use mez_mux::layout::Size;
 use mez_mux::session::Session;
 

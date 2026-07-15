@@ -301,7 +301,7 @@ fn push_unique(values: &mut Vec<usize>, value: usize) {
 impl RuntimeSessionService {
     pub(super) fn apply_attached_mouse_action(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         action: MouseAction,
         queue_for_adapter: bool,
     ) -> Result<bool> {
@@ -559,7 +559,7 @@ impl RuntimeSessionService {
     /// - `position`: The pane-local cell position that was clicked.
     fn execute_agent_command_link_at_pane_position(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
         position: CopyPosition,
     ) -> Result<bool> {
@@ -609,7 +609,7 @@ impl RuntimeSessionService {
     /// Runs a command-backed window status-bar action selected by mouse release.
     fn apply_window_frame_action(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         action: WindowFrameAction,
     ) -> Result<()> {
         let command = action.command().to_string();
@@ -629,7 +629,7 @@ impl RuntimeSessionService {
     /// Applies keyboard navigation to the open pane-frame selector.
     pub(super) fn apply_pane_agent_status_selector_terminal_action(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         action: &TerminalClientLoopAction,
     ) -> Result<bool> {
         let TerminalClientLoopAction::ForwardToPane(input) = action else {
@@ -739,7 +739,7 @@ impl RuntimeSessionService {
     /// Opens or applies the pane-frame selector for a pane.
     fn open_pane_agent_status_selector(
         &mut self,
-        _primary_client_id: &crate::ids::ClientId,
+        _primary_client_id: &mez_core::ids::ClientId,
         pane_index: usize,
         field: PaneAgentStatusField,
     ) -> Result<()> {
@@ -875,7 +875,7 @@ impl RuntimeSessionService {
     /// Applies the selected pane-frame model or reasoning value.
     fn select_pane_agent_status_selector(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         pane_index: usize,
         field: PaneAgentStatusField,
         item_index: usize,
@@ -1007,7 +1007,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     fn apply_mouse_selection_update(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         position: CopyPosition,
         finish: bool,
     ) -> Result<bool> {
@@ -1103,7 +1103,7 @@ impl RuntimeSessionService {
     /// - `position`: Pane-local terminal cell used as the word-selection anchor.
     fn copy_word_at_pane_position(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
         position: CopyPosition,
     ) -> Result<bool> {

@@ -2813,7 +2813,7 @@ fn terminal_step_response_line_style_spans_parse_color_and_attributes() {
 /// forwarding, legacy mouse translation, and pane resize handling.
 #[test]
 fn terminal_step_control_request_preserves_sgr_mouse_bytes() {
-    let client_id = crate::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    let client_id = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
     let mouse = b"\x1b[<0;12;5M";
     let request =
         terminal_step_control_request(3, &client_id, Size::new(80, 24).unwrap(), mouse, true);
@@ -2888,7 +2888,7 @@ async fn control_socket_primary_attach_loop_uses_async_terminal_io() {
     let mut io = AsyncFakeAttachedTerminalIo::default();
     io.push_input(b"x".to_vec());
 
-    let primary_client_id = crate::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    let primary_client_id = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
     run_control_socket_attached_primary_client_loop_async(
         &mut client_stream,
         &mut io,
@@ -2995,7 +2995,7 @@ async fn control_socket_primary_attach_loop_refreshes_without_invalidating_for_l
     let mut io = AsyncFakeAttachedTerminalIo::default();
     io.push_pending_input_read();
     io.push_input(b"x".to_vec());
-    let primary_client_id = crate::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    let primary_client_id = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
     {
         let run = run_control_socket_attached_primary_client_loop_async(
             &mut client_stream,
@@ -3078,7 +3078,7 @@ async fn control_socket_primary_attach_loop_skips_view_after_input_without_refre
     let mut io = AsyncFakeAttachedTerminalIo::default();
     io.push_pending_input_read();
     io.push_input(b"x".to_vec());
-    let primary_client_id = crate::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    let primary_client_id = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
     {
         let run = run_control_socket_attached_primary_client_loop_async(
             &mut client_stream,
@@ -3140,7 +3140,7 @@ async fn control_socket_primary_attach_loop_does_not_repeat_idle_renders() {
     let mut io = AsyncFakeAttachedTerminalIo::default();
     io.push_pending_input_read();
     io.push_pending_input_read();
-    let primary_client_id = crate::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    let primary_client_id = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
     {
         let run = run_control_socket_attached_primary_client_loop_async(
             &mut client_stream,
@@ -3206,7 +3206,7 @@ async fn control_socket_primary_attach_loop_runtime_event_requests_view() {
     let mut io = AsyncFakeAttachedTerminalIo::default();
     io.push_pending_input_read();
     io.push_pending_input_read();
-    let primary_client_id = crate::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    let primary_client_id = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
     {
         let run = run_control_socket_attached_primary_client_loop_async_with_runtime_events(
             &mut client_stream,
@@ -3293,7 +3293,7 @@ async fn control_socket_primary_attach_loop_refreshes_active_animation_without_r
     io.push_pending_input_read();
     io.push_pending_input_read();
     io.push_pending_input_read();
-    let primary_client_id = crate::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    let primary_client_id = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
     {
         let run = run_control_socket_attached_primary_client_loop_async_with_runtime_events(
             &mut client_stream,
@@ -3485,7 +3485,7 @@ async fn control_socket_primary_attach_loop_refreshes_idle_resize_without_input(
     io.push_terminal_size(Some(Size::new(100, 30).unwrap()));
     io.push_pending_input_read();
     io.push_pending_input_read();
-    let primary_client_id = crate::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    let primary_client_id = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
     {
         let run = run_control_socket_attached_primary_client_loop_async_with_runtime_events(
             &mut client_stream,
@@ -3547,7 +3547,7 @@ async fn control_socket_primary_attach_loop_ignores_nonvisible_runtime_events() 
     let mut io = AsyncFakeAttachedTerminalIo::default();
     io.push_pending_input_read();
     io.push_pending_input_read();
-    let primary_client_id = crate::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    let primary_client_id = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
     {
         let run = run_control_socket_attached_primary_client_loop_async_with_runtime_events(
             &mut client_stream,
@@ -3659,7 +3659,7 @@ async fn control_socket_primary_attach_loop_prefers_ready_input_over_runtime_eve
     io.push_input(b"x".to_vec());
     io.push_pending_input_read();
     io.push_readiness(vec![readable_input_readiness()]);
-    let primary_client_id = crate::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    let primary_client_id = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
     {
         let run = run_control_socket_attached_primary_client_loop_async_with_runtime_events(
             &mut client_stream,
@@ -3721,7 +3721,7 @@ async fn control_socket_primary_attach_loop_structural_runtime_event_invalidates
     let mut io = AsyncFakeAttachedTerminalIo::default();
     io.push_pending_input_read();
     io.push_pending_input_read();
-    let primary_client_id = crate::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    let primary_client_id = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
     {
         let run = run_control_socket_attached_primary_client_loop_async_with_runtime_events(
             &mut client_stream,
@@ -3810,7 +3810,7 @@ async fn control_socket_primary_attach_loop_exits_on_incomplete_response_eof() {
     let mut io = AsyncFakeAttachedTerminalIo::default();
     io.push_input(b"x".to_vec());
 
-    let primary_client_id = crate::ids::ClientId::parse('c', "c1".to_string()).unwrap();
+    let primary_client_id = mez_core::ids::ClientId::parse('c', "c1".to_string()).unwrap();
     run_control_socket_attached_primary_client_loop_async(
         &mut client_stream,
         &mut io,

@@ -15,7 +15,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(in crate::runtime) fn apply_attached_mux_action(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         action: MuxAction,
     ) -> Result<bool> {
         match action {
@@ -167,7 +167,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(in crate::runtime) fn execute_attached_display_command(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         command: &str,
     ) -> Result<()> {
         let output = self.execute_terminal_command(primary_client_id, command)?;
@@ -193,7 +193,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn swap_active_pane_with_neighbor(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         action: MuxAction,
     ) -> Result<bool> {
         let window = self
@@ -226,7 +226,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(in crate::runtime) fn approve_observer_with_runtime_cutoff(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         observer_id: &str,
     ) -> Result<()> {
         if let Some(visible_from_event_id) = self

@@ -18,7 +18,7 @@ impl RuntimeSessionService {
         &mut self,
         body: &str,
         request: &crate::control::JsonRpcRequest,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
     ) -> String {
         if let Some(response) =
             self.dispatch_runtime_live_config_mutation_request(request, caller_client_id)
@@ -197,7 +197,7 @@ impl RuntimeSessionService {
     fn dispatch_runtime_live_config_mutation_request(
         &mut self,
         request: &crate::control::JsonRpcRequest,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
     ) -> Option<String> {
         if !matches!(request.method.as_str(), "config/set" | "config/unset") {
             return None;
@@ -242,7 +242,7 @@ impl RuntimeSessionService {
     fn dispatch_runtime_deferred_config_file_mutation_request(
         &mut self,
         request: &crate::control::JsonRpcRequest,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
     ) -> Option<String> {
         if !self.config_effects_use_adapter {
             return None;
@@ -287,7 +287,7 @@ impl RuntimeSessionService {
     fn dispatch_runtime_live_config_mutation_response(
         &mut self,
         request: &crate::control::JsonRpcRequest,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
         params: &str,
         target: ControlPersistTarget,
     ) -> String {
@@ -376,7 +376,7 @@ impl RuntimeSessionService {
     fn dispatch_runtime_deferred_config_file_mutation_response(
         &mut self,
         request: &crate::control::JsonRpcRequest,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
         params: &str,
         target: ControlPersistTarget,
     ) -> String {
@@ -467,7 +467,7 @@ impl RuntimeSessionService {
     fn dispatch_runtime_live_config_mutation_result(
         &mut self,
         method: &str,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
         params: &str,
         target: &ControlPersistTarget,
     ) -> Result<String> {
@@ -530,7 +530,7 @@ impl RuntimeSessionService {
     fn dispatch_runtime_deferred_config_file_mutation_result(
         &mut self,
         method: &str,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
         params: &str,
         target: &ControlPersistTarget,
     ) -> Result<String> {
@@ -706,7 +706,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     fn append_config_reload_permission_audits(
         &mut self,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
         previous: &crate::permissions::PermissionPolicy,
     ) -> Result<()> {
         if self.audit_log.is_none() {
@@ -754,7 +754,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     fn append_config_reload_permission_audit(
         &mut self,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
         permission_id: &str,
         decision: &str,
     ) -> Result<()> {
@@ -786,7 +786,7 @@ impl RuntimeSessionService {
     pub(super) fn dispatch_runtime_project_trust_request(
         &mut self,
         request: &crate::control::JsonRpcRequest,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
     ) -> String {
         let result = validate_control_method_params_schema(request).and_then(|()| {
             self.dispatch_runtime_project_trust_result(
@@ -812,7 +812,7 @@ impl RuntimeSessionService {
     pub(super) fn dispatch_runtime_project_trust_result(
         &mut self,
         method: &str,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
         if self.session.primary_client_id() != Some(caller_client_id) {
@@ -863,7 +863,7 @@ impl RuntimeSessionService {
     pub(super) fn dispatch_runtime_project_trust_mutation(
         &mut self,
         method: &str,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
         if self.session.primary_client_id() != Some(caller_client_id) {

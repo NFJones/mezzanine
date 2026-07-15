@@ -9,10 +9,10 @@
 use crate::agent::{AgentTurnExecution, ModelResponse};
 use crate::audit::AuditRetentionPolicy;
 use crate::hooks::{HookExecutionPlan, HookExecutionResult};
-use crate::ids::{AgentId, ClientId};
 use crate::registry::SessionRegistry;
 use crate::runtime::RuntimeRegistryUpdatePlan;
 use crate::transcript::{AgentTranscriptStore, TranscriptEntry};
+use mez_core::ids::{AgentId, ClientId};
 use mez_mux::layout::Size;
 use mez_mux::presentation::AttachedTerminalOutputModes;
 use mez_terminal::TerminalStyleSpan;

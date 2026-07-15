@@ -189,7 +189,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn dispatch_runtime_agent_spawn(
         &mut self,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
         self.require_live()?;
@@ -312,7 +312,7 @@ impl RuntimeSessionService {
     /// status delivery, lifecycle events, and audit behavior.
     pub(in crate::runtime) fn spawn_runtime_subagent(
         &mut self,
-        controller: &crate::ids::ClientId,
+        controller: &mez_core::ids::ClientId,
         spawn: SubagentSpawnRequest,
         placement: RuntimeSubagentPlacement,
     ) -> Result<String> {
@@ -331,7 +331,7 @@ impl RuntimeSessionService {
     /// Implements client-authenticated and session-owned subagent creation.
     fn spawn_runtime_subagent_internal(
         &mut self,
-        controller: Option<&crate::ids::ClientId>,
+        controller: Option<&mez_core::ids::ClientId>,
         mut spawn: SubagentSpawnRequest,
         placement: RuntimeSubagentPlacement,
     ) -> Result<String> {
@@ -608,7 +608,7 @@ impl RuntimeSessionService {
     /// which point a new bucket window is created in the same group.
     fn spawn_subagent_pane_in_parent_group(
         &mut self,
-        controller: Option<&crate::ids::ClientId>,
+        controller: Option<&mez_core::ids::ClientId>,
         spawn: &SubagentSpawnRequest,
         requested_window_name: Option<&str>,
         start_directory: Option<&Path>,
@@ -682,7 +682,7 @@ impl RuntimeSessionService {
     /// Applies human-readable display titles to the spawned pane and bucket.
     fn apply_subagent_display_titles(
         &mut self,
-        controller: Option<&crate::ids::ClientId>,
+        controller: Option<&mez_core::ids::ClientId>,
         window_id: &str,
         pane_id: &str,
         display_name: &str,
@@ -696,7 +696,7 @@ impl RuntimeSessionService {
     /// Refreshes generated names for all live subagent bucket windows.
     pub(in crate::runtime) fn refresh_subagent_window_names(
         &mut self,
-        controller: &crate::ids::ClientId,
+        controller: &mez_core::ids::ClientId,
     ) -> Result<()> {
         self.refresh_subagent_window_names_internal(Some(controller))
     }
@@ -704,7 +704,7 @@ impl RuntimeSessionService {
     /// Refreshes generated subagent window names for session-owned orchestration.
     fn refresh_subagent_window_names_internal(
         &mut self,
-        controller: Option<&crate::ids::ClientId>,
+        controller: Option<&mez_core::ids::ClientId>,
     ) -> Result<()> {
         self.prune_subagent_window_ids();
         let window_ids = self.subagent_window_ids.iter().cloned().collect::<Vec<_>>();
@@ -797,7 +797,10 @@ impl RuntimeSessionService {
     }
 
     /// Resolves the window group that should own a child subagent window.
-    fn subagent_parent_group_id(&self, parent_agent_id: &str) -> Result<crate::ids::WindowGroupId> {
+    fn subagent_parent_group_id(
+        &self,
+        parent_agent_id: &str,
+    ) -> Result<mez_core::ids::WindowGroupId> {
         if let Some(parent_pane_id) = pane_id_from_runtime_agent_id(parent_agent_id)
             && let Ok((parent_window, _)) =
                 runtime_pane_by_id(&self.session, parent_pane_id.as_str())
@@ -819,8 +822,8 @@ impl RuntimeSessionService {
     /// Finds a subagent bucket window in a group that still has usable capacity.
     fn available_subagent_window_in_group(
         &self,
-        group_id: &crate::ids::WindowGroupId,
-    ) -> Option<(crate::ids::WindowId, RuntimeSubagentBucketLayout)> {
+        group_id: &mez_core::ids::WindowGroupId,
+    ) -> Option<(mez_core::ids::WindowId, RuntimeSubagentBucketLayout)> {
         let group = self
             .session
             .window_groups()
@@ -847,7 +850,7 @@ impl RuntimeSessionService {
     }
 
     /// Builds a generated name for the next subagent bucket in a group.
-    fn next_subagent_window_name(&self, group_id: &crate::ids::WindowGroupId) -> String {
+    fn next_subagent_window_name(&self, group_id: &mez_core::ids::WindowGroupId) -> String {
         let count = self
             .session
             .window_groups()
@@ -872,7 +875,7 @@ impl RuntimeSessionService {
     /// before a subagent spawn setup step failed.
     fn cleanup_failed_subagent_spawn(
         &mut self,
-        controller: Option<&crate::ids::ClientId>,
+        controller: Option<&mez_core::ids::ClientId>,
         pane_id: &str,
         child_agent_id: &str,
         turn_id: Option<&str>,

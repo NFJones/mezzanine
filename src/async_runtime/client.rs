@@ -28,9 +28,9 @@ use crate::agent::{
 };
 use crate::async_runtime::RenderInvalidationReason;
 use crate::error::MezErrorKind;
-use crate::ids::AgentId;
 use crate::runtime::runtime_execute_auto_sizing_with_async_provider;
 use crate::terminal::TerminalFdInterest;
+use mez_core::ids::AgentId;
 use mez_terminal::TerminalStyleSpan;
 use std::time::Duration;
 use tokio::sync::watch;

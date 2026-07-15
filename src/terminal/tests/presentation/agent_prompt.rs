@@ -1,6 +1,5 @@
 //! Regression tests for terminal presentation agent prompt behavior.
 
-use crate::ids::IdFactory;
 use crate::terminal::tests::fixtures::{
     display_column_for_fragment, test_color_is_grayscale, test_contrast_ratio,
 };
@@ -11,6 +10,7 @@ use crate::terminal::{
     compose_prompt_region_presentation_with_styles, compose_readline_prompt_client_presentation,
     render_attached_client_view, render_readline_prompt_status_row, terminal_text_width,
 };
+use mez_core::ids::IdFactory;
 use mez_mux::layout::{Size, SplitDirection, Window};
 use mez_mux::presentation::{
     ClientViewRole, ReadlinePromptRegion, RenderedClientView, TerminalCursorStyle,

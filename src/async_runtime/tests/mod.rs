@@ -44,13 +44,13 @@ use crate::config::{ConfigFormat, ConfigLayer, ConfigScope};
 use crate::control::ControlConnectionState;
 use crate::event::EventAudience;
 use crate::hooks::{HookEvent, HookExecutionPlan, HookOnFailure};
-use crate::ids::{AgentId, ClientId, IdFactory};
 use crate::message::MessageConnection;
 use crate::registry::SessionRegistry;
 use crate::runtime::{
     RuntimeLifecycleState, RuntimeSessionService, current_effective_uid, pane_environment,
 };
 use crate::terminal::AttachedTerminalClientStepPlan;
+use mez_core::ids::{AgentId, ClientId, IdFactory};
 use mez_mux::presentation::{AttachedTerminalOutputModes, ClientViewRole};
 use mez_mux::process::{PaneProcessLaunch, spawn_pane_process};
 use std::ffi::OsString;

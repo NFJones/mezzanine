@@ -17,7 +17,7 @@ impl RuntimeSessionService {
     pub(super) fn dispatch_runtime_mutating_request(
         &mut self,
         request: crate::control::JsonRpcRequest,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
     ) -> String {
         let params = request.params.clone().unwrap_or_else(|| "{}".to_string());
         let idempotency_key = match runtime_json_string_field(&params, "idempotency_key") {
@@ -77,7 +77,7 @@ impl RuntimeSessionService {
     pub(super) fn dispatch_runtime_mutating_result(
         &mut self,
         method: &str,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
         match method {
@@ -133,7 +133,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn dispatch_runtime_window_create(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
         let name = runtime_json_string_field(params, "name").unwrap_or_else(|| "shell".to_string());
@@ -158,7 +158,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn dispatch_runtime_pane_create(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
         if let Some(target) = pane_target_checked_resolved(&self.session, params)? {
@@ -200,7 +200,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn dispatch_runtime_pane_resize(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
         let target = pane_target_checked_resolved(&self.session, params)?;
@@ -216,7 +216,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn dispatch_runtime_pane_swap(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
         let source = source_pane_target_checked_resolved(&self.session, params)?;
@@ -238,7 +238,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn dispatch_runtime_pane_break(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
         let target = pane_target_checked_resolved(&self.session, params)?;
@@ -272,7 +272,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn dispatch_runtime_pane_join(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
         let source = source_pane_target_checked_resolved(&self.session, params)?;
@@ -306,7 +306,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(in crate::runtime) fn dispatch_runtime_pane_close(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
         self.require_live()?;
@@ -361,7 +361,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn dispatch_runtime_window_close(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
         self.require_live()?;
@@ -428,7 +428,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn dispatch_runtime_session_kill(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
         let force = runtime_json_bool_field(params, "force").unwrap_or(false);
@@ -446,7 +446,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn dispatch_runtime_observer_approve(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
         let observer_id =
@@ -481,7 +481,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn dispatch_runtime_observer_reject(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
         let observer_id =
@@ -518,7 +518,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn dispatch_runtime_observer_revoke(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
         let client_id = runtime_json_string_field(params, "client_id")
@@ -550,7 +550,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn dispatch_runtime_terminal_step(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
         self.require_live()?;
@@ -613,7 +613,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn dispatch_runtime_terminal_view(
         &self,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
         params: Option<&str>,
     ) -> Result<String> {
         let client = self
@@ -666,7 +666,7 @@ impl RuntimeSessionService {
         &mut self,
         body: &str,
         request: &crate::control::JsonRpcRequest,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
     ) -> String {
         let pane_id = match self.runtime_agent_shell_visibility_target_pane_id(request) {
             Ok(pane_id) => pane_id,
@@ -719,7 +719,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn dispatch_runtime_terminal_command(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
         let input = runtime_json_string_field(params, "input")
@@ -734,7 +734,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn dispatch_runtime_agent_shell_command(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         params: &str,
     ) -> Result<String> {
         let input = runtime_json_string_field(params, "input")
@@ -786,7 +786,7 @@ impl RuntimeSessionService {
         &mut self,
         body: &str,
         request_id: &str,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
     ) -> String {
         if self.session.primary_client_id() != Some(caller_client_id) {
             return runtime_json_rpc_error(

@@ -53,7 +53,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn write_input_to_pane(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         target: Option<&str>,
         input: &[u8],
     ) -> Result<PaneInputDispatch> {
@@ -80,7 +80,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(in crate::runtime) fn write_input_to_pane_descriptor(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         descriptor: &PaneDescriptor,
         input: &[u8],
     ) -> Result<PaneInputDispatch> {
@@ -120,7 +120,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn apply_attached_terminal_step_plan(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         step: &AttachedTerminalClientStepPlan,
     ) -> Result<AttachedClientStepApplication> {
         self.apply_attached_terminal_step_plan_inner(primary_client_id, step, false, false)
@@ -130,7 +130,7 @@ impl RuntimeSessionService {
     /// Applies one planned client step and returns its ordered adapter effects.
     pub(crate) fn apply_attached_terminal_step_transition(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         step: &AttachedTerminalClientStepPlan,
     ) -> Result<(AttachedClientStepApplication, RuntimeTransition)> {
         let (application, mut side_effects) =
@@ -173,7 +173,7 @@ impl RuntimeSessionService {
     /// Plans and applies raw primary-client input as a runtime transition.
     pub(crate) fn apply_client_input_transition(
         &mut self,
-        client_id: &crate::ids::ClientId,
+        client_id: &mez_core::ids::ClientId,
         bytes: &[u8],
     ) -> Result<RuntimeTransition> {
         if bytes.is_empty() || self.session.primary_client_id() != Some(client_id) {
@@ -257,7 +257,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     fn apply_attached_terminal_step_plan_inner(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         step: &AttachedTerminalClientStepPlan,
         defer_pane_io: bool,
         queue_external_effects: bool,

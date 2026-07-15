@@ -1923,7 +1923,7 @@ impl RuntimeSessionService {
     /// Executes one command selected from the primary display overlay.
     pub(super) fn execute_primary_display_overlay_selection_command(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         command: &str,
     ) -> Result<bool> {
         if command.trim_start().starts_with('/') {
@@ -2208,7 +2208,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn apply_primary_display_overlay_input(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         input: &[u8],
     ) -> Result<bool> {
         let Some(overlay) = self.primary_display_overlay.as_ref() else {
@@ -2809,7 +2809,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn apply_primary_display_overlay_terminal_action(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         action: &TerminalClientLoopAction,
     ) -> Result<bool> {
         match action {
@@ -2889,7 +2889,7 @@ impl RuntimeSessionService {
     /// mouse click.
     fn apply_primary_display_overlay_selection(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         position: CopyPosition,
     ) -> Result<bool> {
         let Some(overlay) = self.primary_display_overlay.as_ref() else {
@@ -2955,7 +2955,7 @@ impl RuntimeSessionService {
     /// Finishes a mouse text selection in the primary command-output overlay and copies it.
     fn finish_primary_display_overlay_mouse_selection(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         position: CopyPosition,
     ) -> Result<bool> {
         let Some(selection_position) = self.primary_display_overlay_position_for_mouse(position)

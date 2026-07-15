@@ -1,6 +1,5 @@
 //! Regression tests for terminal presentation layout behavior.
 
-use crate::ids::IdFactory;
 use crate::terminal::tests::fixtures::display_column_for_fragment;
 use crate::terminal::{
     BTreeMap, DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE,
@@ -9,6 +8,7 @@ use crate::terminal::{
     compose_client_presentation, draw_window_from_screens, render_attached_client_view,
     render_window, render_window_with_pane_frame_template,
 };
+use mez_core::ids::IdFactory;
 use mez_mux::layout::{PaneGeometry, Size, SplitDirection, Window};
 use mez_mux::presentation::{ClientViewRole, RenderedClientView, TerminalCursorStyle};
 use mez_mux::presentation::{
@@ -53,7 +53,7 @@ fn blank_inputs_for_window(window: &Window) -> Vec<PaneRenderInput> {
 /// implementation detail.
 #[test]
 fn client_loop_draws_window_from_live_pane_screens() {
-    let mut ids = crate::ids::IdFactory::default();
+    let mut ids = mez_core::ids::IdFactory::default();
     let mut window = Window::new(&mut ids, 0, "main", Size::new(20, 4).unwrap());
     window
         .split_active(&mut ids, mez_mux::layout::SplitDirection::Vertical)
@@ -145,7 +145,7 @@ fn pane_render_region_reserves_right_divider_for_odd_vertical_split() {
 /// private screen access to observe colors and attributes.
 #[test]
 fn client_view_preserves_terminal_style_spans() {
-    let mut ids = crate::ids::IdFactory::default();
+    let mut ids = mez_core::ids::IdFactory::default();
     let window = Window::new(&mut ids, 0, "main", Size::new(8, 2).unwrap());
     let mut screen = TerminalScreen::new(Size::new(8, 2).unwrap(), 10).unwrap();
     screen.feed(b"\x1b[1;38;5;120mAB\x1b[0mC");
@@ -196,7 +196,7 @@ fn client_view_preserves_terminal_style_spans() {
 /// the visible text.
 #[test]
 fn client_view_keeps_full_word_style_span_through_final_character() {
-    let mut ids = crate::ids::IdFactory::default();
+    let mut ids = mez_core::ids::IdFactory::default();
     let window = Window::new(&mut ids, 0, "main", Size::new(8, 2).unwrap());
     let mut screen = TerminalScreen::new(Size::new(8, 2).unwrap(), 10).unwrap();
     screen.feed(b"\x1b[34mblue\x1b[0m");
@@ -237,7 +237,7 @@ fn client_view_keeps_full_word_style_span_through_final_character() {
 /// terminal-cell columns in the composed client view.
 #[test]
 fn client_view_offsets_style_spans_across_side_by_side_panes() {
-    let mut ids = crate::ids::IdFactory::default();
+    let mut ids = mez_core::ids::IdFactory::default();
     let mut window = Window::new(&mut ids, 0, "main", Size::new(8, 2).unwrap());
     window
         .split_active(&mut ids, mez_mux::layout::SplitDirection::Vertical)
@@ -298,7 +298,7 @@ fn client_view_offsets_style_spans_across_side_by_side_panes() {
 /// implementation detail.
 #[test]
 fn client_view_hides_pending_observers_and_keeps_primary_dimensions() {
-    let mut ids = crate::ids::IdFactory::default();
+    let mut ids = mez_core::ids::IdFactory::default();
     let window = Window::new(&mut ids, 0, "main", Size::new(20, 4).unwrap());
     let mut screen = TerminalScreen::new(Size::new(20, 2).unwrap(), 10).unwrap();
     screen.feed(b"live\nviewport");

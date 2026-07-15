@@ -111,7 +111,7 @@ impl RuntimeSessionService {
     /// - `source`: Human-readable source of the policy update for lifecycle events.
     pub(in crate::runtime) fn reconcile_pending_agent_approvals_after_permission_change(
         &mut self,
-        caller_client_id: Option<&crate::ids::ClientId>,
+        caller_client_id: Option<&mez_core::ids::ClientId>,
         previous: &PermissionPolicy,
         source: &str,
     ) -> Result<usize> {
@@ -281,7 +281,7 @@ impl RuntimeSessionService {
         &mut self,
         approval_id: &str,
         approval: &BlockedApprovalRequest,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
     ) -> Result<Option<usize>> {
         if !matches!(
             approval.action_kind.as_str(),

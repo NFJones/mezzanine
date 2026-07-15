@@ -20,13 +20,13 @@ use super::{
     run_async_attached_terminal_client_service, selected_socket_path,
     supervise_async_runtime_services, terminal_size_from_fd_or_environment, write_json_or_plain,
 };
-use crate::ids::SessionId;
 use crate::snapshot::SnapshotRepository;
 use crate::{
     control::{CONTROL_CONTENT_TYPE, encode_control_body},
     framing::ProtocolFrameCodec,
 };
 use futures_util::StreamExt;
+use mez_core::ids::SessionId;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};

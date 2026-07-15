@@ -18,9 +18,10 @@ multiplexer and agent harness remain separable logical subsystems.
   configuration, runtime orchestration, persistence, transports, policy, and
   adapters between lower-level crates.
 
-The lower crates initially contain only documented facades. Production code is
-moved only after its responsibilities have been separated and reverse
-dependencies have been replaced with explicit contracts or effects.
+The lower crates contain production-owned domain behavior and tests. Additional
+behavior moves only after its responsibilities have been separated and reverse
+dependencies have been replaced with explicit contracts or effects; root
+adapters retain product policy, persistence, transports, and host I/O.
 
 ## Dependency direction
 

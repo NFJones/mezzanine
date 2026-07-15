@@ -17,7 +17,7 @@ impl RuntimeSessionService {
     pub(super) fn apply_runtime_initialize_side_effects(
         &mut self,
         request: &crate::control::JsonRpcRequest,
-        primary_before: Option<&crate::ids::ClientId>,
+        primary_before: Option<&mez_core::ids::ClientId>,
         observer_count_before: usize,
     ) -> Result<()> {
         if runtime_initialize_requested_observer(request) {
@@ -120,7 +120,7 @@ impl RuntimeSessionService {
     pub(super) fn append_runtime_snapshot_audit(
         &mut self,
         request: &crate::control::JsonRpcRequest,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
         outcome: &str,
     ) -> Result<()> {
         let Some(operation) = request.method.strip_prefix("snapshot/") else {
@@ -167,7 +167,7 @@ impl RuntimeSessionService {
         request: &crate::control::JsonRpcRequest,
         snapshots: &SnapshotRepository,
         connection: &mut ControlConnectionState,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
     ) -> Result<String> {
         let params = request
             .params
@@ -199,7 +199,7 @@ impl RuntimeSessionService {
         request: &crate::control::JsonRpcRequest,
         snapshots: &SnapshotRepository,
         connection: &mut ControlConnectionState,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
     ) -> Result<String> {
         let _ = connection;
         let params = request
@@ -231,7 +231,7 @@ impl RuntimeSessionService {
         snapshot_id: &str,
         payload: crate::snapshot::SessionSnapshotPayload,
         resume_plan: crate::snapshot::LayoutLoadPlan,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
     ) -> Result<String> {
         let previous_session = self.session.clone();
         let previous_window_created_at_unix_seconds = self.window_created_at_unix_seconds.clone();

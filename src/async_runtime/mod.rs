@@ -28,7 +28,6 @@ use crate::control::{ControlConnectionState, encode_control_body};
 use crate::error::{MezError, Result};
 use crate::event::{EventAudience, encode_event_notification};
 use crate::framing::{ProtocolFrameCodec, encode_frame};
-use crate::ids::{AgentId, ClientId};
 use crate::message::{
     DeliveryCursor, FanoutBatch, MessageConnection, delivery_batch_json, encode_mmp_body,
 };
@@ -46,6 +45,7 @@ use crate::terminal::{
     compose_client_presentation_with_styles, plan_attached_terminal_client_step,
     plan_attached_terminal_client_step_with_host_paste_buffer,
 };
+use mez_core::ids::{AgentId, ClientId};
 use mez_mux::layout::Size;
 use mez_mux::process::{PaneExitStatus, PaneProcess};
 use mez_mux::session::ClientState;

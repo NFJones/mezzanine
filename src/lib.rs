@@ -69,8 +69,6 @@ pub mod hooks;
 /// The nested module keeps cross-subsystem identifier predicates isolated while
 /// callers retain subsystem-specific error messages.
 pub(crate) mod identifiers;
-/// Preserves the product crate's identifier facade during workspace extraction.
-pub use mez_core::ids;
 /// Exposes the instructions module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

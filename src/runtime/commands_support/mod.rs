@@ -47,7 +47,7 @@ pub(super) use status::*;
 /// on duplicated control-flow logic.
 pub(super) fn execute_runtime_command_sequence(
     service: &mut RuntimeSessionService,
-    primary_client_id: &crate::ids::ClientId,
+    primary_client_id: &mez_core::ids::ClientId,
     input: &str,
 ) -> Result<Vec<CommandOutcome>> {
     let invocations = parse_command_sequence(input)?;
@@ -81,7 +81,7 @@ pub(super) fn execute_runtime_command_sequence(
 /// on duplicated control-flow logic.
 pub(super) async fn execute_runtime_command_sequence_async(
     service: &mut RuntimeSessionService,
-    primary_client_id: &crate::ids::ClientId,
+    primary_client_id: &mez_core::ids::ClientId,
     input: &str,
 ) -> Result<Vec<CommandOutcome>> {
     let invocations = parse_command_sequence(input)?;
@@ -116,7 +116,7 @@ pub(super) async fn execute_runtime_command_sequence_async(
 /// on duplicated control-flow logic.
 fn runtime_send_prefix_command(
     service: &mut RuntimeSessionService,
-    primary_client_id: &crate::ids::ClientId,
+    primary_client_id: &mez_core::ids::ClientId,
 ) -> Result<String> {
     let input = key_chord_input_bytes(service.key_bindings.escape)
         .ok_or_else(|| MezError::invalid_state("configured prefix key cannot be sent to pane"))?;
@@ -134,7 +134,7 @@ fn runtime_send_prefix_command(
 /// on duplicated control-flow logic.
 pub(super) fn execute_runtime_live_terminal_command(
     service: &mut RuntimeSessionService,
-    primary_client_id: &crate::ids::ClientId,
+    primary_client_id: &mez_core::ids::ClientId,
     invocation: &CommandInvocation,
 ) -> Result<Option<CommandOutcome>> {
     match invocation.name.as_str() {
@@ -695,7 +695,7 @@ pub(super) fn execute_runtime_live_terminal_command(
 /// on duplicated control-flow logic.
 pub(super) async fn execute_runtime_live_terminal_command_async(
     service: &mut RuntimeSessionService,
-    primary_client_id: &crate::ids::ClientId,
+    primary_client_id: &mez_core::ids::ClientId,
     invocation: &CommandInvocation,
 ) -> Result<Option<CommandOutcome>> {
     match invocation.name.as_str() {
@@ -714,7 +714,7 @@ pub(super) async fn execute_runtime_live_terminal_command_async(
 /// on duplicated control-flow logic.
 pub(super) fn runtime_mark_pane_ready_command(
     service: &mut RuntimeSessionService,
-    primary_client_id: &crate::ids::ClientId,
+    primary_client_id: &mez_core::ids::ClientId,
     invocation: &CommandInvocation,
 ) -> Result<String> {
     let pane_id = runtime_mark_pane_ready_target_pane_id(&service.session, invocation)?;
@@ -828,7 +828,7 @@ pub(super) const TERMINAL_COMMAND_LIVE_OVERRIDE_LAYER: &str = "terminal-command-
 /// on duplicated control-flow logic.
 pub(super) fn runtime_append_observer_decision_audit(
     service: &mut RuntimeSessionService,
-    primary_client_id: &crate::ids::ClientId,
+    primary_client_id: &mez_core::ids::ClientId,
     target_kind: &str,
     target_id: &str,
     decision: &str,

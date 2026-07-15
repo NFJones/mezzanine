@@ -102,7 +102,6 @@ use crate::hooks::{
     decide_hook_failure, execute_focused_shell_hook, execute_program_hook,
     hook_execution_audit_record, plan_event,
 };
-use crate::ids::{AgentId, ClientId, PaneId, SessionId, WindowId};
 use crate::instructions::DiscoveredInstructionFile;
 use crate::mcp::{
     McpApprovalSetting, McpExternalCapability, McpRegistry, McpServerKind, McpServerStatus,
@@ -153,6 +152,7 @@ use crate::transcript::{
     AgentSessionMetadata, AgentTranscriptStore, TranscriptEntry, TranscriptRole,
 };
 use mez_agent::{AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ScheduledWork, ScheduledWorkKind};
+use mez_core::ids::{AgentId, ClientId, PaneId, SessionId, WindowId};
 use mez_mux::copy::CopyModeKeyAction;
 use mez_mux::copy::{CopyPosition, SearchDirection};
 use mez_mux::input::{

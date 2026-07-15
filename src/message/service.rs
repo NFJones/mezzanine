@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::error::{MezError, Result};
-use crate::ids::{AgentId, IdFactory, PaneId, StableId, WindowId};
+use mez_core::ids::{AgentId, IdFactory, PaneId, StableId, WindowId};
 
 use super::types::{
     AcceptedMessage, AgentPresenceStatus, Delivery, DeliveryBatch, DeliveryCursor, DeliveryStatus,

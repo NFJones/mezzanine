@@ -38,7 +38,6 @@ use crate::config::{
 };
 use crate::control::{decode_control_frame, encode_control_body};
 use crate::error::{MezError, Result};
-use crate::ids::ClientId;
 use crate::mcp::McpRegistry;
 use crate::memory::{
     MemoryKind, MemoryRecord, MemoryRetentionPolicy, MemoryScope, MemorySearchRequest,
@@ -67,6 +66,7 @@ use crate::terminal::{
     attached_terminal_output_disconnected,
 };
 use crate::transcript::AgentTranscriptStore;
+use mez_core::ids::ClientId;
 use mez_mux::layout::Size;
 use mez_mux::session::Session;
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};

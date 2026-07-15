@@ -217,7 +217,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn execute_terminal_command(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         input: &str,
     ) -> Result<String> {
         self.require_live()?;
@@ -235,7 +235,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub async fn execute_terminal_command_async(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         input: &str,
     ) -> Result<String> {
         self.require_live()?;
@@ -337,7 +337,7 @@ impl RuntimeSessionService {
     /// behavior stay identical to approval decisions made by external clients.
     pub(super) fn execute_agent_shell_approve_command(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
         input: &str,
     ) -> Result<AgentShellCommandOutcome> {
@@ -421,7 +421,7 @@ impl RuntimeSessionService {
     /// stay identical to decisions made through the control API.
     pub(super) fn execute_agent_shell_trust_command(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
         input: &str,
     ) -> Result<AgentShellCommandOutcome> {

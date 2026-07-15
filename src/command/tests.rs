@@ -15,8 +15,8 @@ use super::{
 };
 use crate::auth::AuthPaths;
 use crate::config::ConfigPaths;
-use crate::ids::ClientId;
 use crate::shell::{ResolvedShell, ShellSource};
+use mez_core::ids::ClientId;
 use mez_mux::layout::Size;
 use mez_mux::session::{ClientState, Session};
 use std::fs;

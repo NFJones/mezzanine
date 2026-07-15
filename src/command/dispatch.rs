@@ -599,7 +599,7 @@ fn execute_command_plan(
 }
 
 /// Formats the common pane-zoom command response.
-fn zoom_command_outcome(command: String, zoomed: Option<crate::ids::PaneId>) -> CommandOutcome {
+fn zoom_command_outcome(command: String, zoomed: Option<mez_core::ids::PaneId>) -> CommandOutcome {
     CommandOutcome::Display {
         command,
         body: format!(

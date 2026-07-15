@@ -20,7 +20,7 @@ persistence, transport, and composition adapters.
 
 | Surface | Final owner | Current evidence | State | Required follow-up |
 |---|---|---|---|---|
-| Stable identifiers | `mez-core` | `crates/mez-core/src/ids.rs` | owned | Remove the root `mez_core::ids` forwarding export and import IDs directly. |
+| Stable identifiers | `mez-core` | `crates/mez-core/src/ids.rs`; product consumers import `mez_core::ids` directly | owned | No root compatibility facade remains. |
 | Terminal geometry, history, protocol, state, style, width, profiles, and screen parser | `mez-terminal` | `crates/mez-terminal/src/{geometry,history,protocol,state,style,width,profile,screen}.rs` and crate-owned screen tests | owned | The unused root profile facade is removed; remove remaining screen/style/state forwarding exports while keeping explicitly named product adapters for OSC 133 and host policy. |
 | Layout, session state/effects, PTY processes, input contracts, theme, and copy/readline primitives | `mez-mux` | `crates/mez-mux/src/{layout,session,process,input,theme,copy,readline}` | owned | The lower-crate fake pane-output-to-terminal-screen-to-headless-client flow covers input routing, resize/focus/layout effects, copy-mode transitions, and redraw. Styled terminal-derived copy state plus prompt buffer ownership, reverse history search, multiline navigation, and baseline terminal-input transitions are mux-owned; product transcript/Markdown normalization and selector candidate policy remain adapter concerns. |
 | Mux presentation geometry and canvas primitives | `mez-mux` | `crates/mez-mux/src/{presentation,render}.rs` and `crates/mez-mux/src/render/{overlay,prompt,style}.rs` | owned | Neutral window render planning (including zoom selection, pane geometry, frame reservations, and divider-frame merging), pane-to-canvas composition, divider rendering, exact-width pane/window/group frame-row composition, generic frame/status template expansion, semantic right-status composition and placement, attached-client status-row composition, Unicode-aware window/group frame pillbox layout, and prompt wrapping/viewport/cursor/shadow-region layout are mux-owned. Product pane content, prompt kinds and summary policy, field resolution, merged-frame overlays, palettes, animation, and hit-action policy remain adapters. |
@@ -69,7 +69,6 @@ persistence, transport, and composition adapters.
 
 The following current exports are migration markers, not completion evidence:
 
-- `src/lib.rs` re-exports `mez_core::ids`.
 - `src/agent/mod.rs` broadly re-exports `mez-agent` contracts and product
   implementations through one facade.
 - `src/terminal/mod.rs` still forwards product copy/render surfaces; mux theme

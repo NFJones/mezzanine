@@ -8,8 +8,8 @@ use super::{
 };
 use crate::MezError;
 use crate::error::Result;
-use crate::ids::IdFactory;
-use crate::ids::{AgentId, PaneId, WindowId};
+use mez_core::ids::IdFactory;
+use mez_core::ids::{AgentId, PaneId, WindowId};
 
 /// Carries Collecting Fanout Sink state for this subsystem.
 ///

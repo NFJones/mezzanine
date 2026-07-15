@@ -23,7 +23,7 @@ use mez_mux::layout::SplitDirection;
 /// Resolves typed snapshot command outcomes through the live runtime snapshot repository.
 pub(super) fn resolve_runtime_layout_command_outcome(
     service: &mut RuntimeSessionService,
-    active_client_id: &mut crate::ids::ClientId,
+    active_client_id: &mut mez_core::ids::ClientId,
     outcome: CommandOutcome,
 ) -> Result<CommandOutcome> {
     match outcome {
@@ -75,7 +75,7 @@ fn new_layout_uuid() -> String {
 /// Saves the current layout through the runtime snapshot repository path.
 fn runtime_layout_save_command(
     service: &mut RuntimeSessionService,
-    active_client_id: &mut crate::ids::ClientId,
+    active_client_id: &mut mez_core::ids::ClientId,
     snapshots: &SnapshotRepository,
     name: Option<String>,
 ) -> Result<String> {
@@ -100,7 +100,7 @@ fn runtime_layout_save_command(
 /// Resumes a live session snapshot through the runtime snapshot resume control path.
 fn runtime_layout_load_command(
     service: &mut RuntimeSessionService,
-    active_client_id: &mut crate::ids::ClientId,
+    active_client_id: &mut mez_core::ids::ClientId,
     snapshots: &SnapshotRepository,
     selector: &LayoutLoadSelector,
 ) -> Result<String> {
@@ -126,7 +126,7 @@ fn runtime_layout_load_status_message(selector: &LayoutLoadSelector) -> String {
 /// Dispatches a snapshot control request and tracks a re-bound primary client after resume.
 fn dispatch_runtime_snapshot_terminal_command(
     service: &mut RuntimeSessionService,
-    active_client_id: &mut crate::ids::ClientId,
+    active_client_id: &mut mez_core::ids::ClientId,
     snapshots: &SnapshotRepository,
     body: &str,
 ) -> Result<String> {
@@ -208,7 +208,7 @@ fn runtime_compare_snapshot_recency(
 /// creation and resize paths used by key bindings, control requests, and MAAP.
 pub(super) fn execute_runtime_layout_terminal_command(
     service: &mut RuntimeSessionService,
-    primary_client_id: &crate::ids::ClientId,
+    primary_client_id: &mez_core::ids::ClientId,
     invocation: &CommandInvocation,
 ) -> Result<Option<CommandOutcome>> {
     match invocation.name.as_str() {
@@ -424,7 +424,7 @@ pub(super) fn execute_runtime_layout_terminal_command(
 /// Closes a live pane and terminates the runtime pane process it owns.
 pub(super) fn runtime_kill_pane_command(
     service: &mut RuntimeSessionService,
-    primary_client_id: &crate::ids::ClientId,
+    primary_client_id: &mez_core::ids::ClientId,
     invocation: &CommandInvocation,
 ) -> Result<CommandOutcome> {
     let force = invocation.has_flag("-f", "--force");
@@ -477,7 +477,7 @@ pub(super) fn runtime_kill_pane_command(
 /// Closes a live window and terminates all runtime pane processes it owns.
 pub(super) fn runtime_kill_window_command(
     service: &mut RuntimeSessionService,
-    primary_client_id: &crate::ids::ClientId,
+    primary_client_id: &mez_core::ids::ClientId,
     invocation: &CommandInvocation,
 ) -> Result<CommandOutcome> {
     let force = invocation.has_flag("-f", "--force");
@@ -532,7 +532,7 @@ pub(super) fn runtime_kill_window_command(
 /// Closes a live window group and terminates all runtime pane processes it owns.
 pub(super) fn runtime_kill_group_command(
     service: &mut RuntimeSessionService,
-    primary_client_id: &crate::ids::ClientId,
+    primary_client_id: &mez_core::ids::ClientId,
     invocation: &CommandInvocation,
 ) -> Result<CommandOutcome> {
     let force = invocation.has_flag("-f", "--force");

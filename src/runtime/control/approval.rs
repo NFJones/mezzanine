@@ -18,7 +18,7 @@ impl RuntimeSessionService {
         &mut self,
         body: &str,
         request: &crate::control::JsonRpcRequest,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
     ) -> String {
         let cache_key = if request.method == "approval/decide" {
             let params = request.params.as_deref().unwrap_or("{}");

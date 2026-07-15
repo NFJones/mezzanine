@@ -121,7 +121,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn apply_primary_prompt_terminal_action(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         action: &TerminalClientLoopAction,
         queue_for_adapter: bool,
     ) -> Result<bool> {
@@ -146,7 +146,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(in crate::runtime) fn apply_primary_prompt_input(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         input: &[u8],
         queue_for_adapter: bool,
     ) -> Result<bool> {
@@ -286,7 +286,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn apply_attached_agent_prompt_input(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         input: &[u8],
     ) -> Result<bool> {
         if input.is_empty() {
@@ -303,7 +303,7 @@ impl RuntimeSessionService {
     /// pane-local prompt before bytes are decoded by readline.
     pub(in crate::runtime) fn apply_attached_agent_prompt_input_for_pane(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
         input: &[u8],
     ) -> Result<bool> {
@@ -445,7 +445,7 @@ impl RuntimeSessionService {
     /// stopped consistently before the pane-local prompt is hidden.
     fn apply_agent_prompt_interrupt_or_exit(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
     ) -> Result<bool> {
         let command = if self.agent_shell_pane_has_active_turn(pane_id) {
@@ -470,7 +470,7 @@ impl RuntimeSessionService {
     /// Applies the Ctrl+C interrupt or double-confirm idle exit contract.
     fn apply_agent_prompt_ctrl_c_interrupt_or_confirm_exit(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
     ) -> Result<bool> {
         const CTRL_C_EXIT_CONFIRM_WINDOW_MS: u64 = 3_000;

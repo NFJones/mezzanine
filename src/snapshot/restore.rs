@@ -4,8 +4,8 @@
 //! actual session reconstruction to the session module.
 
 use crate::error::{MezError, Result};
-use crate::ids::{PaneId, SessionId, WindowGroupId, WindowId};
 use crate::shell::ResolvedShell;
+use mez_core::ids::{PaneId, SessionId, WindowGroupId, WindowId};
 use mez_mux::layout::{LayoutPolicy, PaneGeometry, Size};
 use mez_mux::session::{
     RestoredPane, RestoredSessionState, RestoredWindow, RestoredWindowGroup, Session,

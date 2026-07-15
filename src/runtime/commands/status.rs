@@ -57,7 +57,7 @@ impl RuntimeSessionService {
     /// Executes `/title` against the active runtime window title.
     pub(super) fn execute_agent_shell_title_command(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
         input: &str,
     ) -> Result<AgentShellCommandOutcome> {

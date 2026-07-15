@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use crate::ids::{AgentId, IdFactory, PaneId, WindowId};
+use mez_core::ids::{AgentId, IdFactory, PaneId, WindowId};
 use serde::{Deserialize, Serialize};
 
 /// Defines the MMP PROTOCOL const used by this subsystem.

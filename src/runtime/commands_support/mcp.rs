@@ -248,7 +248,7 @@ pub(in crate::runtime) fn runtime_apply_live_override_mutations(
 /// - `event_source`: Lifecycle event source describing the command path.
 pub(super) fn runtime_apply_permission_live_override(
     service: &mut RuntimeSessionService,
-    caller_client_id: Option<&crate::ids::ClientId>,
+    caller_client_id: Option<&mez_core::ids::ClientId>,
     path: &str,
     value: &str,
     event_source: &str,

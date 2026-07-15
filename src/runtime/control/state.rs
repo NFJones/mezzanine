@@ -127,7 +127,7 @@ impl RuntimeSessionService {
     pub(super) fn dispatch_runtime_event_list_request(
         &self,
         request: &crate::control::JsonRpcRequest,
-        caller_client_id: &crate::ids::ClientId,
+        caller_client_id: &mez_core::ids::ClientId,
     ) -> Result<String> {
         let event_log = self
             .event_log

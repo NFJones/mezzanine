@@ -37,7 +37,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn paste_most_recent_buffer_to_active_pane(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
     ) -> Result<bool> {
         let Some(source) = self.most_recent_paste_buffer_source() else {
             return Ok(false);
@@ -53,7 +53,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(in crate::runtime) fn paste_clipboard_or_most_recent_buffer_to_pane(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         descriptor: &PaneDescriptor,
     ) -> Result<bool> {
         let Some(source) = self.clipboard_or_most_recent_paste_source() else {
@@ -66,7 +66,7 @@ impl RuntimeSessionService {
     /// one is visible, otherwise into the clicked pane.
     pub(super) fn paste_clipboard_or_most_recent_buffer_to_text_entry_or_pane(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         descriptor: &PaneDescriptor,
         queue_for_adapter: bool,
     ) -> Result<bool> {
@@ -84,7 +84,7 @@ impl RuntimeSessionService {
     /// Routes one paste source to a prompt text entry or a pane PTY.
     pub(super) fn paste_source_to_text_entry_or_pane(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         descriptor: &PaneDescriptor,
         source: RuntimePasteSource,
         queue_for_adapter: bool,
@@ -156,7 +156,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn paste_source_to_pane(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         descriptor: &PaneDescriptor,
         source: RuntimePasteSource,
     ) -> Result<bool> {

@@ -155,7 +155,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn execute_agent_shell_command(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         input: &str,
     ) -> Result<String> {
         self.execute_agent_shell_command_with_display(primary_client_id, input, input)
@@ -165,7 +165,7 @@ impl RuntimeSessionService {
     /// form for pane transcript rendering.
     pub(in crate::runtime) fn execute_agent_shell_command_with_display(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         input: &str,
         display_input: &str,
     ) -> Result<String> {
@@ -181,7 +181,7 @@ impl RuntimeSessionService {
     /// form for pane transcript rendering.
     fn execute_agent_shell_command_with_display_inner(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         input: &str,
         display_input: &str,
         queue_external_effects_for_adapter: bool,
@@ -716,7 +716,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub async fn execute_agent_shell_command_async(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         input: &str,
     ) -> Result<String> {
         let slash_invocation = parse_slash_command(input).ok().flatten();

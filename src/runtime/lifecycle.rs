@@ -63,7 +63,7 @@ impl RuntimeSessionService {
         interactive: bool,
         terminal_size: Size,
         now_unix_seconds: u64,
-    ) -> Result<crate::ids::ClientId> {
+    ) -> Result<mez_core::ids::ClientId> {
         self.require_attachable()?;
         let terminal = ClientTerminalDescriptor {
             columns: terminal_size.columns,
@@ -101,7 +101,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn detach_primary(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         terminal_size: Size,
     ) -> Result<()> {
         self.require_live()?;
@@ -140,7 +140,7 @@ impl RuntimeSessionService {
     /// remain identical to the compatibility request path.
     pub fn apply_primary_client_resize_event(
         &mut self,
-        client_id: &crate::ids::ClientId,
+        client_id: &mez_core::ids::ClientId,
         size: Size,
     ) -> Result<bool> {
         if self.session.primary_client_id() != Some(client_id) {
@@ -205,7 +205,7 @@ impl RuntimeSessionService {
     /// can distinguish user-initiated detach from fd hangup or service exit.
     pub fn apply_primary_client_disconnect_event(
         &mut self,
-        client_id: &crate::ids::ClientId,
+        client_id: &mez_core::ids::ClientId,
         reason: impl Into<String>,
     ) -> Result<bool> {
         if self.session.primary_client_id() != Some(client_id) {
@@ -233,7 +233,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn kill_session(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         force: bool,
     ) -> Result<()> {
         self.require_live()?;

@@ -4,7 +4,7 @@
 //! emits JSON responses suitable for framed transport replies.
 
 use crate::error::{MezError, Result};
-use crate::ids::{AgentId, StableId};
+use mez_core::ids::{AgentId, StableId};
 
 use super::framing::encode_mmp_body;
 use super::json::{

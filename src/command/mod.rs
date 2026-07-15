@@ -17,7 +17,7 @@ use crate::config::{
     validate_config_file,
 };
 use crate::error::{MezError, Result};
-use crate::ids::ClientId;
+use mez_core::ids::ClientId;
 use mez_mux::input::{KeyBindings, KeyChord, KeyCode};
 use mez_mux::layout::{
     PaneNavigationDirection, PaneSizeSpec, ResizeAxis, ResizeDirection, SplitDirection,

@@ -16,7 +16,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn create_window_with_pane_process(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         name: impl Into<String>,
         select: bool,
         explicit_command: Option<&str>,
@@ -38,7 +38,7 @@ impl RuntimeSessionService {
     /// resizes the created pane before the PTY is opened.
     pub fn create_window_with_pane_process_with_options(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         name: impl Into<String>,
         select: bool,
         explicit_command: Option<&str>,
@@ -131,8 +131,8 @@ impl RuntimeSessionService {
     /// without stealing user focus.
     pub fn create_unfocused_window_in_group_with_pane_process(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
-        group_id: &crate::ids::WindowGroupId,
+        primary_client_id: &mez_core::ids::ClientId,
+        group_id: &mez_core::ids::WindowGroupId,
         name: impl Into<String>,
         layout_policy: mez_mux::layout::LayoutPolicy,
         start_directory: Option<&Path>,
@@ -153,7 +153,7 @@ impl RuntimeSessionService {
     /// Creates an unfocused window and pane process for session-owned orchestration.
     pub(in crate::runtime) fn create_unfocused_window_in_group_with_pane_process_session_owned(
         &mut self,
-        group_id: &crate::ids::WindowGroupId,
+        group_id: &mez_core::ids::WindowGroupId,
         name: impl Into<String>,
         layout_policy: mez_mux::layout::LayoutPolicy,
         start_directory: Option<&Path>,
@@ -171,8 +171,8 @@ impl RuntimeSessionService {
     /// Implements authenticated and session-owned unfocused window creation.
     fn create_unfocused_window_in_group_with_pane_process_internal(
         &mut self,
-        primary_client_id: Option<&crate::ids::ClientId>,
-        group_id: &crate::ids::WindowGroupId,
+        primary_client_id: Option<&mez_core::ids::ClientId>,
+        group_id: &mez_core::ids::WindowGroupId,
         name: impl Into<String>,
         layout_policy: mez_mux::layout::LayoutPolicy,
         start_directory: Option<&Path>,
@@ -244,7 +244,7 @@ impl RuntimeSessionService {
     /// session mutation is rolled back if the pane process cannot be spawned.
     pub fn create_group_with_pane_process(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         name: impl Into<String>,
         select: bool,
         explicit_command: Option<&str>,
@@ -311,7 +311,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn split_pane_with_process(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         direction: SplitDirection,
         explicit_command: Option<&str>,
     ) -> Result<PaneProcessStart> {
@@ -332,7 +332,7 @@ impl RuntimeSessionService {
     /// the pane and PTY are resized before process spawn.
     pub fn split_pane_with_process_with_options(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         direction: SplitDirection,
         select_new: bool,
         explicit_command: Option<&str>,
@@ -398,7 +398,7 @@ impl RuntimeSessionService {
     /// reusing the normal process, PTY-size synchronization, and rollback path.
     pub fn split_pane_in_window_with_process(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         window_id: &WindowId,
         direction: SplitDirection,
         select_new: bool,
@@ -442,7 +442,7 @@ impl RuntimeSessionService {
     /// Implements authenticated and session-owned background pane creation.
     fn split_pane_in_window_with_process_internal(
         &mut self,
-        primary_client_id: Option<&crate::ids::ClientId>,
+        primary_client_id: Option<&mez_core::ids::ClientId>,
         window_id: &WindowId,
         direction: SplitDirection,
         select_new: bool,
@@ -503,7 +503,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn resize_pane_pty(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         target: Option<&str>,
         size: Size,
     ) -> Result<PaneResizeUpdate> {
@@ -536,7 +536,7 @@ impl RuntimeSessionService {
     /// Resolves a size spec, resizes the pane PTY, and updates session state.
     pub fn resize_pane_pty_with_spec(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         target: Option<&str>,
         spec: PaneSizeSpec,
     ) -> Result<PaneResizeUpdate> {
@@ -562,7 +562,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn swap_panes_and_sync_pty_sizes(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         source: Option<&str>,
         destination: &str,
     ) -> Result<Vec<PaneResizeUpdate>> {
@@ -583,7 +583,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn break_pane_and_sync_pty_sizes(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         target: Option<&str>,
         name: Option<String>,
         select_new_window: bool,
@@ -612,7 +612,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn join_pane_and_sync_pty_sizes(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         source: Option<&str>,
         destination: &str,
         direction: SplitDirection,
@@ -712,7 +712,7 @@ impl RuntimeSessionService {
     /// Applies a primary terminal resize to session geometry and tracked pane PTYs.
     pub fn resize_attached_primary_terminal(
         &mut self,
-        primary_client_id: &crate::ids::ClientId,
+        primary_client_id: &mez_core::ids::ClientId,
         size: Size,
     ) -> Result<Vec<PaneResizeUpdate>> {
         self.require_live()?;

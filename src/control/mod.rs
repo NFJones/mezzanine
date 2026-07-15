@@ -24,13 +24,13 @@ use crate::event::{EventAudience, EventKind, EventLog, VisibleEvent};
 use crate::framing::{
     FrameContext, FrameOverflow, ProtocolFrame, decode_frame, encode_frame, render_frame_template,
 };
-use crate::ids::ClientId;
 use crate::mcp::{McpRegistry, McpServerKind, McpServerStatus};
 use crate::permissions::{
     ApprovalDecision, BlockedApprovalQueue, BlockedApprovalRequest, BlockedApprovalState,
 };
 use crate::project::{ProjectTrustRecord, ProjectTrustStore, TrustDecision};
 use crate::snapshot::{LayoutLoadPlan, SnapshotKind, SnapshotRepository, SnapshotState};
+use mez_core::ids::ClientId;
 use mez_mux::layout::{PaneSizeSpec, ResizeAxis, ResizeDirection, SplitDirection, Window};
 use mez_mux::session::{ClientRole, ClientState, ObserverDecisionState, Session, SessionState};
 
