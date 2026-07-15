@@ -14,6 +14,7 @@ pub mod paste;
 pub mod presentation;
 pub mod process;
 pub mod readline;
+pub mod render;
 pub mod session;
 pub mod theme;
 

@@ -8,8 +8,6 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use mez_terminal::{TerminalStyleSpan, TerminalStyledLine};
-
 /// Default maximum display-cell width for Mezzanine-owned agent log rows.
 pub(crate) const DEFAULT_AGENT_WRAP_COLUMN_CAP: usize = 120;
 
@@ -48,158 +46,6 @@ pub(crate) fn set_agent_wrap_column_cap(columns: usize) {
 /// Returns the process-wide maximum display width for Mezzanine-owned agent rows.
 pub(crate) fn agent_wrap_column_cap() -> usize {
     AGENT_WRAP_COLUMN_CAP.load(Ordering::Relaxed).max(1)
-}
-
-/// One display-cell slot in a Mezzanine-owned render canvas.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct TerminalRenderCell {
-    text: String,
-    continuation: bool,
-}
-
-impl TerminalRenderCell {
-    /// Builds one leading render cell containing a single glyph.
-    pub(super) fn from_char(ch: char) -> Self {
-        Self {
-            text: ch.to_string(),
-            continuation: false,
-        }
-    }
-
-    /// Builds one leading render cell containing a complete grapheme cluster.
-    pub(super) fn from_grapheme(grapheme: &str) -> Self {
-        Self {
-            text: grapheme.to_string(),
-            continuation: false,
-        }
-    }
-
-    /// Builds one continuation cell for a multi-column grapheme cluster.
-    pub(super) fn continuation() -> Self {
-        Self {
-            text: String::new(),
-            continuation: true,
-        }
-    }
-}
-
-/// Builds one render-canvas row initialized to the requested fill glyph.
-pub(super) fn blank_render_row(columns: usize, fill: char) -> Vec<TerminalRenderCell> {
-    vec![TerminalRenderCell::from_char(fill); columns]
-}
-
-/// Builds a render-canvas matrix initialized to the requested fill glyph.
-pub(super) fn blank_render_cells(
-    rows: usize,
-    columns: usize,
-    fill: char,
-) -> Vec<Vec<TerminalRenderCell>> {
-    (0..rows).map(|_| blank_render_row(columns, fill)).collect()
-}
-
-/// Writes one single-width cell while removing any overlapping wide glyph.
-///
-/// A divider or frame cell can land on either half of a previously rendered
-/// wide glyph. If only the sentinel half is overwritten, the leading glyph
-/// would still consume two terminal cells when collected into a string and
-/// would shift everything to its right. Clearing both halves keeps the canvas
-/// and the terminal's display-width model aligned.
-pub(super) fn write_single_width_cell(row: &mut [TerminalRenderCell], column: usize, glyph: char) {
-    if column >= row.len() {
-        return;
-    }
-    if row[column].continuation {
-        let mut left = column;
-        while left > 0 && row[left].continuation {
-            row[left] = TerminalRenderCell::from_char(' ');
-            left = left.saturating_sub(1);
-        }
-        row[left] = TerminalRenderCell::from_char(' ');
-    }
-    // Clear all continuation cells to the right.
-    let mut right = column.saturating_add(1);
-    while right < row.len() && row[right].continuation {
-        row[right] = TerminalRenderCell::from_char(' ');
-        right = right.saturating_add(1);
-    }
-    row[column] = TerminalRenderCell::from_char(glyph);
-}
-
-/// Writes bounded text into a terminal cell row, marking wide-glyph
-/// continuations with an internal sentinel.
-pub(super) fn write_text_cells(
-    row: &mut [TerminalRenderCell],
-    column_start: usize,
-    max_columns: usize,
-    text: &str,
-) {
-    let mut used = 0usize;
-    for grapheme in terminal_graphemes(&fit_width(text, max_columns)) {
-        let grapheme_width = terminal_grapheme_width(grapheme);
-        if grapheme_width == 0 {
-            continue;
-        }
-        if used.saturating_add(grapheme_width) > max_columns {
-            break;
-        }
-        let cell = column_start.saturating_add(used);
-        if cell >= row.len() {
-            break;
-        }
-        row[cell] = TerminalRenderCell::from_grapheme(grapheme);
-        for continuation in 1..grapheme_width {
-            let continuation_cell = cell.saturating_add(continuation);
-            if continuation_cell < row.len() {
-                row[continuation_cell] = TerminalRenderCell::continuation();
-            }
-        }
-        used = used.saturating_add(grapheme_width);
-    }
-}
-
-/// Collects display cells into terminal text while omitting internal wide-cell
-/// continuation sentinels.
-pub(super) fn collect_text_cells(row: Vec<TerminalRenderCell>) -> String {
-    let mut output = String::new();
-    for cell in row {
-        if cell.continuation {
-            continue;
-        }
-        output.push_str(&cell.text);
-    }
-    output
-}
-
-/// Fits terminal text to an exact display width, padding with spaces if needed.
-pub(super) fn fit_width(value: &str, width: usize) -> String {
-    let mut output = String::new();
-    let mut used = 0usize;
-    for grapheme in terminal_graphemes(value) {
-        let grapheme_width = terminal_grapheme_width(grapheme);
-        if used.saturating_add(grapheme_width) > width {
-            break;
-        }
-        output.push_str(grapheme);
-        used = used.saturating_add(grapheme_width);
-    }
-    if used < width {
-        output.push_str(&" ".repeat(width - used));
-    }
-    output
-}
-
-/// Returns the display width that would be occupied when fitting text to a
-/// bounded terminal row.
-pub(super) fn fitted_text_width(value: &str, max_width: usize) -> usize {
-    let mut used = 0usize;
-    for grapheme in terminal_graphemes(value) {
-        let grapheme_width = terminal_grapheme_width(grapheme);
-        if used.saturating_add(grapheme_width) > max_width {
-            break;
-        }
-        used = used.saturating_add(grapheme_width);
-    }
-    used
 }
 
 /// Returns the bounded display width used for Mezzanine-owned agent log rows.
@@ -287,148 +133,6 @@ fn wrap_agent_log_physical_line(line: &str, wrap_width: usize) -> Vec<String> {
     rows
 }
 
-/// Fits a styled terminal line and clips its style spans to the retained width.
-pub(super) fn fit_styled_width(line: &TerminalStyledLine, width: usize) -> TerminalStyledLine {
-    let text = fit_width(&line.text, width);
-    let retained_width = fitted_text_width(&line.text, width);
-    let style_spans = line
-        .style_spans
-        .iter()
-        .filter_map(|span| clip_style_span(*span, retained_width))
-        .collect::<Vec<_>>();
-    TerminalStyledLine {
-        text,
-        style_spans,
-        copy_text: line.copy_text.clone(),
-    }
-}
-
-/// Replaces one fixed-width column range with source style spans clipped to that range.
-///
-/// Text overlays in terminal and runtime render paths both need the same style
-/// invariant: preexisting spans outside the overlay range survive, overlapping
-/// portions are removed, and source spans are clipped to the overlay width then
-/// shifted into absolute terminal columns.
-pub(crate) fn overlay_fixed_column_style_spans(
-    spans: &mut Vec<TerminalStyleSpan>,
-    column_start: usize,
-    width: usize,
-    source_spans: &[TerminalStyleSpan],
-) {
-    let region_end = column_start.saturating_add(width);
-    let mut retained = Vec::with_capacity(spans.len().saturating_add(source_spans.len()));
-    for span in std::mem::take(spans) {
-        if style_span_overlaps_columns(span, column_start, region_end) {
-            retained.extend(style_span_segments_outside_range(
-                span,
-                column_start,
-                region_end,
-            ));
-        } else {
-            retained.push(span);
-        }
-    }
-    retained.extend(
-        source_spans
-            .iter()
-            .filter_map(|span| clip_style_span(*span, width))
-            .map(|span| offset_style_span(span, column_start)),
-    );
-    *spans = retained;
-}
-
-/// Returns whether a style span touches a half-open column range.
-pub(super) fn style_span_overlaps_columns(
-    span: TerminalStyleSpan,
-    start: usize,
-    end: usize,
-) -> bool {
-    span.start < end && span.start.saturating_add(span.length) > start
-}
-
-/// Keeps the parts of a style span that fall outside a replaced column range.
-pub(super) fn style_span_segments_outside_range(
-    span: TerminalStyleSpan,
-    start: usize,
-    end: usize,
-) -> Vec<TerminalStyleSpan> {
-    let span_end = span.start.saturating_add(span.length);
-    let mut segments = Vec::with_capacity(2);
-    if span.start < start {
-        segments.push(TerminalStyleSpan {
-            start: span.start,
-            length: start.saturating_sub(span.start),
-            rendition: span.rendition,
-        });
-    }
-    if span_end > end {
-        segments.push(TerminalStyleSpan {
-            start: end,
-            length: span_end.saturating_sub(end),
-            rendition: span.rendition,
-        });
-    }
-    segments
-        .into_iter()
-        .filter(|segment| segment.length > 0)
-        .collect()
-}
-
-/// Shifts a style span by a terminal column offset.
-pub(super) fn offset_style_span(
-    span: TerminalStyleSpan,
-    column_offset: usize,
-) -> TerminalStyleSpan {
-    TerminalStyleSpan {
-        start: span.start.saturating_add(column_offset),
-        length: span.length,
-        rendition: span.rendition,
-    }
-}
-
-/// Clips a style span to the given terminal row width.
-pub(super) fn clip_style_span(span: TerminalStyleSpan, width: usize) -> Option<TerminalStyleSpan> {
-    if span.start >= width {
-        return None;
-    }
-    let end = span.start.saturating_add(span.length).min(width);
-    Some(TerminalStyleSpan {
-        start: span.start,
-        length: end.saturating_sub(span.start),
-        rendition: span.rendition,
-    })
-    .filter(|span| span.length > 0)
-}
-
-/// Returns a display-column slice from one terminal line.
-pub(in crate::terminal) fn line_slice(line: &str, start: usize, end: usize) -> String {
-    let mut output = String::new();
-    let mut column = 0usize;
-    for grapheme in terminal_graphemes(line) {
-        let width = terminal_grapheme_width(grapheme);
-        let next = column.saturating_add(width);
-        if next <= start {
-            column = next;
-            continue;
-        }
-        if column < start && next > start {
-            column = next;
-            continue;
-        }
-        if column >= end || next > end {
-            break;
-        }
-        output.push_str(grapheme);
-        column = next;
-    }
-    output
-}
-
-/// Returns the terminal display column count for a value.
-pub(in crate::terminal) fn char_count(value: &str) -> usize {
-    terminal_text_width(value)
-}
-
 /// Returns the terminal display width of one Unicode scalar.
 pub(crate) fn terminal_char_width(ch: char) -> usize {
     mez_terminal::terminal_char_width(ch, terminal_emoji_width())
@@ -478,11 +182,10 @@ pub(crate) fn terminal_graphemes(value: &str) -> impl Iterator<Item = &str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_AGENT_WRAP_COLUMN_CAP, TerminalEmojiWidth, agent_log_wrap_width, fit_styled_width,
+        DEFAULT_AGENT_WRAP_COLUMN_CAP, TerminalEmojiWidth, agent_log_wrap_width,
         set_agent_wrap_column_cap, terminal_grapheme_width_for_emoji_width, terminal_text_width,
         wrap_agent_log_text,
     };
-    use mez_terminal::{GraphicRendition, TerminalStyleSpan, TerminalStyledLine};
 
     /// Verifies agent log wrapping uses the pane width until the default cap
     /// applies, so very wide terminals do not create unbounded transcript rows.
@@ -625,30 +328,5 @@ mod tests {
 
         assert_eq!(terminal_text_width(&wrapped[0]), 120);
         assert_eq!(terminal_text_width(&wrapped[1]), 10);
-    }
-
-    /// Verifies style spans are clipped to the display cells retained after text
-    /// fitting, not merely to the target pane width. A double-width glyph that
-    /// starts at the final pane column is dropped from text, so its style must
-    /// also be dropped instead of painting the remaining blank edge cell.
-    #[test]
-    fn fit_styled_width_drops_style_for_clipped_wide_glyph() {
-        let line = TerminalStyledLine {
-            text: "x界".to_string(),
-            style_spans: vec![TerminalStyleSpan {
-                start: 1,
-                length: 2,
-                rendition: GraphicRendition {
-                    inverse: true,
-                    ..GraphicRendition::default()
-                },
-            }],
-            copy_text: None,
-        };
-
-        let fitted = fit_styled_width(&line, 2);
-
-        assert_eq!(fitted.text, "x ");
-        assert!(fitted.style_spans.is_empty(), "{:?}", fitted.style_spans);
     }
 }

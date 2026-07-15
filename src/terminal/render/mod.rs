@@ -19,6 +19,13 @@ use mez_mux::presentation::{
     TerminalFramePosition, TerminalFrameStyle, TerminalWindowFrameContext,
     TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
 };
+pub(crate) use mez_mux::render::overlay_fixed_column_style_spans;
+use mez_mux::render::{
+    TerminalRenderCell, blank_render_cells, blank_render_row, clip_style_span, collect_text_cells,
+    fit_styled_width, fit_width, fitted_text_width, offset_style_span, style_span_overlaps_columns,
+    style_span_segments_outside_range, write_single_width_cell, write_text_cells,
+};
+pub(super) use mez_mux::render::{char_count, line_slice};
 use mez_mux::theme::{UiColorPair, UiTheme};
 
 // Client view composition and pane/window rendering.
@@ -84,15 +91,8 @@ use style::{
 };
 pub(crate) use text::{
     DEFAULT_AGENT_WRAP_COLUMN_CAP, TerminalEmojiWidth, agent_log_wrap_width, agent_wrap_column_cap,
-    overlay_fixed_column_style_spans, set_agent_wrap_column_cap, set_terminal_emoji_width,
-    terminal_grapheme_width, terminal_graphemes, terminal_text_width, wrap_agent_log_lines,
-};
-pub(super) use text::{char_count, line_slice};
-
-use text::{
-    TerminalRenderCell, blank_render_cells, blank_render_row, clip_style_span, collect_text_cells,
-    fit_styled_width, fit_width, fitted_text_width, offset_style_span, style_span_overlaps_columns,
-    style_span_segments_outside_range, write_single_width_cell, write_text_cells,
+    set_agent_wrap_column_cap, set_terminal_emoji_width, terminal_grapheme_width,
+    terminal_graphemes, terminal_text_width, wrap_agent_log_lines,
 };
 
 /// Defines the DEFAULT PANE FRAME TEMPLATE const used by this subsystem.

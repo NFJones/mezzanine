@@ -13,6 +13,7 @@ use crate::terminal::{
 };
 use mez_mux::layout::Size;
 use mez_mux::presentation::{ReadlinePromptRegion, RenderedClientView};
+use mez_mux::render::{char_count, fit_width, offset_style_span};
 use mez_mux::theme::{UiColorPair, UiTheme};
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalStyledLine};
 
@@ -22,8 +23,7 @@ use super::style::{
     terminal_color_contrast_ratio, terminal_color_luminance, terminal_color_relative_luminance,
 };
 use super::text::{
-    char_count, fit_width, offset_style_span, terminal_char_width, terminal_grapheme_width,
-    terminal_graphemes, terminal_text_width,
+    terminal_char_width, terminal_grapheme_width, terminal_graphemes, terminal_text_width,
 };
 use super::{
     AGENT_STATUS_SCAN_BAND_WIDTH, compose_client_presentation_with_styles,
