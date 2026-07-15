@@ -126,20 +126,3 @@ pub fn compose_modal_display_overlay_line_style_spans(
         })
         .collect()
 }
-
-/// Runs the status line rendition operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(crate) fn status_line_rendition(
-    kind: ClientStatusKind,
-    ui_theme: &UiTheme,
-) -> GraphicRendition {
-    match kind {
-        ClientStatusKind::Plain => ui_theme.colors.prompt.rendition(),
-        ClientStatusKind::CopyMode
-        | ClientStatusKind::PendingObserver
-        | ClientStatusKind::Diagnostic => ui_theme.colors.display_overlay.rendition(),
-    }
-}

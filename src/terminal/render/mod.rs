@@ -5,19 +5,17 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, BTreeMap, ClientStatusKind, ClientStatusLine,
-    GraphicRendition, MezError, MousePaneAgentStatusCell, MouseWindowActionFrameCell,
-    PaneAgentStatusField, PaneRenderInput, Result, TerminalClientLoopConfig, TerminalFrameContext,
-    TerminalPaneFrameContext, TerminalScreen, TerminalStyleSpan, TerminalStyledLine,
-    WindowFrameAction,
+    AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, BTreeMap, GraphicRendition, MezError,
+    MousePaneAgentStatusCell, MouseWindowActionFrameCell, PaneAgentStatusField, PaneRenderInput,
+    Result, TerminalClientLoopConfig, TerminalFrameContext, TerminalPaneFrameContext,
+    TerminalScreen, TerminalStyleSpan, TerminalStyledLine, WindowFrameAction,
 };
 use mez_mux::input::{MouseWindowFrameCell, MouseWindowGroupFrameCell};
 use mez_mux::layout::{PaneGeometry, Size, Window};
 use mez_mux::presentation::{ClientViewRole, ReadlinePromptRegion, RenderedClientView};
 use mez_mux::presentation::{
     TerminalFramePosition, TerminalFrameStyle, TerminalWindowFrameContext,
-    TerminalWindowGroupFrameContext, TerminalWindowStatusContext, compose_client_viewport,
-    plan_window_render,
+    TerminalWindowGroupFrameContext, TerminalWindowStatusContext, plan_window_render,
 };
 pub(crate) use mez_mux::render::overlay_fixed_column_style_spans;
 use mez_mux::render::{
@@ -58,6 +56,9 @@ pub use frame::{
     pane_frame_agent_status_pillbox_cells, window_frame_action_pillbox_cells,
     window_frame_pillbox_cells, window_group_frame_pillbox_cells,
 };
+pub use mez_mux::presentation::{
+    compose_client_presentation, compose_client_presentation_with_styles,
+};
 use mez_mux::presentation::{place_group_frame, place_window_frame};
 use mez_mux::render::{
     agent_status_running_gradient_palette, animated_scan_background, blend_terminal_color,
@@ -65,7 +66,6 @@ use mez_mux::render::{
     normalize_overlay_canvas, normalize_overlay_style_spans, overlay_text_style_width,
     push_or_extend_style_span,
 };
-pub(super) use overlay::status_line_rendition;
 pub use overlay::{
     compose_display_overlay_line_style_spans, compose_display_overlay_lines,
     compose_modal_display_overlay_line_style_spans, compose_modal_display_overlay_lines,
@@ -726,54 +726,4 @@ fn style_span_is_agent_prompt_block(
     display_rendition: GraphicRendition,
 ) -> bool {
     span.rendition == prompt_rendition || span.rendition == display_rendition
-}
-
-/// Runs the compose client presentation operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub fn compose_client_presentation(
-    view: &RenderedClientView,
-    status: Option<&ClientStatusLine>,
-) -> Vec<String> {
-    compose_client_presentation_with_styles(view, status).0
-}
-
-/// Runs the compose client presentation with styles operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub fn compose_client_presentation_with_styles(
-    view: &RenderedClientView,
-    status: Option<&ClientStatusLine>,
-) -> (Vec<String>, Vec<Vec<TerminalStyleSpan>>) {
-    let (mut lines, mut line_style_spans) = compose_client_viewport(view);
-    let target_rows = lines.len();
-    let target_columns = if view.requires_client_scroll {
-        usize::from(view.client_size.columns)
-    } else {
-        usize::from(view.authoritative_size.columns)
-    };
-    if let Some(status) = status
-        && target_rows > 0
-    {
-        let prefix = match status.kind {
-            ClientStatusKind::Plain => "",
-            ClientStatusKind::CopyMode => "copy: ",
-            ClientStatusKind::PendingObserver => "observer: ",
-            ClientStatusKind::Diagnostic => "status: ",
-        };
-        lines[target_rows - 1] = fit_width(&format!("{prefix}{}", status.text), target_columns);
-        line_style_spans[target_rows - 1].clear();
-        if target_columns > 0 {
-            line_style_spans[target_rows - 1].push(TerminalStyleSpan {
-                start: 0,
-                length: target_columns,
-                rendition: status_line_rendition(status.kind, &view.ui_theme),
-            });
-        }
-    }
-    (lines, line_style_spans)
 }

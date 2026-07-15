@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use mez_terminal::{TerminalSize, TerminalStyleSpan};
+use mez_terminal::{GraphicRendition, TerminalSize, TerminalStyleSpan};
 
 use crate::copy::CopyPosition;
 use crate::layout::{PaneGeometry, range_overlap_u16};
@@ -62,6 +62,28 @@ pub struct ReadlinePromptRegion {
     pub rows: usize,
 }
 
+/// Semantic role of one attached-client status row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientStatusKind {
+    /// Ordinary prompt or informational status.
+    Plain,
+    /// Copy-mode status.
+    CopyMode,
+    /// Observer waiting for promotion or synchronization.
+    PendingObserver,
+    /// Diagnostic status emitted by the product adapter.
+    Diagnostic,
+}
+
+/// One transport-neutral attached-client status row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientStatusLine {
+    /// Semantic status role used for prefix and style selection.
+    pub kind: ClientStatusKind,
+    /// Product-supplied status text without the semantic prefix.
+    pub text: String,
+}
+
 /// Transport-neutral rendered attached-client viewport.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedClientView {
@@ -113,6 +135,59 @@ pub struct RenderedClientView {
     pub agent_prompt_region: Option<ReadlinePromptRegion>,
     /// Whether the primary prompt is active.
     pub primary_prompt_active: bool,
+}
+
+/// Composes a rendered viewport and optional semantic status row as plain text.
+pub fn compose_client_presentation(
+    view: &RenderedClientView,
+    status: Option<&ClientStatusLine>,
+) -> Vec<String> {
+    compose_client_presentation_with_styles(view, status).0
+}
+
+/// Composes a rendered viewport and optional semantic status row with styles.
+pub fn compose_client_presentation_with_styles(
+    view: &RenderedClientView,
+    status: Option<&ClientStatusLine>,
+) -> (Vec<String>, Vec<Vec<TerminalStyleSpan>>) {
+    let (mut lines, mut line_style_spans) = compose_client_viewport(view);
+    let target_rows = lines.len();
+    let target_columns = if view.requires_client_scroll {
+        usize::from(view.client_size.columns)
+    } else {
+        usize::from(view.authoritative_size.columns)
+    };
+    if let Some(status) = status
+        && target_rows > 0
+    {
+        let prefix = match status.kind {
+            ClientStatusKind::Plain => "",
+            ClientStatusKind::CopyMode => "copy: ",
+            ClientStatusKind::PendingObserver => "observer: ",
+            ClientStatusKind::Diagnostic => "status: ",
+        };
+        lines[target_rows - 1] =
+            crate::render::fit_width(&format!("{prefix}{}", status.text), target_columns);
+        line_style_spans[target_rows - 1].clear();
+        if target_columns > 0 {
+            line_style_spans[target_rows - 1].push(TerminalStyleSpan {
+                start: 0,
+                length: target_columns,
+                rendition: status_line_rendition(status.kind, &view.ui_theme),
+            });
+        }
+    }
+    (lines, line_style_spans)
+}
+
+/// Resolves the theme rendition for one semantic attached-client status row.
+pub fn status_line_rendition(kind: ClientStatusKind, ui_theme: &UiTheme) -> GraphicRendition {
+    match kind {
+        ClientStatusKind::Plain => ui_theme.colors.prompt.rendition(),
+        ClientStatusKind::CopyMode
+        | ClientStatusKind::PendingObserver
+        | ClientStatusKind::Diagnostic => ui_theme.colors.display_overlay.rendition(),
+    }
 }
 
 /// Composes the visible text and style rows for an attached-client viewport.
@@ -1235,8 +1310,9 @@ mod tests {
 
     use super::{
         AttachedClientEndpointReadiness, AttachedClientOutputDecision, AttachedClientStepPlan,
-        ClientViewRole, RenderedClientView, TerminalCursorStyle, TerminalFramePosition,
-        TerminalFrameStyle, apply_client_view_offset, classify_attached_client_readiness,
+        ClientStatusKind, ClientStatusLine, ClientViewRole, RenderedClientView,
+        TerminalCursorStyle, TerminalFramePosition, TerminalFrameStyle, apply_client_view_offset,
+        classify_attached_client_readiness, compose_client_presentation_with_styles,
         compose_client_viewport, max_viewport_column, max_viewport_row, pane_canvas_placements,
         pane_content_size_for_geometry, pane_divider_cells, pane_divider_glyph,
         pane_frame_merges_into_divider, pane_render_region_size_for_geometry, place_group_frame,
@@ -1315,6 +1391,54 @@ mod tests {
 
         apply_client_view_offset(&mut view, 99, 99);
         assert_eq!((view.viewport_row, view.viewport_column), (2, 4));
+    }
+
+    /// Verifies attached-client status composition is fully mux-owned by
+    /// applying semantic prefixes, exact viewport width, and theme styling
+    /// without relying on the product terminal renderer.
+    #[test]
+    fn client_status_composition_is_mux_owned() {
+        let view = RenderedClientView {
+            role: ClientViewRole::Primary,
+            authoritative_size: Size::new(8, 2).unwrap(),
+            client_size: Size::new(8, 2).unwrap(),
+            lines: vec!["pane".to_owned(), "old".to_owned()],
+            line_style_spans: vec![Vec::new(), Vec::new()],
+            selection: None,
+            requires_client_scroll: false,
+            viewport_row: 0,
+            viewport_column: 0,
+            cursor_row: 0,
+            cursor_column: 0,
+            cursor_visible: false,
+            cursor_style: TerminalCursorStyle::Block,
+            cursor_blink: false,
+            cursor_blink_interval_ms: 500,
+            application_keypad: false,
+            bracketed_paste: false,
+            focus_events: false,
+            alternate_screen: false,
+            host_mouse_reporting: true,
+            animation_refresh_interval_ms: 0,
+            ui_theme: Default::default(),
+            agent_prompt_region: None,
+            primary_prompt_active: false,
+        };
+        let status = ClientStatusLine {
+            kind: ClientStatusKind::CopyMode,
+            text: "line 2".to_owned(),
+        };
+
+        let (lines, spans) = compose_client_presentation_with_styles(&view, Some(&status));
+
+        assert_eq!(lines, ["pane", "copy: li"]);
+        assert_eq!(spans[1].len(), 1);
+        assert_eq!(spans[1][0].start, 0);
+        assert_eq!(spans[1][0].length, 8);
+        assert_eq!(
+            spans[1][0].rendition,
+            view.ui_theme.colors.display_overlay.rendition()
+        );
     }
 
     /// Verifies the mux-owned attached-client result envelope remains generic

@@ -63,10 +63,9 @@ mod screen;
 pub(crate) use client_loop::route_client_input_actions;
 pub use client_loop::{
     AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, AttachedTerminalClientLoopConfig,
-    AttachedTerminalClientLoopReport, AttachedTerminalClientStepPlan, ClientStatusKind,
-    ClientStatusLine, ReadlinePromptClientPresentation, ReadlinePromptStatusRow,
-    TerminalClientLoopAction, attached_terminal_output_disconnected,
-    plan_attached_terminal_client_step, route_client_input,
+    AttachedTerminalClientLoopReport, AttachedTerminalClientStepPlan,
+    ReadlinePromptClientPresentation, ReadlinePromptStatusRow, TerminalClientLoopAction,
+    attached_terminal_output_disconnected, plan_attached_terminal_client_step, route_client_input,
 };
 #[cfg(test)]
 pub use client_loop::{
@@ -92,6 +91,7 @@ pub use fd::{
     TerminalRawModeGuard, read_attached_terminal_size,
 };
 pub use host_clipboard::{HostClipboard, HostClipboardCommand};
+pub use mez_mux::presentation::{ClientStatusKind, ClientStatusLine};
 pub use mez_mux::presentation::{apply_client_view_offset, max_viewport_column, max_viewport_row};
 pub use mouse::{
     MouseAction, MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MouseWindowActionFrameCell,

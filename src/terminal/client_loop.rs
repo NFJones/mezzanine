@@ -27,7 +27,7 @@ use mez_mux::input::{
 };
 #[cfg(test)]
 use mez_mux::layout::Size;
-use mez_mux::presentation::{AttachedTerminalOutputModes, RenderedClientView};
+use mez_mux::presentation::{AttachedTerminalOutputModes, ClientStatusLine, RenderedClientView};
 #[cfg(test)]
 use mez_mux::presentation::{ClientViewRole, TerminalCursorStyle};
 #[cfg(test)]
@@ -108,52 +108,6 @@ pub enum TerminalClientLoopAction {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     ReportUnboundPrefix(KeyChord),
-}
-
-/// Carries Client Status Kind state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClientStatusKind {
-    /// Represents the Plain case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Plain,
-    /// Represents the Copy Mode case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    CopyMode,
-    /// Represents the Pending Observer case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    PendingObserver,
-    /// Represents the Diagnostic case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Diagnostic,
-}
-
-/// Carries Client Status Line state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClientStatusLine {
-    /// Stores the kind value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub kind: ClientStatusKind,
-    /// Stores the text value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub text: String,
 }
 
 /// Carries Readline Prompt Status Row state for this subsystem.
