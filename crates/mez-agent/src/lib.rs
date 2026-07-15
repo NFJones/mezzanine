@@ -14,6 +14,8 @@ pub mod accounting;
 pub mod action_gates;
 /// Provider-independent initial action-result planning.
 pub mod action_planning;
+/// Provider-independent MAAP action recovery policy.
+pub mod action_recovery;
 /// Provider-independent MAAP action-result contracts.
 pub mod action_result;
 /// Provider-independent action-result context and transcript rendering.
@@ -127,6 +129,11 @@ pub use action_planning::{
     ActionPlanningError, ActionPlanningInput, ActionPlanningResult, action_auto_allow_reason,
     action_supports_auto_allow, plan_action_result, say_action_structured_content_json,
     shell_action_structured_content_json,
+};
+pub use action_recovery::{
+    ActionRecoveryError, ActionRecoveryResult, capability_continuation_request,
+    capability_requests_from_batch, disallowed_action_capability_continuation_request,
+    maap_repair_request, mixed_capability_continuation_request, validate_batch_allowed_actions,
 };
 pub use action_result::{
     ActionContentBlock, ActionError, ActionResult, ActionResultContractError,

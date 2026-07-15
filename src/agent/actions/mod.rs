@@ -34,8 +34,6 @@ pub use transcript::{
 
 // Shell/MCP executors, action execution, and transcript persistence.
 
-/// Maximum previous-response bytes included in one ephemeral MAAP repair prompt.
-const MAAP_REPAIR_RAW_TEXT_LIMIT_BYTES: usize = 12 * 1024;
 /// Maximum previous-response bytes included in a terminal failure summary prompt.
 const FAILURE_SUMMARY_RAW_TEXT_LIMIT_BYTES: usize = 8 * 1024;
 

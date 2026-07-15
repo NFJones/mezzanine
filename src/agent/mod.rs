@@ -78,16 +78,18 @@ pub use maap::{
     parse_fenced_maap_action_batch, parse_fenced_maap_action_batch_for_turn,
     parse_maap_action_batch_json, parse_maap_action_batch_json_for_turn,
 };
+#[cfg(test)]
+use mez_agent::AgentCapability;
 use mez_agent::action_text_content_blocks;
 use mez_agent::{
-    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentCapability, AgentContext,
-    AgentLogLevel, AgentShellStore, AgentShellVisibility, AgentTranscriptEntry,
-    AgentTranscriptRole, AgentTurnLedger, AgentTurnRecord, AgentTurnState, AllowedAction,
-    AllowedActionSet, ContextSourceKind, LocalActionPlan, MaapBatch, McpExecutionRequest,
-    McpExecutionResponse, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest,
-    ModelTokenUsage, ModelTokenUsageKey, ProviderHttpRequest, ProviderHttpResponse,
-    ProviderTranscriptEvent, SayStatus, TranscriptPersistence, agent_shell_help_display,
-    agent_shell_mcp_display, agent_shell_permissions_display, agent_shell_status_display,
+    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentLogLevel,
+    AgentShellStore, AgentShellVisibility, AgentTranscriptEntry, AgentTranscriptRole,
+    AgentTurnLedger, AgentTurnRecord, AgentTurnState, AllowedActionSet, ContextSourceKind,
+    LocalActionPlan, MaapBatch, McpExecutionRequest, McpExecutionResponse, ModelInteractionKind,
+    ModelMessage, ModelMessageRole, ModelRequest, ModelTokenUsage, ModelTokenUsageKey,
+    ProviderHttpRequest, ProviderHttpResponse, ProviderTranscriptEvent, SayStatus,
+    TranscriptPersistence, agent_shell_help_display, agent_shell_mcp_display,
+    agent_shell_permissions_display, agent_shell_status_display,
 };
 pub use network::{
     execute_network_action_with_transport_async, network_action_structured_content_json,

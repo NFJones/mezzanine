@@ -24,12 +24,9 @@ use super::execution::{
     execute_local_action, execute_mcp_action_through_runtime,
 };
 use super::recovery::{
-    FailureSummaryInput, FailureSummaryScope, capability_continuation_request,
-    capability_requests_from_batch, disallowed_action_capability_continuation_request,
-    failed_maap_validation_execution_with_summary_async, maap_provider_error_is_repairable,
-    maap_repair_request, mixed_capability_continuation_request,
-    summarize_controller_failure_execution_async, summarize_provider_failure_execution_async,
-    validate_batch_allowed_actions,
+    FailureSummaryInput, FailureSummaryScope, failed_maap_validation_execution_with_summary_async,
+    maap_provider_error_is_repairable, summarize_controller_failure_execution_async,
+    summarize_provider_failure_execution_async,
 };
 #[cfg(test)]
 use super::recovery::{
@@ -40,7 +37,9 @@ use mez_agent::turn_state_from_action_results;
 use mez_agent::{
     AgentTurnNegotiation, AgentTurnProviderFailureDecision, AgentTurnResponseDecision,
     MemoryActionBudget, ProviderResponseAcceptance, SubagentScopeDeclaration,
-    apply_default_action_gates,
+    apply_default_action_gates, capability_continuation_request, capability_requests_from_batch,
+    disallowed_action_capability_continuation_request, maap_repair_request,
+    mixed_capability_continuation_request, validate_batch_allowed_actions,
 };
 
 /// Maximum number of ephemeral provider retries after a MAAP validation error.
@@ -120,6 +119,7 @@ fn plan_batch_continuation(
         return Ok(BatchContinuationPlan::Continue(Box::new(next_request)));
     }
     if let Err(error) = validate_batch_allowed_actions(input.batch, input.request) {
+        let error = MezError::invalid_args(error.message());
         let capability_recovery_base =
             if input.response_request.interaction_kind == ModelInteractionKind::Repair {
                 negotiation.durable_request()
@@ -129,7 +129,7 @@ fn plan_batch_continuation(
         if let Some(next_request) = disallowed_action_capability_continuation_request(
             capability_recovery_base,
             input.batch,
-            &error,
+            error.message(),
         ) {
             negotiation.reset_recovery();
             return Ok(BatchContinuationPlan::Continue(Box::new(next_request)));
@@ -179,7 +179,10 @@ fn plan_batch_continuation(
                 negotiation.recovery_attempts(),
             )),
         )),
-        Err(error) => Err((error, "capability_negotiation")),
+        Err(error) => Err((
+            MezError::invalid_args(error.message()),
+            "capability_negotiation",
+        )),
     }
 }
 
