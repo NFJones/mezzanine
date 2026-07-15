@@ -41,16 +41,16 @@ mod copy;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod fd;
+/// Exposes the host clipboard adapter boundary.
+///
+/// The nested module keeps its implementation details isolated while this
+/// declaration makes the boundary available to the crate.
+mod host_clipboard;
 /// Exposes the mouse module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod mouse;
-/// Exposes the paste module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-mod paste;
 /// Exposes the render module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -93,12 +93,12 @@ pub use fd::{
     TerminalClientLoopConfig, TerminalCursorStyle, TerminalFdInterest, TerminalFrameContext,
     TerminalPaneFrameContext, TerminalRawModeGuard, read_attached_terminal_size,
 };
+pub use host_clipboard::{HostClipboard, HostClipboardCommand};
 pub use mouse::{
     CopyModeKeyAction, MouseAction, MousePaneAgentSelectorCell, MousePaneAgentStatusCell,
     MouseWindowActionFrameCell, PaneAgentStatusField, WindowFrameAction, WindowFrameCommandKind,
     classify_mouse_event,
 };
-pub use paste::{HostClipboard, HostClipboardCommand};
 pub(crate) use render::overlay_fixed_column_style_spans;
 #[cfg(test)]
 pub(crate) use render::pane_divider_glyph_for_test;
