@@ -40,6 +40,8 @@ pub mod mcp;
 pub mod memory;
 /// OpenAI request rendering and prompt-cache diagnostics.
 pub mod openai_cache;
+/// Provider-independent OpenAI-compatible Chat Completions request shaping.
+pub mod openai_chat_completions;
 /// Provider-independent OpenAI Responses request construction.
 pub mod openai_request;
 /// Provider-independent OpenAI Responses API response parsing.
@@ -143,6 +145,9 @@ pub use openai_cache::{
     openai_prompt_cache_diagnostics_for_request,
     openai_prompt_cache_diagnostics_for_request_with_stream,
     openai_stable_prefix_material_for_request,
+};
+pub use openai_chat_completions::{
+    OpenAiChatCompletionsOptions, openai_chat_completions_request_body,
 };
 pub use openai_request::{
     openai_responses_request_body, openai_responses_request_body_with_stream,
