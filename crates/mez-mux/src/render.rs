@@ -15,6 +15,16 @@ use crate::presentation::{
     PaneDividerCell, TerminalFrameStyle, pane_canvas_placements, pane_divider_cells,
 };
 
+mod style;
+
+pub use style::{
+    agent_status_running_gradient_palette, animated_scan_background, blend_terminal_color,
+    contrasting_binary_foreground, gradient_highlight_for_offset, neutral_surface_step,
+    push_or_extend_style_span, shifted_channel, srgb_channel_to_linear,
+    terminal_color_contrast_ratio, terminal_color_luminance, terminal_color_relative_luminance,
+    terminal_color_rgb,
+};
+
 /// One display-cell slot in a mux-owned render canvas.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalRenderCell {
@@ -988,21 +998,6 @@ pub fn overlay_fixed_column_style_spans(
             .map(|span| offset_style_span(span, column_start)),
     );
     *spans = retained;
-}
-
-/// Appends a style span or extends the final adjacent span with the same rendition.
-pub fn push_or_extend_style_span(spans: &mut Vec<TerminalStyleSpan>, span: TerminalStyleSpan) {
-    if span.length == 0 {
-        return;
-    }
-    if let Some(previous) = spans.last_mut()
-        && previous.rendition == span.rendition
-        && previous.start.saturating_add(previous.length) == span.start
-    {
-        previous.length = previous.length.saturating_add(span.length);
-        return;
-    }
-    spans.push(span);
 }
 
 /// Returns whether a style span touches a half-open column range.

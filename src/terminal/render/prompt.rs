@@ -18,10 +18,6 @@ use mez_mux::theme::{UiColorPair, UiTheme};
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalStyledLine};
 
 use super::super::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
-use super::style::{
-    animated_scan_background, gradient_highlight_for_offset, push_or_extend_style_span,
-    terminal_color_contrast_ratio, terminal_color_luminance, terminal_color_relative_luminance,
-};
 use super::text::{
     terminal_char_width, terminal_grapheme_width, terminal_graphemes, terminal_text_width,
 };
@@ -29,6 +25,10 @@ use super::{
     AGENT_STATUS_SCAN_BAND_WIDTH, compose_client_presentation_with_styles,
     normalize_overlay_canvas, normalize_overlay_style_spans, overlay_text_style_width,
     pane_agent_prompt_space_reserved,
+};
+use mez_mux::render::{
+    animated_scan_background, gradient_highlight_for_offset, push_or_extend_style_span,
+    terminal_color_contrast_ratio, terminal_color_luminance, terminal_color_relative_luminance,
 };
 
 const MIN_PROMPT_SHADOW_CONTRAST_RATIO: f64 = 4.5;

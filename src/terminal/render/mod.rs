@@ -40,7 +40,6 @@ mod frame;
 mod overlay;
 mod panes;
 mod prompt;
-mod style;
 
 mod text;
 
@@ -60,6 +59,11 @@ pub use frame::{
     window_frame_pillbox_cells, window_group_frame_pillbox_cells,
 };
 use mez_mux::presentation::{place_group_frame, place_window_frame};
+use mez_mux::render::{
+    agent_status_running_gradient_palette, animated_scan_background, blend_terminal_color,
+    contrasting_binary_foreground, gradient_highlight_for_offset, neutral_surface_step,
+    push_or_extend_style_span,
+};
 pub use overlay::{
     compose_display_overlay_line_style_spans, compose_display_overlay_lines,
     compose_modal_display_overlay_line_style_spans, compose_modal_display_overlay_lines,
@@ -87,11 +91,6 @@ pub use prompt::{
     compose_prompt_overlay_presentation, compose_prompt_overlay_presentation_with_styles,
     compose_prompt_region_presentation_with_styles, compose_readline_prompt_client_presentation,
     render_readline_prompt_status_row,
-};
-use style::{
-    agent_status_running_gradient_palette, animated_scan_background, blend_terminal_color,
-    contrasting_binary_foreground, gradient_highlight_for_offset, neutral_surface_step,
-    push_or_extend_style_span,
 };
 pub(crate) use text::{
     DEFAULT_AGENT_WRAP_COLUMN_CAP, TerminalEmojiWidth, agent_log_wrap_width, agent_wrap_column_cap,
