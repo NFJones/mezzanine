@@ -115,6 +115,143 @@ pub struct RenderedClientView {
     pub primary_prompt_active: bool,
 }
 
+/// Composes the visible text and style rows for an attached-client viewport.
+///
+/// The compositor applies authoritative/client size clipping, scroll offsets,
+/// row padding, and copy-selection highlighting. Product-specific status rows
+/// and host-terminal encoding remain composition-layer responsibilities.
+pub fn compose_client_viewport(
+    view: &RenderedClientView,
+) -> (Vec<String>, Vec<Vec<TerminalStyleSpan>>) {
+    let (target_rows, target_columns) = if view.requires_client_scroll {
+        (
+            usize::from(view.client_size.rows),
+            usize::from(view.client_size.columns),
+        )
+    } else {
+        (
+            usize::from(view.authoritative_size.rows),
+            usize::from(view.authoritative_size.columns),
+        )
+    };
+    let row_offset = if view.requires_client_scroll {
+        view.viewport_row.min(max_viewport_row(view))
+    } else {
+        0
+    };
+    let column_offset = if view.requires_client_scroll {
+        view.viewport_column.min(max_viewport_column(view))
+    } else {
+        0
+    };
+    let mut lines = view
+        .lines
+        .iter()
+        .skip(row_offset)
+        .take(target_rows)
+        .map(|line| {
+            crate::render::line_slice(
+                line,
+                column_offset,
+                column_offset.saturating_add(target_columns),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut line_style_spans = view
+        .line_style_spans
+        .iter()
+        .skip(row_offset)
+        .take(target_rows)
+        .map(|spans| crate::render::clip_style_spans(spans, column_offset, target_columns))
+        .collect::<Vec<_>>();
+    while lines.len() < target_rows {
+        lines.push(" ".repeat(target_columns));
+        line_style_spans.push(Vec::new());
+    }
+    push_client_selection_style_spans(
+        &mut line_style_spans,
+        view.selection,
+        row_offset,
+        column_offset,
+        target_columns,
+        view.ui_theme.colors.copy_selection.rendition(),
+    );
+    (lines, line_style_spans)
+}
+
+/// Applies a requested viewport offset, clamping it to the rendered surface.
+pub fn apply_client_view_offset(view: &mut RenderedClientView, row: usize, column: usize) {
+    if view.requires_client_scroll {
+        view.viewport_row = row.min(max_viewport_row(view));
+        view.viewport_column = column.min(max_viewport_column(view));
+    } else {
+        view.viewport_row = 0;
+        view.viewport_column = 0;
+    }
+}
+
+/// Returns the largest valid viewport row offset for this rendered view.
+pub fn max_viewport_row(view: &RenderedClientView) -> usize {
+    usize::from(view.authoritative_size.rows).saturating_sub(usize::from(view.client_size.rows))
+}
+
+/// Returns the largest valid viewport column offset for this rendered view.
+pub fn max_viewport_column(view: &RenderedClientView) -> usize {
+    usize::from(view.authoritative_size.columns)
+        .saturating_sub(usize::from(view.client_size.columns))
+}
+
+fn push_client_selection_style_spans(
+    line_style_spans: &mut [Vec<TerminalStyleSpan>],
+    selection: Option<(CopyPosition, CopyPosition)>,
+    row_offset: usize,
+    column_offset: usize,
+    target_columns: usize,
+    rendition: mez_terminal::GraphicRendition,
+) {
+    if target_columns == 0 {
+        return;
+    }
+    let Some((selection_start, selection_end)) = selection else {
+        return;
+    };
+    let (selection_start, selection_end) = if selection_start <= selection_end {
+        (selection_start, selection_end)
+    } else {
+        (selection_end, selection_start)
+    };
+    let visible_column_end = column_offset.saturating_add(target_columns);
+    for (visible_row, spans) in line_style_spans.iter_mut().enumerate() {
+        let source_row = row_offset.saturating_add(visible_row);
+        if source_row < selection_start.line || source_row > selection_end.line {
+            continue;
+        }
+        let source_start = if source_row == selection_start.line {
+            selection_start.column
+        } else {
+            0
+        };
+        let source_end = if source_row == selection_end.line {
+            selection_end.column
+        } else {
+            visible_column_end
+        };
+        let clipped_start = source_start.max(column_offset);
+        let clipped_end = source_end.min(visible_column_end);
+        if clipped_end <= clipped_start {
+            continue;
+        }
+        crate::render::push_or_extend_style_span(
+            spans,
+            TerminalStyleSpan {
+                start: clipped_start.saturating_sub(column_offset),
+                length: clipped_end.saturating_sub(clipped_start),
+                rendition,
+            },
+        );
+    }
+}
+
 /// Host-terminal modes required to present one attached-client frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AttachedTerminalOutputModes {
@@ -1028,11 +1165,13 @@ mod tests {
 
     use super::{
         AttachedClientEndpointReadiness, AttachedClientOutputDecision, AttachedClientStepPlan,
-        TerminalFramePosition, TerminalFrameStyle, classify_attached_client_readiness,
-        pane_canvas_placements, pane_content_size_for_geometry, pane_divider_cells,
-        pane_divider_glyph, pane_frame_merges_into_divider, pane_render_region_size_for_geometry,
-        place_group_frame, place_window_frame, plan_attached_client_output,
-        plan_attached_client_step, plan_headless_attached_client_cycle, rendered_window_body_size,
+        ClientViewRole, RenderedClientView, TerminalCursorStyle, TerminalFramePosition,
+        TerminalFrameStyle, apply_client_view_offset, classify_attached_client_readiness,
+        compose_client_viewport, max_viewport_column, max_viewport_row, pane_canvas_placements,
+        pane_content_size_for_geometry, pane_divider_cells, pane_divider_glyph,
+        pane_frame_merges_into_divider, pane_render_region_size_for_geometry, place_group_frame,
+        place_window_frame, plan_attached_client_output, plan_attached_client_step,
+        plan_headless_attached_client_cycle, rendered_window_body_size,
     };
 
     /// Verifies neutral frame contracts retain the product's established
@@ -1041,6 +1180,71 @@ mod tests {
     fn frame_contract_defaults_remain_stable() {
         assert_eq!(TerminalFramePosition::default(), TerminalFramePosition::Top);
         assert_eq!(TerminalFrameStyle::default(), TerminalFrameStyle::Default);
+    }
+
+    /// Verifies the mux-owned viewport compositor clips text and style spans,
+    /// highlights the visible copy selection, and clamps requested offsets
+    /// without relying on the product terminal-rendering adapter.
+    #[test]
+    fn client_viewport_composition_owns_scrolling_and_selection() {
+        let mut view = RenderedClientView {
+            role: ClientViewRole::Primary,
+            authoritative_size: Size::new(8, 4).unwrap(),
+            client_size: Size::new(4, 2).unwrap(),
+            lines: vec![
+                "abcdefgh".to_owned(),
+                "ijklmnop".to_owned(),
+                "qrstuvwx".to_owned(),
+                "yz012345".to_owned(),
+            ],
+            line_style_spans: vec![
+                Vec::new(),
+                vec![TerminalStyleSpan {
+                    start: 2,
+                    length: 4,
+                    rendition: Default::default(),
+                }],
+                Vec::new(),
+                Vec::new(),
+            ],
+            selection: Some((
+                CopyPosition { line: 1, column: 3 },
+                CopyPosition { line: 2, column: 2 },
+            )),
+            requires_client_scroll: true,
+            viewport_row: 1,
+            viewport_column: 2,
+            cursor_row: 0,
+            cursor_column: 0,
+            cursor_visible: false,
+            cursor_style: TerminalCursorStyle::Block,
+            cursor_blink: false,
+            cursor_blink_interval_ms: 500,
+            application_keypad: false,
+            bracketed_paste: false,
+            focus_events: false,
+            alternate_screen: false,
+            host_mouse_reporting: true,
+            animation_refresh_interval_ms: 0,
+            ui_theme: Default::default(),
+            agent_prompt_region: None,
+            primary_prompt_active: false,
+        };
+
+        let (lines, spans) = compose_client_viewport(&view);
+
+        assert_eq!(lines, ["klmn", "stuv"]);
+        assert_eq!(spans.len(), 2);
+        assert!(
+            spans[0]
+                .iter()
+                .any(|span| span.start == 1 && span.length == 3)
+        );
+        assert_eq!(max_viewport_row(&view), 2);
+        assert_eq!(max_viewport_column(&view), 4);
+
+        apply_client_view_offset(&mut view, 99, 99);
+        assert_eq!((view.viewport_row, view.viewport_column), (2, 4));
     }
 
     /// Verifies the mux-owned attached-client result envelope remains generic

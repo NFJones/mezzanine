@@ -817,6 +817,21 @@ pub fn overlay_fixed_column_style_spans(
     *spans = retained;
 }
 
+/// Appends a style span or extends the final adjacent span with the same rendition.
+pub fn push_or_extend_style_span(spans: &mut Vec<TerminalStyleSpan>, span: TerminalStyleSpan) {
+    if span.length == 0 {
+        return;
+    }
+    if let Some(previous) = spans.last_mut()
+        && previous.rendition == span.rendition
+        && previous.start.saturating_add(previous.length) == span.start
+    {
+        previous.length = previous.length.saturating_add(span.length);
+        return;
+    }
+    spans.push(span);
+}
+
 /// Returns whether a style span touches a half-open column range.
 pub fn style_span_overlaps_columns(span: TerminalStyleSpan, start: usize, end: usize) -> bool {
     span.start < end && span.start.saturating_add(span.length) > start
@@ -871,6 +886,27 @@ pub fn clip_style_span(span: TerminalStyleSpan, width: usize) -> Option<Terminal
         rendition: span.rendition,
     })
     .filter(|span| span.length > 0)
+}
+
+/// Clips style spans to one half-open viewport column range.
+pub fn clip_style_spans(
+    spans: &[TerminalStyleSpan],
+    column_offset: usize,
+    width: usize,
+) -> Vec<TerminalStyleSpan> {
+    let end = column_offset.saturating_add(width);
+    spans
+        .iter()
+        .filter_map(|span| {
+            let clipped_start = span.start.max(column_offset);
+            let clipped_end = span.start.saturating_add(span.length).min(end);
+            (clipped_start < clipped_end).then(|| TerminalStyleSpan {
+                start: clipped_start.saturating_sub(column_offset),
+                length: clipped_end.saturating_sub(clipped_start),
+                rendition: span.rendition,
+            })
+        })
+        .collect()
 }
 
 /// Returns a display-column slice from one terminal line.

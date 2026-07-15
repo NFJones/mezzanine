@@ -92,6 +92,7 @@ pub use fd::{
     TerminalRawModeGuard, read_attached_terminal_size,
 };
 pub use host_clipboard::{HostClipboard, HostClipboardCommand};
+pub use mez_mux::presentation::{apply_client_view_offset, max_viewport_column, max_viewport_row};
 pub use mouse::{
     MouseAction, MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MouseWindowActionFrameCell,
     PaneAgentStatusField, WindowFrameAction, WindowFrameCommandKind, classify_mouse_event,
@@ -103,15 +104,14 @@ pub use render::{
     DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_PANE_FRAME_VISIBLE_FIELDS,
     DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE, DEFAULT_WINDOW_FRAME_TEMPLATE,
     DEFAULT_WINDOW_FRAME_VISIBLE_FIELDS, TerminalFrameRenderOptions,
-    agent_prompt_reserved_line_count, apply_client_view_offset, compose_client_presentation,
+    agent_prompt_reserved_line_count, compose_client_presentation,
     compose_client_presentation_with_styles, compose_display_overlay_line_style_spans,
     compose_display_overlay_lines, compose_display_region_overlay_line_style_spans,
     compose_display_region_overlay_lines, compose_modal_display_overlay_line_style_spans,
     compose_modal_display_overlay_lines, compose_prompt_overlay_lines,
     compose_prompt_overlay_presentation, compose_prompt_overlay_presentation_with_styles,
     compose_prompt_region_presentation_with_styles, compose_readline_prompt_client_presentation,
-    draw_window_from_screens, max_viewport_column, max_viewport_row,
-    modal_display_overlay_max_scroll, modal_display_overlay_page_rows,
+    draw_window_from_screens, modal_display_overlay_max_scroll, modal_display_overlay_page_rows,
     pane_border_cells_for_geometries, pane_frame_agent_status_pillbox_cells,
     render_attached_client_view, render_readline_prompt_status_row, render_window,
     render_window_with_pane_frame_template, rendered_pane_geometries,

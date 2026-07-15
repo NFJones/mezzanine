@@ -11,26 +11,26 @@ use super::{
     TerminalPaneFrameContext, TerminalScreen, TerminalStyleSpan, TerminalStyledLine,
     WindowFrameAction,
 };
-use mez_mux::copy::CopyPosition;
 use mez_mux::input::{MouseWindowFrameCell, MouseWindowGroupFrameCell};
 use mez_mux::layout::{PaneGeometry, Size, Window};
 use mez_mux::presentation::{ClientViewRole, ReadlinePromptRegion, RenderedClientView};
 use mez_mux::presentation::{
     TerminalFramePosition, TerminalFrameStyle, TerminalWindowFrameContext,
-    TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
+    TerminalWindowGroupFrameContext, TerminalWindowStatusContext, compose_client_viewport,
 };
 pub(crate) use mez_mux::render::overlay_fixed_column_style_spans;
 use mez_mux::render::{
     FramePillboxEntry, FramePillboxSegment, FrameStatusSegment, FrameStatusValue,
     PositionedFrameStatus, RenderedFrameStatus, TerminalRenderCell, blank_render_cells,
-    clip_style_span, collect_text_cells, compose_frame_pillbox_row, compose_frame_text_row,
-    compose_pane_frame_row, display_overlay_targets as agent_display_overlay_targets,
-    fit_styled_width, fit_width, fitted_text_width, frame_pillbox_segment_columns,
-    frame_style_rendition, offset_style_span, overlay_display_lines as overlay_agent_display_lines,
-    position_frame_status, render_frame_pillbox_segments, render_frame_pillbox_text,
-    render_frame_status, sanitize_frame_text, style_span_overlaps_columns,
-    style_span_segments_outside_range, styled_frame_line_with_rendition, write_single_width_cell,
-    write_text_cells, write_text_cells_with_width as write_frame_text_cells,
+    clip_style_span, clip_style_spans as clipped_style_spans, collect_text_cells,
+    compose_frame_pillbox_row, compose_frame_text_row, compose_pane_frame_row,
+    display_overlay_targets as agent_display_overlay_targets, fit_styled_width, fit_width,
+    fitted_text_width, frame_pillbox_segment_columns, frame_style_rendition, offset_style_span,
+    overlay_display_lines as overlay_agent_display_lines, position_frame_status,
+    render_frame_pillbox_segments, render_frame_pillbox_text, render_frame_status,
+    sanitize_frame_text, style_span_overlaps_columns, style_span_segments_outside_range,
+    styled_frame_line_with_rendition, write_single_width_cell, write_text_cells,
+    write_text_cells_with_width as write_frame_text_cells,
 };
 pub(super) use mez_mux::render::{char_count, line_slice};
 use mez_mux::theme::{UiColorPair, UiTheme};
@@ -744,55 +744,13 @@ pub fn compose_client_presentation_with_styles(
     view: &RenderedClientView,
     status: Option<&ClientStatusLine>,
 ) -> (Vec<String>, Vec<Vec<TerminalStyleSpan>>) {
-    let (target_rows, target_columns) = if view.requires_client_scroll {
-        (
-            usize::from(view.client_size.rows),
-            usize::from(view.client_size.columns),
-        )
+    let (mut lines, mut line_style_spans) = compose_client_viewport(view);
+    let target_rows = lines.len();
+    let target_columns = if view.requires_client_scroll {
+        usize::from(view.client_size.columns)
     } else {
-        (
-            usize::from(view.authoritative_size.rows),
-            usize::from(view.authoritative_size.columns),
-        )
+        usize::from(view.authoritative_size.columns)
     };
-    let row_offset = if view.requires_client_scroll {
-        view.viewport_row.min(max_viewport_row(view))
-    } else {
-        0
-    };
-    let column_offset = if view.requires_client_scroll {
-        view.viewport_column.min(max_viewport_column(view))
-    } else {
-        0
-    };
-    let mut lines: Vec<String> = view
-        .lines
-        .iter()
-        .skip(row_offset)
-        .take(target_rows)
-        .map(|line| slice_terminal_line(line, column_offset, target_columns))
-        .collect();
-    let mut line_style_spans: Vec<Vec<TerminalStyleSpan>> = view
-        .line_style_spans
-        .iter()
-        .skip(row_offset)
-        .take(target_rows)
-        .map(|spans| clipped_style_spans(spans, column_offset, target_columns))
-        .collect();
-    while lines.len() < target_rows {
-        lines.push(" ".repeat(target_columns));
-        line_style_spans.push(Vec::new());
-    }
-    if view.selection.is_some() {
-        push_client_selection_style_spans(
-            &mut line_style_spans,
-            view.selection,
-            row_offset,
-            column_offset,
-            target_columns,
-            view.ui_theme.colors.copy_selection.rendition(),
-        );
-    }
     if let Some(status) = status
         && target_rows > 0
     {
@@ -813,130 +771,4 @@ pub fn compose_client_presentation_with_styles(
         }
     }
     (lines, line_style_spans)
-}
-
-/// Adds a visible style run for the active copy-mode selection in client space.
-///
-/// The function keeps pager search matches render-only: copy-mode owns the
-/// selected range, while the client presentation clips that range to the current
-/// viewport and appends a highlight span without changing the underlying text.
-fn push_client_selection_style_spans(
-    line_style_spans: &mut [Vec<TerminalStyleSpan>],
-    selection: Option<(CopyPosition, CopyPosition)>,
-    row_offset: usize,
-    column_offset: usize,
-    target_columns: usize,
-    rendition: GraphicRendition,
-) {
-    if target_columns == 0 {
-        return;
-    }
-    let Some((selection_start, selection_end)) = selection else {
-        return;
-    };
-    let (selection_start, selection_end) = if selection_start <= selection_end {
-        (selection_start, selection_end)
-    } else {
-        (selection_end, selection_start)
-    };
-    let visible_column_end = column_offset.saturating_add(target_columns);
-    for (visible_row, spans) in line_style_spans.iter_mut().enumerate() {
-        let source_row = row_offset.saturating_add(visible_row);
-        if source_row < selection_start.line || source_row > selection_end.line {
-            continue;
-        }
-        let source_start = if source_row == selection_start.line {
-            selection_start.column
-        } else {
-            0
-        };
-        let source_end = if source_row == selection_end.line {
-            selection_end.column
-        } else {
-            visible_column_end
-        };
-        let clipped_start = source_start.max(column_offset);
-        let clipped_end = source_end.min(visible_column_end);
-        if clipped_end <= clipped_start {
-            continue;
-        }
-        push_or_extend_style_span(
-            spans,
-            TerminalStyleSpan {
-                start: clipped_start.saturating_sub(column_offset),
-                length: clipped_end.saturating_sub(clipped_start),
-                rendition,
-            },
-        );
-    }
-}
-
-/// Runs the apply client view offset operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub fn apply_client_view_offset(view: &mut RenderedClientView, row: usize, column: usize) {
-    if view.requires_client_scroll {
-        view.viewport_row = row.min(max_viewport_row(view));
-        view.viewport_column = column.min(max_viewport_column(view));
-    } else {
-        view.viewport_row = 0;
-        view.viewport_column = 0;
-    }
-}
-
-/// Runs the max viewport row operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub fn max_viewport_row(view: &RenderedClientView) -> usize {
-    usize::from(view.authoritative_size.rows).saturating_sub(usize::from(view.client_size.rows))
-}
-
-/// Runs the max viewport column operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub fn max_viewport_column(view: &RenderedClientView) -> usize {
-    usize::from(view.authoritative_size.columns)
-        .saturating_sub(usize::from(view.client_size.columns))
-}
-
-/// Runs the slice terminal line operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn slice_terminal_line(line: &str, column_offset: usize, width: usize) -> String {
-    line_slice(line, column_offset, column_offset.saturating_add(width))
-}
-
-/// Runs the clipped style spans operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn clipped_style_spans(
-    spans: &[TerminalStyleSpan],
-    column_offset: usize,
-    width: usize,
-) -> Vec<TerminalStyleSpan> {
-    let end = column_offset.saturating_add(width);
-    spans
-        .iter()
-        .filter_map(|span| {
-            let span_start = span.start;
-            let span_end = span.start.saturating_add(span.length);
-            let clipped_start = span_start.max(column_offset);
-            let clipped_end = span_end.min(end);
-            (clipped_start < clipped_end).then(|| TerminalStyleSpan {
-                start: clipped_start.saturating_sub(column_offset),
-                length: clipped_end.saturating_sub(clipped_start),
-                rendition: span.rendition,
-            })
-        })
-        .collect()
 }
