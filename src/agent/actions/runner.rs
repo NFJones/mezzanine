@@ -13,7 +13,7 @@ use super::super::{ActionStatus, AgentAction, local_action_plan};
 use super::super::{
     AgentContext, AgentTurnLedger, AgentTurnRecord, AgentTurnState, AllowedActionSet,
     MaapBatchProductValidation, McpPromptTool, MezError, ModelInteractionKind, ModelProfile,
-    ModelRequest, ModelTokenUsage, Result, assemble_model_request, provider_error_retry_class,
+    ModelRequest, Result, assemble_model_request, provider_error_retry_class,
 };
 #[cfg(test)]
 use super::super::{MarkerToken, McpExecutionRequest, Path};
@@ -39,7 +39,7 @@ use mez_agent::{
     AgentTurnNegotiation, AgentTurnProviderFailureDecision, AgentTurnResponseDecision,
     BatchContinuationError, BatchContinuationInput, BatchContinuationPlan, BatchValidationFailure,
     ProviderResponseAcceptance, SubagentScopeDeclaration, apply_default_action_gates,
-    maap_repair_request,
+    failed_turn_execution_without_batch, maap_repair_request, plan_turn_execution_from_batch,
 };
 
 /// Maximum number of ephemeral provider retries after a MAAP validation error.
@@ -49,30 +49,6 @@ use mez_agent::{
 /// durable transcripts and future model context when the corrected response is
 /// valid.
 const MAAP_REPAIR_ATTEMPT_LIMIT: usize = 2;
-
-/// Plans post-batch action results and projects them into the product execution record.
-fn planned_execution_from_batch(
-    runner: &AgentTurnRunner<'_, impl Sized>,
-    turn: &AgentTurnRecord,
-    context: &AgentContext,
-    request: ModelRequest,
-    response: super::super::ModelResponse,
-    latest_response_usage: ModelTokenUsage,
-    batch: super::super::MaapBatch,
-) -> Result<AgentTurnExecution> {
-    let planned = mez_agent::plan_batch_action_results(turn, context, &batch, |action| {
-        runner.plan_action_result(turn, action)
-    })?;
-    Ok(AgentTurnExecution {
-        request,
-        response,
-        latest_response_usage,
-        routing_token_usage_by_model: std::collections::BTreeMap::new(),
-        action_results: planned.action_results,
-        final_turn: planned.final_turn,
-        terminal_state: planned.terminal_state,
-    })
-}
 
 /// Borrows product-owned facts needed by the lower batch-continuation planner.
 struct ProductBatchContinuationInput<'a> {
@@ -362,25 +338,21 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
 
         let Some(batch) = response.action_batch.clone() else {
             ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-            return Ok(AgentTurnExecution {
-                request: negotiation.durable_request().clone(),
+            return Ok(failed_turn_execution_without_batch(
+                negotiation.durable_request().clone(),
                 response,
-                latest_response_usage: negotiation.latest_response_usage(),
-                routing_token_usage_by_model: std::collections::BTreeMap::new(),
-                action_results: Vec::new(),
-                final_turn: true,
-                terminal_state: AgentTurnState::Failed,
-            });
+                negotiation.latest_response_usage(),
+            ));
         };
 
-        let execution = planned_execution_from_batch(
-            self,
+        let execution = plan_turn_execution_from_batch(
             &turn,
             context,
             negotiation.durable_request().clone(),
             response,
             negotiation.latest_response_usage(),
-            batch,
+            &batch,
+            |action| self.plan_action_result(&turn, action),
         )?;
         if execution.terminal_state != AgentTurnState::Running {
             ledger.finish_turn(&turn.turn_id, execution.terminal_state)?;
@@ -726,25 +698,21 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
 
         let Some(batch) = response.action_batch.clone() else {
             ledger.finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
-            return Ok(AgentTurnExecution {
-                request: negotiation.durable_request().clone(),
+            return Ok(failed_turn_execution_without_batch(
+                negotiation.durable_request().clone(),
                 response,
-                latest_response_usage: negotiation.latest_response_usage(),
-                routing_token_usage_by_model: std::collections::BTreeMap::new(),
-                action_results: Vec::new(),
-                final_turn: true,
-                terminal_state: AgentTurnState::Failed,
-            });
+                negotiation.latest_response_usage(),
+            ));
         };
 
-        let execution = planned_execution_from_batch(
-            self,
+        let execution = plan_turn_execution_from_batch(
             &turn,
             context,
             negotiation.durable_request().clone(),
             response,
             negotiation.latest_response_usage(),
-            batch,
+            &batch,
+            |action| self.plan_action_result(&turn, action),
         )?;
         if execution.terminal_state != AgentTurnState::Running {
             ledger.finish_turn(&turn.turn_id, execution.terminal_state)?;

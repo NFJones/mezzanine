@@ -137,9 +137,9 @@ pub use accounting::{AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsage
 pub use action_gates::apply_default_action_gates;
 pub use action_planning::{
     ActionPlanningError, ActionPlanningInput, ActionPlanningResult, PlannedBatchActionResults,
-    action_auto_allow_reason, action_supports_auto_allow, plan_action_result,
-    plan_batch_action_results, say_action_structured_content_json,
-    shell_action_structured_content_json,
+    action_auto_allow_reason, action_supports_auto_allow, failed_turn_execution_without_batch,
+    plan_action_result, plan_batch_action_results, plan_turn_execution_from_batch,
+    say_action_structured_content_json, shell_action_structured_content_json,
 };
 pub use action_recovery::{
     ActionRecoveryError, ActionRecoveryResult, BatchContinuationError, BatchContinuationInput,

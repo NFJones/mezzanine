@@ -11,11 +11,11 @@ use std::error::Error;
 use std::fmt;
 
 use crate::{
-    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext,
+    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentTurnExecution,
     AgentTurnResultIdentity, AgentTurnState, ApprovalPolicy, LocalActionPlan, MaapBatch,
-    MemoryActionBudget, NetworkActionPlan, RuleDecision, SayStatus,
-    network_action_structured_content_json, shell_read_observations_for_command,
-    turn_state_from_action_results,
+    MemoryActionBudget, ModelRequest, ModelResponse, ModelTokenUsage, NetworkActionPlan,
+    RuleDecision, SayStatus, network_action_structured_content_json,
+    shell_read_observations_for_command, turn_state_from_action_results,
 };
 
 /// Product-supplied facts needed to plan one validated action result.
@@ -95,6 +95,50 @@ pub fn plan_batch_action_results<Error>(
         final_turn,
         terminal_state,
     })
+}
+
+/// Projects one validated MAAP batch into the canonical turn-execution record.
+///
+/// Product adapters supply only per-action policy planning. Request, response,
+/// token accounting, ordered results, final-turn intent, and lifecycle state
+/// are assembled by the provider-independent owner.
+pub fn plan_turn_execution_from_batch<Error>(
+    turn: &(impl AgentTurnResultIdentity + ?Sized),
+    context: &AgentContext,
+    request: ModelRequest,
+    response: ModelResponse,
+    latest_response_usage: ModelTokenUsage,
+    batch: &MaapBatch,
+    plan_action: impl FnMut(&AgentAction) -> Result<ActionResult, Error>,
+) -> Result<AgentTurnExecution, Error> {
+    let planned = plan_batch_action_results(turn, context, batch, plan_action)?;
+    Ok(AgentTurnExecution {
+        request,
+        response,
+        latest_response_usage,
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: planned.action_results,
+        final_turn: planned.final_turn,
+        terminal_state: planned.terminal_state,
+    })
+}
+
+/// Builds the canonical terminal failure used when negotiation finishes
+/// without an executable MAAP batch.
+pub fn failed_turn_execution_without_batch(
+    request: ModelRequest,
+    response: ModelResponse,
+    latest_response_usage: ModelTokenUsage,
+) -> AgentTurnExecution {
+    AgentTurnExecution {
+        request,
+        response,
+        latest_response_usage,
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: Vec::new(),
+        final_turn: true,
+        terminal_state: AgentTurnState::Failed,
+    }
 }
 
 /// Plans the initial canonical result for one validated MAAP action.
@@ -490,6 +534,43 @@ mod tests {
         }
     }
 
+    fn request() -> ModelRequest {
+        ModelRequest {
+            provider: "test".to_string(),
+            model: "test-model".to_string(),
+            reasoning_effort: None,
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: None,
+            temperature: None,
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            interaction_kind: crate::ModelInteractionKind::ActionExecution,
+            allowed_actions: crate::AllowedActionSet::respond_only(),
+            stop: None,
+            messages: Vec::new(),
+        }
+    }
+
+    fn response(action_batch: Option<MaapBatch>) -> ModelResponse {
+        ModelResponse {
+            provider: "test".to_string(),
+            model: "test-model".to_string(),
+            raw_text: "response".to_string(),
+            usage: ModelTokenUsage::default(),
+            latest_request_usage: None,
+            quota_usage: Vec::new(),
+            action_batch,
+            provider_transcript_events: Vec::new(),
+        }
+    }
+
     fn shell_action(rationale: &str) -> AgentAction {
         AgentAction {
             id: "shell-1".to_string(),
@@ -713,6 +794,64 @@ mod tests {
         assert_eq!(planned.action_results[0].action_id, "say-1");
         assert!(planned.final_turn);
         assert_eq!(planned.terminal_state, AgentTurnState::Completed);
+    }
+
+    /// Verifies validated batch projection constructs the canonical execution
+    /// record with ordered results and lifecycle state in the lower crate.
+    #[test]
+    fn batch_execution_projection_owns_canonical_turn_state() {
+        let action = AgentAction {
+            id: "say-1".to_string(),
+            rationale: "finish the turn".to_string(),
+            payload: AgentActionPayload::Say {
+                status: SayStatus::Final,
+                text: "Done.".to_string(),
+                content_type: "text/plain".to_string(),
+            },
+        };
+        let batch = MaapBatch {
+            protocol: "maap/1".to_string(),
+            rationale: "finish".to_string(),
+            thought: None,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            actions: vec![action],
+            final_turn: true,
+        };
+
+        let execution = plan_turn_execution_from_batch(
+            &TestTurn,
+            &context(),
+            request(),
+            response(Some(batch.clone())),
+            ModelTokenUsage::default(),
+            &batch,
+            |action| plan_action_result(&TestTurn, action, ActionPlanningInput::default()),
+        )
+        .unwrap();
+
+        assert_eq!(execution.action_results[0].action_id, "say-1");
+        assert!(execution.final_turn);
+        assert_eq!(execution.terminal_state, AgentTurnState::Completed);
+        assert!(execution.routing_token_usage_by_model.is_empty());
+    }
+
+    /// Verifies missing-batch failure projection is terminal, result-free, and
+    /// preserves the durable request and latest response usage.
+    #[test]
+    fn missing_batch_execution_projection_is_terminal_failure() {
+        let latest_usage = ModelTokenUsage {
+            input_tokens: 12,
+            output_tokens: 3,
+            ..ModelTokenUsage::default()
+        };
+        let execution =
+            failed_turn_execution_without_batch(request(), response(None), latest_usage);
+
+        assert_eq!(execution.latest_response_usage, latest_usage);
+        assert!(execution.action_results.is_empty());
+        assert!(execution.final_turn);
+        assert_eq!(execution.terminal_state, AgentTurnState::Failed);
     }
 
     /// Batch planning applies memory wrapper guardrails before invoking the
