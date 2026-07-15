@@ -145,7 +145,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
         .to_string(),
     );
     let mut execution = crate::agent::AgentTurnExecution {
-        request: crate::agent::ModelRequest {
+        request: mez_agent::ModelRequest {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             reasoning_effort: None,

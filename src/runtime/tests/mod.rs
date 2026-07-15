@@ -299,7 +299,7 @@ impl ModelProvider for RuntimeEchoProvider {
     /// on duplicated control-flow logic.
     fn send_request(
         &self,
-        request: &crate::agent::ModelRequest,
+        request: &mez_agent::ModelRequest,
     ) -> Result<crate::agent::ModelResponse> {
         Ok(crate::agent::ModelResponse {
             provider: self.provider_id().to_string(),
@@ -337,7 +337,7 @@ impl ModelProvider for RuntimeFailingProvider {
     /// on duplicated control-flow logic.
     fn send_request(
         &self,
-        _request: &crate::agent::ModelRequest,
+        _request: &mez_agent::ModelRequest,
     ) -> Result<crate::agent::ModelResponse> {
         Err(MezError::invalid_state("provider API request failed").with_provider_failure_json(
             r#"{"status_code":400,"error":{"message":"stream must be set to true","type":"invalid_request_error","code":"missing_required_parameter"}}"#,
@@ -368,7 +368,7 @@ impl ModelProvider for RuntimeProviderRawTextFailingProvider {
     /// on duplicated control-flow logic.
     fn send_request(
         &self,
-        _request: &crate::agent::ModelRequest,
+        _request: &mez_agent::ModelRequest,
     ) -> Result<crate::agent::ModelResponse> {
         Err(
             MezError::invalid_args("provider MAAP output is malformed: missing turn_id")
@@ -415,7 +415,7 @@ impl ModelProvider for RuntimeBatchFailingProvider {
     /// on duplicated control-flow logic.
     fn send_request(
         &self,
-        _request: &crate::agent::ModelRequest,
+        _request: &mez_agent::ModelRequest,
     ) -> Result<crate::agent::ModelResponse> {
         Err(MezError::invalid_state(
             "provider continuation failed after shell command result",
@@ -476,7 +476,7 @@ fn runtime_capability_for_response(
 /// Builds the synthetic capability response used by runtime test providers.
 fn runtime_capability_response(
     provider_id: &str,
-    request: &crate::agent::ModelRequest,
+    request: &mez_agent::ModelRequest,
     capability: mez_agent::AgentCapability,
 ) -> crate::agent::ModelResponse {
     crate::agent::ModelResponse {
@@ -540,7 +540,7 @@ impl ModelProvider for RuntimeBatchProvider {
     /// on duplicated control-flow logic.
     fn send_request(
         &self,
-        request: &crate::agent::ModelRequest,
+        request: &mez_agent::ModelRequest,
     ) -> Result<crate::agent::ModelResponse> {
         if request.interaction_kind == mez_agent::ModelInteractionKind::CapabilityDecision
             && let Some(capability) = runtime_capability_for_response(&self.response)
@@ -617,7 +617,7 @@ fn runtime_spawn_agent_action(id: &str, task_prompt: &str) -> mez_agent::AgentAc
 
 /// Builds the request fixture used when a provider response was already
 /// underway before a mid-turn steering prompt was submitted.
-fn runtime_model_request_fixture(turn_id: &str) -> crate::agent::ModelRequest {
+fn runtime_model_request_fixture(turn_id: &str) -> mez_agent::ModelRequest {
     runtime_model_request_fixture_for_agent(turn_id, "agent-%1")
 }
 
@@ -625,8 +625,8 @@ fn runtime_model_request_fixture(turn_id: &str) -> crate::agent::ModelRequest {
 fn runtime_model_request_fixture_for_agent(
     turn_id: &str,
     agent_id: &str,
-) -> crate::agent::ModelRequest {
-    crate::agent::ModelRequest {
+) -> mez_agent::ModelRequest {
+    mez_agent::ModelRequest {
         provider: "runtime-batch".to_string(),
         model: "test".to_string(),
         reasoning_effort: None,
@@ -672,7 +672,7 @@ struct RuntimeRecordingProvider {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    last_request: RefCell<Option<crate::agent::ModelRequest>>,
+    last_request: RefCell<Option<mez_agent::ModelRequest>>,
 }
 
 impl ModelProvider for RuntimeRecordingProvider {
@@ -692,7 +692,7 @@ impl ModelProvider for RuntimeRecordingProvider {
     /// on duplicated control-flow logic.
     fn send_request(
         &self,
-        request: &crate::agent::ModelRequest,
+        request: &mez_agent::ModelRequest,
     ) -> Result<crate::agent::ModelResponse> {
         *self.last_request.borrow_mut() = Some(request.clone());
         if request.interaction_kind == mez_agent::ModelInteractionKind::CapabilityDecision
@@ -712,7 +712,7 @@ impl ModelProvider for RuntimeRecordingProvider {
 /// the retry after runtime recovery has reduced active-turn context.
 struct RuntimeContextLimitThenSuccessProvider {
     /// Requests observed by the test provider.
-    requests: RefCell<Vec<crate::agent::ModelRequest>>,
+    requests: RefCell<Vec<mez_agent::ModelRequest>>,
 }
 
 impl ModelProvider for RuntimeContextLimitThenSuccessProvider {
@@ -724,7 +724,7 @@ impl ModelProvider for RuntimeContextLimitThenSuccessProvider {
     /// Returns one context-limit error, then a successful completion response.
     fn send_request(
         &self,
-        request: &crate::agent::ModelRequest,
+        request: &mez_agent::ModelRequest,
     ) -> Result<crate::agent::ModelResponse> {
         let mut requests = self.requests.borrow_mut();
         requests.push(request.clone());
@@ -753,7 +753,7 @@ impl ModelProvider for RuntimeContextLimitThenSuccessProvider {
 /// the retry after runtime recovery has reduced active-turn context.
 struct RuntimeContextWindowErrorProvider {
     /// Requests observed by the test provider.
-    requests: RefCell<Vec<crate::agent::ModelRequest>>,
+    requests: RefCell<Vec<mez_agent::ModelRequest>>,
 }
 
 impl ModelProvider for RuntimeContextWindowErrorProvider {
@@ -765,7 +765,7 @@ impl ModelProvider for RuntimeContextWindowErrorProvider {
     /// Returns one context-window error, then a successful completion response.
     fn send_request(
         &self,
-        request: &crate::agent::ModelRequest,
+        request: &mez_agent::ModelRequest,
     ) -> Result<crate::agent::ModelResponse> {
         let mut requests = self.requests.borrow_mut();
         requests.push(request.clone());
@@ -791,7 +791,7 @@ impl ModelProvider for RuntimeContextWindowErrorProvider {
 /// and succeeds after runtime recovery applies both retry stages.
 struct RuntimeOutputLimitThenSuccessProvider {
     /// Requests observed by the test provider.
-    requests: RefCell<Vec<crate::agent::ModelRequest>>,
+    requests: RefCell<Vec<mez_agent::ModelRequest>>,
 }
 
 impl ModelProvider for RuntimeOutputLimitThenSuccessProvider {
@@ -803,7 +803,7 @@ impl ModelProvider for RuntimeOutputLimitThenSuccessProvider {
     /// Returns two output-limit errors, then a successful completion response.
     fn send_request(
         &self,
-        request: &crate::agent::ModelRequest,
+        request: &mez_agent::ModelRequest,
     ) -> Result<crate::agent::ModelResponse> {
         let mut requests = self.requests.borrow_mut();
         requests.push(request.clone());
@@ -832,7 +832,7 @@ impl ModelProvider for RuntimeOutputLimitThenSuccessProvider {
 /// responses for the internal router and the user-facing turn.
 struct RuntimeAutoSizingProvider {
     /// Stores every request sent through the provider.
-    requests: RefCell<Vec<crate::agent::ModelRequest>>,
+    requests: RefCell<Vec<mez_agent::ModelRequest>>,
 }
 
 impl ModelProvider for RuntimeAutoSizingProvider {
@@ -845,7 +845,7 @@ impl ModelProvider for RuntimeAutoSizingProvider {
     /// simple `say` response for the selected model request.
     fn send_request(
         &self,
-        request: &crate::agent::ModelRequest,
+        request: &mez_agent::ModelRequest,
     ) -> Result<crate::agent::ModelResponse> {
         self.requests.borrow_mut().push(request.clone());
         if request.interaction_kind == mez_agent::ModelInteractionKind::AutoSizing {

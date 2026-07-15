@@ -95,7 +95,7 @@ pub use config_change::{
 pub use context::{
     AgentContextError, AgentContextResult, AgentRequestAssemblyError,
     AgentRequestAssemblyErrorKind, AgentRequestAssemblyResult, ContextSourceKind, ModelMessage,
-    ModelMessageRole, validate_context_required,
+    ModelMessageRole, ModelRequest, validate_context_required,
 };
 pub use continuation::{
     CapabilityAvailability, CapabilityDecision, CapabilityRequest, ProviderResponseAcceptance,

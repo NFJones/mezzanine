@@ -25,11 +25,11 @@ pub use compaction::{
 };
 use mez_agent::{
     AllowedAction, AllowedActionSet, ContextSourceKind, ModelInteractionKind, ModelMessage,
-    ModelMessageRole,
+    ModelMessageRole, ModelRequest,
 };
 pub use model::{
-    ModelProfile, ModelProfileOverrideSource, ModelProfileOverrides, ModelRequest,
-    SelectedModelProfile, known_model_context_window_tokens, select_model_profile,
+    ModelProfile, ModelProfileOverrideSource, ModelProfileOverrides, SelectedModelProfile,
+    known_model_context_window_tokens, select_model_profile,
 };
 pub use skills::constrain_skill_actions_for_loaded_context;
 

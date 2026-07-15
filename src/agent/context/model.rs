@@ -2,12 +2,10 @@
 //!
 //! This module owns provider-facing model metadata that is independent of
 //! context block storage: model messages, model profiles and overrides,
-//! selected-profile metadata, request envelopes, and profile selection helpers.
+//! selected-profile metadata and profile selection helpers.
 
-use super::{AllowedActionSet, ModelInteractionKind};
-use mez_agent::ModelMessage;
 use mez_agent::{
-    AgentContextResult, McpPromptTool,
+    AgentContextResult,
     known_model_context_window_tokens as agent_known_model_context_window_tokens,
     known_provider_model_context_window_tokens as agent_known_provider_model_context_window_tokens,
     validate_context_required,
@@ -305,112 +303,6 @@ pub enum ModelProfileOverrideSource {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     Subagent,
-}
-
-/// Carries Model Request state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModelRequest {
-    /// Stores the provider value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub provider: String,
-    /// Stores the model value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub model: String,
-    /// Stores the provider reasoning effort for this request, when configured.
-    ///
-    /// The field is runtime-owned per request so temporary turn sizing can
-    /// adjust reasoning without mutating saved model profiles.
-    pub reasoning_effort: Option<String>,
-    /// Explicit provider thinking-mode override for providers that support it.
-    pub thinking_enabled: Option<bool>,
-    /// Latency/cost preference for provider request routing, when configured.
-    ///
-    /// The value is runtime-owned per request so pane-local profile overrides
-    /// can select provider service tiers without mutating saved profiles.
-    pub latency_preference: Option<String>,
-    /// Provider prompt-cache retention policy, when configured.
-    ///
-    /// OpenAI-compatible providers use this to request longer-lived prefix
-    /// cache retention without baking retention policy into the prompt cache
-    /// key itself.
-    pub prompt_cache_retention: Option<String>,
-    /// Provider output-token cap, when configured or temporarily escalated for
-    /// an output-limit retry.
-    pub max_output_tokens: Option<usize>,
-    /// Provider sampling temperature, when configured.
-    ///
-    /// DeepSeek providers default to 0.5 for structured-output reliability.
-    /// Other providers leave this unset to use their own default.
-    pub temperature: Option<String>,
-    /// Live Mezzanine session identifier used for cache diagnostics and
-    /// runtime-origin tracking without coupling provider cache routing to live
-    /// session identity.
-    ///
-    /// The value is non-secret and is derived from runtime session context when
-    /// present. Requests built outside a live session leave it unset.
-    pub prompt_cache_session_id: Option<String>,
-    /// Stable prompt-cache lineage identifier for requests that should share
-    /// one provider-side cache namespace even if runtime session identity
-    /// changes across resume or inherited fork flows.
-    ///
-    /// The value is non-secret and is derived from runtime conversation
-    /// metadata when present. Requests built outside a live conversation leave
-    /// it unset; provider cache keys use a stable unknown-lineage placeholder
-    /// instead of falling back to live session identity.
-    pub prompt_cache_lineage_id: Option<String>,
-    /// Stores the turn id value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub turn_id: String,
-    /// Stores the agent id value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub agent_id: String,
-    /// Stores the available mcp tools value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub available_mcp_tools: Vec<McpPromptTool>,
-    /// Whether persistent-memory MAAP actions may be exposed for this request.
-    ///
-    /// Runtime sets this only when persistent memory is enabled so the main
-    /// model can search or store durable records when the current task needs it.
-    pub memory_actions_enabled: bool,
-    /// Whether local issue-tracking MAAP actions may be exposed for this request.
-    ///
-    /// Runtime sets this from the effective `issues.enabled` configuration so
-    /// disabled local tracking is rejected during capability negotiation before
-    /// issue actions can reach provider-visible action surfaces.
-    pub issue_actions_enabled: bool,
-    /// Stores the interaction kind for this provider request.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub interaction_kind: ModelInteractionKind,
-    /// Stores the concrete MAAP action surface exposed for this request.
-    ///
-    /// The provider adapter uses this set to generate a strict per-request
-    /// schema rather than exposing every MAAP action on every turn.
-    pub allowed_actions: AllowedActionSet,
-    /// Provider stop sequences for this request, when configured.
-    ///
-    /// DeepSeek providers default to a trailing newline-brace sequence
-    /// to prevent trailing text after JSON tool calls.
-    pub stop: Option<Vec<String>>,
-    /// Stores the messages value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub messages: Vec<ModelMessage>,
 }
 
 /// Runs the select model profile operation for this subsystem.

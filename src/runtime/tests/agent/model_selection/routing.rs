@@ -577,7 +577,7 @@ reasoning_profile = "high"
 #[test]
 fn runtime_agent_turn_routing_provider_error_fails_turn() {
     struct InaccessibleRouterProvider {
-        requests: RefCell<Vec<crate::agent::ModelRequest>>,
+        requests: RefCell<Vec<mez_agent::ModelRequest>>,
     }
 
     impl ModelProvider for InaccessibleRouterProvider {
@@ -587,7 +587,7 @@ fn runtime_agent_turn_routing_provider_error_fails_turn() {
 
         fn send_request(
             &self,
-            request: &crate::agent::ModelRequest,
+            request: &mez_agent::ModelRequest,
         ) -> Result<crate::agent::ModelResponse> {
             self.requests.borrow_mut().push(request.clone());
             if request.interaction_kind == mez_agent::ModelInteractionKind::AutoSizing {

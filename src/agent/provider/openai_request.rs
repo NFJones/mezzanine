@@ -10,7 +10,7 @@ use super::cache::{
     openai_prompt_cache_key, openai_render_request_messages, openai_response_format,
 };
 use super::schema::openai_maap_action_batch_tools;
-use crate::agent::ModelRequest;
+use mez_agent::ModelRequest;
 use mez_agent::{
     ProviderRequestAssemblyError, ProviderRequestAssemblyResult, openai_request_options,
     validate_provider_request_required,

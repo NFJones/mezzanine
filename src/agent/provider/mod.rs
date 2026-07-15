@@ -6,8 +6,8 @@
 
 use super::{
     AgentCapability, AllowedAction, AllowedActionSet, BTreeMap, ExposeSecret, MaapBatch,
-    McpPromptTool, MezError, ModelInteractionKind, ModelMessageRole, ModelRequest,
-    ProviderTranscriptEvent, Result, SecretString, parse_fenced_maap_action_batch_for_turn,
+    McpPromptTool, MezError, ModelInteractionKind, ModelMessageRole, ProviderTranscriptEvent,
+    Result, SecretString, parse_fenced_maap_action_batch_for_turn,
     parse_maap_action_batch_json_for_turn, validate_non_empty,
 };
 use std::future::Future;
@@ -47,9 +47,9 @@ pub use http::{AsyncProviderHttpTransport, ReqwestProviderHttpTransport};
 use mez_agent::ANTHROPIC_MESSAGES_API;
 use mez_agent::parse_openai_responses_provider_body;
 use mez_agent::{
-    DEFAULT_PROVIDER_TIMEOUT_MS, ModelTokenUsage, ProviderApiCompatibility, ProviderAuthMetadata,
-    ProviderCredentialKind, ProviderCredentialSource, ProviderHttpRequest, ProviderHttpResponse,
-    ProviderModelCatalog,
+    DEFAULT_PROVIDER_TIMEOUT_MS, ModelRequest, ModelTokenUsage, ProviderApiCompatibility,
+    ProviderAuthMetadata, ProviderCredentialKind, ProviderCredentialSource, ProviderHttpRequest,
+    ProviderHttpResponse, ProviderModelCatalog,
 };
 use mez_agent::{ProviderQuotaUsage, provider_quota_usage_from_headers};
 #[cfg(test)]

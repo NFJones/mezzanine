@@ -306,7 +306,7 @@ mod tests {
     #[test]
     fn failed_deepseek_execution_prompt_shows_action_error_not_executing_placeholder() {
         let execution = AgentTurnExecution {
-            request: crate::agent::ModelRequest {
+            request: mez_agent::ModelRequest {
                 provider: "deepseek".to_string(),
                 model: "deepseek-v4-pro".to_string(),
                 reasoning_effort: Some("high".to_string()),
@@ -389,7 +389,7 @@ mod tests {
     #[test]
     fn failed_macro_judge_execution_prompt_shows_provider_error_not_missing_batch() {
         let execution = AgentTurnExecution {
-            request: crate::agent::ModelRequest {
+            request: mez_agent::ModelRequest {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
                 reasoning_effort: None,

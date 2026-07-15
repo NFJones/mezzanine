@@ -1158,7 +1158,7 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
         final_turn: false,
     };
     let execution = crate::agent::AgentTurnExecution {
-        request: crate::agent::ModelRequest {
+        request: mez_agent::ModelRequest {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),
             reasoning_effort: task

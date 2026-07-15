@@ -202,7 +202,7 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
         final_turn: false,
     };
     let execution = crate::agent::AgentTurnExecution {
-        request: crate::agent::ModelRequest {
+        request: mez_agent::ModelRequest {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),
             reasoning_effort: task
@@ -382,7 +382,7 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
         final_turn: false,
     };
     let execution = crate::agent::AgentTurnExecution {
-        request: crate::agent::ModelRequest {
+        request: mez_agent::ModelRequest {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),
             reasoning_effort: task
@@ -523,7 +523,7 @@ async fn async_provider_worker_executes_network_actions_before_actor_completion(
         },
     };
     let execution = crate::agent::AgentTurnExecution {
-        request: crate::agent::ModelRequest {
+        request: mez_agent::ModelRequest {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
             reasoning_effort: None,

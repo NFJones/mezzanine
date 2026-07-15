@@ -87,11 +87,11 @@ pub use actions::{
 };
 pub use context::{
     AgentContext, ContextBlock, ContextCachePolicy, ContextStability, ModelContextCompactionReport,
-    ModelProfile, ModelProfileOverrideSource, ModelProfileOverrides, ModelRequest,
-    SelectedModelProfile, append_mcp_context, append_memory_context,
-    append_permission_policy_context, append_project_guidance_context, append_scheduler_context,
-    assemble_model_request, assemble_model_request_with_retained_tail_percent,
-    compact_model_context_for_budget, compact_model_context_for_budget_with_retained_tail_percent,
+    ModelProfile, ModelProfileOverrideSource, ModelProfileOverrides, SelectedModelProfile,
+    append_mcp_context, append_memory_context, append_permission_policy_context,
+    append_project_guidance_context, append_scheduler_context, assemble_model_request,
+    assemble_model_request_with_retained_tail_percent, compact_model_context_for_budget,
+    compact_model_context_for_budget_with_retained_tail_percent,
     constrain_skill_actions_for_loaded_context, invoked_mcp_tools_for_context,
     known_model_context_window_tokens, model_context_text_word_count, select_model_profile,
     set_project_guidance_context,
@@ -106,7 +106,7 @@ use mez_agent::{
     AgentPromptProfile, AgentTranscriptEntry, AgentTranscriptRole, AgentTurnState,
     AgentTurnTrigger, AllowedAction, AllowedActionSet, ContextSourceKind, LocalActionPlan,
     MaapBatch, McpExecutionRequest, McpExecutionResponse, ModelInteractionKind, ModelMessage,
-    ModelMessageRole, ModelTokenUsage, ModelTokenUsageKey, ProviderHttpRequest,
+    ModelMessageRole, ModelRequest, ModelTokenUsage, ModelTokenUsageKey, ProviderHttpRequest,
     ProviderHttpResponse, ProviderTranscriptEvent, SayStatus, TranscriptPersistence,
 };
 pub use network::{

@@ -162,7 +162,7 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
         final_turn: false,
     };
     let execution = crate::agent::AgentTurnExecution {
-        request: crate::agent::ModelRequest {
+        request: mez_agent::ModelRequest {
             provider: task.model_profile.provider.clone(),
             model: task.model_profile.model.clone(),
             reasoning_effort: task

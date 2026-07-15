@@ -199,7 +199,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
     service.agent_turn_executions.insert(
         "turn-1".to_string(),
         crate::agent::AgentTurnExecution {
-            request: crate::agent::ModelRequest {
+            request: mez_agent::ModelRequest {
                 provider: "runtime-batch".to_string(),
                 model: "test".to_string(),
                 reasoning_effort: None,
