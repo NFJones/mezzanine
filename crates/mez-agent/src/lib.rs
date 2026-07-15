@@ -115,7 +115,10 @@ pub use anthropic::{
     anthropic_request_requires_maap, parse_anthropic_messages_provider_body,
 };
 pub use auth::{ProviderAuthMetadata, ProviderCredentialKind, ProviderCredentialSource};
-pub use claude_code::claude_code_session_id;
+pub use claude_code::{
+    claude_code_auto_sizing_json_schema, claude_code_maap_json_schema,
+    claude_code_macro_judge_json_schema, claude_code_session_id,
+};
 pub use config_change::{
     CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_SETTING_PATH_DESCRIPTION,
     CONFIG_CHANGE_VALUE_DESCRIPTION,

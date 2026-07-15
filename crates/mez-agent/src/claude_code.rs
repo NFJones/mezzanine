@@ -5,8 +5,88 @@
 //! projection. The root adapter retains subprocess invocation and process-local
 //! session locking around the stable identities produced here.
 
-use crate::ModelRequest;
+use crate::{
+    ModelRequest, ProviderRequestAssemblyError, ProviderRequestAssemblyResult,
+    maap_action_batch_schema,
+};
 use sha2::Digest;
+
+/// Builds the Claude Code JSON schema argument for MAAP action-batch turns.
+pub fn claude_code_maap_json_schema(
+    request: &ModelRequest,
+) -> ProviderRequestAssemblyResult<String> {
+    serde_json::to_string(&maap_action_batch_schema(
+        &request.allowed_actions,
+        &request.available_mcp_tools,
+    ))
+    .map_err(|error| {
+        ProviderRequestAssemblyError::invalid_state(format!(
+            "Claude Code MAAP JSON schema could not be serialized: {error}"
+        ))
+    })
+}
+
+/// Builds the Claude Code JSON schema argument for internal auto-sizing
+/// router turns.
+pub fn claude_code_auto_sizing_json_schema() -> ProviderRequestAssemblyResult<String> {
+    serialize_claude_code_schema(
+        serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["version", "size", "reasoning_effort", "confidence", "rationale"],
+            "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "size": { "type": "string", "enum": ["small", "medium", "large"] },
+                "reasoning_effort": { "type": "string", "enum": ["low", "medium", "high", "xhigh"] },
+                "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+                "rationale": { "type": "string", "minLength": 1 }
+            }
+        }),
+        "auto-sizing",
+    )
+}
+
+/// Builds the Claude Code JSON schema argument for internal macro-step judge
+/// decisions.
+pub fn claude_code_macro_judge_json_schema() -> ProviderRequestAssemblyResult<String> {
+    serialize_claude_code_schema(
+        serde_json::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "version", "outcome", "step_success", "rationale", "adapted_prompt",
+                "user_message"
+            ],
+            "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "outcome": {
+                    "type": "string",
+                    "enum": [
+                        "continue", "continue_with_adapted_prompt", "stop_failure",
+                        "finish_success"
+                    ]
+                },
+                "step_success": { "type": "boolean" },
+                "rationale": { "type": "string", "minLength": 1 },
+                "adapted_prompt": { "type": ["string", "null"] },
+                "user_message": { "type": ["string", "null"] }
+            }
+        }),
+        "macro judge",
+    )
+}
+
+/// Serializes one deterministic Claude Code structured-output schema.
+fn serialize_claude_code_schema(
+    schema: serde_json::Value,
+    interaction: &str,
+) -> ProviderRequestAssemblyResult<String> {
+    serde_json::to_string(&schema).map_err(|error| {
+        ProviderRequestAssemblyError::invalid_state(format!(
+            "Claude Code {interaction} JSON schema could not be serialized: {error}"
+        ))
+    })
+}
 
 /// Returns the Claude Code session id used to resume one Mezzanine
 /// conversation.
@@ -75,6 +155,43 @@ fn claude_code_uuid_from_stable_key(key: &str) -> String {
 mod tests {
     use super::*;
     use crate::{AllowedActionSet, ModelInteractionKind};
+
+    /// Verifies Claude Code structured interactions expose closed schemas with
+    /// the exact required router and macro-judge fields.
+    #[test]
+    fn claude_code_internal_json_schemas_are_strict() {
+        let auto: serde_json::Value =
+            serde_json::from_str(&claude_code_auto_sizing_json_schema().unwrap()).unwrap();
+        let judge: serde_json::Value =
+            serde_json::from_str(&claude_code_macro_judge_json_schema().unwrap()).unwrap();
+
+        assert_eq!(auto["additionalProperties"], false);
+        assert_eq!(
+            auto["properties"]["version"]["enum"],
+            serde_json::json!([1])
+        );
+        assert_eq!(judge["additionalProperties"], false);
+        assert_eq!(
+            judge["properties"]["outcome"]["enum"],
+            serde_json::json!([
+                "continue",
+                "continue_with_adapted_prompt",
+                "stop_failure",
+                "finish_success"
+            ])
+        );
+    }
+
+    /// Verifies Claude Code MAAP schema construction follows the request's
+    /// active action surface instead of exposing disallowed actions.
+    #[test]
+    fn claude_code_maap_json_schema_tracks_allowed_actions() {
+        let request = claude_request();
+        let schema = claude_code_maap_json_schema(&request).unwrap();
+
+        assert!(schema.contains("say"), "{schema}");
+        assert!(!schema.contains("shell_command"), "{schema}");
+    }
 
     /// Verifies Claude Code session ids are stable per Mezzanine session and
     /// still satisfy Claude's UUID argument contract when Mezzanine only has a

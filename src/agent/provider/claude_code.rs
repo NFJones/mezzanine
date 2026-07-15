@@ -11,7 +11,10 @@ use super::{
     ModelResponse, ModelTokenUsage, ProviderModelCatalog, Result,
     parse_maap_action_batch_json_for_turn, provider_maap_parse_error, validate_non_empty,
 };
-use mez_agent::{claude_code_session_id, maap_action_batch_schema};
+use mez_agent::{
+    claude_code_auto_sizing_json_schema, claude_code_maap_json_schema,
+    claude_code_macro_judge_json_schema, claude_code_session_id,
+};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::PathBuf;
@@ -568,107 +571,6 @@ fn append_claude_code_section(prompt: &mut String, label: &str, content: &str) {
     prompt.push_str(":\n");
     prompt.push_str(content);
     prompt.push_str("\n\n");
-}
-
-/// Builds the Claude Code JSON schema argument for MAAP action-batch turns.
-fn claude_code_maap_json_schema(request: &ModelRequest) -> Result<String> {
-    serde_json::to_string(&maap_action_batch_schema(
-        &request.allowed_actions,
-        &request.available_mcp_tools,
-    ))
-    .map_err(|error| {
-        MezError::invalid_state(format!(
-            "Claude Code MAAP JSON schema could not be serialized: {error}"
-        ))
-    })
-}
-
-/// Builds the Claude Code JSON schema argument for internal auto-sizing
-/// router turns.
-fn claude_code_auto_sizing_json_schema() -> Result<String> {
-    serde_json::to_string(&serde_json::json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["version", "size", "reasoning_effort", "confidence", "rationale"],
-        "properties": {
-            "version": {
-                "type": "integer",
-                "enum": [1]
-            },
-            "size": {
-                "type": "string",
-                "enum": ["small", "medium", "large"]
-            },
-            "reasoning_effort": {
-                "type": "string",
-                "enum": ["low", "medium", "high", "xhigh"]
-            },
-            "confidence": {
-                "type": "number",
-                "minimum": 0.0,
-                "maximum": 1.0
-            },
-            "rationale": {
-                "type": "string",
-                "minLength": 1
-            }
-        }
-    }))
-    .map_err(|error| {
-        MezError::invalid_state(format!(
-            "Claude Code auto-sizing JSON schema could not be serialized: {error}"
-        ))
-    })
-}
-
-/// Builds the Claude Code JSON schema argument for internal macro-step judge
-/// decisions.
-fn claude_code_macro_judge_json_schema() -> Result<String> {
-    serde_json::to_string(&serde_json::json!({
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-            "version",
-            "outcome",
-            "step_success",
-            "rationale",
-            "adapted_prompt",
-            "user_message"
-        ],
-        "properties": {
-            "version": {
-                "type": "integer",
-                "enum": [1]
-            },
-            "outcome": {
-                "type": "string",
-                "enum": [
-                    "continue",
-                    "continue_with_adapted_prompt",
-                    "stop_failure",
-                    "finish_success"
-                ]
-            },
-            "step_success": {
-                "type": "boolean"
-            },
-            "rationale": {
-                "type": "string",
-                "minLength": 1
-            },
-            "adapted_prompt": {
-                "type": ["string", "null"]
-            },
-            "user_message": {
-                "type": ["string", "null"]
-            }
-        }
-    }))
-    .map_err(|error| {
-        MezError::invalid_state(format!(
-            "Claude Code macro judge JSON schema could not be serialized: {error}"
-        ))
-    })
 }
 
 /// Parses Claude Code MAAP output from schema-enforced Claude Code responses.
