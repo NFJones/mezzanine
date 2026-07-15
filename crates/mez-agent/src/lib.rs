@@ -121,7 +121,13 @@ pub use continuation::{
     accept_provider_response, continuation_surface, decide_capabilities,
 };
 pub use deepseek::{
-    deepseek_chat_completions_endpoint_for_base_url, deepseek_models_endpoint_for_base_url,
+    DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,
+    DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT, DEEPSEEK_MODELS_ENDPOINT,
+    DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME, DeepSeekMaapRequestStrategy, DeepSeekMaapShimKind,
+    deepseek_chat_completions_endpoint_for_base_url,
+    deepseek_chat_completions_request_body_with_strategy, deepseek_effective_stream,
+    deepseek_maap_request_strategy, deepseek_models_endpoint_for_base_url,
+    deepseek_should_retry_with_forced_maap, deepseek_thinking_enabled_for_request,
 };
 pub use failure_summary::{
     AgentFailureSummaryNegotiation, AgentFailureSummaryProviderDecision,

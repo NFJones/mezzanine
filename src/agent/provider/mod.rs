@@ -5,9 +5,8 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AgentCapability, AllowedAction, AllowedActionSet, BTreeMap, ExposeSecret, MaapBatch,
-    McpPromptTool, MezError, ModelInteractionKind, ModelMessageRole, ProviderTranscriptEvent,
-    Result, SecretString, parse_fenced_maap_action_batch_for_turn,
+    BTreeMap, ExposeSecret, MaapBatch, MezError, ModelInteractionKind, ModelMessageRole,
+    ProviderTranscriptEvent, Result, SecretString, parse_fenced_maap_action_batch_for_turn,
     parse_maap_action_batch_json_for_turn, validate_non_empty,
 };
 use std::future::Future;
@@ -59,11 +58,10 @@ use mez_agent::{
 use openai_chat_completions::OpenAiChatCompletionsDialect;
 
 use mez_agent::{CHATGPT_RESPONSES_ENDPOINT, OPENAI_RESPONSES_ENDPOINT};
-/// Default DeepSeek Chat Completions API endpoint.
-pub const DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT: &str = "https://api.deepseek.com/chat/completions";
-/// Default DeepSeek models listing endpoint.
-#[allow(dead_code)]
-pub const DEEPSEEK_MODELS_ENDPOINT: &str = "https://api.deepseek.com/models";
+pub use mez_agent::{
+    DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,
+    DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT, DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME,
+};
 /// Default Anthropic Messages API endpoint.
 #[allow(dead_code)]
 pub const ANTHROPIC_MESSAGES_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
@@ -73,14 +71,6 @@ pub const OPENAI_ORGANIZATION_HEADER: &str = "OpenAI-Organization";
 pub const OPENAI_PROJECT_HEADER: &str = "OpenAI-Project";
 /// ChatGPT account selection header required by ChatGPT-backed requests.
 pub const CHATGPT_ACCOUNT_ID_HEADER: &str = "ChatGPT-Account-ID";
-/// OpenAI function tool name used to carry one validated MAAP action batch.
-use mez_agent::MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME;
-/// DeepSeek shim function tool name used for capability routing turns.
-pub const DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME: &str = "mez_decide_capability";
-/// DeepSeek shim function tool name used for response-only turns.
-pub const DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME: &str = "mez_respond";
-/// DeepSeek shim function tool name used for executable action turns.
-pub const DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME: &str = "mez_take_actions";
 
 /// Resolves an optional configured API id against one provider kind.
 pub fn effective_provider_api(kind: &str, api: Option<&str>) -> Result<ProviderApiCompatibility> {
@@ -196,7 +186,8 @@ pub trait AsyncModelProvider: Send + Sync {
     }
 }
 
-use mez_agent::ProviderCapabilities;
+#[cfg(test)]
+use mez_agent::{McpPromptTool, ProviderCapabilities};
 
 /// Carries Open Ai Responses Provider state for this subsystem.
 ///

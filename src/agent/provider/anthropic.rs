@@ -4,13 +4,13 @@
 //! and product response/error projection around provider-independent Anthropic
 //! policy and response parsing in `mez-agent`.
 
-#[cfg(test)]
-use super::OPENAI_MAAP_FUNCTION_TOOL_NAME;
 use super::chat_completions::ChatCompletionsDialect;
 use super::{
     ANTHROPIC_MESSAGES_ENDPOINT, MezError, ModelRequest, ModelResponse, ProviderHttpRequest,
     ProviderHttpResponse, Result, provider_quota_usage_from_headers, validate_non_empty,
 };
+#[cfg(test)]
+use mez_agent::MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME;
 use mez_agent::{
     AnthropicMessagesOptions, AnthropicMessagesResponse, anthropic_messages_endpoint_for_base_url,
     anthropic_messages_request_body, anthropic_provider_failure_json,
