@@ -172,7 +172,7 @@ async fn runtime_agent_shell_model_list_uses_provider_catalog_over_configured_mo
         .unwrap();
     service.cache_provider_model_catalog_for_tests(
         "openai",
-        vec![crate::agent::ProviderModelInfo {
+        vec![mez_agent::ProviderModelInfo {
             id: "provider-only".to_string(),
             display_name: None,
             reasoning_levels: vec!["low".to_string(), "high".to_string()],

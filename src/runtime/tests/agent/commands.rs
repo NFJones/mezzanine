@@ -45,38 +45,38 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     service.runtime_metrics.record_provider_token_usage(
-        crate::agent::ModelTokenUsage {
+        mez_agent::ModelTokenUsage {
             input_tokens: 120,
             output_tokens: 34,
             reasoning_tokens: 9,
             cached_input_tokens: Some(80),
             cache_write_input_tokens: None,
         },
-        crate::agent::ModelTokenUsage {
+        mez_agent::ModelTokenUsage {
             input_tokens: 120,
             output_tokens: 34,
             reasoning_tokens: 9,
             cached_input_tokens: Some(80),
             cache_write_input_tokens: None,
         },
-        &crate::agent::ModelTokenUsageKey::new("openai", "gpt-fast"),
+        &mez_agent::ModelTokenUsageKey::new("openai", "gpt-fast"),
     );
     service.runtime_metrics.record_provider_token_usage(
-        crate::agent::ModelTokenUsage {
+        mez_agent::ModelTokenUsage {
             input_tokens: 200,
             output_tokens: 50,
             reasoning_tokens: 20,
             cached_input_tokens: Some(100),
             cache_write_input_tokens: None,
         },
-        crate::agent::ModelTokenUsage {
+        mez_agent::ModelTokenUsage {
             input_tokens: 200,
             output_tokens: 50,
             reasoning_tokens: 20,
             cached_input_tokens: Some(100),
             cache_write_input_tokens: None,
         },
-        &crate::agent::ModelTokenUsageKey::new("deepseek", "deepseek-chat"),
+        &mez_agent::ModelTokenUsageKey::new("deepseek", "deepseek-chat"),
     );
     let mut request = runtime_model_request_fixture("turn-output-budget");
     request.max_output_tokens = Some(16_384);
@@ -174,7 +174,7 @@ fn runtime_slash_command_latency_displays_and_applies_override() {
         .unwrap();
     service.cache_provider_model_catalog_for_tests(
         "openai",
-        vec![crate::agent::ProviderModelInfo {
+        vec![mez_agent::ProviderModelInfo {
             id: "gpt-5.5".to_string(),
             display_name: None,
             reasoning_levels: vec!["high".to_string()],

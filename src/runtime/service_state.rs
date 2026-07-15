@@ -257,7 +257,7 @@ impl RuntimeMetricsSnapshot {
     pub(super) fn record_provider_request_shape(
         &mut self,
         request: &ModelRequest,
-        diagnostics: Option<&crate::agent::OpenAiPromptCacheDiagnostics>,
+        diagnostics: Option<&mez_agent::OpenAiPromptCacheDiagnostics>,
         diagnostics_failed: bool,
     ) {
         self.provider_requests_started = self.provider_requests_started.saturating_add(1);
@@ -2386,7 +2386,7 @@ pub struct RuntimeSessionService {
     /// Latest provider-response request-context snapshots keyed by
     /// conversation id.
     pub(super) agent_context_usage_snapshot_by_conversation:
-        BTreeMap<String, crate::agent::AgentContextUsageSnapshot>,
+        BTreeMap<String, mez_agent::AgentContextUsageSnapshot>,
     /// Latest provider quota usage percentages keyed by agent conversation id.
     pub(super) agent_quota_usage_by_conversation: BTreeMap<String, Vec<ProviderQuotaUsage>>,
     /// Latest live provider model catalogs keyed by provider id.

@@ -8,7 +8,7 @@ use crate::error::{MezError, Result};
 use crate::terminal::{agent_log_wrap_width, terminal_text_width, wrap_agent_log_lines};
 
 use super::types::{AgentPresentationEntry, AgentSessionMetadata, TranscriptEntry, TranscriptRole};
-use crate::agent::{ModelTokenUsage, ModelTokenUsageKey};
+use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
 use std::collections::BTreeMap;
 
 /// Defines the TRANSCRIPT VERSION const used by this subsystem.
@@ -642,7 +642,7 @@ fn decode_token_usage_by_model(
 
 /// Encodes the last request-context snapshot into one stable TSV field.
 fn encode_context_usage_snapshot(
-    snapshot: Option<&crate::agent::AgentContextUsageSnapshot>,
+    snapshot: Option<&mez_agent::AgentContextUsageSnapshot>,
 ) -> Result<String> {
     let Some(snapshot) = snapshot else {
         return Ok(String::new());
@@ -660,7 +660,7 @@ fn encode_context_usage_snapshot(
 }
 
 /// Decodes the last request-context snapshot from one stable TSV field.
-fn decode_context_usage_snapshot(value: &str) -> Result<crate::agent::AgentContextUsageSnapshot> {
+fn decode_context_usage_snapshot(value: &str) -> Result<mez_agent::AgentContextUsageSnapshot> {
     let object = serde_json::from_str::<serde_json::Value>(value).map_err(|error| {
         MezError::invalid_args(format!(
             "agent session context usage snapshot JSON is invalid: {error}"
@@ -669,7 +669,7 @@ fn decode_context_usage_snapshot(value: &str) -> Result<crate::agent::AgentConte
     let object = object.as_object().ok_or_else(|| {
         MezError::invalid_args("agent session context usage snapshot must be an object")
     })?;
-    Ok(crate::agent::AgentContextUsageSnapshot {
+    Ok(mez_agent::AgentContextUsageSnapshot {
         input_tokens: json_u64_field(object, "input_tokens")?,
         context_window_tokens: json_u64_field(object, "context_window_tokens")?,
         cached_input_tokens: json_optional_u64_field(object, "cached_input_tokens")?,

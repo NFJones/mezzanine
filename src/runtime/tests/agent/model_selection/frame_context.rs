@@ -147,7 +147,7 @@ fn runtime_frame_context_uses_known_openai_model_context_window() {
 
     service.record_agent_provider_token_usage(
         &pane_id,
-        crate::agent::ModelTokenUsage {
+        mez_agent::ModelTokenUsage {
             input_tokens: 10_500,
             output_tokens: 34,
             reasoning_tokens: 9,

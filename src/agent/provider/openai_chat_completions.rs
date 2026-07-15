@@ -7,13 +7,14 @@
 
 use super::chat_completions::{ChatCompletionsDialect, parse_chat_completions_response_envelope};
 use super::errors::provider_maap_parse_error;
-use super::schema::{maap_action_batch_schema, openai_maap_current_action_batch_description};
+use super::schema::openai_maap_current_action_batch_description;
 use super::{
     MezError, ModelInteractionKind, ModelMessageRole, ModelRequest, ModelResponse, ModelTokenUsage,
     OPENAI_MAAP_FUNCTION_TOOL_NAME, ProviderHttpRequest, ProviderHttpResponse, Result,
     openai_models_endpoint_for_responses_endpoint, parse_fenced_maap_action_batch_for_turn,
     parse_maap_action_batch_json_for_turn, provider_quota_usage_from_headers, validate_non_empty,
 };
+use mez_agent::maap_action_batch_schema;
 use std::collections::BTreeMap;
 
 /// Chat Completions dialect for generic OpenAI-compatible providers.

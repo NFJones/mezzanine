@@ -107,7 +107,7 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
         .unwrap();
     service.cache_provider_model_catalog_for_tests(
         "openai",
-        vec![crate::agent::ProviderModelInfo {
+        vec![mez_agent::ProviderModelInfo {
             id: "gpt-provider-only".to_string(),
             display_name: Some("Provider Only".to_string()),
             reasoning_levels: vec!["low".to_string(), "high".to_string()],

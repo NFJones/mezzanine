@@ -1319,7 +1319,7 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         .unwrap();
     service.record_agent_provider_token_usage(
         "%1",
-        crate::agent::ModelTokenUsage {
+        mez_agent::ModelTokenUsage {
             input_tokens: 120,
             output_tokens: 34,
             reasoning_tokens: 9,
@@ -1329,7 +1329,7 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
     );
     service.record_agent_provider_token_usage(
         "%1",
-        crate::agent::ModelTokenUsage {
+        mez_agent::ModelTokenUsage {
             input_tokens: 40,
             output_tokens: 0,
             reasoning_tokens: 0,
@@ -1340,14 +1340,14 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
     let deepseek_profile = runtime_model_profile("deepseek", "deepseek-chat");
     service.record_agent_provider_token_usage_with_profile(
         "%1",
-        crate::agent::ModelTokenUsage {
+        mez_agent::ModelTokenUsage {
             input_tokens: 200,
             output_tokens: 50,
             reasoning_tokens: 20,
             cached_input_tokens: Some(100),
             cache_write_input_tokens: None,
         },
-        crate::agent::ModelTokenUsage {
+        mez_agent::ModelTokenUsage {
             input_tokens: 200,
             output_tokens: 50,
             reasoning_tokens: 20,
@@ -1358,7 +1358,7 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
     );
     service.record_agent_provider_token_usage(
         second_pane.as_str(),
-        crate::agent::ModelTokenUsage {
+        mez_agent::ModelTokenUsage {
             input_tokens: 60,
             output_tokens: 10,
             reasoning_tokens: 4,
@@ -1367,21 +1367,21 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         },
     );
     service.runtime_metrics.record_provider_token_usage(
-        crate::agent::ModelTokenUsage {
+        mez_agent::ModelTokenUsage {
             input_tokens: 300,
             output_tokens: 75,
             reasoning_tokens: 15,
             cached_input_tokens: Some(120),
             cache_write_input_tokens: None,
         },
-        crate::agent::ModelTokenUsage {
+        mez_agent::ModelTokenUsage {
             input_tokens: 300,
             output_tokens: 75,
             reasoning_tokens: 15,
             cached_input_tokens: Some(120),
             cache_write_input_tokens: None,
         },
-        &crate::agent::ModelTokenUsageKey::new("runtime-metrics", "metrics-only"),
+        &mez_agent::ModelTokenUsageKey::new("runtime-metrics", "metrics-only"),
     );
     service
         .subagent_scopes

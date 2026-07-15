@@ -853,7 +853,7 @@ impl ModelProvider for RuntimeAutoSizingProvider {
                 provider: self.provider_id().to_string(),
                 model: request.model.clone(),
                 raw_text: r#"{"version":1,"size":"large","reasoning_effort":"high","confidence":0.92,"rationale":"multi-file feature work"}"#.to_string(),
-                usage: crate::agent::ModelTokenUsage {
+                usage: mez_agent::ModelTokenUsage {
                     input_tokens: 90,
                     output_tokens: 10,
                     reasoning_tokens: 3,
@@ -867,7 +867,7 @@ impl ModelProvider for RuntimeAutoSizingProvider {
             });
         }
         let mut response = runtime_say_response(&request.turn_id, "auto-sized response", true);
-        response.usage = crate::agent::ModelTokenUsage {
+        response.usage = mez_agent::ModelTokenUsage {
             input_tokens: 150,
             output_tokens: 40,
             reasoning_tokens: 12,

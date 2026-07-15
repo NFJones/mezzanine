@@ -327,7 +327,7 @@ fn runtime_frame_context_uses_cached_catalog_context_window_for_named_compatible
         .unwrap();
     service.cache_provider_model_catalog_for_tests(
         "compat",
-        vec![crate::agent::ProviderModelInfo {
+        vec![mez_agent::ProviderModelInfo {
             id: "catalog-only-model".to_string(),
             display_name: None,
             reasoning_levels: vec!["low".to_string()],
@@ -361,7 +361,7 @@ fn runtime_frame_context_uses_cached_catalog_context_window_for_named_compatible
 
     service.record_agent_provider_token_usage(
         &pane_id,
-        crate::agent::ModelTokenUsage {
+        mez_agent::ModelTokenUsage {
             input_tokens: 500_000,
             output_tokens: 34,
             reasoning_tokens: 9,
@@ -509,7 +509,7 @@ fn runtime_pane_agent_status_selector_applies_latency_preference() {
         .unwrap();
     service.cache_provider_model_catalog_for_tests(
         "openai",
-        vec![crate::agent::ProviderModelInfo {
+        vec![mez_agent::ProviderModelInfo {
             id: "gpt-5.5".to_string(),
             display_name: None,
             reasoning_levels: vec!["low".to_string()],

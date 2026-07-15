@@ -9,13 +9,14 @@
 
 use super::chat_completions::ChatCompletionsDialect;
 use super::errors::provider_maap_parse_error;
-use super::schema::{maap_action_batch_schema, maap_current_action_batch_description};
+use super::schema::maap_current_action_batch_description;
 use super::{
     ANTHROPIC_MESSAGES_ENDPOINT, MezError, ModelRequest, ModelResponse, ModelTokenUsage,
     OPENAI_MAAP_FUNCTION_TOOL_NAME, ProviderHttpRequest, ProviderHttpResponse, Result,
     parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
     provider_quota_usage_from_headers, validate_non_empty,
 };
+use mez_agent::maap_action_batch_schema;
 use mez_agent::{
     parse_sse_events_with, provider_failure_event_json as openai_provider_failure_event_json,
     provider_failure_json as openai_provider_failure_json,
@@ -1072,11 +1073,11 @@ impl AnthropicStreamContentBlock {
 mod tests {
     use super::*;
     use crate::agent::{
-        AnthropicMessagesProvider, DEFAULT_PROVIDER_TIMEOUT_MS, ProviderErrorRetryClass,
-        ReqwestProviderHttpTransport, provider_error_retry_class,
+        AnthropicMessagesProvider, ReqwestProviderHttpTransport, provider_error_retry_class,
     };
     use crate::auth::{AuthPaths, AuthStore};
     use crate::error::MezErrorKind;
+    use mez_agent::{DEFAULT_PROVIDER_TIMEOUT_MS, ProviderErrorRetryClass};
     use std::fs;
 
     /// Verifies Anthropic base URL normalization accepts the documented root,

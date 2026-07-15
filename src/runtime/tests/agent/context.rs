@@ -44,7 +44,7 @@ fn runtime_frame_context_reports_last_provider_context_usage() {
 
     service.record_agent_provider_token_usage(
         &pane_id,
-        crate::agent::ModelTokenUsage {
+        mez_agent::ModelTokenUsage {
             input_tokens: 251,
             output_tokens: 34,
             reasoning_tokens: 9,
@@ -66,14 +66,14 @@ fn runtime_frame_context_reports_last_provider_context_usage() {
         .unwrap();
     service.record_agent_provider_token_usage_with_profile(
         &pane_id,
-        crate::agent::ModelTokenUsage {
+        mez_agent::ModelTokenUsage {
             input_tokens: 1_200,
             output_tokens: 10,
             reasoning_tokens: 5,
             cached_input_tokens: Some(100),
             cache_write_input_tokens: None,
         },
-        crate::agent::ModelTokenUsage {
+        mez_agent::ModelTokenUsage {
             input_tokens: 251,
             output_tokens: 10,
             reasoning_tokens: 5,
@@ -99,14 +99,14 @@ fn runtime_frame_context_reports_last_provider_context_usage() {
 
     service.record_agent_provider_token_usage_with_profile(
         &pane_id,
-        crate::agent::ModelTokenUsage {
+        mez_agent::ModelTokenUsage {
             input_tokens: 1_500,
             output_tokens: 10,
             reasoning_tokens: 5,
             cached_input_tokens: Some(100),
             cache_write_input_tokens: None,
         },
-        crate::agent::ModelTokenUsage {
+        mez_agent::ModelTokenUsage {
             input_tokens: 1_200,
             output_tokens: 10,
             reasoning_tokens: 5,

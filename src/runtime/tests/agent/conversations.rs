@@ -765,7 +765,7 @@ fn runtime_agent_shell_status_pane_tokens_survive_conversation_switch() {
         .enter_or_resume("%1")
         .unwrap();
     let profile = runtime_model_profile("openai", "gpt-fast");
-    let first_usage = crate::agent::ModelTokenUsage {
+    let first_usage = mez_agent::ModelTokenUsage {
         input_tokens: 120,
         output_tokens: 34,
         reasoning_tokens: 9,
@@ -782,7 +782,7 @@ fn runtime_agent_shell_status_pane_tokens_survive_conversation_switch() {
         .agent_shell_store_mut()
         .bind_conversation("%1", "status-pane-session-2", 0)
         .unwrap();
-    let second_usage = crate::agent::ModelTokenUsage {
+    let second_usage = mez_agent::ModelTokenUsage {
         input_tokens: 40,
         output_tokens: 0,
         reasoning_tokens: 0,
@@ -1426,8 +1426,8 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
             content: "resume with prior token totals".to_string(),
         })
         .unwrap();
-    let saved_token_usage_key = crate::agent::ModelTokenUsageKey::new("openai", "gpt-saved");
-    let saved_token_usage = crate::agent::ModelTokenUsage {
+    let saved_token_usage_key = mez_agent::ModelTokenUsageKey::new("openai", "gpt-saved");
+    let saved_token_usage = mez_agent::ModelTokenUsage {
         input_tokens: 900,
         output_tokens: 80,
         reasoning_tokens: 33,
@@ -1455,7 +1455,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
                 working_directory: None,
                 project_root: None,
                 context_usage: Some("42%".to_string()),
-                context_usage_snapshot: Some(crate::agent::AgentContextUsageSnapshot {
+                context_usage_snapshot: Some(mez_agent::AgentContextUsageSnapshot {
                     input_tokens: 420,
                     context_window_tokens: 1000,
                     cached_input_tokens: Some(450),
@@ -1537,14 +1537,14 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
     profile.model = "gpt-saved".to_string();
     service.record_agent_provider_token_usage_with_profile(
         "%1",
-        crate::agent::ModelTokenUsage {
+        mez_agent::ModelTokenUsage {
             input_tokens: 100,
             output_tokens: 20,
             reasoning_tokens: 5,
             cached_input_tokens: Some(25),
             cache_write_input_tokens: None,
         },
-        crate::agent::ModelTokenUsage {
+        mez_agent::ModelTokenUsage {
             input_tokens: 100,
             output_tokens: 20,
             reasoning_tokens: 5,
@@ -1569,7 +1569,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
         resumed_metadata[0].token_usage_by_model,
         std::collections::BTreeMap::from([(
             saved_token_usage_key,
-            crate::agent::ModelTokenUsage {
+            mez_agent::ModelTokenUsage {
                 input_tokens: 1000,
                 output_tokens: 100,
                 reasoning_tokens: 38,

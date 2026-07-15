@@ -4,7 +4,7 @@
 //! filesystem-backed store handle. Encoding and I/O behavior live in sibling
 //! modules.
 
-use crate::agent::{AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsageKey};
+use mez_agent::{AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsageKey};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 

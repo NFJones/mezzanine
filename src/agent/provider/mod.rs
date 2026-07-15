@@ -38,7 +38,7 @@ use deepseek::DeepSeekChatCompletionsDialect;
 pub use deepseek::build_deepseek_chat_completions_http_request;
 use errors::provider_maap_parse_error;
 pub(crate) use errors::{
-    ProviderErrorRetryClass, provider_error_retry_class, provider_error_retry_class_from_parts,
+    provider_error_retry_class, provider_error_retry_class_from_parts,
     provider_event_error_from_parts, provider_event_error_kind,
 };
 #[cfg(test)]
@@ -46,21 +46,17 @@ pub use http::ProviderHttpTransport;
 pub use http::{AsyncProviderHttpTransport, ReqwestProviderHttpTransport};
 #[cfg(test)]
 use mez_agent::ANTHROPIC_MESSAGES_API;
-pub use mez_agent::OpenAiPromptCacheDiagnostics;
-pub use mez_agent::{
-    AgentContextUsageSnapshot, CLAUDE_CODE_API, DEEPSEEK_CHAT_COMPLETIONS_API,
-    DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ModelTokenUsage,
-    ModelTokenUsageKey, OPENAI_CHAT_COMPLETIONS_API, OPENAI_RESPONSES_API,
-    ProviderApiCompatibility, ProviderAuthMetadata, ProviderCredentialKind,
-    ProviderCredentialSource, ProviderHttpRequest, ProviderHttpResponse, ProviderModelCatalog,
-    ProviderModelInfo,
+use mez_agent::{
+    DEFAULT_PROVIDER_TIMEOUT_MS, ModelTokenUsage, ProviderApiCompatibility, ProviderAuthMetadata,
+    ProviderCredentialKind, ProviderCredentialSource, ProviderHttpRequest, ProviderHttpResponse,
+    ProviderModelCatalog,
 };
-pub use mez_agent::{ProviderQuotaUsage, provider_quota_usage_from_headers};
+use mez_agent::{ProviderQuotaUsage, provider_quota_usage_from_headers};
 #[cfg(test)]
 use mez_agent::{maap_mcp_call_action_schema_for_tool, normalize_openai_strict_schema};
-pub use mez_agent::{
-    openai_default_reasoning_levels_for_model, openai_models_endpoint_for_responses_endpoint,
-    openai_responses_endpoint_for_base_url, provider_catalog_reasoning_levels,
+use mez_agent::{
+    openai_models_endpoint_for_responses_endpoint, openai_responses_endpoint_for_base_url,
+    provider_catalog_reasoning_levels,
 };
 use mez_agent::{
     provider_error_detail as openai_provider_error_detail,
@@ -74,9 +70,7 @@ use response::parse_openai_responses_provider_body;
 #[cfg(test)]
 pub(crate) use response::parse_openai_responses_stream_body;
 
-pub use mez_agent::{
-    CHATGPT_RESPONSES_ENDPOINT, OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT,
-};
+use mez_agent::{CHATGPT_RESPONSES_ENDPOINT, OPENAI_RESPONSES_ENDPOINT};
 /// Default DeepSeek Chat Completions API endpoint.
 pub const DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT: &str = "https://api.deepseek.com/chat/completions";
 /// Default DeepSeek models listing endpoint.
@@ -92,7 +86,7 @@ pub const OPENAI_PROJECT_HEADER: &str = "OpenAI-Project";
 /// ChatGPT account selection header required by ChatGPT-backed requests.
 pub const CHATGPT_ACCOUNT_ID_HEADER: &str = "ChatGPT-Account-ID";
 /// OpenAI function tool name used to carry one validated MAAP action batch.
-pub use mez_agent::MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME;
+use mez_agent::MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME;
 /// DeepSeek shim function tool name used for capability routing turns.
 pub const DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME: &str = "mez_decide_capability";
 /// DeepSeek shim function tool name used for response-only turns.
@@ -214,7 +208,7 @@ pub trait AsyncModelProvider: Send + Sync {
     }
 }
 
-pub use mez_agent::ProviderCapabilities;
+use mez_agent::ProviderCapabilities;
 
 /// Carries Open Ai Responses Provider state for this subsystem.
 ///

@@ -545,8 +545,8 @@ fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
     let root = temp_root("agent-session-metadata");
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
-    let owned_token_usage_key = crate::agent::ModelTokenUsageKey::new("openai", "gpt-fast");
-    let owned_token_usage = crate::agent::ModelTokenUsage {
+    let owned_token_usage_key = mez_agent::ModelTokenUsageKey::new("openai", "gpt-fast");
+    let owned_token_usage = mez_agent::ModelTokenUsage {
         input_tokens: 100,
         output_tokens: 20,
         reasoning_tokens: 5,
@@ -571,7 +571,7 @@ fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
         working_directory: Some("/workspace/live".to_string()),
         project_root: Some("/workspace".to_string()),
         context_usage: Some("10%".to_string()),
-        context_usage_snapshot: Some(crate::agent::AgentContextUsageSnapshot {
+        context_usage_snapshot: Some(mez_agent::AgentContextUsageSnapshot {
             input_tokens: 100,
             context_window_tokens: 1000,
             cached_input_tokens: Some(80),

@@ -856,7 +856,7 @@ fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_prose()
     assert_eq!(response.usage.reasoning_tokens, 3);
     assert_eq!(
         response.latest_request_usage,
-        Some(crate::agent::ModelTokenUsage {
+        Some(mez_agent::ModelTokenUsage {
             input_tokens: 12,
             output_tokens: 6,
             reasoning_tokens: 0,

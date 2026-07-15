@@ -14,10 +14,8 @@ use super::{
     RuntimeAutoSizingFallbackPolicy, RuntimeAutoSizingTargetProfile, RuntimeProviderConfig,
     openai_default_reasoning_levels_for_model,
 };
-use crate::agent::{
-    ProviderApiCompatibility, effective_provider_api, model_context_text_word_count,
-};
-use mez_agent::{AllowedActionSet, ModelInteractionKind};
+use crate::agent::{effective_provider_api, model_context_text_word_count};
+use mez_agent::{AllowedActionSet, ModelInteractionKind, ProviderApiCompatibility};
 
 /// Fixed word cap for the filtered conversation projection sent to the internal
 /// auto-sizing router.

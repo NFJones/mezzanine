@@ -106,7 +106,8 @@ use mez_agent::{
     AgentPromptProfile, AgentTranscriptEntry, AgentTranscriptRole, AgentTurnState,
     AgentTurnTrigger, AllowedAction, AllowedActionSet, ContextSourceKind, LocalActionPlan,
     MaapBatch, McpExecutionRequest, McpExecutionResponse, ModelInteractionKind, ModelMessage,
-    ModelMessageRole, ProviderTranscriptEvent, SayStatus, TranscriptPersistence,
+    ModelMessageRole, ModelTokenUsage, ModelTokenUsageKey, ProviderHttpRequest,
+    ProviderHttpResponse, ProviderTranscriptEvent, SayStatus, TranscriptPersistence,
 };
 pub use network::{
     NetworkActionPlan, execute_network_action_with_transport_async, network_action_plan,
@@ -116,18 +117,12 @@ pub use prompt::{
     build_agent_system_prompt, build_agent_system_prompt_with_repository_instructions,
 };
 pub use provider::{
-    AgentContextUsageSnapshot, AnthropicMessagesProvider, AsyncModelProvider,
-    AsyncProviderHttpTransport, CHATGPT_ACCOUNT_ID_HEADER, CHATGPT_RESPONSES_ENDPOINT,
-    CLAUDE_CODE_API, ChatCompletionsProvider, ClaudeCodeProvider,
+    AnthropicMessagesProvider, AsyncModelProvider, AsyncProviderHttpTransport,
+    CHATGPT_ACCOUNT_ID_HEADER, ChatCompletionsProvider, ClaudeCodeProvider,
     DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,
-    DEEPSEEK_CHAT_COMPLETIONS_API, DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT,
-    DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME, DEFAULT_PROVIDER_MAX_RESPONSE_BYTES,
-    DEFAULT_PROVIDER_TIMEOUT_MS, DeepSeekChatCompletionsProvider, ModelResponse, ModelTokenUsage,
-    ModelTokenUsageKey, OPENAI_CHAT_COMPLETIONS_API, OPENAI_MAAP_FUNCTION_TOOL_NAME,
-    OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_API, OPENAI_RESPONSES_ENDPOINT,
-    OpenAiCompatibleChatCompletionsProvider, OpenAiPromptCacheDiagnostics, OpenAiResponsesProvider,
-    ProviderApiCompatibility, ProviderCapabilities, ProviderHttpRequest, ProviderHttpResponse,
-    ProviderModelCatalog, ProviderModelInfo, ProviderQuotaUsage, ReqwestProviderHttpTransport,
+    DEEPSEEK_CHAT_COMPLETIONS_ENDPOINT, DEEPSEEK_RESPOND_MAAP_FUNCTION_TOOL_NAME,
+    DeepSeekChatCompletionsProvider, ModelResponse, OpenAiCompatibleChatCompletionsProvider,
+    OpenAiResponsesProvider, ReqwestProviderHttpTransport,
     anthropic_provider_from_auth_store_with_provider_options,
     build_deepseek_chat_completions_http_request, build_openai_models_http_request,
     build_openai_models_http_request_with_headers, build_openai_responses_http_request,
@@ -135,19 +130,17 @@ pub use provider::{
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     deepseek_provider_from_auth_store_with_provider_options, effective_provider_api,
     openai_compatible_provider_from_auth_store_with_provider_options,
-    openai_default_reasoning_levels_for_model, openai_models_endpoint_for_responses_endpoint,
     openai_prompt_cache_diagnostics_for_request, openai_provider_from_auth_store_with_options,
-    openai_provider_from_auth_store_with_provider_options, openai_responses_endpoint_for_base_url,
+    openai_provider_from_auth_store_with_provider_options,
     openai_responses_provider_from_auth_store_with_provider_options, openai_responses_request_body,
     parse_openai_models_http_body, parse_openai_responses_http_body,
-    provider_quota_usage_from_headers,
 };
 #[cfg(test)]
 pub use provider::{
     ModelProvider, ProviderHttpTransport, openai_provider_from_auth_store_with_transport,
 };
 pub(crate) use provider::{
-    ProviderErrorRetryClass, provider_error_retry_class, provider_error_retry_class_from_parts,
+    provider_error_retry_class, provider_error_retry_class_from_parts,
     provider_event_error_from_parts, provider_event_error_kind,
 };
 pub use semantic::{

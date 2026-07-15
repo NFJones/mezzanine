@@ -14,10 +14,9 @@ use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentShellSession,
     AgentShellVisibility, AgentTurnExecution, AgentTurnRecord, AgentTurnState, AuditActor,
     AuditRecord, BTreeMap, BTreeSet, BlockedAgentApprovalRef, BlockedApprovalRequest, ContextBlock,
-    ContextSourceKind, DEFAULT_COMMAND_SHELL_CLASSIFICATION, DEFAULT_PROVIDER_TIMEOUT_MS, Envelope,
-    EventKind, HookEvent, JoinedSubagentDependency, McpToolCallRequest, MezError, ModelProfile,
-    ModelResponse, ModelTokenUsage, ModelTokenUsageKey, PaneId, PaneReadinessState, PathBuf,
-    PathScopes, PendingFocusedShellHookContinuation, PermissionPolicy, ProviderQuotaUsage,
+    ContextSourceKind, DEFAULT_COMMAND_SHELL_CLASSIFICATION, Envelope, EventKind, HookEvent,
+    JoinedSubagentDependency, McpToolCallRequest, MezError, ModelProfile, ModelResponse, PaneId,
+    PaneReadinessState, PathBuf, PathScopes, PendingFocusedShellHookContinuation, PermissionPolicy,
     ReadinessOverrideRevocation, Recipient, ReqwestProviderHttpTransport, Result, RuleDecision,
     RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentCopyOutput,
     RuntimeAgentLoopTurnKind, RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider,
@@ -51,23 +50,26 @@ use super::{
 };
 use crate::agent::assistant_context_content_for_execution;
 #[cfg(test)]
+use crate::agent::provider_error_retry_class;
+#[cfg(test)]
 use crate::agent::{AgentTurnLedger, AgentTurnRunner, ModelProvider};
 use crate::agent::{
-    ApplyPatchTransactionPhase, ProviderApiCompatibility, apply_patch_error_plan,
-    apply_patch_read_plan_for_paths, apply_patch_touched_paths, apply_patch_transaction_phase,
+    ApplyPatchTransactionPhase, apply_patch_error_plan, apply_patch_read_plan_for_paths,
+    apply_patch_touched_paths, apply_patch_transaction_phase,
     apply_patch_write_plan_from_read_output, apply_patch_write_plan_from_read_outputs,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     effective_provider_api, openai_compatible_provider_from_auth_store_with_provider_options,
     openai_responses_provider_from_auth_store_with_provider_options,
 };
-#[cfg(test)]
-use crate::agent::{ProviderErrorRetryClass, provider_error_retry_class};
 use crate::command::CommandInvocation;
 use crate::config::{
     ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
     ConfigPaths, ConfigScope,
 };
-use mez_agent::{MaapBatch, SayStatus};
+use mez_agent::{
+    DEFAULT_PROVIDER_TIMEOUT_MS, MaapBatch, ModelTokenUsage, ModelTokenUsageKey,
+    ProviderApiCompatibility, ProviderQuotaUsage, SayStatus,
+};
 
 mod approvals;
 mod audit;
@@ -148,7 +150,7 @@ fn runtime_shell_action_timeout_ms(turn: &AgentTurnRecord, timeout_ms: Option<u6
 fn runtime_agent_provider_context_usage_snapshot(
     profile: &ModelProfile,
     usage: ModelTokenUsage,
-) -> Option<crate::agent::AgentContextUsageSnapshot> {
+) -> Option<mez_agent::AgentContextUsageSnapshot> {
     let context_window_tokens = profile
         .known_context_window_tokens()
         .and_then(|tokens| u64::try_from(tokens).ok())
@@ -156,7 +158,7 @@ fn runtime_agent_provider_context_usage_snapshot(
     if usage.input_tokens == 0 {
         return None;
     }
-    Some(crate::agent::AgentContextUsageSnapshot {
+    Some(mez_agent::AgentContextUsageSnapshot {
         input_tokens: usage.input_tokens,
         context_window_tokens,
         cached_input_tokens: usage.cached_input_tokens,
@@ -169,7 +171,7 @@ fn runtime_agent_provider_context_usage_snapshot(
 /// whose token count exceeds the configured profile window saturate at `100%`
 /// instead of rendering impossible percentages above the full window.
 pub(crate) fn runtime_agent_provider_context_usage_display(
-    snapshot: crate::agent::AgentContextUsageSnapshot,
+    snapshot: mez_agent::AgentContextUsageSnapshot,
 ) -> Option<String> {
     if snapshot.input_tokens == 0 || snapshot.context_window_tokens == 0 {
         return None;

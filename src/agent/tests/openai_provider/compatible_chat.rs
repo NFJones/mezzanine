@@ -265,7 +265,7 @@ fn openai_compatible_chat_completions_length_finish_reason_is_output_limit_error
     );
     assert_eq!(
         crate::agent::provider_error_retry_class(&error),
-        crate::agent::ProviderErrorRetryClass::OutputLimit
+        mez_agent::ProviderErrorRetryClass::OutputLimit
     );
     let failure_json: serde_json::Value =
         serde_json::from_str(error.provider_failure_json().unwrap()).unwrap();

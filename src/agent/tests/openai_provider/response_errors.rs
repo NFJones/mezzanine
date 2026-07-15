@@ -256,7 +256,7 @@ fn openai_provider_stream_incomplete_output_limit_is_recoverable() {
     );
     assert_eq!(
         crate::agent::provider_error_retry_class(&error),
-        crate::agent::ProviderErrorRetryClass::OutputLimit
+        mez_agent::ProviderErrorRetryClass::OutputLimit
     );
     let failure_json: serde_json::Value =
         serde_json::from_str(error.provider_failure_json().unwrap()).unwrap();

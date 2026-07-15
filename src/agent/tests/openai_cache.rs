@@ -394,7 +394,7 @@ fn openai_long_session_stable_prefix_is_append_only_until_compaction() {
     let mut transcript = Vec::new();
     let mut previous_instructions: Option<String> = None;
     let mut previous_stable_input: Option<Vec<serde_json::Value>> = None;
-    let mut previous_diagnostics: Option<crate::agent::OpenAiPromptCacheDiagnostics> = None;
+    let mut previous_diagnostics: Option<mez_agent::OpenAiPromptCacheDiagnostics> = None;
     let mut initial_stable_input_len = None;
 
     for turn_index in 0..32 {

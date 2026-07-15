@@ -5,9 +5,9 @@
 //! malformed model-output diagnostics.
 
 use crate::error::MezError;
-pub(crate) use mez_agent::ProviderErrorRetryClass;
 use mez_agent::{
-    ProviderErrorKind, classify_provider_error_retry, provider_malformed_output_error,
+    ProviderErrorKind, ProviderErrorRetryClass, classify_provider_error_retry,
+    provider_malformed_output_error,
 };
 
 /// Classifies one provider failure for runtime recovery and retry handling.

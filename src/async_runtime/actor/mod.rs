@@ -21,13 +21,14 @@ use super::{
     watch,
 };
 use crate::agent::{
-    DEFAULT_PROVIDER_TIMEOUT_MS, ProviderErrorRetryClass, provider_error_retry_class_from_parts,
-    provider_event_error_from_parts, provider_event_error_kind,
+    provider_error_retry_class_from_parts, provider_event_error_from_parts,
+    provider_event_error_kind,
 };
 use crate::control::{decode_control_frame, encode_control_body};
 use crate::runtime::PaneResizeUpdate;
 #[cfg(test)]
 use crate::runtime::coalesce_config_persistence_effects;
+use mez_agent::{DEFAULT_PROVIDER_TIMEOUT_MS, ProviderErrorRetryClass};
 
 // Serialized runtime actor and handle implementation.
 

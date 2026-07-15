@@ -197,7 +197,7 @@ fn runtime_pane_agent_status_reasoning_preserves_latency_preference() {
         .unwrap();
     service.cache_provider_model_catalog_for_tests(
         "openai",
-        vec![crate::agent::ProviderModelInfo {
+        vec![mez_agent::ProviderModelInfo {
             id: "gpt-5.5".to_string(),
             display_name: None,
             reasoning_levels: vec!["low".to_string(), "high".to_string()],
@@ -527,13 +527,13 @@ reasoning_profile = "high"
         executions[0].request.reasoning_effort.as_deref(),
         Some("high")
     );
-    let router_usage_key = crate::agent::ModelTokenUsageKey::new("runtime-batch", "gpt-router");
+    let router_usage_key = mez_agent::ModelTokenUsageKey::new("runtime-batch", "gpt-router");
     assert_eq!(
         executions[0]
             .routing_token_usage_by_model
             .get(&router_usage_key)
             .copied(),
-        Some(crate::agent::ModelTokenUsage {
+        Some(mez_agent::ModelTokenUsage {
             input_tokens: 90,
             output_tokens: 10,
             reasoning_tokens: 3,

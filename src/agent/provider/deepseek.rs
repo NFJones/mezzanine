@@ -9,7 +9,6 @@ use super::chat_completions::{
     ChatCompletionsDialect, ChatCompletionsRetry, parse_chat_completions_response_envelope,
 };
 use super::errors::provider_maap_parse_error;
-use super::schema::{maap_action_batch_schema, mcp_tool_manifest_for_description};
 use super::{
     AgentCapability, AllowedAction, AllowedActionSet, DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME,
     DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_MODELS_ENDPOINT,
@@ -20,6 +19,7 @@ use super::{
     parse_maap_action_batch_json_for_turn, provider_quota_usage_from_headers, validate_non_empty,
 };
 use mez_agent::parse_sse_events;
+use mez_agent::{maap_action_batch_schema, mcp_tool_manifest_for_description};
 use std::collections::BTreeMap;
 
 /// DeepSeek request strategy for provider-native MAAP transport.
@@ -1525,7 +1525,7 @@ mod tests {
         assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidState);
         assert_eq!(
             crate::agent::provider_error_retry_class(&error),
-            crate::agent::ProviderErrorRetryClass::OutputLimit
+            mez_agent::ProviderErrorRetryClass::OutputLimit
         );
         assert_eq!(error.provider_raw_text(), Some(partial_json));
         let failure_json: serde_json::Value =

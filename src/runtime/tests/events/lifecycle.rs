@@ -419,7 +419,7 @@ fn runtime_generated_profile_identity_differs_by_latency_preference() {
         .unwrap();
     service.cache_provider_model_catalog_for_tests(
         "openai",
-        vec![crate::agent::ProviderModelInfo {
+        vec![mez_agent::ProviderModelInfo {
             id: "gpt-5.5".to_string(),
             display_name: None,
             reasoning_levels: vec!["high".to_string()],
@@ -497,8 +497,8 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
         &primary,
     );
     assert!(resumed.contains("conversation_id=saved"), "{resumed}");
-    let saved_token_usage_key = crate::agent::ModelTokenUsageKey::new("openai", "gpt-5.6-sol");
-    let saved_token_usage = crate::agent::ModelTokenUsage {
+    let saved_token_usage_key = mez_agent::ModelTokenUsageKey::new("openai", "gpt-5.6-sol");
+    let saved_token_usage = mez_agent::ModelTokenUsage {
         input_tokens: 321,
         output_tokens: 45,
         reasoning_tokens: 12,

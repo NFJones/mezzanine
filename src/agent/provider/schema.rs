@@ -7,9 +7,7 @@
 
 use super::{AllowedAction, AllowedActionSet, ModelRequest, OPENAI_MAAP_FUNCTION_TOOL_NAME};
 
-pub(super) use mez_agent::{
-    OpenAiMaapToolSurface, maap_action_batch_schema, mcp_tool_manifest_for_description,
-};
+use mez_agent::maap_action_batch_schema;
 
 /// Builds the OpenAI MAAP function-tool list for the current request.
 pub(super) fn openai_maap_action_batch_tools(request: &ModelRequest) -> Vec<serde_json::Value> {

@@ -7,6 +7,8 @@
 //! one focused implementation unit.
 
 use super::*;
+#[cfg(test)]
+use mez_agent::ProviderErrorRetryClass;
 
 /// Returns true when a completed work turn finished without any `apply_patch`
 /// action results.

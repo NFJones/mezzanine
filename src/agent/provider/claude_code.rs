@@ -6,12 +6,12 @@
 //! and returns assistant text for the normal Mezzanine MAAP parsing path without
 //! granting Claude Code direct tool execution or filesystem mutation authority.
 
-use super::schema::maap_action_batch_schema;
 use super::{
     AsyncModelProvider, MaapBatch, MezError, ModelInteractionKind, ModelMessageRole, ModelRequest,
     ModelResponse, ModelTokenUsage, ProviderModelCatalog, Result,
     parse_maap_action_batch_json_for_turn, provider_maap_parse_error, validate_non_empty,
 };
+use mez_agent::maap_action_batch_schema;
 use sha2::Digest;
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -1637,9 +1637,9 @@ mod tests {
         }
     }
     use crate::agent::{
-        AllowedActionSet, ContextSourceKind, ModelMessage, ModelRequest, ProviderErrorRetryClass,
-        provider_error_retry_class,
+        AllowedActionSet, ContextSourceKind, ModelMessage, ModelRequest, provider_error_retry_class,
     };
+    use mez_agent::ProviderErrorRetryClass;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 

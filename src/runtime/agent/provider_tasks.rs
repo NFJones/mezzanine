@@ -7,11 +7,9 @@
 //! async actor and tests.
 
 use super::*;
-use crate::agent::{
-    ClaudeCodeProvider, ProviderErrorRetryClass,
-    anthropic_provider_from_auth_store_with_provider_options,
-};
+use crate::agent::{ClaudeCodeProvider, anthropic_provider_from_auth_store_with_provider_options};
 use crate::runtime::{RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition};
+use mez_agent::ProviderErrorRetryClass;
 
 /// Maximum provider retries allowed for one turn.
 const PROVIDER_RETRY_MAX_ATTEMPTS: u32 = 5;

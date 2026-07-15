@@ -40,14 +40,11 @@ use super::{
     shell_command_from_argv, unix_seconds_to_rfc3339,
 };
 use crate::agent::{
-    AsyncModelProvider, ClaudeCodeProvider, DEFAULT_PROVIDER_TIMEOUT_MS, ModelRequest,
-    ModelResponse, ModelTokenUsage, ModelTokenUsageKey, ProviderApiCompatibility,
-    ProviderCapabilities, ProviderModelCatalog, ProviderModelInfo, ProviderQuotaUsage,
+    AsyncModelProvider, ClaudeCodeProvider, ModelRequest, ModelResponse,
     ReqwestProviderHttpTransport, append_mcp_context,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     effective_provider_api, model_context_text_word_count,
     openai_compatible_provider_from_auth_store_with_provider_options,
-    openai_default_reasoning_levels_for_model,
     openai_responses_provider_from_auth_store_with_provider_options,
 };
 use crate::auth::AuthCredentialKind;
@@ -58,7 +55,10 @@ use crate::runtime::config::{
 use crate::transcript::ConversationSummary;
 use base64::Engine;
 use mez_agent::{
-    AgentActionPayload, AllowedActionSet, ModelInteractionKind, ModelMessage, ModelMessageRole,
+    AgentActionPayload, AllowedActionSet, DEFAULT_PROVIDER_TIMEOUT_MS, ModelInteractionKind,
+    ModelMessage, ModelMessageRole, ModelTokenUsage, ModelTokenUsageKey, ProviderApiCompatibility,
+    ProviderCapabilities, ProviderModelCatalog, ProviderModelInfo, ProviderQuotaUsage,
+    openai_default_reasoning_levels_for_model,
 };
 use mez_mux::readline::ReadlineEdit;
 use std::fs;
