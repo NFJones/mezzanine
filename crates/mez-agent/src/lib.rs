@@ -24,6 +24,8 @@ pub mod claude_code;
 pub mod config_change;
 /// Provider-independent agent context validation contracts.
 pub mod context;
+/// Provider-independent context insertion and replacement policy.
+pub mod context_appenders;
 /// Provider-independent model-request assembly from canonical context.
 pub mod context_assembly;
 /// Provider-independent model-context compaction and budgeting.
@@ -142,6 +144,11 @@ pub use context::{
     ContextSourceKind, ContextStability, ModelContextCompactionReport, ModelMessage,
     ModelMessageRole, ModelRequest, TrustDomain, model_context_block_header,
     validate_context_required,
+};
+pub use context_appenders::{
+    append_mcp_context, append_memory_context, append_permission_policy_context,
+    append_project_guidance_context, append_scheduler_context, invoked_mcp_tools_for_context,
+    set_project_guidance_context,
 };
 pub use context_assembly::{
     ModelRequestIdentity, assemble_model_request_from_context, role_for_context_source,

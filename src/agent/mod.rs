@@ -85,12 +85,7 @@ pub use actions::{
     shell_command_structured_content_json, shell_read_observations_for_command,
     transcript_entries_for_execution,
 };
-pub use context::{
-    append_mcp_context, append_memory_context, append_permission_policy_context,
-    append_project_guidance_context, append_scheduler_context, assemble_model_request,
-    assemble_model_request_with_retained_tail_percent, invoked_mcp_tools_for_context,
-    set_project_guidance_context,
-};
+pub use context::{assemble_model_request, assemble_model_request_with_retained_tail_percent};
 pub(crate) use maap::MaapBatchProductValidation;
 pub use maap::{
     parse_fenced_maap_action_batch, parse_fenced_maap_action_batch_for_turn,

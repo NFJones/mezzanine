@@ -26,16 +26,16 @@ use super::{
     RuntimeSideEffect, SenderIdentity, ShellTransaction, ShellTransactionOutputTransport,
     SubagentScopeDeclaration, SubagentSpawnRequest, SubagentWaitPolicy, TaskResultPayload,
     TaskState, TaskStatusPayload, TranscriptEntry, TranscriptRole, action_result_context_content,
-    append_mcp_context, assemble_model_request_with_retained_tail_percent,
+    assemble_model_request_with_retained_tail_percent,
     compact_model_context_for_budget_with_retained_tail_percent, current_unix_millis,
     current_unix_seconds, decode_shell_output_transport_with_diagnostics, discover_project_root,
     exact_command_sha256, execute_mcp_action_through_runtime,
     execute_mcp_action_through_runtime_async, execute_network_action_with_transport_async,
-    invoked_mcp_tools_for_context, json_escape, local_action_plan, local_action_summary,
-    network_action_plan, network_action_summary, next_transcript_sequence,
-    runtime_agent_turn_duration_display, runtime_agent_turn_start_hook_payload,
-    runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
-    runtime_apply_auto_sizing_execution_profile, runtime_apply_persisted_config_mutation_batch,
+    json_escape, local_action_plan, local_action_summary, network_action_plan,
+    network_action_summary, next_transcript_sequence, runtime_agent_turn_duration_display,
+    runtime_agent_turn_start_hook_payload, runtime_agent_turn_state_from_action_results,
+    runtime_agent_turn_state_name, runtime_apply_auto_sizing_execution_profile,
+    runtime_apply_persisted_config_mutation_batch,
     runtime_auto_sizing_reasoning_levels_for_profile, runtime_blocked_approval_request,
     runtime_cooperation_mode, runtime_cooperation_mode_name,
     runtime_execution_ready_for_provider_continuation, runtime_hook_event_name,
@@ -44,7 +44,7 @@ use super::{
     runtime_path_under_project_root, runtime_permission_preset_name,
     runtime_permission_request_hook_payload, runtime_post_mcp_hook_payload,
     runtime_pre_mcp_hook_payload, runtime_pre_shell_hook_payload, runtime_set_theme_command,
-    runtime_subagent_placement_mode, runtime_subagent_spawn_request, set_project_guidance_context,
+    runtime_subagent_placement_mode, runtime_subagent_spawn_request,
     shell_command_structured_content_json, transcript_entries_for_execution,
     validate_mmp_payload_metadata,
 };
@@ -68,7 +68,8 @@ use crate::config::{
 };
 use mez_agent::{
     DEFAULT_PROVIDER_TIMEOUT_MS, MaapBatch, ModelTokenUsage, ModelTokenUsageKey,
-    ProviderApiCompatibility, ProviderQuotaUsage, SayStatus,
+    ProviderApiCompatibility, ProviderQuotaUsage, SayStatus, append_mcp_context,
+    invoked_mcp_tools_for_context, set_project_guidance_context,
 };
 
 mod approvals;

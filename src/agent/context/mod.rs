@@ -4,14 +4,8 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use mez_agent::{AgentContext, ContextBlock, ContextSourceKind};
+use mez_agent::AgentContext;
 
-mod appenders;
 mod assembly;
 
-pub use appenders::{
-    append_mcp_context, append_memory_context, append_permission_policy_context,
-    append_project_guidance_context, append_scheduler_context, invoked_mcp_tools_for_context,
-    set_project_guidance_context,
-};
 pub use assembly::{assemble_model_request, assemble_model_request_with_retained_tail_percent};

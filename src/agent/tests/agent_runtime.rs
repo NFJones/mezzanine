@@ -69,7 +69,7 @@ fn default_action_gates_keep_memory_when_mcp_is_available() {
         approval_required: false,
         input_schema_json: r#"{"type":"object"}"#.to_string(),
     };
-    let context = crate::agent::append_mcp_context(
+    let context = mez_agent::append_mcp_context(
         AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
             label: "user".to_string(),

@@ -40,7 +40,7 @@ use super::{
     shell_command_from_argv, unix_seconds_to_rfc3339,
 };
 use crate::agent::{
-    AsyncModelProvider, ClaudeCodeProvider, ReqwestProviderHttpTransport, append_mcp_context,
+    AsyncModelProvider, ClaudeCodeProvider, ReqwestProviderHttpTransport,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     effective_provider_api, openai_compatible_provider_from_auth_store_with_provider_options,
     openai_responses_provider_from_auth_store_with_provider_options,
@@ -58,7 +58,7 @@ use mez_agent::{
     AgentActionPayload, AllowedActionSet, DEFAULT_PROVIDER_TIMEOUT_MS, ModelInteractionKind,
     ModelMessage, ModelMessageRole, ModelRequest, ModelTokenUsage, ModelTokenUsageKey,
     ProviderApiCompatibility, ProviderCapabilities, ProviderModelCatalog, ProviderModelInfo,
-    ProviderQuotaUsage, openai_default_reasoning_levels_for_model,
+    ProviderQuotaUsage, append_mcp_context, openai_default_reasoning_levels_for_model,
 };
 use mez_mux::readline::ReadlineEdit;
 use std::fs;

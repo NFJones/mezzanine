@@ -10,8 +10,8 @@ use super::super::{
     AgentTurnRecord, AgentTurnState, AgentTurnTrigger, MezError, Result, RuntimeSessionService,
     current_unix_seconds, json_escape,
 };
-use crate::agent::{append_mcp_context, assemble_model_request_with_retained_tail_percent};
-use mez_agent::{ContextSourceKind, ModelMessageRole, ModelRequest};
+use crate::agent::assemble_model_request_with_retained_tail_percent;
+use mez_agent::{ContextSourceKind, ModelMessageRole, ModelRequest, append_mcp_context};
 
 /// Captures one assembled model request dump before it is written to a target.
 struct RuntimeAgentContextDump {

@@ -20,7 +20,7 @@ fn openai_available_mcp_keeps_memory_on_default_surface() {
         input_schema_json: r#"{"type":"object","properties":{"repo":{"type":"string"}}}"#
             .to_string(),
     };
-    let context = crate::agent::append_mcp_context(
+    let context = mez_agent::append_mcp_context(
         AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
             label: "user".to_string(),

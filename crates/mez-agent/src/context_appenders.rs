@@ -5,11 +5,11 @@
 //! policy, and scheduler state. Keeping these helpers together preserves the
 //! ordering contracts used before provider request assembly.
 
-use super::{AgentContext, ContextBlock, ContextSourceKind};
-use mez_agent::instructions::DiscoveredInstructionFile;
-use mez_agent::{
-    AgentContextResult, AgentScheduler, McpPromptServer, McpPromptSummary, McpPromptTool,
-    MemoryContextRecord, runnable_agent_ids, validate_context_required,
+use crate::instructions::DiscoveredInstructionFile;
+use crate::{
+    AgentContext, AgentContextResult, AgentScheduler, ContextBlock, ContextSourceKind,
+    McpPromptServer, McpPromptSummary, McpPromptTool, MemoryContextRecord, runnable_agent_ids,
+    validate_context_required,
 };
 
 /// Appends selected memory records to provider-bound context.

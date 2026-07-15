@@ -62,7 +62,7 @@ fn turn_runner_accepts_memory_search_with_matched_mcp_available() {
         memory_actions_enabled: true,
         issue_actions_enabled: true,
     };
-    let context = crate::agent::append_mcp_context(
+    let context = mez_agent::append_mcp_context(
         AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
             label: "user".to_string(),

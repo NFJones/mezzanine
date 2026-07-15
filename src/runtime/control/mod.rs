@@ -30,7 +30,6 @@ use super::{
     SessionRecord, SnapshotCreationContext, SnapshotRepository, SplitDirection,
     SubagentScopeDeclaration, SubagentSpawnRequest, TaskState, TaskStatusPayload,
     TerminalClientLoopAction, TerminalClientLoopConfig, TrustDecision, agent_state_control_method,
-    append_memory_context, append_permission_policy_context, append_scheduler_context,
     approval_decide_scope_persistence, compare_permission_preset_authority, current_unix_seconds,
     default_trust_database_path, destination_target_checked_resolved, discover_project_root,
     dispatch_control_request_cached, dispatch_control_request_for_client_with_agent_state,
@@ -58,9 +57,8 @@ use super::{
     runtime_permission_preset_name, runtime_project_root_param, runtime_project_trust_record_json,
     runtime_split_direction, runtime_string_array_json, runtime_subagent_placement_mode,
     runtime_subagent_spawn_request, runtime_subagent_state_json, runtime_terminal_step_result_json,
-    runtime_trust_decision_name, runtime_trust_decision_param, set_project_guidance_context,
-    snapshot_id_for_idempotency_key, source_pane_target_checked_resolved, validate_config_text,
-    window_target_checked_resolved,
+    runtime_trust_decision_name, runtime_trust_decision_param, snapshot_id_for_idempotency_key,
+    source_pane_target_checked_resolved, validate_config_text, window_target_checked_resolved,
 };
 use crate::config::compose_effective_config;
 use crate::control::{
@@ -78,7 +76,10 @@ use context::{
     runtime_context_block_is_compaction_refresh_owned, runtime_local_message_context_content,
     runtime_transcript_context_entry_limit,
 };
-use mez_agent::is_valid_skill_name;
+use mez_agent::{
+    append_memory_context, append_permission_policy_context, append_scheduler_context,
+    is_valid_skill_name, set_project_guidance_context,
+};
 use protocol::{
     pane_id_from_runtime_agent_id, paths_equivalent, runtime_project_trust_read_method,
     runtime_snapshot_resume_plan_json,
