@@ -17,9 +17,9 @@ use super::{
 };
 use mez_agent::{
     AnthropicMessagesOptions, anthropic_messages_endpoint_for_base_url,
-    anthropic_messages_request_body, anthropic_request_requires_maap, parse_sse_events_with,
-    provider_failure_event_json as openai_provider_failure_event_json,
-    provider_failure_json as openai_provider_failure_json,
+    anthropic_messages_request_body, anthropic_overlay_usage,
+    anthropic_provider_failure_event_json, anthropic_provider_failure_json,
+    anthropic_request_requires_maap, anthropic_usage_from_value, parse_sse_events_with,
 };
 use std::collections::BTreeMap;
 
@@ -268,7 +268,7 @@ fn parse_anthropic_messages_stream_body(
                     anthropic_provider_error_from_value(&value, "Anthropic stream error")
                         .unwrap_or_else(|| {
                             MezError::invalid_state("Anthropic stream returned an error event")
-                                .with_provider_failure_json(openai_provider_failure_event_json(
+                                .with_provider_failure_json(anthropic_provider_failure_event_json(
                                     &value,
                                 ))
                         }),
@@ -597,101 +597,6 @@ fn anthropic_provider_error_from_value(
     )
 }
 
-/// Builds a sanitized Anthropic failure JSON payload from one failed HTTP body.
-fn anthropic_provider_failure_json(status_code: Option<u16>, body: &str) -> String {
-    let parsed = serde_json::from_str::<serde_json::Value>(body).ok();
-    anthropic_failure_json_with_request_id(
-        openai_provider_failure_json(status_code, body),
-        parsed.as_ref(),
-    )
-}
-
-/// Builds a sanitized Anthropic failure JSON payload from one parsed response
-/// or stream event object.
-fn anthropic_provider_failure_event_json(value: &serde_json::Value) -> String {
-    anthropic_failure_json_with_request_id(openai_provider_failure_event_json(value), Some(value))
-}
-
-/// Adds an Anthropic request id to one already-sanitized failure JSON payload
-/// when the provider supplied that identifier.
-fn anthropic_failure_json_with_request_id(
-    base_json: String,
-    value: Option<&serde_json::Value>,
-) -> String {
-    let Some(request_id) = anthropic_request_id(value) else {
-        return base_json;
-    };
-    let Ok(mut object) =
-        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&base_json)
-    else {
-        return base_json;
-    };
-    object.insert(
-        "request_id".to_string(),
-        serde_json::Value::String(request_id.to_string()),
-    );
-    serde_json::Value::Object(object).to_string()
-}
-
-/// Returns the Anthropic request id from one parsed failure payload when present.
-fn anthropic_request_id(value: Option<&serde_json::Value>) -> Option<&str> {
-    let value = value?;
-    value
-        .pointer("/request_id")
-        .or_else(|| value.pointer("/error/request_id"))
-        .and_then(serde_json::Value::as_str)
-        .filter(|request_id| !request_id.trim().is_empty())
-}
-
-/// Extracts Anthropic token-usage counters from a response or stream usage
-/// object.
-fn anthropic_usage_from_value(value: Option<&serde_json::Value>) -> ModelTokenUsage {
-    let Some(value) = value else {
-        return ModelTokenUsage::default();
-    };
-    let cached_input_tokens = value
-        .get("cache_read_input_tokens")
-        .and_then(serde_json::Value::as_u64);
-    ModelTokenUsage {
-        input_tokens: anthropic_usage_u64(value, "input_tokens")
-            .saturating_add(cached_input_tokens.unwrap_or(0)),
-        output_tokens: anthropic_usage_u64(value, "output_tokens"),
-        reasoning_tokens: 0,
-        cached_input_tokens,
-        cache_write_input_tokens: value
-            .get("cache_creation_input_tokens")
-            .and_then(serde_json::Value::as_u64),
-    }
-}
-
-/// Overlays cumulative Anthropic usage fields from one stream event.
-fn anthropic_overlay_usage(current: &mut ModelTokenUsage, value: Option<&serde_json::Value>) {
-    let next = anthropic_usage_from_value(value);
-    if next.input_tokens > 0 {
-        current.input_tokens = next.input_tokens;
-    }
-    if next.output_tokens > 0 {
-        current.output_tokens = next.output_tokens;
-    }
-    if next.reasoning_tokens > 0 {
-        current.reasoning_tokens = next.reasoning_tokens;
-    }
-    if next.cached_input_tokens.is_some() {
-        current.cached_input_tokens = next.cached_input_tokens;
-    }
-    if next.cache_write_input_tokens.is_some() {
-        current.cache_write_input_tokens = next.cache_write_input_tokens;
-    }
-}
-
-/// Returns one Anthropic usage counter when present.
-fn anthropic_usage_u64(value: &serde_json::Value, key: &str) -> u64 {
-    value
-        .get(key)
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0)
-}
-
 /// Builds a structured unsupported-content diagnostic for Anthropic blocks.
 fn anthropic_unsupported_content_block_error(block: &serde_json::Value) -> MezError {
     let block_type = block
@@ -701,7 +606,7 @@ fn anthropic_unsupported_content_block_error(block: &serde_json::Value) -> MezEr
     MezError::invalid_state(format!(
         "Anthropic response contained unsupported content block type `{block_type}`"
     ))
-    .with_provider_failure_json(openai_provider_failure_event_json(&serde_json::json!({
+    .with_provider_failure_json(anthropic_provider_failure_event_json(&serde_json::json!({
         "content_block": block
     })))
     .with_provider_raw_text(block.to_string())
@@ -790,7 +695,7 @@ impl AnthropicStreamContentBlock {
             _ => Err(MezError::invalid_state(format!(
                 "Anthropic stream returned unsupported content block delta type `{delta_type}`"
             ))
-            .with_provider_failure_json(openai_provider_failure_event_json(&serde_json::json!({
+            .with_provider_failure_json(anthropic_provider_failure_event_json(&serde_json::json!({
                 "delta": delta
             })))
             .with_provider_raw_text(delta.to_string())),
@@ -918,41 +823,6 @@ mod tests {
 
         assert_eq!(provider.provider_id(), "anthropic");
         assert_eq!(provider.endpoint, ANTHROPIC_MESSAGES_ENDPOINT);
-    }
-
-    /// Verifies Anthropic usage parsing keeps prompt-cache read and write
-    /// counters distinct.
-    ///
-    /// Anthropic reports prompt-cache hits as `cache_read_input_tokens` and
-    /// prompt-cache writes as `cache_creation_input_tokens`. The provider must
-    /// preserve both counters so downstream accounting can distinguish cached
-    /// reads from newly written cache tokens.
-    #[test]
-    fn anthropic_usage_parses_cache_creation_tokens() {
-        let usage = anthropic_usage_from_value(Some(&serde_json::json!({
-            "input_tokens": 42,
-            "output_tokens": 9,
-            "cache_read_input_tokens": 7,
-            "cache_creation_input_tokens": 11
-        })));
-
-        assert_eq!(usage.input_tokens, 49);
-        assert_eq!(usage.output_tokens, 9);
-        assert_eq!(usage.cached_input_tokens, Some(7));
-        assert_eq!(usage.cache_write_input_tokens, Some(11));
-        assert_eq!(usage.billed_input_tokens(), 53);
-        assert_eq!(usage.total_tokens(), 69);
-        assert_eq!(usage.cached_input_hit_ratio_display(), "11.67%");
-
-        let mut overlaid = ModelTokenUsage::default();
-        anthropic_overlay_usage(
-            &mut overlaid,
-            Some(&serde_json::json!({
-                "cache_creation_input_tokens": 13
-            })),
-        );
-
-        assert_eq!(overlaid.cache_write_input_tokens, Some(13));
     }
 
     /// Verifies Anthropic native `tool_use` blocks are translated into one
@@ -1490,21 +1360,6 @@ mod tests {
 
         assert!(value.get("tools").is_none());
         assert!(value.get("tool_choice").is_none());
-    }
-
-    /// Verifies Anthropic status failure shaping retains the provider request
-    /// id inside sanitized diagnostics.
-    #[test]
-    fn anthropic_failure_json_preserves_request_id() {
-        let failure_json = anthropic_provider_failure_json(
-            Some(429),
-            r#"{"type":"error","error":{"type":"rate_limit_error","message":"slow down"},"request_id":"req_123"}"#,
-        );
-
-        assert!(
-            failure_json.contains(r#""request_id":"req_123""#),
-            "{failure_json}"
-        );
     }
 
     /// Verifies Anthropic HTTP-200 stream error events classify by structured

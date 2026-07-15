@@ -5,9 +5,11 @@
 //! HTTP headers, timeouts, transport, response parsing, and error projection.
 
 use crate::{
-    MAAP_ACTION_BATCH_TOOL_NAME, ModelMessageRole, ModelRequest, ProviderEndpointError,
-    ProviderEndpointResult, ProviderRequestAssemblyError, ProviderRequestAssemblyResult,
-    maap_action_batch_schema, openai_maap_current_action_batch_description,
+    MAAP_ACTION_BATCH_TOOL_NAME, ModelMessageRole, ModelRequest, ModelTokenUsage,
+    ProviderEndpointError, ProviderEndpointResult, ProviderRequestAssemblyError,
+    ProviderRequestAssemblyResult, maap_action_batch_schema,
+    openai_maap_current_action_batch_description, provider_failure_event_json,
+    provider_failure_json,
 };
 use std::collections::BTreeMap;
 
@@ -260,6 +262,95 @@ pub fn anthropic_request_requires_maap(request: &ModelRequest) -> bool {
     request.interaction_kind.expects_maap_batch() && !request.allowed_actions.actions.is_empty()
 }
 
+/// Builds sanitized Anthropic failure JSON while preserving a provider request id.
+pub fn anthropic_provider_failure_json(status_code: Option<u16>, body: &str) -> String {
+    let parsed = serde_json::from_str::<serde_json::Value>(body).ok();
+    anthropic_failure_json_with_request_id(
+        provider_failure_json(status_code, body),
+        parsed.as_ref(),
+    )
+}
+
+/// Builds sanitized Anthropic event diagnostics while preserving a request id.
+pub fn anthropic_provider_failure_event_json(value: &serde_json::Value) -> String {
+    anthropic_failure_json_with_request_id(provider_failure_event_json(value), Some(value))
+}
+
+fn anthropic_failure_json_with_request_id(
+    base_json: String,
+    value: Option<&serde_json::Value>,
+) -> String {
+    let Some(request_id) = anthropic_request_id(value) else {
+        return base_json;
+    };
+    let Ok(mut object) =
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&base_json)
+    else {
+        return base_json;
+    };
+    object.insert(
+        "request_id".to_string(),
+        serde_json::Value::String(request_id.to_string()),
+    );
+    serde_json::Value::Object(object).to_string()
+}
+
+fn anthropic_request_id(value: Option<&serde_json::Value>) -> Option<&str> {
+    let value = value?;
+    value
+        .pointer("/request_id")
+        .or_else(|| value.pointer("/error/request_id"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|request_id| !request_id.trim().is_empty())
+}
+
+/// Extracts Anthropic token-usage and prompt-cache counters.
+pub fn anthropic_usage_from_value(value: Option<&serde_json::Value>) -> ModelTokenUsage {
+    let Some(value) = value else {
+        return ModelTokenUsage::default();
+    };
+    let cached_input_tokens = value
+        .get("cache_read_input_tokens")
+        .and_then(serde_json::Value::as_u64);
+    ModelTokenUsage {
+        input_tokens: anthropic_usage_u64(value, "input_tokens")
+            .saturating_add(cached_input_tokens.unwrap_or(0)),
+        output_tokens: anthropic_usage_u64(value, "output_tokens"),
+        reasoning_tokens: 0,
+        cached_input_tokens,
+        cache_write_input_tokens: value
+            .get("cache_creation_input_tokens")
+            .and_then(serde_json::Value::as_u64),
+    }
+}
+
+/// Overlays cumulative Anthropic usage fields from one stream event.
+pub fn anthropic_overlay_usage(current: &mut ModelTokenUsage, value: Option<&serde_json::Value>) {
+    let next = anthropic_usage_from_value(value);
+    if next.input_tokens > 0 {
+        current.input_tokens = next.input_tokens;
+    }
+    if next.output_tokens > 0 {
+        current.output_tokens = next.output_tokens;
+    }
+    if next.reasoning_tokens > 0 {
+        current.reasoning_tokens = next.reasoning_tokens;
+    }
+    if next.cached_input_tokens.is_some() {
+        current.cached_input_tokens = next.cached_input_tokens;
+    }
+    if next.cache_write_input_tokens.is_some() {
+        current.cache_write_input_tokens = next.cache_write_input_tokens;
+    }
+}
+
+fn anthropic_usage_u64(value: &serde_json::Value, key: &str) -> u64 {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,5 +392,50 @@ mod tests {
                 .unwrap(),
             "https://api.anthropic.com/v1/messages"
         );
+    }
+
+    /// Verifies Anthropic status failure shaping retains the provider request
+    /// id inside sanitized diagnostics.
+    #[test]
+    fn anthropic_failure_json_preserves_request_id() {
+        let failure_json = anthropic_provider_failure_json(
+            Some(429),
+            r#"{"type":"error","error":{"type":"rate_limit_error","message":"slow down"},"request_id":"req_123"}"#,
+        );
+
+        assert!(
+            failure_json.contains(r#""request_id":"req_123""#),
+            "{failure_json}"
+        );
+    }
+
+    /// Verifies Anthropic usage parsing keeps prompt-cache read and write
+    /// counters distinct so billing and hit-ratio accounting remain stable.
+    #[test]
+    fn anthropic_usage_parses_cache_creation_tokens() {
+        let usage = anthropic_usage_from_value(Some(&serde_json::json!({
+            "input_tokens": 42,
+            "output_tokens": 9,
+            "cache_read_input_tokens": 7,
+            "cache_creation_input_tokens": 11
+        })));
+
+        assert_eq!(usage.input_tokens, 49);
+        assert_eq!(usage.output_tokens, 9);
+        assert_eq!(usage.cached_input_tokens, Some(7));
+        assert_eq!(usage.cache_write_input_tokens, Some(11));
+        assert_eq!(usage.billed_input_tokens(), 53);
+        assert_eq!(usage.total_tokens(), 69);
+        assert_eq!(usage.cached_input_hit_ratio_display(), "11.67%");
+
+        let mut overlaid = ModelTokenUsage::default();
+        anthropic_overlay_usage(
+            &mut overlaid,
+            Some(&serde_json::json!({
+                "cache_creation_input_tokens": 13
+            })),
+        );
+
+        assert_eq!(overlaid.cache_write_input_tokens, Some(13));
     }
 }

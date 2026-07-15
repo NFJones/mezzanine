@@ -100,7 +100,9 @@ pub use agent_shell::{
 pub use anthropic::{
     AnthropicMessagesOptions, DEFAULT_ANTHROPIC_MAX_TOKENS, DEFAULT_ANTHROPIC_PROMPT_CACHING,
     DEFAULT_ANTHROPIC_VERSION, anthropic_messages_endpoint_for_base_url,
-    anthropic_messages_request_body, anthropic_request_requires_maap,
+    anthropic_messages_request_body, anthropic_overlay_usage,
+    anthropic_provider_failure_event_json, anthropic_provider_failure_json,
+    anthropic_request_requires_maap, anthropic_usage_from_value,
 };
 pub use auth::{ProviderAuthMetadata, ProviderCredentialKind, ProviderCredentialSource};
 pub use config_change::{
