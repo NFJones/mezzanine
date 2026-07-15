@@ -1,22 +1,27 @@
-//! OpenAI Responses API response parsing.
+//! Provider-independent OpenAI Responses API response parsing.
 //!
-//! This module owns HTTP and SSE response parsing for OpenAI-compatible
-//! Responses API calls, including native MAAP function-call argument
-//! accumulation and provider token-usage extraction.
+//! This module owns deterministic HTTP and SSE response parsing for
+//! OpenAI-compatible Responses API calls, including native MAAP function-call
+//! argument accumulation and provider token-usage extraction. Product
+//! transports and conversion into product errors remain outside this crate.
 
-use super::{ModelTokenUsage, OPENAI_MAAP_FUNCTION_TOOL_NAME};
-use mez_agent::OpenAiMaapToolSurface;
-use mez_agent::{
-    DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, ProviderResponseError, ProviderResponseResult,
-    parse_sse_events_with, provider_failure_event_json as openai_provider_failure_event_json,
+use crate::accounting::ModelTokenUsage;
+use crate::http::{DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, parse_sse_events_with};
+#[cfg(test)]
+use crate::provider::ProviderResponseErrorKind;
+use crate::provider::{
+    MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, ProviderResponseError,
+    ProviderResponseResult,
 };
+use crate::provider_diagnostics::provider_failure_event_json as openai_provider_failure_event_json;
+use crate::schema::OpenAiMaapToolSurface;
 use std::collections::BTreeMap;
 
 /// Maximum native function-call argument bytes accepted from OpenAI responses.
 const OPENAI_FUNCTION_CALL_ARGUMENT_LIMIT_BYTES: usize = DEFAULT_PROVIDER_MAX_RESPONSE_BYTES;
 
 /// Selects the OpenAI response parser that matches the transport mode.
-pub(super) fn parse_openai_responses_provider_body(
+pub fn parse_openai_responses_provider_body(
     body: &str,
     fallback_model: &str,
     stream: bool,
@@ -486,4 +491,146 @@ fn openai_output_index(value: &serde_json::Value) -> Option<u64> {
     value
         .get("output_index")
         .and_then(serde_json::Value::as_u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    /// Verifies cached-token accounting distinguishes omitted provider fields from
+    /// an explicit provider-reported zero.
+    fn openai_response_parser_distinguishes_missing_and_zero_cached_tokens() {
+        let missing_body = serde_json::json!({
+            "model": "gpt-test",
+            "usage": {
+                "input_tokens": 42,
+                "output_tokens": 11
+            },
+            "output_text": "ok"
+        })
+        .to_string();
+        let zero_body = serde_json::json!({
+            "model": "gpt-test",
+            "usage": {
+                "input_tokens": 42,
+                "output_tokens": 11,
+                "input_tokens_details": {
+                    "cached_tokens": 0
+                }
+            },
+            "output_text": "ok"
+        })
+        .to_string();
+        let prompt_details_body = serde_json::json!({
+            "model": "gpt-test",
+            "usage": {
+                "prompt_tokens": 42,
+                "completion_tokens": 11,
+                "prompt_tokens_details": {
+                    "cached_tokens": 24
+                }
+            },
+            "output_text": "ok"
+        })
+        .to_string();
+        let controller_alias_body = serde_json::json!({
+            "model": "gpt-test",
+            "usage": {
+                "input_tokens": 42,
+                "output_tokens": 11,
+                "cached_tokens": 0,
+                "cached_input_tokens": 36
+            },
+            "output_text": "ok"
+        })
+        .to_string();
+        let multi_cached_body = serde_json::json!({
+            "model": "gpt-test",
+            "usage": {
+                "input_tokens": 42,
+                "output_tokens": 11,
+                "input_tokens_details": {
+                    "cached_tokens": 12
+                },
+                "prompt_tokens_details": {
+                    "cached_tokens": 8
+                },
+                "cached_input_tokens": 5
+            },
+            "output_text": "ok"
+        })
+        .to_string();
+        let stream_body = format!(
+            "event: response.output_item.done\ndata: {}\n\nevent: response.completed\ndata: {}\n\n",
+            serde_json::json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "ok"}]
+                }
+            }),
+            serde_json::json!({
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_1",
+                    "model": "gpt-test",
+                    "usage": {
+                        "input_tokens": 42,
+                        "output_tokens": 11,
+                        "input_tokens_details": {
+                            "cached_tokens": 12
+                        }
+                    }
+                }
+            })
+        );
+
+        let (_, _, missing_usage) =
+            parse_openai_responses_http_body(&missing_body, "gpt-test").unwrap();
+        let (_, _, zero_usage) = parse_openai_responses_http_body(&zero_body, "gpt-test").unwrap();
+        let (_, _, prompt_details_usage) =
+            parse_openai_responses_http_body(&prompt_details_body, "gpt-test").unwrap();
+        let (_, _, controller_alias_usage) =
+            parse_openai_responses_http_body(&controller_alias_body, "gpt-test").unwrap();
+        let (_, _, multi_cached_usage) =
+            parse_openai_responses_http_body(&multi_cached_body, "gpt-test").unwrap();
+        let (_, _, stream_usage) =
+            parse_openai_responses_stream_body(&stream_body, "gpt-test").unwrap();
+
+        assert_eq!(missing_usage.cached_input_tokens, None);
+        assert_eq!(missing_usage.cached_input_tokens_display(), "unknown");
+        assert_eq!(missing_usage.cached_input_hit_ratio_display(), "unknown");
+        assert_eq!(zero_usage.cached_input_tokens, Some(0));
+        assert_eq!(zero_usage.cached_input_tokens_display(), "0");
+        assert_eq!(zero_usage.cached_input_hit_ratio_display(), "0.00%");
+        assert_eq!(prompt_details_usage.cached_input_tokens, Some(24));
+        assert_eq!(
+            prompt_details_usage.cached_input_hit_ratio_display(),
+            "57.14%"
+        );
+        assert_eq!(controller_alias_usage.cached_input_tokens, Some(36));
+        assert_eq!(multi_cached_usage.cached_input_tokens, Some(12));
+        assert_eq!(stream_usage.cached_input_tokens, Some(12));
+    }
+
+    #[test]
+    /// Verifies OpenAI response parsing reports API errors and missing text.
+    ///
+    /// This regression scenario documents the behavior being protected so a
+    /// failure points at a concrete contract change rather than an incidental
+    /// implementation detail.
+    fn openai_response_parser_reports_api_errors_and_missing_text() {
+        let error =
+            parse_openai_responses_http_body(r#"{"error":{"message":"bad auth"}}"#, "gpt-test")
+                .unwrap_err();
+        assert_eq!(error.kind(), ProviderResponseErrorKind::InvalidState);
+        assert!(error.message().contains("bad auth"));
+
+        let missing =
+            parse_openai_responses_http_body(r#"{"model":"gpt-test","output":[]}"#, "gpt-test")
+                .unwrap_err();
+        assert_eq!(missing.kind(), ProviderResponseErrorKind::InvalidState);
+    }
 }

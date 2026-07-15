@@ -38,6 +38,8 @@ pub mod maap;
 pub mod mcp;
 /// Prompt-facing memory context contracts.
 pub mod memory;
+/// Provider-independent OpenAI Responses API response parsing.
+pub mod openai_response;
 /// Agent-facing permission identity contracts.
 pub mod permissions;
 /// Provider-neutral prompt profile contracts.
@@ -131,6 +133,10 @@ pub use mcp::{
     McpPromptUnavailableServer,
 };
 pub use memory::{MemoryContextRecord, MemoryContextScope};
+pub use openai_response::{
+    parse_openai_responses_http_body, parse_openai_responses_provider_body,
+    parse_openai_responses_stream_body,
+};
 pub use permissions::{
     AgentShellPermissionSummary, ApprovalPolicy, PermissionPlanning, PermissionPreset, RuleDecision,
 };

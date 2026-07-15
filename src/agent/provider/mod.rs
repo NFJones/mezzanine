@@ -25,7 +25,6 @@ mod errors;
 mod http;
 mod openai_chat_completions;
 mod openai_request;
-mod response;
 mod schema;
 use anthropic::AnthropicMessagesDialect;
 pub use cache::openai_prompt_cache_diagnostics_for_request;
@@ -46,6 +45,7 @@ pub use http::ProviderHttpTransport;
 pub use http::{AsyncProviderHttpTransport, ReqwestProviderHttpTransport};
 #[cfg(test)]
 use mez_agent::ANTHROPIC_MESSAGES_API;
+use mez_agent::parse_openai_responses_provider_body;
 use mez_agent::{
     DEFAULT_PROVIDER_TIMEOUT_MS, ModelTokenUsage, ProviderApiCompatibility, ProviderAuthMetadata,
     ProviderCredentialKind, ProviderCredentialSource, ProviderHttpRequest, ProviderHttpResponse,
@@ -65,10 +65,6 @@ use mez_agent::{
 use openai_chat_completions::OpenAiChatCompletionsDialect;
 pub use openai_request::openai_responses_request_body;
 use openai_request::openai_responses_request_body_with_stream;
-pub use response::parse_openai_responses_http_body;
-use response::parse_openai_responses_provider_body;
-#[cfg(test)]
-pub(crate) use response::parse_openai_responses_stream_body;
 
 use mez_agent::{CHATGPT_RESPONSES_ENDPOINT, OPENAI_RESPONSES_ENDPOINT};
 /// Default DeepSeek Chat Completions API endpoint.

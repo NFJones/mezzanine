@@ -133,7 +133,7 @@ pub use provider::{
     openai_prompt_cache_diagnostics_for_request, openai_provider_from_auth_store_with_options,
     openai_provider_from_auth_store_with_provider_options,
     openai_responses_provider_from_auth_store_with_provider_options, openai_responses_request_body,
-    parse_openai_models_http_body, parse_openai_responses_http_body,
+    parse_openai_models_http_body,
 };
 #[cfg(test)]
 pub use provider::{

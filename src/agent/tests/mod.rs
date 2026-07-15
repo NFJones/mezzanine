@@ -46,13 +46,12 @@ use super::{
     openai_provider_from_auth_store_with_transport,
     openai_responses_provider_from_auth_store_with_provider_options, openai_responses_request_body,
     parse_bootstrap_env_output, parse_fenced_maap_action_batch, parse_maap_action_batch_json,
-    parse_maap_action_batch_json_for_turn, parse_openai_models_http_body,
-    parse_openai_responses_http_body, parse_slash_command, persist_turn_execution_transcript,
-    postprocess_shell_action_success_output, readiness_probe_command_for_classification,
-    select_model_profile, set_project_guidance_context, tool_discovery_script,
-    transcript_entries_for_execution,
+    parse_maap_action_batch_json_for_turn, parse_openai_models_http_body, parse_slash_command,
+    persist_turn_execution_transcript, postprocess_shell_action_success_output,
+    readiness_probe_command_for_classification, select_model_profile, set_project_guidance_context,
+    tool_discovery_script, transcript_entries_for_execution,
 };
-use super::{prompt, provider, semantic, shell};
+use super::{prompt, semantic, shell};
 use crate::auth::{AuthStore, OpenAiProviderCredential};
 use crate::mcp::McpRegistry;
 use crate::permissions::{PathScopes, PermissionPolicy, SessionApprovalStore};
