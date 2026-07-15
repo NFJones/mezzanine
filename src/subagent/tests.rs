@@ -4,6 +4,7 @@ use super::{
     BuiltinSubagentRole, CooperationMode, ScopeRegistry, SubagentScopeDeclaration,
     SubagentScopeEnforcement, SubagentSpawnRequest, builtin_role_name, builtin_subagent_profiles,
 };
+use mez_agent::SubagentContractErrorKind;
 
 /// Runs the request operation for this subsystem.
 ///
@@ -34,7 +35,7 @@ fn explore_only_must_not_write() {
     let mut request = request(CooperationMode::ExploreOnly);
 
     let error = request.validate().unwrap_err();
-    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert_eq!(error.kind(), SubagentContractErrorKind::InvalidArgs);
 
     request.write_scopes.clear();
     request.validate().unwrap();
@@ -47,7 +48,7 @@ fn unrestricted_requires_user_approval() {
     let mut request = request(CooperationMode::Unrestricted);
 
     let error = request.validate().unwrap_err();
-    assert_eq!(error.kind(), crate::error::MezErrorKind::Forbidden);
+    assert_eq!(error.kind(), SubagentContractErrorKind::Forbidden);
 
     request.explicit_user_approval = true;
     request.validate().unwrap();
@@ -88,7 +89,7 @@ fn overlapping_owned_write_scopes_conflict() {
         )
         .unwrap_err();
 
-    assert_eq!(error.kind(), crate::error::MezErrorKind::Conflict);
+    assert_eq!(error.kind(), SubagentContractErrorKind::Conflict);
 }
 
 /// Verifies that serial-write registrations sharing the same lock may overlap

@@ -194,7 +194,12 @@ pub use slash::{
     SlashCommandEffect, SlashCommandInvocation, SlashCommandParseError, SlashCommandSpec,
     baseline_slash_commands, parse_slash_command,
 };
-pub use subagent::{CooperationMode, SubagentScopeDeclaration, SubagentScopeEnforcement};
+pub use subagent::{
+    ActiveWriteScope, BuiltinSubagentRole, CooperationMode, ScopeConflict, ScopeRegistry,
+    SubagentContractError, SubagentContractErrorKind, SubagentContractResult, SubagentProfile,
+    SubagentScopeDeclaration, SubagentScopeEnforcement, SubagentSpawnRequest, builtin_role_name,
+    builtin_subagent_profiles,
+};
 pub use surface::{AgentCapability, AllowedAction, AllowedActionSet, ModelInteractionKind};
 pub use transcript::{
     AgentTranscriptEntry, AgentTranscriptRole, TranscriptContractError, TranscriptPersistence,

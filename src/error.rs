@@ -75,6 +75,18 @@ impl From<mez_agent::MaapContractError> for MezError {
     }
 }
 
+impl From<mez_agent::SubagentContractError> for MezError {
+    fn from(error: mez_agent::SubagentContractError) -> Self {
+        match error.kind() {
+            mez_agent::SubagentContractErrorKind::InvalidArgs => {
+                Self::invalid_args(error.message())
+            }
+            mez_agent::SubagentContractErrorKind::Forbidden => Self::forbidden(error.message()),
+            mez_agent::SubagentContractErrorKind::Conflict => Self::conflict(error.message()),
+        }
+    }
+}
+
 impl From<mez_agent::AgentRequestAssemblyError> for MezError {
     fn from(error: mez_agent::AgentRequestAssemblyError) -> Self {
         match error.kind() {

@@ -5,11 +5,6 @@
 //! spawn requests and tracks active write scopes independently from the future
 //! pane-creation control call.
 
-/// Exposes the scope registry module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-mod scope_registry;
 /// Exposes the types module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -21,13 +16,13 @@ mod types;
 /// declaration makes the boundary available to the crate.
 mod validation;
 
+pub use mez_agent::{builtin_role_name, builtin_subagent_profiles};
 pub use types::{
     ActiveWriteScope, BuiltinSubagentRole, CooperationMode, SUBAGENT_FRIENDLY_NAMES, ScopeConflict,
     ScopeRegistry, SubagentProfile, SubagentScopeDeclaration, SubagentSpawnRequest,
 };
 pub use validation::{
     AGENT_SUBAGENT_SCOPE_ENFORCEMENT, ProductSubagentScopeEnforcement, SubagentScopeEnforcement,
-    builtin_role_name, builtin_subagent_profiles,
 };
 
 /// Exposes the tests module boundary.
