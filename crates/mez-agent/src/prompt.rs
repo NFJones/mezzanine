@@ -1,7 +1,9 @@
-//! Provider-neutral prompt profile contracts.
+//! Provider-neutral system-prompt assembly.
 //!
-//! This module owns the stable inputs used to assemble an agent system prompt.
-//! Prompt assets and product-specific assembly remain in the composition crate.
+//! This module owns prompt profiles, deterministic section ordering, repository
+//! guidance embedding, provider selection, and subagent scope formatting.
+//! Product-owned Markdown assets are supplied through a narrow source port by
+//! the composition crate.
 
 use std::fmt;
 
@@ -128,12 +130,236 @@ impl AgentPromptProfile {
     }
 }
 
+/// Supplies product-owned prompt fragments to provider-neutral assembly.
+pub trait AgentPromptAssetSource {
+    /// Returns one required system-prompt fragment by stable file name.
+    fn system_fragment<'a>(&'a self, path: &str) -> AgentPromptResult<&'a str>;
+
+    /// Returns one required provider-specific fragment by stable file name.
+    fn provider_fragment<'a>(&'a self, path: &str) -> AgentPromptResult<&'a str>;
+}
+
+/// Assembles one provider-facing system prompt from injected product assets.
+///
+/// Repository instruction blocks must already be discovered and ordered by the
+/// product adapter. This function embeds them verbatim under the repository
+/// instruction contract without performing filesystem access.
+pub fn assemble_agent_system_prompt(
+    profile: &AgentPromptProfile,
+    repository_instruction_blocks: &[String],
+    assets: &impl AgentPromptAssetSource,
+) -> AgentPromptResult<String> {
+    validate_agent_prompt_required("agent id", &profile.agent_id)?;
+    validate_agent_prompt_required("pane id", &profile.pane_id)?;
+
+    let mut prompt = String::new();
+    push_section(&mut prompt, "1. Identity", &identity_prompt(assets)?);
+    push_section(
+        &mut prompt,
+        "2. Autonomy",
+        assets.system_fragment("autonomy.md")?,
+    );
+    push_section(
+        &mut prompt,
+        "3. Repository Instructions",
+        &repository_instructions_prompt(repository_instruction_blocks, assets)?,
+    );
+    push_section(
+        &mut prompt,
+        "4. Personality",
+        assets.system_fragment("personality.md")?,
+    );
+    push_section(
+        &mut prompt,
+        "5. Judgment",
+        assets.system_fragment("judgment.md")?,
+    );
+    push_section(
+        &mut prompt,
+        "6. Actions",
+        assets.system_fragment("actions.md")?,
+    );
+    push_section(&mut prompt, "7. Edits", assets.system_fragment("edits.md")?);
+    push_section(
+        &mut prompt,
+        "8. Validation",
+        assets.system_fragment("validation.md")?,
+    );
+    push_section(&mut prompt, "9. Trust", assets.system_fragment("trust.md")?);
+    push_section(
+        &mut prompt,
+        "10. Subagents",
+        &subagent_prompt(profile, assets)?,
+    );
+    push_section(
+        &mut prompt,
+        "11. Runtime",
+        assets.system_fragment("runtime.md")?,
+    );
+    push_section(
+        &mut prompt,
+        "12. Communication",
+        assets.system_fragment("communication.md")?,
+    );
+    push_section(
+        &mut prompt,
+        "13. Format",
+        assets.system_fragment("format.md")?,
+    );
+    push_section(&mut prompt, "14. MCP", assets.system_fragment("mcp.md")?);
+    let provider_fragment = match profile.provider.as_deref() {
+        Some("deepseek") => Some(("15. DeepSeek Provider", "deepseek.md")),
+        Some("anthropic") => Some(("15. Anthropic Provider", "anthropic.md")),
+        Some("claude-code") => Some(("15. Claude Code Provider", "claude_code.md")),
+        _ => None,
+    };
+    if let Some((title, path)) = provider_fragment {
+        push_section(&mut prompt, title, assets.provider_fragment(path)?);
+    }
+    Ok(prompt)
+}
+
+/// Builds the templated identity section.
+fn identity_prompt(assets: &impl AgentPromptAssetSource) -> AgentPromptResult<String> {
+    Ok(assets
+        .system_fragment("identity.md")?
+        .replace("{profile_name}", AGENT_PROMPT_PROFILE_NAME)
+        .replace(
+            "{profile_version}",
+            &AGENT_PROMPT_PROFILE_VERSION.to_string(),
+        ))
+}
+
+/// Builds the repository-instruction section with injected active contents.
+fn repository_instructions_prompt(
+    repository_instruction_blocks: &[String],
+    assets: &impl AgentPromptAssetSource,
+) -> AgentPromptResult<String> {
+    let mut prompt = assets
+        .system_fragment("repository_instructions.md")?
+        .to_string();
+    if !repository_instruction_blocks.is_empty() {
+        prompt.push_str("\n\nEmbedded active repository instruction contents:");
+        for block in repository_instruction_blocks {
+            prompt.push_str("\n\n");
+            prompt.push_str(block);
+        }
+    }
+    Ok(prompt)
+}
+
+/// Builds the subagent section with optional scope details.
+fn subagent_prompt(
+    profile: &AgentPromptProfile,
+    assets: &impl AgentPromptAssetSource,
+) -> AgentPromptResult<String> {
+    let mut lines = vec![assets.system_fragment("subagents.md")?.to_string()];
+    if let Some(mode) = &profile.cooperation_mode {
+        lines.push(format!(
+            "Subagent scope: cooperation_mode={mode}; Read scopes: {}; Write scopes: {}.",
+            list_or_none(&profile.read_scopes),
+            list_or_none(&profile.write_scopes)
+        ));
+    }
+    Ok(lines.join(" "))
+}
+
+/// Appends one numbered section with stable blank-line separation.
+fn push_section(prompt: &mut String, title: &str, body: &str) {
+    if !prompt.is_empty() {
+        prompt.push_str("\n\n");
+    }
+    prompt.push_str(title);
+    prompt.push('\n');
+    prompt.push_str(body);
+}
+
+/// Formats a scope list without exposing an empty field.
+fn list_or_none(values: &[String]) -> String {
+    if values.is_empty() {
+        "none".to_string()
+    } else {
+        values.join(", ")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentPromptError, AgentPromptErrorKind, AgentPromptProfile, validate_agent_prompt_required,
+        AgentPromptAssetSource, AgentPromptError, AgentPromptErrorKind, AgentPromptProfile,
+        AgentPromptResult, assemble_agent_system_prompt, validate_agent_prompt_required,
     };
     use crate::{McpPromptServer, McpPromptSummary};
+
+    /// Synthetic prompt assets used to test deterministic assembly without
+    /// depending on the product crate's embedded Markdown files.
+    struct TestPromptAssets;
+
+    impl AgentPromptAssetSource for TestPromptAssets {
+        fn system_fragment<'a>(&'a self, path: &str) -> AgentPromptResult<&'a str> {
+            Ok(match path {
+                "identity.md" => "profile {profile_name} version {profile_version}",
+                "repository_instructions.md" => "repository contract",
+                "subagents.md" => "subagent contract",
+                "mcp.md" => "mcp contract",
+                _ => "generic system contract",
+            })
+        }
+
+        fn provider_fragment<'a>(&'a self, path: &str) -> AgentPromptResult<&'a str> {
+            Ok(match path {
+                "anthropic.md" => "anthropic contract",
+                "claude_code.md" => "claude code contract",
+                "deepseek.md" => "deepseek contract",
+                _ => {
+                    return Err(AgentPromptError::invalid_state(
+                        "unknown test provider asset",
+                    ));
+                }
+            })
+        }
+    }
+
+    /// Verifies provider-neutral assembly preserves section ordering, profile
+    /// templating, and verbatim repository guidance injection.
+    #[test]
+    fn prompt_assembly_injects_assets_and_repository_guidance() {
+        let prompt = assemble_agent_system_prompt(
+            &AgentPromptProfile::default_for("agent-1", "%1"),
+            &[
+                "first repository rule".to_string(),
+                "second rule".to_string(),
+            ],
+            &TestPromptAssets,
+        )
+        .unwrap();
+
+        assert!(prompt.starts_with("1. Identity\nprofile default version 30"));
+        assert!(prompt.contains("3. Repository Instructions\nrepository contract"));
+        assert!(prompt.contains("Embedded active repository instruction contents:"));
+        assert!(prompt.contains("first repository rule\n\nsecond rule"));
+        assert!(prompt.find("2. Autonomy").unwrap() < prompt.find("14. MCP").unwrap());
+        assert!(!prompt.contains("15. "));
+    }
+
+    /// Verifies provider and subagent profile fields select only the requested
+    /// guidance and format empty and populated scopes deterministically.
+    #[test]
+    fn prompt_assembly_selects_provider_and_subagent_scope() {
+        let mut profile =
+            AgentPromptProfile::default_for("agent-1", "%1").with_provider("claude-code");
+        profile.cooperation_mode = Some("isolated".to_string());
+        profile.read_scopes = vec!["src".to_string()];
+
+        let prompt = assemble_agent_system_prompt(&profile, &[], &TestPromptAssets).unwrap();
+
+        assert!(prompt.contains("10. Subagents\nsubagent contract Subagent scope:"));
+        assert!(prompt.contains("cooperation_mode=isolated"));
+        assert!(prompt.contains("Read scopes: src; Write scopes: none."));
+        assert!(prompt.contains("15. Claude Code Provider\nclaude code contract"));
+        assert!(!prompt.contains("anthropic contract"));
+        assert!(!prompt.contains("deepseek contract"));
+    }
 
     #[test]
     /// Verifies a default profile contains only the required agent and pane

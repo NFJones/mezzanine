@@ -211,8 +211,9 @@ pub use permissions::{
     AgentShellPermissionSummary, ApprovalPolicy, PermissionPlanning, PermissionPreset, RuleDecision,
 };
 pub use prompt::{
-    AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptError,
-    AgentPromptErrorKind, AgentPromptProfile, AgentPromptResult, validate_agent_prompt_required,
+    AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptAssetSource,
+    AgentPromptError, AgentPromptErrorKind, AgentPromptProfile, AgentPromptResult,
+    assemble_agent_system_prompt, validate_agent_prompt_required,
 };
 pub use provider::{
     ANTHROPIC_MESSAGES_API, CHATGPT_RESPONSES_ENDPOINT, CLAUDE_CODE_API,
