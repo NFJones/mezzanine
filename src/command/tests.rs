@@ -6,7 +6,7 @@
 
 // Command module tests.
 
-use super::plans::{CommandPlan, ResizePanePlan, command_plan_from_invocation};
+use super::plans::{CommandPlan, command_plan_from_invocation};
 use super::{
     AuditLog, AuthStore, CommandOutcome, LayoutLoadSelector, PaneReadinessOverrideStore,
     PaneReadinessState, baseline_commands, execute_auth_command, execute_command,
@@ -17,6 +17,7 @@ use crate::auth::AuthPaths;
 use crate::config::ConfigPaths;
 use crate::shell::{ResolvedShell, ShellSource};
 use mez_core::ids::ClientId;
+use mez_mux::command::plans::ResizePanePlan;
 use mez_mux::layout::Size;
 use mez_mux::session::{ClientState, Session};
 use std::fs;

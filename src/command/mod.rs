@@ -18,10 +18,12 @@ use crate::config::{
 use crate::error::{MezError, Result};
 use mez_agent::{PaneReadinessOverrideStore, PaneReadinessState};
 use mez_core::ids::ClientId;
-use mez_mux::input::{KeyBindings, KeyChord, KeyCode};
-use mez_mux::layout::{
-    PaneNavigationDirection, PaneSizeSpec, ResizeAxis, ResizeDirection, SplitDirection,
+pub(crate) use mez_mux::command::plans::{
+    RuntimePaneLayoutPlan, SwapPaneNeighbor, SwapPanePlan, resize_spec_from_invocation,
+    runtime_pane_layout_plan_from_invocation, split_window_selects_new_pane,
 };
+use mez_mux::input::{KeyBindings, KeyChord, KeyCode};
+use mez_mux::layout::{PaneNavigationDirection, SplitDirection};
 use mez_mux::session::Session;
 
 /// Builds stable `key=value` command output lines with a caller-selected separator.
@@ -115,10 +117,6 @@ pub(crate) use display::{
 };
 pub use mez_mux::command::CommandInvocation;
 pub use parser::parse_command_sequence;
-pub(crate) use plans::{
-    RuntimePaneLayoutPlan, SwapPaneNeighbor, SwapPanePlan, resize_spec_from_invocation,
-    runtime_pane_layout_plan_from_invocation, split_window_selects_new_pane,
-};
 pub use types::{
     BaselineCommand, BaselineCommandStatus, CommandOutcome, LayoutLoadSelector, baseline_commands,
 };

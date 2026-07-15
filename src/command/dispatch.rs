@@ -5,8 +5,7 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::plans::{
-    CommandPlan, PaneSelectionPlan, ResizePanePlan, SwapPaneNeighbor, SwapPanePlan,
-    SynchronizePanesMode, command_plan_from_invocation,
+    CommandPlan, PaneSelectionPlan, SynchronizePanesMode, command_plan_from_invocation,
 };
 use super::{
     AuditLog, AuthStore, ClientId, CommandInvocation, CommandOutcome, ConfigMutation,
@@ -33,6 +32,7 @@ use crate::mcp::{
     mcp_config_command_display, mcp_config_command_from_words, mcp_config_command_report,
     persist_mcp_config_command,
 };
+use mez_mux::command::plans::{ResizePanePlan, SwapPaneNeighbor, SwapPanePlan};
 use std::fs;
 
 // In-memory command execution entry points.

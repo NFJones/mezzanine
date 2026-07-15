@@ -6,10 +6,11 @@
 //! the session, keeping parsing errors and execution side effects separated.
 
 use super::display::{new_window_name, new_window_shell_command, split_window_shell_command};
-use super::shell::{flag_value, positional_args};
-use super::{
-    CommandInvocation, MezError, PaneNavigationDirection, PaneSizeSpec, ResizeAxis,
-    ResizeDirection, Result, SplitDirection,
+use super::shell::positional_args;
+use super::{CommandInvocation, MezError, PaneNavigationDirection, Result, SplitDirection};
+use mez_mux::command::plans::{
+    BreakPanePlan, JoinPanePlan, ResizePanePlan, SwapPanePlan, break_pane_plan, join_pane_plan,
+    resize_pane_plan, split_window_selects_new_pane, swap_pane_plan,
 };
 
 /// Identifies a parsed session-mutation command.
@@ -201,94 +202,6 @@ pub(super) struct LayoutPlan {
     pub(super) layout_name: String,
 }
 
-/// Parsed resize-pane behavior.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum ResizePanePlan {
-    /// Toggle pane zoom instead of resizing.
-    Zoom { command: String },
-    /// Resize a target pane.
-    Resize {
-        /// Original command name.
-        command: String,
-        /// Optional pane target.
-        target: Option<String>,
-        /// Parsed pane-size specification.
-        spec: PaneSizeSpec,
-    },
-}
-
-/// Directional neighbor used by swap-pane.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SwapPaneNeighbor {
-    /// Previous pane in window order.
-    Previous,
-    /// Next pane in window order.
-    Next,
-}
-
-/// Parsed swap-pane behavior.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SwapPanePlan {
-    /// Swap source with an explicit target.
-    Target {
-        /// Original command name.
-        command: String,
-        /// Optional source pane selector.
-        source: Option<String>,
-        /// Destination pane selector.
-        target: String,
-    },
-    /// Swap the active pane with a neighbor.
-    Neighbor {
-        /// Original command name.
-        command: String,
-        /// Neighbor selection.
-        neighbor: SwapPaneNeighbor,
-    },
-}
-
-/// Parsed command data for break-pane.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct BreakPanePlan {
-    /// Original command name.
-    pub(crate) command: String,
-    /// Optional source pane target.
-    pub(crate) target: Option<String>,
-    /// Optional new window name.
-    pub(crate) name: Option<String>,
-    /// Whether the new window should be selected.
-    pub(crate) select: bool,
-}
-
-/// Parsed command data for join-pane.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct JoinPanePlan {
-    /// Original command name.
-    pub(crate) command: String,
-    /// Optional source pane selector.
-    pub(crate) source: Option<String>,
-    /// Destination pane selector.
-    pub(crate) target: String,
-    /// Join direction.
-    pub(crate) direction: SplitDirection,
-    /// Whether the joined pane should be selected.
-    pub(crate) select: bool,
-}
-
-/// Typed runtime-owned pane layout commands.
-///
-/// These commands mutate session layout and must apply session-authored resize
-/// effects through the product runtime rather than through generic dispatch.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum RuntimePaneLayoutPlan {
-    /// Swap panes and apply the resulting resize effects.
-    Swap(SwapPanePlan),
-    /// Move a pane into a new window and apply the resulting resize effects.
-    Break(BreakPanePlan),
-    /// Move a pane into another window and apply the resulting resize effects.
-    Join(JoinPanePlan),
-}
-
 /// Parsed command data for observer target mutations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ObserverTargetPlan {
@@ -429,19 +342,6 @@ pub(super) fn command_plan_from_invocation(invocation: &CommandInvocation) -> Re
     }
 }
 
-/// Parses a layout command that requires runtime-owned resize synchronization.
-pub(crate) fn runtime_pane_layout_plan_from_invocation(
-    invocation: &CommandInvocation,
-) -> Result<Option<RuntimePaneLayoutPlan>> {
-    let plan = match invocation.name.as_str() {
-        "swap-pane" | "swapp" => RuntimePaneLayoutPlan::Swap(swap_pane_plan(invocation)?),
-        "break-pane" | "breakp" => RuntimePaneLayoutPlan::Break(break_pane_plan(invocation)),
-        "join-pane" | "joinp" => RuntimePaneLayoutPlan::Join(join_pane_plan(invocation)?),
-        _ => return Ok(None),
-    };
-    Ok(Some(plan))
-}
-
 fn observer_target_plan(
     invocation: &CommandInvocation,
     missing: &'static str,
@@ -576,74 +476,6 @@ fn layout_plan(invocation: &CommandInvocation) -> Result<LayoutPlan> {
     })
 }
 
-fn resize_pane_plan(invocation: &CommandInvocation) -> Result<ResizePanePlan> {
-    let command = invocation.name.clone();
-    if invocation.has_flag("-Z", "--zoom") {
-        return Ok(ResizePanePlan::Zoom { command });
-    }
-    Ok(ResizePanePlan::Resize {
-        command,
-        target: invocation.target_arg().map(ToOwned::to_owned),
-        spec: resize_spec_from_invocation(invocation)?,
-    })
-}
-
-fn swap_pane_plan(invocation: &CommandInvocation) -> Result<SwapPanePlan> {
-    let command = invocation.name.clone();
-    if let Some(target) = invocation
-        .target_arg()
-        .or_else(|| positional_args(invocation).first().copied())
-    {
-        return Ok(SwapPanePlan::Target {
-            command,
-            source: invocation.source_arg().map(ToOwned::to_owned),
-            target: target.to_string(),
-        });
-    }
-    if let Some(neighbor) = swap_pane_neighbor(invocation)? {
-        if invocation.source_arg().is_some() {
-            return Err(MezError::invalid_args(
-                "swap-pane direction flags operate on the active pane",
-            ));
-        }
-        return Ok(SwapPanePlan::Neighbor { command, neighbor });
-    }
-    Err(MezError::invalid_args("swap-pane requires a target"))
-}
-
-fn break_pane_plan(invocation: &CommandInvocation) -> BreakPanePlan {
-    BreakPanePlan {
-        command: invocation.name.clone(),
-        target: invocation
-            .target_arg()
-            .or_else(|| positional_args(invocation).first().copied())
-            .map(ToOwned::to_owned),
-        name: flag_value(&invocation.args, "-n")
-            .or_else(|| flag_value(&invocation.args, "--name"))
-            .map(ToOwned::to_owned),
-        select: !invocation.has_flag("-d", "--detached"),
-    }
-}
-
-fn join_pane_plan(invocation: &CommandInvocation) -> Result<JoinPanePlan> {
-    let target = invocation
-        .target_arg()
-        .or_else(|| positional_args(invocation).first().copied())
-        .ok_or_else(|| MezError::invalid_args("join-pane requires a target"))?;
-    let direction = if invocation.has_flag("-h", "--horizontal") {
-        SplitDirection::Horizontal
-    } else {
-        SplitDirection::Vertical
-    };
-    Ok(JoinPanePlan {
-        command: invocation.name.clone(),
-        source: invocation.source_arg().map(ToOwned::to_owned),
-        target: target.to_string(),
-        direction,
-        select: invocation.args.iter().any(|arg| arg == "--select"),
-    })
-}
-
 fn session_name_plan(
     invocation: &CommandInvocation,
     missing: &'static str,
@@ -656,90 +488,6 @@ fn session_name_plan(
         command: invocation.name.clone(),
         name,
     })
-}
-
-/// Builds the pane-size specification requested by `resize-pane`.
-pub(crate) fn resize_spec_from_invocation(invocation: &CommandInvocation) -> Result<PaneSizeSpec> {
-    if let Some(percent) = flag_value(&invocation.args, "--percent") {
-        let percent = parse_resize_amount(percent, "resize-pane percent is invalid")?;
-        let axis = match flag_value(&invocation.args, "--axis").unwrap_or("both") {
-            "columns" | "horizontal" => ResizeAxis::Columns,
-            "rows" | "vertical" => ResizeAxis::Rows,
-            "both" => ResizeAxis::Both,
-            _ => return Err(MezError::invalid_args("resize-pane axis is invalid")),
-        };
-        return Ok(PaneSizeSpec::Percent { percent, axis });
-    }
-    if let Some(direction) = flag_value(&invocation.args, "--delta") {
-        let direction = ResizeDirection::from_name(direction)
-            .ok_or_else(|| MezError::invalid_args("resize-pane delta direction is invalid"))?;
-        return Ok(PaneSizeSpec::Delta {
-            direction,
-            amount: resize_amount_flag(invocation)?,
-        });
-    }
-    if let Some(edge) = flag_value(&invocation.args, "--edge") {
-        let edge = ResizeDirection::from_name(edge)
-            .ok_or_else(|| MezError::invalid_args("resize-pane edge is invalid"))?;
-        return Ok(PaneSizeSpec::Edge {
-            edge,
-            amount: resize_amount_flag(invocation)?,
-        });
-    }
-    for (flag, direction) in [
-        ("-L", ResizeDirection::Left),
-        ("-R", ResizeDirection::Right),
-        ("-U", ResizeDirection::Up),
-        ("-D", ResizeDirection::Down),
-    ] {
-        if invocation.args.iter().any(|arg| arg == flag) {
-            return Ok(PaneSizeSpec::Delta {
-                direction,
-                amount: optional_flag_amount(&invocation.args, flag)?,
-            });
-        }
-    }
-
-    let columns = flag_value(&invocation.args, "-x")
-        .or_else(|| flag_value(&invocation.args, "--columns"))
-        .map(|value| parse_resize_amount(value, "resize-pane columns are invalid"))
-        .transpose()?;
-    let rows = flag_value(&invocation.args, "-y")
-        .or_else(|| flag_value(&invocation.args, "--rows"))
-        .map(|value| parse_resize_amount(value, "resize-pane rows are invalid"))
-        .transpose()?;
-    if columns.is_none() && rows.is_none() {
-        return Err(MezError::invalid_args(
-            "resize-pane requires a size, percent, delta, or edge",
-        ));
-    }
-    Ok(PaneSizeSpec::Cells { columns, rows })
-}
-
-fn resize_amount_flag(invocation: &CommandInvocation) -> Result<u16> {
-    flag_value(&invocation.args, "--amount")
-        .map(|value| parse_resize_amount(value, "resize-pane amount is invalid"))
-        .transpose()?
-        .ok_or_else(|| MezError::invalid_args("resize-pane requires --amount"))
-}
-
-fn optional_flag_amount(args: &[String], flag: &str) -> Result<u16> {
-    let Some(index) = args.iter().position(|arg| arg == flag) else {
-        return Ok(1);
-    };
-    let Some(value) = args.get(index.saturating_add(1)) else {
-        return Ok(1);
-    };
-    if value.starts_with('-') {
-        return Ok(1);
-    }
-    parse_resize_amount(value, "resize-pane amount is invalid")
-}
-
-fn parse_resize_amount(value: &str, message: &'static str) -> Result<u16> {
-    value
-        .parse::<u16>()
-        .map_err(|_| MezError::invalid_args(message))
 }
 
 fn select_pane_direction(
@@ -772,30 +520,6 @@ fn select_pane_direction(
     Ok(direction)
 }
 
-fn swap_pane_neighbor(invocation: &CommandInvocation) -> Result<Option<SwapPaneNeighbor>> {
-    let mut matched = [
-        ("-U", SwapPaneNeighbor::Previous),
-        ("--up", SwapPaneNeighbor::Previous),
-        ("-D", SwapPaneNeighbor::Next),
-        ("--down", SwapPaneNeighbor::Next),
-    ]
-    .into_iter()
-    .filter_map(|(flag, neighbor)| {
-        invocation
-            .args
-            .iter()
-            .any(|arg| arg == flag)
-            .then_some(neighbor)
-    });
-    let neighbor = matched.next();
-    if matched.next().is_some() {
-        return Err(MezError::invalid_args(
-            "swap-pane accepts only one direction flag",
-        ));
-    }
-    Ok(neighbor)
-}
-
 fn move_window_target_index(invocation: &CommandInvocation) -> Result<usize> {
     let target = invocation
         .target_arg()
@@ -804,17 +528,4 @@ fn move_window_target_index(invocation: &CommandInvocation) -> Result<usize> {
     target
         .parse::<usize>()
         .map_err(|_| MezError::invalid_args("move-window target must be a window index"))
-}
-
-/// Returns whether `split-window` should select the newly created pane.
-pub(crate) fn split_window_selects_new_pane(invocation: &CommandInvocation) -> Result<bool> {
-    let explicit_select = invocation.args.iter().any(|arg| arg == "--select");
-    let detached = invocation.has_flag("-d", "--detached")
-        || invocation.args.iter().any(|arg| arg == "--no-select");
-    if explicit_select && detached {
-        return Err(MezError::invalid_args(
-            "split-window cannot combine --select with -d/--no-select",
-        ));
-    }
-    Ok(!detached)
 }

@@ -7,6 +7,8 @@
 
 use crate::{MuxError, Result};
 
+pub mod plans;
+
 /// Parsed command name and ordered arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandInvocation {
