@@ -74,6 +74,20 @@ pub enum AgentTurnResponseDecision {
     Reject(crate::ProviderResponseAcceptance),
 }
 
+/// Provider-failure progression shared by portable and product turn runners.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentTurnProviderFailureDecision {
+    /// Retry malformed provider output with an ephemeral repair request.
+    RecoverMalformedOutput {
+        /// One-based recovery attempt accepted for this failure.
+        attempt: usize,
+    },
+    /// Return context, output, or transport failures to runtime recovery.
+    ReturnToRuntime,
+    /// Summarize a terminal provider failure through the product adapter.
+    Summarize,
+}
+
 /// Provider-negotiation state shared by portable and product turn runners.
 ///
 /// The state keeps the durable request separate from ephemeral repair and
@@ -114,6 +128,33 @@ impl<Request> AgentTurnNegotiation<Request> {
     /// Returns the number of accepted recovery attempts in this phase.
     pub const fn recovery_attempts(&self) -> usize {
         self.recovery_budget.attempts()
+    }
+
+    /// Classifies one provider failure and advances bounded repair state.
+    ///
+    /// Malformed output may consume the shared repair budget. Context,
+    /// output, and retryable transport failures remain visible to runtime
+    /// recovery, while all other failures proceed to product summarization.
+    pub const fn advance_provider_failure(
+        &mut self,
+        repairable_malformed_output: bool,
+        retry_class: crate::ProviderErrorRetryClass,
+    ) -> AgentTurnProviderFailureDecision {
+        if repairable_malformed_output && self.record_recovery_attempt() {
+            return AgentTurnProviderFailureDecision::RecoverMalformedOutput {
+                attempt: self.recovery_attempts(),
+            };
+        }
+        match retry_class {
+            crate::ProviderErrorRetryClass::ContextLimit
+            | crate::ProviderErrorRetryClass::OutputLimit
+            | crate::ProviderErrorRetryClass::RetryableTransport => {
+                AgentTurnProviderFailureDecision::ReturnToRuntime
+            }
+            crate::ProviderErrorRetryClass::NonRetryable => {
+                AgentTurnProviderFailureDecision::Summarize
+            }
+        }
     }
 
     /// Starts a fresh recovery phase after a valid continuation decision.
@@ -651,7 +692,39 @@ mod tests {
                 None,
                 &[],
             ),
-            AgentTurnResponseDecision::Reject(crate::ProviderResponseAcceptance::MissingActionBatch)
+            AgentTurnResponseDecision::Reject(
+                crate::ProviderResponseAcceptance::MissingActionBatch
+            )
+        );
+    }
+
+    /// Verifies provider failures share bounded malformed-output recovery while
+    /// preserving runtime retries and terminal summarization as distinct paths.
+    #[test]
+    fn turn_negotiation_advances_provider_failures() {
+        let mut negotiation = AgentTurnNegotiation::new("initial", 1);
+
+        assert_eq!(
+            negotiation
+                .advance_provider_failure(true, crate::ProviderErrorRetryClass::NonRetryable,),
+            AgentTurnProviderFailureDecision::RecoverMalformedOutput { attempt: 1 }
+        );
+        assert_eq!(
+            negotiation
+                .advance_provider_failure(true, crate::ProviderErrorRetryClass::NonRetryable,),
+            AgentTurnProviderFailureDecision::Summarize
+        );
+        assert_eq!(
+            negotiation.advance_provider_failure(
+                false,
+                crate::ProviderErrorRetryClass::RetryableTransport,
+            ),
+            AgentTurnProviderFailureDecision::ReturnToRuntime
+        );
+        assert_eq!(
+            negotiation
+                .advance_provider_failure(false, crate::ProviderErrorRetryClass::ContextLimit,),
+            AgentTurnProviderFailureDecision::ReturnToRuntime
         );
     }
 

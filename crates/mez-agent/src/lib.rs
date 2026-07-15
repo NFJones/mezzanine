@@ -91,8 +91,9 @@ pub use continuation::{
 pub use harness::{
     AgentActionExecutor, AgentHarnessAction, AgentHarnessActionResult, AgentHarnessError,
     AgentHarnessErrorKind, AgentHarnessOutcome, AgentHarnessRequest, AgentHarnessResponse,
-    AgentHarnessTurn, AgentTurnNegotiation, AgentTurnProvider, AgentTurnRecoveryBudget,
-    AgentTurnResponseDecision, DEFAULT_TURN_RECOVERY_LIMIT, run_agent_turn,
+    AgentHarnessTurn, AgentTurnNegotiation, AgentTurnProvider, AgentTurnProviderFailureDecision,
+    AgentTurnRecoveryBudget, AgentTurnResponseDecision, DEFAULT_TURN_RECOVERY_LIMIT,
+    run_agent_turn,
 };
 pub use http::{
     DEFAULT_PROVIDER_MAX_RESPONSE_BYTES, DEFAULT_PROVIDER_TIMEOUT_MS, ProviderHttpError,

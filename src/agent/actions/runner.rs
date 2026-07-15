@@ -12,7 +12,7 @@ use super::super::{
     ActionResult, AgentAction, AgentActionPayload, AgentContext, AgentTurnLedger, AgentTurnRecord,
     AgentTurnState, AllowedAction, AllowedActionSet, ContextSourceKind, McpPromptTool, MezError,
     ModelInteractionKind, ModelProfile, ModelRequest, ModelTokenUsage, Result,
-    assemble_model_request,
+    assemble_model_request, provider_error_retry_class,
 };
 #[cfg(test)]
 use super::super::{ActionStatus, local_action_plan};
@@ -28,8 +28,8 @@ use super::recovery::{
     capability_requests_from_batch, disallowed_action_capability_continuation_request,
     failed_maap_validation_execution_with_summary_async, maap_provider_error_is_repairable,
     maap_repair_request, mixed_capability_continuation_request,
-    provider_error_should_retry_without_summary, summarize_controller_failure_execution_async,
-    summarize_provider_failure_execution_async, validate_batch_allowed_actions,
+    summarize_controller_failure_execution_async, summarize_provider_failure_execution_async,
+    validate_batch_allowed_actions,
 };
 #[cfg(test)]
 use super::recovery::{
@@ -38,8 +38,8 @@ use super::recovery::{
 };
 use super::{AgentTurnExecution, turn_state_from_action_results};
 use mez_agent::{
-    AgentTurnNegotiation, AgentTurnResponseDecision, ProviderResponseAcceptance,
-    SubagentScopeDeclaration,
+    AgentTurnNegotiation, AgentTurnProviderFailureDecision, AgentTurnResponseDecision,
+    ProviderResponseAcceptance, SubagentScopeDeclaration,
 };
 
 /// Maximum number of ephemeral provider retries after a MAAP validation error.
@@ -493,21 +493,22 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             response_request = request.clone();
             let response = match self.provider.send_request(&request) {
                 Ok(response) => response,
-                Err(error)
-                    if maap_provider_error_is_repairable(&error)
-                        && negotiation.record_recovery_attempt() =>
-                {
-                    request = maap_repair_request(
-                        &response_request,
-                        error.message(),
-                        error.provider_raw_text().unwrap_or(""),
-                        negotiation.recovery_attempts(),
-                    );
-                    continue;
-                }
                 Err(error) => {
-                    if provider_error_should_retry_without_summary(&error) {
-                        return Err(error);
+                    match negotiation.advance_provider_failure(
+                        maap_provider_error_is_repairable(&error),
+                        provider_error_retry_class(&error),
+                    ) {
+                        AgentTurnProviderFailureDecision::RecoverMalformedOutput { attempt } => {
+                            request = maap_repair_request(
+                                &response_request,
+                                error.message(),
+                                error.provider_raw_text().unwrap_or(""),
+                                attempt,
+                            );
+                            continue;
+                        }
+                        AgentTurnProviderFailureDecision::ReturnToRuntime => return Err(error),
+                        AgentTurnProviderFailureDecision::Summarize => {}
                     }
                     if let Some(execution) = summarize_provider_failure_execution(
                         self.provider,
@@ -850,21 +851,22 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
             response_request = request.clone();
             let response = match self.provider.send_request_async(&request).await {
                 Ok(response) => response,
-                Err(error)
-                    if maap_provider_error_is_repairable(&error)
-                        && negotiation.record_recovery_attempt() =>
-                {
-                    request = maap_repair_request(
-                        &response_request,
-                        error.message(),
-                        error.provider_raw_text().unwrap_or(""),
-                        negotiation.recovery_attempts(),
-                    );
-                    continue;
-                }
                 Err(error) => {
-                    if provider_error_should_retry_without_summary(&error) {
-                        return Err(error);
+                    match negotiation.advance_provider_failure(
+                        maap_provider_error_is_repairable(&error),
+                        provider_error_retry_class(&error),
+                    ) {
+                        AgentTurnProviderFailureDecision::RecoverMalformedOutput { attempt } => {
+                            request = maap_repair_request(
+                                &response_request,
+                                error.message(),
+                                error.provider_raw_text().unwrap_or(""),
+                                attempt,
+                            );
+                            continue;
+                        }
+                        AgentTurnProviderFailureDecision::ReturnToRuntime => return Err(error),
+                        AgentTurnProviderFailureDecision::Summarize => {}
                     }
                     if let Some(execution) = summarize_provider_failure_execution_async(
                         self.provider,
