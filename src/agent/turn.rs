@@ -79,6 +79,16 @@ pub struct AgentTurnRecord {
     pub initial_capability: Option<crate::agent::AgentCapability>,
 }
 
+impl mez_agent::AgentTurnResultIdentity for AgentTurnRecord {
+    fn turn_id(&self) -> &str {
+        &self.turn_id
+    }
+
+    fn agent_id(&self) -> &str {
+        &self.agent_id
+    }
+}
+
 /// Carries Agent Turn Ledger state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move

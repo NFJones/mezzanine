@@ -5,7 +5,7 @@
 //! environment bootstrap decisions, prompt/model request assembly, action
 //! planning, and injectable execution boundaries for pane shell actions.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use secrecy::{ExposeSecret, SecretString};
@@ -107,19 +107,20 @@ pub use context::{
     known_model_context_window_tokens, model_context_text_word_count, select_model_profile,
     set_project_guidance_context,
 };
+pub(crate) use maap::MaapBatchProductValidation;
 pub use maap::{
-    AGENT_OUTPUT_TEXT_DIFF_CONTENT_TYPE, AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
-    AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, AgentAction, AgentActionPayload, MaapBatch, SayStatus,
-    agent_output_content_type_is_diff, agent_output_content_type_is_markdown, is_valid_skill_name,
-    normalize_agent_output_content_type, parse_fenced_maap_action_batch,
-    parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json,
-    parse_maap_action_batch_json_for_turn,
+    parse_fenced_maap_action_batch, parse_fenced_maap_action_batch_for_turn,
+    parse_maap_action_batch_json, parse_maap_action_batch_json_for_turn,
 };
 pub use mez_agent::{
-    ActionContentBlock, ActionError, ActionResult, ActionStatus, AgentTranscriptEntry,
-    AgentTranscriptRole, AgentTurnState, AgentTurnTrigger, McpExecutionRequest,
-    McpExecutionResponse, PROVIDER_TRANSCRIPT_EVENT_MARKER, ProviderTranscriptEvent,
-    TranscriptContractError, TranscriptPersistence,
+    AGENT_OUTPUT_TEXT_DIFF_CONTENT_TYPE, AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+    AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, ActionContentBlock, ActionError, ActionResult,
+    ActionStatus, AgentAction, AgentActionPayload, AgentTranscriptEntry, AgentTranscriptRole,
+    AgentTurnState, AgentTurnTrigger, MaapBatch, McpExecutionRequest, McpExecutionResponse,
+    PROVIDER_TRANSCRIPT_EVENT_MARKER, ProviderTranscriptEvent, SayStatus, TranscriptContractError,
+    TranscriptPersistence, agent_output_content_type_is_diff,
+    agent_output_content_type_is_markdown, is_valid_skill_name,
+    normalize_agent_output_content_type,
 };
 pub use network::{
     NetworkActionPlan, execute_network_action_with_transport_async, network_action_plan,

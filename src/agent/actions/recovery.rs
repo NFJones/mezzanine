@@ -9,9 +9,9 @@ use super::super::ModelProvider;
 use super::super::{
     ActionResult, AgentActionPayload, AgentCapability, AgentTurnRecord, AgentTurnState,
     AllowedAction, AllowedActionSet, AsyncModelProvider, ContextSourceKind, MaapBatch,
-    McpPromptTool, MezError, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest,
-    ModelResponse, ModelTokenUsage, Result, SayStatus, constrain_skill_actions_for_loaded_context,
-    provider_error_retry_class,
+    MaapBatchProductValidation, McpPromptTool, MezError, ModelInteractionKind, ModelMessage,
+    ModelMessageRole, ModelRequest, ModelResponse, ModelTokenUsage, Result, SayStatus,
+    constrain_skill_actions_for_loaded_context, provider_error_retry_class,
 };
 use super::{
     AgentTurnExecution, FAILURE_SUMMARY_RAW_TEXT_LIMIT_BYTES, MAAP_REPAIR_RAW_TEXT_LIMIT_BYTES,

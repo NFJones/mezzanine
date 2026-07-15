@@ -4,6 +4,7 @@
 //! fixtures remain in the parent module.
 
 use super::*;
+use crate::agent::MaapBatchProductValidation;
 
 #[test]
 /// Verifies that the fallback parser extracts the one required fenced

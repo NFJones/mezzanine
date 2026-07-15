@@ -9,8 +9,8 @@
 mod patch;
 
 use super::Result;
-use super::maap::{AgentAction, AgentActionPayload};
 use super::shell::validate_agent_authored_shell_command;
+use super::{AgentAction, AgentActionPayload};
 pub use mez_agent::{LocalActionKind, LocalActionPlan};
 
 #[cfg(test)]

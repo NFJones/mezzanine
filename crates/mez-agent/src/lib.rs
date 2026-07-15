@@ -32,6 +32,8 @@ pub mod http;
 pub mod instructions;
 /// Provider-independent local-action execution plans.
 pub mod local_action;
+/// Provider-independent MAAP action batches, parsing, and validation.
+pub mod maap;
 /// Dependency-neutral MCP prompt manifest records.
 pub mod mcp;
 /// Prompt-facing memory context contracts.
@@ -114,6 +116,15 @@ pub use http::{
     ProviderSseTerminalDetector, SseEvent, SseParseError, parse_sse_events, parse_sse_events_with,
 };
 pub use local_action::{LocalActionKind, LocalActionPlan};
+pub use maap::{
+    AGENT_OUTPUT_TEXT_DIFF_CONTENT_TYPE, AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
+    AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, AgentAction, AgentActionPayload, MaapBatch,
+    MaapContractError, MaapContractResult, MaapValidationContext, SayStatus,
+    agent_output_content_type_is_diff, agent_output_content_type_is_markdown, is_valid_skill_name,
+    normalize_agent_output_content_type, parse_fenced_maap_action_batch,
+    parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json,
+    parse_maap_action_batch_json_for_turn,
+};
 pub use mcp::{
     AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellMcpToolSummary,
     McpExecutionRequest, McpExecutionResponse, McpPromptServer, McpPromptSummary, McpPromptTool,
