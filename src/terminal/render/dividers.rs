@@ -5,14 +5,12 @@
 //! and styled/plain divider canvas writes.
 
 use mez_mux::input::MouseBorderCell;
-use mez_mux::layout::{PaneGeometry, Window};
+use mez_mux::layout::PaneGeometry;
 use mez_mux::theme::UiTheme;
 use mez_terminal::{GraphicRendition, TerminalStyleSpan};
 
 use mez_mux::presentation::pane_divider_cells;
 pub use mez_mux::presentation::pane_frame_merges_into_divider;
-
-use super::{TerminalRenderCell, pane_border_rendition, write_single_width_cell};
 
 /// Returns the rendered cells occupied by mux-managed pane dividers.
 pub fn pane_border_cells_for_geometries(
@@ -38,41 +36,6 @@ pub(crate) fn pane_divider_glyph_for_test(up: bool, down: bool, left: bool, righ
     mez_mux::presentation::pane_divider_glyph(up, down, left, right)
 }
 
-/// Writes pane-divider glyphs into a plain text canvas.
-pub(super) fn draw_pane_dividers(
-    canvas: &mut [Vec<TerminalRenderCell>],
-    geometries: &[PaneGeometry],
-    include_horizontal: bool,
-) {
-    for cell in pane_divider_cells(geometries, include_horizontal) {
-        let row = usize::from(cell.row);
-        let column = usize::from(cell.column);
-        if let Some(line) = canvas.get_mut(row) {
-            write_single_width_cell(line, column, cell.glyph);
-        }
-    }
-}
-
-/// Writes pane-divider glyphs and style spans into a styled text canvas.
-pub(super) fn draw_styled_pane_dividers(
-    text_canvas: &mut [Vec<TerminalRenderCell>],
-    style_canvas: &mut [Vec<TerminalStyleSpan>],
-    geometries: &[PaneGeometry],
-    include_horizontal: bool,
-    window: &Window,
-    ui_theme: &UiTheme,
-) {
-    mez_mux::render::draw_styled_pane_dividers(
-        text_canvas,
-        style_canvas,
-        geometries,
-        include_horizontal,
-        window.active_pane_index(),
-        pane_border_rendition(true, ui_theme),
-        pane_divider_rendition(ui_theme),
-    );
-}
-
 /// Builds style spans for divider junctions that bound a merged pane status row.
 pub(super) fn merged_pane_frame_boundary_style_spans(
     geometries: &[PaneGeometry],
@@ -92,7 +55,7 @@ pub(super) fn merged_pane_frame_boundary_style_spans(
 
 /// Returns the stable divider rendition used for merged pane-frame boundary
 /// caps.
-fn pane_divider_rendition(ui_theme: &UiTheme) -> GraphicRendition {
+pub(super) fn pane_divider_rendition(ui_theme: &UiTheme) -> GraphicRendition {
     GraphicRendition {
         foreground: Some(ui_theme.colors.pane_divider.foreground),
         background: None,
@@ -102,11 +65,12 @@ fn pane_divider_rendition(ui_theme: &UiTheme) -> GraphicRendition {
 
 #[cfg(test)]
 mod tests {
-    use super::super::blank_render_cells;
+    use super::super::pane_border_rendition;
     use super::*;
     use crate::ids::IdFactory;
     use mez_mux::layout::SplitDirection;
     use mez_mux::layout::{Size, Window};
+    use mez_mux::render::blank_render_cells;
 
     /// Verifies pane divider styling still uses the active border palette when
     /// a divider cell touches the active pane border.
@@ -124,13 +88,14 @@ mod tests {
         let mut style_canvas = vec![Vec::new(); rows];
         let ui_theme = UiTheme::default();
 
-        draw_styled_pane_dividers(
+        mez_mux::render::draw_styled_pane_dividers(
             &mut text_canvas,
             &mut style_canvas,
             &geometries,
             true,
-            &window,
-            &ui_theme,
+            window.active_pane_index(),
+            pane_border_rendition(true, &ui_theme),
+            pane_divider_rendition(&ui_theme),
         );
 
         let active = pane_border_rendition(true, &ui_theme);
@@ -213,13 +178,14 @@ mod tests {
         let ui_theme = UiTheme::default();
         let divider = pane_divider_rendition(&ui_theme);
 
-        draw_styled_pane_dividers(
+        mez_mux::render::draw_styled_pane_dividers(
             &mut text_canvas,
             &mut style_canvas,
             &geometries,
             true,
-            &window,
-            &ui_theme,
+            window.active_pane_index(),
+            pane_border_rendition(true, &ui_theme),
+            pane_divider_rendition(&ui_theme),
         );
 
         assert!(

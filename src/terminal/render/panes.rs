@@ -6,8 +6,6 @@
 //! whole rendering pipeline.
 
 use super::*;
-use mez_mux::presentation::pane_canvas_placements;
-
 /// Runs the draw window from screens operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -503,36 +501,9 @@ pub(super) fn render_panes_by_geometry(
     frame_context: &TerminalFrameContext,
     pane_frame: TerminalFrameRenderOptions<'_>,
 ) -> Vec<String> {
-    let rows = usize::from(size.rows);
-    let columns = usize::from(size.columns);
-    let mut canvas = blank_render_cells(rows, columns, ' ');
-
-    for placement in pane_canvas_placements(size, geometries) {
-        let Some(pane) = rendered_panes.get(placement.source_index) else {
-            continue;
-        };
-        for row_offset in 0..placement.pane_rows {
-            if let Some(line) = pane.get(row_offset) {
-                write_text_cells(
-                    &mut canvas[placement.row_start + row_offset],
-                    placement.column_start,
-                    placement.pane_columns,
-                    line,
-                );
-            }
-        }
-    }
-    draw_pane_dividers(&mut canvas, geometries, true);
-
-    write_merged_pane_frames_on_dividers(
-        &mut canvas,
-        geometries,
-        window,
-        frame_context,
-        pane_frame,
-    );
-
-    canvas.into_iter().map(collect_text_cells).collect()
+    mez_mux::render::compose_plain_pane_rows(size, geometries, rendered_panes, |canvas| {
+        write_merged_pane_frames_on_dividers(canvas, geometries, window, frame_context, pane_frame);
+    })
 }
 
 /// Runs the render styled panes by geometry operation for this subsystem.
@@ -549,59 +520,23 @@ pub(super) fn render_styled_panes_by_geometry(
     pane_frame: TerminalFrameRenderOptions<'_>,
     ui_theme: &UiTheme,
 ) -> Vec<TerminalStyledLine> {
-    let rows = usize::from(size.rows);
-    let columns = usize::from(size.columns);
-    let mut text_canvas = blank_render_cells(rows, columns, ' ');
-    let mut style_canvas = vec![Vec::new(); rows];
-
-    for placement in pane_canvas_placements(size, geometries) {
-        let Some(pane) = rendered_panes.get(placement.source_index) else {
-            continue;
-        };
-        for row_offset in 0..placement.pane_rows {
-            let Some(line) = pane.get(row_offset) else {
-                continue;
-            };
-            write_text_cells(
-                &mut text_canvas[placement.row_start + row_offset],
-                placement.column_start,
-                placement.pane_columns,
-                &line.text,
-            );
-            style_canvas[placement.row_start + row_offset].extend(
-                line.style_spans
-                    .iter()
-                    .filter_map(|span| clip_style_span(*span, placement.pane_columns))
-                    .map(|span| offset_style_span(span, placement.column_start)),
-            );
-        }
-    }
-    draw_styled_pane_dividers(
-        &mut text_canvas,
-        &mut style_canvas,
+    mez_mux::render::compose_styled_pane_rows(
+        size,
         geometries,
-        true,
-        window,
-        ui_theme,
-    );
-
-    write_styled_merged_pane_frames_on_dividers(
-        &mut text_canvas,
-        &mut style_canvas,
-        geometries,
-        window,
-        frame_context,
-        pane_frame,
-        ui_theme,
-    );
-
-    text_canvas
-        .into_iter()
-        .zip(style_canvas)
-        .map(|(row, style_spans)| TerminalStyledLine {
-            text: collect_text_cells(row),
-            style_spans,
-            copy_text: None,
-        })
-        .collect()
+        rendered_panes,
+        window.active_pane_index(),
+        pane_border_rendition(true, ui_theme),
+        pane_divider_rendition(ui_theme),
+        |text_canvas, style_canvas| {
+            write_styled_merged_pane_frames_on_dividers(
+                text_canvas,
+                style_canvas,
+                geometries,
+                window,
+                frame_context,
+                pane_frame,
+                ui_theme,
+            );
+        },
+    )
 }

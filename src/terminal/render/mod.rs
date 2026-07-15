@@ -21,15 +21,14 @@ use mez_mux::presentation::{
 pub(crate) use mez_mux::render::overlay_fixed_column_style_spans;
 use mez_mux::render::{
     FramePillboxEntry, FramePillboxSegment, FrameStatusSegment, FrameStatusValue,
-    PositionedFrameStatus, RenderedFrameStatus, TerminalRenderCell, blank_render_cells,
-    clip_style_span, clip_style_spans as clipped_style_spans, collect_text_cells,
-    compose_frame_pillbox_row, compose_frame_text_row, compose_pane_frame_row,
-    display_overlay_targets as agent_display_overlay_targets, fit_styled_width, fit_width,
-    fitted_text_width, frame_pillbox_segment_columns, frame_style_rendition, offset_style_span,
-    overlay_display_lines as overlay_agent_display_lines, position_frame_status,
-    render_frame_pillbox_segments, render_frame_pillbox_text, render_frame_status,
-    sanitize_frame_text, style_span_overlaps_columns, style_span_segments_outside_range,
-    styled_frame_line_with_rendition, write_single_width_cell, write_text_cells,
+    PositionedFrameStatus, RenderedFrameStatus, TerminalRenderCell,
+    clip_style_spans as clipped_style_spans, compose_frame_pillbox_row, compose_frame_text_row,
+    compose_pane_frame_row, display_overlay_targets as agent_display_overlay_targets,
+    fit_styled_width, fit_width, fitted_text_width, frame_pillbox_segment_columns,
+    frame_style_rendition, overlay_display_lines as overlay_agent_display_lines,
+    position_frame_status, render_frame_pillbox_segments, render_frame_pillbox_text,
+    render_frame_status, sanitize_frame_text, style_span_overlaps_columns,
+    style_span_segments_outside_range, styled_frame_line_with_rendition,
     write_text_cells_with_width as write_frame_text_cells,
 };
 pub(super) use mez_mux::render::{char_count, line_slice};
@@ -47,9 +46,7 @@ mod text;
 
 #[cfg(test)]
 pub(crate) use dividers::pane_divider_glyph_for_test;
-use dividers::{
-    draw_pane_dividers, draw_styled_pane_dividers, merged_pane_frame_boundary_style_spans,
-};
+use dividers::{merged_pane_frame_boundary_style_spans, pane_divider_rendition};
 pub use dividers::{pane_border_cells_for_geometries, pane_frame_merges_into_divider};
 use frame::{
     AGENT_STATUS_SCAN_BAND_WIDTH, group_frame_text, pane_agent_prompt_space_reserved,

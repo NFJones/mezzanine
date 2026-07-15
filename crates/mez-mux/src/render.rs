@@ -6,12 +6,14 @@
 //! policy, overlays, and host terminal encoding.
 
 use mez_terminal::{
-    GraphicRendition, TerminalStyleSpan, TerminalStyledLine, terminal_emoji_width,
+    GraphicRendition, TerminalSize, TerminalStyleSpan, TerminalStyledLine, terminal_emoji_width,
     terminal_grapheme_width, terminal_graphemes, terminal_text_width,
 };
 
 use crate::layout::PaneGeometry;
-use crate::presentation::{PaneDividerCell, TerminalFrameStyle, pane_divider_cells};
+use crate::presentation::{
+    PaneDividerCell, TerminalFrameStyle, pane_canvas_placements, pane_divider_cells,
+};
 
 /// One display-cell slot in a mux-owned render canvas.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +58,96 @@ pub fn blank_render_cells(rows: usize, columns: usize, fill: char) -> Vec<Vec<Te
     (0..rows).map(|_| blank_render_row(columns, fill)).collect()
 }
 
+/// Composes plain pane rows into one mux-owned window-body canvas.
+///
+/// The callback may add caller-owned frame content after pane text and
+/// dividers have been placed but before the canvas is flattened to strings.
+pub fn compose_plain_pane_rows(
+    size: TerminalSize,
+    geometries: &[PaneGeometry],
+    rendered_panes: &[Vec<String>],
+    overlay: impl FnOnce(&mut [Vec<TerminalRenderCell>]),
+) -> Vec<String> {
+    let mut canvas = blank_render_cells(usize::from(size.rows), usize::from(size.columns), ' ');
+    for placement in pane_canvas_placements(size, geometries) {
+        let Some(pane) = rendered_panes.get(placement.source_index) else {
+            continue;
+        };
+        for row_offset in 0..placement.pane_rows {
+            if let Some(line) = pane.get(row_offset) {
+                write_text_cells(
+                    &mut canvas[placement.row_start + row_offset],
+                    placement.column_start,
+                    placement.pane_columns,
+                    line,
+                );
+            }
+        }
+    }
+    draw_pane_dividers(&mut canvas, geometries, true);
+    overlay(&mut canvas);
+    canvas.into_iter().map(collect_text_cells).collect()
+}
+
+/// Composes styled pane rows into one mux-owned window-body canvas.
+///
+/// Divider colors remain caller policy. The callback may add caller-owned
+/// frame text and spans before the canvases are flattened into styled rows.
+pub fn compose_styled_pane_rows(
+    size: TerminalSize,
+    geometries: &[PaneGeometry],
+    rendered_panes: &[Vec<TerminalStyledLine>],
+    active_pane_index: usize,
+    active_rendition: GraphicRendition,
+    divider_rendition: GraphicRendition,
+    overlay: impl FnOnce(&mut [Vec<TerminalRenderCell>], &mut [Vec<TerminalStyleSpan>]),
+) -> Vec<TerminalStyledLine> {
+    let rows = usize::from(size.rows);
+    let mut text_canvas = blank_render_cells(rows, usize::from(size.columns), ' ');
+    let mut style_canvas = vec![Vec::new(); rows];
+    for placement in pane_canvas_placements(size, geometries) {
+        let Some(pane) = rendered_panes.get(placement.source_index) else {
+            continue;
+        };
+        for row_offset in 0..placement.pane_rows {
+            let Some(line) = pane.get(row_offset) else {
+                continue;
+            };
+            write_text_cells(
+                &mut text_canvas[placement.row_start + row_offset],
+                placement.column_start,
+                placement.pane_columns,
+                &line.text,
+            );
+            style_canvas[placement.row_start + row_offset].extend(
+                line.style_spans
+                    .iter()
+                    .filter_map(|span| clip_style_span(*span, placement.pane_columns))
+                    .map(|span| offset_style_span(span, placement.column_start)),
+            );
+        }
+    }
+    draw_styled_pane_dividers(
+        &mut text_canvas,
+        &mut style_canvas,
+        geometries,
+        true,
+        active_pane_index,
+        active_rendition,
+        divider_rendition,
+    );
+    overlay(&mut text_canvas, &mut style_canvas);
+    text_canvas
+        .into_iter()
+        .zip(style_canvas)
+        .map(|(row, style_spans)| TerminalStyledLine {
+            text: collect_text_cells(row),
+            style_spans,
+            copy_text: None,
+        })
+        .collect()
+}
+
 /// Writes one single-width cell while removing any overlapping wide glyph.
 pub fn write_single_width_cell(row: &mut [TerminalRenderCell], column: usize, glyph: char) {
     if column >= row.len() {
@@ -75,6 +167,21 @@ pub fn write_single_width_cell(row: &mut [TerminalRenderCell], column: usize, gl
         right = right.saturating_add(1);
     }
     row[column] = TerminalRenderCell::from_char(glyph);
+}
+
+/// Writes mux-owned pane-divider glyphs into a plain text canvas.
+pub fn draw_pane_dividers(
+    canvas: &mut [Vec<TerminalRenderCell>],
+    geometries: &[PaneGeometry],
+    include_horizontal: bool,
+) {
+    for cell in pane_divider_cells(geometries, include_horizontal) {
+        let row = usize::from(cell.row);
+        let column = usize::from(cell.column);
+        if let Some(line) = canvas.get_mut(row) {
+            write_single_width_cell(line, column, cell.glyph);
+        }
+    }
 }
 
 /// Writes mux-owned pane-divider glyphs and caller-supplied style policy into
