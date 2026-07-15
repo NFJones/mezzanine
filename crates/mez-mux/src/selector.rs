@@ -1,8 +1,9 @@
 //! Product-independent prompt selector contracts and selection state.
 //!
-//! This module owns candidate records, replacement plans, candidate
-//! application, and cycling through an immutable plan. Product crates remain
-//! responsible for command catalogs, dynamic candidates, and filesystem I/O.
+//! This module owns candidate records, shell-like token parsing, candidate
+//! normalization and ranking, replacement plans, candidate application, and
+//! cycling through an immutable plan. Product crates remain responsible for
+//! command catalogs, dynamic candidates, and filesystem I/O.
 
 /// Category for one selectable candidate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +75,21 @@ pub struct SelectorShadowHint {
     pub text: String,
     /// Candidate category represented by the hint.
     pub kind: SelectorCandidateKind,
+}
+
+/// Parsed token context for one prompt cursor position.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectorTokenContext {
+    /// Cursor byte offset clamped to the preceding character boundary.
+    pub cursor: usize,
+    /// Query text between the token start and cursor.
+    pub query: String,
+    /// Start byte of the token containing the cursor.
+    pub token_start: usize,
+    /// End byte of the token containing the cursor.
+    pub token_end: usize,
+    /// Unescaped tokens before the active token in this command segment.
+    pub tokens_before: Vec<String>,
 }
 
 /// Stateful selection over an immutable base line and product surface.
@@ -173,6 +189,290 @@ pub fn apply_selector_candidate(
     (next, cursor)
 }
 
+/// Parses the active shell-like token and preceding command-segment tokens.
+pub fn selector_token_context(line: &str, cursor: usize) -> SelectorTokenContext {
+    let cursor = clamp_to_char_boundary(line, cursor);
+    let segment_start = current_command_segment_start(line, cursor);
+    let token_start = segment_start + current_token_start(&line[segment_start..cursor]);
+    let token_end = cursor + current_token_end(&line[cursor..]);
+    SelectorTokenContext {
+        cursor,
+        query: line[token_start..cursor].to_string(),
+        token_start,
+        token_end,
+        tokens_before: shell_tokens(&line[segment_start..token_start]),
+    }
+}
+
+/// Removes duplicate candidate values while preserving provider order.
+pub fn dedupe_selector_candidates(candidates: Vec<SelectorCandidate>) -> Vec<SelectorCandidate> {
+    let mut deduped = Vec::new();
+    for candidate in candidates {
+        if !deduped
+            .iter()
+            .any(|existing: &SelectorCandidate| existing.value == candidate.value)
+        {
+            deduped.push(candidate);
+        }
+    }
+    deduped
+}
+
+/// Filters and stably ranks product-authored candidates for one query.
+pub fn filter_and_sort_selector_candidates(
+    candidates: Vec<SelectorCandidate>,
+    query: &str,
+) -> Vec<SelectorCandidate> {
+    let normalized_query = query.trim_start_matches('/');
+    let mut scored = candidates
+        .into_iter()
+        .enumerate()
+        .filter_map(|(position, candidate)| {
+            selector_score(normalized_query, &candidate).map(|score| {
+                (
+                    score,
+                    selector_order_key(&candidate, position),
+                    candidate.value.len(),
+                    candidate,
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    scored.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then(left.1.cmp(&right.1))
+            .then(left.2.cmp(&right.2))
+            .then(left.3.value.cmp(&right.3.value))
+    });
+    scored
+        .into_iter()
+        .map(|(_, _, _, candidate)| candidate)
+        .collect()
+}
+
+/// Returns the untyped suffix for a prefix-matching candidate.
+pub fn selector_candidate_prefix_suffix(candidate: &str, query: &str) -> Option<String> {
+    let candidate_lower = candidate.to_ascii_lowercase();
+    let query_lower = query.to_ascii_lowercase();
+    if !candidate_lower.starts_with(&query_lower) {
+        return None;
+    }
+    let suffix = candidate
+        .chars()
+        .skip(query.chars().count())
+        .collect::<String>();
+    (!suffix.is_empty()).then_some(suffix)
+}
+
+/// Quote state used while scanning a shell-like prompt segment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuoteState {
+    None,
+    Single,
+    Double,
+}
+
+/// Returns the current token start inside one command segment.
+fn current_token_start(segment: &str) -> usize {
+    let mut quote = QuoteState::None;
+    let mut escaped = false;
+    let mut token_start = segment.len();
+    let mut token_open = false;
+    for (index, ch) in segment.char_indices() {
+        if quote == QuoteState::None && !escaped && ch.is_whitespace() {
+            token_start = index + ch.len_utf8();
+            token_open = false;
+            continue;
+        }
+        if !token_open {
+            token_start = index;
+            token_open = true;
+        }
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if quote != QuoteState::Single => escaped = true,
+            '\'' if quote == QuoteState::None => quote = QuoteState::Single,
+            '\'' if quote == QuoteState::Single => quote = QuoteState::None,
+            '"' if quote == QuoteState::None => quote = QuoteState::Double,
+            '"' if quote == QuoteState::Double => quote = QuoteState::None,
+            _ => {}
+        }
+    }
+    token_start
+}
+
+/// Returns the current token end inside the trailing prompt slice.
+fn current_token_end(segment: &str) -> usize {
+    let mut quote = QuoteState::None;
+    let mut escaped = false;
+    for (index, ch) in segment.char_indices() {
+        if quote == QuoteState::None && !escaped && (ch.is_whitespace() || ch == ';') {
+            return index;
+        }
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if quote != QuoteState::Single => escaped = true,
+            '\'' if quote == QuoteState::None => quote = QuoteState::Single,
+            '\'' if quote == QuoteState::Single => quote = QuoteState::None,
+            '"' if quote == QuoteState::None => quote = QuoteState::Double,
+            '"' if quote == QuoteState::Double => quote = QuoteState::None,
+            _ => {}
+        }
+    }
+    segment.len()
+}
+
+/// Returns the start of the semicolon-delimited command containing `cursor`.
+fn current_command_segment_start(line: &str, cursor: usize) -> usize {
+    let mut quote = QuoteState::None;
+    let mut escaped = false;
+    let mut start = 0usize;
+    for (index, ch) in line[..cursor].char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if quote != QuoteState::Single => escaped = true,
+            '\'' if quote == QuoteState::None => quote = QuoteState::Single,
+            '\'' if quote == QuoteState::Single => quote = QuoteState::None,
+            '"' if quote == QuoteState::None => quote = QuoteState::Double,
+            '"' if quote == QuoteState::Double => quote = QuoteState::None,
+            ';' if quote == QuoteState::None => start = index.saturating_add(1),
+            _ => {}
+        }
+    }
+    while line[start..cursor]
+        .chars()
+        .next()
+        .is_some_and(char::is_whitespace)
+    {
+        start += line[start..cursor]
+            .chars()
+            .next()
+            .map(char::len_utf8)
+            .unwrap_or(1);
+    }
+    start
+}
+
+/// Parses shell-like tokens while removing quotes and escapes.
+fn shell_tokens(value: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut quote = QuoteState::None;
+    let mut escaped = false;
+    let mut token_start = None;
+    for (index, ch) in value.char_indices() {
+        if quote == QuoteState::None && !escaped && ch.is_whitespace() {
+            if let Some(start) = token_start.take() {
+                tokens.push(unescape_selector_shell_token(&value[start..index]));
+            }
+            continue;
+        }
+        token_start.get_or_insert(index);
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if quote != QuoteState::Single => escaped = true,
+            '\'' if quote == QuoteState::None => quote = QuoteState::Single,
+            '\'' if quote == QuoteState::Single => quote = QuoteState::None,
+            '"' if quote == QuoteState::None => quote = QuoteState::Double,
+            '"' if quote == QuoteState::Double => quote = QuoteState::None,
+            _ => {}
+        }
+    }
+    if let Some(start) = token_start {
+        tokens.push(unescape_selector_shell_token(&value[start..]));
+    }
+    tokens
+}
+
+/// Removes shell quoting and escaping from one selector token.
+pub fn unescape_selector_shell_token(value: &str) -> String {
+    let mut unescaped = String::new();
+    let mut quote = QuoteState::None;
+    let mut escaped = false;
+    for ch in value.chars() {
+        if escaped {
+            unescaped.push(ch);
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if quote != QuoteState::Single => escaped = true,
+            '\'' if quote == QuoteState::None => quote = QuoteState::Single,
+            '\'' if quote == QuoteState::Single => quote = QuoteState::None,
+            '"' if quote == QuoteState::None => quote = QuoteState::Double,
+            '"' if quote == QuoteState::Double => quote = QuoteState::None,
+            _ => unescaped.push(ch),
+        }
+    }
+    if escaped {
+        unescaped.push('\\');
+    }
+    unescaped
+}
+
+/// Returns a stable ordering key for equally good matches.
+fn selector_order_key(candidate: &SelectorCandidate, position: usize) -> usize {
+    if candidate.kind == SelectorCandidateKind::Command {
+        position
+    } else {
+        usize::MAX
+    }
+}
+
+/// Returns one fuzzy match score, where lower values rank first.
+fn selector_score(query: &str, candidate: &SelectorCandidate) -> Option<usize> {
+    if query.is_empty() {
+        return Some(0);
+    }
+    let candidate_value = candidate.value.trim_start_matches('/');
+    let query = query.to_ascii_lowercase();
+    let value = candidate_value.to_ascii_lowercase();
+    let label = candidate.label.to_ascii_lowercase();
+    if value == query {
+        Some(0)
+    } else if value
+        .strip_prefix(&query)
+        .is_some_and(|suffix| suffix.starts_with('-'))
+    {
+        Some(5)
+    } else if value.starts_with(&query) {
+        Some(10 + value.len().saturating_sub(query.len()))
+    } else if let Some(index) = value.find(&query) {
+        Some(100 + index)
+    } else if label.contains(&query) || is_subsequence(&query, &value) {
+        Some(200 + value.len())
+    } else {
+        None
+    }
+}
+
+/// Returns whether `query` appears as an ordered subsequence in `value`.
+fn is_subsequence(query: &str, value: &str) -> bool {
+    let mut chars = value.chars();
+    query.chars().all(|query_ch| chars.any(|ch| ch == query_ch))
+}
+
+/// Clamps a byte cursor to a valid character boundary.
+fn clamp_to_char_boundary(value: &str, cursor: usize) -> usize {
+    let mut cursor = cursor.min(value.len());
+    while cursor > 0 && !value.is_char_boundary(cursor) {
+        cursor -= 1;
+    }
+    cursor
+}
+
 /// Returns whether candidate insertion needs a trailing separator.
 fn should_append_separator(line: &str, plan: &SelectorPlan) -> bool {
     if plan.replacement_end >= line.len() {
@@ -226,5 +526,61 @@ mod tests {
         assert_eq!(selector.selected_line(), Some(("alpine ".into(), 7)));
         selector.select_next();
         assert_eq!(selector.selected_index, 0);
+    }
+
+    /// Verifies token parsing respects quoted and escaped separators while
+    /// resetting preceding arguments at an unquoted command separator.
+    #[test]
+    fn token_context_tracks_shell_quoting_and_current_command_segment() {
+        let line = r#"first "semi; colon" escaped\ value; next "two words" pa"#;
+
+        let context = selector_token_context(line, line.len());
+
+        assert_eq!(context.cursor, line.len());
+        assert_eq!(context.query, "pa");
+        assert_eq!(context.token_start, line.len() - 2);
+        assert_eq!(context.token_end, line.len());
+        assert_eq!(context.tokens_before, ["next", "two words"]);
+    }
+
+    /// Verifies token parsing clamps a cursor inside a multibyte character to
+    /// a valid byte boundary before deriving query and replacement offsets.
+    #[test]
+    fn token_context_clamps_cursor_to_utf8_boundary() {
+        let line = "\u{03b1}beta";
+
+        let context = selector_token_context(line, 1);
+
+        assert_eq!(context.cursor, 0);
+        assert_eq!(context.query, "");
+        assert_eq!(context.token_start, 0);
+        assert_eq!(context.token_end, line.len());
+    }
+
+    /// Verifies generic candidate normalization removes duplicate values and
+    /// ranks exact, command-prefix, and substring matches deterministically.
+    #[test]
+    fn candidate_filtering_deduplicates_and_ranks_matches() {
+        let candidates = dedupe_selector_candidates(vec![
+            SelectorCandidate::new("new-session", SelectorCandidateKind::Command, true),
+            SelectorCandidate::new("new-window", SelectorCandidateKind::Command, true),
+            SelectorCandidate::new("new", SelectorCandidateKind::Value, true),
+            SelectorCandidate::new("renew", SelectorCandidateKind::Alias, true),
+            SelectorCandidate::new("new", SelectorCandidateKind::Value, false),
+        ]);
+
+        let ranked = filter_and_sort_selector_candidates(candidates, "new");
+
+        assert_eq!(
+            ranked
+                .iter()
+                .map(|candidate| candidate.value.as_str())
+                .collect::<Vec<_>>(),
+            ["new", "new-session", "new-window", "renew"]
+        );
+        assert_eq!(
+            selector_candidate_prefix_suffix("New-Window", "new"),
+            Some("-Window".into())
+        );
     }
 }

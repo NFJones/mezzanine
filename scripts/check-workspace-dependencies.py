@@ -71,11 +71,18 @@ ROOT_RUNNER_FORBIDDEN_CALLS = {
 
 ROOT_FORBIDDEN_DECLARATIONS = {
     "enum SelectorCandidateKind": "selector candidate category",
+    "fn dedupe_selector_candidates": "selector candidate deduplication",
+    "fn filter_and_sort_selector_candidates": "selector candidate ranking",
+    "fn selector_candidate_prefix_suffix": "selector prefix matching",
+    "fn selector_score": "selector candidate scoring",
+    "fn selector_token_context": "selector token parsing",
+    "fn unescape_selector_shell_token": "selector shell-token normalization",
     "struct ActiveSelector": "active selector state",
     "struct HostBracketedPasteDecoder": "host-input framing state",
     "struct SelectorCandidate": "selector candidate contract",
     "struct SelectorPlan": "selector replacement plan",
     "struct SelectorShadowHint": "selector shadow-hint contract",
+    "struct SelectorTokenContext": "selector token-context contract",
     "trait AsyncMcpActionExecutor": "async MCP execution port",
     "trait LocalActionExecutor": "local action execution port",
     "trait McpActionExecutor": "MCP execution port",

@@ -1,15 +1,15 @@
-//! Shared selector planning for command prompt surfaces.
+//! Product selector candidate providers for command prompt surfaces.
 //!
-//! The selector is intentionally UI-agnostic: it determines the editable token,
-//! candidate list, and replacement text for a prompt line, while readline and
-//! terminal rendering decide how users cycle and display those candidates. This
-//! keeps Mezzanine command selection, agent slash-command selection, and
-//! argument-value selection on one deterministic code path.
+//! This module supplies Mezzanine and agent command catalogs, runtime values,
+//! parameter hints, and filesystem candidates. Product-independent token
+//! parsing, ranking, replacement, and active selection live in `mez-mux`.
 
 use crate::command::baseline_commands;
 use mez_agent::baseline_slash_commands;
 use mez_mux::selector::{
     ActiveSelector, SelectorCandidate, SelectorCandidateKind, SelectorPlan, SelectorShadowHint,
+    SelectorTokenContext, dedupe_selector_candidates, filter_and_sort_selector_candidates,
+    selector_candidate_prefix_suffix, selector_token_context, unescape_selector_shell_token,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -102,10 +102,9 @@ pub fn plan_selector_with_extra_in_working_directory(
     extra_candidates: &[SelectorExtraCandidate],
     working_directory: Option<&Path>,
 ) -> Option<SelectorPlan> {
-    let cursor = clamp_to_char_boundary(line, cursor);
-    let context = token_context(line, cursor);
+    let context = selector_token_context(line, cursor);
     let candidates = selector_candidates(surface, &context, extra_candidates, working_directory);
-    let candidates = filter_and_sort_candidates(candidates, &context.query);
+    let candidates = filter_and_sort_selector_candidates(candidates, &context.query);
     (!candidates.is_empty()).then_some(SelectorPlan {
         replacement_start: context.token_start,
         replacement_end: context.token_end,
@@ -142,8 +141,8 @@ pub fn shadow_hint_with_extra_in_working_directory(
     extra_candidates: &[SelectorExtraCandidate],
     working_directory: Option<&Path>,
 ) -> Option<SelectorShadowHint> {
-    let cursor = clamp_to_char_boundary(line, cursor);
-    let context = token_context(line, cursor);
+    let context = selector_token_context(line, cursor);
+    let cursor = context.cursor;
     prefix_shadow_hint(
         surface,
         &context,
@@ -154,12 +153,10 @@ pub fn shadow_hint_with_extra_in_working_directory(
     .or_else(|| parameter_shadow_hint(surface, &context, cursor))
 }
 
-/// Applies a selected candidate to a line according to a selector plan.
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
+/// Builds a candidate-prefix shadow hint at the active cursor.
 fn prefix_shadow_hint(
     surface: SelectorSurface,
-    context: &TokenContext,
+    context: &SelectorTokenContext,
     cursor: usize,
     extra_candidates: &[SelectorExtraCandidate],
     working_directory: Option<&Path>,
@@ -171,12 +168,12 @@ fn prefix_shadow_hint(
         return None;
     }
     let candidates = selector_candidates(surface, context, extra_candidates, working_directory);
-    let candidate = filter_and_sort_candidates(candidates, &context.query)
+    let candidate = filter_and_sort_selector_candidates(candidates, &context.query)
         .into_iter()
         .find(|candidate| {
-            candidate_prefix_suffix(candidate.value.as_str(), &context.query).is_some()
+            selector_candidate_prefix_suffix(candidate.value.as_str(), &context.query).is_some()
         })?;
-    let text = candidate_prefix_suffix(candidate.value.as_str(), &context.query)?;
+    let text = selector_candidate_prefix_suffix(candidate.value.as_str(), &context.query)?;
     (!text.is_empty()).then_some(SelectorShadowHint {
         insert_at: cursor,
         text,
@@ -191,7 +188,7 @@ fn prefix_shadow_hint(
 /// on duplicated control-flow logic.
 fn parameter_shadow_hint(
     surface: SelectorSurface,
-    context: &TokenContext,
+    context: &SelectorTokenContext,
     cursor: usize,
 ) -> Option<SelectorShadowHint> {
     if !context.query.is_empty() || context.tokens_before.len() != 1 {
@@ -212,257 +209,12 @@ fn parameter_shadow_hint(
     })
 }
 
-/// Runs the candidate prefix suffix operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn candidate_prefix_suffix(candidate: &str, query: &str) -> Option<String> {
-    let candidate_lower = candidate.to_ascii_lowercase();
-    let query_lower = query.to_ascii_lowercase();
-    if !candidate_lower.starts_with(&query_lower) {
-        return None;
-    }
-    let suffix = candidate
-        .chars()
-        .skip(query.chars().count())
-        .collect::<String>();
-    (!suffix.is_empty()).then_some(suffix)
-}
-
-/// Carries Token Context state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TokenContext {
-    /// Stores the query value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    query: String,
-    /// Stores the token start value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    token_start: usize,
-    /// Stores the token end value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    token_end: usize,
-    /// Stores the tokens before value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    tokens_before: Vec<String>,
-}
-
-/// Runs the token context operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn token_context(line: &str, cursor: usize) -> TokenContext {
-    let segment_start = current_command_segment_start(line, cursor);
-    let token_start = segment_start + current_token_start(&line[segment_start..cursor]);
-    let token_end = cursor + current_token_end(&line[cursor..]);
-    let tokens_before = shell_tokens(&line[segment_start..token_start]);
-    let query = line[token_start..cursor].to_string();
-    TokenContext {
-        query,
-        token_start,
-        token_end,
-        tokens_before,
-    }
-}
-
-/// Returns the byte offset of the current token start inside one command segment.
-fn current_token_start(segment: &str) -> usize {
-    let mut quote = QuoteState::None;
-    let mut escaped = false;
-    let mut token_start = segment.len();
-    let mut token_open = false;
-    for (index, ch) in segment.char_indices() {
-        if quote == QuoteState::None && !escaped && ch.is_whitespace() {
-            token_start = index + ch.len_utf8();
-            token_open = false;
-            continue;
-        }
-        if !token_open {
-            token_start = index;
-            token_open = true;
-        }
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match ch {
-            '\\' if quote != QuoteState::Single => escaped = true,
-            '\'' if quote == QuoteState::None => quote = QuoteState::Single,
-            '\'' if quote == QuoteState::Single => quote = QuoteState::None,
-            '"' if quote == QuoteState::None => quote = QuoteState::Double,
-            '"' if quote == QuoteState::Double => quote = QuoteState::None,
-            _ => {}
-        }
-    }
-    token_start
-}
-
-/// Returns the byte offset of the current token end inside the trailing slice.
-fn current_token_end(segment: &str) -> usize {
-    let mut quote = QuoteState::None;
-    let mut escaped = false;
-    for (index, ch) in segment.char_indices() {
-        if quote == QuoteState::None && !escaped && (ch.is_whitespace() || ch == ';') {
-            return index;
-        }
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match ch {
-            '\\' if quote != QuoteState::Single => escaped = true,
-            '\'' if quote == QuoteState::None => quote = QuoteState::Single,
-            '\'' if quote == QuoteState::Single => quote = QuoteState::None,
-            '"' if quote == QuoteState::None => quote = QuoteState::Double,
-            '"' if quote == QuoteState::Double => quote = QuoteState::None,
-            _ => {}
-        }
-    }
-    segment.len()
-}
-
-/// Runs the current command segment start operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn current_command_segment_start(line: &str, cursor: usize) -> usize {
-    let mut quote = QuoteState::None;
-    let mut escaped = false;
-    let mut start = 0usize;
-    for (index, ch) in line[..cursor].char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match ch {
-            '\\' if quote != QuoteState::Single => escaped = true,
-            '\'' if quote == QuoteState::None => quote = QuoteState::Single,
-            '\'' if quote == QuoteState::Single => quote = QuoteState::None,
-            '"' if quote == QuoteState::None => quote = QuoteState::Double,
-            '"' if quote == QuoteState::Double => quote = QuoteState::None,
-            ';' if quote == QuoteState::None => start = index.saturating_add(1),
-            _ => {}
-        }
-    }
-    while line[start..cursor]
-        .chars()
-        .next()
-        .is_some_and(char::is_whitespace)
-    {
-        start += line[start..cursor]
-            .chars()
-            .next()
-            .map(char::len_utf8)
-            .unwrap_or(1);
-    }
-    start
-}
-
-/// Carries Quote State state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum QuoteState {
-    /// Represents the None case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    None,
-    /// Represents the Single case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Single,
-    /// Represents the Double case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Double,
-}
-
-/// Runs the shell tokens operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn shell_tokens(value: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut quote = QuoteState::None;
-    let mut escaped = false;
-    let mut token_start = None;
-    for (index, ch) in value.char_indices() {
-        if quote == QuoteState::None && !escaped && ch.is_whitespace() {
-            if let Some(start) = token_start.take() {
-                tokens.push(unescape_shell_token(&value[start..index]));
-            }
-            continue;
-        }
-        token_start.get_or_insert(index);
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match ch {
-            '\\' if quote != QuoteState::Single => escaped = true,
-            '\'' if quote == QuoteState::None => quote = QuoteState::Single,
-            '\'' if quote == QuoteState::Single => quote = QuoteState::None,
-            '"' if quote == QuoteState::None => quote = QuoteState::Double,
-            '"' if quote == QuoteState::Double => quote = QuoteState::None,
-            _ => {}
-        }
-    }
-    if let Some(start) = token_start {
-        tokens.push(unescape_shell_token(&value[start..]));
-    }
-    tokens
-}
-
-/// Removes shell escaping and quoting from one parsed token.
-fn unescape_shell_token(value: &str) -> String {
-    let mut unescaped = String::new();
-    let mut quote = QuoteState::None;
-    let mut escaped = false;
-    for ch in value.chars() {
-        if escaped {
-            unescaped.push(ch);
-            escaped = false;
-            continue;
-        }
-        match ch {
-            '\\' if quote != QuoteState::Single => escaped = true,
-            '\'' if quote == QuoteState::None => quote = QuoteState::Single,
-            '\'' if quote == QuoteState::Single => quote = QuoteState::None,
-            '"' if quote == QuoteState::None => quote = QuoteState::Double,
-            '"' if quote == QuoteState::Double => quote = QuoteState::None,
-            _ => unescaped.push(ch),
-        }
-    }
-    if escaped {
-        unescaped.push('\\');
-    }
-    unescaped
-}
-
 /// Runs the mezzanine candidates operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn mezzanine_candidates(context: &TokenContext) -> Vec<SelectorCandidate> {
+fn mezzanine_candidates(context: &SelectorTokenContext) -> Vec<SelectorCandidate> {
     if context.tokens_before.is_empty() {
         return baseline_commands()
             .into_iter()
@@ -481,7 +233,7 @@ fn mezzanine_candidates(context: &TokenContext) -> Vec<SelectorCandidate> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn agent_candidates(context: &TokenContext) -> Vec<SelectorCandidate> {
+fn agent_candidates(context: &SelectorTokenContext) -> Vec<SelectorCandidate> {
     if context.tokens_before.is_empty() {
         if !context.query.is_empty() && !context.query.starts_with('/') {
             return path_candidates(SelectorSurface::AgentCommand, context, None);
@@ -514,7 +266,7 @@ fn agent_candidates(context: &TokenContext) -> Vec<SelectorCandidate> {
 /// Builds selector candidates from static command metadata plus runtime values.
 fn selector_candidates(
     surface: SelectorSurface,
-    context: &TokenContext,
+    context: &SelectorTokenContext,
     extra_candidates: &[SelectorExtraCandidate],
     working_directory: Option<&Path>,
 ) -> Vec<SelectorCandidate> {
@@ -560,7 +312,10 @@ fn selector_candidates(
 }
 
 /// Returns the canonical command receiving argument candidates.
-fn selector_context_command(surface: SelectorSurface, context: &TokenContext) -> Option<String> {
+fn selector_context_command(
+    surface: SelectorSurface,
+    context: &SelectorTokenContext,
+) -> Option<String> {
     let command = context.tokens_before.first()?.as_str();
     Some(match surface {
         SelectorSurface::MezzanineCommand => command.to_string(),
@@ -723,7 +478,7 @@ fn mezzanine_argument_candidates(command: &str) -> Vec<SelectorCandidate> {
         }
         _ => {}
     }
-    dedupe_candidates(candidates)
+    dedupe_selector_candidates(candidates)
 }
 
 /// Runs the common target flags operation for this subsystem.
@@ -740,7 +495,10 @@ fn common_target_flags() -> &'static [&'static str] {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn agent_argument_candidates(command: &str, _context: &TokenContext) -> Vec<SelectorCandidate> {
+fn agent_argument_candidates(
+    command: &str,
+    _context: &SelectorTokenContext,
+) -> Vec<SelectorCandidate> {
     let candidates = match command {
         "directive" => value_candidates(&["status", "show", "clear", "default", "none"]),
         "loop" => flag_candidates(&["--fork", "--new", "--limit"]),
@@ -805,7 +563,7 @@ fn agent_argument_candidates(command: &str, _context: &TokenContext) -> Vec<Sele
         ]),
         _ => Vec::new(),
     };
-    dedupe_candidates(candidates)
+    dedupe_selector_candidates(candidates)
 }
 
 /// Runs the mezzanine parameter hint operation for this subsystem.
@@ -924,7 +682,7 @@ fn value_candidates(values: &[&str]) -> Vec<SelectorCandidate> {
 /// - `context`: Token context at the current cursor.
 fn path_candidates(
     surface: SelectorSurface,
-    context: &TokenContext,
+    context: &SelectorTokenContext,
     working_directory: Option<&Path>,
 ) -> Vec<SelectorCandidate> {
     if !path_completion_allowed(surface, context) {
@@ -969,7 +727,7 @@ fn path_candidates(
 /// # Parameters
 /// - `surface`: Prompt surface requesting candidates.
 /// - `context`: Token context at the current cursor.
-fn path_completion_allowed(surface: SelectorSurface, context: &TokenContext) -> bool {
+fn path_completion_allowed(surface: SelectorSurface, context: &SelectorTokenContext) -> bool {
     if context.query.starts_with('-') {
         return false;
     }
@@ -1037,7 +795,7 @@ fn path_query_is_explicit(query: &str) -> bool {
 ///
 /// # Parameters
 /// - `context`: Token context at the current cursor.
-fn agent_query_likely_targets_relative_path(context: &TokenContext) -> bool {
+fn agent_query_likely_targets_relative_path(context: &SelectorTokenContext) -> bool {
     relative_path_query_is_probable(&context.query)
         || context
             .tokens_before
@@ -1117,10 +875,10 @@ fn path_completion_parts(
     while let Some(component) = components.next() {
         let has_more_components = components.peek().is_some();
         if !has_more_components && !query.ends_with('/') {
-            name_prefix = unescape_shell_token(component);
+            name_prefix = unescape_selector_shell_token(component);
             break;
         }
-        let lookup_component = unescape_shell_token(component);
+        let lookup_component = unescape_selector_shell_token(component);
         let next_directory = directory.join(&lookup_component);
         if component.is_empty() || !next_directory.is_dir() {
             name_prefix = lookup_component;
@@ -1161,120 +919,6 @@ fn expand_home_path(path: &str) -> PathBuf {
             .unwrap_or_else(|| PathBuf::from(path));
     }
     PathBuf::from(path)
-}
-
-/// Runs the dedupe candidates operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn dedupe_candidates(candidates: Vec<SelectorCandidate>) -> Vec<SelectorCandidate> {
-    let mut deduped = Vec::new();
-    for candidate in candidates {
-        if !deduped
-            .iter()
-            .any(|existing: &SelectorCandidate| existing.value == candidate.value)
-        {
-            deduped.push(candidate);
-        }
-    }
-    deduped
-}
-
-/// Runs the filter and sort candidates operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn filter_and_sort_candidates(
-    candidates: Vec<SelectorCandidate>,
-    query: &str,
-) -> Vec<SelectorCandidate> {
-    let normalized_query = query.trim_start_matches('/');
-    let mut scored = candidates
-        .into_iter()
-        .enumerate()
-        .filter_map(|(position, candidate)| {
-            selector_score(normalized_query, &candidate).map(|score| {
-                (
-                    score,
-                    selector_order_key(&candidate, position),
-                    candidate.value.len(),
-                    candidate,
-                )
-            })
-        })
-        .collect::<Vec<_>>();
-    scored.sort_by(|left, right| {
-        left.0
-            .cmp(&right.0)
-            .then(left.1.cmp(&right.1))
-            .then(left.2.cmp(&right.2))
-            .then(left.3.value.cmp(&right.3.value))
-    });
-    scored
-        .into_iter()
-        .map(|(_, _, _, candidate)| candidate)
-        .collect()
-}
-
-/// Returns a stable ordering key for equally good selector matches.
-fn selector_order_key(candidate: &SelectorCandidate, position: usize) -> usize {
-    if candidate.kind == SelectorCandidateKind::Command {
-        position
-    } else {
-        usize::MAX
-    }
-}
-
-/// Runs the selector score operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn selector_score(query: &str, candidate: &SelectorCandidate) -> Option<usize> {
-    if query.is_empty() {
-        return Some(0);
-    }
-    let candidate_value = candidate.value.trim_start_matches('/');
-    let query = query.to_ascii_lowercase();
-    let value = candidate_value.to_ascii_lowercase();
-    let label = candidate.label.to_ascii_lowercase();
-    if value == query {
-        Some(0)
-    } else if value
-        .strip_prefix(&query)
-        .is_some_and(|suffix| suffix.starts_with('-'))
-    {
-        Some(5)
-    } else if value.starts_with(&query) {
-        Some(10 + value.len().saturating_sub(query.len()))
-    } else if let Some(index) = value.find(&query) {
-        Some(100 + index)
-    } else if label.contains(&query) || is_subsequence(&query, &value) {
-        Some(200 + value.len())
-    } else {
-        None
-    }
-}
-
-/// Runs the is subsequence operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn is_subsequence(query: &str, value: &str) -> bool {
-    let mut chars = value.chars();
-    query.chars().all(|query_ch| chars.any(|ch| ch == query_ch))
-}
-
-/// Clamps a byte cursor to a valid character boundary in `value`.
-fn clamp_to_char_boundary(value: &str, cursor: usize) -> usize {
-    let mut cursor = cursor.min(value.len());
-    while cursor > 0 && !value.is_char_boundary(cursor) {
-        cursor -= 1;
-    }
-    cursor
 }
 
 /// Exposes the tests module boundary.
