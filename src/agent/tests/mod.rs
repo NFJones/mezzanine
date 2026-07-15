@@ -59,10 +59,10 @@ use mez_agent::{
     MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, MaapBatch, McpExecutionRequest,
     McpExecutionResponse, McpPromptTool, ModelRequest, ModelTokenUsage, OPENAI_MODELS_ENDPOINT,
     OPENAI_RESPONSES_ENDPOINT, ProviderHttpRequest, ProviderHttpResponse, ProviderTranscriptEvent,
-    SlashCommandEffect, append_mcp_context, baseline_slash_commands,
-    openai_models_endpoint_for_responses_endpoint, openai_prompt_cache_diagnostics_for_request,
-    openai_responses_endpoint_for_base_url, openai_responses_request_body,
-    openai_stable_prefix_material_for_request, provider_quota_usage_from_headers, shell_quote,
+    SlashCommandEffect, baseline_slash_commands, openai_models_endpoint_for_responses_endpoint,
+    openai_prompt_cache_diagnostics_for_request, openai_responses_endpoint_for_base_url,
+    openai_responses_request_body, openai_stable_prefix_material_for_request,
+    provider_quota_usage_from_headers, shell_quote,
 };
 use mez_agent::{
     DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,

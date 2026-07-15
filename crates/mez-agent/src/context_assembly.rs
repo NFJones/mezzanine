@@ -490,3 +490,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "context_assembly/tests/policy.rs"]
+mod policy_tests;
