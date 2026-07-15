@@ -1010,13 +1010,16 @@ pub enum TerminalFrameStyle {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use mez_terminal::{TerminalScreen, TerminalSize, TerminalStyleSpan};
 
     use crate::input::{
         KeyBindings, MuxAction, TerminalInputClassification, classify_terminal_input,
     };
-    use crate::layout::PaneGeometry;
+    use crate::layout::{PaneGeometry, PaneNavigationDirection, Size, SplitDirection};
     use crate::process::PaneProcessOutput;
+    use crate::session::{Session, SessionShell};
 
     use super::{
         AttachedClientEndpointReadiness, AttachedClientOutputDecision, AttachedClientStepPlan,
@@ -1247,6 +1250,41 @@ mod tests {
             cycle.output_decision,
             AttachedClientOutputDecision::WaitForOutput
         );
+    }
+
+    /// Verifies a headless client's classified layout action can drive the
+    /// mux session through layout, focus, and authoritative resize effects.
+    #[test]
+    fn headless_client_drives_layout_focus_and_resize_effects() {
+        let mut session = Session::new_default(
+            SessionShell::new(PathBuf::from("/bin/sh"), "fallback-bin-sh", true),
+            Size::new(80, 24).unwrap(),
+        );
+        let primary = session.attach_primary("primary", true).unwrap();
+        let first_pane_id = session.windows()[0].panes()[0].id.clone();
+        session
+            .split_active_pane(&primary, SplitDirection::Vertical)
+            .unwrap();
+
+        let action = classify_terminal_input(b"\x01 ", &KeyBindings::default()).unwrap();
+        assert_eq!(
+            action,
+            TerminalInputClassification::Mux(MuxAction::CycleLayouts)
+        );
+        let (_, layout_effects) = session.cycle_layout_transition(&primary).unwrap();
+        assert_eq!(layout_effects.len(), 2);
+
+        let focused_pane_id = session
+            .select_adjacent_pane(&primary, PaneNavigationDirection::Left)
+            .unwrap();
+        assert_eq!(focused_pane_id, first_pane_id);
+
+        let resize_effects = session
+            .resize_authoritative_terminal_transition(&primary, Size::new(100, 30).unwrap())
+            .unwrap();
+        assert_eq!(resize_effects.len(), 2);
+        assert!(resize_effects.iter().all(|effect| effect.size.columns > 0));
+        assert!(resize_effects.iter().all(|effect| effect.size.rows > 0));
     }
 
     /// Verifies mux-owned frame placement preserves authoritative viewport
