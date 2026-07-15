@@ -11,7 +11,7 @@ use mez_terminal::{
 };
 
 use crate::layout::PaneGeometry;
-use crate::presentation::{PaneDividerCell, pane_divider_cells};
+use crate::presentation::{PaneDividerCell, TerminalFrameStyle, pane_divider_cells};
 
 /// One display-cell slot in a mux-owned render canvas.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,6 +210,158 @@ pub fn collect_text_cells(row: Vec<TerminalRenderCell>) -> String {
     output
 }
 
+/// Writes bounded text without right-padding and returns consumed display cells.
+pub fn write_text_cells_with_width(
+    row: &mut [TerminalRenderCell],
+    column_start: usize,
+    max_columns: usize,
+    text: &str,
+) -> usize {
+    let mut used = 0usize;
+    for grapheme in terminal_graphemes(text) {
+        let grapheme_width = active_grapheme_width(grapheme);
+        if grapheme_width == 0 {
+            continue;
+        }
+        if used.saturating_add(grapheme_width) > max_columns {
+            break;
+        }
+        let cell = column_start.saturating_add(used);
+        if cell >= row.len() {
+            break;
+        }
+        row[cell] = TerminalRenderCell::from_grapheme(grapheme);
+        for continuation in 1..grapheme_width {
+            let continuation_cell = cell.saturating_add(continuation);
+            if continuation_cell < row.len() {
+                row[continuation_cell] = TerminalRenderCell::continuation();
+            }
+        }
+        used = used.saturating_add(grapheme_width);
+    }
+    used
+}
+
+/// Builds a styled frame row from caller-selected rendition policy.
+pub fn styled_frame_line_with_rendition(
+    text: &str,
+    width: usize,
+    rendition: Option<GraphicRendition>,
+) -> TerminalStyledLine {
+    let text = fit_width(text, width);
+    let Some(rendition) = rendition else {
+        return TerminalStyledLine::plain(text);
+    };
+    TerminalStyledLine {
+        text,
+        style_spans: vec![TerminalStyleSpan {
+            start: 0,
+            length: width,
+            rendition,
+        }],
+        copy_text: None,
+    }
+}
+
+/// Returns terminal rendition flags for one mux frame style.
+pub fn frame_style_rendition(frame_style: TerminalFrameStyle) -> Option<GraphicRendition> {
+    match frame_style {
+        TerminalFrameStyle::Default => None,
+        TerminalFrameStyle::Bold => Some(GraphicRendition {
+            bold: true,
+            ..GraphicRendition::default()
+        }),
+        TerminalFrameStyle::Underline => Some(GraphicRendition {
+            underline: true,
+            ..GraphicRendition::default()
+        }),
+        TerminalFrameStyle::Inverse => Some(GraphicRendition {
+            inverse: true,
+            ..GraphicRendition::default()
+        }),
+    }
+}
+
+/// Chooses body rows for a bottom-aligned transient display overlay.
+pub fn display_overlay_targets<T>(
+    lines: &[T],
+    content_start: usize,
+    content_end: usize,
+    display_line_count: usize,
+    is_blank: impl Fn(&T) -> bool,
+) -> Vec<usize> {
+    if display_line_count == 0 || content_start >= content_end {
+        return Vec::new();
+    }
+    let display_count = display_line_count.min(content_end.saturating_sub(content_start));
+    let mut targets = Vec::with_capacity(display_count);
+    for row in (content_start..content_end).rev() {
+        if is_blank(&lines[row]) {
+            targets.push(row);
+            if targets.len() == display_count {
+                break;
+            }
+        }
+    }
+    if targets.len() < display_count {
+        for row in (content_start..content_end).rev() {
+            if !targets.contains(&row) {
+                targets.push(row);
+                if targets.len() == display_count {
+                    break;
+                }
+            }
+        }
+    }
+    targets.sort_unstable();
+    targets
+}
+
+/// Overlays transient display lines without changing pane content height.
+pub fn overlay_display_lines<T: Clone>(
+    lines: &mut [T],
+    content_start: usize,
+    content_end: usize,
+    display_lines: &[T],
+    is_blank: impl Fn(&T) -> bool,
+) {
+    let targets = display_overlay_targets(
+        lines,
+        content_start,
+        content_end,
+        display_lines.len(),
+        is_blank,
+    );
+    let source_start = display_lines.len().saturating_sub(targets.len());
+    for (target, display_line) in targets
+        .into_iter()
+        .zip(display_lines[source_start..].iter())
+    {
+        lines[target] = display_line.clone();
+    }
+}
+
+/// Renders pane-frame title text over a caller-selected fill glyph.
+pub fn pane_frame_text_with_fill(text: &str, width: usize, fill: char) -> (String, usize) {
+    let mut row = blank_render_row(width, fill);
+    let written_width = write_text_cells_with_width(&mut row, 0, width, text);
+    (collect_text_cells(row), written_width)
+}
+
+/// Extends a pane-title pill over its separator before right-aligned status.
+pub fn pane_frame_left_pill_style_width(text_width: usize, available_width: usize) -> usize {
+    if text_width > 0 && text_width < available_width {
+        text_width.saturating_add(1)
+    } else {
+        text_width
+    }
+}
+
+/// Removes terminal control characters from frame and status text.
+pub fn sanitize_frame_text(value: &str) -> String {
+    value.chars().filter(|ch| !ch.is_control()).collect()
+}
+
 /// Fits terminal text to an exact display width, padding with spaces.
 pub fn fit_width(value: &str, width: usize) -> String {
     let mut output = String::new();
@@ -378,9 +530,13 @@ fn active_grapheme_width(grapheme: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        blank_render_row, collect_text_cells, fit_styled_width, line_slice,
-        overlay_fixed_column_style_spans, write_single_width_cell, write_text_cells,
+        blank_render_row, collect_text_cells, display_overlay_targets, fit_styled_width,
+        frame_style_rendition, line_slice, overlay_display_lines, overlay_fixed_column_style_spans,
+        pane_frame_left_pill_style_width, pane_frame_text_with_fill, sanitize_frame_text,
+        styled_frame_line_with_rendition, write_single_width_cell, write_text_cells,
+        write_text_cells_with_width,
     };
+    use crate::presentation::TerminalFrameStyle;
     use mez_terminal::{GraphicRendition, TerminalStyleSpan, TerminalStyledLine};
 
     /// Verifies wide-glyph canvas writes preserve display columns when a
@@ -443,5 +599,50 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(0, 2), (4, 2), (2, 2)]
         );
+    }
+
+    /// Verifies frame-row composition applies mux frame-style flags while
+    /// preserving exact terminal width and control-free display text.
+    #[test]
+    fn frame_rows_apply_neutral_style_and_text_policy() {
+        let rendition = frame_style_rendition(TerminalFrameStyle::Underline)
+            .expect("underline frame style should produce a rendition");
+        let line = styled_frame_line_with_rendition("status", 8, Some(rendition));
+
+        assert_eq!(line.text, "status  ");
+        assert_eq!(line.style_spans.len(), 1);
+        assert!(line.style_spans[0].rendition.underline);
+        assert_eq!(sanitize_frame_text("ok\u{1b}bad\n"), "okbad");
+    }
+
+    /// Verifies pane-title composition preserves wide-cell accounting and
+    /// extends a non-empty title pill over its separator before right status.
+    #[test]
+    fn pane_frame_text_composition_tracks_display_width() {
+        let (text, written) = pane_frame_text_with_fill("界", 4, '─');
+        let mut row = blank_render_row(4, ' ');
+        let direct = write_text_cells_with_width(&mut row, 0, 4, "界x");
+
+        assert_eq!(text, "界──");
+        assert_eq!(written, 2);
+        assert_eq!(direct, 3);
+        assert_eq!(pane_frame_left_pill_style_width(written, 4), 3);
+    }
+
+    /// Verifies display overlays prefer blank bottom rows, fall back to
+    /// occupied rows when needed, and preserve the caller's row type.
+    #[test]
+    fn display_overlays_choose_bottom_rows_without_resizing() {
+        let mut lines = vec!["body", "", "tail"];
+        assert_eq!(
+            display_overlay_targets(&lines, 0, 3, 2, |line| line.is_empty()),
+            [1, 2]
+        );
+
+        overlay_display_lines(&mut lines, 0, 3, &["first", "second"], |line| {
+            line.is_empty()
+        });
+
+        assert_eq!(lines, ["body", "first", "second"]);
     }
 }

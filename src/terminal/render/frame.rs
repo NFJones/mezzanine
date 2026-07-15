@@ -481,31 +481,6 @@ pub(super) fn subtle_frame_fill_span(
     })
 }
 
-/// Runs the styled frame line with rendition operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn styled_frame_line_with_rendition(
-    text: &str,
-    width: usize,
-    rendition: Option<GraphicRendition>,
-) -> TerminalStyledLine {
-    let text = fit_width(text, width);
-    let Some(rendition) = rendition else {
-        return TerminalStyledLine::plain(text);
-    };
-    TerminalStyledLine {
-        text,
-        style_spans: vec![TerminalStyleSpan {
-            start: 0,
-            length: width,
-            rendition,
-        }],
-        copy_text: None,
-    }
-}
-
 /// Runs the pane frame rendition operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -565,89 +540,6 @@ pub(super) fn themed_frame_rendition(
     }
     rendition.bold |= bold;
     rendition
-}
-
-/// Runs the frame style rendition operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn frame_style_rendition(frame_style: TerminalFrameStyle) -> Option<GraphicRendition> {
-    match frame_style {
-        TerminalFrameStyle::Default => None,
-        TerminalFrameStyle::Bold => Some(GraphicRendition {
-            bold: true,
-            ..GraphicRendition::default()
-        }),
-        TerminalFrameStyle::Underline => Some(GraphicRendition {
-            underline: true,
-            ..GraphicRendition::default()
-        }),
-        TerminalFrameStyle::Inverse => Some(GraphicRendition {
-            inverse: true,
-            ..GraphicRendition::default()
-        }),
-    }
-}
-
-/// Overlays transient agent display lines without changing pane content height.
-pub(super) fn overlay_agent_display_lines<T: Clone>(
-    lines: &mut [T],
-    content_start: usize,
-    content_end: usize,
-    display_lines: &[T],
-    is_blank: impl Fn(&T) -> bool,
-) {
-    let targets = agent_display_overlay_targets(
-        lines,
-        content_start,
-        content_end,
-        display_lines.len(),
-        is_blank,
-    );
-    let source_start = display_lines.len().saturating_sub(targets.len());
-    for (target, display_line) in targets
-        .into_iter()
-        .zip(display_lines[source_start..].iter())
-    {
-        lines[target] = display_line.clone();
-    }
-}
-
-/// Chooses pane-content rows for transient agent display overlays.
-pub(super) fn agent_display_overlay_targets<T>(
-    lines: &[T],
-    content_start: usize,
-    content_end: usize,
-    display_line_count: usize,
-    is_blank: impl Fn(&T) -> bool,
-) -> Vec<usize> {
-    if display_line_count == 0 || content_start >= content_end {
-        return Vec::new();
-    }
-    let content_len = content_end.saturating_sub(content_start);
-    let display_count = display_line_count.min(content_len);
-    let mut targets = Vec::with_capacity(display_count);
-    for row in (content_start..content_end).rev() {
-        if is_blank(&lines[row]) {
-            targets.push(row);
-            if targets.len() == display_count {
-                break;
-            }
-        }
-    }
-    if targets.len() < display_count {
-        for row in (content_start..content_end).rev() {
-            if !targets.contains(&row) {
-                targets.push(row);
-                if targets.len() == display_count {
-                    break;
-                }
-            }
-        }
-    }
-    targets.sort_unstable();
-    targets
 }
 
 /// Runs the render styled pane lines operation for this subsystem.
@@ -1045,26 +937,6 @@ pub(super) fn pane_frame_fill_char(template: &str) -> char {
         '─'
     } else {
         ' '
-    }
-}
-
-/// Renders pane-frame title text over horizontal border fill.
-pub(super) fn pane_frame_text_with_fill(text: &str, width: usize, fill: char) -> (String, usize) {
-    let mut row = blank_render_row(width, fill);
-    let written_width = write_frame_text_cells(&mut row, 0, width, text);
-    (collect_text_cells(row), written_width)
-}
-
-/// Extends the pane title pill over the blank separator before right status.
-///
-/// The row text already reserves this separator so right-aligned status stays
-/// readable. Including it in the title style span makes the right-side padding
-/// visible as part of the pane title pill instead of leaving a bare gap.
-pub(super) fn pane_frame_left_pill_style_width(text_width: usize, available_width: usize) -> usize {
-    if text_width > 0 && text_width < available_width {
-        text_width.saturating_add(1)
-    } else {
-        text_width
     }
 }
 
@@ -2256,15 +2128,6 @@ pub(super) fn optional_u32_frame_value(value: Option<u32>) -> String {
     value.map(|value| value.to_string()).unwrap_or_default()
 }
 
-/// Runs the sanitize frame text operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn sanitize_frame_text(value: &str) -> String {
-    value.chars().filter(|ch| !ch.is_control()).collect()
-}
-
 /// Runs the write merged pane frames on dividers operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -2403,37 +2266,4 @@ pub(super) fn right_aligned_status_bounds(status: &str, width: usize) -> Option<
     let trailing_padding = usize::from(width > status_width);
     let start = width.saturating_sub(status_width.saturating_add(trailing_padding));
     Some((start, status_width))
-}
-
-/// Writes text into a row of terminal cells without padding with spaces.
-/// Returns the number of cells consumed (useful for style span bounds).
-pub(super) fn write_frame_text_cells(
-    row: &mut [TerminalRenderCell],
-    column_start: usize,
-    max_columns: usize,
-    text: &str,
-) -> usize {
-    let mut used = 0usize;
-    for grapheme in terminal_graphemes(text) {
-        let grapheme_width = terminal_grapheme_width(grapheme);
-        if grapheme_width == 0 {
-            continue;
-        }
-        if used.saturating_add(grapheme_width) > max_columns {
-            break;
-        }
-        let cell = column_start.saturating_add(used);
-        if cell >= row.len() {
-            break;
-        }
-        row[cell] = TerminalRenderCell::from_grapheme(grapheme);
-        for continuation in 1..grapheme_width {
-            let continuation_cell = cell.saturating_add(continuation);
-            if continuation_cell < row.len() {
-                row[continuation_cell] = TerminalRenderCell::continuation();
-            }
-        }
-        used = used.saturating_add(grapheme_width);
-    }
-    used
 }
