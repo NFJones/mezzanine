@@ -42,7 +42,7 @@ pub const BASELINE_TOP_LEVEL_KEYS: &[&str] = &[
     "extensions",
 ];
 
-pub use mez_agent::{CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_VALUE_DESCRIPTION};
+use mez_agent::CONFIG_CHANGE_OPERATION_NAMES;
 
 /// One provider-visible annotation for a supported live `config_change` path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

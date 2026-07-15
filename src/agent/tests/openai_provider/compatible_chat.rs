@@ -318,7 +318,7 @@ fn openai_compatible_chat_completions_provider_describes_callable_mcp_tools() {
         crate::agent::AllowedAction::MemorySearch,
         crate::agent::AllowedAction::MemoryStore,
     ]);
-    request.available_mcp_tools = vec![crate::mcp::McpPromptTool {
+    request.available_mcp_tools = vec![mez_agent::McpPromptTool {
         server_id: "gitlab".to_string(),
         tool_name: "get_issue".to_string(),
         description: "Read one GitLab issue".to_string(),

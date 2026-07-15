@@ -14,14 +14,14 @@ use super::{
     ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentScheduler, AgentShellStore,
     AgentShellVisibility, AgentTranscriptStore, AgentTurnExecution, AgentTurnLedger,
     AgentTurnState, AuditLog, AuthStore, BTreeMap, BTreeSet, BlockedApprovalQueue, ConfigLayer,
-    ControlIdempotencyCache, CopyMode, DiscoveredInstructionFile, EnvironmentSignature, EventLog,
-    FocusedShellHookQueue, HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult,
-    HookFailureKind, HostClipboard, KeyBindings, KeyChord, McpRegistry, McpServerStatus,
-    McpStartupPlan, McpStdioConnection, McpToolCallPlan, McpToolCallResponse, MessageService,
-    MezError, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey,
-    PaneGeometry, PaneId, PaneProcessManager, PaneReadinessOverrideStore, PaneReadinessState,
-    PasteBuffers, PathBuf, PermissionPolicy, ProjectTrustStore, ProviderQuotaUsage, Result,
-    RuntimeSideEffect, RuntimeStatusPillCache, RuntimeStatusPillDefinition, ScopeRegistry, Session,
+    ControlIdempotencyCache, CopyMode, EnvironmentSignature, EventLog, FocusedShellHookQueue,
+    HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult, HookFailureKind,
+    HostClipboard, KeyBindings, KeyChord, McpRegistry, McpServerStatus, McpStartupPlan,
+    McpStdioConnection, McpToolCallPlan, McpToolCallResponse, MessageService, MezError,
+    ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey, PaneGeometry,
+    PaneId, PaneProcessManager, PaneReadinessOverrideStore, PaneReadinessState, PasteBuffers,
+    PathBuf, PermissionPolicy, ProjectTrustStore, ProviderQuotaUsage, Result, RuntimeSideEffect,
+    RuntimeStatusPillCache, RuntimeStatusPillDefinition, ScopeRegistry, Session,
     SessionApprovalStore, SessionMemoryStore, SessionRecord, SessionRegistry, Size,
     SnapshotRepository, SplitDirection, SubagentProfile, SubagentScopeDeclaration,
     TerminalCursorStyle, TerminalScreen, ToolDiscoveryCache, WindowFrameAction, WindowId,
@@ -31,6 +31,7 @@ use crate::error::MezErrorKind;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
 use crate::runtime::record_browser::RuntimeRecordBrowser;
 use crate::terminal::{PaneAgentStatusField, TerminalEmojiWidth};
+use mez_agent::instructions::DiscoveredInstructionFile;
 use mez_mux::copy::CopyPosition;
 use mez_mux::layout::PaneTitleSource;
 use mez_mux::presentation::{TerminalFramePosition, TerminalFrameStyle};
@@ -2088,7 +2089,7 @@ pub struct RuntimeSessionService {
     ///
     /// Runtime approval changes are session choices. They must survive unrelated
     /// configuration reloads without being erased by persistent config changes.
-    pub(super) live_approval_policy_override: Option<crate::permissions::ApprovalPolicy>,
+    pub(super) live_approval_policy_override: Option<mez_agent::ApprovalPolicy>,
     /// Stores the blocked approvals value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

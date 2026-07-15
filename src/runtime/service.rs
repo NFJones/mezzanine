@@ -1561,10 +1561,7 @@ impl RuntimeSessionService {
     ///
     /// # Parameters
     /// - `policy`: Approval policy that should survive unrelated config reloads.
-    pub fn set_live_approval_policy_override(
-        &mut self,
-        policy: crate::permissions::ApprovalPolicy,
-    ) {
+    pub fn set_live_approval_policy_override(&mut self, policy: mez_agent::ApprovalPolicy) {
         self.live_approval_policy_override = Some(policy);
         self.permission_policy.approval_policy = policy;
     }

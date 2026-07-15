@@ -158,7 +158,7 @@ fn runtime_config_change_approval_state(
 ) -> &'static str {
     if permission_policy.approval_bypass() {
         "bypassed"
-    } else if permission_policy.approval_policy == crate::permissions::ApprovalPolicy::AutoAllow
+    } else if permission_policy.approval_policy == mez_agent::ApprovalPolicy::AutoAllow
         && runtime_action_supports_auto_allow(action)
     {
         "auto_allowed"

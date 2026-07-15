@@ -27,7 +27,6 @@ mod shell;
 /// declaration makes the boundary available to the crate.
 mod types;
 
-pub use mez_agent::instructions::DiscoveredInstructionFile;
 pub use parser::parse_instruction_discovery_output;
 pub use planning::plan_instruction_discovery;
 pub use types::{InstructionDiscoveryConfig, InstructionDiscoveryPlan};

@@ -417,8 +417,8 @@ fn agent_shell_mcp_command_reports_unavailable_server_reason() {
 fn agent_shell_permissions_command_lists_injected_policy() {
     let mut store = AgentShellStore::default();
     store.enter_or_resume("%1").unwrap();
-    let mut policy = PermissionPolicy::default()
-        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let mut policy =
+        PermissionPolicy::default().with_approval_policy(mez_agent::ApprovalPolicy::FullAccess);
     policy.set_approval_bypass(true);
     let summary = policy.agent_shell_summary();
 

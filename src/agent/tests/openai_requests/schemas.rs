@@ -27,8 +27,8 @@ fn openai_available_mcp_keeps_memory_on_default_surface() {
             content: "use the githubcopilot mcp server to pull the latest CI results".to_string(),
         }])
         .unwrap(),
-        &crate::mcp::McpPromptSummary {
-            available_servers: vec![crate::mcp::McpPromptServer {
+        &mez_agent::McpPromptSummary {
+            available_servers: vec![mez_agent::McpPromptServer {
                 server_id: "githubcopilot".to_string(),
                 display_name: "GitHub Copilot".to_string(),
                 purpose: "GitHub repository and CI operations".to_string(),

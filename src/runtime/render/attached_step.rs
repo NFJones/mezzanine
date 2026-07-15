@@ -16,12 +16,12 @@ use crate::terminal::{
 impl RuntimeSessionService {
     /// Returns the compact approval label shown in the pane agent status area.
     pub(super) fn runtime_frame_policy_mode_name(
-        policy: crate::permissions::ApprovalPolicy,
+        policy: mez_agent::ApprovalPolicy,
     ) -> &'static str {
         match policy {
-            crate::permissions::ApprovalPolicy::Ask => "ask",
-            crate::permissions::ApprovalPolicy::AutoAllow => "auto-allow",
-            crate::permissions::ApprovalPolicy::FullAccess => "full-access",
+            mez_agent::ApprovalPolicy::Ask => "ask",
+            mez_agent::ApprovalPolicy::AutoAllow => "auto-allow",
+            mez_agent::ApprovalPolicy::FullAccess => "full-access",
         }
     }
 

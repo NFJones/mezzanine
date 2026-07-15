@@ -6,6 +6,8 @@
 
 use std::collections::BTreeMap;
 
+use mez_agent::{ApprovalPolicy, PermissionPreset, RuleDecision};
+
 use super::{
     MezError, Result,
     classification::{
@@ -25,8 +27,6 @@ use super::{
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_COMMAND_SHELL_CLASSIFICATION: &str = "unix-like";
-
-pub use mez_agent::{ApprovalPolicy, PermissionPreset, RuleDecision};
 
 /// Carries Permission Authority Change state for this subsystem.
 ///

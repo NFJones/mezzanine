@@ -106,7 +106,7 @@ fn deepseek_chat_completions_request_body_dispatches_default_mcp_actions_on_init
         crate::agent::AllowedAction::MemorySearch,
         crate::agent::AllowedAction::MemoryStore,
     ]);
-    request.available_mcp_tools = vec![crate::mcp::McpPromptTool {
+    request.available_mcp_tools = vec![mez_agent::McpPromptTool {
         server_id: "gitlab".to_string(),
         tool_name: "get_issue".to_string(),
         description: "Read one GitLab issue".to_string(),

@@ -65,10 +65,9 @@ pub use migration::{
 };
 pub use paths::ConfigPaths;
 pub use schema::{
-    BASELINE_TOP_LEVEL_KEYS, CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_VALUE_DESCRIPTION,
-    ConfigChangePathAnnotation, PRIMARY_CONFIG_FILENAMES, config_change_setting_path_annotations,
-    config_change_setting_path_annotations_markdown, config_change_setting_path_annotations_text,
-    config_change_setting_path_description,
+    BASELINE_TOP_LEVEL_KEYS, ConfigChangePathAnnotation, PRIMARY_CONFIG_FILENAMES,
+    config_change_setting_path_annotations, config_change_setting_path_annotations_markdown,
+    config_change_setting_path_annotations_text, config_change_setting_path_description,
 };
 pub use types::{
     ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,

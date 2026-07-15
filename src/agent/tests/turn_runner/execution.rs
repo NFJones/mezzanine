@@ -34,8 +34,8 @@ fn turn_runner_accepts_config_change_with_full_access_and_bypass() {
             provider_transcript_events: Vec::new(),
         },
     );
-    let mut policy = PermissionPolicy::default()
-        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let mut policy =
+        PermissionPolicy::default().with_approval_policy(mez_agent::ApprovalPolicy::FullAccess);
     policy.set_approval_bypass(true);
     let approvals = SessionApprovalStore::default();
     let mut ledger = AgentTurnLedger::new(false);
@@ -352,8 +352,8 @@ fn turn_runner_keeps_skill_actions_suppressed_after_capability_request() {
             provider_transcript_events: Vec::new(),
         }),
     ]);
-    let policy = PermissionPolicy::default()
-        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let policy =
+        PermissionPolicy::default().with_approval_policy(mez_agent::ApprovalPolicy::FullAccess);
     let approvals = SessionApprovalStore::default();
     let mut ledger = AgentTurnLedger::new(false);
     let runner = AgentTurnRunner {
@@ -478,8 +478,8 @@ fn turn_runner_plans_codex_style_apply_patch_after_capability_request() {
             provider_transcript_events: Vec::new(),
 }),
     ]);
-    let policy = PermissionPolicy::default()
-        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let policy =
+        PermissionPolicy::default().with_approval_policy(mez_agent::ApprovalPolicy::FullAccess);
     let approvals = SessionApprovalStore::default();
     let mut ledger = AgentTurnLedger::new(false);
     let runner = AgentTurnRunner {

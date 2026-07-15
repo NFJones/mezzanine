@@ -55,10 +55,10 @@ impl RuntimeSessionService {
             }
             let permission_policy = self.permission_policy_for_turn(turn);
             let auto_allowed = permission_policy.approval_policy
-                == crate::permissions::ApprovalPolicy::AutoAllow
+                == mez_agent::ApprovalPolicy::AutoAllow
                 && runtime_action_supports_auto_allow(&action);
             let policy_allowed =
-                permission_policy.approval_policy == crate::permissions::ApprovalPolicy::FullAccess;
+                permission_policy.approval_policy == mez_agent::ApprovalPolicy::FullAccess;
             execution.action_results[index] =
                 self.execute_mcp_action_for_turn(turn, &action, auto_allowed || policy_allowed)?;
             executed = executed.saturating_add(1);
@@ -136,10 +136,10 @@ impl RuntimeSessionService {
             }
             let permission_policy = self.permission_policy_for_turn(turn);
             let auto_allowed = permission_policy.approval_policy
-                == crate::permissions::ApprovalPolicy::AutoAllow
+                == mez_agent::ApprovalPolicy::AutoAllow
                 && runtime_action_supports_auto_allow(&action);
             let policy_allowed =
-                permission_policy.approval_policy == crate::permissions::ApprovalPolicy::FullAccess;
+                permission_policy.approval_policy == mez_agent::ApprovalPolicy::FullAccess;
             execution.action_results[index] = self
                 .execute_mcp_action_for_turn_async(turn, &action, auto_allowed || policy_allowed)
                 .await?;

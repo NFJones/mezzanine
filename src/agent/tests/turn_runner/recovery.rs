@@ -571,8 +571,8 @@ fn turn_runner_recovers_mixed_capability_and_execution_batch_without_effects() {
             provider_transcript_events: Vec::new(),
         }),
     ]);
-    let policy = PermissionPolicy::default()
-        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let policy =
+        PermissionPolicy::default().with_approval_policy(mez_agent::ApprovalPolicy::FullAccess);
     let approvals = SessionApprovalStore::default();
     let mut ledger = AgentTurnLedger::new(false);
     let runner = AgentTurnRunner {
@@ -695,8 +695,8 @@ fn turn_runner_recovers_mixed_capability_batch_before_heredoc_validation() {
             provider_transcript_events: Vec::new(),
         }),
     ]);
-    let policy = PermissionPolicy::default()
-        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let policy =
+        PermissionPolicy::default().with_approval_policy(mez_agent::ApprovalPolicy::FullAccess);
     let approvals = SessionApprovalStore::default();
     let mut ledger = AgentTurnLedger::new(false);
     let runner = AgentTurnRunner {
@@ -841,8 +841,8 @@ fn turn_runner_repairs_legacy_complete_during_capability_decision() {
             provider_transcript_events: Vec::new(),
         }),
     ]);
-    let policy = PermissionPolicy::default()
-        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let policy =
+        PermissionPolicy::default().with_approval_policy(mez_agent::ApprovalPolicy::FullAccess);
     let approvals = SessionApprovalStore::default();
     let mut ledger = AgentTurnLedger::new(false);
     let runner = AgentTurnRunner {
@@ -1069,8 +1069,8 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
             provider_transcript_events: Vec::new(),
 }),
     ]);
-    let policy = PermissionPolicy::default()
-        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let policy =
+        PermissionPolicy::default().with_approval_policy(mez_agent::ApprovalPolicy::FullAccess);
     let approvals = SessionApprovalStore::default();
     let mut ledger = AgentTurnLedger::new(false);
     let runner = AgentTurnRunner {
@@ -1209,8 +1209,8 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
         provider_transcript_events: Vec::new(),
     };
     let provider = SequencedProvider::new(vec![Ok(capability), Ok(invalid), Ok(corrected)]);
-    let policy = PermissionPolicy::default()
-        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let policy =
+        PermissionPolicy::default().with_approval_policy(mez_agent::ApprovalPolicy::FullAccess);
     let approvals = SessionApprovalStore::default();
     let mut ledger = AgentTurnLedger::new(false);
     let runner = AgentTurnRunner {
@@ -1779,8 +1779,8 @@ fn turn_runner_routes_repair_disallowed_shell_action_through_capability_recovery
             provider_transcript_events: Vec::new(),
         }),
     ]);
-    let policy = PermissionPolicy::default()
-        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let policy =
+        PermissionPolicy::default().with_approval_policy(mez_agent::ApprovalPolicy::FullAccess);
     let approvals = SessionApprovalStore::default();
     let mut ledger = AgentTurnLedger::new(false);
     let runner = AgentTurnRunner {

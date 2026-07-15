@@ -75,8 +75,10 @@ The following current exports are migration markers, not completion evidence:
   mux status, viewport, theme, and attached-client contracts are imported
   directly from `mez-mux`.
 - `src/readline/` specializes mux-owned prompt state with product command and agent selector policy; it no longer owns neutral reverse-search or multiline transition state.
-- Product permission, MCP, instruction, provider, config, and runtime
-  modules still forward selected `mez-agent` contracts.
+- Product provider and runtime modules still forward selected `mez-agent`
+  contracts. Permission enums, MCP prompt records, instruction discovery
+  records, and provider-facing config constants are imported directly from
+  `mez-agent` and are no longer exposed through product subsystem facades.
 
 These surfaces must be removed or narrowed to an adapter that adds documented
 product behavior. Consumers should otherwise import the owning crate directly.

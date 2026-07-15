@@ -102,7 +102,6 @@ use crate::hooks::{
     decide_hook_failure, execute_focused_shell_hook, execute_program_hook,
     hook_execution_audit_record, plan_event,
 };
-use crate::instructions::DiscoveredInstructionFile;
 use crate::mcp::{
     McpApprovalSetting, McpExternalCapability, McpRegistry, McpServerKind, McpServerStatus,
     McpStartupPlan, McpStartupTransportPlan, McpStdioConnection, McpToolCallPlan,
@@ -117,12 +116,11 @@ use crate::message::{
     encode_mmp_body, handle_mmp_frame, validate_mmp_payload_metadata,
 };
 use crate::permissions::{
-    ApprovalDecision, ApprovalGrant, ApprovalPolicy, ApprovalScope, ArgumentPolicy,
-    BlockedApprovalQueue, BlockedApprovalRequest, BlockedApprovalState, CommandRule,
-    CommandRuleScope, DEFAULT_COMMAND_SHELL_CLASSIFICATION, PathScopes, PermissionAuthorityChange,
-    PermissionPolicy, PermissionPreset, RuleDecision, RuleMatch, SessionApprovalStore,
-    compare_approval_policy_authority, compare_permission_preset_authority, exact_command_sha256,
-    normalize_exact_command_text,
+    ApprovalDecision, ApprovalGrant, ApprovalScope, ArgumentPolicy, BlockedApprovalQueue,
+    BlockedApprovalRequest, BlockedApprovalState, CommandRule, CommandRuleScope,
+    DEFAULT_COMMAND_SHELL_CLASSIFICATION, PathScopes, PermissionAuthorityChange, PermissionPolicy,
+    RuleMatch, SessionApprovalStore, compare_approval_policy_authority,
+    compare_permission_preset_authority, exact_command_sha256, normalize_exact_command_text,
 };
 use crate::project::{
     ProjectTrustRecord, ProjectTrustStore, TrustDecision, default_trust_database_path,
@@ -149,6 +147,7 @@ use crate::transcript::{
     AgentSessionMetadata, AgentTranscriptStore, TranscriptEntry, TranscriptRole,
 };
 use mez_agent::{AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ScheduledWork, ScheduledWorkKind};
+use mez_agent::{ApprovalPolicy, PermissionPreset, RuleDecision};
 use mez_agent::{
     CooperationMode, ScopeRegistry, SubagentProfile, SubagentScopeDeclaration,
     SubagentSpawnRequest, builtin_subagent_profiles,

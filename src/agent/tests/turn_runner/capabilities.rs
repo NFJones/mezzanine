@@ -52,8 +52,8 @@ fn turn_runner_denies_issues_capability_when_issue_tracking_disabled() {
             provider_transcript_events: Vec::new(),
         }),
     ]);
-    let policy = PermissionPolicy::default()
-        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let policy =
+        PermissionPolicy::default().with_approval_policy(mez_agent::ApprovalPolicy::FullAccess);
     let approvals = SessionApprovalStore::default();
     let mut ledger = AgentTurnLedger::new(false);
     let runner = AgentTurnRunner {
@@ -347,8 +347,8 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
             provider_transcript_events: Vec::new(),
         }),
     ]);
-    let policy = PermissionPolicy::default()
-        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let policy =
+        PermissionPolicy::default().with_approval_policy(mez_agent::ApprovalPolicy::FullAccess);
     let approvals = SessionApprovalStore::default();
     let mut ledger = AgentTurnLedger::new(false);
     let runner = AgentTurnRunner {

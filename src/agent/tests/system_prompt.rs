@@ -454,8 +454,8 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
         cooperation_mode: Some("isolated".to_string()),
         read_scopes: vec!["src".to_string()],
         write_scopes: vec!["src/agent.rs".to_string()],
-        mcp_summary: crate::mcp::McpPromptSummary {
-            available_servers: vec![crate::mcp::McpPromptServer {
+        mcp_summary: mez_agent::McpPromptSummary {
+            available_servers: vec![mez_agent::McpPromptServer {
                 server_id: "fs".to_string(),
                 display_name: "Filesystem".to_string(),
                 purpose: "Read project files through MCP".to_string(),
@@ -464,7 +464,7 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
                 tool_count: 1,
                 approval_required_tool_count: 1,
             }],
-            available_tools: vec![crate::mcp::McpPromptTool {
+            available_tools: vec![mez_agent::McpPromptTool {
                 server_id: "fs".to_string(),
                 tool_name: "read_file".to_string(),
                 description: "Read files".to_string(),
@@ -472,7 +472,7 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
                 input_schema_json: r#"{"type":"object","properties":{"path":{"type":"string"}}}"#
                     .to_string(),
             }],
-            unavailable_servers: vec![crate::mcp::McpPromptUnavailableServer {
+            unavailable_servers: vec![mez_agent::McpPromptUnavailableServer {
                 server_id: "gitlab".to_string(),
                 purpose: "GitLab issue and merge request operations".to_string(),
                 usage_instructions: "Use for GitLab issue and merge request tasks.".to_string(),

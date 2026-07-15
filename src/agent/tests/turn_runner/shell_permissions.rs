@@ -206,8 +206,8 @@ fn turn_runner_auto_allows_prompted_shell_actions_from_rationale() {
             provider_transcript_events: Vec::new(),
         },
     );
-    let policy = PermissionPolicy::default()
-        .with_approval_policy(crate::permissions::ApprovalPolicy::AutoAllow);
+    let policy =
+        PermissionPolicy::default().with_approval_policy(mez_agent::ApprovalPolicy::AutoAllow);
     let approvals = SessionApprovalStore::default();
     let mut ledger = AgentTurnLedger::new(false);
     let runner = AgentTurnRunner {
@@ -645,8 +645,8 @@ fn turn_runner_full_access_denies_out_of_scope_subagent_apply_patch() {
             provider_transcript_events: Vec::new(),
         },
     );
-    let policy = PermissionPolicy::default()
-        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let policy =
+        PermissionPolicy::default().with_approval_policy(mez_agent::ApprovalPolicy::FullAccess);
     let approvals = SessionApprovalStore::default();
     let subagent_scope = mez_agent::SubagentScopeDeclaration {
         cooperation_mode: mez_agent::CooperationMode::OwnedWrite,
@@ -738,8 +738,8 @@ fn turn_runner_full_access_denies_out_of_scope_subagent_shell_command() {
             provider_transcript_events: Vec::new(),
         },
     );
-    let policy = PermissionPolicy::default()
-        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let policy =
+        PermissionPolicy::default().with_approval_policy(mez_agent::ApprovalPolicy::FullAccess);
     let approvals = SessionApprovalStore::default();
     let subagent_scope = mez_agent::SubagentScopeDeclaration {
         cooperation_mode: mez_agent::CooperationMode::ExploreOnly,
@@ -979,8 +979,8 @@ fn turn_runner_routes_subagent_unknown_shell_actions_through_approval_policy() {
             provider_transcript_events: Vec::new(),
         },
     );
-    let policy = PermissionPolicy::default()
-        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let policy =
+        PermissionPolicy::default().with_approval_policy(mez_agent::ApprovalPolicy::FullAccess);
     let approvals = SessionApprovalStore::default();
     let subagent_scope = mez_agent::SubagentScopeDeclaration {
         cooperation_mode: mez_agent::CooperationMode::ExploreOnly,
@@ -1067,8 +1067,8 @@ fn turn_runner_runs_prompted_shell_actions_with_auto_allow_assertion() {
             provider_transcript_events: Vec::new(),
         },
     );
-    let policy = PermissionPolicy::default()
-        .with_approval_policy(crate::permissions::ApprovalPolicy::AutoAllow);
+    let policy =
+        PermissionPolicy::default().with_approval_policy(mez_agent::ApprovalPolicy::AutoAllow);
     let approvals = SessionApprovalStore::default();
     let mut ledger = AgentTurnLedger::new(false);
     let runner = AgentTurnRunner {

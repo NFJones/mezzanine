@@ -495,13 +495,13 @@ fn runtime_config_change_resumes_after_full_access_change() {
     );
     assert_eq!(
         service.permission_policy().approval_policy,
-        crate::permissions::ApprovalPolicy::FullAccess
+        mez_agent::ApprovalPolicy::FullAccess
     );
     assert_eq!(service.blocked_approvals().pending().len(), 0);
     assert_eq!(service.ui_theme.name, "catppuccin_latte");
     assert_eq!(
         service.permission_policy().approval_policy,
-        crate::permissions::ApprovalPolicy::FullAccess
+        mez_agent::ApprovalPolicy::FullAccess
     );
     let config_text = fs::read_to_string(config_root.join("config.toml")).unwrap();
     assert!(

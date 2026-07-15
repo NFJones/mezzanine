@@ -212,7 +212,7 @@ impl RuntimeSessionService {
             })?;
         let permission_policy = self.permission_policy_for_turn(turn);
         if permission_policy.approval_bypass()
-            || permission_policy.approval_policy == crate::permissions::ApprovalPolicy::FullAccess
+            || permission_policy.approval_policy == mez_agent::ApprovalPolicy::FullAccess
         {
             return Ok(true);
         }
@@ -243,8 +243,7 @@ impl RuntimeSessionService {
                         path_scopes.as_ref(),
                     ),
                     RuleDecision::Allow
-                ) || (permission_policy.approval_policy
-                    == crate::permissions::ApprovalPolicy::AutoAllow
+                ) || (permission_policy.approval_policy == mez_agent::ApprovalPolicy::AutoAllow
                     && runtime_action_supports_auto_allow(action)))
             }
             _ if network_action_plan(action)?.is_some() => {
@@ -258,15 +257,14 @@ impl RuntimeSessionService {
                         None,
                     ),
                     RuleDecision::Allow
-                ) || (permission_policy.approval_policy
-                    == crate::permissions::ApprovalPolicy::AutoAllow
+                ) || (permission_policy.approval_policy == mez_agent::ApprovalPolicy::AutoAllow
                     && runtime_action_supports_auto_allow(action)))
             }
             AgentActionPayload::McpCall { .. } => Ok(permission_policy.approval_policy
-                == crate::permissions::ApprovalPolicy::AutoAllow
+                == mez_agent::ApprovalPolicy::AutoAllow
                 && runtime_action_supports_auto_allow(action)),
             AgentActionPayload::ConfigChange { .. } => Ok(permission_policy.approval_policy
-                == crate::permissions::ApprovalPolicy::AutoAllow
+                == mez_agent::ApprovalPolicy::AutoAllow
                 && runtime_action_supports_auto_allow(action)),
             _ => Ok(false),
         }

@@ -52,7 +52,6 @@ pub use config_commands::{
     mcp_config_command_report, mcp_config_setting_from_user, persist_mcp_config_command,
     validate_mcp_config_identifier,
 };
-pub use mez_agent::{McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer};
 pub(crate) use protocol::mcp_tools_call_operation;
 pub use protocol::{
     build_mcp_default_initialize_request, build_mcp_initialize_request,

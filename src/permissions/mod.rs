@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 use crate::error::{MezError, Result};
+use mez_agent::{ApprovalPolicy, PermissionPreset, RuleDecision};
 
 /// Exposes the classification module boundary.
 ///
@@ -43,11 +44,10 @@ pub use rules::{
     builtin_rules, classify_shell_command, exact_command_sha256, normalize_exact_command_text,
 };
 pub use types::{
-    ApprovalDecision, ApprovalGrant, ApprovalPolicy, ApprovalScope, ArgumentPolicy,
-    BlockedApprovalQueue, BlockedApprovalRequest, BlockedApprovalState, CommandRule,
-    CommandRuleScope, CommandRuleStore, DEFAULT_COMMAND_SHELL_CLASSIFICATION,
-    EffectiveCommandEffects, PathResolutionStatus, PathScopes, PermissionAuthorityChange,
-    PermissionPolicy, PermissionPreset, RuleDecision, RuleMatch, SessionApprovalStore,
+    ApprovalDecision, ApprovalGrant, ApprovalScope, ArgumentPolicy, BlockedApprovalQueue,
+    BlockedApprovalRequest, BlockedApprovalState, CommandRule, CommandRuleScope, CommandRuleStore,
+    DEFAULT_COMMAND_SHELL_CLASSIFICATION, EffectiveCommandEffects, PathResolutionStatus,
+    PathScopes, PermissionAuthorityChange, PermissionPolicy, RuleMatch, SessionApprovalStore,
 };
 
 /// Borrowed product adapter for agent action permission planning.

@@ -9,11 +9,12 @@
 use crate::agent::{baseline_slash_commands, is_valid_skill_name};
 use crate::command::baseline_commands;
 use crate::config::{
-    CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_VALUE_DESCRIPTION, CURRENT_CONFIG_SCHEMA_VERSION,
-    config_change_setting_path_annotations_markdown, config_change_setting_path_description,
+    CURRENT_CONFIG_SCHEMA_VERSION, config_change_setting_path_annotations_markdown,
+    config_change_setting_path_description,
 };
 use crate::{MezError, MezErrorKind, Result};
 use include_dir::{Dir, include_dir};
+use mez_agent::{CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_VALUE_DESCRIPTION};
 use mez_mux::theme::UI_COLOR_SLOT_NAMES;
 use serde::Deserialize;
 use std::collections::BTreeMap;

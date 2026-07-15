@@ -135,8 +135,8 @@ fn assemble_model_request_system_prompt_uses_mcp_context_availability() {
     .unwrap();
     let context = append_mcp_context(
         context,
-        &crate::mcp::McpPromptSummary {
-            available_servers: vec![crate::mcp::McpPromptServer {
+        &mez_agent::McpPromptSummary {
+            available_servers: vec![mez_agent::McpPromptServer {
                 server_id: "gitlab".to_string(),
                 display_name: "GitLab".to_string(),
                 purpose: "GitLab issue and merge request operations".to_string(),
@@ -144,14 +144,14 @@ fn assemble_model_request_system_prompt_uses_mcp_context_availability() {
                 tool_count: 1,
                 approval_required_tool_count: 0,
             }],
-            available_tools: vec![crate::mcp::McpPromptTool {
+            available_tools: vec![mez_agent::McpPromptTool {
                 server_id: "gitlab".to_string(),
                 tool_name: "get_issue".to_string(),
                 description: "Read one GitLab issue".to_string(),
                 approval_required: false,
                 input_schema_json: r#"{"type":"object"}"#.to_string(),
             }],
-            unavailable_servers: vec![crate::mcp::McpPromptUnavailableServer {
+            unavailable_servers: vec![mez_agent::McpPromptUnavailableServer {
                 server_id: "jira".to_string(),
                 purpose: "Jira issue operations".to_string(),
                 usage_instructions: "Use for Jira issue tasks.".to_string(),

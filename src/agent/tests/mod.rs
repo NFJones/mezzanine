@@ -62,16 +62,16 @@ use super::{
 };
 use super::{prompt, provider, semantic, shell};
 use crate::auth::{AuthStore, OpenAiProviderCredential};
-use crate::instructions::DiscoveredInstructionFile;
-use crate::mcp::{McpPromptTool, McpRegistry};
+use crate::mcp::McpRegistry;
 use crate::permissions::{PathScopes, PermissionPolicy, SessionApprovalStore};
 use crate::test_support::agent::ActionBuilder;
 use crate::test_support::temp::TestTempDir;
 use crate::transcript::{AgentTranscriptStore, TranscriptRole as DurableTranscriptRole};
 use base64::Engine;
+use mez_agent::instructions::DiscoveredInstructionFile;
 use mez_agent::{
     AgentTranscriptRole as TranscriptRole, McpExecutionRequest, McpExecutionResponse,
-    MemoryContextRecord, MemoryContextScope,
+    McpPromptTool, MemoryContextRecord, MemoryContextScope,
 };
 use std::cell::RefCell;
 use std::collections::BTreeSet;

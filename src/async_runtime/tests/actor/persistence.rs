@@ -732,13 +732,13 @@ async fn async_actor_defers_project_approval_config_to_persistence_worker() {
         exit.service
             .permission_policy()
             .evaluate_shell_command("mez-test-command --flag"),
-        crate::permissions::RuleDecision::Allow
+        mez_agent::RuleDecision::Allow
     );
     assert_eq!(
         exit.service
             .permission_policy()
             .evaluate_shell_command("mez-test-command --delete"),
-        crate::permissions::RuleDecision::Forbid
+        mez_agent::RuleDecision::Forbid
     );
     assert!(exit.commands_processed >= 4);
     exit.service.pane_processes_mut().terminate_all().unwrap();

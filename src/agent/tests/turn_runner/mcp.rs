@@ -228,8 +228,8 @@ fn turn_runner_auto_allows_mcp_actions_with_model_assertion() {
             provider_transcript_events: Vec::new(),
         },
     );
-    let policy = PermissionPolicy::default()
-        .with_approval_policy(crate::permissions::ApprovalPolicy::AutoAllow);
+    let policy =
+        PermissionPolicy::default().with_approval_policy(mez_agent::ApprovalPolicy::AutoAllow);
     let approvals = SessionApprovalStore::default();
     let tools = vec![McpPromptTool {
         server_id: "fs".to_string(),
@@ -501,8 +501,8 @@ fn turn_runner_full_access_accepts_mcp_actions_requiring_approval() {
             provider_transcript_events: Vec::new(),
         },
     );
-    let policy = PermissionPolicy::default()
-        .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
+    let policy =
+        PermissionPolicy::default().with_approval_policy(mez_agent::ApprovalPolicy::FullAccess);
     let approvals = SessionApprovalStore::default();
     let tools = vec![McpPromptTool {
         server_id: "fs".to_string(),

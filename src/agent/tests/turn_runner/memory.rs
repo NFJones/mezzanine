@@ -69,8 +69,8 @@ fn turn_runner_accepts_memory_search_with_matched_mcp_available() {
             content: "use githubcopilot and recall the durable project preference".to_string(),
         }])
         .unwrap(),
-        &crate::mcp::McpPromptSummary {
-            available_servers: vec![crate::mcp::McpPromptServer {
+        &mez_agent::McpPromptSummary {
+            available_servers: vec![mez_agent::McpPromptServer {
                 server_id: "githubcopilot".to_string(),
                 display_name: "GitHub Copilot".to_string(),
                 purpose: "GitHub repository and CI operations".to_string(),
