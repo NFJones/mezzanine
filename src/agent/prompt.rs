@@ -18,7 +18,7 @@ static SYSTEM_PROMPTS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/agent/pro
 static PROVIDER_PROMPTS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/agent/prompt/providers");
 
 /// Product adapter that resolves lower assembly requests from embedded assets.
-struct EmbeddedPromptAssets;
+pub(super) struct EmbeddedPromptAssets;
 
 impl AgentPromptAssetSource for EmbeddedPromptAssets {
     /// Returns one embedded system fragment for lower prompt assembly.

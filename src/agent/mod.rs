@@ -88,8 +88,8 @@ pub use actions::{
 pub use context::{
     append_mcp_context, append_memory_context, append_permission_policy_context,
     append_project_guidance_context, append_scheduler_context, assemble_model_request,
-    assemble_model_request_with_retained_tail_percent, constrain_skill_actions_for_loaded_context,
-    invoked_mcp_tools_for_context, set_project_guidance_context,
+    assemble_model_request_with_retained_tail_percent, invoked_mcp_tools_for_context,
+    set_project_guidance_context,
 };
 pub(crate) use maap::MaapBatchProductValidation;
 pub use maap::{
@@ -98,11 +98,11 @@ pub use maap::{
 };
 use mez_agent::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentCapability, AgentContext,
-    AgentPromptProfile, AgentTranscriptEntry, AgentTranscriptRole, AgentTurnState,
-    AgentTurnTrigger, AllowedAction, AllowedActionSet, ContextSourceKind, LocalActionPlan,
-    MaapBatch, McpExecutionRequest, McpExecutionResponse, ModelInteractionKind, ModelMessage,
-    ModelMessageRole, ModelRequest, ModelTokenUsage, ModelTokenUsageKey, ProviderHttpRequest,
-    ProviderHttpResponse, ProviderTranscriptEvent, SayStatus, TranscriptPersistence,
+    AgentTranscriptEntry, AgentTranscriptRole, AgentTurnState, AgentTurnTrigger, AllowedAction,
+    AllowedActionSet, ContextSourceKind, LocalActionPlan, MaapBatch, McpExecutionRequest,
+    McpExecutionResponse, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest,
+    ModelTokenUsage, ModelTokenUsageKey, ProviderHttpRequest, ProviderHttpResponse,
+    ProviderTranscriptEvent, SayStatus, TranscriptPersistence,
 };
 pub use network::{
     NetworkActionPlan, execute_network_action_with_transport_async, network_action_plan,
@@ -161,7 +161,6 @@ pub use slash::{
 };
 pub use turn::{AgentTurnLedger, AgentTurnRecord};
 
-use actions::role_for_source;
 use maap::{
     action_content_blocks_from_json_or_text, json_escape, string_array_json, validate_non_empty,
 };

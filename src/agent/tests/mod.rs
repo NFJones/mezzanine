@@ -13,7 +13,7 @@
 
 use super::actions::action_result_transcript_content;
 use super::{
-    AgentCapability, AgentLogLevel, AgentPromptProfile, AgentShellCommandOutcome, AgentShellStore,
+    AgentCapability, AgentLogLevel, AgentShellCommandOutcome, AgentShellStore,
     AgentShellVisibility, AgentTurnExecution, AgentTurnLedger, AgentTurnRecord, AgentTurnRunner,
     AsyncModelProvider, AsyncProviderHttpTransport, CHATGPT_ACCOUNT_ID_HEADER, ContextSourceKind,
     DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MarkerToken, McpActionExecutor,
@@ -55,7 +55,7 @@ use base64::Engine;
 use mez_agent::instructions::DiscoveredInstructionFile;
 use mez_agent::semantic_patch::try_convert_unified_diff_to_mez_patch;
 use mez_agent::{
-    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext,
+    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentPromptProfile,
     AgentTranscriptRole as TranscriptRole, AgentTurnState, AgentTurnTrigger,
     CHATGPT_RESPONSES_ENDPOINT, ContextBlock,
     MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, MaapBatch, McpExecutionRequest,

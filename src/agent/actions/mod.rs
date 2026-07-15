@@ -5,8 +5,7 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AgentAction, AgentActionPayload, ContextSourceKind, MezError, ModelMessageRole, Result,
-    SayStatus, json_escape, local_action_plan,
+    AgentAction, AgentActionPayload, MezError, Result, SayStatus, json_escape, local_action_plan,
 };
 
 mod execution;
@@ -103,32 +102,4 @@ pub fn shell_command_structured_content_json(
     serde_json::to_string(&value).map_err(|error| {
         MezError::invalid_state(format!("shell structured content encoding failed: {error}"))
     })
-}
-
-/// Executes the `role_for_source` operation for the owning subsystem.
-///
-/// Callers receive a typed result or error with context from the underlying
-/// runtime operation.
-pub(super) fn role_for_source(source: ContextSourceKind) -> ModelMessageRole {
-    match source {
-        ContextSourceKind::System => ModelMessageRole::System,
-        ContextSourceKind::DeveloperInstruction
-        | ContextSourceKind::Policy
-        | ContextSourceKind::Configuration
-        | ContextSourceKind::RuntimeHint => ModelMessageRole::Developer,
-        ContextSourceKind::ActionResult | ContextSourceKind::TranscriptTool => {
-            ModelMessageRole::Tool
-        }
-        ContextSourceKind::EvidenceLedger | ContextSourceKind::CommittedEvidence => {
-            ModelMessageRole::Developer
-        }
-        ContextSourceKind::TranscriptAssistant => ModelMessageRole::Assistant,
-        ContextSourceKind::UserInstruction
-        | ContextSourceKind::SkillInstruction
-        | ContextSourceKind::LocalMessage
-        | ContextSourceKind::ProjectGuidance
-        | ContextSourceKind::Memory
-        | ContextSourceKind::Transcript
-        | ContextSourceKind::TranscriptUser => ModelMessageRole::User,
-    }
 }
