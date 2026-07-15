@@ -6,7 +6,6 @@
 //! it reads `SKILL.md` metadata for catalogs, loads full skill text only on
 //! explicit invocation, and never executes auxiliary skill files.
 
-use crate::agent::{baseline_slash_commands, is_valid_skill_name};
 use crate::command::baseline_commands;
 use crate::config::{
     CURRENT_CONFIG_SCHEMA_VERSION, config_change_setting_path_annotations_markdown,
@@ -14,7 +13,10 @@ use crate::config::{
 };
 use crate::{MezError, MezErrorKind, Result};
 use include_dir::{Dir, include_dir};
-use mez_agent::{CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_VALUE_DESCRIPTION};
+use mez_agent::{
+    CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_VALUE_DESCRIPTION, baseline_slash_commands,
+    is_valid_skill_name,
+};
 use mez_mux::theme::UI_COLOR_SLOT_NAMES;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -852,7 +854,7 @@ mod tests {
         SkillSource, discover_skill_catalog, load_skill_document, parse_skill_prompt_invocation,
         skill_context_text, split_skill_front_matter, sync_managed_builtin_skills,
     };
-    use crate::agent::is_valid_skill_name;
+    use mez_agent::is_valid_skill_name;
     use std::fs;
     use std::path::{Path, PathBuf};
 

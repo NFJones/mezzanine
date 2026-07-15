@@ -8,7 +8,6 @@
 use std::fs;
 use std::path::PathBuf;
 
-use crate::agent::{PaneReadinessOverrideStore, PaneReadinessState};
 use crate::audit::{AuditActor, AuditLog, AuditRecord};
 use crate::auth::{AuthStatus, AuthStore, CredentialStoreKind};
 use crate::config::{
@@ -17,6 +16,7 @@ use crate::config::{
     validate_config_file,
 };
 use crate::error::{MezError, Result};
+use mez_agent::{PaneReadinessOverrideStore, PaneReadinessState};
 use mez_core::ids::ClientId;
 use mez_mux::input::{KeyBindings, KeyChord, KeyCode};
 use mez_mux::layout::{

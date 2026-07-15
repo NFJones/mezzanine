@@ -592,4 +592,112 @@ mod tests {
         assert!(!store.clear_pending_probe_if_matches("%1", "probe-a"));
         assert!(store.clear_pending_probe_if_matches("%1", "probe-b"));
     }
+
+    /// Verifies bootstrap runs after signature change before a user prompt.
+    #[test]
+    fn bootstrap_runs_after_signature_change_before_user_prompt() {
+        let first = "host:user:/bin/sh:/repo";
+        let second = "host:user:/bin/sh:/repo/sub";
+
+        let unchanged = decide_bootstrap_before_user_prompt(
+            PaneReadinessState::Ready,
+            Some(first),
+            Some(first),
+        );
+        let changed = decide_bootstrap_before_user_prompt(
+            PaneReadinessState::Ready,
+            Some(first),
+            Some(second),
+        );
+        let blocked = decide_bootstrap_before_user_prompt::<str>(
+            PaneReadinessState::PasswordPrompt,
+            Some(first),
+            None,
+        );
+
+        assert!(!unchanged.should_bootstrap);
+        assert!(changed.should_bootstrap);
+        assert!(blocked.block_turn);
+    }
+
+    /// Verifies readiness blocks probes when a pane is not ready.
+    #[test]
+    fn readiness_blocks_probes_when_pane_is_not_ready() {
+        let busy = readiness_decision(PaneReadinessState::Busy);
+        let unknown = readiness_decision(PaneReadinessState::Unknown);
+        let prompt_candidate = readiness_decision(PaneReadinessState::PromptCandidate);
+        let probing = readiness_decision(PaneReadinessState::Probing);
+        let ready = readiness_decision(PaneReadinessState::Ready);
+
+        assert!(!busy.may_probe);
+        assert!(!busy.may_send_agent_command);
+        assert!(busy.stale_signature_allowed);
+        assert!(unknown.may_probe);
+        assert!(!unknown.may_send_agent_command);
+        assert!(prompt_candidate.may_probe);
+        assert!(!prompt_candidate.may_send_agent_command);
+        assert!(!probing.may_probe);
+        assert!(!probing.may_send_agent_command);
+        assert!(ready.may_probe);
+        assert!(ready.may_send_agent_command);
+    }
+
+    /// Verifies a readiness override requires acknowledgement and one epoch.
+    #[test]
+    fn readiness_override_requires_warning_ack_and_is_one_epoch_only() {
+        let mut store = PaneReadinessOverrideStore::default();
+        store.record_pending_probe("%1", "probe-1").unwrap();
+        assert!(store.has_pending_probe("%1"));
+
+        let error = store
+            .mark_ready_for_epoch("%1", 7, "primary accepted uncertain shell boundary", false)
+            .unwrap_err();
+        assert_eq!(error.kind(), ReadinessErrorKind::Forbidden);
+        assert!(store.has_pending_probe("%1"));
+
+        store
+            .mark_ready_for_epoch("%1", 7, "primary accepted uncertain shell boundary", true)
+            .unwrap();
+        assert!(!store.has_pending_probe("%1"));
+        assert!(store.allows_epoch("%1", 7));
+        assert!(!store.allows_epoch("%1", 8));
+
+        let consumed = store.consume_epoch("%1", 7).unwrap();
+        assert_eq!(consumed.pane_id, "%1");
+        assert!(!store.allows_epoch("%1", 7));
+    }
+
+    /// Verifies readiness overrides revoke at safety-boundary changes.
+    #[test]
+    fn readiness_override_revokes_on_safety_boundary_changes() {
+        let mut store = PaneReadinessOverrideStore::default();
+        store
+            .mark_ready_for_epoch("%1", 1, "manual override", true)
+            .unwrap();
+
+        let revoked = store
+            .revoke(
+                "%1",
+                ReadinessOverrideRevocation::EnvironmentSignatureChanged,
+            )
+            .unwrap();
+
+        assert_eq!(revoked.epoch, 1);
+        assert!(!store.allows_epoch("%1", 1));
+    }
+
+    /// Verifies only the active marker clears a pending readiness probe.
+    #[test]
+    fn readiness_pending_probe_requires_matching_marker() {
+        let mut store = PaneReadinessOverrideStore::default();
+
+        store.record_pending_probe("%1", "probe-a").unwrap();
+        store.record_pending_probe("%1", "probe-b").unwrap();
+
+        assert_eq!(store.pending_probe_marker("%1"), Some("probe-b"));
+        assert!(!store.clear_pending_probe_if_matches("%1", "probe-a"));
+        assert_eq!(store.pending_probe_marker("%1"), Some("probe-b"));
+        assert!(store.clear_pending_probe_if_matches("%1", "probe-b"));
+        assert!(!store.has_pending_probe("%1"));
+    }
 }

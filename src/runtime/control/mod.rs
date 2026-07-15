@@ -62,7 +62,6 @@ use super::{
     snapshot_id_for_idempotency_key, source_pane_target_checked_resolved, validate_config_text,
     window_target_checked_resolved,
 };
-use crate::agent::is_valid_skill_name;
 use crate::config::compose_effective_config;
 use crate::control::{
     ControlPersistTarget, authorize_control_request, config_audit_outcome, config_audit_plan,
@@ -79,6 +78,7 @@ use context::{
     runtime_context_block_is_compaction_refresh_owned, runtime_local_message_context_content,
     runtime_transcript_context_entry_limit,
 };
+use mez_agent::is_valid_skill_name;
 use protocol::{
     pane_id_from_runtime_agent_id, paths_equivalent, runtime_project_trust_read_method,
     runtime_snapshot_resume_plan_json,

@@ -11,11 +11,8 @@ use super::{
 };
 use mez_agent::{
     AgentShellMcpSummary, AgentShellPermissionSummary, AgentShellSessionError,
-    AgentShellSessionErrorKind, AgentShellSessionResult,
+    AgentShellSessionErrorKind, AgentShellSessionResult, SlashCommandInvocation,
     parse_slash_command as parse_agent_slash_command,
-};
-pub use mez_agent::{
-    SlashCommandEffect, SlashCommandInvocation, SlashCommandSpec, baseline_slash_commands,
 };
 
 // Agent shell slash command registry and dispatch.

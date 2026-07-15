@@ -27,21 +27,18 @@ use super::{
     McpActionExecutor, ModelMessage, ModelMessageRole, ModelProfile, ModelProfileOverrideSource,
     ModelProfileOverrides, ModelProvider, ModelRequest, ModelResponse, ModelTokenUsage,
     OPENAI_MAAP_FUNCTION_TOOL_NAME, OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT,
-    OpenAiResponsesProvider, PaneReadinessOverrideStore, PaneReadinessState, PaneShellExecutor,
-    ProviderHttpRequest, ProviderHttpResponse, ProviderHttpTransport, ProviderTranscriptEvent,
-    ReadinessOverrideRevocation, Result, ShellClassification, ShellExecutionOutput,
-    ShellExecutionRequest, ShellTransaction, ShellTransactionInput,
-    ShellTransactionOutputTransport, SlashCommandEffect, ToolDiscoveryCache, ToolInventory,
+    OpenAiResponsesProvider, PaneShellExecutor, ProviderHttpRequest, ProviderHttpResponse,
+    ProviderHttpTransport, ProviderTranscriptEvent, Result, ShellClassification,
+    ShellExecutionOutput, ShellExecutionRequest, ShellTransaction, ShellTransactionInput,
+    ShellTransactionOutputTransport, ToolDiscoveryCache, ToolInventory,
     action_result_context_content, agent_subshell_enter_command, append_mcp_context,
     append_memory_context, append_permission_policy_context, append_project_guidance_context,
     append_scheduler_context, apply_default_action_gates, apply_patch_read_plan_for_paths,
     apply_patch_write_plan_from_read_output, apply_patch_write_plan_from_read_outputs,
-    assemble_model_request, baseline_slash_commands, bootstrap_script,
-    bootstrap_script_for_classification, build_agent_system_prompt,
-    build_deepseek_chat_completions_http_request, compact_model_context_for_budget,
-    compact_model_context_for_budget_with_retained_tail_percent,
-    decide_bootstrap_before_user_prompt, decode_shell_output_transport,
-    decode_shell_output_transport_with_diagnostics,
+    assemble_model_request, bootstrap_script, bootstrap_script_for_classification,
+    build_agent_system_prompt, build_deepseek_chat_completions_http_request,
+    compact_model_context_for_budget, compact_model_context_for_budget_with_retained_tail_percent,
+    decode_shell_output_transport, decode_shell_output_transport_with_diagnostics,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     discover_tools_through_pane_shell, execute_agent_shell_command,
     execute_agent_shell_command_with_mcp, execute_agent_shell_command_with_permissions,
@@ -55,7 +52,7 @@ use super::{
     parse_bootstrap_env_output, parse_fenced_maap_action_batch, parse_maap_action_batch_json,
     parse_maap_action_batch_json_for_turn, parse_openai_models_http_body,
     parse_openai_responses_http_body, parse_slash_command, persist_turn_execution_transcript,
-    postprocess_shell_action_success_output, provider_quota_usage_from_headers, readiness_decision,
+    postprocess_shell_action_success_output, provider_quota_usage_from_headers,
     readiness_probe_command_for_classification, select_model_profile, set_project_guidance_context,
     shell_quote, tool_discovery_script, transcript_entries_for_execution,
     try_convert_unified_diff_to_mez_patch,
@@ -71,7 +68,8 @@ use base64::Engine;
 use mez_agent::instructions::DiscoveredInstructionFile;
 use mez_agent::{
     AgentTranscriptRole as TranscriptRole, McpExecutionRequest, McpExecutionResponse,
-    McpPromptTool, MemoryContextRecord, MemoryContextScope,
+    McpPromptTool, MemoryContextRecord, MemoryContextScope, SlashCommandEffect,
+    baseline_slash_commands,
 };
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -1042,7 +1040,6 @@ mod network_actions;
 mod openai_cache;
 mod openai_provider;
 mod openai_requests;
-mod pane_readiness;
 mod provider_contract;
 mod semantic_patch;
 mod shell_bootstrap;

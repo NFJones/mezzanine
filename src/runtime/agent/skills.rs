@@ -6,9 +6,9 @@
 //! orchestration.
 
 use super::*;
-use crate::agent::is_valid_skill_name;
 use crate::project::TrustDecision;
 use crate::skills::{SkillCatalog, discover_skill_catalog, load_skill_document};
+use mez_agent::is_valid_skill_name;
 
 impl RuntimeSessionService {
     /// Builds the effective skill catalog for one pane.

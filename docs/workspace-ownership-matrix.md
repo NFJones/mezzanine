@@ -36,10 +36,11 @@ persistence, transport, and composition adapters.
 | `src/agent/provider/` | `mez-agent` provider behavior plus root credential/HTTP/runtime adapters | temporary | Move provider-independent OpenAI/Anthropic/DeepSeek request, response, schema, cache, and model behavior. Retain concrete auth stores, reqwest transport, refresh, and runtime event conversion in root adapters. |
 | `src/agent/prompt.rs` | `mez-agent` with root embedded-asset adapter | temporary | Move provider-neutral prompt assembly; inject repository instructions and product-owned embedded assets. |
 | `src/agent/semantic/` | `mez-agent` planning plus root filesystem adapter | temporary | Move deterministic snapshot interpretation, matching, and transaction planning. Retain filesystem reads/writes and shell execution behind `LocalActionExecutor`. |
-| `src/agent/session.rs`, `turn.rs`, `slash.rs`, `readiness.rs` | `mez-agent` | temporary | Move deterministic state machines and intrinsic tests; keep presentation and runtime mutation in product adapters. |
+| `src/agent/session.rs`, `turn.rs` | `mez-agent` | temporary | Move deterministic state machines and intrinsic tests; keep presentation and runtime mutation in product adapters. |
+| `src/agent/slash.rs` | root agent-shell execution adapter over `mez-agent` | adapter | Canonical slash registry, parser records, effects, and intrinsic parsing tests are lower-owned. Keep product session mutation, display rendering, runtime-effect routing, and product error projection here. |
 | `src/agent/network.rs`, `shell.rs` | `mez-agent` contracts plus root transport adapter | temporary | Move provider-independent protocol and action behavior; retain network I/O and pane-shell transport in root. |
 | `src/agent/mod.rs` | product composition facade | temporary | Replace broad re-exports with explicit `src/adapters/agent_*` modules after consumers import `mez_agent` directly. |
-| `src/agent/tests/` | split by behavior owner | temporary | Move intrinsic harness/provider/context/MAAP/patch tests to `mez-agent`; retain tests that exercise concrete product stores, transports, permissions, runtime, or UI. |
+| `src/agent/tests/` | split by behavior owner | temporary | Readiness tests now run directly in `mez-agent`; move remaining intrinsic harness/provider/context/MAAP/patch tests and retain tests that exercise concrete product stores, transports, permissions, runtime, or UI. |
 
 ## Residual root mux and terminal audit
 

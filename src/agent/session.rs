@@ -4,10 +4,11 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::{BTreeMap, baseline_slash_commands};
+use super::BTreeMap;
 use mez_agent::{
     AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellPermissionSummary,
-    AgentShellSessionError, AgentShellSessionResult, validate_agent_shell_required,
+    AgentShellSessionError, AgentShellSessionResult, baseline_slash_commands,
+    validate_agent_shell_required,
 };
 
 // Agent shell sessions, stores, and shell display helpers.

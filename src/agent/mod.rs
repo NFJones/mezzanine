@@ -43,15 +43,6 @@ mod prompt;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod provider;
-/// Exposes provider-native transcript event helpers.
-///
-/// The nested module keeps hidden provider continuity payloads outside visible
-/// transcript rendering while allowing compatible providers to replay them.
-/// Exposes the readiness module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-mod readiness;
 /// Exposes the semantic module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -119,8 +110,7 @@ pub use mez_agent::{
     AgentTurnState, AgentTurnTrigger, MaapBatch, McpExecutionRequest, McpExecutionResponse,
     PROVIDER_TRANSCRIPT_EVENT_MARKER, ProviderTranscriptEvent, SayStatus, TranscriptContractError,
     TranscriptPersistence, agent_output_content_type_is_diff,
-    agent_output_content_type_is_markdown, is_valid_skill_name,
-    normalize_agent_output_content_type,
+    agent_output_content_type_is_markdown, normalize_agent_output_content_type,
 };
 pub use network::{
     NetworkActionPlan, execute_network_action_with_transport_async, network_action_plan,
@@ -165,11 +155,6 @@ pub(crate) use provider::{
     ProviderErrorRetryClass, provider_error_retry_class, provider_error_retry_class_from_parts,
     provider_event_error_from_parts, provider_event_error_kind,
 };
-pub use readiness::{
-    BootstrapDecision, PaneReadinessOverride, PaneReadinessOverrideStore, PaneReadinessState,
-    ReadinessDecision, ReadinessOverrideRevocation, decide_bootstrap_before_user_prompt,
-    readiness_decision,
-};
 pub use semantic::{
     ApplyPatchTransactionPhase, LocalActionKind, LocalActionPlan, action_is_local_shell_backed,
     apply_patch_error_plan, apply_patch_read_plan_for_paths, apply_patch_touched_paths,
@@ -190,8 +175,7 @@ pub(crate) use shell::{
     posix_shell_history_suppression_finish, posix_shell_history_suppression_start,
 };
 pub use slash::{
-    AgentShellCommandOutcome, AgentShellRuntimeContext, SlashCommandEffect, SlashCommandInvocation,
-    SlashCommandSpec, baseline_slash_commands, execute_agent_shell_command,
+    AgentShellCommandOutcome, AgentShellRuntimeContext, execute_agent_shell_command,
     execute_agent_shell_command_with_context, execute_agent_shell_command_with_mcp,
     execute_agent_shell_command_with_permissions, execute_agent_shell_command_with_runtime_context,
     parse_slash_command,

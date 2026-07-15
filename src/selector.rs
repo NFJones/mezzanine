@@ -6,8 +6,8 @@
 //! keeps Mezzanine command selection, agent slash-command selection, and
 //! argument-value selection on one deterministic code path.
 
-use crate::agent::baseline_slash_commands;
 use crate::command::baseline_commands;
+use mez_agent::baseline_slash_commands;
 use std::fs;
 use std::path::{Path, PathBuf};
 
