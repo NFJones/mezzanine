@@ -8,14 +8,14 @@
 use super::super::AsyncModelProvider;
 #[cfg(test)]
 use super::super::ModelProvider;
-use super::super::{
-    ActionResult, AgentAction, AgentActionPayload, AgentContext, AgentTurnLedger, AgentTurnRecord,
-    AgentTurnState, AllowedAction, AllowedActionSet, ContextSourceKind, MaapBatchProductValidation,
-    McpPromptTool, MezError, ModelInteractionKind, ModelProfile, ModelRequest, ModelTokenUsage,
-    Result, assemble_model_request, provider_error_retry_class,
-};
 #[cfg(test)]
-use super::super::{ActionStatus, local_action_plan};
+use super::super::{ActionStatus, AgentAction, local_action_plan};
+use super::super::{
+    AgentContext, AgentTurnLedger, AgentTurnRecord, AgentTurnState, AllowedAction,
+    AllowedActionSet, MaapBatchProductValidation, McpPromptTool, MezError, ModelInteractionKind,
+    ModelProfile, ModelRequest, ModelTokenUsage, Result, assemble_model_request,
+    provider_error_retry_class,
+};
 #[cfg(test)]
 use super::super::{MarkerToken, McpExecutionRequest, Path};
 use super::AgentTurnExecution;
@@ -40,7 +40,7 @@ use super::recovery::{
 use mez_agent::turn_state_from_action_results;
 use mez_agent::{
     AgentTurnNegotiation, AgentTurnProviderFailureDecision, AgentTurnResponseDecision,
-    ProviderResponseAcceptance, SubagentScopeDeclaration,
+    MemoryActionBudget, ProviderResponseAcceptance, SubagentScopeDeclaration,
 };
 
 /// Maximum number of ephemeral provider retries after a MAAP validation error.
@@ -51,112 +51,6 @@ use mez_agent::{
 /// valid.
 const MAAP_REPAIR_ATTEMPT_LIMIT: usize = 2;
 
-/// Maximum memory searches accepted during one user turn.
-///
-/// Memory is durable prior context, not a route-discovery fallback. Keeping the
-/// runtime cap small gives the model room for one focused search plus one
-/// exceptional follow-up while preventing paraphrase loops.
-const MEMORY_SEARCH_ACTION_LIMIT_PER_TURN: usize = 2;
-
-#[derive(Debug, Clone, Copy, Default)]
-struct MemoryActionBudget {
-    /// Number of memory search actions already accepted or observed in the
-    /// active turn context.
-    search_count: usize,
-}
-
-impl MemoryActionBudget {
-    /// Builds the memory action budget from current model context.
-    ///
-    /// Only action-result blocks are counted because they represent memory
-    /// actions that have already been surfaced to the model during this active
-    /// work loop.
-    fn from_context(context: &AgentContext) -> Self {
-        let mut budget = Self::default();
-        for block in &context.blocks {
-            if block.source != ContextSourceKind::ActionResult {
-                continue;
-            }
-            if action_result_block_has_action_type(&block.content, "memory_search") {
-                budget.search_count = budget.search_count.saturating_add(1);
-            }
-        }
-        budget
-    }
-
-    /// Accepts a memory action against the turn budget or returns a skipped result.
-    ///
-    /// Non-memory actions do not consume this budget. Over-budget memory
-    /// actions become successful skipped results so unrelated useful actions in
-    /// the same batch are not blocked by the guardrail.
-    fn accept_or_skip(
-        &mut self,
-        turn: &AgentTurnRecord,
-        action: &AgentAction,
-        batch_rationale: &str,
-        batch_thought: Option<&str>,
-    ) -> Option<ActionResult> {
-        if memory_action_is_wrapper_placeholder(action, batch_rationale, batch_thought) {
-            return Some(memory_budget_skip_result(
-                turn,
-                action,
-                "memory_wrapper_placeholder",
-                "memory action skipped: rationale identified this as action-wrapper compliance rather than a concrete durable-context need; continue with the direct task action instead",
-                0,
-            ));
-        }
-        match &action.payload {
-            AgentActionPayload::MemorySearch { .. } => {
-                if self.search_count >= MEMORY_SEARCH_ACTION_LIMIT_PER_TURN {
-                    return Some(memory_budget_skip_result(
-                        turn,
-                        action,
-                        "memory_search_turn_limit",
-                        "memory_search skipped: per-turn memory search limit reached; continue the task with direct artifacts, current action results, MCP, shell, web, or a bounded report instead, and do not search memory again this turn",
-                        MEMORY_SEARCH_ACTION_LIMIT_PER_TURN,
-                    ));
-                }
-                self.search_count = self.search_count.saturating_add(1);
-                None
-            }
-            AgentActionPayload::MemoryStore { .. } => None,
-            _ => None,
-        }
-    }
-}
-
-/// Reports whether a model-context action-result block has the supplied action type.
-fn action_result_block_has_action_type(content: &str, action_type: &str) -> bool {
-    let Some(header) = content.lines().next() else {
-        return false;
-    };
-    header.starts_with("[action_result ") && header.split_whitespace().nth(2) == Some(action_type)
-}
-
-/// Builds the structured skipped result returned for an over-budget memory action.
-fn memory_budget_skip_result(
-    turn: &AgentTurnRecord,
-    action: &AgentAction,
-    code: &str,
-    message: &str,
-    limit: usize,
-) -> ActionResult {
-    ActionResult::succeeded(
-        turn,
-        action,
-        vec![message.to_string()],
-        Some(
-            serde_json::json!({
-                "state": "skipped_runtime_memory_guardrail",
-                "code": code,
-                "limit": limit,
-                "message": message,
-            })
-            .to_string(),
-        ),
-    )
-}
-
 /// Exposes persistent-memory actions on the main model action surface when enabled.
 fn expose_default_memory_actions(request: &mut ModelRequest, memory_actions_enabled: bool) {
     request.memory_actions_enabled = memory_actions_enabled;
@@ -166,89 +60,6 @@ fn expose_default_memory_actions(request: &mut ModelRequest, memory_actions_enab
     request
         .allowed_actions
         .extend([AllowedAction::MemorySearch, AllowedAction::MemoryStore]);
-}
-
-/// Reports whether a memory action is only satisfying the function/action wrapper.
-///
-/// The runtime should keep memory available when it is the right tool, but
-/// should not let a model convert wrapper-compliance confusion into a durable
-/// memory lookup or store. The match requires both wrapper terminology and
-/// compliance/setup language so ordinary memory searches about prompt behavior
-/// are not rejected merely for mentioning a function call.
-fn memory_action_is_wrapper_placeholder(
-    action: &AgentAction,
-    batch_rationale: &str,
-    batch_thought: Option<&str>,
-) -> bool {
-    if !matches!(
-        action.payload,
-        AgentActionPayload::MemorySearch { .. } | AgentActionPayload::MemoryStore { .. }
-    ) {
-        return false;
-    }
-    let mut text = String::new();
-    text.push_str(batch_rationale);
-    text.push('\n');
-    if let Some(batch_thought) = batch_thought {
-        text.push_str(batch_thought);
-        text.push('\n');
-    }
-    text.push_str(&action.rationale);
-    memory_placeholder_text_mentions_wrapper_compliance(&text)
-}
-
-/// Reports whether text frames an action as wrapper compliance instead of work.
-fn memory_placeholder_text_mentions_wrapper_compliance(text: &str) -> bool {
-    let normalized = normalize_memory_placeholder_text(text);
-    let mentions_wrapper = [
-        "required function call",
-        "required tool call",
-        "required current actions call",
-        "required current action call",
-        "current actions call",
-        "schema wrapper",
-        "action wrapper",
-        "function call requirement",
-        "schema valid batch",
-        "action batch envelope",
-        "transport envelope",
-    ]
-    .iter()
-    .any(|phrase| normalized.contains(phrase));
-    if !mentions_wrapper {
-        return false;
-    }
-    [
-        "comply",
-        "complying",
-        "satisfy",
-        "satisfying",
-        "satisfies",
-        "placeholder",
-        "prerequisite",
-        "before proceeding",
-        "required immediate",
-        "schema valid batch is needed",
-        "initial batch is needed",
-    ]
-    .iter()
-    .any(|phrase| normalized.contains(phrase))
-}
-
-/// Normalizes model-authored rationale text for guardrail phrase matching.
-fn normalize_memory_placeholder_text(text: &str) -> String {
-    let mut output = String::with_capacity(text.len());
-    let mut previous_space = true;
-    for character in text.chars().flat_map(char::to_lowercase) {
-        if character.is_ascii_alphanumeric() {
-            output.push(character);
-            previous_space = false;
-        } else if !previous_space {
-            output.push(' ');
-            previous_space = true;
-        }
-    }
-    output.trim().to_string()
 }
 
 /// Exposes MCP tool calls on the main model action surface when tools are available.

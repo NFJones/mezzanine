@@ -58,6 +58,8 @@ pub mod maap;
 pub mod mcp;
 /// Prompt-facing memory context contracts.
 pub mod memory;
+/// Per-turn persistent-memory action guardrails.
+pub mod memory_guardrail;
 /// Provider-independent model profile records and selection policy.
 pub mod model_profile;
 /// Provider-independent successful model response contract.
@@ -222,6 +224,7 @@ pub use mcp::{
     McpPromptUnavailableServer,
 };
 pub use memory::{MemoryContextRecord, MemoryContextScope};
+pub use memory_guardrail::MemoryActionBudget;
 pub use model_profile::{
     ModelProfile, ModelProfileOverrideSource, ModelProfileOverrides, SelectedModelProfile,
     select_model_profile, validate_model_profile_request,
