@@ -6,9 +6,12 @@
 //! remain in the root provider adapter.
 
 use crate::{
-    MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, ModelInteractionKind,
-    ModelMessageRole, ModelRequest, ProviderRequestAssemblyError, ProviderRequestAssemblyResult,
-    maap_action_batch_schema, openai_maap_current_action_batch_description,
+    MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME, MaapBatch, ModelInteractionKind,
+    ModelMessageRole, ModelRequest, ModelTokenUsage, ProviderErrorKind,
+    ProviderMalformedOutputError, ProviderRequestAssemblyError, ProviderRequestAssemblyResult,
+    ProviderResponseError, maap_action_batch_schema, openai_maap_current_action_batch_description,
+    parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
+    provider_malformed_output_error,
 };
 use std::collections::BTreeMap;
 
@@ -416,6 +419,338 @@ fn openai_chat_completions_maap_tool(request: &ModelRequest) -> serde_json::Valu
     })
 }
 
+/// Shared first-choice fields decoded from a Chat Completions response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatCompletionsResponseEnvelope {
+    /// Complete parsed response root used for dialect-specific accounting.
+    pub root: serde_json::Value,
+    /// Response model id, falling back to the requested model when absent.
+    pub model: String,
+    /// First assistant message from the first response choice.
+    pub message: serde_json::Value,
+    /// First-choice finish reason when supplied by the provider.
+    pub finish_reason: Option<String>,
+}
+
+/// Parses the shared Chat Completions JSON envelope.
+///
+/// Dialect-specific code remains responsible for content, tool-call, usage,
+/// transcript, and finish-reason policy.
+pub fn parse_chat_completions_response_envelope(
+    body: &str,
+    fallback_model: &str,
+    provider_label: &str,
+) -> Result<ChatCompletionsResponseEnvelope, ProviderResponseError> {
+    let root: serde_json::Value = serde_json::from_str(body).map_err(|error| {
+        ProviderResponseError::invalid_state(format!(
+            "{provider_label} Chat Completions response body is invalid JSON: {error}"
+        ))
+    })?;
+    let model = root
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(fallback_model)
+        .to_string();
+    let choices = root
+        .get("choices")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            ProviderResponseError::invalid_state(format!(
+                "{provider_label} Chat Completions response has no choices array"
+            ))
+        })?;
+    let first_choice = choices.first().ok_or_else(|| {
+        ProviderResponseError::invalid_state(format!(
+            "{provider_label} Chat Completions response has empty choices array"
+        ))
+    })?;
+    let finish_reason = first_choice
+        .get("finish_reason")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let message = first_choice.get("message").cloned().ok_or_else(|| {
+        ProviderResponseError::invalid_state(format!(
+            "{provider_label} Chat Completions choice has no message"
+        ))
+    })?;
+    Ok(ChatCompletionsResponseEnvelope {
+        root,
+        model,
+        message,
+        finish_reason,
+    })
+}
+
+/// Deterministic fields decoded from one compatible Chat Completions body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenAiChatCompletionsResponse {
+    /// Provider-reported model id or the request fallback model.
+    pub model: String,
+    /// Visible assistant content retained for transcript and diagnostics.
+    pub raw_text: String,
+    /// Provider-reported token accounting.
+    pub usage: ModelTokenUsage,
+    /// Parsed MAAP batch when the request expected provider actions.
+    pub action_batch: Option<MaapBatch>,
+}
+
+/// Failure returned while decoding a compatible Chat Completions body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenAiChatCompletionsResponseError {
+    /// The response envelope or finish state was invalid.
+    Provider(ProviderResponseError),
+    /// Provider-authored MAAP output was malformed.
+    MalformedOutput(ProviderMalformedOutputError),
+}
+
+impl std::fmt::Display for OpenAiChatCompletionsResponseError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Provider(error) => error.fmt(formatter),
+            Self::MalformedOutput(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for OpenAiChatCompletionsResponseError {}
+
+impl From<ProviderResponseError> for OpenAiChatCompletionsResponseError {
+    fn from(error: ProviderResponseError) -> Self {
+        Self::Provider(error)
+    }
+}
+
+impl From<ProviderMalformedOutputError> for OpenAiChatCompletionsResponseError {
+    fn from(error: ProviderMalformedOutputError) -> Self {
+        Self::MalformedOutput(error)
+    }
+}
+
+/// Parses one non-streaming generic OpenAI-compatible response body.
+pub fn parse_openai_chat_completions_response_body(
+    body: &str,
+    request: &ModelRequest,
+) -> Result<OpenAiChatCompletionsResponse, OpenAiChatCompletionsResponseError> {
+    let envelope =
+        parse_chat_completions_response_envelope(body, &request.model, "OpenAI-compatible")?;
+    let message = &envelope.message;
+    let raw_text = message
+        .get("content")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_default();
+    let action_batch = if request.interaction_kind == ModelInteractionKind::AutoSizing {
+        None
+    } else {
+        match parse_openai_chat_completions_maap_action_batch(message, &raw_text, request) {
+            Ok(action_batch) => action_batch,
+            Err(error) => {
+                if let Some(error) = openai_chat_completions_finish_reason_error(
+                    envelope.finish_reason.as_deref(),
+                    &raw_text,
+                    Some(&error),
+                    request,
+                ) {
+                    return Err(error.into());
+                }
+                return Err(error.into());
+            }
+        }
+    };
+    if let Some(error) = openai_chat_completions_finish_reason_error(
+        envelope.finish_reason.as_deref(),
+        &raw_text,
+        None,
+        request,
+    ) {
+        return Err(error.into());
+    }
+    Ok(OpenAiChatCompletionsResponse {
+        model: envelope.model,
+        raw_text,
+        usage: openai_chat_completions_usage(&envelope.root),
+        action_batch,
+    })
+}
+
+fn openai_chat_completions_request_requires_maap(request: &ModelRequest) -> bool {
+    request.interaction_kind.expects_maap_batch() && !request.allowed_actions.actions.is_empty()
+}
+
+fn openai_chat_completions_finish_reason_error(
+    finish_reason: Option<&str>,
+    raw_text: &str,
+    parse_error: Option<&ProviderMalformedOutputError>,
+    request: &ModelRequest,
+) -> Option<ProviderResponseError> {
+    if !openai_chat_completions_request_requires_maap(request) || finish_reason != Some("length") {
+        return None;
+    }
+    let detail = parse_error
+        .map(|error| format!(": {}", error.message()))
+        .unwrap_or_default();
+    let provider_raw_text = parse_error
+        .map(ProviderMalformedOutputError::raw_text)
+        .unwrap_or(raw_text)
+        .to_string();
+    Some(
+        ProviderResponseError::invalid_state(format!(
+            "OpenAI-compatible Chat Completions response hit max_output_tokens before completing MAAP output{detail}"
+        ))
+        .with_provider_failure_json(
+            serde_json::json!({
+                "provider": "openai_chat_completions",
+                "finish_reason": "length",
+                "incomplete_details": {
+                    "reason": "max_output_tokens"
+                },
+                "raw_text_bytes": provider_raw_text.len()
+            })
+            .to_string(),
+        )
+        .with_provider_raw_text(provider_raw_text),
+    )
+}
+
+fn parse_openai_chat_completions_maap_action_batch(
+    message: &serde_json::Value,
+    raw_text: &str,
+    request: &ModelRequest,
+) -> Result<Option<MaapBatch>, ProviderMalformedOutputError> {
+    if let Some(arguments) = openai_chat_completions_maap_tool_arguments(message)? {
+        return parse_maap_action_batch_json_for_turn(
+            &arguments,
+            &request.turn_id,
+            &request.agent_id,
+        )
+        .map(Some)
+        .map_err(|error| openai_chat_malformed_output(error.message(), raw_text));
+    }
+    let trimmed = raw_text.trim();
+    if trimmed.starts_with('{') {
+        return parse_maap_action_batch_json_for_turn(trimmed, &request.turn_id, &request.agent_id)
+            .map(Some)
+            .map_err(|error| openai_chat_malformed_output(error.message(), raw_text));
+    }
+    if let Some(batch) =
+        parse_fenced_maap_action_batch_for_turn(raw_text, &request.turn_id, &request.agent_id)
+            .map_err(|error| openai_chat_malformed_output(error.message(), raw_text))?
+    {
+        return Ok(Some(batch));
+    }
+    if trimmed.is_empty()
+        && let Some(reasoning_content) = openai_chat_completions_reasoning_content(message)
+    {
+        let trimmed_reasoning = reasoning_content.trim();
+        if trimmed_reasoning.starts_with('{') {
+            return parse_maap_action_batch_json_for_turn(
+                trimmed_reasoning,
+                &request.turn_id,
+                &request.agent_id,
+            )
+            .map(Some)
+            .map_err(|error| openai_chat_malformed_output(error.message(), reasoning_content));
+        }
+        return parse_fenced_maap_action_batch_for_turn(
+            reasoning_content,
+            &request.turn_id,
+            &request.agent_id,
+        )
+        .map_err(|error| openai_chat_malformed_output(error.message(), reasoning_content));
+    }
+    Ok(None)
+}
+
+fn openai_chat_completions_reasoning_content(message: &serde_json::Value) -> Option<&str> {
+    let content = message
+        .get("content")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    if !content.is_empty() {
+        return None;
+    }
+    message
+        .get("reasoning_content")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+}
+
+fn openai_chat_completions_maap_tool_arguments(
+    message: &serde_json::Value,
+) -> Result<Option<String>, ProviderMalformedOutputError> {
+    let Some(tool_calls) = message
+        .get("tool_calls")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Ok(None);
+    };
+    let mut matches = Vec::new();
+    for tool_call in tool_calls {
+        let Some(function) = tool_call.get("function") else {
+            continue;
+        };
+        let Some(name) = function.get("name").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if name != OPENAI_MAAP_FUNCTION_TOOL_NAME {
+            continue;
+        }
+        let arguments = match function.get("arguments") {
+            Some(serde_json::Value::String(arguments)) => arguments.clone(),
+            Some(arguments) => arguments.to_string(),
+            None => String::new(),
+        };
+        matches.push(arguments);
+    }
+    match matches.len() {
+        0 if tool_calls.is_empty() => Ok(None),
+        0 => Err(provider_malformed_output_error(
+            ProviderErrorKind::InvalidState,
+            "OpenAI-compatible Chat Completions response returned non-MAAP tool calls without a MAAP action batch",
+            &serde_json::Value::Array(tool_calls.clone()).to_string(),
+        )),
+        1 => Ok(matches.pop()),
+        _ => Err(provider_malformed_output_error(
+            ProviderErrorKind::InvalidState,
+            "OpenAI-compatible Chat Completions response returned multiple MAAP tool calls",
+            &serde_json::Value::Array(tool_calls.clone()).to_string(),
+        )),
+    }
+}
+
+fn openai_chat_malformed_output(
+    error_message: &str,
+    raw_text: &str,
+) -> ProviderMalformedOutputError {
+    provider_malformed_output_error(ProviderErrorKind::InvalidArgs, error_message, raw_text)
+}
+
+fn openai_chat_completions_usage(root: &serde_json::Value) -> ModelTokenUsage {
+    let usage = root.get("usage").unwrap_or(&serde_json::Value::Null);
+    ModelTokenUsage {
+        input_tokens: usage
+            .get("prompt_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        output_tokens: usage
+            .get("completion_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        reasoning_tokens: usage
+            .get("completion_tokens_details")
+            .and_then(|details| details.get("reasoning_tokens"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        cached_input_tokens: usage
+            .get("prompt_tokens_details")
+            .and_then(|details| details.get("cached_tokens"))
+            .and_then(serde_json::Value::as_u64),
+        cache_write_input_tokens: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,5 +810,28 @@ mod tests {
             crate::ProviderRequestAssemblyErrorKind::InvalidArgs
         );
         assert!(error.message().contains("developer or system"));
+    }
+
+    /// Verifies hallucinated or unsupported compatible tool calls fail as
+    /// malformed provider output and retain the raw call for product-level
+    /// diagnostics.
+    #[test]
+    fn openai_chat_completions_non_maap_tool_calls_are_malformed_output() {
+        let message = serde_json::json!({
+            "tool_calls": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "unexpected_tool",
+                        "arguments": {"value": true}
+                    }
+                }
+            ]
+        });
+
+        let error = openai_chat_completions_maap_tool_arguments(&message).unwrap_err();
+
+        assert!(error.message().contains("non-MAAP tool calls"));
+        assert!(error.raw_text().contains("unexpected_tool"));
     }
 }

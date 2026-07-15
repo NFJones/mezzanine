@@ -5,9 +5,7 @@
 //! Provider dispatch remains in the parent module so shared trait wiring stays
 //! centralized.
 
-use super::chat_completions::{
-    ChatCompletionsDialect, ChatCompletionsRetry, parse_chat_completions_response_envelope,
-};
+use super::chat_completions::{ChatCompletionsDialect, ChatCompletionsRetry};
 use super::errors::provider_maap_parse_error;
 use super::{
     AgentCapability, AllowedAction, AllowedActionSet, DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME,
@@ -18,8 +16,8 @@ use super::{
     ProviderHttpResponse, ProviderTranscriptEvent, Result, parse_fenced_maap_action_batch_for_turn,
     parse_maap_action_batch_json_for_turn, provider_quota_usage_from_headers, validate_non_empty,
 };
-use mez_agent::parse_sse_events;
 use mez_agent::{maap_action_batch_schema, mcp_tool_manifest_for_description};
+use mez_agent::{parse_chat_completions_response_envelope, parse_sse_events};
 use std::collections::BTreeMap;
 
 /// DeepSeek request strategy for provider-native MAAP transport.

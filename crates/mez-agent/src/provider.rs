@@ -603,6 +603,7 @@ pub struct ProviderResponseError {
     kind: ProviderResponseErrorKind,
     message: String,
     provider_failure_json: Option<String>,
+    provider_raw_text: Option<String>,
 }
 
 impl ProviderResponseError {
@@ -612,12 +613,19 @@ impl ProviderResponseError {
             kind: ProviderResponseErrorKind::InvalidState,
             message: message.into(),
             provider_failure_json: None,
+            provider_raw_text: None,
         }
     }
 
     /// Attaches a sanitized provider failure payload to this error.
     pub fn with_provider_failure_json(mut self, failure_json: impl Into<String>) -> Self {
         self.provider_failure_json = Some(failure_json.into());
+        self
+    }
+
+    /// Attaches raw provider output required for recovery or diagnostics.
+    pub fn with_provider_raw_text(mut self, raw_text: impl Into<String>) -> Self {
+        self.provider_raw_text = Some(raw_text.into());
         self
     }
 
@@ -634,6 +642,11 @@ impl ProviderResponseError {
     /// Returns the optional sanitized provider failure payload.
     pub fn provider_failure_json(&self) -> Option<&str> {
         self.provider_failure_json.as_deref()
+    }
+
+    /// Returns optional raw provider output retained for recovery.
+    pub fn provider_raw_text(&self) -> Option<&str> {
+        self.provider_raw_text.as_deref()
     }
 }
 
@@ -1264,12 +1277,14 @@ mod request_assembly_tests {
         assert_eq!(error.to_string(), "encoding failed");
     }
 
-    /// Provider response failures retain their stable category and optional
-    /// sanitized provider payload for conversion by the composition boundary.
+    /// Provider response failures retain their stable category, optional
+    /// sanitized payload, and raw recovery text for conversion by the product
+    /// composition boundary.
     #[test]
     fn provider_response_errors_preserve_sanitized_failure_payloads() {
         let error = ProviderResponseError::invalid_state("response failed")
-            .with_provider_failure_json(r#"{"status_code":500}"#);
+            .with_provider_failure_json(r#"{"status_code":500}"#)
+            .with_provider_raw_text("partial provider output");
 
         assert_eq!(error.kind(), ProviderResponseErrorKind::InvalidState);
         assert_eq!(error.message(), "response failed");
@@ -1277,6 +1292,7 @@ mod request_assembly_tests {
             error.provider_failure_json(),
             Some(r#"{"status_code":500}"#)
         );
+        assert_eq!(error.provider_raw_text(), Some("partial provider output"));
     }
 
     /// OpenAI endpoint derivation preserves canonical defaults, normalizes

@@ -147,7 +147,9 @@ pub use openai_cache::{
     openai_stable_prefix_material_for_request,
 };
 pub use openai_chat_completions::{
-    OpenAiChatCompletionsOptions, openai_chat_completions_request_body,
+    ChatCompletionsResponseEnvelope, OpenAiChatCompletionsOptions, OpenAiChatCompletionsResponse,
+    OpenAiChatCompletionsResponseError, openai_chat_completions_request_body,
+    parse_chat_completions_response_envelope, parse_openai_chat_completions_response_body,
 };
 pub use openai_request::{
     openai_responses_request_body, openai_responses_request_body_with_stream,

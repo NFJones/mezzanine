@@ -209,6 +209,9 @@ impl From<mez_agent::ProviderResponseError> for MezError {
         if let Some(failure_json) = error.provider_failure_json() {
             product_error = product_error.with_provider_failure_json(failure_json.to_string());
         }
+        if let Some(raw_text) = error.provider_raw_text() {
+            product_error = product_error.with_provider_raw_text(raw_text.to_string());
+        }
         product_error
     }
 }
@@ -218,6 +221,15 @@ impl From<mez_agent::ProviderMalformedOutputError> for MezError {
         Self::new(error.kind().into(), error.message())
             .with_provider_raw_text(error.raw_text().to_string())
             .with_provider_failure_json(error.provider_failure_json().to_string())
+    }
+}
+
+impl From<mez_agent::OpenAiChatCompletionsResponseError> for MezError {
+    fn from(error: mez_agent::OpenAiChatCompletionsResponseError) -> Self {
+        match error {
+            mez_agent::OpenAiChatCompletionsResponseError::Provider(error) => error.into(),
+            mez_agent::OpenAiChatCompletionsResponseError::MalformedOutput(error) => error.into(),
+        }
     }
 }
 
