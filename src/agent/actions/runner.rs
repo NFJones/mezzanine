@@ -17,8 +17,7 @@ use super::super::{
 use super::super::{MarkerToken, McpExecutionRequest, Path};
 #[cfg(test)]
 use super::execution::{
-    LocalActionExecutor, McpActionExecutor, PaneShellExecutor, PaneShellLocalExecutor,
-    execute_local_action, execute_mcp_action_through_runtime,
+    PaneShellLocalExecutor, execute_local_action, execute_mcp_action_through_runtime,
 };
 use super::recovery::{
     FailureSummaryInput, FailureSummaryScope, failed_maap_validation_execution_with_summary_async,
@@ -42,6 +41,8 @@ use mez_agent::{
     SubagentScopeDeclaration, apply_default_action_gates, failed_turn_execution_without_batch,
     maap_repair_request, plan_turn_execution_from_batch,
 };
+#[cfg(test)]
+use mez_agent::{LocalActionExecutor, McpActionExecutor, PaneShellExecutor};
 
 /// Maximum number of ephemeral provider retries after a MAAP validation error.
 ///
@@ -372,7 +373,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
         turn: AgentTurnRecord,
         context: AgentContext,
         shell_path: &Path,
-        executor: &mut impl PaneShellExecutor,
+        executor: &mut impl PaneShellExecutor<Error = MezError>,
         marker_for_action: M,
     ) -> Result<AgentTurnExecution>
     where
@@ -397,7 +398,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
         ledger: &mut AgentTurnLedger,
         turn: AgentTurnRecord,
         context: AgentContext,
-        executor: &mut impl LocalActionExecutor,
+        executor: &mut impl LocalActionExecutor<Error = MezError>,
         mut marker_for_action: M,
     ) -> Result<AgentTurnExecution>
     where
@@ -446,7 +447,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
         ledger: &mut AgentTurnLedger,
         turn: AgentTurnRecord,
         context: AgentContext,
-        executor: &mut impl McpActionExecutor,
+        executor: &mut impl McpActionExecutor<Error = MezError>,
         mut plan_for_action: F,
     ) -> Result<AgentTurnExecution>
     where

@@ -26,10 +26,9 @@ use rustix::process::geteuid;
 use serde_json::Value;
 
 use crate::agent::actions::{
-    AsyncMcpActionExecutor, McpActionExecutor, execute_mcp_action_through_runtime,
-    execute_mcp_action_through_runtime_async, next_transcript_sequence,
-    postprocess_shell_action_success_output, shell_command_result_content,
-    shell_command_structured_content_json,
+    execute_mcp_action_through_runtime, execute_mcp_action_through_runtime_async,
+    next_transcript_sequence, postprocess_shell_action_success_output,
+    shell_command_result_content, shell_command_structured_content_json,
 };
 use crate::agent::context::assemble_model_request;
 use crate::agent::network::execute_network_action_with_transport_async;
@@ -148,6 +147,7 @@ use mez_agent::{
 };
 use mez_agent::{AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ScheduledWork, ScheduledWorkKind};
 use mez_agent::{ApprovalPolicy, PermissionPreset, RuleDecision};
+use mez_agent::{AsyncMcpActionExecutor, McpActionExecutor};
 use mez_agent::{
     CooperationMode, ScopeRegistry, SubagentProfile, SubagentScopeDeclaration,
     SubagentSpawnRequest, builtin_subagent_profiles,

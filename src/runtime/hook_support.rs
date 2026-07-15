@@ -192,6 +192,8 @@ impl RuntimeMcpActionExecutor<'_> {
 }
 
 impl McpActionExecutor for RuntimeMcpActionExecutor<'_> {
+    type Error = MezError;
+
     /// Executes one approved MCP request through the product transport.
     fn execute_mcp_call(&mut self, request: &McpExecutionRequest) -> Result<McpExecutionResponse> {
         self.validate_request(request)?;
@@ -228,6 +230,8 @@ impl McpActionExecutor for RuntimeMcpActionExecutor<'_> {
 }
 
 impl AsyncMcpActionExecutor for RuntimeMcpActionExecutor<'_> {
+    type Error = MezError;
+
     /// Executes one approved MCP request asynchronously through the product transport.
     async fn execute_mcp_call_async(
         &mut self,

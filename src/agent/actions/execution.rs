@@ -7,181 +7,21 @@
 
 use super::super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnRecord,
-    DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, LocalActionPlan, MarkerToken,
-    McpExecutionRequest, McpExecutionResponse, MezError, Path, Result, ShellTransaction,
+    DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MarkerToken, McpExecutionRequest,
+    McpExecutionResponse, MezError, Path, Result, ShellTransaction,
     ShellTransactionOutputTransport, ToolDiscoveryCache, ToolInventory,
     action_content_blocks_from_json_or_text, action_text_content_blocks, json_escape,
     local_action_plan, tool_discovery_script,
 };
 use super::shell_command_structured_content_json;
-use mez_agent::{ShellTransportDiagnostics, decode_shell_output_transport_with_diagnostics};
+use mez_agent::{
+    AsyncMcpActionExecutor, LocalActionExecutor, LocalExecutionOutput, LocalExecutionRequest,
+    LocalExecutionTransport, McpActionExecutor, PaneShellExecutor, ShellExecutionOutput,
+    ShellExecutionRequest, decode_shell_output_transport_with_diagnostics,
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 /// Default turn-wide shell action timeout used by transport-neutral execution.
 const LOCAL_EXECUTION_DEFAULT_TIMEOUT_MS: u64 = 30 * 60 * 1000;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// Carries shell execution request state for this subsystem.
-///
-/// The fields are kept explicit so callers can inspect and move structured
-/// runtime data without parsing display text.
-pub struct ShellExecutionRequest {
-    /// Structured `action_id` value carried by this API type.
-    pub action_id: String,
-    /// Structured `transaction` value carried by this API type.
-    pub transaction: ShellTransaction,
-    /// Structured `timeout_ms` value carried by this API type.
-    pub timeout_ms: Option<u64>,
-    /// Structured `interactive` value carried by this API type.
-    pub interactive: bool,
-    /// Structured `stateful` value carried by this API type.
-    pub stateful: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// Carries shell execution output state for this subsystem.
-///
-/// The fields are kept explicit so callers can inspect and move structured
-/// runtime data without parsing display text.
-pub struct ShellExecutionOutput {
-    /// Structured `exit_code` value carried by this API type.
-    pub exit_code: Option<i32>,
-    /// Native process signal when the executor can observe signal termination.
-    pub signal: Option<i32>,
-    /// Structured `stdout` value carried by this API type.
-    pub stdout: String,
-    /// Structured `stderr` value carried by this API type.
-    pub stderr: String,
-    /// Structured `timed_out` value carried by this API type.
-    pub timed_out: bool,
-    /// Structured `interrupted` value carried by this API type.
-    pub interrupted: bool,
-    /// Structured transport diagnostics kept separate from command output.
-    pub transport_diagnostics: ShellTransportDiagnostics,
-}
-
-impl ShellExecutionOutput {
-    /// Builds shell execution output with no transport diagnostics.
-    ///
-    /// Callers that already provide decoded or non-transported output can use
-    /// this constructor without fabricating empty diagnostic state at each
-    /// call site.
-    pub fn new(
-        exit_code: Option<i32>,
-        stdout: String,
-        stderr: String,
-        timed_out: bool,
-        interrupted: bool,
-    ) -> Self {
-        Self {
-            exit_code,
-            signal: None,
-            stdout,
-            stderr,
-            timed_out,
-            interrupted,
-            transport_diagnostics: ShellTransportDiagnostics::default(),
-        }
-    }
-}
-
-/// Defines the `PaneShellExecutor` behavior contract for this subsystem.
-///
-/// Implementors provide the concrete I/O or state transition boundary used by
-/// higher-level runtime code.
-pub trait PaneShellExecutor {
-    /// Runs the execute shell operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in the
-    /// owning module so callers receive typed results instead of relying on
-    /// duplicated control-flow logic.
-    fn execute_shell(&mut self, request: &ShellExecutionRequest) -> Result<ShellExecutionOutput>;
-}
-
-/// Identifies the runtime transport used to execute a local action plan.
-///
-/// Local actions keep their model-facing MAAP action names regardless of this
-/// value. The transport is selected by runtime code after planning and policy
-/// checks have accepted an action.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocalExecutionTransport {
-    /// Execute the local action by dispatching a transaction to the pane shell.
-    PaneShell,
-}
-
-impl LocalExecutionTransport {
-    /// Returns the stable string recorded in structured action-result metadata.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::PaneShell => "pane_shell",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// Carries transport-neutral local action execution request state.
-///
-/// The planned command remains available to every transport, while
-/// pane-specific wrapper state is supplied only by the pane-shell adapter.
-pub struct LocalExecutionRequest {
-    /// Structured `action_id` value carried by this API type.
-    pub action_id: String,
-    /// Original MAAP action whose model-facing shape must stay transport-neutral.
-    pub action: AgentAction,
-    /// Structured `turn_id` value needed by transports that render wrappers.
-    pub turn_id: String,
-    /// Structured `agent_id` value needed by transports that render wrappers.
-    pub agent_id: String,
-    /// Structured `pane_id` value needed by transports that render wrappers.
-    pub pane_id: String,
-    /// Planned local action semantics selected before transport dispatch.
-    pub plan: LocalActionPlan,
-    /// Effective finite timeout after applying the enclosing turn budget.
-    pub effective_timeout_ms: u64,
-    /// Runtime transport selected for this local action.
-    pub transport: LocalExecutionTransport,
-    /// Marker token used by transports that need a command-output boundary.
-    pub marker: MarkerToken,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// Carries transport-neutral local action execution output state.
-///
-/// The output mirrors shell execution data so existing action-result recovery
-/// and display logic can be reused while the transport choice stays explicit.
-pub struct LocalExecutionOutput {
-    /// Runtime transport that produced this output.
-    pub transport: LocalExecutionTransport,
-    /// Whether this execution sent input to the pane shell.
-    pub sent_to_pane: bool,
-    /// Shell-shaped output returned by the selected local action transport.
-    pub shell_output: ShellExecutionOutput,
-}
-
-impl LocalExecutionOutput {
-    /// Builds output for a pane-shell local action execution.
-    pub fn pane_shell(shell_output: ShellExecutionOutput) -> Self {
-        Self {
-            transport: LocalExecutionTransport::PaneShell,
-            sent_to_pane: true,
-            shell_output,
-        }
-    }
-}
-
-/// Defines the local action executor behavior contract for this subsystem.
-///
-/// Implementors select the concrete transport for an already-planned local
-/// action without changing the model-facing action interface.
-pub trait LocalActionExecutor {
-    /// Reports which runtime transport this executor uses for local actions.
-    fn transport(&self) -> LocalExecutionTransport;
-
-    /// Runs one planned local action through the selected runtime transport.
-    fn execute_local_action(
-        &mut self,
-        request: &LocalExecutionRequest,
-    ) -> Result<LocalExecutionOutput>;
-}
 
 /// Adapts the existing pane shell executor to the transport-neutral executor
 /// contract.
@@ -202,8 +42,10 @@ impl<'a, E> PaneShellLocalExecutor<'a, E> {
 
 impl<E> LocalActionExecutor for PaneShellLocalExecutor<'_, E>
 where
-    E: PaneShellExecutor,
+    E: PaneShellExecutor<Error = MezError>,
 {
+    type Error = MezError;
+
     fn transport(&self) -> LocalExecutionTransport {
         LocalExecutionTransport::PaneShell
     }
@@ -234,36 +76,6 @@ where
     }
 }
 
-/// Defines the `McpActionExecutor` behavior contract for this subsystem.
-///
-/// Implementors provide the concrete I/O or state transition boundary used by
-/// higher-level runtime code.
-pub trait McpActionExecutor {
-    /// Runs the execute mcp call operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in the
-    /// owning module so callers receive typed results instead of relying on
-    /// duplicated control-flow logic.
-    fn execute_mcp_call(&mut self, request: &McpExecutionRequest) -> Result<McpExecutionResponse>;
-}
-
-#[allow(async_fn_in_trait)]
-/// Defines the `AsyncMcpActionExecutor` behavior contract for this subsystem.
-///
-/// Implementors provide the concrete I/O or state transition boundary used by
-/// higher-level runtime code.
-pub trait AsyncMcpActionExecutor {
-    /// Runs the execute mcp call async operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in the
-    /// owning module so callers receive typed results instead of relying on
-    /// duplicated control-flow logic.
-    async fn execute_mcp_call_async(
-        &mut self,
-        request: &McpExecutionRequest,
-    ) -> Result<McpExecutionResponse>;
-}
-
 /// Executes the `execute_shell_action_through_pane` operation for the owning subsystem.
 ///
 /// Callers receive a typed result or error with context from the underlying
@@ -273,7 +85,7 @@ pub fn execute_shell_action_through_pane(
     action: &AgentAction,
     marker: MarkerToken,
     shell_path: &Path,
-    executor: &mut impl PaneShellExecutor,
+    executor: &mut impl PaneShellExecutor<Error = MezError>,
 ) -> Result<ActionResult> {
     let mut local_executor = PaneShellLocalExecutor::new(shell_path, executor);
     execute_local_action(turn, action, marker, &mut local_executor)
@@ -287,7 +99,7 @@ pub fn execute_local_action(
     turn: &AgentTurnRecord,
     action: &AgentAction,
     marker: MarkerToken,
-    executor: &mut impl LocalActionExecutor,
+    executor: &mut impl LocalActionExecutor<Error = MezError>,
 ) -> Result<ActionResult> {
     let Some(plan) = local_action_plan(action)? else {
         return Err(MezError::invalid_args(
@@ -426,7 +238,7 @@ pub fn execute_mcp_action_through_runtime(
     turn: &AgentTurnRecord,
     action: &AgentAction,
     plan: &McpExecutionRequest,
-    executor: &mut impl McpActionExecutor,
+    executor: &mut impl McpActionExecutor<Error = MezError>,
 ) -> Result<ActionResult> {
     let AgentActionPayload::McpCall {
         server,
@@ -459,7 +271,7 @@ pub async fn execute_mcp_action_through_runtime_async(
     turn: &AgentTurnRecord,
     action: &AgentAction,
     plan: &McpExecutionRequest,
-    executor: &mut impl AsyncMcpActionExecutor,
+    executor: &mut impl AsyncMcpActionExecutor<Error = MezError>,
 ) -> Result<ActionResult> {
     let AgentActionPayload::McpCall {
         server,
@@ -494,7 +306,7 @@ pub fn discover_tools_through_pane_shell(
     turn: &AgentTurnRecord,
     marker: MarkerToken,
     shell_path: &Path,
-    executor: &mut impl PaneShellExecutor,
+    executor: &mut impl PaneShellExecutor<Error = MezError>,
 ) -> Result<ToolInventory> {
     if let Some(inventory) = cache.get(&signature) {
         return Ok(inventory.clone());

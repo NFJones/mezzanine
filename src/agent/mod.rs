@@ -62,11 +62,11 @@ use mez_agent::action_text_content_blocks;
 use mez_agent::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentLogLevel,
     AgentShellStore, AgentShellVisibility, AgentTranscriptEntry, AgentTurnLedger, AgentTurnRecord,
-    AgentTurnState, AllowedActionSet, ContextSourceKind, LocalActionPlan, MaapBatch,
-    McpExecutionRequest, McpExecutionResponse, ModelInteractionKind, ModelMessage,
-    ModelMessageRole, ModelRequest, ModelTokenUsage, ProviderHttpRequest, ProviderHttpResponse,
-    SayStatus, TranscriptPersistence, agent_shell_help_display, agent_shell_mcp_display,
-    agent_shell_permissions_display, agent_shell_status_display,
+    AgentTurnState, AllowedActionSet, ContextSourceKind, MaapBatch, McpExecutionRequest,
+    McpExecutionResponse, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest,
+    ModelTokenUsage, ProviderHttpRequest, ProviderHttpResponse, SayStatus, TranscriptPersistence,
+    agent_shell_help_display, agent_shell_mcp_display, agent_shell_permissions_display,
+    agent_shell_status_display,
 };
 use mez_agent::{
     DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MarkerToken, ShellTransaction,

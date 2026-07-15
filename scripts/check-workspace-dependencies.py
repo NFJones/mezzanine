@@ -27,6 +27,7 @@ ALLOWED_EDGES = {
 
 REQUIRED_OWNER_PATHS = {
     "crates/mez-agent/src/lib.rs",
+    "crates/mez-agent/src/execution.rs",
     "crates/mez-agent/src/shell/mod.rs",
     "crates/mez-core/src/ids.rs",
     "crates/mez-mux/src/layout/mod.rs",

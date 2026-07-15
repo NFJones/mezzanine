@@ -12,8 +12,7 @@
 // Agent module tests.
 
 use super::actions::{
-    AgentTurnRunner, McpActionExecutor, PaneShellExecutor, ShellExecutionOutput,
-    ShellExecutionRequest, discover_tools_through_pane_shell, execute_mcp_action_through_runtime,
+    AgentTurnRunner, discover_tools_through_pane_shell, execute_mcp_action_through_runtime,
     execute_shell_action_through_pane, persist_turn_execution_transcript,
     postprocess_shell_action_success_output,
 };
@@ -65,6 +64,9 @@ use mez_agent::{
 use mez_agent::{
     DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MarkerToken, ShellClassification,
     ShellTransaction, ShellTransactionInput, ShellTransactionOutputTransport, ToolDiscoveryCache,
+};
+use mez_agent::{
+    McpActionExecutor, PaneShellExecutor, ShellExecutionOutput, ShellExecutionRequest,
 };
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -130,6 +132,8 @@ struct FakePaneShellExecutor {
 }
 
 impl PaneShellExecutor for FakePaneShellExecutor {
+    type Error = crate::error::MezError;
+
     /// Runs the execute shell operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -280,6 +284,8 @@ struct FakeMcpActionExecutor {
 }
 
 impl McpActionExecutor for FakeMcpActionExecutor {
+    type Error = crate::error::MezError;
+
     /// Runs the execute mcp call operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
