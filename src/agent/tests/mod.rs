@@ -78,26 +78,6 @@ use std::thread;
 use std::time::Duration;
 use wait_timeout::ChildExt;
 
-/// Runs the looks like uuid v4 operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn looks_like_uuid_v4(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    bytes.len() == 36
-        && bytes[8] == b'-'
-        && bytes[13] == b'-'
-        && bytes[18] == b'-'
-        && bytes[23] == b'-'
-        && bytes[14] == b'4'
-        && matches!(bytes[19], b'8' | b'9' | b'a' | b'b')
-        && bytes
-            .iter()
-            .enumerate()
-            .all(|(index, byte)| matches!(index, 8 | 13 | 18 | 23) || byte.is_ascii_hexdigit())
-}
-
 /// Builds a representative MCP tool state for agent-shell display tests. The
 /// registry normalizes server id, availability, and approval from the owning
 /// server config, so tests can override only the fields relevant to each

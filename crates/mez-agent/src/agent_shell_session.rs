@@ -965,3 +965,70 @@ pub fn agent_shell_visibility_name(visibility: AgentShellVisibility) -> &'static
         AgentShellVisibility::HidePendingTaskCompletion => "hide-pending-task-completion",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies agent shell rejects mismatched turn completion.
+    ///
+    /// This regression scenario documents the behavior being protected so a
+    /// failure points at a concrete contract change rather than an incidental
+    /// implementation detail.
+    #[test]
+    fn agent_shell_rejects_mismatched_turn_completion() {
+        let mut store = AgentShellStore::default();
+        store.enter_or_resume("%1").unwrap();
+        store.start_turn("%1", "turn-1").unwrap();
+
+        let error = store.finish_turn("%1", "turn-2").unwrap_err();
+
+        assert_eq!(error.kind(), crate::AgentShellSessionErrorKind::InvalidArgs);
+    }
+
+    /// Verifies that hiding an agent shell immediately returns pane input focus
+    /// to the user even when a turn continues in the background. Finishing the
+    /// turn keeps the same session while transcript state remains tied to
+    /// durable transcript writes.
+    #[test]
+    fn agent_shell_resumes_per_pane_and_hides_immediately_during_running_turn() {
+        let mut store = AgentShellStore::default();
+        let first_session_id = store.enter_or_resume("%1").unwrap().session_id.to_string();
+        assert!(looks_like_uuid_v4(&first_session_id));
+
+        store.start_turn("%1", "turn-1").unwrap();
+        let pending = store.request_exit("%1").unwrap();
+        assert_eq!(pending.visibility, AgentShellVisibility::Hidden);
+
+        let hidden = store.finish_turn("%1", "turn-1").unwrap();
+        assert_eq!(hidden.visibility, AgentShellVisibility::Hidden);
+        assert_eq!(hidden.transcript_entries, 0);
+        let recorded = store.record_transcript_entries("%1", 3).unwrap();
+        assert_eq!(recorded.transcript_entries, 3);
+
+        let resumed = store.enter_or_resume("%1").unwrap();
+        assert_eq!(resumed.session_id, first_session_id);
+        assert_eq!(resumed.visibility, AgentShellVisibility::Visible);
+        assert_eq!(resumed.transcript_entries, 3);
+
+        let other = store.enter_or_resume("%2").unwrap();
+        assert!(looks_like_uuid_v4(&other.session_id));
+        assert_ne!(other.session_id, first_session_id);
+    }
+
+    /// Reports whether one string is a lowercase RFC 4122 UUIDv4.
+    fn looks_like_uuid_v4(value: &str) -> bool {
+        let bytes = value.as_bytes();
+        bytes.len() == 36
+            && bytes[8] == b'-'
+            && bytes[13] == b'-'
+            && bytes[18] == b'-'
+            && bytes[23] == b'-'
+            && bytes[14] == b'4'
+            && matches!(bytes[19], b'8' | b'9' | b'a' | b'b')
+            && bytes
+                .iter()
+                .enumerate()
+                .all(|(index, byte)| matches!(index, 8 | 13 | 18 | 23) || byte.is_ascii_hexdigit())
+    }
+}
