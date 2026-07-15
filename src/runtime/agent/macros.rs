@@ -8,7 +8,7 @@
 use super::*;
 #[cfg(test)]
 use crate::agent::ModelProvider;
-use crate::macros::{MacroCatalog, MacroDefinition, discover_macro_catalog, load_macro_definition};
+use crate::macros::{discover_macro_catalog, load_macro_definition};
 use crate::project::TrustDecision;
 use crate::runtime::agent_state::RuntimeAgentLoopCompletion;
 use crate::runtime::service_state::{
@@ -24,6 +24,7 @@ use mez_agent::{
     AllowedActionSet, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile,
     ModelRequest,
 };
+use mez_agent::{MacroCatalog, MacroDefinition, parse_macro_prompt_invocation};
 use mez_agent::{ScheduledWork, ScheduledWorkKind};
 
 impl RuntimeSessionService {
@@ -165,7 +166,7 @@ impl RuntimeSessionService {
         pane_id: &str,
         prompt: &str,
     ) -> Result<RuntimeAgentPromptTurnStart> {
-        let invocation = crate::macros::parse_macro_prompt_invocation(prompt)
+        let invocation = parse_macro_prompt_invocation(prompt)
             .ok_or_else(|| MezError::invalid_args("macro prompt must start with #<macro-name>"))?;
         let catalog = self.effective_macro_catalog_for_pane(pane_id);
         let summary = catalog.get(&invocation.name).cloned().ok_or_else(|| {

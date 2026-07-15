@@ -60,7 +60,7 @@ persistence, transport, and composition adapters.
 
 | Root surface | Final owner / root role | State | Required migration |
 |---|---|---|---|
-| `src/macros/` | `mez-agent` state machine plus root asset/discovery adapter | temporary | Move parsing, validation, catalog semantics, and judge/retry state. Retain filesystem discovery, embedded product assets, and runtime dispatch in root. |
+| `src/macros/` | `mez-agent` macro contracts plus root asset/discovery adapter | adapter | Macro identities, ordered-step/document/invocation parsing, validation, catalog precedence, and model/JSON projection are lower-owned. Root retains bounded filesystem discovery, embedded product assets, source/path attachment, product error projection, and runtime dispatch. Six intrinsic tests run lower; five asset/filesystem integrations remain root-owned. |
 | `src/subagent/` | `mez-agent` spawn/profile/scope state plus root effect-classification adapter | adapter | Canonical records, validation, profiles, and scope conflicts are imported directly from `mez-agent`. Root retains only friendly presentation names and shell/patch permission-path classification implementing the lower enforcement port. |
 | `src/command/` | `mez-mux` pure mux grammar/plans plus product dispatch | temporary | Extract only commands that mutate mux state without auth/config/audit/agent/persistence concerns. Keep cross-cutting dispatch product-owned. |
 | `src/runtime/`, `src/async_runtime/` | product composition | adapter | Keep serialized ownership, supervision, persistence, scheduling, transport, and effect execution. Ensure deterministic lower-crate transitions are invoked rather than duplicated. |

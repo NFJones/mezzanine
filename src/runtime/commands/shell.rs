@@ -7,7 +7,7 @@
 //! modules own concrete slash-command behavior.
 
 use super::*;
-use crate::macros::parse_macro_prompt_invocation;
+use mez_agent::parse_macro_prompt_invocation;
 
 /// Result of applying the live side effects for an agent-shell exit request.
 pub(in crate::runtime) struct RuntimeAgentShellExit {

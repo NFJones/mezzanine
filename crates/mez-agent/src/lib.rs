@@ -64,6 +64,8 @@ pub mod local_action;
 pub mod maap;
 #[cfg(test)]
 mod maap_protocol_tests;
+/// Provider-independent agent macro contracts and parsing.
+pub mod macro_workflow;
 /// Dependency-neutral MCP prompt manifest records.
 pub mod mcp;
 /// Prompt-facing memory context contracts.
@@ -250,6 +252,12 @@ pub use maap::{
     normalize_agent_output_content_type, parse_fenced_maap_action_batch,
     parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json,
     parse_maap_action_batch_json_for_turn,
+};
+pub use macro_workflow::{
+    MACRO_FILE_NAME, MACRO_STEPS_HEADING, MAX_MACRO_FILE_BYTES, MAX_MACRO_STEPS, MacroCatalog,
+    MacroContractError, MacroDefinition, MacroDiagnostic, MacroPromptInvocation, MacroSource,
+    MacroStep, MacroSummary, ParsedMacroDocument, is_valid_macro_name, parse_macro_document,
+    parse_macro_prompt_invocation, parse_macro_steps,
 };
 pub use mcp::{
     AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellMcpToolSummary,
