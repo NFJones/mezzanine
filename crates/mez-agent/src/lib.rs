@@ -126,14 +126,17 @@ pub mod turn_ledger;
 pub use accounting::{AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsageKey};
 pub use action_gates::apply_default_action_gates;
 pub use action_planning::{
-    ActionPlanningError, ActionPlanningInput, ActionPlanningResult, action_auto_allow_reason,
-    action_supports_auto_allow, plan_action_result, say_action_structured_content_json,
+    ActionPlanningError, ActionPlanningInput, ActionPlanningResult, PlannedBatchActionResults,
+    action_auto_allow_reason, action_supports_auto_allow, plan_action_result,
+    plan_batch_action_results, say_action_structured_content_json,
     shell_action_structured_content_json,
 };
 pub use action_recovery::{
-    ActionRecoveryError, ActionRecoveryResult, capability_continuation_request,
-    capability_requests_from_batch, disallowed_action_capability_continuation_request,
-    maap_repair_request, mixed_capability_continuation_request, validate_batch_allowed_actions,
+    ActionRecoveryError, ActionRecoveryResult, BatchContinuationError, BatchContinuationInput,
+    BatchContinuationPlan, BatchContinuationRejection, BatchValidationFailure,
+    capability_continuation_request, capability_requests_from_batch,
+    disallowed_action_capability_continuation_request, maap_repair_request,
+    mixed_capability_continuation_request, plan_batch_continuation, validate_batch_allowed_actions,
 };
 pub use action_result::{
     ActionContentBlock, ActionError, ActionResult, ActionResultContractError,

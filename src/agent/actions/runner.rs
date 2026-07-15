@@ -33,13 +33,13 @@ use super::recovery::{
     failed_maap_validation_execution_with_summary, summarize_controller_failure_execution,
     summarize_provider_failure_execution,
 };
+#[cfg(test)]
 use mez_agent::turn_state_from_action_results;
 use mez_agent::{
     AgentTurnNegotiation, AgentTurnProviderFailureDecision, AgentTurnResponseDecision,
-    MemoryActionBudget, ProviderResponseAcceptance, SubagentScopeDeclaration,
-    apply_default_action_gates, capability_continuation_request, capability_requests_from_batch,
-    disallowed_action_capability_continuation_request, maap_repair_request,
-    mixed_capability_continuation_request, validate_batch_allowed_actions,
+    BatchContinuationError, BatchContinuationInput, BatchContinuationPlan, BatchValidationFailure,
+    ProviderResponseAcceptance, SubagentScopeDeclaration, apply_default_action_gates,
+    maap_repair_request,
 };
 
 /// Maximum number of ephemeral provider retries after a MAAP validation error.
@@ -50,7 +50,7 @@ use mez_agent::{
 /// valid.
 const MAAP_REPAIR_ATTEMPT_LIMIT: usize = 2;
 
-/// Plans post-batch action results and derives the resulting terminal state.
+/// Plans post-batch action results and projects them into the product execution record.
 fn planned_execution_from_batch(
     runner: &AgentTurnRunner<'_, impl Sized>,
     turn: &AgentTurnRecord,
@@ -60,130 +60,72 @@ fn planned_execution_from_batch(
     latest_response_usage: ModelTokenUsage,
     batch: super::super::MaapBatch,
 ) -> Result<AgentTurnExecution> {
-    let final_turn = batch.final_turn;
-    let mut action_results = Vec::with_capacity(batch.actions.len());
-    let mut memory_budget = MemoryActionBudget::from_context(context);
-    for action in &batch.actions {
-        if let Some(result) =
-            memory_budget.accept_or_skip(turn, action, &batch.rationale, batch.thought.as_deref())
-        {
-            action_results.push(result);
-            continue;
-        }
-        action_results.push(runner.plan_action_result(turn, action)?);
-    }
-    let terminal_state = turn_state_from_action_results(&action_results, final_turn);
+    let planned = mez_agent::plan_batch_action_results(turn, context, &batch, |action| {
+        runner.plan_action_result(turn, action)
+    })?;
     Ok(AgentTurnExecution {
         request,
         response,
         latest_response_usage,
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
-        action_results,
-        final_turn,
-        terminal_state,
+        action_results: planned.action_results,
+        final_turn: planned.final_turn,
+        terminal_state: planned.terminal_state,
     })
 }
 
-/// Describes whether a validated MAAP batch can execute or needs another model request.
-enum BatchContinuationPlan {
-    /// Continue provider negotiation with an ephemeral repair or capability request.
-    Continue(Box<ModelRequest>),
-    /// Execute the validated action batch through the owning runtime adapter.
-    Execute,
-}
-
-/// Borrows the product-owned inputs used to validate one provider MAAP batch.
-struct BatchContinuationInput<'a> {
+/// Borrows product-owned facts needed by the lower batch-continuation planner.
+struct ProductBatchContinuationInput<'a> {
+    /// Request that produced the current provider response.
     response_request: &'a ModelRequest,
+    /// Raw provider output used only for ephemeral repair context.
     response_raw_text: &'a str,
+    /// Parsed batch being validated.
     batch: &'a super::super::MaapBatch,
-    request: &'a ModelRequest,
+    /// Active request whose allowed-action surface must be enforced.
+    active_request: &'a ModelRequest,
+    /// Active product turn identity.
     turn: &'a AgentTurnRecord,
+    /// MCP server ids available to product MAAP validation.
     available_mcp_servers: &'a [String],
+    /// Concrete MCP tools available to product MAAP validation.
     available_mcp_tools: &'a [McpPromptTool],
 }
 
-/// Validates a parsed MAAP batch and derives its provider-independent continuation.
-///
-/// Both synchronous and asynchronous runners share these validation and recovery
-/// rules. Provider failure summaries remain with their respective transport
-/// paths because those summaries can require synchronous or asynchronous I/O.
-fn plan_batch_continuation(
-    input: BatchContinuationInput<'_>,
+/// Supplies product MAAP validation to canonical lower continuation planning.
+fn plan_product_batch_continuation(
+    input: ProductBatchContinuationInput<'_>,
     negotiation: &mut AgentTurnNegotiation<ModelRequest>,
 ) -> std::result::Result<BatchContinuationPlan, (MezError, &'static str)> {
-    if let Some(next_request) =
-        mixed_capability_continuation_request(input.response_request, input.batch)
-    {
-        negotiation.reset_recovery();
-        return Ok(BatchContinuationPlan::Continue(Box::new(next_request)));
-    }
-    if let Err(error) = validate_batch_allowed_actions(input.batch, input.request) {
-        let error = MezError::invalid_args(error.message());
-        let capability_recovery_base =
-            if input.response_request.interaction_kind == ModelInteractionKind::Repair {
-                negotiation.durable_request()
-            } else {
-                input.response_request
-            };
-        if let Some(next_request) = disallowed_action_capability_continuation_request(
-            capability_recovery_base,
-            input.batch,
-            error.message(),
-        ) {
-            negotiation.reset_recovery();
-            return Ok(BatchContinuationPlan::Continue(Box::new(next_request)));
-        }
-        if negotiation.record_recovery_attempt() {
-            return Ok(BatchContinuationPlan::Continue(Box::new(
-                maap_repair_request(
-                    input.response_request,
-                    error.message(),
-                    input.response_raw_text,
-                    negotiation.recovery_attempts(),
-                ),
-            )));
-        }
-        return Err((error, "allowed_actions"));
-    }
-    if let Err(error) = input.batch.validate(
-        input.turn,
-        input.available_mcp_servers,
-        input.available_mcp_tools,
-    ) {
-        if negotiation.record_recovery_attempt() {
-            return Ok(BatchContinuationPlan::Continue(Box::new(
-                maap_repair_request(
-                    input.response_request,
-                    error.message(),
-                    input.response_raw_text,
-                    negotiation.recovery_attempts(),
-                ),
-            )));
-        }
-        return Err((error, "maap_validation"));
-    }
-    match capability_requests_from_batch(input.batch) {
-        Ok(Some(capability_request)) => {
-            negotiation.reset_recovery();
-            Ok(BatchContinuationPlan::Continue(Box::new(
-                capability_continuation_request(input.response_request, &capability_request),
-            )))
-        }
-        Ok(None) => Ok(BatchContinuationPlan::Execute),
-        Err(error) if negotiation.record_recovery_attempt() => Ok(BatchContinuationPlan::Continue(
-            Box::new(maap_repair_request(
-                input.response_request,
-                error.message(),
-                input.response_raw_text,
-                negotiation.recovery_attempts(),
-            )),
-        )),
-        Err(error) => Err((
-            MezError::invalid_args(error.message()),
-            "capability_negotiation",
-        )),
-    }
+    mez_agent::plan_batch_continuation(
+        BatchContinuationInput {
+            response_request: input.response_request,
+            response_raw_text: input.response_raw_text,
+            batch: input.batch,
+            active_request: input.active_request,
+        },
+        negotiation,
+        || {
+            input
+                .batch
+                .validate(
+                    input.turn,
+                    input.available_mcp_servers,
+                    input.available_mcp_tools,
+                )
+                .map_err(|error| {
+                    let message = error.message().to_string();
+                    BatchValidationFailure::new(error, message)
+                })
+        },
+    )
+    .map_err(|rejection| {
+        let error = match rejection.error {
+            BatchContinuationError::Recovery(error) => MezError::invalid_args(error.message()),
+            BatchContinuationError::Product(error) => error,
+        };
+        (error, rejection.stage)
+    })
 }
 
 /// Carries agent turn runner state for this subsystem.
@@ -376,12 +318,12 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
                     },
                 ));
             };
-            match plan_batch_continuation(
-                BatchContinuationInput {
+            match plan_product_batch_continuation(
+                ProductBatchContinuationInput {
                     response_request: &response_request,
                     response_raw_text: &response.raw_text,
                     batch,
-                    request: &request,
+                    active_request: &request,
                     turn: &turn,
                     available_mcp_servers: &self.available_mcp_servers,
                     available_mcp_tools: self.available_mcp_tools,
@@ -739,12 +681,12 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
                 )
                 .await);
             };
-            match plan_batch_continuation(
-                BatchContinuationInput {
+            match plan_product_batch_continuation(
+                ProductBatchContinuationInput {
                     response_request: &response_request,
                     response_raw_text: &response.raw_text,
                     batch,
-                    request: &request,
+                    active_request: &request,
                     turn: &turn,
                     available_mcp_servers: &self.available_mcp_servers,
                     available_mcp_tools: self.available_mcp_tools,

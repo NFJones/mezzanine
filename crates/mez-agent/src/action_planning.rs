@@ -11,9 +11,11 @@ use std::error::Error;
 use std::fmt;
 
 use crate::{
-    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnResultIdentity,
-    ApprovalPolicy, LocalActionPlan, NetworkActionPlan, RuleDecision, SayStatus,
+    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext,
+    AgentTurnResultIdentity, AgentTurnState, ApprovalPolicy, LocalActionPlan, MaapBatch,
+    MemoryActionBudget, NetworkActionPlan, RuleDecision, SayStatus,
     network_action_structured_content_json, shell_read_observations_for_command,
+    turn_state_from_action_results,
 };
 
 /// Product-supplied facts needed to plan one validated action result.
@@ -50,6 +52,49 @@ impl Default for ActionPlanningInput<'_> {
             subagent_scope_violation: None,
         }
     }
+}
+
+/// Canonical initial results and lifecycle state derived for one MAAP batch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlannedBatchActionResults {
+    /// Initial result for every action in provider-authored order.
+    pub action_results: Vec<ActionResult>,
+    /// Whether the provider declared this batch terminal after effects finish.
+    pub final_turn: bool,
+    /// Lifecycle state derived from all initial results and final-turn intent.
+    pub terminal_state: AgentTurnState,
+}
+
+/// Plans initial canonical results for one validated MAAP batch.
+///
+/// Persistent-memory guardrails run before the injected product planner so
+/// skipped memory actions cannot reach concrete runtime dispatch. All other
+/// actions retain provider order and delegate product-specific planning facts
+/// through the callback.
+pub fn plan_batch_action_results<Error>(
+    turn: &(impl AgentTurnResultIdentity + ?Sized),
+    context: &AgentContext,
+    batch: &MaapBatch,
+    mut plan_action: impl FnMut(&AgentAction) -> Result<ActionResult, Error>,
+) -> Result<PlannedBatchActionResults, Error> {
+    let mut action_results = Vec::with_capacity(batch.actions.len());
+    let mut memory_budget = MemoryActionBudget::from_context(context);
+    for action in &batch.actions {
+        if let Some(result) =
+            memory_budget.accept_or_skip(turn, action, &batch.rationale, batch.thought.as_deref())
+        {
+            action_results.push(result);
+            continue;
+        }
+        action_results.push(plan_action(action)?);
+    }
+    let final_turn = batch.final_turn;
+    let terminal_state = turn_state_from_action_results(&action_results, final_turn);
+    Ok(PlannedBatchActionResults {
+        action_results,
+        final_turn,
+        terminal_state,
+    })
 }
 
 /// Plans the initial canonical result for one validated MAAP action.
@@ -433,7 +478,7 @@ impl Error for ActionPlanningError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AgentActionResultIdentity, LocalActionKind};
+    use crate::{AgentActionResultIdentity, ContextBlock, ContextSourceKind, LocalActionKind};
 
     struct TestTurn;
     impl AgentTurnResultIdentity for TestTurn {
@@ -470,6 +515,16 @@ mod tests {
             timeout_ms: None,
             display_output_after_completion: false,
         }
+    }
+
+    /// Builds a valid context with no prior action-result budget usage.
+    fn context() -> AgentContext {
+        AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            label: "user".to_string(),
+            content: "complete the task".to_string(),
+        }])
+        .unwrap()
     }
 
     #[test]
@@ -625,5 +680,80 @@ mod tests {
         assert_eq!(value["command"], "rg --files");
         assert_eq!(value["sent_to_pane"], true);
         assert_eq!(action.action_id(), "shell-1");
+    }
+
+    /// Batch planning preserves provider action order and derives terminal
+    /// completion from canonical results plus the final-turn declaration.
+    #[test]
+    fn batch_action_planning_derives_terminal_state() {
+        let action = AgentAction {
+            id: "say-1".to_string(),
+            rationale: "finish the turn".to_string(),
+            payload: AgentActionPayload::Say {
+                status: SayStatus::Final,
+                text: "Done.".to_string(),
+                content_type: "text/plain; charset=utf-8".to_string(),
+            },
+        };
+        let batch = MaapBatch {
+            protocol: "maap/1".to_string(),
+            rationale: "finish the requested work".to_string(),
+            thought: None,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            actions: vec![action],
+            final_turn: true,
+        };
+
+        let planned = plan_batch_action_results(&TestTurn, &context(), &batch, |action| {
+            plan_action_result(&TestTurn, action, ActionPlanningInput::default())
+        })
+        .unwrap();
+
+        assert_eq!(planned.action_results[0].action_id, "say-1");
+        assert!(planned.final_turn);
+        assert_eq!(planned.terminal_state, AgentTurnState::Completed);
+    }
+
+    /// Batch planning applies memory wrapper guardrails before invoking the
+    /// product planner so skipped placeholders cannot reach runtime dispatch.
+    #[test]
+    fn batch_action_planning_skips_memory_placeholders_before_product_planning() {
+        let action = AgentAction {
+            id: "memory-1".to_string(),
+            rationale: "satisfy the required function call before proceeding".to_string(),
+            payload: AgentActionPayload::MemorySearch {
+                query: "placeholder".to_string(),
+                limit: Some(1),
+            },
+        };
+        let batch = MaapBatch {
+            protocol: "maap/1".to_string(),
+            rationale: "comply with the required function call".to_string(),
+            thought: None,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            actions: vec![action],
+            final_turn: false,
+        };
+
+        let planned = plan_batch_action_results(
+            &TestTurn,
+            &context(),
+            &batch,
+            |_| -> ActionPlanningResult<ActionResult> {
+                panic!("memory placeholder must not reach product planning")
+            },
+        )
+        .unwrap();
+
+        assert_eq!(planned.action_results[0].status, ActionStatus::Succeeded);
+        assert!(
+            planned.action_results[0]
+                .structured_content_json
+                .as_deref()
+                .unwrap()
+                .contains("memory_wrapper_placeholder")
+        );
     }
 }

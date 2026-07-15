@@ -8,9 +8,9 @@
 use std::fmt;
 
 use crate::{
-    AgentActionPayload, AgentCapability, AllowedAction, AllowedActionSet, CapabilityAvailability,
-    CapabilityRequest, ContextSourceKind, MaapBatch, ModelInteractionKind, ModelMessage,
-    ModelMessageRole, ModelRequest, constrain_skill_actions_for_loaded_context,
+    AgentActionPayload, AgentCapability, AgentTurnNegotiation, AllowedAction, AllowedActionSet,
+    CapabilityAvailability, CapabilityRequest, ContextSourceKind, MaapBatch, ModelInteractionKind,
+    ModelMessage, ModelMessageRole, ModelRequest, constrain_skill_actions_for_loaded_context,
     continuation_surface, decide_capabilities,
 };
 
@@ -47,6 +47,65 @@ impl fmt::Display for ActionRecoveryError {
 }
 
 impl std::error::Error for ActionRecoveryError {}
+
+/// Borrowed canonical inputs used to plan one provider batch continuation.
+#[derive(Debug, Clone, Copy)]
+pub struct BatchContinuationInput<'a> {
+    /// Request that produced the current provider response.
+    pub response_request: &'a ModelRequest,
+    /// Raw provider response retained for an ephemeral repair excerpt.
+    pub response_raw_text: &'a str,
+    /// Parsed provider-authored MAAP batch.
+    pub batch: &'a MaapBatch,
+    /// Active request whose concrete action surface must be enforced.
+    pub active_request: &'a ModelRequest,
+}
+
+/// Product validation failure retained across lower continuation planning.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchValidationFailure<Error> {
+    /// Product error returned unchanged to the composition adapter.
+    pub error: Error,
+    /// Stable model-facing diagnostic used to construct repair context.
+    pub message: String,
+}
+
+impl<Error> BatchValidationFailure<Error> {
+    /// Preserves one product validation error and its model-facing diagnostic.
+    pub fn new(error: Error, message: impl Into<String>) -> Self {
+        Self {
+            error,
+            message: message.into(),
+        }
+    }
+}
+
+/// Non-terminal continuation decision for one parsed MAAP batch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BatchContinuationPlan {
+    /// Send another capability or repair request before executing effects.
+    Continue(Box<ModelRequest>),
+    /// Execute the validated batch through product runtime adapters.
+    Execute,
+}
+
+/// Error retained when batch continuation cannot recover within its budget.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BatchContinuationError<ProductError> {
+    /// Lower-owned action-surface or capability-negotiation failure.
+    Recovery(ActionRecoveryError),
+    /// Product-owned MAAP validation failure.
+    Product(ProductError),
+}
+
+/// Terminal rejection of one provider batch after recovery is exhausted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchContinuationRejection<ProductError> {
+    /// Original lower or product validation error.
+    pub error: BatchContinuationError<ProductError>,
+    /// Stable failure-summary stage identifying the rejected boundary.
+    pub stage: &'static str,
+}
 
 /// Validates that the provider emitted only actions exposed in the active
 /// request schema.
@@ -268,6 +327,95 @@ pub fn maap_repair_request(
         ),
     });
     request
+}
+
+/// Validates one parsed MAAP batch and derives its next controller decision.
+///
+/// Mixed capability batches are recovered before product validation. The
+/// injected validator is called only after allowed-action checks and before
+/// pure capability extraction, preserving one ordered policy for synchronous
+/// and asynchronous product runners without importing product errors.
+pub fn plan_batch_continuation<ProductError>(
+    input: BatchContinuationInput<'_>,
+    negotiation: &mut AgentTurnNegotiation<ModelRequest>,
+    validate_product_batch: impl FnOnce() -> Result<(), BatchValidationFailure<ProductError>>,
+) -> Result<BatchContinuationPlan, BatchContinuationRejection<ProductError>> {
+    if let Some(next_request) =
+        mixed_capability_continuation_request(input.response_request, input.batch)
+    {
+        negotiation.reset_recovery();
+        return Ok(BatchContinuationPlan::Continue(Box::new(next_request)));
+    }
+
+    if let Err(error) = validate_batch_allowed_actions(input.batch, input.active_request) {
+        let capability_recovery_base =
+            if input.response_request.interaction_kind == ModelInteractionKind::Repair {
+                negotiation.durable_request()
+            } else {
+                input.response_request
+            };
+        if let Some(next_request) = disallowed_action_capability_continuation_request(
+            capability_recovery_base,
+            input.batch,
+            error.message(),
+        ) {
+            negotiation.reset_recovery();
+            return Ok(BatchContinuationPlan::Continue(Box::new(next_request)));
+        }
+        if negotiation.record_recovery_attempt() {
+            return Ok(BatchContinuationPlan::Continue(Box::new(
+                maap_repair_request(
+                    input.response_request,
+                    error.message(),
+                    input.response_raw_text,
+                    negotiation.recovery_attempts(),
+                ),
+            )));
+        }
+        return Err(BatchContinuationRejection {
+            error: BatchContinuationError::Recovery(error),
+            stage: "allowed_actions",
+        });
+    }
+
+    if let Err(failure) = validate_product_batch() {
+        if negotiation.record_recovery_attempt() {
+            return Ok(BatchContinuationPlan::Continue(Box::new(
+                maap_repair_request(
+                    input.response_request,
+                    &failure.message,
+                    input.response_raw_text,
+                    negotiation.recovery_attempts(),
+                ),
+            )));
+        }
+        return Err(BatchContinuationRejection {
+            error: BatchContinuationError::Product(failure.error),
+            stage: "maap_validation",
+        });
+    }
+
+    match capability_requests_from_batch(input.batch) {
+        Ok(Some(capability_requests)) => {
+            negotiation.reset_recovery();
+            Ok(BatchContinuationPlan::Continue(Box::new(
+                capability_continuation_request(input.response_request, &capability_requests),
+            )))
+        }
+        Ok(None) => Ok(BatchContinuationPlan::Execute),
+        Err(error) if negotiation.record_recovery_attempt() => Ok(BatchContinuationPlan::Continue(
+            Box::new(maap_repair_request(
+                input.response_request,
+                error.message(),
+                input.response_raw_text,
+                negotiation.recovery_attempts(),
+            )),
+        )),
+        Err(error) => Err(BatchContinuationRejection {
+            error: BatchContinuationError::Recovery(error),
+            stage: "capability_negotiation",
+        }),
+    }
 }
 
 /// Returns the coarse capability that exposes one concrete action type.
@@ -555,5 +703,81 @@ mod tests {
 
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].capability, AgentCapability::Shell);
+    }
+
+    /// Ordered continuation planning handles mixed capability batches before
+    /// invoking product validation so no executable action is inspected or run.
+    #[test]
+    fn batch_continuation_recovers_mixed_capabilities_before_product_validation() {
+        let request = request();
+        let batch = batch(vec![shell_capability_action(), shell_action()]);
+        let mut negotiation = AgentTurnNegotiation::new(request.clone(), 2);
+
+        let plan = plan_batch_continuation(
+            BatchContinuationInput {
+                response_request: &request,
+                response_raw_text: "mixed response",
+                batch: &batch,
+                active_request: &request,
+            },
+            &mut negotiation,
+            || -> Result<(), BatchValidationFailure<String>> {
+                panic!("mixed capability recovery must precede product validation")
+            },
+        )
+        .unwrap();
+
+        let BatchContinuationPlan::Continue(continuation) = plan else {
+            panic!("mixed capability batch must produce a continuation")
+        };
+        assert!(
+            continuation
+                .messages
+                .last()
+                .unwrap()
+                .content
+                .contains("[mixed capability batch recovery]")
+        );
+    }
+
+    /// Product validation failures retain their original error after the shared
+    /// repair budget is consumed while exposing a stable summary stage.
+    #[test]
+    fn batch_continuation_preserves_product_failure_after_repair_exhaustion() {
+        let mut request = request();
+        request.interaction_kind = ModelInteractionKind::ActionExecution;
+        request
+            .allowed_actions
+            .extend([AllowedAction::ShellCommand]);
+        let batch = batch(vec![shell_action()]);
+        let mut negotiation = AgentTurnNegotiation::new(request.clone(), 1);
+        let input = BatchContinuationInput {
+            response_request: &request,
+            response_raw_text: "invalid response",
+            batch: &batch,
+            active_request: &request,
+        };
+
+        let first = plan_batch_continuation(input, &mut negotiation, || {
+            Err(BatchValidationFailure::new(
+                "product-error",
+                "shell validation failed",
+            ))
+        })
+        .unwrap();
+        assert!(matches!(first, BatchContinuationPlan::Continue(_)));
+
+        let rejection = plan_batch_continuation(input, &mut negotiation, || {
+            Err(BatchValidationFailure::new(
+                "product-error",
+                "shell validation failed",
+            ))
+        })
+        .unwrap_err();
+        assert_eq!(rejection.stage, "maap_validation");
+        assert_eq!(
+            rejection.error,
+            BatchContinuationError::Product("product-error")
+        );
     }
 }
