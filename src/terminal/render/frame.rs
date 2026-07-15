@@ -1014,24 +1014,9 @@ pub(super) fn render_window_frame_template(
     frame_context: &TerminalFrameContext,
     template: &str,
 ) -> String {
-    let mut rendered = String::new();
-    let mut remaining = template;
-    loop {
-        let Some(start) = remaining.find("#{") else {
-            rendered.push_str(remaining);
-            break;
-        };
-        rendered.push_str(&remaining[..start]);
-        let after_start = &remaining[start + 2..];
-        let Some(end) = after_start.find('}') else {
-            rendered.push_str(&remaining[start..]);
-            break;
-        };
-        let field = &after_start[..end];
-        rendered.push_str(&window_frame_field_value(window, frame_context, field));
-        remaining = &after_start[end + 1..];
-    }
-    sanitize_frame_text(&rendered)
+    mez_mux::render::render_frame_template(template, |field| {
+        window_frame_field_value(window, frame_context, field)
+    })
 }
 
 /// Runs the render window frame text operation for this subsystem.
@@ -1136,34 +1121,9 @@ pub(super) fn render_window_status_template(
     frame_context: &TerminalFrameContext,
     status: &TerminalWindowStatusContext,
 ) -> RenderedWindowStatusTemplate {
-    let mut text = String::new();
-    let mut segments = Vec::new();
-    let mut remaining = status.template.as_str();
-    loop {
-        let Some(start) = remaining.find("#{") else {
-            text.push_str(remaining);
-            break;
-        };
-        text.push_str(&remaining[..start]);
-        let after_start = &remaining[start + 2..];
-        let Some(end) = after_start.find('}') else {
-            text.push_str(&remaining[start..]);
-            break;
-        };
-        let field = &after_start[..end];
-        let component = window_status_field_component(frame_context, status, field);
-        let value_start = fitted_text_width(&text, usize::MAX);
-        text.push_str(&component.text);
-        segments.extend(component.segments.into_iter().map(|mut segment| {
-            segment.start = value_start.saturating_add(segment.start);
-            segment
-        }));
-        remaining = &after_start[end + 1..];
-    }
-    RenderedWindowStatusTemplate {
-        text: sanitize_frame_text(&text),
-        segments,
-    }
+    mez_mux::render::render_frame_status_template(&status.template, |field| {
+        window_status_field_component(frame_context, status, field)
+    })
 }
 
 /// Expands one window status template field into text and relative segments.

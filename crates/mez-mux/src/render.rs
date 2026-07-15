@@ -552,6 +552,72 @@ pub struct FramePillboxRowLayout<P, S> {
     pub right_status_segments: Vec<FrameStatusSegment<S>>,
 }
 
+/// Expands a frame template through a caller-owned field resolver.
+///
+/// Unknown fields and product-specific formatting remain the caller's
+/// responsibility. Unterminated field markers are preserved literally, and
+/// the completed row is sanitized for terminal-safe display.
+pub fn render_frame_template(
+    template: &str,
+    mut resolve_field: impl FnMut(&str) -> String,
+) -> String {
+    let mut rendered = String::new();
+    let mut remaining = template;
+    loop {
+        let Some(start) = remaining.find("#{") else {
+            rendered.push_str(remaining);
+            break;
+        };
+        rendered.push_str(&remaining[..start]);
+        let after_start = &remaining[start + 2..];
+        let Some(end) = after_start.find('}') else {
+            rendered.push_str(&remaining[start..]);
+            break;
+        };
+        rendered.push_str(&resolve_field(&after_start[..end]));
+        remaining = &after_start[end + 1..];
+    }
+    sanitize_frame_text(&rendered)
+}
+
+/// Expands a semantic status template through a caller-owned field resolver.
+///
+/// Each resolved component carries text plus segments relative to that text.
+/// This function concatenates the components, translates every segment into
+/// template-relative columns, and sanitizes the final display text.
+pub fn render_frame_status_template<K>(
+    template: &str,
+    mut resolve_field: impl FnMut(&str) -> RenderedFrameStatus<K>,
+) -> RenderedFrameStatus<K> {
+    let mut text = String::new();
+    let mut segments = Vec::new();
+    let mut remaining = template;
+    loop {
+        let Some(start) = remaining.find("#{") else {
+            text.push_str(remaining);
+            break;
+        };
+        text.push_str(&remaining[..start]);
+        let after_start = &remaining[start + 2..];
+        let Some(end) = after_start.find('}') else {
+            text.push_str(&remaining[start..]);
+            break;
+        };
+        let component = resolve_field(&after_start[..end]);
+        let value_start = fitted_text_width(&text, usize::MAX);
+        text.push_str(&component.text);
+        segments.extend(component.segments.into_iter().map(|mut segment| {
+            segment.start = value_start.saturating_add(segment.start);
+            segment
+        }));
+        remaining = &after_start[end + 1..];
+    }
+    RenderedFrameStatus {
+        text: sanitize_frame_text(&text),
+        segments,
+    }
+}
+
 /// Renders caller-owned status values with one separating cell.
 pub fn render_frame_status<K: Clone>(values: &[FrameStatusValue<K>]) -> RenderedFrameStatus<K> {
     let mut text = String::new();
@@ -951,9 +1017,9 @@ mod tests {
         frame_status_hit_cells, frame_style_rendition, line_slice, overlay_display_lines,
         overlay_fixed_column_style_spans, pane_frame_left_pill_style_width,
         pane_frame_text_with_fill, position_frame_status, render_frame_pillbox_segments,
-        render_frame_pillbox_text, render_frame_status, sanitize_frame_text,
-        styled_frame_line_with_rendition, write_single_width_cell, write_text_cells,
-        write_text_cells_with_width,
+        render_frame_pillbox_text, render_frame_status, render_frame_status_template,
+        render_frame_template, sanitize_frame_text, styled_frame_line_with_rendition,
+        write_single_width_cell, write_text_cells, write_text_cells_with_width,
     };
     use crate::presentation::TerminalFrameStyle;
     use mez_terminal::{GraphicRendition, TerminalStyleSpan, TerminalStyledLine};
@@ -1075,6 +1141,41 @@ mod tests {
         assert_eq!(line.style_spans.len(), 1);
         assert!(line.style_spans[0].rendition.underline);
         assert_eq!(sanitize_frame_text("ok\u{1b}bad\n"), "okbad");
+    }
+
+    /// Verifies generic frame template expansion preserves unterminated
+    /// markers while sanitizing resolved and literal display text.
+    #[test]
+    fn frame_template_expansion_is_terminal_safe() {
+        let rendered = render_frame_template("#{name} #{missing} #{open", |field| match field {
+            "name" => "shell\u{1b}".to_string(),
+            _ => String::new(),
+        });
+
+        assert_eq!(rendered, "shell  #{open");
+    }
+
+    /// Verifies semantic status-template expansion translates component
+    /// segments across literal text and preceding resolved fields.
+    #[test]
+    fn frame_status_template_offsets_semantic_segments() {
+        let rendered = render_frame_status_template("x#{first}/#{second}", |field| {
+            let display = format!(" {field} ");
+            super::RenderedFrameStatus {
+                text: display.clone(),
+                segments: vec![super::FrameStatusSegment {
+                    start: 1,
+                    width: field.len(),
+                    key: field.to_string(),
+                    value: field.to_string(),
+                }],
+            }
+        });
+
+        assert_eq!(rendered.text, "x first / second ");
+        assert_eq!(rendered.segments[0].start, 2);
+        assert_eq!(rendered.segments[1].start, 10);
+        assert_eq!(rendered.segments[1].key, "second");
     }
 
     /// Verifies pane-title composition preserves wide-cell accounting and
