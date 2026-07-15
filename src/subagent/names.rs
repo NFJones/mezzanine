@@ -1,12 +1,7 @@
-//! Shared subagent request and scope coordination types.
+//! Product-friendly subagent display names.
 //!
-//! These types represent the public contract for spawning helper agents and
-//! tracking write ownership across concurrent work.
-
-pub use mez_agent::{
-    ActiveWriteScope, BuiltinSubagentRole, CooperationMode, ScopeConflict, ScopeRegistry,
-    SubagentProfile, SubagentScopeDeclaration, SubagentSpawnRequest,
-};
+//! Canonical subagent domain records live in `mez-agent`; this module contains
+//! only the human-readable names used by product panes and status lines.
 
 /// Built-in human-readable subagent display names.
 ///

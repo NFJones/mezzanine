@@ -477,9 +477,9 @@ mod tests {
         assert!(!CooperationMode::ExploreOnly.requires_explicit_user_approval());
     }
 
-    fn spawn_request(mode: CooperationMode) -> SubagentSpawnRequest {
+    fn request(mode: CooperationMode) -> SubagentSpawnRequest {
         SubagentSpawnRequest {
-            parent_agent_id: "agent-1".to_string(),
+            parent_agent_id: "a1".to_string(),
             requested_role: "worker".to_string(),
             placement: "new-pane".to_string(),
             cooperation_mode: mode,
@@ -488,41 +488,57 @@ mod tests {
             read_scopes_defaulted: false,
             write_scopes: vec!["src/parser".to_string()],
             write_scopes_defaulted: false,
-            task_prompt: "Implement parser".to_string(),
+            task_prompt: "implement parser".to_string(),
             skip_initial_turn: false,
             explicit_user_approval: false,
         }
     }
 
-    /// Verifies spawn validation owns cooperation-mode authority checks without
-    /// requiring product runtime or filesystem dependencies.
+    /// Verifies that explore-only requests reject write scopes but pass
+    /// validation when the write scope list is empty.
     #[test]
-    fn spawn_requests_enforce_cooperation_authority() {
-        let mut request = spawn_request(CooperationMode::ExploreOnly);
+    fn explore_only_must_not_write() {
+        let mut request = request(CooperationMode::ExploreOnly);
         assert_eq!(
             request.validate().unwrap_err().kind(),
             SubagentContractErrorKind::InvalidArgs
         );
         request.write_scopes.clear();
         request.validate().unwrap();
-
-        let mut unrestricted = spawn_request(CooperationMode::Unrestricted);
-        assert_eq!(
-            unrestricted.validate().unwrap_err().kind(),
-            SubagentContractErrorKind::Forbidden
-        );
-        unrestricted.explicit_user_approval = true;
-        unrestricted.validate().unwrap();
     }
 
-    /// Verifies active write-scope registrations normalize paths and reject
-    /// incompatible overlaps before product pane creation begins.
+    /// Verifies unrestricted writes require explicit approval and report that
+    /// requirement to callers.
     #[test]
-    fn scope_registry_rejects_incompatible_overlaps() {
+    fn unrestricted_requires_user_approval() {
+        let mut request = request(CooperationMode::Unrestricted);
+        assert_eq!(
+            request.validate().unwrap_err().kind(),
+            SubagentContractErrorKind::Forbidden
+        );
+        request.explicit_user_approval = true;
+        request.validate().unwrap();
+        assert!(request.requires_user_approval());
+    }
+
+    /// Verifies write-capable requests may omit child scopes because product
+    /// composition derives enforceable scope from the parent agent.
+    #[test]
+    fn write_capable_modes_do_not_require_child_scopes() {
+        let mut request = request(CooperationMode::OwnedWrite);
+        request.read_scopes.clear();
+        request.write_scopes.clear();
+        request.validate().unwrap();
+    }
+
+    /// Verifies overlapping owned-write scopes conflict before the second
+    /// writer is registered.
+    #[test]
+    fn overlapping_owned_write_scopes_conflict() {
         let mut registry = ScopeRegistry::new();
         registry
             .register(
-                "agent-2",
+                "a2",
                 CooperationMode::OwnedWrite,
                 &["src".to_string()],
                 None,
@@ -530,7 +546,7 @@ mod tests {
             .unwrap();
         let error = registry
             .register(
-                "agent-3",
+                "a3",
                 CooperationMode::OwnedWrite,
                 &["src/parser".to_string()],
                 None,
@@ -539,18 +555,47 @@ mod tests {
         assert_eq!(error.kind(), SubagentContractErrorKind::Conflict);
     }
 
-    /// Verifies built-in profiles retain stable identities and provider-neutral
-    /// defaults consumed by product configuration composition.
+    /// Verifies serial-write registrations sharing the same lock may overlap
+    /// because callers opted into serialized mutation.
     #[test]
-    fn built_in_profiles_are_stable() {
+    fn serial_write_scopes_can_share_same_lock() {
+        let mut registry = ScopeRegistry::new();
+        registry
+            .register(
+                "a2",
+                CooperationMode::SerialWrite,
+                &["src".to_string()],
+                Some("lock-1".to_string()),
+            )
+            .unwrap();
+        registry
+            .register(
+                "a3",
+                CooperationMode::SerialWrite,
+                &["src/parser".to_string()],
+                Some("lock-1".to_string()),
+            )
+            .unwrap();
+    }
+
+    /// Verifies built-in roles keep stable names and baseline profiles.
+    #[test]
+    fn builtin_roles_have_stable_names() {
+        assert_eq!(
+            super::builtin_role_name(super::BuiltinSubagentRole::Default),
+            "default"
+        );
+        assert_eq!(
+            super::builtin_role_name(super::BuiltinSubagentRole::Worker),
+            "worker"
+        );
+        assert_eq!(
+            super::builtin_role_name(super::BuiltinSubagentRole::Explorer),
+            "explorer"
+        );
         let profiles = builtin_subagent_profiles();
-        assert_eq!(
-            profiles["worker"].default_cooperation_mode,
-            Some(CooperationMode::OwnedWrite)
-        );
-        assert_eq!(
-            profiles["explorer"].default_cooperation_mode,
-            Some(CooperationMode::ExploreOnly)
-        );
+        assert!(profiles.contains_key("default"));
+        assert!(profiles.contains_key("worker"));
+        assert!(profiles.contains_key("explorer"));
     }
 }

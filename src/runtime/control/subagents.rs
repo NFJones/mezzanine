@@ -373,7 +373,7 @@ impl RuntimeSessionService {
             spawn.cooperation_mode = parent_scope.cooperation_mode;
             spawn.read_scopes = parent_scope.read_scopes.clone();
             spawn.write_scopes = parent_scope.write_scopes.clone();
-            if parent_scope.cooperation_mode == crate::subagent::CooperationMode::Unrestricted {
+            if parent_scope.cooperation_mode == mez_agent::CooperationMode::Unrestricted {
                 spawn.explicit_user_approval = true;
             }
         } else {
@@ -425,7 +425,7 @@ impl RuntimeSessionService {
             && let Some(permission_preset) = profile.permission_preset
         {
             child_scope = Some(SubagentScopeDeclaration {
-                cooperation_mode: crate::subagent::CooperationMode::Unrestricted,
+                cooperation_mode: mez_agent::CooperationMode::Unrestricted,
                 current_directory: current_directory.clone(),
                 read_scopes: Vec::new(),
                 write_scopes: Vec::new(),

@@ -137,10 +137,7 @@ use crate::snapshot::{
     SnapshotMcpExternalCapability, SnapshotMcpServerState, SnapshotMcpToolEffects,
     SnapshotMcpToolState, SnapshotPaneCapture, SnapshotRepository, SnapshotState,
 };
-use crate::subagent::{
-    CooperationMode, SUBAGENT_FRIENDLY_NAMES, ScopeRegistry, SubagentProfile,
-    SubagentScopeDeclaration, SubagentSpawnRequest, builtin_subagent_profiles,
-};
+use crate::subagent::SUBAGENT_FRIENDLY_NAMES;
 use crate::terminal::{
     AttachedTerminalClientStepPlan, CopyMode, HostClipboard, HostClipboardCommand, MouseAction,
     MouseWindowActionFrameCell, TerminalClientLoopAction, TerminalClientLoopConfig,
@@ -152,6 +149,10 @@ use crate::transcript::{
     AgentSessionMetadata, AgentTranscriptStore, TranscriptEntry, TranscriptRole,
 };
 use mez_agent::{AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ScheduledWork, ScheduledWorkKind};
+use mez_agent::{
+    CooperationMode, ScopeRegistry, SubagentProfile, SubagentScopeDeclaration,
+    SubagentSpawnRequest, builtin_subagent_profiles,
+};
 use mez_core::ids::{AgentId, ClientId, PaneId, SessionId, WindowId};
 use mez_mux::copy::CopyModeKeyAction;
 use mez_mux::copy::{CopyPosition, SearchDirection};

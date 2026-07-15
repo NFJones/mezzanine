@@ -303,13 +303,13 @@ impl RuntimeSessionService {
     fn maap_spawn_role_for_action(
         &self,
         role: &str,
-        cooperation_mode: crate::subagent::CooperationMode,
+        cooperation_mode: mez_agent::CooperationMode,
         write_scopes: &[String],
     ) -> String {
         if self.subagent_profiles.contains_key(role) {
             return role.to_string();
         }
-        if cooperation_mode == crate::subagent::CooperationMode::ExploreOnly
+        if cooperation_mode == mez_agent::CooperationMode::ExploreOnly
             && write_scopes.is_empty()
             && Self::maap_read_only_subagent_role_alias(role)
         {

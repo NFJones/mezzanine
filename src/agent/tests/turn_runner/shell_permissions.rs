@@ -648,8 +648,8 @@ fn turn_runner_full_access_denies_out_of_scope_subagent_apply_patch() {
     let policy = PermissionPolicy::default()
         .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
     let approvals = SessionApprovalStore::default();
-    let subagent_scope = crate::subagent::SubagentScopeDeclaration {
-        cooperation_mode: crate::subagent::CooperationMode::OwnedWrite,
+    let subagent_scope = mez_agent::SubagentScopeDeclaration {
+        cooperation_mode: mez_agent::CooperationMode::OwnedWrite,
         current_directory: "/repo".to_string(),
         read_scopes: vec!["/repo/src/lib.rs".to_string()],
         write_scopes: vec!["/repo/docs".to_string()],
@@ -741,8 +741,8 @@ fn turn_runner_full_access_denies_out_of_scope_subagent_shell_command() {
     let policy = PermissionPolicy::default()
         .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
     let approvals = SessionApprovalStore::default();
-    let subagent_scope = crate::subagent::SubagentScopeDeclaration {
-        cooperation_mode: crate::subagent::CooperationMode::ExploreOnly,
+    let subagent_scope = mez_agent::SubagentScopeDeclaration {
+        cooperation_mode: mez_agent::CooperationMode::ExploreOnly,
         current_directory: "/repo".to_string(),
         read_scopes: vec!["/elsewhere".to_string()],
         write_scopes: Vec::new(),
@@ -982,8 +982,8 @@ fn turn_runner_routes_subagent_unknown_shell_actions_through_approval_policy() {
     let policy = PermissionPolicy::default()
         .with_approval_policy(crate::permissions::ApprovalPolicy::FullAccess);
     let approvals = SessionApprovalStore::default();
-    let subagent_scope = crate::subagent::SubagentScopeDeclaration {
-        cooperation_mode: crate::subagent::CooperationMode::ExploreOnly,
+    let subagent_scope = mez_agent::SubagentScopeDeclaration {
+        cooperation_mode: mez_agent::CooperationMode::ExploreOnly,
         current_directory: "/home/neil".to_string(),
         read_scopes: vec![
             "/home/neil/.codex".to_string(),

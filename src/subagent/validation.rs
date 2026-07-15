@@ -9,7 +9,7 @@ use crate::agent::apply_patch_touched_paths;
 use crate::error::Result;
 use crate::permissions::{EffectiveCommandEffects, classify_shell_command};
 
-use super::types::{CooperationMode, SubagentScopeDeclaration};
+use mez_agent::{CooperationMode, SubagentScopeDeclaration};
 
 /// Product-owned enforcement for agent-owned subagent scope declarations.
 ///

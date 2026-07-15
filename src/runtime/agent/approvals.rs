@@ -806,7 +806,7 @@ impl RuntimeSessionService {
 
 /// Returns a delegated subagent scope violation for one runtime local action.
 fn runtime_subagent_scope_violation(
-    scope: &crate::subagent::SubagentScopeDeclaration,
+    scope: &mez_agent::SubagentScopeDeclaration,
     action: &crate::agent::AgentAction,
     policy_command: &str,
 ) -> Result<Option<String>> {
