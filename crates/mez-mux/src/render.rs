@@ -362,6 +362,152 @@ pub fn sanitize_frame_text(value: &str) -> String {
     value.chars().filter(|ch| !ch.is_control()).collect()
 }
 
+/// One semantic segment within a right-aligned frame status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameStatusSegment<K> {
+    /// Display-column offset relative to the containing row or status text.
+    pub start: usize,
+    /// Display width of the segment.
+    pub width: usize,
+    /// Caller-owned semantic key used for styling and hit testing.
+    pub key: K,
+    /// Raw caller-owned value retained for presentation policy.
+    pub value: String,
+}
+
+/// One semantic value to render in a right-aligned frame status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FrameStatusValue<K> {
+    /// Caller-owned semantic key used for styling and hit testing.
+    pub key: K,
+    /// Raw caller-owned value retained for presentation policy.
+    pub value: String,
+    /// Text displayed in the status row.
+    pub display: String,
+}
+
+/// Rendered right-aligned status text and its semantic segments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedFrameStatus<K> {
+    /// Sanitized status text.
+    pub text: String,
+    /// Semantic segments relative to `text`.
+    pub segments: Vec<FrameStatusSegment<K>>,
+}
+
+/// Exact-width pane frame row with semantic right-status placement.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaneFrameRowLayout<K> {
+    /// Exact-width rendered frame text.
+    pub text: String,
+    /// Display width occupied by the left title pill.
+    pub left_text_width: usize,
+    /// Right-status segments in absolute row columns.
+    pub right_status_segments: Vec<FrameStatusSegment<K>>,
+}
+
+/// Renders caller-owned status values with one separating cell.
+pub fn render_frame_status<K: Clone>(values: &[FrameStatusValue<K>]) -> RenderedFrameStatus<K> {
+    let mut text = String::new();
+    let mut segments = Vec::new();
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            text.push(' ');
+        }
+        let start = fitted_text_width(&text, usize::MAX);
+        text.push_str(&value.display);
+        let width = fitted_text_width(&value.display, usize::MAX);
+        if width > 0 {
+            segments.push(FrameStatusSegment {
+                start,
+                width,
+                key: value.key.clone(),
+                value: value.value.clone(),
+            });
+        }
+    }
+    RenderedFrameStatus {
+        text: sanitize_frame_text(&text),
+        segments,
+    }
+}
+
+/// Composes a pane title and optional right status into one exact-width row.
+pub fn compose_pane_frame_row<K>(
+    left_text: &str,
+    right_status: Option<RenderedFrameStatus<K>>,
+    width: usize,
+    fill: char,
+) -> PaneFrameRowLayout<K> {
+    if width == 0 {
+        return PaneFrameRowLayout {
+            text: String::new(),
+            left_text_width: 0,
+            right_status_segments: Vec::new(),
+        };
+    }
+    let Some(right_status) = right_status else {
+        let (text, left_text_width) = pane_frame_text_with_fill(left_text, width, fill);
+        return PaneFrameRowLayout {
+            text,
+            left_text_width,
+            right_status_segments: Vec::new(),
+        };
+    };
+    let mut row = blank_render_row(width, fill);
+    let Some((status_start, status_width)) = right_aligned_status_bounds(&right_status.text, width)
+    else {
+        let (text, left_text_width) = pane_frame_text_with_fill(left_text, width, fill);
+        return PaneFrameRowLayout {
+            text,
+            left_text_width,
+            right_status_segments: Vec::new(),
+        };
+    };
+    let left_width = status_start.saturating_sub(1);
+    let written_left_text_width = write_text_cells_with_width(&mut row, 0, left_width, left_text);
+    let left_text_width = pane_frame_left_pill_style_width(written_left_text_width, left_width);
+    write_text_cells_with_width(&mut row, status_start, status_width, &right_status.text);
+    let right_status_segments = right_status
+        .segments
+        .into_iter()
+        .filter_map(|segment| {
+            clip_style_span(
+                TerminalStyleSpan {
+                    start: segment.start,
+                    length: segment.width,
+                    rendition: GraphicRendition::default(),
+                },
+                status_width,
+            )
+            .map(|span| FrameStatusSegment {
+                start: status_start.saturating_add(span.start),
+                width: span.length,
+                key: segment.key,
+                value: segment.value,
+            })
+        })
+        .collect();
+    PaneFrameRowLayout {
+        text: collect_text_cells(row),
+        left_text_width,
+        right_status_segments,
+    }
+}
+
+fn right_aligned_status_bounds(text: &str, width: usize) -> Option<(usize, usize)> {
+    let status_limit = width.saturating_sub(usize::from(width > 1));
+    let status_width = fitted_text_width(text, status_limit);
+    if status_width == 0 {
+        return None;
+    }
+    let trailing_padding = usize::from(width > status_width);
+    Some((
+        width.saturating_sub(status_width.saturating_add(trailing_padding)),
+        status_width,
+    ))
+}
+
 /// Fits terminal text to an exact display width, padding with spaces.
 pub fn fit_width(value: &str, width: usize) -> String {
     let mut output = String::new();
@@ -530,9 +676,10 @@ fn active_grapheme_width(grapheme: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        blank_render_row, collect_text_cells, display_overlay_targets, fit_styled_width,
-        frame_style_rendition, line_slice, overlay_display_lines, overlay_fixed_column_style_spans,
-        pane_frame_left_pill_style_width, pane_frame_text_with_fill, sanitize_frame_text,
+        FrameStatusValue, blank_render_row, collect_text_cells, compose_pane_frame_row,
+        display_overlay_targets, fit_styled_width, frame_style_rendition, line_slice,
+        overlay_display_lines, overlay_fixed_column_style_spans, pane_frame_left_pill_style_width,
+        pane_frame_text_with_fill, render_frame_status, sanitize_frame_text,
         styled_frame_line_with_rendition, write_single_width_cell, write_text_cells,
         write_text_cells_with_width,
     };
@@ -627,6 +774,33 @@ mod tests {
         assert_eq!(written, 2);
         assert_eq!(direct, 3);
         assert_eq!(pane_frame_left_pill_style_width(written, 4), 3);
+    }
+
+    /// Verifies neutral frame-status composition right-aligns bounded values
+    /// while retaining semantic keys and raw values for product adapters.
+    #[test]
+    fn pane_frame_status_composition_preserves_semantic_segments() {
+        let status = render_frame_status(&[
+            FrameStatusValue {
+                key: "model",
+                value: "gpt-5".to_string(),
+                display: " gpt-5 ".to_string(),
+            },
+            FrameStatusValue {
+                key: "state",
+                value: "running".to_string(),
+                display: " run ".to_string(),
+            },
+        ]);
+        let layout = compose_pane_frame_row(" 1 shell ", Some(status), 24, '─');
+
+        assert_eq!(layout.text.chars().count(), 24);
+        assert_eq!(layout.right_status_segments.len(), 2);
+        assert_eq!(layout.right_status_segments[0].key, "model");
+        assert_eq!(layout.right_status_segments[0].value, "gpt-5");
+        assert_eq!(layout.right_status_segments[1].key, "state");
+        assert_eq!(layout.right_status_segments[1].value, "running");
+        assert!(layout.right_status_segments[0].start > layout.left_text_width);
     }
 
     /// Verifies display overlays prefer blank bottom rows, fall back to

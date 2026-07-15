@@ -259,7 +259,7 @@ pub(super) fn pane_frame_right_status_segment_style_spans(
     frame_context: &TerminalFrameContext,
     ui_theme: &UiTheme,
 ) -> Vec<TerminalStyleSpan> {
-    if segment.field == "agent.status"
+    if segment.key == "agent.status"
         && pane_frame_agent_status_is_active(&segment.value)
         && !frame_context.reduced_motion
     {
@@ -286,7 +286,7 @@ pub(super) fn pane_frame_right_status_rendition(
     segment: &PaneFrameRightStatusSegment,
     ui_theme: &UiTheme,
 ) -> GraphicRendition {
-    match segment.field {
+    match segment.key {
         "history.position" => ui_theme.colors.scroll_indicator.rendition(),
         "pane.pwd" => ui_theme.colors.pane_pwd.rendition(),
         "agent.model" => ui_theme.colors.agent_model.rendition(),
@@ -772,93 +772,25 @@ pub(super) fn render_pane_frame_text(
 ///
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PaneFrameRowLayout {
-    /// Stores the text value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    text: String,
-    /// Stores the left text width value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    left_text_width: usize,
-    /// Stores the right status segments value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    right_status_segments: Vec<PaneFrameRightStatusSegment>,
-}
+pub(super) type PaneFrameRowLayout = mez_mux::render::PaneFrameRowLayout<&'static str>;
 
 /// Carries Pane Frame Right Status Segment state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PaneFrameRightStatusSegment {
-    /// Stores the start value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    start: usize,
-    /// Stores the width value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    width: usize,
-    /// Stores the field value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    field: &'static str,
-    /// Stores the value value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    value: String,
-}
+pub(super) type PaneFrameRightStatusSegment = FrameStatusSegment<&'static str>;
 
 /// Carries Pane Frame Right Value state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PaneFrameRightValue {
-    /// Stores the field value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    field: &'static str,
-    /// Stores the value value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    value: String,
-    /// Stores the display value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    display: String,
-}
+pub(super) type PaneFrameRightValue = FrameStatusValue<&'static str>;
 
 /// Carries Rendered Pane Frame Right Status state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct RenderedPaneFrameRightStatus {
-    /// Stores the text value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    text: String,
-    /// Stores the segments value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    segments: Vec<PaneFrameRightStatusSegment>,
-}
+pub(super) type RenderedPaneFrameRightStatus = RenderedFrameStatus<&'static str>;
 
 /// Runs the pane frame row layout operation for this subsystem.
 ///
@@ -873,62 +805,9 @@ pub(super) fn pane_frame_row_layout(
     width: usize,
     fill: char,
 ) -> PaneFrameRowLayout {
-    if width == 0 {
-        return PaneFrameRowLayout {
-            text: String::new(),
-            left_text_width: 0,
-            right_status_segments: Vec::new(),
-        };
-    }
     let text = render_pane_frame_template(window, pane, frame_context, template);
     let right_status = pane_frame_right_status(window, pane, frame_context, template);
-    let Some(right_status) = right_status else {
-        let (text, left_text_width) = pane_frame_text_with_fill(&text, width, fill);
-        return PaneFrameRowLayout {
-            text,
-            left_text_width,
-            right_status_segments: Vec::new(),
-        };
-    };
-    let mut row = blank_render_row(width, fill);
-    let Some((status_start, status_width)) = right_aligned_status_bounds(&right_status.text, width)
-    else {
-        let (text, left_text_width) = pane_frame_text_with_fill(&text, width, fill);
-        return PaneFrameRowLayout {
-            text,
-            left_text_width,
-            right_status_segments: Vec::new(),
-        };
-    };
-    let left_width = status_start.saturating_sub(1);
-    let written_left_text_width = write_frame_text_cells(&mut row, 0, left_width, &text);
-    let left_text_width = pane_frame_left_pill_style_width(written_left_text_width, left_width);
-    write_frame_text_cells(&mut row, status_start, status_width, &right_status.text);
-    let right_status_segments = right_status
-        .segments
-        .into_iter()
-        .filter_map(|segment| {
-            clip_style_span(
-                TerminalStyleSpan {
-                    start: segment.start,
-                    length: segment.width,
-                    rendition: GraphicRendition::default(),
-                },
-                status_width,
-            )
-            .map(|span| PaneFrameRightStatusSegment {
-                start: status_start.saturating_add(span.start),
-                width: span.length,
-                field: segment.field,
-                value: segment.value,
-            })
-        })
-        .collect();
-    PaneFrameRowLayout {
-        text: collect_text_cells(row),
-        left_text_width,
-        right_status_segments,
-    }
+    compose_pane_frame_row(&text, right_status, width, fill)
 }
 
 /// Returns the background fill glyph for a pane frame template.
@@ -953,7 +832,7 @@ pub(super) fn pane_frame_right_status(
     let mut right_fields = pane_frame_right_aligned_values(window, pane, frame_context, template);
     if !history_value.is_empty() && !template.contains("#{history.position}") {
         right_fields.push(PaneFrameRightValue {
-            field: history_field,
+            key: history_field,
             value: history_value.clone(),
             display: history_value,
         });
@@ -989,7 +868,7 @@ pub(super) fn pane_frame_right_aligned_values(
                     return None;
                 }
                 Some(PaneFrameRightValue {
-                    field,
+                    key: field,
                     display: pane_frame_right_aligned_display_value(field, segment_value),
                     value,
                 })
@@ -1006,28 +885,7 @@ pub(super) fn pane_frame_right_aligned_values(
 pub(super) fn render_pane_frame_right_status(
     values: &[PaneFrameRightValue],
 ) -> RenderedPaneFrameRightStatus {
-    let mut text = String::new();
-    let mut segments = Vec::new();
-    for (index, value) in values.iter().enumerate() {
-        if index > 0 {
-            text.push(' ');
-        }
-        let start = fitted_text_width(&text, usize::MAX);
-        text.push_str(&value.display);
-        let width = fitted_text_width(&value.display, usize::MAX);
-        if width > 0 {
-            segments.push(PaneFrameRightStatusSegment {
-                start,
-                width,
-                field: value.field,
-                value: value.value.clone(),
-            });
-        }
-    }
-    RenderedPaneFrameRightStatus {
-        text: sanitize_frame_text(&text),
-        segments,
-    }
+    render_frame_status(values)
 }
 
 /// Runs the pane agent shell visible operation for this subsystem.
@@ -1662,8 +1520,7 @@ pub fn pane_frame_agent_status_pillbox_cells(
                 .right_status_segments
                 .into_iter()
                 .flat_map(move |segment| {
-                    let Some(field) = pane_agent_status_field_from_frame_field(segment.field)
-                    else {
+                    let Some(field) = pane_agent_status_field_from_frame_field(segment.key) else {
                         return Vec::new();
                     };
                     pillbox_segment_local_columns(segment.start, segment.width, width)
@@ -2250,20 +2107,4 @@ pub(super) fn write_pane_frame_layout_cells(
     );
     write_frame_text_cells(row, column_start, max_columns, &layout.text);
     layout
-}
-
-/// Runs the right aligned status bounds operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn right_aligned_status_bounds(status: &str, width: usize) -> Option<(usize, usize)> {
-    let status_limit = width.saturating_sub(usize::from(width > 1));
-    let status_width = fitted_text_width(status, status_limit);
-    if status_width == 0 {
-        return None;
-    }
-    let trailing_padding = usize::from(width > status_width);
-    let start = width.saturating_sub(status_width.saturating_add(trailing_padding));
-    Some((start, status_width))
 }
