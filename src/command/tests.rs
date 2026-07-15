@@ -36,68 +36,14 @@ fn test_session() -> (Session, ClientId) {
     (session, primary)
 }
 
-/// Verifies parses command with quotes and target flag.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
+/// Verifies the product parser adapter preserves lower command diagnostics
+/// while projecting them into the product invalid-argument category.
 #[test]
-fn parses_command_with_quotes_and_target_flag() {
-    let commands = parse_command_sequence("rename-window -t @1 \"work tree\"").unwrap();
-
-    assert_eq!(commands.len(), 1);
-    assert_eq!(commands[0].name, "rename-window");
-    assert_eq!(commands[0].target_arg(), Some("@1"));
-    assert_eq!(commands[0].args[2], "work tree");
-}
-
-/// Verifies explicit empty quoted command arguments are preserved.
-///
-/// Empty strings are meaningful command values for commands that clear fields
-/// or intentionally pass an empty payload. The tokenizer must track argument
-/// presence separately from argument content so quoted empty strings do not
-/// disappear while surrounding non-empty arguments remain ordered.
-#[test]
-fn preserves_explicit_empty_quoted_arguments() {
-    let commands = parse_command_sequence("send --body \"\" '' keep").unwrap();
-
-    assert_eq!(commands.len(), 1);
-    assert_eq!(commands[0].name, "send");
-    assert_eq!(
-        commands[0].args,
-        vec![
-            String::from("--body"),
-            String::new(),
-            String::new(),
-            String::from("keep"),
-        ]
-    );
-}
-
-/// Verifies splits semicolon sequence outside quotes.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
-#[test]
-fn splits_semicolon_sequence_outside_quotes() {
-    let commands = parse_command_sequence("select-window -t @1; rename-window 'a;b'").unwrap();
-
-    assert_eq!(commands.len(), 2);
-    assert_eq!(commands[0].name, "select-window");
-    assert_eq!(commands[1].args[0], "a;b");
-}
-
-/// Verifies rejects unterminated quotes.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
-#[test]
-fn rejects_unterminated_quotes() {
+fn command_parser_projects_mux_errors_to_product_invalid_args() {
     let error = parse_command_sequence("rename-window \"unterminated").unwrap_err();
 
     assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
+    assert!(error.message().contains("unterminated quoted"));
 }
 
 /// Verifies executes window commands against session state.

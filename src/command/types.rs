@@ -4,72 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::flag_value;
-
 // Command invocation, outcome, and baseline registry types.
-
-/// Carries Command Invocation state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommandInvocation {
-    /// Stores the name value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub name: String,
-    /// Stores the args value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub args: Vec<String>,
-}
-
-impl CommandInvocation {
-    /// Returns command arguments that are not flags or flag values.
-    pub fn positional_args(&self) -> Vec<&str> {
-        super::positional_args(self)
-    }
-
-    /// Runs the target arg operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn target_arg(&self) -> Option<&str> {
-        flag_value(&self.args, "-t")
-    }
-
-    /// Runs the source arg operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn source_arg(&self) -> Option<&str> {
-        flag_value(&self.args, "-s")
-    }
-
-    /// Runs the start directory arg operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn start_directory_arg(&self) -> Option<&str> {
-        flag_value(&self.args, "-c")
-    }
-
-    /// Runs the has flag operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn has_flag(&self, short: &str, long: &str) -> bool {
-        self.args
-            .iter()
-            .any(|arg| arg.as_str() == short || arg.as_str() == long)
-    }
-}
 
 /// Carries Command Outcome state for this subsystem.
 ///

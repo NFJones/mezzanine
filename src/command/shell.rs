@@ -181,26 +181,3 @@ pub(super) fn shell_quote_word(word: &str) -> String {
     }
     format!("'{}'", word.replace('\'', "'\\''"))
 }
-
-/// Carries Quote State state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum QuoteState {
-    /// Represents the None case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    None,
-    /// Represents the Single case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Single,
-    /// Represents the Double case for this enumeration.
-    ///
-    /// Callers use this variant to describe one explicit state or command path
-    /// without relying on stringly typed status values.
-    Double,
-}

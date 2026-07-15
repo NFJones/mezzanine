@@ -113,14 +113,14 @@ pub(crate) use display::{
     bind_key_args, binding_config_key, command_help_display_with_key_bindings, key_chord_notation,
     new_window_name, new_window_shell_command, split_window_shell_command,
 };
+pub use mez_mux::command::CommandInvocation;
 pub use parser::parse_command_sequence;
 pub(crate) use plans::{
     RuntimePaneLayoutPlan, SwapPaneNeighbor, SwapPanePlan, resize_spec_from_invocation,
     runtime_pane_layout_plan_from_invocation, split_window_selects_new_pane,
 };
 pub use types::{
-    BaselineCommand, BaselineCommandStatus, CommandInvocation, CommandOutcome, LayoutLoadSelector,
-    baseline_commands,
+    BaselineCommand, BaselineCommandStatus, CommandOutcome, LayoutLoadSelector, baseline_commands,
 };
 
 use display::{
@@ -140,8 +140,8 @@ use permissions::{
     mark_pane_ready_warning_display, pane_readiness_state_name, validate_command_identifier,
 };
 use shell::{
-    QuoteState, explicit_shell_command_flag, flag_value, positional_args,
-    positional_args_before_double_dash, shell_command_after_double_dash, shell_command_from_words,
+    explicit_shell_command_flag, flag_value, positional_args, positional_args_before_double_dash,
+    shell_command_after_double_dash, shell_command_from_words,
 };
 use stores::{
     auth_status_store_display, config_set_string, config_unset, mcp_server_id,

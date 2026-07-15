@@ -6,6 +6,7 @@
 //! composition crate. The initial empty facade records that direction before
 //! effect-driven mux boundaries are extracted from the root package.
 
+pub mod command;
 pub mod copy;
 mod error;
 pub mod input;
