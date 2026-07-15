@@ -3031,12 +3031,12 @@ where
         let output_writable = readiness
             .iter()
             .any(|ready| ready.role == AttachedTerminalFdRole::Output && ready.writable);
-        let output_decision = mez_mux::presentation::plan_attached_client_output(
+        let cycle = mez_mux::presentation::plan_attached_client_cycle(
             output_writable,
             io.pending_output_bytes(),
-            !step.output_lines.is_empty(),
+            step,
         );
-        match output_decision {
+        match cycle.output_decision {
             mez_mux::presentation::AttachedClientOutputDecision::FlushPending => {
                 let flush = io
                     .flush_pending_output(ATTACHED_TERMINAL_CLIENT_LOOP_OUTPUT_WRITE_LIMIT_BYTES)?;
@@ -3065,8 +3065,8 @@ where
                     cursor_column: view.map(|view| view.cursor_column).unwrap_or(0),
                 };
                 let write = io.write_styled_output_with_modes_bounded(
-                    &step.output_lines,
-                    &step.output_line_style_spans,
+                    &cycle.step.output_lines,
+                    &cycle.step.output_line_style_spans,
                     output_modes,
                     ATTACHED_TERMINAL_CLIENT_LOOP_OUTPUT_WRITE_LIMIT_BYTES,
                 )?;
@@ -3084,14 +3084,14 @@ where
                 report.pending_output_bytes = io.pending_output_bytes();
             }
         }
-        report.actions.extend(step.actions);
-        if step.input_hangup {
+        report.actions.extend(cycle.step.actions);
+        if cycle.step.input_hangup {
             report.input_hangups = report.input_hangups.saturating_add(1);
         }
-        if step.output_hangup {
+        if cycle.step.output_hangup {
             report.output_hangups = report.output_hangups.saturating_add(1);
         }
-        report.error_roles.extend(step.error_roles);
+        report.error_roles.extend(cycle.step.error_roles);
         report.iterations = report.iterations.saturating_add(1);
 
         if report.input_hangups > 0 || report.output_hangups > 0 || !report.error_roles.is_empty() {

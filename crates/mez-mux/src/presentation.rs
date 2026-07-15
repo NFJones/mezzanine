@@ -186,6 +186,19 @@ pub struct AttachedClientStepPlan<Action, ErrorRole> {
     pub error_roles: Vec<ErrorRole>,
 }
 
+/// Complete transport-neutral plan for one attached-client cycle.
+///
+/// The cycle keeps the readiness-gated step envelope and its selected output
+/// work together so headless clients cannot independently reinterpret whether
+/// pending bytes, a newly rendered frame, or no output should be processed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachedClientCyclePlan<Action, ErrorRole> {
+    /// Input, presentation, and lifecycle observations for this cycle.
+    pub step: AttachedClientStepPlan<Action, ErrorRole>,
+    /// Host-output work selected after accounting for pending bytes.
+    pub output_decision: AttachedClientOutputDecision,
+}
+
 /// Transport-neutral output work selected for one attached-client step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttachedClientOutputDecision {
@@ -216,6 +229,27 @@ pub const fn plan_attached_client_output(
         AttachedClientOutputDecision::Present
     } else {
         AttachedClientOutputDecision::Idle
+    }
+}
+
+/// Combines one planned attached-client step with pending-output precedence.
+///
+/// Product adapters still encode and write terminal bytes, but the mux owns
+/// the complete decision that a fake or real client consumes for each cycle.
+pub fn plan_attached_client_cycle<Action, ErrorRole>(
+    output_writable: bool,
+    pending_output_bytes: usize,
+    step: AttachedClientStepPlan<Action, ErrorRole>,
+) -> AttachedClientCyclePlan<Action, ErrorRole> {
+    let output_decision = plan_attached_client_output(
+        output_writable,
+        pending_output_bytes,
+        !step.output_lines.is_empty(),
+    );
+
+    AttachedClientCyclePlan {
+        step,
+        output_decision,
     }
 }
 
@@ -308,6 +342,23 @@ pub fn plan_attached_client_step<Action, ErrorRole>(
         output_hangup: readiness.output_hangup,
         error_roles: readiness.error_roles,
     }
+}
+
+/// Plans one complete headless attached-client cycle from endpoint readiness.
+///
+/// This is the dependency-neutral integration boundary used by fake clients:
+/// it aggregates endpoint state, gates rendered output, retains decoded
+/// actions, propagates lifecycle observations, and selects output work.
+pub fn plan_headless_attached_client_cycle<Action, ErrorRole: Copy>(
+    endpoints: impl IntoIterator<Item = AttachedClientEndpointReadiness<ErrorRole>>,
+    actions: Vec<Action>,
+    output: Option<(Vec<String>, Vec<Vec<TerminalStyleSpan>>)>,
+    pending_output_bytes: usize,
+) -> AttachedClientCyclePlan<Action, ErrorRole> {
+    let readiness = classify_attached_client_readiness(endpoints);
+    let output_writable = readiness.output_writable;
+    let step = plan_attached_client_step(readiness, actions, output);
+    plan_attached_client_cycle(output_writable, pending_output_bytes, step)
 }
 
 /// Per-pane metadata consumed by mux frame and body presentation.
@@ -969,7 +1020,7 @@ mod tests {
         pane_canvas_placements, pane_content_size_for_geometry, pane_divider_cells,
         pane_divider_glyph, pane_frame_merges_into_divider, pane_render_region_size_for_geometry,
         place_group_frame, place_window_frame, plan_attached_client_output,
-        plan_attached_client_step, rendered_window_body_size,
+        plan_attached_client_step, plan_headless_attached_client_cycle, rendered_window_body_size,
     };
 
     /// Verifies neutral frame contracts retain the product's established
@@ -1078,6 +1129,46 @@ mod tests {
             plan_attached_client_output(false, 12, true),
             AttachedClientOutputDecision::WaitForOutput
         );
+    }
+
+    /// Verifies a fake client can drive the complete mux-owned cycle from
+    /// endpoint readiness through pending-output and lifecycle decisions.
+    #[test]
+    fn headless_attached_client_cycle_integrates_readiness_and_output_work() {
+        let cycle = plan_headless_attached_client_cycle(
+            [
+                AttachedClientEndpointReadiness {
+                    role: "input",
+                    input: true,
+                    output: false,
+                    readable: true,
+                    writable: false,
+                    hangup: false,
+                    error: false,
+                },
+                AttachedClientEndpointReadiness {
+                    role: "output",
+                    input: false,
+                    output: true,
+                    readable: false,
+                    writable: true,
+                    hangup: true,
+                    error: true,
+                },
+            ],
+            vec!["forward-input"],
+            Some((vec!["pane".to_owned()], vec![Vec::new()])),
+            7,
+        );
+
+        assert_eq!(
+            cycle.output_decision,
+            AttachedClientOutputDecision::FlushPending
+        );
+        assert_eq!(cycle.step.actions, ["forward-input"]);
+        assert_eq!(cycle.step.output_lines, ["pane"]);
+        assert!(cycle.step.output_hangup);
+        assert_eq!(cycle.step.error_roles, ["output"]);
     }
 
     /// Verifies mux-owned frame placement preserves authoritative viewport
