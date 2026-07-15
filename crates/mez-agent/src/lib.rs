@@ -62,6 +62,8 @@ pub mod instructions;
 pub mod local_action;
 /// Provider-independent MAAP action batches, parsing, and validation.
 pub mod maap;
+#[cfg(test)]
+mod maap_protocol_tests;
 /// Dependency-neutral MCP prompt manifest records.
 pub mod mcp;
 /// Prompt-facing memory context contracts.
