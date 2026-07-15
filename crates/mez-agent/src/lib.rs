@@ -18,6 +18,8 @@ pub mod agent_shell;
 pub mod anthropic;
 /// Provider authentication routing contracts.
 pub mod auth;
+/// Provider-independent Claude Code CLI policy.
+pub mod claude_code;
 /// Model-facing live configuration mutation contracts.
 pub mod config_change;
 /// Provider-independent agent context validation contracts.
@@ -113,6 +115,7 @@ pub use anthropic::{
     anthropic_request_requires_maap, parse_anthropic_messages_provider_body,
 };
 pub use auth::{ProviderAuthMetadata, ProviderCredentialKind, ProviderCredentialSource};
+pub use claude_code::claude_code_session_id;
 pub use config_change::{
     CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_SETTING_PATH_DESCRIPTION,
     CONFIG_CHANGE_VALUE_DESCRIPTION,
