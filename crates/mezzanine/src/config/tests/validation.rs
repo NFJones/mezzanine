@@ -123,7 +123,7 @@ fn validates_named_model_profile_schema() {
 /// normative Section 8.2 configuration table.
 #[test]
 fn specification_lists_all_audit_schema_keys() {
-    let specification = include_str!("../../../SPEC.md");
+    let specification = include_str!("../../../../../SPEC.md");
 
     for key in super::super::schema::AUDIT_KEYS {
         assert!(

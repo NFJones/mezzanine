@@ -62,7 +62,7 @@ fixtures before broadening user-facing reliability claims:
 When a terminal capability is added, removed, or reclassified, update all of the
 following in the same change:
 
-- `src/terminal/profile.rs` capability declarations and diagnostics.
+- `crates/mez-terminal/src/profile.rs` capability declarations and diagnostics.
 - Parser/rendering implementation and focused regression tests.
 - `SPEC.md` if the compatibility contract changes.
 - This matrix, including any new unsupported behavior or fixture backlog item.

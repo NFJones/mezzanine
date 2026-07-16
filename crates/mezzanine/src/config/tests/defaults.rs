@@ -115,7 +115,7 @@ fn rejects_ambiguous_primary_config_files() {
 /// implementation detail.
 #[test]
 fn default_config_matches_documented_example() {
-    let documented = include_str!("../../../docs/examples/config.toml");
+    let documented = include_str!("../../../../../docs/examples/config.toml");
 
     assert_eq!(DEFAULT_CONFIG_TOML.trim(), documented.trim());
 }

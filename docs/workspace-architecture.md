@@ -1,10 +1,10 @@
 # Workspace architecture
 
-Mezzanine is organized as five Cargo packages with one product application
-package. That package is temporarily located at the workspace root and will
-move to `crates/mezzanine/`, leaving a virtual repository workspace. This
-structure enforces the specification requirement that the terminal multiplexer
-and agent harness remain separable logical subsystems.
+Mezzanine is organized as a virtual Cargo workspace with exactly five packages.
+The product application lives at `crates/mezzanine/`; the repository root has
+no package, `src/`, or `tests/` ownership. This structure enforces the
+specification requirement that the terminal multiplexer and agent harness
+remain separable logical subsystems.
 
 ## Package responsibilities
 

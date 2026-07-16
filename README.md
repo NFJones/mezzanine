@@ -140,7 +140,7 @@ Use this path on a clean machine.
 ### 1. Install `mez`
 
 ```sh
-cargo install --path . --locked
+cargo install --path crates/mezzanine --locked
 ```
 
 This installs `mez` into Cargo's bin directory, typically `~/.cargo/bin`. If

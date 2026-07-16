@@ -12,7 +12,7 @@ build-release:
 
 # Install mez
 install:
-    cargo install --path .
+    cargo install --path crates/mezzanine
 
 # Run (release by default)
 run *args:

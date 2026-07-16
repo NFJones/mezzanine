@@ -1,58 +1,9 @@
 [workspace]
 members = [
-    ".",
+    "crates/mezzanine",
     "crates/mez-agent",
     "crates/mez-core",
     "crates/mez-mux",
     "crates/mez-terminal",
 ]
 resolver = "3"
-
-[package]
-name = "mezzanine"
-version = "0.1.0"
-edition = "2024"
-
-[[bin]]
-name = "mez"
-path = "src/main.rs"
-
-[dependencies]
-mez-agent = { path = "crates/mez-agent" }
-mez-core = { path = "crates/mez-core" }
-mez-mux = { path = "crates/mez-mux" }
-mez-terminal = { path = "crates/mez-terminal" }
-clap = { version = "4", default-features = false, features = ["std", "help", "usage", "derive"] }
-futures-util = "0.3"
-base64 = "0.22"
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-include_dir = "0.7"
-keyring-core = "1.0"
-rand = "0.10"
-reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
-rpassword = "7"
-rusqlite = { version = "0.40", features = ["bundled"] }
-rustix = { version = "1.1", features = ["event", "fs", "net", "pipe", "process", "termios"] }
-secrecy = "0.10"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-serde_norway = "0.9"
-sha2 = "0.11"
-shlex = "2"
-thiserror = "2"
-tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "test-util", "time"] }
-tokio-util = { version = "0.7", features = ["codec"] }
-toml = "1.1"
-toml_edit = "0.25"
-unicode-segmentation = "1.12"
-unicode-width = "0.2"
-urlencoding = "2"
-wait-timeout = "0.2"
-zeroize = "1.8"
-zstd = "0.13"
-
-[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
-zbus-secret-service-keyring-store = { version = "1.0", features = ["rt-tokio-crypto-rust"] }
-
-[dev-dependencies]
-portable-pty = "0.9"

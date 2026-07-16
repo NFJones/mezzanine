@@ -2,71 +2,71 @@ version = 1
 status = "open"
 
 [[surface]]
-path = "src/cli"
+path = "crates/mezzanine/src/cli"
 state = "temporary"
 role = "The mez process command line, argument projection, and process-level workflows."
 
 [[surface]]
-path = "src/config"
+path = "crates/mezzanine/src/config"
 state = "temporary"
 role = "Versioned product configuration schema, defaults, migration, mutation, and validation."
 
 [[surface]]
-path = "src/control"
+path = "crates/mezzanine/src/control"
 state = "temporary"
 role = "Product JSON-RPC schema, authorization, idempotency, state projection, dispatch, and the supported control-client codec."
 
 [[surface]]
-path = "src/error.rs"
+path = "crates/mezzanine/src/error.rs"
 state = "temporary"
 role = "Product error taxonomy and concrete lower-crate error projection."
 
 [[surface]]
-path = "src/host"
+path = "crates/mezzanine/src/host"
 state = "temporary"
 role = "Host shell, terminal, Tokio, socket, worker, supervision, and concrete side-effect adapters."
 
 [[surface]]
-path = "src/integrations"
+path = "crates/mezzanine/src/integrations"
 state = "temporary"
 role = "Concrete agent, provider, MCP, hook, macro, and skill transports, assets, credentials, and product projections."
 
 [[surface]]
-path = "src/lib.rs"
+path = "crates/mezzanine/src/lib.rs"
 state = "temporary"
 role = "Narrow product composition API for CLI bootstrap, product errors, and the supported control-client codec."
 
 [[surface]]
-path = "src/main.rs"
+path = "crates/mezzanine/src/main.rs"
 state = "temporary"
 role = "Thin mez binary entry point."
 
 [[surface]]
-path = "src/protocol"
+path = "crates/mezzanine/src/protocol"
 state = "temporary"
 role = "Product event records, local framing, concrete message sinks, and product-local identifiers."
 
 [[surface]]
-path = "src/runtime"
+path = "crates/mezzanine/src/runtime"
 state = "temporary"
 role = "Private product runtime components, serialized cross-crate transactions, typed transitions, and side-effect planning."
 
 [[surface]]
-path = "src/security"
+path = "crates/mezzanine/src/security"
 state = "temporary"
 role = "Product credential, OAuth, audit, project-trust, and live permission adapters."
 
 [[surface]]
-path = "src/storage"
+path = "crates/mezzanine/src/storage"
 state = "temporary"
 role = "Product issue, memory, registry, snapshot, and transcript persistence and compatibility I/O."
 
 [[surface]]
-path = "src/test_support"
+path = "crates/mezzanine/src/test_support"
 state = "temporary"
 role = "Shared application fixtures used by multiple product test owners."
 
 [[surface]]
-path = "src/ui"
+path = "crates/mezzanine/src/ui"
 state = "temporary"
 role = "Product command dispatch, prompt adaptation, and product/runtime/filesystem selector candidates."
