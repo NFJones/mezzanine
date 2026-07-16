@@ -241,18 +241,19 @@ impl RuntimeSessionService {
         parent_agent_id: &str,
     ) -> Result<RuntimeSubagentLineage> {
         let parent_lineage = self.subagent_lineage_for_agent(parent_agent_id);
-        if parent_lineage.depth >= self.max_subagent_depth {
+        if parent_lineage.depth >= self.max_subagent_depth() {
             return Err(MezError::forbidden(format!(
                 "subagent depth limit reached for {parent_agent_id}: depth {} of {}",
-                parent_lineage.depth, self.max_subagent_depth
+                parent_lineage.depth,
+                self.max_subagent_depth()
             )));
         }
         let (limit_name, limit) = if parent_lineage.depth == 0 {
-            ("agents.max_root_subagents", self.max_root_subagents)
+            ("agents.max_root_subagents", self.max_root_subagents())
         } else {
             (
                 "agents.max_subagents_per_subagent",
-                self.max_subagents_per_subagent,
+                self.max_subagents_per_subagent(),
             )
         };
         let active = self.active_direct_subagent_count(parent_agent_id);
@@ -839,7 +840,7 @@ impl RuntimeSessionService {
                 .flatten()
                 .and_then(|window| {
                     let next_pane_count = window.panes().len().saturating_add(1);
-                    (next_pane_count <= self.max_subagent_panes_per_window)
+                    (next_pane_count <= self.max_subagent_panes_per_window())
                         .then(|| runtime_subagent_bucket_layout(window.size, next_pane_count))
                         .flatten()
                         .map(|layout| (window.id.clone(), layout))

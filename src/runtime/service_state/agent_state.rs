@@ -4,9 +4,10 @@ use super::*;
 
 /// Describes whether a parent turn waits for spawned subagents before it can
 /// continue provider execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SubagentWaitPolicy {
     /// Spawned subagents are joined: the parent waits for their task results.
+    #[default]
     Join,
     /// Spawned subagents are detached: the parent can continue after spawn.
     Detach,

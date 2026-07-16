@@ -260,13 +260,13 @@ impl RuntimeSessionService {
             None => {}
         }
         let max_concurrent_agents = runtime_max_concurrent_agents_from_config(&structured)?;
-        self.max_subagent_panes_per_window =
-            runtime_max_subagent_panes_per_window_from_config(&structured)?;
-        self.max_root_subagents = runtime_max_root_subagents_from_config(&structured)?;
-        self.max_subagents_per_subagent =
-            runtime_max_subagents_per_subagent_from_config(&structured)?;
-        self.max_subagent_depth = runtime_max_subagent_depth_from_config(&structured)?;
-        self.subagent_wait_policy = runtime_subagent_wait_policy_from_config(&structured)?;
+        self.configure_subagent_policy(
+            runtime_max_subagent_panes_per_window_from_config(&structured)?,
+            runtime_max_root_subagents_from_config(&structured)?,
+            runtime_max_subagents_per_subagent_from_config(&structured)?,
+            runtime_max_subagent_depth_from_config(&structured)?,
+            runtime_subagent_wait_policy_from_config(&structured)?,
+        );
         self.set_agent_compaction_raw_retention_percent(
             runtime_agent_compaction_raw_retention_percent_from_config(&structured)?,
         );

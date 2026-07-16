@@ -13,7 +13,9 @@ use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentScheduler,
     AgentShellSession, AgentShellVisibility, AgentTurnExecution, AgentTurnRecord, AgentTurnState,
     AuditActor, AuditRecord, BTreeMap, BTreeSet, BlockedAgentApprovalRef, BlockedApprovalRequest,
-    ContextBlock, ContextSourceKind, DEFAULT_COMMAND_SHELL_CLASSIFICATION, Envelope, EventKind,
+    ContextBlock, ContextSourceKind, DEFAULT_COMMAND_SHELL_CLASSIFICATION,
+    DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH, DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW,
+    DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT, DEFAULT_SUBAGENT_WAIT_POLICY, Envelope, EventKind,
     HookEvent, JoinedSubagentDependency, McpToolCallRequest, MezError, ModelProfile, ModelResponse,
     PaneId, PaneReadinessState, PathBuf, PathScopes, PendingFocusedShellHookContinuation,
     PermissionPolicy, ReadinessOverrideRevocation, Recipient, ReqwestProviderHttpTransport, Result,
@@ -194,6 +196,16 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     agent_quota_usage_by_conversation: BTreeMap<String, Vec<ProviderQuotaUsage>>,
     /// Latest live model catalog keyed by provider id.
     provider_model_catalog_cache: BTreeMap<String, RuntimeModelCatalog>,
+    /// Maximum subagent panes assigned to one background window.
+    max_subagent_panes_per_window: usize,
+    /// Maximum direct subagents available to a root pane agent.
+    max_root_subagents: usize,
+    /// Maximum direct subagents available to a child agent.
+    max_subagents_per_subagent: usize,
+    /// Maximum nested subagent delegation depth.
+    max_subagent_depth: usize,
+    /// Whether parent turns join or detach spawned subagents.
+    subagent_wait_policy: SubagentWaitPolicy,
 }
 
 /// State removed when a compaction worker reports failure.
@@ -234,12 +246,59 @@ impl RuntimeAgentComponent {
             agent_loop_limit,
             agent_action_failure_retry_limit,
             agent_implementation_pressure_after_shell_actions,
+            max_subagent_panes_per_window: DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW,
+            max_root_subagents: DEFAULT_MAX_ROOT_SUBAGENTS,
+            max_subagents_per_subagent: DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT,
+            max_subagent_depth: DEFAULT_MAX_SUBAGENT_DEPTH,
+            subagent_wait_policy: DEFAULT_SUBAGENT_WAIT_POLICY,
             ..Self::default()
         }
     }
 }
 
 impl RuntimeSessionService {
+    /// Replaces all configured subagent placement and delegation limits.
+    pub(in crate::runtime) fn configure_subagent_policy(
+        &mut self,
+        max_subagent_panes_per_window: usize,
+        max_root_subagents: usize,
+        max_subagents_per_subagent: usize,
+        max_subagent_depth: usize,
+        subagent_wait_policy: SubagentWaitPolicy,
+    ) {
+        self.agent.max_subagent_panes_per_window = max_subagent_panes_per_window;
+        self.agent.max_root_subagents = max_root_subagents;
+        self.agent.max_subagents_per_subagent = max_subagents_per_subagent;
+        self.agent.max_subagent_depth = max_subagent_depth;
+        self.agent.subagent_wait_policy = subagent_wait_policy;
+    }
+
+    /// Returns the configured subagent pane capacity per window.
+    pub(in crate::runtime) fn max_subagent_panes_per_window(&self) -> usize {
+        self.agent.max_subagent_panes_per_window
+    }
+
+    /// Returns the direct-subagent limit for root agents.
+    pub(crate) fn max_root_subagents(&self) -> usize {
+        self.agent.max_root_subagents
+    }
+
+    /// Returns the direct-subagent limit for child agents.
+    pub(crate) fn max_subagents_per_subagent(&self) -> usize {
+        self.agent.max_subagents_per_subagent
+    }
+
+    /// Returns the maximum nested subagent depth.
+    pub(crate) fn max_subagent_depth(&self) -> usize {
+        self.agent.max_subagent_depth
+    }
+
+    /// Returns whether parent turns join or detach spawned subagents.
+    #[cfg(test)]
+    pub(crate) fn subagent_wait_policy(&self) -> SubagentWaitPolicy {
+        self.agent.subagent_wait_policy
+    }
+
     /// Returns a cached live model catalog for one provider.
     pub(in crate::runtime) fn cached_provider_model_catalog(
         &self,

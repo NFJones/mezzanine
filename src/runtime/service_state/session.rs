@@ -264,33 +264,6 @@ pub struct RuntimeSessionService {
     /// Panes that should close once their terminal subagent turn fully
     /// finishes its normal terminal cleanup.
     pub(in crate::runtime) pending_terminal_subagent_pane_closes: BTreeSet<String>,
-    /// Maximum number of subagent panes to place in one subagent window.
-    ///
-    /// This bound keeps helper panes readable by forcing a fresh background
-    /// window once the configured bucket size is reached.
-    pub(in crate::runtime) max_subagent_panes_per_window: usize,
-    /// Maximum number of direct subagents a root pane agent may spawn.
-    ///
-    /// This caps the delegation width available to the user-facing root agent
-    /// independently from scheduler concurrency and subagent window bucket
-    /// capacity.
-    pub(in crate::runtime) max_root_subagents: usize,
-    /// Maximum number of direct subagents a child subagent may spawn.
-    ///
-    /// Child delegation uses a narrower branching factor so nested helper
-    /// trees remain bounded even when the parent task is allowed to delegate.
-    pub(in crate::runtime) max_subagents_per_subagent: usize,
-    /// Maximum depth at which spawned subagents may create more children.
-    ///
-    /// Root pane agents are depth zero. A subagent at this depth may continue
-    /// its own work but cannot spawn another generation.
-    pub(in crate::runtime) max_subagent_depth: usize,
-    /// Policy controlling whether parent turns wait for spawned subagents.
-    ///
-    /// Joined parents move to blocked scheduler state until all spawned child
-    /// task results are available, preventing scheduler deadlocks while keeping
-    /// provider continuation ordered after child output.
-    pub(in crate::runtime) subagent_wait_policy: SubagentWaitPolicy,
     /// Child turns currently joined by parent `spawn_agent` actions.
     ///
     /// The map is keyed by child turn id so task-result delivery can resolve

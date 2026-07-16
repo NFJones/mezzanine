@@ -212,7 +212,7 @@ fn runtime_config_reload_applies_implementation_pressure_threshold() {
 #[test]
 fn runtime_config_reload_applies_subagent_wait_policy() {
     let mut service = test_runtime_service();
-    assert_eq!(service.subagent_wait_policy, SubagentWaitPolicy::Join);
+    assert_eq!(service.subagent_wait_policy(), SubagentWaitPolicy::Join);
 
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -224,7 +224,7 @@ fn runtime_config_reload_applies_subagent_wait_policy() {
             text: "[agents]\nsubagent_wait_policy = \"detach\"\n".to_string(),
         }])
         .unwrap();
-    assert_eq!(service.subagent_wait_policy, SubagentWaitPolicy::Detach);
+    assert_eq!(service.subagent_wait_policy(), SubagentWaitPolicy::Detach);
 
     let error = service
         .replace_config_layers(vec![ConfigLayer {
@@ -252,9 +252,9 @@ fn runtime_config_reload_applies_subagent_wait_policy() {
 fn runtime_config_reload_applies_subagent_capacity_limits() {
     let mut service = test_runtime_service();
 
-    assert_eq!(service.max_root_subagents, 4);
-    assert_eq!(service.max_subagents_per_subagent, 2);
-    assert_eq!(service.max_subagent_depth, 2);
+    assert_eq!(service.max_root_subagents(), 4);
+    assert_eq!(service.max_subagents_per_subagent(), 2);
+    assert_eq!(service.max_subagent_depth(), 2);
 
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -269,9 +269,9 @@ fn runtime_config_reload_applies_subagent_capacity_limits() {
         }])
         .unwrap();
 
-    assert_eq!(service.max_root_subagents, 6);
-    assert_eq!(service.max_subagents_per_subagent, 3);
-    assert_eq!(service.max_subagent_depth, 4);
+    assert_eq!(service.max_root_subagents(), 6);
+    assert_eq!(service.max_subagents_per_subagent(), 3);
+    assert_eq!(service.max_subagent_depth(), 4);
 
     let error = service
         .replace_config_layers(vec![ConfigLayer {

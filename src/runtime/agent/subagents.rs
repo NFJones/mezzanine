@@ -247,7 +247,7 @@ impl RuntimeSessionService {
         let spawn = runtime_subagent_spawn_request(&params, false)?;
         let placement_mode = runtime_subagent_placement_mode(&params)?;
         let spawn_json = self.spawn_runtime_subagent_session_owned(spawn, placement_mode)?;
-        if self.subagent_wait_policy == SubagentWaitPolicy::Join {
+        if self.agent.subagent_wait_policy == SubagentWaitPolicy::Join {
             let (child_agent_id, child_display_name, child_turn_id) =
                 runtime_spawn_json_agent_and_turn(&spawn_json)?;
             let child_turn_id = child_turn_id.ok_or_else(|| {
