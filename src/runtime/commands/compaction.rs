@@ -214,23 +214,6 @@ impl RuntimeSessionService {
         })
     }
 
-    /// Executes `/compact` by asking the active model to produce the durable
-    /// conversation summary that replaces older transcript context.
-    pub(super) async fn execute_agent_shell_compact_command_async(
-        &mut self,
-        pane_id: &str,
-        input: &str,
-    ) -> Result<AgentShellCommandOutcome> {
-        let invocation = parse_slash_command(input)?
-            .ok_or_else(|| MezError::invalid_args("compact command must be a slash command"))?;
-        if !invocation.args.trim().is_empty() {
-            return Err(MezError::invalid_args(
-                "compact command does not accept arguments",
-            ));
-        }
-        self.queue_agent_shell_compaction_with_model(pane_id, "manual", None)
-    }
-
     /// Queues internal output-limit recovery compaction for a running turn.
     ///
     /// Provider `max_output_tokens` exhaustion can leave a running turn with a

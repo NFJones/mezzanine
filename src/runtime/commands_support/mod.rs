@@ -11,6 +11,7 @@ mod keybindings;
 mod layout;
 mod mcp;
 mod permissions;
+mod plan;
 mod status;
 
 use super::{
@@ -43,6 +44,7 @@ use layout::{
 };
 pub(super) use mcp::*;
 pub(super) use permissions::*;
+use plan::{RuntimeTerminalCommandPlan, runtime_terminal_command_plan};
 pub(super) use status::*;
 
 // Runtime command display and command helper functions.
@@ -57,26 +59,15 @@ pub(super) fn execute_runtime_command_sequence(
     primary_client_id: &mez_core::ids::ClientId,
     input: &str,
 ) -> Result<Vec<CommandOutcome>> {
-    let invocations = parse_command_sequence(input)?;
-    let mut outcomes = Vec::with_capacity(invocations.len());
+    let plan = runtime_terminal_command_plan(input)?;
+    let mut outcomes = Vec::with_capacity(plan.len());
     let mut active_client_id = primary_client_id.clone();
-    for invocation in &invocations {
-        if let Some(outcome) =
-            execute_runtime_live_terminal_command(service, &active_client_id, invocation)?
-        {
-            outcomes.push(outcome);
-            continue;
-        }
-        if let Some(outcome) =
-            execute_runtime_layout_terminal_command(service, &active_client_id, invocation)?
-        {
-            outcomes.push(outcome);
-            continue;
-        }
-        let outcome = execute_command(&mut service.session, &active_client_id, invocation)?;
-        let outcome =
-            resolve_runtime_layout_command_outcome(service, &mut active_client_id, outcome)?;
-        outcomes.push(outcome);
+    for command in &plan {
+        outcomes.push(execute_runtime_planned_terminal_command(
+            service,
+            &mut active_client_id,
+            command.invocation(),
+        )?);
     }
     Ok(outcomes)
 }
@@ -91,29 +82,48 @@ pub(super) async fn execute_runtime_command_sequence_async(
     primary_client_id: &mez_core::ids::ClientId,
     input: &str,
 ) -> Result<Vec<CommandOutcome>> {
-    let invocations = parse_command_sequence(input)?;
-    let mut outcomes = Vec::with_capacity(invocations.len());
+    let plan = runtime_terminal_command_plan(input)?;
+    let mut outcomes = Vec::with_capacity(plan.len());
     let mut active_client_id = primary_client_id.clone();
-    for invocation in &invocations {
-        if let Some(outcome) =
-            execute_runtime_live_terminal_command_async(service, &active_client_id, invocation)
-                .await?
-        {
-            outcomes.push(outcome);
-            continue;
+    for command in &plan {
+        match command {
+            RuntimeTerminalCommandPlan::RefreshProviderInfo(invocation) => {
+                outcomes.push(CommandOutcome::Display {
+                    command: invocation.name.clone(),
+                    body: runtime_refresh_provider_info_command_async(service, invocation).await?,
+                });
+            }
+            RuntimeTerminalCommandPlan::Immediate(invocation) => {
+                outcomes.push(execute_runtime_planned_terminal_command(
+                    service,
+                    &mut active_client_id,
+                    invocation,
+                )?);
+            }
         }
-        if let Some(outcome) =
-            execute_runtime_layout_terminal_command(service, &active_client_id, invocation)?
-        {
-            outcomes.push(outcome);
-            continue;
-        }
-        let outcome = execute_command(&mut service.session, &active_client_id, invocation)?;
-        let outcome =
-            resolve_runtime_layout_command_outcome(service, &mut active_client_id, outcome)?;
-        outcomes.push(outcome);
     }
     Ok(outcomes)
+}
+
+/// Executes one non-awaited terminal command through the shared runtime,
+/// layout, and neutral mux dispatch chain.
+fn execute_runtime_planned_terminal_command(
+    service: &mut RuntimeSessionService,
+    active_client_id: &mut mez_core::ids::ClientId,
+    invocation: &CommandInvocation,
+) -> Result<CommandOutcome> {
+    if let Some(outcome) =
+        execute_runtime_live_terminal_command(service, active_client_id, invocation)?
+    {
+        return Ok(outcome);
+    }
+    if let Some(outcome) =
+        execute_runtime_layout_terminal_command(service, active_client_id, invocation)?
+    {
+        return Ok(outcome);
+    }
+    let outcome = execute_command(&mut service.session, active_client_id, invocation)?;
+    resolve_runtime_layout_command_outcome(service, active_client_id, outcome)
 }
 
 /// Runs the runtime send prefix command operation for this subsystem.
@@ -695,25 +705,6 @@ pub(super) fn execute_runtime_live_terminal_command(
             }))
         }
         _ => Ok(None),
-    }
-}
-
-/// Runs the execute runtime live terminal command async operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) async fn execute_runtime_live_terminal_command_async(
-    service: &mut RuntimeSessionService,
-    primary_client_id: &mez_core::ids::ClientId,
-    invocation: &CommandInvocation,
-) -> Result<Option<CommandOutcome>> {
-    match invocation.name.as_str() {
-        "refresh-provider-info" => Ok(Some(CommandOutcome::Display {
-            command: invocation.name.clone(),
-            body: runtime_refresh_provider_info_command_async(service, invocation).await?,
-        })),
-        _ => execute_runtime_live_terminal_command(service, primary_client_id, invocation),
     }
 }
 

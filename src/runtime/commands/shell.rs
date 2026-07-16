@@ -27,6 +27,47 @@ pub(crate) struct RuntimeAgentShellExit {
     stopped_turn_id: Option<String>,
 }
 
+/// Execution class selected for one agent-shell input before runtime mutation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentShellCommandPlan {
+    /// Ordinary slash commands that execute through the synchronous runtime.
+    Immediate,
+    /// A non-command user prompt submitted through the ordinary prompt path.
+    Prompt,
+    /// A command that requires one async host effect before or during execution.
+    Awaited(AgentShellAwaitedCommand),
+}
+
+/// Agent-shell commands whose concrete effect executor may await host work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentShellAwaitedCommand {
+    /// Pane model or routing-model selection.
+    Model,
+    /// Model-backed conversation compaction queueing.
+    Compact,
+    /// Model-backed durable-memory extraction.
+    Remember,
+    /// MCP listing after live transport discovery.
+    ListMcp,
+}
+
+/// Classifies one agent-shell input once before selecting an executor.
+fn agent_shell_command_plan(input: &str) -> AgentShellCommandPlan {
+    let invocation = parse_slash_command(input).ok().flatten();
+    match invocation
+        .as_ref()
+        .map(|invocation| invocation.name.as_str())
+    {
+        Some("model") => AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::Model),
+        Some("compact") => AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::Compact),
+        Some("remember") => AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::Remember),
+        Some("list-mcp") => AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::ListMcp),
+        Some(_) => AgentShellCommandPlan::Immediate,
+        None if input.trim().is_empty() => AgentShellCommandPlan::Immediate,
+        None => AgentShellCommandPlan::Prompt,
+    }
+}
+
 /// Runs the agent shell invalid command response json operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -719,66 +760,21 @@ impl RuntimeSessionService {
         self.queue_agent_shell_remember_command_with_model(pane_id, input)
     }
 
-    /// Runs the execute agent shell command async operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// Executes one agent-shell input through a typed sync/awaited plan.
     pub async fn execute_agent_shell_command_async(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         input: &str,
     ) -> Result<String> {
-        let slash_invocation = parse_slash_command(input).ok().flatten();
-        let is_model_command = slash_invocation
-            .as_ref()
-            .is_some_and(|invocation| invocation.name == "model");
-        let is_compact_command = slash_invocation
-            .as_ref()
-            .is_some_and(|invocation| invocation.name == "compact");
-        let is_remember_command = slash_invocation
-            .as_ref()
-            .is_some_and(|invocation| invocation.name == "remember");
-        let is_list_mcp_command = slash_invocation
-            .as_ref()
-            .is_some_and(|invocation| invocation.name == "list-mcp");
-        let is_prompt = !input.trim().is_empty() && slash_invocation.is_none();
-        if !is_model_command
-            && !is_compact_command
-            && !is_remember_command
-            && !is_list_mcp_command
-            && !is_prompt
-        {
+        let plan = agent_shell_command_plan(input);
+        let AgentShellCommandPlan::Awaited(awaited_command) = plan else {
             return self.execute_agent_shell_command_with_display_inner(
                 primary_client_id,
                 input,
                 input,
                 true,
             );
-        }
-
-        if is_prompt {
-            self.require_live()?;
-            if self.session.primary_client_id() != Some(primary_client_id) {
-                return Err(MezError::forbidden("operation requires the primary client"));
-            }
-            let pane_id = self.active_pane_id()?;
-            let visible = self
-                .agent_shell_store()
-                .get(&pane_id)
-                .is_some_and(|session| session.visibility == AgentShellVisibility::Visible);
-            if !visible {
-                return Err(MezError::invalid_state(
-                    "agent shell prompt requires a visible agent shell session",
-                ));
-            }
-            return self.execute_agent_shell_command_with_display_inner(
-                primary_client_id,
-                input,
-                input,
-                true,
-            );
-        }
+        };
 
         self.require_live()?;
         if self.session.primary_client_id() != Some(primary_client_id) {
@@ -794,11 +790,11 @@ impl RuntimeSessionService {
                 "agent shell prompt requires a visible agent shell session",
             ));
         }
-        if is_list_mcp_command {
-            let _ = self
-                .ensure_runtime_mcp_transports_discovered_async()
+        if awaited_command == AgentShellAwaitedCommand::ListMcp {
+            self.ensure_runtime_mcp_transports_discovered_async()
                 .await?;
         }
+
         self.persist_agent_prompt_history_entry(&pane_id, input, true)?;
         let mcp_summary = self.mcp_registry().agent_shell_summary();
         let permission_summary = self.permission_policy().agent_shell_summary();
@@ -818,117 +814,31 @@ impl RuntimeSessionService {
                 ));
             }
         };
+
         let response = match async {
-            if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                outcome.as_ref()
-                && command == "model"
-            {
-                let model_outcome = self
-                    .execute_agent_shell_model_command_async(&pane_id, input)
-                    .await?;
-                return Ok(runtime_agent_shell_command_response_json(
-                    &pane_id,
-                    input,
-                    Some(&model_outcome),
-                ));
-            }
-            if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                outcome.as_ref()
-                && command == "latency"
-            {
-                let latency_outcome = self.execute_agent_shell_latency_command(&pane_id, input)?;
-                return Ok(runtime_agent_shell_command_response_json(
-                    &pane_id,
-                    input,
-                    Some(&latency_outcome),
-                ));
-            }
-            if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                outcome.as_ref()
-                && command == "thinking"
-            {
-                let thinking_outcome =
-                    self.execute_agent_shell_thinking_command(&pane_id, input)?;
-                return Ok(runtime_agent_shell_command_response_json(
-                    &pane_id,
-                    input,
-                    Some(&thinking_outcome),
-                ));
-            }
-            if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                outcome.as_ref()
-                && command == "compact"
-            {
-                let compact_outcome = self
-                    .execute_agent_shell_compact_command_async(&pane_id, input)
-                    .await?;
-                return Ok(runtime_agent_shell_command_response_json(
-                    &pane_id,
-                    input,
-                    Some(&compact_outcome),
-                ));
-            }
-            if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                outcome.as_ref()
-                && command == "remember"
-            {
-                let remember_outcome = self
-                    .execute_agent_shell_remember_command_async(&pane_id, input)
-                    .await?;
-                return Ok(runtime_agent_shell_command_response_json(
-                    &pane_id,
-                    input,
-                    Some(&remember_outcome),
-                ));
-            }
-            if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                outcome.as_ref()
-                && command == "memory"
-            {
-                let memory_outcome = self.execute_agent_shell_memory_command(&pane_id, input)?;
-                return Ok(runtime_agent_shell_command_response_json(
-                    &pane_id,
-                    input,
-                    Some(&memory_outcome),
-                ));
-            }
-            if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                outcome.as_ref()
-                && command == "list-macros"
-            {
-                let macros_outcome = self.execute_agent_shell_list_macros_command(&pane_id)?;
-                return Ok(runtime_agent_shell_command_response_json(
-                    &pane_id,
-                    input,
-                    Some(&macros_outcome),
-                ));
-            }
-            if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                outcome.as_ref()
-                && command == "list-skills"
-            {
-                let skills_outcome = self.execute_agent_shell_list_skills_command(&pane_id)?;
-                return Ok(runtime_agent_shell_command_response_json(
-                    &pane_id,
-                    input,
-                    Some(&skills_outcome),
-                ));
-            }
-            if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                outcome.as_ref()
-                && command == "sync-builtin-skills"
-            {
-                let skills_outcome = self.execute_agent_shell_sync_builtin_skills_command()?;
-                return Ok(runtime_agent_shell_command_response_json(
-                    &pane_id,
-                    input,
-                    Some(&skills_outcome),
-                ));
-            }
+            let runtime_outcome = match awaited_command {
+                AgentShellAwaitedCommand::Model => {
+                    self.execute_agent_shell_model_command(&pane_id, input)?
+                }
+                AgentShellAwaitedCommand::Compact => {
+                    self.execute_agent_shell_compact_command(&pane_id, input)?
+                }
+                AgentShellAwaitedCommand::Remember => {
+                    self.execute_agent_shell_remember_command_async(&pane_id, input)
+                        .await?
+                }
+                AgentShellAwaitedCommand::ListMcp => {
+                    return Ok(runtime_agent_shell_command_response_json(
+                        &pane_id,
+                        input,
+                        outcome.as_ref(),
+                    ));
+                }
+            };
             Ok(runtime_agent_shell_command_response_json(
                 &pane_id,
                 input,
-                outcome.as_ref(),
+                Some(&runtime_outcome),
             ))
         }
         .await
@@ -1081,5 +991,46 @@ impl RuntimeSessionService {
         }
         let _ = store.append_prompt_history(&session.session_id, input)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::{AgentShellAwaitedCommand, AgentShellCommandPlan, agent_shell_command_plan};
+
+    /// Verifies model, compaction, memory extraction, and MCP discovery are
+    /// classified as the only agent-shell inputs requiring async host work.
+    #[test]
+    fn agent_shell_plan_identifies_awaited_commands() {
+        assert_eq!(
+            agent_shell_command_plan("/model --routing show"),
+            AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::Model)
+        );
+        assert_eq!(
+            agent_shell_command_plan("/compact"),
+            AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::Compact)
+        );
+        assert_eq!(
+            agent_shell_command_plan("/remember"),
+            AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::Remember)
+        );
+        assert_eq!(
+            agent_shell_command_plan("/list-mcp"),
+            AgentShellCommandPlan::Awaited(AgentShellAwaitedCommand::ListMcp)
+        );
+    }
+
+    /// Verifies user prompts and ordinary slash commands remain distinct typed
+    /// plans while sharing the serialized immediate runtime executor.
+    #[test]
+    fn agent_shell_plan_separates_prompts_from_immediate_commands() {
+        assert_eq!(
+            agent_shell_command_plan("continue the implementation"),
+            AgentShellCommandPlan::Prompt
+        );
+        assert_eq!(
+            agent_shell_command_plan("/status"),
+            AgentShellCommandPlan::Immediate
+        );
     }
 }
