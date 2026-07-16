@@ -239,7 +239,7 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
             .line(),
         "/resume saved"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(cwd);
 }
 

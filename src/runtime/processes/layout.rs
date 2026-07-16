@@ -674,8 +674,10 @@ impl RuntimeSessionService {
                 .find(|window| window.id == descriptor.window_id)
                 .and_then(|window| self.pane_process_size_for(window, pane_id))
                 .unwrap_or(effect.size);
-            if self.pane_processes.contains_pane(pane_id) {
-                self.pane_processes.resize_pane(pane_id, process_size)?;
+            if self.process.pane_processes.contains_pane(pane_id) {
+                self.process
+                    .pane_processes
+                    .resize_pane(pane_id, process_size)?;
             } else if self.pane_process_is_adapter_owned(pane_id) {
                 self.queued_pane_resize_effects.insert(
                     pane_id.to_string(),

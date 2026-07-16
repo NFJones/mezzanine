@@ -281,8 +281,7 @@ impl RuntimeSessionService {
         loop {
             let activity_sequence = executor
                 .service
-                .pane_processes()
-                .output_activity_sequence(pane_id.as_str());
+                .pane_process_output_activity_sequence(pane_id.as_str());
             executor
                 .service
                 .poll_pane_outputs(DEFAULT_PTY_READ_LIMIT_BYTES)?;
@@ -323,8 +322,11 @@ impl RuntimeSessionService {
             if let Some(activity_sequence) = activity_sequence {
                 let _ = executor
                     .service
-                    .pane_processes()
-                    .wait_for_output_activity_after(pane_id.as_str(), activity_sequence, remaining);
+                    .wait_for_pane_process_output_activity_after(
+                        pane_id.as_str(),
+                        activity_sequence,
+                        remaining,
+                    );
             } else {
                 executor
                     .service

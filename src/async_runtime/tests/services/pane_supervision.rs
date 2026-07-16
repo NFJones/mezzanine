@@ -53,7 +53,7 @@ async fn async_pane_process_supervisor_claims_live_manager_panes() {
 
     assert_eq!(report.polls, 2);
     assert_eq!(report.spawned_workers, 1);
-    assert!(exit.service.pane_processes_mut().terminate_all().is_ok());
+    assert!(exit.service.terminate_all_pane_processes().is_ok());
 }
 
 /// Verifies that the dynamic pane-process supervisor observes child worker
@@ -100,5 +100,5 @@ async fn async_pane_process_supervisor_wakes_on_worker_completion() {
 
     assert_eq!(report.spawned_workers, 1);
     assert_eq!(report.completed_workers, 1);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }

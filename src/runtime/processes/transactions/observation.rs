@@ -9,8 +9,9 @@ impl RuntimeSessionService {
         &self,
         pane_id: &str,
     ) -> Option<bool> {
-        let primary_pid = self.pane_processes.primary_pid(pane_id)?;
+        let primary_pid = self.process.pane_processes.primary_pid(pane_id)?;
         let foreground_group = self
+            .process
             .pane_processes
             .foreground_process_group_id(pane_id)
             .or_else(|| {
@@ -20,6 +21,7 @@ impl RuntimeSessionService {
                     .copied()
             })?;
         let primary_process_group = self
+            .process
             .pane_processes
             .process_group_leader(pane_id)
             .and_then(|leader| u32::try_from(leader).ok())

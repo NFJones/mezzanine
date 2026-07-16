@@ -80,7 +80,7 @@ fn runtime_agent_plain_say_does_not_render_markdown_divider() {
             .all(|line| line.text != expected_divider),
         "{styled_lines:?}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies markdown `say` output is rendered as presentation-only styling.
@@ -234,7 +234,7 @@ fn runtime_agent_markdown_say_renders_styled_presentation_and_copies_raw_markdow
         .unwrap();
 
     assert_eq!(copy_mode.copy_selection().unwrap(), markdown);
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies wrapped markdown presentation rows still copy as raw markdown.

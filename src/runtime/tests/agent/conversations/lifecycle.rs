@@ -108,7 +108,7 @@ fn runtime_agent_loop_reuses_current_conversation_by_default() {
         pane_text.contains("user> /loop review this document"),
         "{pane_text}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies `/loop --fork` rotates the pane to a fresh ephemeral conversation
@@ -207,7 +207,7 @@ fn runtime_agent_loop_fork_option_starts_first_iteration_in_ephemeral_conversati
         pane_text.contains("user> /loop --fork review this document"),
         "{pane_text}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies `/loop --fork` can start from a pane conversation that has no
@@ -270,7 +270,7 @@ fn runtime_agent_loop_fork_option_starts_when_parent_conversation_has_no_saved_e
     assert_eq!(metadata.len(), 1, "{metadata:#?}");
     assert_eq!(metadata[0].conversation_id, old_session);
     assert_eq!(metadata[0].transcript_entries, 0);
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies `/loop --new` starts the first iteration in a fresh ephemeral
@@ -375,7 +375,7 @@ fn runtime_agent_loop_new_option_starts_first_iteration_in_fresh_ephemeral_conve
         pane_text.contains("user> /loop --new --limit 3 review this document"),
         "{pane_text}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that `/clear` follows the spec-level behavior of clearing the live

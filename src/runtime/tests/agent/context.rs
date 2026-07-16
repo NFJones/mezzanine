@@ -309,7 +309,7 @@ fn runtime_agent_context_settles_recoverable_prompt_candidate_readiness() {
     assert!(!context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::RuntimeHint && block.label == "pane readiness"
     }));
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies prompt construction keeps the readiness warning when no shell-state

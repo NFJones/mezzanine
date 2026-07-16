@@ -493,5 +493,5 @@ async fn async_terminal_show_metrics_command_renders_actor_metrics() {
         );
     };
     let ((), mut exit) = tokio::join!(client, actor.run());
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }

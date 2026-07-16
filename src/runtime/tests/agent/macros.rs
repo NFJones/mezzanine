@@ -232,7 +232,7 @@ fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
         "{orchestration_context}"
     );
 
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies a completed macro step asks the main model for a structured judge
@@ -363,7 +363,7 @@ fn runtime_agent_macro_judge_dispatches_next_step_after_child_result() {
         "{pane_text}"
     );
 
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies a recoverable macro judge retry decision resubmits the same
@@ -486,7 +486,7 @@ fn runtime_agent_macro_judge_retries_current_step_after_child_result() {
         "{pane_text}"
     );
 
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies a macro judge stop-failure decision after a successful child result
@@ -621,7 +621,7 @@ fn runtime_agent_macro_judge_stop_failure_closes_successful_child_subagent() {
         pane_text.contains("macro release-check (1/2): stopped: the subagent did not perform the requested inspection"),
         "{pane_text}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies a final-step macro judge finish-success decision closes the
@@ -757,7 +757,7 @@ fn runtime_agent_macro_judge_finish_success_closes_child_subagent_and_completes_
         "{pane_text}"
     );
 
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies a macro-step child failure without a shell binding still resolves the joined parent dependency.

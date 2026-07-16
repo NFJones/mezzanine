@@ -311,7 +311,7 @@ impl RuntimeSessionService {
                 starts.len()
             }
             Err(error) => {
-                let restored_pane_ids = self.pane_processes.tracked_pane_ids();
+                let restored_pane_ids = self.tracked_runtime_pane_process_ids();
                 let restored_pane_id_refs = restored_pane_ids
                     .iter()
                     .map(String::as_str)

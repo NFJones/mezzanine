@@ -150,7 +150,7 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
         1
     );
     assert!(service.joined_subagent_dependencies.is_empty());
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that MAAP `send_message` still reaches the shared message queue

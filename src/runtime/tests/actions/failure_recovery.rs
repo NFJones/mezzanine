@@ -415,7 +415,7 @@ fn runtime_unrecovered_failure_with_pending_sibling_explains_blocker() {
         pane_text.contains("read-pending shell_command running no_error_code"),
         "{pane_text}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies unrecovered failures explain when the failed result is outside the
@@ -513,7 +513,7 @@ fn runtime_unrecovered_non_correctable_failure_explains_boundary() {
         "{pane_text}"
     );
     assert!(pane_text.contains("approval_denied"), "{pane_text}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies subagent spawn-limit denials are recoverable model feedback.
@@ -557,7 +557,7 @@ fn runtime_spawn_agent_action_succeeds_while_primary_is_detached() {
     assert!(service.session().primary_client_id().is_none());
     assert_eq!(service.joined_subagent_dependencies.len(), 1);
     assert!(service.session().windows().len() > 1);
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies subagent spawn-limit denials are recoverable model feedback.
@@ -651,5 +651,5 @@ fn runtime_spawn_limit_denial_queues_model_recovery() {
             && block.content.contains("attempt=1 max=5")
             && block.content.contains("Spawn-agent recovery")
     }));
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }

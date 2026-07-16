@@ -111,7 +111,7 @@ impl RuntimeSessionService {
         crate::terminal::set_agent_wrap_column_cap(crate::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP);
         Ok(Self {
             presentation: RuntimePresentationComponent::default(),
-            process: RuntimeProcessComponent::default(),
+            process: RuntimeProcessComponent::with_pane_processes(pane_processes),
             session,
             window_created_at_unix_seconds,
             config_layers: Vec::new(),
@@ -119,7 +119,6 @@ impl RuntimeSessionService {
             snapshot_repository: None,
             control_idempotency,
             message_service,
-            pane_processes,
             async_runtime_metrics: None,
             runtime_metrics: Default::default(),
             pane_current_working_directories: BTreeMap::new(),

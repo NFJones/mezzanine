@@ -411,7 +411,7 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
         "{:?}",
         execution.action_results[0]
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(config_root);
 }
 
@@ -509,6 +509,6 @@ fn runtime_config_change_resumes_after_full_access_change() {
         "{config_text}"
     );
     assert!(config_text.contains("[theme.colors]"), "{config_text}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(config_root);
 }

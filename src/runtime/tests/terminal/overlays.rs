@@ -254,7 +254,7 @@ fn runtime_primary_display_overlay_keyboard_navigation_requests_diff_refresh() {
             .any(|(index, line)| index != moved_active_row && line.starts_with("  ")),
         "{moved_view:?}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies mouse-wheel scrolling inside a primary command-output pager uses a
@@ -500,7 +500,7 @@ fn runtime_primary_display_overlay_executes_selectable_command_rows() {
     assert!(report.view_refresh_required);
     assert!(service.primary_display_overlay().is_none());
     assert_eq!(service.session().active_window().unwrap().name, "work");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies selectable command rows exposed by the primary display overlay can
@@ -545,7 +545,7 @@ fn runtime_primary_display_overlay_executes_keyboard_selected_command_rows() {
     assert!(report.full_redraw_required);
     assert!(service.primary_display_overlay().is_none());
     assert_eq!(service.session().active_window().unwrap().name, "work");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies command overlays can expose multiple selectable choices on one row.
@@ -645,7 +645,7 @@ fn runtime_primary_display_overlay_executes_multiple_action_chips() {
     assert!(service.paste_buffers().get("main").is_none());
     assert_eq!(service.active_paste_buffer(), None);
     assert!(service.primary_display_overlay().is_none());
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies mouse selection resolves the clicked chip when multiple choices are
@@ -705,7 +705,7 @@ fn runtime_primary_display_overlay_mouse_selects_action_chip() {
 
     assert!(service.paste_buffers().get("main").is_none());
     assert_eq!(service.active_paste_buffer(), None);
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that recoverable error overlays render as transient status-bar
@@ -761,5 +761,5 @@ fn runtime_primary_error_overlay_dismisses_on_any_input() {
     assert!(report.full_redraw_required);
     assert!(service.primary_error_status_overlay().is_none());
     assert!(service.primary_display_overlay().is_none());
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }

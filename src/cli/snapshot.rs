@@ -451,7 +451,7 @@ pub(super) fn restored_snapshot_json(
     let starts = service.restart_restored_pane_processes(Some(command))?;
     let session_json = restored_session_json(service.session());
     let restarted_json = pane_process_starts_json(&starts);
-    service.pane_processes_mut().terminate_all()?;
+    service.terminate_all_pane_processes()?;
     Ok(format!(
         r#"{{"restored":true,"live":false,"restarted":true,"restarted_panes":{},"session":{},"resume_plan":{}}}"#,
         restarted_json,

@@ -277,5 +277,5 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
         block.source != ContextSourceKind::RuntimeHint
             || !block.content.contains("Mutation-evidence rule")
     }));
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }

@@ -362,5 +362,5 @@ fn runtime_agent_shell_toggle_syncs_process_size_with_reserved_prompt_rows() {
     assert_eq!(exit_report.mux_actions_applied, 1);
     assert_eq!(restored_size, initial_size);
     assert_eq!(service.pane_screens.get("%1").unwrap().size(), initial_size);
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }

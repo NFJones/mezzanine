@@ -132,7 +132,7 @@ fn runtime_mixed_say_and_file_mutation_defers_say_until_after_diff() {
     let say_index = pane_text.find("Created note.txt.").unwrap_or(usize::MAX);
     assert!(diff_index < say_index, "{pane_text}");
     assert!(pane_text.contains("Worked for"), "{pane_text}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(target.parent().unwrap());
 }
 
@@ -257,7 +257,7 @@ fn runtime_agent_diff_say_renders_file_aware_syntax_spans() {
             .any(|span| span.start >= syntax_start && span.rendition.foreground.is_some()),
         "{addition_line:?}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that a provider response containing only a final completion marker
@@ -330,7 +330,7 @@ fn runtime_agent_complete_without_say_reports_visible_completion_status() {
         pane_text.contains("thinking: the task is complete"),
         "{pane_text}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that a completed but unparseable bootstrap attempt is still
@@ -390,7 +390,7 @@ fn runtime_bootstrap_unparsed_output_does_not_retry_forever() {
             .any(|event| event.payload.contains(r#""bootstrap":"unparsed""#)),
         "{events:?}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that generated runtime model profiles produce distinct identities

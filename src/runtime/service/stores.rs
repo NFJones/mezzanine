@@ -80,24 +80,6 @@ impl RuntimeSessionService {
         &mut self.message_service
     }
 
-    /// Runs the pane processes operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn pane_processes(&self) -> &PaneProcessManager {
-        &self.pane_processes
-    }
-
-    /// Runs the pane processes mut operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn pane_processes_mut(&mut self) -> &mut PaneProcessManager {
-        &mut self.pane_processes
-    }
-
     /// Runs the pane screens operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

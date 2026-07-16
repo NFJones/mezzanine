@@ -241,7 +241,8 @@ impl RuntimeSessionService {
                 .get(output.pane_id.as_str())
                 .copied()
                 .or_else(|| {
-                    self.pane_processes
+                    self.process
+                        .pane_processes
                         .foreground_process_group_id(output.pane_id.as_str())
                 })
                 .unwrap_or(output.primary_pid);

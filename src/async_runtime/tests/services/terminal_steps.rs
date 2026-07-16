@@ -174,5 +174,5 @@ async fn async_attached_terminal_step_can_be_applied_through_actor() {
         exit.commands_processed >= 5,
         "actor should process client-step, drain, split, and shutdown requests"
     );
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }

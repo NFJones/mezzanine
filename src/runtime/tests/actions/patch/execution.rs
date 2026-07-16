@@ -194,7 +194,7 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
         "{addition_line:?}"
     );
     fs::remove_dir_all(target.parent().unwrap()).unwrap();
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(target.parent().unwrap());
 }
 
@@ -338,7 +338,7 @@ fn runtime_apply_patch_read_phase_truncation_dispatches_specific_error_plan() {
         "{}",
         feedback.content
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies a pane-shell `apply_patch` action does not switch execution mode after dispatch.
@@ -469,7 +469,7 @@ fn runtime_apply_patch_uses_full_read_transport_when_preview_truncates() {
         "{}",
         write_transaction.command
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies `/loop` schedules another work iteration after a completed turn
@@ -645,7 +645,7 @@ fn runtime_agent_markdown_say_displays_raw_mez_patch_examples() {
     );
     assert!(pane_text.contains("     +new"), "{pane_text}");
     assert!(!pane_text.contains("[mez: no output]"), "{pane_text}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies action-pressure hints move from inspection to validation after a patch.
@@ -917,5 +917,5 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
         "{}",
         feedback.content
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }

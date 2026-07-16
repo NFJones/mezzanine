@@ -111,7 +111,7 @@ async fn async_actor_queues_provider_dispatch_side_effects_for_provider_poll_tim
     assert_eq!(exit.metrics.runtime_event_batches, 3);
     assert_eq!(exit.metrics.runtime_side_effects_queued, 4);
     assert_eq!(exit.metrics.runtime_side_effects_drained, 4);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that provider-poll timer events are generation checked before they
@@ -199,7 +199,7 @@ async fn async_actor_ignores_stale_provider_poll_timer_events() {
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert!(exit.metrics.runtime_side_effects_queued >= 4);
     assert!(exit.metrics.runtime_side_effects_drained >= 4);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that retryable provider failures schedule a per-turn retry timer
@@ -305,7 +305,7 @@ async fn async_actor_schedules_provider_retry_timer_for_retryable_failure() {
 
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert!(exit.metrics.runtime_side_effects_queued >= 2);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies rate-limited provider failures receive the full bounded exponential
@@ -420,7 +420,7 @@ async fn async_actor_retries_rate_limits_five_times_with_exponential_backoff() {
 
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert!(exit.metrics.runtime_side_effects_queued >= 10);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies provider output-limit failures use the retry timer path after
@@ -558,7 +558,7 @@ max_output_tokens = 4096
         !pane_text.contains("provider rejected context as too large"),
         "{pane_text}"
     );
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies exhausted output-limit retries queue automatic compaction instead
@@ -762,7 +762,7 @@ context_window_tokens = 128000
             .and_then(|session| session.running_turn_id.as_deref()),
         Some(expected_turn.as_str())
     );
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies idle cleanup does not fail turns whose only progress path is an
@@ -905,7 +905,7 @@ async fn async_actor_idle_cleanup_preserves_turn_waiting_for_provider_retry_time
         !pane_text.contains("runtime found no remaining progress path"),
         "{pane_text}"
     );
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies OpenAI-style provider/controller failures that explicitly invite
@@ -982,7 +982,7 @@ async fn async_actor_schedules_provider_retry_timer_for_controller_retry_hint() 
 
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert!(exit.metrics.runtime_side_effects_queued >= 1);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that non-retryable provider failures still fail the active turn and
@@ -1057,7 +1057,7 @@ async fn async_actor_fails_non_retryable_provider_failures_without_retry_timer()
             .is_none()
     );
     assert_eq!(exit.service.agent_scheduler().snapshot().running, 0);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies model-correctable file-action failures enqueue the next provider
@@ -1253,7 +1253,7 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
         pane_text.contains("agent: action failed; asking model to recover"),
         "{pane_text}"
     );
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies transient provider-authored overload failures still enter the
@@ -1355,5 +1355,5 @@ async fn async_actor_retries_provider_overload_message_without_rate_limit_status
 
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert!(exit.metrics.runtime_side_effects_queued >= 2);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }

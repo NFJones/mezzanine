@@ -136,7 +136,7 @@ async fn async_persistence_side_effect_service_wakes_on_lifecycle_change_without
 
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert!(exit.commands_processed >= 3);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that persistence write modes can preserve create-new semantics for

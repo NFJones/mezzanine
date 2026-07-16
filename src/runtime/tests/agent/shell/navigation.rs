@@ -349,7 +349,7 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_live_parent_cursor() {
         Some(prompt_column),
         "parent prompt cursor should land after the trailing prompt space; observed_cursor={observed_cursor:?}; observed_screen={observed_screen:?}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that `/exit` from the pane-scoped agent prompt performs the same

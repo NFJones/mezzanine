@@ -75,7 +75,7 @@ fn runtime_agent_suppresses_batch_rationale_that_duplicates_say_text() {
         pane_text.contains(&format!("mez> {visible}")),
         "{pane_text}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that `/log-level verbose` is an explicit opt-in for low-level agent lifecycle
@@ -168,7 +168,7 @@ fn runtime_agent_verbose_mode_injects_low_level_status_lines() {
         pane_text.contains("agent: turn turn-1 completed"),
         "{pane_text}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that `/log-level debug` exposes model introspection and action
@@ -255,7 +255,7 @@ fn runtime_agent_thinking_mode_injects_action_rationales() {
         "{pane_text}"
     );
     assert!(pane_text.contains("mez> The pane is ready."), "{pane_text}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that trace mode exposes the full MAAP exchange in the pane buffer:
@@ -357,7 +357,7 @@ fn runtime_agent_trace_mode_prints_maap_request_response_and_results() {
         "{pane_text}"
     );
     assert!(pane_text.contains(r#""structured_content""#), "{pane_text}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that `/log-level debug` exposes MAAP and state-machine diagnostics
@@ -457,7 +457,7 @@ fn runtime_agent_debug_mode_prints_maap_without_shell_view() {
         pane_text.contains("$ printf 'debug-secret-command"),
         "{pane_text}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies repeated same-turn investigative rationale is suppressed after the
@@ -582,7 +582,7 @@ fn runtime_agent_suppresses_redundant_same_turn_rationale() {
         pane_text.contains("The selector fix is complete."),
         "{pane_text}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies batch thoughts are durable context notes, not normal-mode pane
@@ -658,7 +658,7 @@ fn runtime_batch_thought_is_hidden_until_verbose_logging() {
             .unwrap()
             .normal_content_lines()
             .join("\n");
-        service.pane_processes_mut().terminate_all().unwrap();
+        service.terminate_all_pane_processes().unwrap();
         pane_text
     }
 

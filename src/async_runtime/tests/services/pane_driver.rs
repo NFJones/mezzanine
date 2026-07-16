@@ -327,7 +327,7 @@ async fn async_pane_process_driver_service_submits_output_to_actor() {
     assert_eq!(report.submitted_events, 1);
     assert_eq!(report.applied_events, 1);
     assert_eq!(exit.commands_processed, 3);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that an idle pane driver service wakes between empty output polls
@@ -383,7 +383,7 @@ async fn async_pane_process_driver_service_wakes_between_empty_polls_on_side_eff
 
     let ((), mut exit) = tokio::join!(service, actor.run());
     assert!(exit.commands_processed >= 2);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that an unbounded pane driver service waits only on output, actor
@@ -433,7 +433,7 @@ async fn async_pane_process_driver_service_unbounded_waits_for_notifications() {
     };
 
     let ((), mut exit) = tokio::join!(service, actor.run());
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that the live PTY backend can wake a pane driver from Tokio
@@ -496,7 +496,7 @@ async fn async_pane_process_driver_service_wakes_on_live_output_activity() {
     };
 
     let ((), mut exit) = tokio::join!(service, actor.run());
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies zero-byte PTY writes are reported as bounded failures.

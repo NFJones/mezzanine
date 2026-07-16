@@ -94,7 +94,7 @@ async fn async_actor_drains_render_side_effects_without_stealing_provider_dispat
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert_eq!(exit.metrics.runtime_side_effects_queued, 4);
     assert_eq!(exit.metrics.runtime_side_effects_drained, 4);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that an async provider completion which dispatches a shell command
@@ -305,5 +305,5 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
         ),
         "agent shell transaction timer should be settled"
     );
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }

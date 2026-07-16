@@ -151,7 +151,7 @@ context_window_tokens = 128000
             .and_then(|pane| pane.agent_status.as_deref()),
         Some("compacting")
     );
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that the attached terminal loop can run in deferred pane I/O mode,
@@ -224,7 +224,7 @@ async fn async_attached_terminal_loop_can_defer_pane_input_to_worker() {
 
     let ((), mut exit) = tokio::join!(client, actor.run());
 
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that a stalled attached-terminal readiness await returns a typed
@@ -393,7 +393,7 @@ async fn async_attached_terminal_loop_preserves_large_deferred_paste_across_read
 
     let ((), mut exit) = tokio::join!(client, actor.run());
 
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies async attached terminal loop renders and applies primary actions.

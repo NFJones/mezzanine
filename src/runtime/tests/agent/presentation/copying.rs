@@ -425,7 +425,7 @@ fn runtime_agent_copy_trace_log_retains_hidden_trace_and_writes_destinations() {
         pane_text_after.contains("trace raw sentinel"),
         "{pane_text_after}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies `/copy-context` exports the assembled provider request context
@@ -509,7 +509,7 @@ fn runtime_agent_copy_context_writes_idle_context_to_destinations() {
         pane_text.contains("model_request_context_dump"),
         "{pane_text}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies `/copy-patches` exports exact retained patch payloads and statuses
@@ -640,7 +640,7 @@ fn runtime_agent_copy_patches_writes_retained_patches_to_destinations() {
         pane_text_after.contains("status=succeeded"),
         "{pane_text_after}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies `/copy-patches` keeps every patch attempt for a session even when
@@ -787,5 +787,5 @@ fn runtime_agent_copy_patches_retains_reused_action_id_attempts() {
     assert!(retained.contains("+new"), "{retained}");
     assert!(retained.contains("-current"), "{retained}");
     assert!(retained.contains("+updated"), "{retained}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }

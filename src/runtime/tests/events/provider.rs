@@ -76,7 +76,7 @@ fn runtime_provider_completion_accepts_controller_failure_summary_state() {
 
     mez_agent::outcome::runtime_validate_provider_completion_execution(&turn, &mut execution)
         .unwrap();
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies provider-completion validation accepts controller-owned MAAP
@@ -144,7 +144,7 @@ fn runtime_provider_completion_accepts_terminal_maap_validation_failure_state() 
 
     mez_agent::outcome::runtime_validate_provider_completion_execution(&turn, &mut execution)
         .unwrap();
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies provider-completion validation rejects missing-batch executions
@@ -197,7 +197,7 @@ fn runtime_provider_completion_rejects_nonterminal_missing_batch_state() {
 
     assert_eq!(execution.terminal_state, AgentTurnState::Failed);
     assert!(execution.final_turn);
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies provider-completion validation rejects non-final empty action
@@ -262,7 +262,7 @@ fn runtime_provider_completion_rejects_empty_nonfinal_batch_state() {
             .contains("action batch has no actions but is not final"),
         "{error}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies runtime provider failure persists and finishes turn.
@@ -722,7 +722,7 @@ fn runtime_provider_failure_after_nonzero_shell_result_does_not_report_running_r
             .any(|turn| turn.turn_id == "turn-1" && turn.state == AgentTurnState::Failed)
     );
     assert!(!service.agent_turn_executions.contains_key("turn-1"));
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies provider-worker network results are applied without actor-side HTTP.
@@ -931,6 +931,6 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
     assert!(audit.contains(r#""action_id":"fetch-404""#), "{audit}");
     assert!(audit.contains(r#""outcome":"succeeded""#), "{audit}");
     assert!(audit.contains(r#""outcome":"failed""#), "{audit}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(audit_root);
 }

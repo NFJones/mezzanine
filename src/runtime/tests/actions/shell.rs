@@ -154,7 +154,7 @@ fn runtime_agent_shell_command_is_presented_before_pty_dispatch() {
                 foreground != theme.colors.agent_transcript_command.foreground
             })
     }));
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies hidden model shell commands expose a bounded live latest-output tail.
@@ -475,7 +475,7 @@ fn runtime_agent_shell_command_output_is_visible_in_verbose_mode() {
     assert!(!pane_text.contains("MEZ_STATUS"), "{pane_text}");
     assert!(!pane_text.contains("MEZ_COMMAND_"), "{pane_text}");
     assert!(!pane_text.contains("unset MEZ_MARKER_TOKEN"), "{pane_text}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that default agent command execution keeps one bounded command
@@ -604,7 +604,7 @@ fn runtime_agent_shell_command_output_keeps_decoded_context() {
         "{context_text}"
     );
     assert!(context_text.contains("output:\n"), "{context_text}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// through native execution and leaves the result visible to the continuation.
@@ -713,7 +713,7 @@ fn runtime_agent_shell_command_without_output_keeps_mez_framing_out_of_logs() {
         !context_text.contains("__MEZ_SHELL_OUTPUT_BASE64_BEGIN__"),
         "{context_text}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that the normal command preview is bounded using the pane's
@@ -803,7 +803,7 @@ fn runtime_agent_shell_command_preview_is_wrapped_and_capped() {
         !pane_text.contains("epsilon zeta eta theta iota kappa lambda mu"),
         "{pane_text}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies command previews on wide panes cap their display width at 120 cells.
@@ -1107,7 +1107,7 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
                 .contains("shell command not run because `shell-fail` exited with status 2")
     }));
     assert!(service.agent_turn_failure_feedback_attempts.is_empty());
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies timed-out shell actions receive bounded model recovery.
@@ -1209,7 +1209,7 @@ fn runtime_shell_action_timeout_queues_model_self_correction() {
                 .content
                 .contains("shell command timed out after 30000 ms")
     }));
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies agent-authored heredoc shell commands fail before pane dispatch.
@@ -1306,5 +1306,5 @@ fn runtime_shell_command_heredoc_is_rejected_before_pane_dispatch() {
         .normal_content_lines()
         .join("\n");
     assert!(!pane_text.contains("MEZ_COMMAND_"), "{pane_text}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }

@@ -199,7 +199,7 @@ fn runtime_agent_loop_stop_clears_interrupted_loop_state() {
         restarted,
         crate::runtime::AgentShellCommandOutcome::Mutated { .. }
     ));
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that bootstrap parsing uses the hidden transaction capture rather
@@ -274,7 +274,7 @@ tool\tsed\t1\t/usr/bin/sed\tGNU sed 4.9\tcommand -v sed\t0\t/usr/bin/sed --versi
             .values()
             .all(|transaction| transaction.kind != RunningShellTransactionKind::Bootstrap)
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies failure-feedback accounting is per failed action, not per batch.
@@ -385,7 +385,7 @@ fn runtime_action_failure_retry_budget_is_per_failed_action() {
     attempt_values.sort_unstable();
     assert_eq!(attempt_values, vec![1, 1]);
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that intentionally terminal model actions do not use the automatic
@@ -455,5 +455,5 @@ fn runtime_cancelled_action_does_not_queue_failure_feedback() {
             .iter()
             .any(|turn| turn.turn_id == "turn-1" && turn.state == AgentTurnState::Failed)
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }

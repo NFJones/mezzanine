@@ -741,7 +741,7 @@ async fn async_actor_defers_project_approval_config_to_persistence_worker() {
         mez_agent::RuleDecision::Forbid
     );
     assert!(exit.commands_processed >= 4);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
     let _ = std::fs::remove_dir_all(root);
 }
 

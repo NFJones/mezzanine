@@ -254,5 +254,5 @@ fn runtime_agent_keeps_redundant_progress_say_updates_visible() {
         "{:?}",
         executions[0].action_results
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }

@@ -75,7 +75,7 @@ async fn async_attached_terminal_service_can_defer_pane_input_to_worker() {
 
     let ((), mut exit) = tokio::join!(client, actor.run());
 
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that slow client-output flushing does not block foreground input
@@ -156,7 +156,7 @@ async fn async_attached_terminal_service_routes_input_while_output_is_pending() 
 
     let ((), mut exit) = tokio::join!(client, actor.run());
 
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies async attached terminal service runs batches until hangup.

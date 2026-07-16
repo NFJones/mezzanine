@@ -509,7 +509,7 @@ fn runtime_explicit_skill_prompt_rejects_redundant_call_skill_loop() {
         .normal_content_lines()
         .join("\n");
     assert!(pane_text.contains("maap_validation_error"), "{pane_text}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies explicit `$skill` prompts do not need an additional skill catalog
@@ -586,7 +586,7 @@ fn runtime_explicit_skill_prompt_rejects_redundant_skill_catalog_lookup() {
             .contains(&"request_skills")
     );
     assert!(execution.action_results.is_empty());
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies `/list-skills` displays the effective pane skill catalog with the

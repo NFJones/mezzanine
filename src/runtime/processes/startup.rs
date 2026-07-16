@@ -62,7 +62,7 @@ impl RuntimeSessionService {
             .iter()
             .flat_map(|window| {
                 window.panes().iter().filter_map(|pane| {
-                    if pane.live || self.pane_processes.contains_pane(pane.id.as_str()) {
+                    if pane.live || self.process.pane_processes.contains_pane(pane.id.as_str()) {
                         None
                     } else {
                         let size = self
@@ -120,7 +120,8 @@ impl RuntimeSessionService {
         let mut pending = starts
             .iter()
             .filter_map(|start| {
-                self.pane_processes
+                self.process
+                    .pane_processes
                     .output_activity_sequence(start.pane_id.as_str())
                     .map(|sequence| (start.pane_id.clone(), sequence))
             })
@@ -131,7 +132,7 @@ impl RuntimeSessionService {
         self.poll_pane_outputs(crate::runtime::DEFAULT_PTY_READ_LIMIT_BYTES)?;
         pending.retain(|(pane_id, sequence)| {
             matches!(
-                self.pane_processes.output_activity_sequence(pane_id.as_str()),
+                self.process.pane_processes.output_activity_sequence(pane_id.as_str()),
                 Some(current) if current <= *sequence
             )
         });
@@ -151,6 +152,7 @@ impl RuntimeSessionService {
                 let pane_id = pending[index].0.clone();
                 let sequence = pending[index].1;
                 if self
+                    .process
                     .pane_processes
                     .wait_for_output_activity_after(pane_id.as_str(), sequence, slice)
                     .unwrap_or(false)
@@ -158,7 +160,7 @@ impl RuntimeSessionService {
                     self.poll_pane_outputs(crate::runtime::DEFAULT_PTY_READ_LIMIT_BYTES)?;
                     pending.retain(|(pending_pane_id, pending_sequence)| {
                         matches!(
-                            self.pane_processes
+                            self.process.pane_processes
                                 .output_activity_sequence(pending_pane_id.as_str()),
                             Some(current) if current <= *pending_sequence
                         )

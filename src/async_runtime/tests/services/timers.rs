@@ -79,7 +79,7 @@ async fn async_timer_side_effect_service_fires_scheduled_timers() {
 
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert!(exit.commands_processed >= 3);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that cancelled runtime timers are removed before they can emit

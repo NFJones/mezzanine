@@ -136,7 +136,7 @@ async fn async_agent_provider_service_uses_actor_owned_provider_poll_guard() {
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert!(exit.metrics.runtime_side_effects_queued >= 1);
     assert!(exit.metrics.runtime_side_effects_drained >= 1);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that a provider-completed shell action whose pane cannot accept
@@ -484,11 +484,7 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
         .normal_content_lines()
         .join("\n");
     assert!(pane_text.contains("Failed after"), "{pane_text}");
-    actor_exit
-        .service
-        .pane_processes_mut()
-        .terminate_all()
-        .unwrap();
+    actor_exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies provider workers settle runtime-owned network actions pre-ingress.
@@ -679,7 +675,7 @@ async fn async_agent_provider_service_keeps_running_after_prompt_provider_failur
         None
     );
     assert!(exit.commands_processed >= 4);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that the async provider service wakes from runtime notifications
@@ -759,7 +755,7 @@ async fn async_agent_provider_service_wakes_when_prompt_queues_work() {
             .and_then(|session| session.running_turn_id.as_deref()),
         None
     );
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that one slow provider request does not block another pane's
@@ -937,7 +933,7 @@ async fn async_agent_provider_service_does_not_serialize_provider_requests_acros
     assert!(exit.service.pending_agent_provider_tasks().is_empty());
     assert_eq!(exit.service.agent_scheduler().snapshot().running, 0);
     assert_eq!(report.executions, 2);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
     tokio::time::timeout(Duration::from_secs(1), server)
         .await
         .unwrap()

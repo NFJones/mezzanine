@@ -877,5 +877,5 @@ fn runtime_shell_pane_not_ready_queues_model_self_correction() {
         pane_text.contains("agent: action failed; asking model to recover"),
         "{pane_text}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }

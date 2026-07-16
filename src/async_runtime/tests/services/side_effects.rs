@@ -63,7 +63,7 @@ async fn async_side_effect_service_drains_actor_queue() {
         }]
     );
     assert_eq!(exit.commands_processed, 3);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that a bounded side-effect worker exits immediately after its
@@ -104,7 +104,7 @@ async fn async_side_effect_service_exits_after_final_empty_poll_without_sleep() 
 
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert_eq!(exit.commands_processed, 2);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that an unbounded side-effect worker still performs a bounded idle
@@ -157,7 +157,7 @@ async fn async_side_effect_service_uses_bounded_idle_probe_when_unbounded() {
     assert_eq!(report.polls, 2);
     assert_eq!(report.drained, 0);
     assert_eq!(report.applied, 0);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that a filtered side-effect drain re-notifies retained work for
@@ -207,7 +207,7 @@ async fn async_filtered_side_effect_drain_renotifies_retained_work() {
 
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert!(exit.metrics.side_effect_delivery_notifications >= 2);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that side-effect delivery revisions wake every worker watching the
@@ -247,7 +247,7 @@ async fn async_side_effect_delivery_watcher_broadcasts_to_all_workers() {
 
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert_eq!(exit.metrics.side_effect_delivery_notifications, 1);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that the side-effect worker wakes from actor notifications instead
@@ -319,5 +319,5 @@ async fn async_side_effect_service_wakes_when_actor_queues_effects() {
             reason: RenderInvalidationReason::PaneOutput,
         }]
     );
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }

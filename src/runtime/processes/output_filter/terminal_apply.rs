@@ -17,7 +17,7 @@ impl RuntimeSessionService {
         skipped_panes: &BTreeSet<String>,
     ) -> Result<usize> {
         let mut changed = 0usize;
-        for pane_id in self.pane_processes.tracked_pane_ids() {
+        for pane_id in self.process.pane_processes.tracked_pane_ids() {
             if skipped_panes.contains(&pane_id) {
                 continue;
             }
@@ -77,9 +77,15 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn foreground_process_pane_title(&self, pane_id: &str) -> Option<(String, u32)> {
-        let foreground_name = self.pane_processes.foreground_process_name(pane_id)?;
-        let foreground_group = self.pane_processes.foreground_process_group_id(pane_id)?;
-        let primary_pid = self.pane_processes.primary_pid(pane_id)?;
+        let foreground_name = self
+            .process
+            .pane_processes
+            .foreground_process_name(pane_id)?;
+        let foreground_group = self
+            .process
+            .pane_processes
+            .foreground_process_group_id(pane_id)?;
+        let primary_pid = self.process.pane_processes.primary_pid(pane_id)?;
         self.title_from_foreground_process_metadata(
             pane_id,
             foreground_name,
@@ -219,7 +225,11 @@ impl RuntimeSessionService {
         self.pane_current_working_directories
             .get(pane_id)
             .cloned()
-            .or_else(|| self.pane_processes.current_working_directory(pane_id))
+            .or_else(|| {
+                self.process
+                    .pane_processes
+                    .current_working_directory(pane_id)
+            })
     }
 
     /// Runs the title from foreground process metadata operation for this subsystem.

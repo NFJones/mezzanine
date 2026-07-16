@@ -205,7 +205,7 @@ async fn async_actor_uses_full_redraw_invalidation_for_alternate_screen_exit_out
     };
 
     let ((), mut exit) = tokio::join!(client, actor.run());
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies manual `/compact` publishes visible compaction state and queues a
@@ -310,7 +310,7 @@ context_window_tokens = 128000
             .and_then(|pane| pane.agent_status.as_deref()),
         Some("compacting")
     );
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that async hook worker results are no longer accepted-only events.
@@ -461,7 +461,7 @@ async fn async_actor_metrics_track_event_and_side_effect_activity() {
         exit.metrics.pane_output_chunk_bytes.max,
         Some(u64::try_from(b"metrics-output\n".len()).unwrap())
     );
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that compatibility-style service methods called through the async
@@ -717,7 +717,7 @@ async fn async_actor_applies_failed_shutdown_events() {
     );
     assert!(events.contains(r#""force":false"#), "{events}");
     assert_eq!(exit.commands_processed, 2);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that actor-applied lifecycle events defer non-blocking configured
@@ -892,7 +892,7 @@ async fn async_actor_handles_control_requests_with_snapshot_repository() {
         "snapshot control should use a request plus completion actor command per operation: {:?}",
         exit.commands_processed
     );
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -963,7 +963,7 @@ async fn async_actor_dispatches_bootstrap_after_prompt_ready_output_event() {
     };
 
     let ((), mut exit) = tokio::join!(client, actor.run());
-    assert!(exit.service.pane_processes_mut().terminate_all().is_ok());
+    assert!(exit.service.terminate_all_pane_processes().is_ok());
 }
 
 /// Verifies async actor rejects requests after shutdown.

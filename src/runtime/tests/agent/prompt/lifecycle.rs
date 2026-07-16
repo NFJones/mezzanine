@@ -85,7 +85,7 @@ fn runtime_subagent_spawn_logs_parent_prompt_in_child_pane() {
         child_text.contains("parent> inspect the renderer issue"),
         "{child_text}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies runtime agent shell prompt starts live turn lifecycle.
@@ -341,7 +341,7 @@ fn runtime_agent_prompt_and_say_response_are_interleaved_in_pane_buffer() {
         "command transcript lines should use themed command foreground without a background: {:?}",
         command_line.style_spans
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies visible-pane user prompt transcript lines wrap to the bounded pane
@@ -392,7 +392,7 @@ fn runtime_user_prompt_logs_wrap_with_sixth_column_hanging_indent() {
         user_lines.iter().any(|line| line == "▐      epsilon"),
         "{user_lines:#?}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies pasted provider diagnostics remain normal prompt text.

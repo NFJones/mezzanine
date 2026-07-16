@@ -65,7 +65,7 @@ fn runtime_frame_context_uses_host_process_name_when_available() {
 
     assert_eq!(process_name.as_deref(), Some("sleep"));
     assert_eq!(pane_context.process_name.as_deref(), Some("sleep"));
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that a failed new-window process spawn is transactional. The window
@@ -134,7 +134,7 @@ fn runtime_split_spawn_failure_rolls_back_layout_creation() {
     assert_eq!(window.active_pane().id, active_pane_id);
     assert_eq!(window.active_pane().size, Size::new(80, 24).unwrap());
     assert_eq!(service.pane_processes().tracked_pane_ids(), vec!["%1"]);
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that terminal-command splits use the same transactional runtime
@@ -173,7 +173,7 @@ fn runtime_terminal_command_split_spawn_failure_rolls_back_layout_creation() {
     assert_eq!(window.active_pane().id, active_pane_id);
     assert_eq!(window.active_pane().size, Size::new(80, 24).unwrap());
     assert_eq!(service.pane_processes().tracked_pane_ids(), vec!["%1"]);
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies pane-move terminal commands synchronize screens through the
@@ -207,7 +207,7 @@ fn runtime_terminal_pane_move_commands_apply_resize_effects() {
     assert_eq!(service.session().windows().len(), 1);
     assert!(service.pane_screen("%2").unwrap().size().columns < broken_size.columns);
 
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies runtime service starts initial pane process through resolved shell.
@@ -692,7 +692,7 @@ fn runtime_foreground_process_event_recovers_after_alternate_screen_exit() {
         service.pane_readiness_state("%1"),
         PaneReadinessState::PromptCandidate
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies stale readiness recovery can use async foreground metadata when
@@ -791,7 +791,7 @@ fn runtime_pane_program_title_stays_sticky_until_foreground_process_changes() {
             .title,
         "shell"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies async pane write failures settle shell-backed file actions.

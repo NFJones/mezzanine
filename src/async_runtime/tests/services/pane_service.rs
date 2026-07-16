@@ -76,7 +76,7 @@ async fn async_pane_process_service_defers_large_input_remainders() {
     };
 
     let ((), mut exit) = tokio::join!(service, actor.run());
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that partial PTY write progress remains observable and ordered.
@@ -146,7 +146,7 @@ async fn async_pane_process_service_retries_partial_input_remainders() {
     };
 
     let ((), mut exit) = tokio::join!(service, actor.run());
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that the combined pane process service serializes PTY output and
@@ -239,7 +239,7 @@ async fn async_pane_process_service_serializes_output_and_side_effects() {
     assert_eq!(backend.writes, vec![b"input".to_vec()]);
     assert_eq!(backend.resizes, vec![Size::new(100, 30).unwrap()]);
     assert_eq!(backend.terminations, vec![false]);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies bursty pane output is submitted to the actor as one event batch.
@@ -287,7 +287,7 @@ async fn async_pane_process_service_batches_bursty_output_events() {
     assert_eq!(exit.metrics.runtime_event_batches, 1);
     assert_eq!(exit.metrics.pane_output_chunks, 1);
     assert_eq!(exit.metrics.pane_output_bytes, 11);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies foreground process metadata is not polled again for every output
@@ -341,7 +341,7 @@ async fn async_pane_process_service_throttles_metadata_during_output_bursts() {
     assert_eq!(report.output_events, 2);
     assert_eq!(report.submitted_events, 3);
     assert_eq!(exit.metrics.pane_output_chunks, 2);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that the combined pane process service wakes for queued pane I/O
@@ -403,7 +403,7 @@ async fn async_pane_process_service_wakes_for_pane_side_effects() {
     assert_eq!(report.drained, 1);
     assert_eq!(report.submitted_events, 1);
     assert_eq!(backend.writes, vec![b"wake".to_vec()]);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that a quiet combined pane worker sleeps until the next foreground
@@ -455,7 +455,7 @@ async fn async_pane_process_service_uses_metadata_deadline_for_quiet_panes() {
     assert_eq!(report.polls, 2);
     assert_eq!(report.output_events, 0);
     assert_eq!(report.drained, 0);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that an idle combined pane worker wakes from the actor lifecycle
@@ -526,7 +526,7 @@ async fn async_pane_process_service_wakes_on_terminal_lifecycle_and_terminates_b
     assert_eq!(report.terminal_state, RuntimeLifecycleState::Killed);
     assert_eq!(report.exit_events, 1);
     assert_eq!(backend.terminations, vec![true]);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that the combined pane process service submits a natural process
@@ -580,7 +580,7 @@ async fn async_pane_process_service_reports_exit_after_output_turn() {
         report.applied_events >= 1,
         "output should apply before exit event teardown: {report:?}"
     );
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that the live PTY backend does not report process exit before
@@ -640,7 +640,7 @@ async fn async_pane_process_service_waits_for_live_output_before_exit() {
         report.submitted_events >= 2,
         "output and exit should both be submitted: {report:?}"
     );
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that the async-owned pane path keeps the pane shell alive after the
@@ -1008,9 +1008,5 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
         supervisor_report.terminal_state,
         RuntimeLifecycleState::Running
     );
-    actor_exit
-        .service
-        .pane_processes_mut()
-        .terminate_all()
-        .unwrap();
+    actor_exit.service.terminate_all_pane_processes().unwrap();
 }

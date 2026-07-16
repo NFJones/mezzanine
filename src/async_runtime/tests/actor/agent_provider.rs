@@ -73,7 +73,7 @@ async fn async_actor_applies_agent_provider_failure_events() {
         "{pane_text}"
     );
     assert_eq!(exit.commands_processed, 2);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that async provider worker completions can apply a model-produced
@@ -236,7 +236,7 @@ async fn async_actor_applies_agent_provider_completion_events() {
         "{pane_text}"
     );
     assert_eq!(exit.commands_processed, 2);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that provider completions queue durable transcript entries for the
@@ -422,7 +422,7 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert!(exit.service.pending_agent_provider_tasks().is_empty());
     assert!(exit.commands_processed >= 4);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
     let _ = std::fs::remove_dir_all(transcript_root);
 }
 
@@ -504,7 +504,7 @@ async fn async_actor_defers_agent_prompt_history_to_persistence_worker() {
 
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert!(exit.commands_processed >= 4);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
     let _ = std::fs::remove_dir_all(transcript_root);
 }
 
@@ -589,6 +589,6 @@ async fn async_actor_defers_agent_init_scaffold_to_persistence_worker() {
 
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert!(exit.commands_processed >= 4);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
     let _ = std::fs::remove_dir_all(root);
 }

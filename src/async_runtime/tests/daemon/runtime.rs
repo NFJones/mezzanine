@@ -76,7 +76,7 @@ async fn async_runtime_daemon_pane_worker_feeds_pty_output_into_rendered_view() 
             .any(|service| service.name == "pane-process-supervisor")
     );
     assert!(!report.services.iter().any(|service| service.name == "tick"));
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
     let _ = std::fs::remove_file(&path);
 }
 

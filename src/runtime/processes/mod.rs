@@ -17,9 +17,9 @@ use super::{
     AgentTurnState, AuditActor, BTreeSet, ContextBlock, ContextSourceKind, EventKind,
     ExitedPaneProcess, HookEvent, HookExecutionResult, HookExecutionStatus, HookFailure,
     HookFailureKind, MezError, PaneDescriptor, PaneExitRecord, PaneExitStatus, PaneExitUpdate,
-    PaneId, PaneOutputUpdate, PaneProcessOutput, PaneProcessStart, PaneReadinessState,
-    PaneResizeUpdate, PaneSizeSpec, Path, PathBuf, ReadinessOverrideRevocation, ResizeAxis,
-    ResizeDirection, Result, RunningShellTransactionKind, RunningShellTransactionRef,
+    PaneId, PaneOutputUpdate, PaneProcessManager, PaneProcessOutput, PaneProcessStart,
+    PaneReadinessState, PaneResizeUpdate, PaneSizeSpec, Path, PathBuf, ReadinessOverrideRevocation,
+    ResizeAxis, ResizeDirection, Result, RunningShellTransactionKind, RunningShellTransactionRef,
     RuntimeHookPipelineBlock, RuntimeLifecycleState, RuntimeSessionService,
     RuntimeShellTransactionActionFailure, RuntimeShellTransactionTimerKind,
     RuntimeShellTransactionTimerRef, SessionSnapshotPayload, ShellClassification, ShellTransaction,
@@ -71,6 +71,8 @@ use transactions::{
 /// process metadata.
 #[derive(Debug, Default)]
 pub(in crate::runtime) struct RuntimeProcessComponent {
+    /// Live pane process handles and their PTY lifecycle manager.
+    pane_processes: PaneProcessManager,
     /// Primary process ids for panes whose handles are adapter-owned.
     detached_pane_primary_pids: std::collections::BTreeMap<String, u32>,
     /// Latest foreground process groups observed by pane workers.
@@ -97,7 +99,54 @@ pub(in crate::runtime) struct RuntimeProcessComponent {
     pane_closing: BTreeSet<String>,
 }
 
+impl RuntimeProcessComponent {
+    /// Builds process ownership around the manager supplied by runtime construction.
+    pub(in crate::runtime) fn with_pane_processes(pane_processes: PaneProcessManager) -> Self {
+        Self {
+            pane_processes,
+            ..Self::default()
+        }
+    }
+}
+
 impl RuntimeSessionService {
+    /// Terminates every process still owned by the runtime.
+    pub(crate) fn terminate_all_pane_processes(&mut self) -> Result<Vec<ExitedPaneProcess>> {
+        Ok(self.process.pane_processes.terminate_all()?)
+    }
+
+    /// Returns the current output-activity sequence for one pane process.
+    pub(in crate::runtime) fn pane_process_output_activity_sequence(
+        &self,
+        pane_id: &str,
+    ) -> Option<u64> {
+        self.process
+            .pane_processes
+            .output_activity_sequence(pane_id)
+    }
+
+    /// Waits for a pane process to publish output after a known sequence.
+    pub(in crate::runtime) fn wait_for_pane_process_output_activity_after(
+        &self,
+        pane_id: &str,
+        sequence: u64,
+        timeout: std::time::Duration,
+    ) -> Option<bool> {
+        self.process
+            .pane_processes
+            .wait_for_output_activity_after(pane_id, sequence, timeout)
+    }
+
+    /// Returns the executable name observed for one live pane process.
+    pub(in crate::runtime) fn pane_process_name(&self, pane_id: &str) -> Option<String> {
+        self.process.pane_processes.process_name(pane_id)
+    }
+
+    /// Returns pane ids currently tracked by the live process manager.
+    pub(in crate::runtime) fn tracked_runtime_pane_process_ids(&self) -> Vec<String> {
+        self.process.pane_processes.tracked_pane_ids()
+    }
+
     /// Clears visible and hidden shell transaction parser state on shutdown.
     pub(in crate::runtime) fn clear_pane_transaction_parsers(&mut self) {
         self.process.pane_transaction_osc_screens.clear();
@@ -131,6 +180,16 @@ impl RuntimeSessionService {
 
 #[cfg(test)]
 impl RuntimeSessionService {
+    /// Returns the process manager for integration-test observation.
+    pub(crate) fn pane_processes(&self) -> &PaneProcessManager {
+        &self.process.pane_processes
+    }
+
+    /// Returns the process manager for test-only process-fixture mutation.
+    pub(crate) fn pane_processes_mut(&mut self) -> &mut PaneProcessManager {
+        &mut self.process.pane_processes
+    }
+
     /// Returns mutable visible transaction parsers for a process fixture.
     pub(in crate::runtime) fn pane_transaction_osc_screens_mut_for_tests(
         &mut self,
@@ -186,7 +245,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn poll_pane_processes(&mut self) -> Result<Vec<PaneExitUpdate>> {
         self.require_live()?;
-        let exited = self.pane_processes.poll_exited()?;
+        let exited = self.process.pane_processes.poll_exited()?;
         let mut updates = Vec::new();
 
         for process in exited {
@@ -291,7 +350,11 @@ impl RuntimeSessionService {
             return Ok(false);
         };
         let primary_pid = pid
-            .or_else(|| self.pane_processes.primary_pid(descriptor.pane_id.as_str()))
+            .or_else(|| {
+                self.process
+                    .pane_processes
+                    .primary_pid(descriptor.pane_id.as_str())
+            })
             .unwrap_or(0);
         self.process
             .pane_exit_records
@@ -344,7 +407,7 @@ impl RuntimeSessionService {
                 signal,
             } => {
                 let primary_pid = primary_pid
-                    .or_else(|| self.pane_processes.primary_pid(&pane_id))
+                    .or_else(|| self.process.pane_processes.primary_pid(&pane_id))
                     .unwrap_or(0);
                 let signal_number = signal
                     .as_deref()
@@ -544,6 +607,7 @@ impl RuntimeSessionService {
             screen.resize(size);
         }
         let primary_pid = self
+            .process
             .pane_processes
             .primary_pid(descriptor.pane_id.as_str())
             .unwrap_or(0);
@@ -597,7 +661,9 @@ impl RuntimeSessionService {
             .close_exited_pane_with_effects(descriptor.pane_id.as_str())?;
         self.sync_pane_resize_effects(&transition.effects)?;
         if remove_recorded_process {
-            self.pane_processes.remove_exited(&process.pane_id)?;
+            self.process
+                .pane_processes
+                .remove_exited(&process.pane_id)?;
         }
         self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
 
@@ -656,6 +722,7 @@ impl RuntimeSessionService {
     ) -> Result<Vec<PaneOutputUpdate>> {
         self.require_live()?;
         let outputs = self
+            .process
             .pane_processes
             .read_available_output(max_bytes_per_pane)?;
         let mut updates = Vec::new();
@@ -746,14 +813,17 @@ impl RuntimeSessionService {
         )?;
         let launch =
             mez_mux::process::PaneProcessLaunch::new(self.session.shell.path().to_path_buf());
-        let primary_pid = self.pane_processes.spawn_for_pane_with_start_directory(
-            descriptor.pane_id.as_str(),
-            &launch,
-            explicit_command,
-            &environment,
-            descriptor.size,
-            start_directory,
-        )?;
+        let primary_pid = self
+            .process
+            .pane_processes
+            .spawn_for_pane_with_start_directory(
+                descriptor.pane_id.as_str(),
+                &launch,
+                explicit_command,
+                &environment,
+                descriptor.size,
+                start_directory,
+            )?;
         self.process
             .pane_exit_records
             .remove(descriptor.pane_id.as_str());
@@ -815,19 +885,28 @@ impl RuntimeSessionService {
     /// compatibility manager path.
     pub fn take_running_pane_process_for_adapter(&mut self, pane_id: &str) -> Result<PaneProcess> {
         self.require_live()?;
-        let primary_pid = self.pane_processes.primary_pid(pane_id).ok_or_else(|| {
-            MezError::new(
-                crate::error::MezErrorKind::NotFound,
-                "pane process not found",
-            )
-        })?;
-        if let Some(current_working_directory) =
-            self.pane_processes.current_working_directory(pane_id)
+        let primary_pid = self
+            .process
+            .pane_processes
+            .primary_pid(pane_id)
+            .ok_or_else(|| {
+                MezError::new(
+                    crate::error::MezErrorKind::NotFound,
+                    "pane process not found",
+                )
+            })?;
+        if let Some(current_working_directory) = self
+            .process
+            .pane_processes
+            .current_working_directory(pane_id)
         {
             self.pane_current_working_directories
                 .insert(pane_id.to_string(), current_working_directory);
         }
-        let process = self.pane_processes.take_running_pane_process(pane_id)?;
+        let process = self
+            .process
+            .pane_processes
+            .take_running_pane_process(pane_id)?;
         self.process
             .detached_pane_primary_pids
             .insert(pane_id.to_string(), primary_pid);
@@ -851,6 +930,7 @@ impl RuntimeSessionService {
             ));
         }
         let pane_ids = self
+            .process
             .pane_processes
             .tracked_running_pane_ids()
             .into_iter()
@@ -875,6 +955,7 @@ impl RuntimeSessionService {
         let pane_id = pane_id.into();
         self.process.detached_pane_primary_pids.remove(&pane_id);
         Ok(self
+            .process
             .pane_processes
             .insert_running_pane_process(pane_id, process)?)
     }
@@ -904,12 +985,15 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn primary_pid_for_live_pane_process(&self, pane_id: &str) -> Option<u32> {
-        self.pane_processes.primary_pid(pane_id).or_else(|| {
-            self.process
-                .detached_pane_primary_pids
-                .get(pane_id)
-                .copied()
-        })
+        self.process
+            .pane_processes
+            .primary_pid(pane_id)
+            .or_else(|| {
+                self.process
+                    .detached_pane_primary_pids
+                    .get(pane_id)
+                    .copied()
+            })
     }
 
     /// Writes pane input immediately when the synchronous manager still owns
@@ -929,8 +1013,11 @@ impl RuntimeSessionService {
         if input.is_empty() {
             return Err(MezError::invalid_args("pane input must not be empty"));
         }
-        if self.pane_processes.contains_pane(pane_id) {
-            return Ok(self.pane_processes.write_pane_input(pane_id, input)?);
+        if self.process.pane_processes.contains_pane(pane_id) {
+            return Ok(self
+                .process
+                .pane_processes
+                .write_pane_input(pane_id, input)?);
         }
         if self.pane_process_is_adapter_owned(pane_id) {
             self.queued_pane_input_effects.push(if priority {
@@ -970,8 +1057,9 @@ impl RuntimeSessionService {
     ) -> Result<bool> {
         self.agent_subshell_panes.remove(pane_id);
         self.agent_subshell_command_exit_panes.remove(pane_id);
-        if self.pane_processes.contains_pane(pane_id) {
+        if self.process.pane_processes.contains_pane(pane_id) {
             return Ok(self
+                .process
                 .pane_processes
                 .terminate_pane(pane_id)
                 .map(|process| process.is_some())?);
@@ -1011,7 +1099,7 @@ impl RuntimeSessionService {
 
     /// Terminates all manager-owned and adapter-owned pane processes.
     pub(super) fn terminate_all_runtime_pane_processes(&mut self, force: bool) -> Result<usize> {
-        let mut pane_ids = self.pane_processes.tracked_pane_ids();
+        let mut pane_ids = self.process.pane_processes.tracked_pane_ids();
         pane_ids.extend(self.process.detached_pane_primary_pids.keys().cloned());
         self.terminate_runtime_pane_processes(pane_ids.iter().map(String::as_str), force)
     }
@@ -1256,7 +1344,7 @@ impl RuntimeSessionService {
             .iter()
             .flat_map(|window| {
                 window.panes().iter().filter_map(|pane| {
-                    if self.pane_processes.contains_pane(pane.id.as_str())
+                    if self.process.pane_processes.contains_pane(pane.id.as_str())
                         || self.pane_process_is_adapter_owned(pane.id.as_str())
                     {
                         let size = self

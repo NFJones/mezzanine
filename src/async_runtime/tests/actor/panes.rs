@@ -46,7 +46,7 @@ async fn async_actor_applies_pane_output_events_to_rendered_view() {
 
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert_eq!(exit.commands_processed, 3);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that foreground process metadata from an async pane worker updates
@@ -101,7 +101,7 @@ async fn async_actor_applies_foreground_process_metadata_to_pane_title() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(events.contains(r#""title":"vim""#), "{events}");
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that typed process-exit events close the pane through the actor
@@ -232,7 +232,7 @@ async fn async_actor_applies_process_failure_events_to_event_log() {
             && event.payload.contains("wait task failed")
     }));
     assert_eq!(exit.commands_processed, 3);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that pane I/O completion events from the async driver are applied
@@ -288,7 +288,7 @@ async fn async_actor_applies_pane_io_completion_events_to_event_log() {
             && event.payload.contains(r#""rows":30"#)
     }));
     assert_eq!(exit.commands_processed, 3);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that primary-client detach only changes attachment lifecycle when
@@ -571,7 +571,7 @@ async fn async_actor_drains_service_deferred_input_after_pane_handoff() {
     };
 
     let ((), mut exit) = tokio::join!(client, actor.run());
-    assert!(exit.service.pane_processes_mut().terminate_all().is_ok());
+    assert!(exit.service.terminate_all_pane_processes().is_ok());
 }
 
 /// Verifies that pane close commands produce async termination side effects
@@ -618,5 +618,5 @@ async fn async_actor_drains_service_deferred_termination_after_pane_handoff() {
     };
 
     let ((), mut exit) = tokio::join!(client, actor.run());
-    assert!(exit.service.pane_processes_mut().terminate_all().is_ok());
+    assert!(exit.service.terminate_all_pane_processes().is_ok());
 }

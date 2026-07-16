@@ -581,7 +581,7 @@ async fn async_actor_queues_render_side_effects_for_applied_events() {
 
     let ((), mut exit) = tokio::join!(client, actor.run());
     assert_eq!(exit.commands_processed, 4);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that actor metrics expose rendered-view and terminal control
@@ -647,7 +647,7 @@ async fn async_actor_metrics_track_render_and_terminal_control_requests() {
     assert_eq!(exit.metrics.render_client_view_requests, 1);
     assert_eq!(exit.metrics.terminal_step_control_requests, 1);
     assert_eq!(exit.metrics.terminal_view_control_requests, 1);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies async actor serializes lifecycle render and shutdown.

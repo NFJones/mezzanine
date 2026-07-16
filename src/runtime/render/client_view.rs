@@ -1377,12 +1377,10 @@ impl RuntimeSessionService {
                     pane_id.clone(),
                     TerminalPaneFrameContext {
                         primary_pid: self.primary_pid_for_live_pane_process(pane_id.as_str()),
-                        process_name: self.pane_processes.process_name(pane_id.as_str()).or_else(
-                            || {
-                                self.primary_pid_for_live_pane_process(pane_id.as_str())
-                                    .and(shell_process_name.clone())
-                            },
-                        ),
+                        process_name: self.pane_process_name(pane_id.as_str()).or_else(|| {
+                            self.primary_pid_for_live_pane_process(pane_id.as_str())
+                                .and(shell_process_name.clone())
+                        }),
                         exit_status: self
                             .pane_exit_status(pane_id.as_str())
                             .map(|status| status.frame_value()),

@@ -156,7 +156,7 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
         "{pane_text}"
     );
     assert!(!pane_text.contains("Failed after"), "{pane_text}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies `apply_patch` hunk mismatches receive specific recovery guidance.
@@ -352,7 +352,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_guides_context_refresh() {
         "{pane_text}"
     );
     assert!(pane_text.contains("(patch hunk mismatch)"), "{pane_text}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies replacement-present patch mismatches steer recovery toward
@@ -486,7 +486,7 @@ fn runtime_apply_patch_replacement_hint_recovery_guides_reconcile_or_skip() {
         "{}",
         feedback.content
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies missing-anchor patch mismatches steer recovery toward refreshing
@@ -614,7 +614,7 @@ fn runtime_apply_patch_missing_anchor_recovery_guides_anchor_refresh() {
         "{}",
         feedback.content
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies ambiguous repeated-candidate mismatches keep candidate-region
@@ -744,7 +744,7 @@ fn runtime_apply_patch_candidate_region_recovery_guides_ambiguous_ranges() {
         feedback.content
     );
     assert!(feedback.content.contains("note.rs"), "{}", feedback.content);
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies real `apply_patch` write-phase hunk failures enter model recovery.
@@ -900,7 +900,7 @@ fn runtime_apply_patch_write_phase_hunk_mismatch_queues_model_recovery() {
     );
     assert!(failed_patches.contains("-old"), "{failed_patches}");
     assert!(failed_patches.contains("+new"), "{failed_patches}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies repeated identical `apply_patch` hunk mismatches stay unbounded
@@ -1059,7 +1059,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_is_unbounded_and_hides_retry_budge
         "{pane_text}"
     );
     assert!(!pane_text.contains("/5"), "{pane_text}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies unsafe `apply_patch` paths receive CWD-relative recovery guidance.
@@ -1214,7 +1214,7 @@ fn runtime_apply_patch_unsafe_path_recovery_guides_relative_headers() {
                 .content
                 .contains("apply_patch: unsafe patch path: /home/neil/Documents/repos/chimera/src/conf/document.rs")
     }));
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies unrecovered `apply_patch` failures render their captured terminal
@@ -1337,7 +1337,7 @@ fn runtime_unrecovered_apply_patch_failure_logs_terminal_observation() {
         "{pane_text}"
     );
     assert!(pane_text.contains("Failed after"), "{pane_text}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies unrecovered `apply_patch` failures do not expose shell-wrapper

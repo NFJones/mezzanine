@@ -293,7 +293,7 @@ fn runtime_agent_prompt_height_resize_is_pane_local() {
     );
     assert_eq!(resized_second, initial_second);
 
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies application-cursor-mode arrows still drive agent prompt navigation.
@@ -462,5 +462,5 @@ fn runtime_agent_prompt_allows_navigation_and_other_pane_input() {
         "%2"
     );
     assert!(!service.agent_prompt_inputs_for_tests().contains_key("%2"));
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }

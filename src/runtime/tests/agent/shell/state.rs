@@ -319,7 +319,7 @@ fn runtime_parent_agent_shell_exit_closes_child_subagent_panes() {
     );
     assert!(!service.subagent_lineage.contains_key(&child_agent_id));
     assert!(service.agent_shell_store().get(&child_pane_id).is_none());
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that foreground pane input applied through the async deferred I/O

@@ -304,7 +304,7 @@ fn runtime_control_project_approval_decisions_persist_exact_command_rules() {
         "project approval should load an exact deny rule into the runtime policy"
     );
 
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
     let _ = fs::remove_dir_all(root);
 }
 

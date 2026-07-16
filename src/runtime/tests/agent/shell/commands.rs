@@ -785,5 +785,5 @@ fn runtime_agent_shell_planning_failure_hides_command_by_default() {
     );
     assert!(!pane_text.contains("before execution: ls"), "{pane_text}");
     assert!(!pane_text.contains("$ ls"), "{pane_text}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }

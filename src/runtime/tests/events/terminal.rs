@@ -153,7 +153,7 @@ fn runtime_applies_lone_prefix_key_as_pending_state() {
 
     assert!(!service.primary_prefix_key_pending());
     assert!(service.primary_prompt_input().is_some());
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that destructive default prefix bindings open command prompts with
@@ -302,7 +302,7 @@ fn runtime_applies_default_prefix_mux_actions() {
             .contains("action=select-pane -t"),
         "{display_panes_event:?}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies keyboard pane-focus actions use a diff redraw.
@@ -349,7 +349,7 @@ fn runtime_keyboard_focus_pane_requests_diff_redraw() {
         service.session().windows()[0].active_pane().id.as_str(),
         "%2"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies alternate-screen exit moves stale interactive readiness into prompt recovery.
@@ -381,7 +381,7 @@ fn runtime_alternate_screen_exit_recovers_interactive_blocked_readiness() {
         service.pane_readiness_state("%1"),
         PaneReadinessState::PromptCandidate
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies a pre-dispatch pane-readiness failure stops the current shell batch

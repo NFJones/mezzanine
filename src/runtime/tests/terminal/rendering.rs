@@ -475,7 +475,7 @@ fn runtime_mouse_focus_targets_content_below_merged_top_pane_frame() {
         service.session().windows()[0].active_pane().id.as_str(),
         "%2"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that the pane agent status latency selector opens, populates with

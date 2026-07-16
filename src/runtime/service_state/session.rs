@@ -49,11 +49,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) message_service: MessageService,
-    /// Stores the pane processes value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_processes: PaneProcessManager,
     /// Stores the latest async runtime actor metrics snapshot when available.
     ///
     /// The actor-owned command path updates this snapshot before rendering

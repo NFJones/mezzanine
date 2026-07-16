@@ -44,7 +44,7 @@ fn runtime_service_restarts_restored_panes_drain_initial_prompt_output() {
 
     assert_eq!(starts.len(), 1);
     assert!(visible.contains("restored-ps1$"), "{visible:?}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies layout-loaded prompt draining waits for each restored pane.
@@ -106,7 +106,7 @@ fn runtime_service_restarts_restored_panes_drain_initial_prompt_output_for_each_
             .join("\n");
         assert!(visible.contains("restored-ps1$"), "{pane_id}: {visible:?}");
     }
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies a degraded pane can recover from later prompt-boundary evidence.
@@ -154,7 +154,7 @@ fn runtime_passive_prompt_recovers_stale_interactive_blocked_shell() {
         service.pane_readiness_state("%1"),
         PaneReadinessState::PromptCandidate
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies prompt markers alone do not clear an interactive block when the

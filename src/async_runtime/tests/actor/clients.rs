@@ -87,7 +87,7 @@ async fn async_actor_applies_primary_client_input_events() {
         .unwrap_or_default();
     assert_eq!(pane_count, 2);
     assert_eq!(exit.commands_processed, 2);
-    exit.service.pane_processes_mut().terminate_all().unwrap();
+    exit.service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that primary-client disconnects can be applied from async runtime

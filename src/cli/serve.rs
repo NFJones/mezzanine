@@ -994,7 +994,7 @@ pub(super) async fn run_foreground_control_daemon(
             result
         };
         let (daemon_result, mut actor_exit) = tokio::join!(daemon, actor.run());
-        actor_exit.service.pane_processes_mut().terminate_all()?;
+        actor_exit.service.terminate_all_pane_processes()?;
         daemon_result.map(|report| (report, actor_exit.service))
     }
     .await;

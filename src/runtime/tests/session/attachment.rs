@@ -158,7 +158,7 @@ fn runtime_control_initialize_resizes_started_initial_pane_for_primary_terminal(
         "agent prompt cursor should render at attached terminal bottom: {view:?}"
     );
 
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies observer `control/initialize` requests are visible immediately.
@@ -383,7 +383,7 @@ fn runtime_applies_attached_terminal_step_actions() {
     assert!(!service.active_copy_modes().is_empty());
     assert_eq!(service.session().windows()[0].panes().len(), 2);
     assert_eq!(service.pane_processes().len(), 2);
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies observer chooser rows expose the concrete available decisions as
@@ -460,7 +460,7 @@ fn runtime_attached_split_mux_action_focuses_new_pane() {
     let window = &service.session().windows()[0];
     assert_eq!(window.panes().len(), 2);
     assert_eq!(window.active_pane().id.as_str(), "%2");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that the attached-terminal detach binding runs through the runtime

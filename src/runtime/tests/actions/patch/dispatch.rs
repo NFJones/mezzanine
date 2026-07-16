@@ -91,7 +91,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
     let execution = service.agent_turn_executions.get(&turn.turn_id).unwrap();
     assert_eq!(execution.action_results[0].status, ActionStatus::Running);
     assert!(execution.action_results[0].error.is_none());
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies successful readiness-probe completion resumes the original shell
@@ -228,7 +228,7 @@ fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_block
     let execution = service.agent_turn_executions.get(&turn.turn_id).unwrap();
     assert_ne!(execution.action_results[0].status, ActionStatus::Running);
     assert!(execution.action_results[0].error.is_none());
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies stale `interactive-blocked` dispatch recovery compares foreground
@@ -333,7 +333,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_shell_process_
     let execution = service.agent_turn_executions.get(&turn.turn_id).unwrap();
     assert_eq!(execution.action_results[0].status, ActionStatus::Running);
     assert!(execution.action_results[0].error.is_none());
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 #[test]
@@ -425,7 +425,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_cached_foregro
     let execution = service.agent_turn_executions.get(&turn.turn_id).unwrap();
     assert_eq!(execution.action_results[0].status, ActionStatus::Running);
     assert!(execution.action_results[0].error.is_none());
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies runtime shell dispatch honors per-action shell timeouts.

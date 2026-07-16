@@ -218,7 +218,7 @@ fn runtime_primary_command_prompt_immediate_command_does_not_open_overlay() {
         .join("\n");
     assert!(!pane_text.contains("mez: buffer: ack"), "{pane_text}");
     assert!(!pane_text.contains("created=true"), "{pane_text}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that the primary command prompt retains submitted commands across

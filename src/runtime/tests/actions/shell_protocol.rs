@@ -615,7 +615,7 @@ fn runtime_bash_agent_shell_transaction_keeps_parent_shell_alive() {
         .join("\n");
     assert!(!pane_text.contains("MEZ_MARKER_TOKEN"), "{pane_text}");
     assert!(!pane_text.contains("MEZ_HISTORY_"), "{pane_text}");
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies that the bash-backed pane shell also survives an agent shell
@@ -757,7 +757,7 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
         pane_text.contains("STRICT_OPTIONS_STILL_SET"),
         "{pane_text}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies mismatched shell-transaction markers fail the live action promptly.
@@ -861,7 +861,7 @@ fn runtime_shell_transaction_metadata_mismatch_fails_live_action() {
             .contains("shell transaction marker metadata does not match runtime dispatch state"),
         "{pane_text}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies a duplicate start marker fails the live shell action.
@@ -912,7 +912,7 @@ fn runtime_shell_transaction_duplicate_start_marker_fails_live_action() {
         pane_text.contains("shell transaction emitted a duplicate start marker"),
         "{pane_text}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies an end marker before the start marker fails the live shell action.
@@ -958,7 +958,7 @@ fn runtime_shell_transaction_end_before_start_marker_fails_live_action() {
         pane_text.contains("shell transaction end marker arrived before the start marker"),
         "{pane_text}"
     );
-    service.pane_processes_mut().terminate_all().unwrap();
+    service.terminate_all_pane_processes().unwrap();
 }
 
 /// Verifies shell transaction payload bytes are deferred until the wrapper
