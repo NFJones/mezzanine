@@ -6,7 +6,21 @@
 //! avoids mixing long-running summarization workflow with ordinary shell
 //! command dispatch.
 
-use super::*;
+use super::{
+    AGENT_COMPACT_TRANSCRIPT_ENTRY_CONTEXT_OVERHEAD_WORDS, AgentActionPayload, AgentContext,
+    AgentId, AgentShellCommandOutcome, AgentTurnState, AllowedActionSet, ClaudeCodeProvider,
+    ContextBlock, ContextSourceKind, DEFAULT_PROVIDER_TIMEOUT_MS, MemoryRecord, MemoryScope,
+    MemorySource, MezError, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile,
+    ModelRequest, ModelResponse, ProviderApiCompatibility, ReqwestProviderHttpTransport, Result,
+    RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask,
+    RuntimeAgentProviderDispatchProvider, RuntimeSessionService, TranscriptEntry, TranscriptRole,
+    append_mcp_context, current_unix_seconds,
+    deepseek_chat_completions_provider_from_auth_store_with_provider_options, json_escape,
+    model_context_text_word_count,
+    openai_compatible_provider_from_auth_store_with_provider_options,
+    openai_responses_provider_from_auth_store_with_provider_options, parse_slash_command,
+    resolve_provider_api, runtime_mezzanine_error_code,
+};
 use crate::agent::provider::anthropic_provider_from_auth_store_with_provider_options;
 use crate::runtime::{AgentCompactionEvent, RenderInvalidationReason, RuntimeTransition};
 

@@ -46,7 +46,6 @@ use crate::agent::provider::{
     openai_responses_provider_from_auth_store_with_provider_options,
 };
 use crate::auth::AuthCredentialKind;
-use crate::error::MezErrorKind;
 use crate::runtime::config::{
     runtime_default_models_for_provider, runtime_recommended_model_for_provider,
 };

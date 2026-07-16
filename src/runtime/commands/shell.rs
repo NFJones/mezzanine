@@ -6,7 +6,15 @@
 //! `commands::mod` focused on cross-family command wiring while sibling
 //! modules own concrete slash-command behavior.
 
-use super::*;
+use super::{
+    AgentShellCommandOutcome, AgentShellRuntimeContext, AgentShellVisibility, EventKind, MezError,
+    Result, RuntimeSessionService, RuntimeSideEffect, agent_shell_visibility_json_name,
+    agent_subshell_enter_command, execute_agent_shell_command_with_context, json_escape,
+    parse_slash_command, runtime_agent_shell_command_response_json,
+    runtime_agent_shell_prompt_turn_response_json, runtime_agent_shell_stop_response_json,
+    runtime_mezzanine_error_code,
+};
+use crate::{error::MezErrorKind, runtime::commands::issues};
 use mez_agent::parse_macro_prompt_invocation;
 
 /// Result of applying the live side effects for an agent-shell exit request.
