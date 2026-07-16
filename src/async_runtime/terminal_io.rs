@@ -1231,7 +1231,12 @@ impl AsyncAttachedTerminalIo for AsyncFakeAttachedTerminalIo {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        ATTACHED_TERMINAL_OUTPUT_WRITE_RECOVERY_FLUSHES, AsyncTerminalOutputWriteReport,
+        AttachedTerminalOutputWriteBudget, DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,
+        MIN_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,
+        adapt_attached_terminal_output_write_budget,
+    };
 
     /// Verifies that the attached-terminal output budget starts above the old
     /// small-frame cap while preserving a lower bound for slow clients.

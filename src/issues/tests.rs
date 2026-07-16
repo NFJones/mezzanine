@@ -4,7 +4,10 @@
 //! deletion so every CLI, slash-command, and MAAP action surface can share the
 //! same persistence contract.
 
-use super::*;
+use super::{
+    IssueBrowserQuery, IssueKind, IssueQuery, IssueState, IssueStore, IssueUpdate, NewIssueRecord,
+    fs, issue_database_location,
+};
 
 fn temp_store(name: &str) -> IssueStore {
     let root = std::env::temp_dir().join(format!("mez-issue-store-{name}-{}", std::process::id()));

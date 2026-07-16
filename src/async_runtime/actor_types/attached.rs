@@ -1,6 +1,10 @@
 //! Attached-terminal step planning and application through the async actor handle.
 
-use super::*;
+use super::{
+    AsyncRuntimeSessionHandle, AttachedClientStepApplication, AttachedTerminalClientStepPlan,
+    AttachedTerminalFdReadiness, ClientId, ClientStatusLine, ClientViewRole, Result, Size,
+    TerminalClientLoopConfig, plan_attached_terminal_client_step,
+};
 
 /// Runs the plan async attached terminal client step operation for this subsystem.
 ///

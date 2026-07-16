@@ -36,10 +36,8 @@ use mez_agent::{
 };
 use mez_core::ids::AgentId;
 use mez_terminal::TerminalStyleSpan;
-use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
-use tokio::time::Instant;
 
 mod provider_service;
 mod terminal_service;
