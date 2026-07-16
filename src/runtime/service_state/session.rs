@@ -250,20 +250,6 @@ pub struct RuntimeSessionService {
     /// The key is `turn_id/action_id`, keeping the accumulator scoped to one
     /// running semantic action while successive read transactions complete.
     pub(in crate::runtime) apply_patch_batch_states: BTreeMap<String, RuntimeApplyPatchBatchState>,
-    /// Stores the subagent task routes value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) subagent_task_routes: BTreeMap<String, String>,
-    /// Tracks windows reserved for subagent panes.
-    ///
-    /// Subagent windows are runtime-only placement buckets. They remain in the
-    /// same user-visible group as the controlling pane, use an even layout, and
-    /// are pruned from this set whenever the backing window disappears.
-    pub(in crate::runtime) subagent_window_ids: BTreeSet<String>,
-    /// Panes that should close once their terminal subagent turn fully
-    /// finishes its normal terminal cleanup.
-    pub(in crate::runtime) pending_terminal_subagent_pane_closes: BTreeSet<String>,
     /// Child turns currently joined by parent `spawn_agent` actions.
     ///
     /// The map is keyed by child turn id so task-result delivery can resolve

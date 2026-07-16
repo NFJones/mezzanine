@@ -1562,7 +1562,7 @@ impl RuntimeSessionService {
         self.process.pane_bootstrap_pending.remove(pane_id);
         self.pane_instruction_files.remove(pane_id);
         self.process.pane_closing.remove(pane_id);
-        self.pending_terminal_subagent_pane_closes.remove(pane_id);
+        self.clear_terminal_subagent_pane_close(pane_id);
         self.model_profile_overrides.pane_profiles.remove(pane_id);
         self.set_agent_auto_sizing_override(pane_id, None);
         let pane_turn_ids = self
@@ -1574,13 +1574,12 @@ impl RuntimeSessionService {
             .collect::<Vec<_>>();
         for turn_id in &pane_turn_ids {
             self.clear_agent_failure_feedback_attempts_for_turn(turn_id);
-            self.subagent_task_routes.remove(turn_id);
+            self.remove_subagent_task_parent(turn_id);
             self.clear_joined_subagent_dependencies_for_turn(turn_id);
         }
 
         let agent_id = format!("agent-{pane_id}");
-        self.subagent_task_routes
-            .retain(|_child_turn_id, parent_agent_id| parent_agent_id != &agent_id);
+        self.remove_subagent_task_routes_for_parent(&agent_id);
         self.joined_subagent_dependencies
             .retain(|_child_turn_id, dependency| dependency.child_agent_id != agent_id);
         self.model_profile_overrides
@@ -1609,8 +1608,7 @@ impl RuntimeSessionService {
             .iter()
             .map(|window| window.id.to_string())
             .collect::<BTreeSet<_>>();
-        self.subagent_window_ids
-            .retain(|window_id| live_windows.contains(window_id));
+        self.retain_live_subagent_windows(&live_windows);
     }
 
     /// Runs the initial pane descriptor operation for this subsystem.

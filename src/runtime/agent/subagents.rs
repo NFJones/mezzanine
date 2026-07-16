@@ -456,7 +456,7 @@ impl RuntimeSessionService {
         progress_percent: Option<u8>,
         summary: &str,
     ) -> Result<()> {
-        let Some(parent_agent_id) = self.subagent_task_routes.get(&turn.turn_id).cloned() else {
+        let Some(parent_agent_id) = self.subagent_task_parent(&turn.turn_id) else {
             return Ok(());
         };
         let now_ms = current_unix_seconds().saturating_mul(1000);
@@ -618,7 +618,7 @@ impl RuntimeSessionService {
                 ),
             )?;
         }
-        self.subagent_task_routes.remove(&turn.turn_id);
+        self.agent.subagent_task_routes.remove(&turn.turn_id);
         let is_macro_step =
             dependency.is_some() || turn.cooperation_mode.as_deref() == Some("macro-step");
         let terminal_macro_step_failure = is_macro_step && !success;
@@ -635,7 +635,8 @@ impl RuntimeSessionService {
             self.resolve_joined_subagent_dependency(turn, success, summary, output)?;
         }
         if !is_macro_step || terminal_macro_step_failure {
-            self.pending_terminal_subagent_pane_closes
+            self.agent
+                .pending_terminal_subagent_pane_closes
                 .insert(turn.pane_id.clone());
         }
         if let Err(error) = delivery {
@@ -661,9 +662,7 @@ impl RuntimeSessionService {
     /// In that case the parent turn recorded in the join dependency is the
     /// fallback source of truth.
     fn subagent_task_result_parent_agent_id(&self, turn: &AgentTurnRecord) -> Option<String> {
-        self.subagent_task_routes
-            .get(&turn.turn_id)
-            .cloned()
+        self.subagent_task_parent(&turn.turn_id)
             .or_else(|| {
                 let dependency = self.joined_subagent_dependencies.get(&turn.turn_id)?;
                 self.agent_turn_ledger
@@ -1015,6 +1014,7 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
     ) -> Result<()> {
         if !self
+            .agent
             .pending_terminal_subagent_pane_closes
             .remove(&turn.pane_id)
         {
@@ -1042,7 +1042,8 @@ impl RuntimeSessionService {
             .iter()
             .map(|window| window.id.to_string())
             .collect::<std::collections::BTreeSet<_>>();
-        self.subagent_window_ids
+        self.agent
+            .subagent_window_ids
             .retain(|window_id| live_windows.contains(window_id));
         self.refresh_subagent_window_names(&primary)?;
         Ok(())

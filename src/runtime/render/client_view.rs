@@ -1174,7 +1174,7 @@ impl RuntimeSessionService {
                     .unwrap_or(window.index),
                 title: window.title(),
                 active: active_window_id.as_ref() == Some(&window.id.to_string()),
-                subagent: self.subagent_window_ids.contains(window.id.as_str()),
+                subagent: self.is_subagent_window(window.id.as_str()),
             });
             let pane_ids = window
                 .panes()

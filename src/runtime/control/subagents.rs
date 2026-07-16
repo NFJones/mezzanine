@@ -533,8 +533,7 @@ impl RuntimeSessionService {
             );
             return Err(error);
         }
-        self.subagent_task_routes
-            .insert(turn.turn_id.clone(), spawn.parent_agent_id.clone());
+        self.set_subagent_task_parent(turn.turn_id.clone(), spawn.parent_agent_id.clone());
         if let Err(error) = self.append_lifecycle_event(
             EventKind::AgentStatus,
             format!(
@@ -673,8 +672,7 @@ impl RuntimeSessionService {
                     .mark_window_name_generated_session_owned(&started.window_id)?;
             }
         }
-        self.subagent_window_ids
-            .insert(started.window_id.to_string());
+        self.mark_subagent_window(started.window_id.to_string());
         Ok(started)
     }
 
@@ -688,7 +686,7 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         self.session
             .set_pane_title_explicit(pane_id, display_name)?;
-        self.subagent_window_ids.insert(window_id.to_string());
+        self.mark_subagent_window(window_id.to_string());
         self.refresh_subagent_window_names_internal(controller)
     }
 
@@ -706,7 +704,7 @@ impl RuntimeSessionService {
         controller: Option<&mez_core::ids::ClientId>,
     ) -> Result<()> {
         self.prune_subagent_window_ids();
-        let window_ids = self.subagent_window_ids.iter().cloned().collect::<Vec<_>>();
+        let window_ids = self.subagent_window_ids();
         for window_id in window_ids {
             let Some(name) = self.subagent_bucket_window_display_name(&window_id) else {
                 continue;
@@ -791,8 +789,7 @@ impl RuntimeSessionService {
             .iter()
             .map(|window| window.id.to_string())
             .collect::<std::collections::BTreeSet<_>>();
-        self.subagent_window_ids
-            .retain(|window_id| live_windows.contains(window_id));
+        self.retain_live_subagent_windows(&live_windows);
     }
 
     /// Resolves the window group that should own a child subagent window.
@@ -829,8 +826,7 @@ impl RuntimeSessionService {
             .iter()
             .find(|group| &group.id == group_id)?;
         group.window_ids.iter().find_map(|window_id| {
-            self.subagent_window_ids
-                .contains(window_id.as_str())
+            self.is_subagent_window(window_id.as_str())
                 .then(|| {
                     self.session
                         .windows()
@@ -859,7 +855,7 @@ impl RuntimeSessionService {
                 group
                     .window_ids
                     .iter()
-                    .filter(|window_id| self.subagent_window_ids.contains(window_id.as_str()))
+                    .filter(|window_id| self.is_subagent_window(window_id.as_str()))
                     .count()
             })
             .unwrap_or(0);
@@ -882,7 +878,7 @@ impl RuntimeSessionService {
         let pane_ids = vec![pane_id.to_string()];
         let _ = self.fail_agent_turns_for_pane_shutdown(&pane_ids, "subagent spawn setup failed");
         if let Some(turn_id) = turn_id {
-            self.subagent_task_routes.remove(turn_id);
+            self.remove_subagent_task_parent(turn_id);
             self.clear_joined_subagent_dependencies_for_turn(turn_id);
         }
         self.subagent_scopes.unregister(child_agent_id);

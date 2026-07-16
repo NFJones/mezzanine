@@ -206,6 +206,12 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     max_subagent_depth: usize,
     /// Whether parent turns join or detach spawned subagents.
     subagent_wait_policy: SubagentWaitPolicy,
+    /// Parent agent route keyed by spawned child turn id.
+    subagent_task_routes: BTreeMap<String, String>,
+    /// Windows reserved for spawned subagent panes.
+    subagent_window_ids: BTreeSet<String>,
+    /// Subagent panes awaiting close after terminal turn cleanup.
+    pending_terminal_subagent_pane_closes: BTreeSet<String>,
 }
 
 /// State removed when a compaction worker reports failure.
@@ -257,6 +263,76 @@ impl RuntimeAgentComponent {
 }
 
 impl RuntimeSessionService {
+    /// Returns the parent-agent route for one spawned child turn.
+    pub(in crate::runtime) fn subagent_task_parent(&self, turn_id: &str) -> Option<String> {
+        self.agent.subagent_task_routes.get(turn_id).cloned()
+    }
+
+    /// Records the parent-agent route for one spawned child turn.
+    pub(in crate::runtime) fn set_subagent_task_parent(
+        &mut self,
+        turn_id: impl Into<String>,
+        parent_agent_id: impl Into<String>,
+    ) {
+        self.agent
+            .subagent_task_routes
+            .insert(turn_id.into(), parent_agent_id.into());
+    }
+
+    /// Removes the parent-agent route for one spawned child turn.
+    pub(in crate::runtime) fn remove_subagent_task_parent(&mut self, turn_id: &str) {
+        self.agent.subagent_task_routes.remove(turn_id);
+    }
+
+    /// Removes every child-turn route owned by one parent agent.
+    pub(in crate::runtime) fn remove_subagent_task_routes_for_parent(
+        &mut self,
+        parent_agent_id: &str,
+    ) {
+        self.agent
+            .subagent_task_routes
+            .retain(|_, parent| parent != parent_agent_id);
+    }
+
+    /// Records a window as reserved for subagent panes.
+    pub(in crate::runtime) fn mark_subagent_window(&mut self, window_id: impl Into<String>) {
+        self.agent.subagent_window_ids.insert(window_id.into());
+    }
+
+    /// Reports whether a window is reserved for subagent panes.
+    pub(in crate::runtime) fn is_subagent_window(&self, window_id: &str) -> bool {
+        self.agent.subagent_window_ids.contains(window_id)
+    }
+
+    /// Returns all currently reserved subagent window ids.
+    pub(in crate::runtime) fn subagent_window_ids(&self) -> Vec<String> {
+        self.agent.subagent_window_ids.iter().cloned().collect()
+    }
+
+    /// Retains only subagent windows still present in the mux session.
+    pub(in crate::runtime) fn retain_live_subagent_windows(
+        &mut self,
+        live_window_ids: &BTreeSet<String>,
+    ) {
+        self.agent
+            .subagent_window_ids
+            .retain(|window_id| live_window_ids.contains(window_id));
+    }
+
+    /// Removes one deferred terminal-pane close marker.
+    pub(in crate::runtime) fn clear_terminal_subagent_pane_close(&mut self, pane_id: &str) -> bool {
+        self.agent
+            .pending_terminal_subagent_pane_closes
+            .remove(pane_id)
+    }
+
+    /// Clears all subagent routing and placement state on session replacement.
+    pub(in crate::runtime) fn clear_subagent_placement_state(&mut self) {
+        self.agent.subagent_task_routes.clear();
+        self.agent.subagent_window_ids.clear();
+        self.agent.pending_terminal_subagent_pane_closes.clear();
+    }
+
     /// Replaces all configured subagent placement and delegation limits.
     pub(in crate::runtime) fn configure_subagent_policy(
         &mut self,

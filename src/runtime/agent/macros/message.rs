@@ -195,7 +195,8 @@ impl RuntimeSessionService {
                 .find(|(_, loop_turn)| loop_turn.pane_id == child_pane_id)
                 .map(|(turn_id, _)| turn_id.clone())
                 .ok_or_else(|| MezError::invalid_state("macro loop did not create a work turn"))?;
-            self.subagent_task_routes
+            self.agent
+                .subagent_task_routes
                 .insert(child_turn_id.clone(), parent_turn.agent_id.clone());
             let loop_state = self
                 .agent
@@ -253,7 +254,8 @@ impl RuntimeSessionService {
         self.agent
             .agent_turn_model_profiles
             .insert(turn_id.clone(), model_profile);
-        self.subagent_task_routes
+        self.agent
+            .subagent_task_routes
             .insert(turn_id.clone(), parent_turn.agent_id.clone());
         self.joined_subagent_dependencies.insert(
             turn_id.clone(),
