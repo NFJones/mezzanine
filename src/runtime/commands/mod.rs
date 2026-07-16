@@ -586,8 +586,8 @@ impl RuntimeSessionService {
                 self.finish_agent_turn_without_shell_session(&turn, AgentTurnState::Interrupted)?
             }
         };
-        if let Some(loop_turn) = self.agent_loop_turns.remove(&turn_id)
-            && let Some(state) = self.agent_loops_by_pane.remove(&loop_turn.pane_id)
+        if let Some(loop_turn) = self.remove_agent_loop_turn(&turn_id)
+            && let Some(state) = self.remove_agent_loop_state(&loop_turn.pane_id)
         {
             self.restore_agent_loop_parent_conversation(&loop_turn.pane_id, &state)?;
         }
@@ -722,13 +722,12 @@ impl RuntimeSessionService {
             .agent_shell_store
             .get(pane_id)
             .and_then(|session| session.running_turn_id.as_deref())
-            .and_then(|turn_id| self.agent_loop_turns.get(turn_id))
+            .and_then(|turn_id| self.agent_loop_turn(turn_id))
             .is_some_and(|loop_turn| loop_turn.pane_id == pane_id);
         let queued_loop_turn_active = self.agent_scheduler.queued_turns().any(|work| {
             work.pane_id.as_deref() == Some(pane_id)
                 && self
-                    .agent_loop_turns
-                    .get(&work.turn_id)
+                    .agent_loop_turn(&work.turn_id)
                     .is_some_and(|loop_turn| loop_turn.pane_id == pane_id)
         });
         running_loop_turn_active || queued_loop_turn_active
@@ -736,11 +735,10 @@ impl RuntimeSessionService {
 
     /// Clears stale loop controller metadata for a pane that no longer has active loop work.
     fn clear_stale_agent_loop_state_for_pane(&mut self, pane_id: &str) -> Result<()> {
-        if let Some(state) = self.agent_loops_by_pane.remove(pane_id) {
+        if let Some(state) = self.remove_agent_loop_state(pane_id) {
             self.restore_agent_loop_parent_conversation(pane_id, &state)?;
         }
-        self.agent_loop_turns
-            .retain(|_, loop_turn| loop_turn.pane_id != pane_id);
+        self.clear_agent_loop_turns_for_pane(pane_id);
         Ok(())
     }
 
@@ -757,7 +755,7 @@ impl RuntimeSessionService {
         if parsed.original_prompt.is_empty() {
             return Err(MezError::invalid_args("/loop requires a non-empty prompt"));
         }
-        if self.agent_loops_by_pane.contains_key(pane_id) {
+        if self.agent_loop_is_active(pane_id) {
             if self.pane_has_active_agent_loop_turn(pane_id) {
                 return Err(MezError::conflict(
                     "an agent loop is already active for this pane",
@@ -775,28 +773,23 @@ impl RuntimeSessionService {
         let parent_conversation_id = parent_session.session_id.clone();
         let parent_transcript_entries = parent_session.transcript_entries;
         let parent_prompt_cache_lineage_id = parent_session.prompt_cache_lineage_id.clone();
-        let max_iterations = parsed
-            .max_iterations
-            .unwrap_or(self.agent_loop_limit.max(1));
-        self.agent_loops_by_pane.insert(
-            pane_id.to_string(),
-            RuntimeAgentLoopState {
-                pane_id: pane_id.to_string(),
-                original_prompt: parsed.original_prompt.to_string(),
-                mode: parsed.mode,
-                parent_conversation_id: parent_conversation_id.clone(),
-                parent_transcript_entries,
-                parent_prompt_cache_lineage_id: Some(parent_prompt_cache_lineage_id),
-                iteration: 1,
-                emitted_apply_patch: false,
-                max_iterations,
-                completion: None,
-            },
-        );
+        let max_iterations = parsed.max_iterations.unwrap_or(self.agent_loop_limit());
+        self.insert_agent_loop_state(RuntimeAgentLoopState {
+            pane_id: pane_id.to_string(),
+            original_prompt: parsed.original_prompt.to_string(),
+            mode: parsed.mode,
+            parent_conversation_id: parent_conversation_id.clone(),
+            parent_transcript_entries,
+            parent_prompt_cache_lineage_id: Some(parent_prompt_cache_lineage_id),
+            iteration: 1,
+            emitted_apply_patch: false,
+            max_iterations,
+            completion: None,
+        });
         let started = match self.start_agent_loop_work_turn(pane_id) {
             Ok(started) => started,
             Err(error) => {
-                if let Some(state) = self.agent_loops_by_pane.remove(pane_id) {
+                if let Some(state) = self.remove_agent_loop_state(pane_id) {
                     self.restore_agent_loop_parent_conversation(pane_id, &state)?;
                 }
                 return Err(error);
@@ -824,15 +817,14 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Result<RuntimeAgentPromptTurnStart> {
         let state = self
-            .agent_loops_by_pane
-            .get(pane_id)
+            .agent_loop_state(pane_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("agent loop state is unavailable"))?;
         let (session_id, transcript_entries) =
             self.prepare_agent_loop_work_conversation(pane_id, &state)?;
         let prompt = runtime_agent_loop_work_prompt(&state);
         let started = self.start_agent_prompt_turn_inner(pane_id, &prompt, None, None)?;
-        self.agent_loop_turns.insert(
+        self.insert_agent_loop_turn(
             started.turn_id.clone(),
             RuntimeAgentLoopTurn {
                 pane_id: pane_id.to_string(),

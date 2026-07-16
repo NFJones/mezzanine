@@ -119,6 +119,7 @@ impl RuntimeSessionService {
                 DEFAULT_AGENT_ROUTING,
                 RuntimeAutoSizingConfig::default(),
                 DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
+                DEFAULT_AGENT_LOOP_LIMIT,
             ),
             session,
             window_created_at_unix_seconds,
@@ -177,9 +178,6 @@ impl RuntimeSessionService {
             agent_action_failure_retry_limit: DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT,
             agent_implementation_pressure_after_shell_actions:
                 DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS,
-            agent_loop_limit: DEFAULT_AGENT_LOOP_LIMIT,
-            agent_loops_by_pane: BTreeMap::new(),
-            agent_loop_turns: BTreeMap::new(),
             agent_turn_shell_dispatch_history: BTreeMap::new(),
             agent_turn_network_action_history: BTreeMap::new(),
             agent_pre_shell_hook_completions: BTreeSet::new(),

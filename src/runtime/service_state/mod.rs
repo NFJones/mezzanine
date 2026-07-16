@@ -5,8 +5,7 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::agent_state::{
-    RuntimeAgentCompactionTask, RuntimeAgentLoopState, RuntimeAgentLoopTurn,
-    RuntimeAgentProviderClaim, RuntimeAgentRememberTask,
+    RuntimeAgentCompactionTask, RuntimeAgentProviderClaim, RuntimeAgentRememberTask,
 };
 use super::{
     ActionStatus, AgentContext, AgentScheduler, AgentShellStore, AgentShellVisibility,

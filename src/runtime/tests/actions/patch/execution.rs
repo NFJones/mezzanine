@@ -603,8 +603,8 @@ fn runtime_agent_loop_continues_after_apply_patch_iteration() {
         .unwrap();
     assert_eq!(completions.len(), 1);
     assert_eq!(completions[0].terminal_state, AgentTurnState::Completed);
-    assert_eq!(service.agent_loops_by_pane.get("%1").unwrap().iteration, 2);
-    assert_eq!(service.agent_loop_turns.get("turn-2").unwrap().iteration, 2);
+    assert_eq!(service.agent_loop_state("%1").unwrap().iteration, 2);
+    assert_eq!(service.agent_loop_turn("turn-2").unwrap().iteration, 2);
     assert_eq!(
         service
             .agent_turn_ledger

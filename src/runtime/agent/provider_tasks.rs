@@ -556,7 +556,7 @@ impl RuntimeSessionService {
             available_mcp_tools,
             memory_actions_enabled: self.runtime_persistent_memory_enabled(),
             issue_actions_enabled: super::issues::runtime_issues_enabled(self),
-            loop_turn: self.agent_loop_turns.get(turn_id).cloned(),
+            loop_turn: self.agent.agent_loop_turns.get(turn_id).cloned(),
         }))
     }
 

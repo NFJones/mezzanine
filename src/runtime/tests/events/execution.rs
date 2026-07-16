@@ -100,7 +100,7 @@ fn runtime_agent_loop_limit_option_rejects_zero() {
             .contains("/loop --limit requires a positive integer"),
         "{error}"
     );
-    assert!(!service.agent_loops_by_pane.contains_key("%1"));
+    assert!(!service.agent_loop_is_active("%1"));
 }
 
 /// Verifies stopping a `/loop`-owned turn clears the pane loop controller
@@ -163,14 +163,14 @@ fn runtime_agent_loop_stop_clears_interrupted_loop_state() {
         .session_id
         .clone();
     assert_ne!(loop_session, old_session);
-    assert!(service.agent_loops_by_pane.contains_key("%1"));
-    assert!(service.agent_loop_turns.contains_key("turn-1"));
+    assert!(service.agent_loop_is_active("%1"));
+    assert!(service.agent_loop_turn("turn-1").is_some());
 
     let stopped = service.stop_agent_turn_for_pane("%1").unwrap();
 
     assert_eq!(stopped.turn_id, "turn-1");
-    assert!(!service.agent_loops_by_pane.contains_key("%1"));
-    assert!(!service.agent_loop_turns.contains_key("turn-1"));
+    assert!(!service.agent_loop_is_active("%1"));
+    assert!(service.agent_loop_turn("turn-1").is_none());
     let session = service.agent_shell_store().get("%1").unwrap();
     assert_eq!(session.session_id, old_session);
     assert!(!session.ephemeral);

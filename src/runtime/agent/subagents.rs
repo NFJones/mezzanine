@@ -14,6 +14,7 @@ impl RuntimeSessionService {
         turn_id: &str,
     ) {
         let active_loop_agent = self
+            .agent
             .agent_loop_turns
             .get(turn_id)
             .map(|loop_turn| format!("agent-{}", loop_turn.pane_id));
@@ -23,6 +24,7 @@ impl RuntimeSessionService {
                     dependency.child_turn_id == turn_id
                         && dependency.child_agent_id == *agent_id
                         && self
+                            .agent
                             .agent_loops_by_pane
                             .contains_key(agent_id.strip_prefix("agent-").unwrap_or_default())
                 }) || (child_turn_id != turn_id
@@ -48,8 +50,9 @@ impl RuntimeSessionService {
             .child_agent_id
             .strip_prefix("agent-")
             .is_some_and(|pane_id| {
-                self.agent_loops_by_pane.contains_key(pane_id)
+                self.agent.agent_loops_by_pane.contains_key(pane_id)
                     || self
+                        .agent
                         .agent_loop_turns
                         .values()
                         .any(|turn| turn.pane_id == pane_id)
@@ -423,8 +426,9 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: &str,
     ) -> Option<JoinedSubagentDependency> {
-        let pane_id = self.agent_loop_turns.get(turn_id)?.pane_id.clone();
+        let pane_id = self.agent.agent_loop_turns.get(turn_id)?.pane_id.clone();
         let completion = self
+            .agent
             .agent_loops_by_pane
             .get_mut(&pane_id)?
             .completion

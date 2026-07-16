@@ -280,12 +280,6 @@ pub struct RuntimeSessionService {
     /// The runtime uses this as advisory context only; it must not block shell
     /// execution because legitimate audits can require long inspection runs.
     pub(in crate::runtime) agent_implementation_pressure_after_shell_actions: usize,
-    /// Maximum number of work iterations for one `/loop` command.
-    pub(in crate::runtime) agent_loop_limit: usize,
-    /// Active `/loop` controller state keyed by pane id.
-    pub(in crate::runtime) agent_loops_by_pane: BTreeMap<String, RuntimeAgentLoopState>,
-    /// Loop metadata keyed by runtime agent turn id.
-    pub(in crate::runtime) agent_loop_turns: BTreeMap<String, RuntimeAgentLoopTurn>,
     /// Stores the agent turn shell dispatch history value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

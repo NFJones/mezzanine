@@ -133,15 +133,14 @@ fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
         .strip_prefix("agent-")
         .expect("macro child agent should identify its pane");
     let loop_state = service
-        .agent_loops_by_pane
-        .get(child_pane_id)
+        .agent_loop_state(child_pane_id)
         .expect("macro /loop step should start a loop controller in the child pane");
     assert_eq!(
         loop_state.original_prompt,
         "inspect release notes for the requested version.\n\nUser additional context for this macro invocation:\nfor v1.2"
     );
     let loop_turn_id = service
-        .agent_loop_turns
+        .agent_loop_turns_for_tests()
         .iter()
         .find(|(_, loop_turn)| loop_turn.pane_id == child_pane_id)
         .map(|(turn_id, _)| turn_id)

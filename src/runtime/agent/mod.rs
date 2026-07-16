@@ -17,7 +17,8 @@ use super::{
     PaneReadinessState, PathBuf, PathScopes, PendingFocusedShellHookContinuation, PermissionPolicy,
     ReadinessOverrideRevocation, Recipient, ReqwestProviderHttpTransport, Result, RuleDecision,
     RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentCopyOutput,
-    RuntimeAgentLoopTurnKind, RuntimeAgentModifiedFileSummary, RuntimeAgentProviderDispatch,
+    RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind,
+    RuntimeAgentModifiedFileSummary, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAutoSizingConfig,
     RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile, RuntimeHookPipelineBlock,
     RuntimeHookPipelineDecision, RuntimeMcpActionExecutor, RuntimeProviderConfig,
@@ -133,6 +134,12 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     agent_auto_sizing: RuntimeAutoSizingConfig,
     /// Pane-local auto-sizing policy overrides.
     agent_auto_sizing_overrides: BTreeMap<String, RuntimeAutoSizingConfig>,
+    /// Maximum iterations accepted by one loop controller.
+    agent_loop_limit: usize,
+    /// Active loop controller state keyed by pane id.
+    agent_loops_by_pane: BTreeMap<String, RuntimeAgentLoopState>,
+    /// Loop-owned turn metadata keyed by turn id.
+    agent_loop_turns: BTreeMap<String, RuntimeAgentLoopTurn>,
 }
 
 impl RuntimeAgentComponent {
@@ -141,17 +148,89 @@ impl RuntimeAgentComponent {
         agent_routing: bool,
         agent_auto_sizing: RuntimeAutoSizingConfig,
         agent_compaction_raw_retention_percent: usize,
+        agent_loop_limit: usize,
     ) -> Self {
         Self {
             agent_routing,
             agent_auto_sizing,
             agent_compaction_raw_retention_percent,
+            agent_loop_limit,
             ..Self::default()
         }
     }
 }
 
 impl RuntimeSessionService {
+    /// Returns the configured loop iteration limit.
+    pub(in crate::runtime) fn agent_loop_limit(&self) -> usize {
+        self.agent.agent_loop_limit.max(1)
+    }
+
+    /// Replaces the configured loop iteration limit.
+    pub(in crate::runtime) fn set_agent_loop_limit(&mut self, limit: usize) {
+        self.agent.agent_loop_limit = limit;
+    }
+
+    /// Returns loop controller state for one pane.
+    pub(in crate::runtime) fn agent_loop_state(
+        &self,
+        pane_id: &str,
+    ) -> Option<&RuntimeAgentLoopState> {
+        self.agent.agent_loops_by_pane.get(pane_id)
+    }
+
+    /// Reports whether a pane has loop controller state.
+    pub(in crate::runtime) fn agent_loop_is_active(&self, pane_id: &str) -> bool {
+        self.agent.agent_loops_by_pane.contains_key(pane_id)
+    }
+
+    /// Replaces loop controller state for one pane.
+    pub(in crate::runtime) fn insert_agent_loop_state(&mut self, state: RuntimeAgentLoopState) {
+        self.agent
+            .agent_loops_by_pane
+            .insert(state.pane_id.clone(), state);
+    }
+
+    /// Removes loop controller state for one pane.
+    pub(in crate::runtime) fn remove_agent_loop_state(
+        &mut self,
+        pane_id: &str,
+    ) -> Option<RuntimeAgentLoopState> {
+        self.agent.agent_loops_by_pane.remove(pane_id)
+    }
+
+    /// Returns loop-owned metadata for one turn.
+    pub(in crate::runtime) fn agent_loop_turn(
+        &self,
+        turn_id: &str,
+    ) -> Option<&RuntimeAgentLoopTurn> {
+        self.agent.agent_loop_turns.get(turn_id)
+    }
+
+    /// Records one loop-owned turn.
+    pub(in crate::runtime) fn insert_agent_loop_turn(
+        &mut self,
+        turn_id: String,
+        loop_turn: RuntimeAgentLoopTurn,
+    ) {
+        self.agent.agent_loop_turns.insert(turn_id, loop_turn);
+    }
+
+    /// Removes loop-owned metadata for one turn.
+    pub(in crate::runtime) fn remove_agent_loop_turn(
+        &mut self,
+        turn_id: &str,
+    ) -> Option<RuntimeAgentLoopTurn> {
+        self.agent.agent_loop_turns.remove(turn_id)
+    }
+
+    /// Removes stale loop-owned turns for one pane.
+    pub(in crate::runtime) fn clear_agent_loop_turns_for_pane(&mut self, pane_id: &str) {
+        self.agent
+            .agent_loop_turns
+            .retain(|_, loop_turn| loop_turn.pane_id != pane_id);
+    }
+
     /// Returns the raw-context percentage retained after compaction.
     pub(in crate::runtime) fn agent_compaction_raw_retention_percent(&self) -> usize {
         self.agent.agent_compaction_raw_retention_percent
@@ -396,6 +475,13 @@ impl RuntimeSessionService {
 
 #[cfg(test)]
 impl RuntimeSessionService {
+    /// Returns loop-owned turn metadata for integration-test observation.
+    pub(in crate::runtime) fn agent_loop_turns_for_tests(
+        &self,
+    ) -> &BTreeMap<String, RuntimeAgentLoopTurn> {
+        &self.agent.agent_loop_turns
+    }
+
     /// Reports whether a process fixture still has a command-exit marker.
     pub(in crate::runtime) fn agent_subshell_command_exit_is_pending_for_tests(
         &self,

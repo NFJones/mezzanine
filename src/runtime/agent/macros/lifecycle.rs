@@ -338,7 +338,7 @@ impl RuntimeSessionService {
                     dependency.parent_turn_id == parent_turn.turn_id
                         && dependency.parent_action_id == action.id
                 })
-                || self.agent_loops_by_pane.values().any(|state| {
+                || self.agent.agent_loops_by_pane.values().any(|state| {
                     state.completion.as_ref().is_some_and(|completion| {
                         completion.parent_turn_id == parent_turn.turn_id
                             && completion.parent_action_id == action.id
@@ -361,7 +361,7 @@ impl RuntimeSessionService {
                 })
                 .map(|dependency| dependency.child_turn_id.clone())
                 .or_else(|| {
-                    self.agent_loops_by_pane.values().find_map(|state| {
+                    self.agent.agent_loops_by_pane.values().find_map(|state| {
                         state.completion.as_ref().and_then(|completion| {
                             (completion.parent_turn_id == parent_turn.turn_id
                                 && completion.parent_action_id == action.id)

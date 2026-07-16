@@ -257,10 +257,10 @@ impl RuntimeSessionService {
                     || session
                         .ephemeral_transcript_source_conversation_id
                         .is_some()
-                    || self.agent_loops_by_pane.contains_key(&session.pane_id)
+                    || self.agent_loop_is_active(&session.pane_id)
             })
             .map(|session| {
-                let fallback_parent = self.agent_loops_by_pane.get(&session.pane_id);
+                let fallback_parent = self.agent_loop_state(&session.pane_id);
                 let conversation_id = session
                     .ephemeral_transcript_source_conversation_id
                     .clone()

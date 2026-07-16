@@ -327,7 +327,7 @@ fn runtime_agent_loop_new_option_starts_first_iteration_in_fresh_ephemeral_conve
         outcome,
         crate::runtime::AgentShellCommandOutcome::Mutated { .. }
     ));
-    let loop_state = service.agent_loops_by_pane.get("%1").unwrap();
+    let loop_state = service.agent_loop_state("%1").unwrap();
     assert_eq!(
         loop_state.mode,
         crate::runtime::agent_state::RuntimeAgentLoopMode::NewEachIteration
