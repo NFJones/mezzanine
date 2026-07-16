@@ -234,6 +234,8 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     /// Project instruction files discovered for each pane.
     pane_instruction_files:
         BTreeMap<String, Vec<mez_agent::instructions::DiscoveredInstructionFile>>,
+    /// Batched semantic apply-patch read state keyed by turn/action.
+    apply_patch_batch_states: BTreeMap<String, RuntimeApplyPatchBatchState>,
 }
 
 /// State removed when a compaction worker reports failure.

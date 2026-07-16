@@ -245,11 +245,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) agent_turn_executions: BTreeMap<String, AgentTurnExecution>,
-    /// Tracks shell-backed `apply_patch` actions that are collecting batched read snapshots.
-    ///
-    /// The key is `turn_id/action_id`, keeping the accumulator scoped to one
-    /// running semantic action while successive read transactions complete.
-    pub(in crate::runtime) apply_patch_batch_states: BTreeMap<String, RuntimeApplyPatchBatchState>,
     /// Stores the agent transcript store value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

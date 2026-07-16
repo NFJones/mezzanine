@@ -440,12 +440,7 @@ fn runtime_apply_patch_uses_full_read_transport_when_preview_truncates() {
     transaction.observed_output_bytes = snapshot.len();
     transaction.observed_output_truncated = true;
     let state_key = RuntimeSessionService::apply_patch_batch_state_key("turn-1", "patch-1");
-    service
-        .apply_patch_batch_states
-        .get_mut(&state_key)
-        .expect("apply_patch batch state should exist")
-        .current_read_transport
-        .extend_from_slice(snapshot.as_bytes());
+    service.append_apply_patch_batch_transport(&state_key, snapshot.as_bytes());
     service
         .observe_agent_shell_transaction_start("%1", &marker, "turn-1", "agent-%1", "%1")
         .unwrap();

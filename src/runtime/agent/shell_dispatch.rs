@@ -16,6 +16,19 @@ use mez_agent::{
 const RUNTIME_ACTION_PRESSURE_LABEL: &str = "action pressure";
 
 impl RuntimeSessionService {
+    /// Appends one transported read chunk to an active apply-patch batch.
+    pub(in crate::runtime) fn append_apply_patch_batch_transport(
+        &mut self,
+        state_key: &str,
+        transport_chunk: &[u8],
+    ) {
+        if let Some(state) = self.agent.apply_patch_batch_states.get_mut(state_key) {
+            state
+                .current_read_transport
+                .extend_from_slice(transport_chunk);
+        }
+    }
+
     /// Builds the state key for one batched shell-backed `apply_patch` action.
     pub(in crate::runtime) fn apply_patch_batch_state_key(
         turn_id: &str,
@@ -36,8 +49,8 @@ impl RuntimeSessionService {
             return Ok(());
         };
         let key = Self::apply_patch_batch_state_key(&turn.turn_id, &action.id);
-        if !self.apply_patch_batch_states.contains_key(&key) {
-            self.apply_patch_batch_states.insert(
+        if !self.agent.apply_patch_batch_states.contains_key(&key) {
+            self.agent.apply_patch_batch_states.insert(
                 key.clone(),
                 RuntimeApplyPatchBatchState {
                     remaining_paths: apply_patch_touched_paths(patch)?,
@@ -46,7 +59,7 @@ impl RuntimeSessionService {
                 },
             );
         }
-        if let Some(state) = self.apply_patch_batch_states.get_mut(&key)
+        if let Some(state) = self.agent.apply_patch_batch_states.get_mut(&key)
             && !state.remaining_paths.is_empty()
         {
             let path = state.remaining_paths.remove(0);
@@ -930,7 +943,7 @@ impl RuntimeSessionService {
     ) -> Result<bool> {
         let state_key = Self::apply_patch_batch_state_key(&turn.turn_id, action_id);
         if exit_code != 0 {
-            self.apply_patch_batch_states.remove(&state_key);
+            self.agent.apply_patch_batch_states.remove(&state_key);
             return Ok(false);
         }
         if apply_patch_transaction_phase(&transaction.command)
@@ -954,7 +967,9 @@ impl RuntimeSessionService {
         let AgentActionPayload::ApplyPatch { patch, .. } = &action.payload else {
             return Ok(false);
         };
-        let write_plan = if let Some(mut state) = self.apply_patch_batch_states.remove(&state_key) {
+        let write_plan = if let Some(mut state) =
+            self.agent.apply_patch_batch_states.remove(&state_key)
+        {
             let retained_transport;
             let retained_transport = if state.current_read_transport.is_empty() {
                 transaction.observed_output_preview.as_str()
@@ -978,7 +993,7 @@ impl RuntimeSessionService {
                     let mut paths = BTreeSet::new();
                     paths.insert(path);
                     let read_plan = apply_patch_read_plan_for_paths(&paths);
-                    self.apply_patch_batch_states.insert(state_key, state);
+                    self.agent.apply_patch_batch_states.insert(state_key, state);
                     self.append_agent_trace_turn_event(
                         &turn.pane_id,
                         &turn.turn_id,

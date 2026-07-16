@@ -78,11 +78,7 @@ impl RuntimeSessionService {
             }
         }
         for (state_key, transport_chunk) in apply_patch_transport_updates {
-            if let Some(state) = self.apply_patch_batch_states.get_mut(&state_key) {
-                state
-                    .current_read_transport
-                    .extend_from_slice(&transport_chunk);
-            }
+            self.append_apply_patch_batch_transport(&state_key, &transport_chunk);
         }
         for (turn_id, action_id, pane_id, lines) in status_line_updates {
             if self.agent_shell_transaction_action_shows_live_output(&turn_id, &action_id) {
