@@ -1,6 +1,21 @@
 //! Product input, prefix, mouse, and bracketed-paste routing.
 
-use super::*;
+use std::time::Instant;
+
+use super::types::{HostBracketedPasteBufferState, TerminalClientLoopAction};
+use super::{MouseAction, MouseEvent, Result, TerminalClientLoopConfig, parse_sgr_mouse};
+use crate::terminal::mouse::mouse_copy_position;
+use mez_mux::attached_client::{
+    application_cursor_forwarding_bytes, application_mouse_forwarding_bytes,
+    classify_attached_mouse_event, earliest_sequence_start, input_sequence_start,
+    malformed_sgr_mouse_prefix_len, prefix_sequence_len, sgr_mouse_sequence_len,
+    sgr_mouse_sequence_start,
+};
+use mez_mux::copy::{CopyModeKeyAction, classify_copy_mode_key_action};
+use mez_mux::input::{
+    MuxAction, TerminalInputClassification, WindowFocusTarget, classify_prefix_binding,
+    classify_terminal_input_with_command_bindings, key_chord_input_bytes, parse_key_chord_bytes,
+};
 
 /// Routes one host-input unit into a product terminal-loop action.
 pub fn route_client_input(

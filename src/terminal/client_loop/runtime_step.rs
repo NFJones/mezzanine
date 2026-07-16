@@ -1,6 +1,16 @@
 //! One-step attached-terminal planning over mux-owned presentation state.
 
-use super::*;
+use super::input_adapter::route_client_input_actions_with_host_paste_buffer_state;
+use super::types::{
+    AttachedTerminalClientStepPlan, HostBracketedPasteBufferState, TerminalClientLoopAction,
+};
+use super::{
+    AttachedTerminalFdReadiness, AttachedTerminalFdRole, MouseAction, Result,
+    TerminalClientLoopConfig,
+};
+use mez_mux::presentation::{
+    ClientStatusLine, RenderedClientView, compose_client_presentation_with_styles,
+};
 
 /// Plans one host-terminal client step over neutral mux presentation state.
 pub fn plan_attached_terminal_client_step(

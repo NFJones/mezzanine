@@ -1,6 +1,18 @@
 //! Product terminal-loop actions, configuration, reports, and host I/O test contracts.
 
-use super::*;
+use std::time::Instant;
+
+#[cfg(test)]
+use super::{AttachedTerminalFdReadiness, Result};
+use super::{AttachedTerminalFdRole, MouseAction};
+use mez_mux::copy::CopyModeKeyAction;
+use mez_mux::input::{KeyChord, MuxAction};
+#[cfg(test)]
+use mez_mux::layout::Size;
+#[cfg(test)]
+use mez_mux::presentation::AttachedTerminalOutputModes;
+use mez_mux::presentation::ClientStatusLine;
+use mez_terminal::TerminalStyleSpan;
 
 // Attached terminal loop planning and I/O abstraction.
 

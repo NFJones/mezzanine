@@ -5,7 +5,20 @@
 //! styled/plain pane composition in one place so the facade does not carry the
 //! whole rendering pipeline.
 
-use super::*;
+use std::collections::BTreeMap;
+
+use super::{
+    DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_WINDOW_FRAME_TEMPLATE, MezError, PaneRenderInput, Result,
+    TerminalClientLoopConfig, TerminalFrameContext, TerminalFramePosition,
+    TerminalFrameRenderOptions, TerminalScreen, TerminalStyledLine, fit_width, group_frame_text,
+    pane_border_rendition, pane_divider_rendition, place_group_frame, place_window_frame,
+    plan_window_render, render_pane_lines, render_styled_pane_lines, render_window_frame_text,
+    rendered_window_body_size, styled_group_frame_line, styled_window_frame_line,
+    window_with_group_frame_space, write_merged_pane_frames_on_dividers,
+    write_styled_merged_pane_frames_on_dividers,
+};
+use mez_mux::layout::{PaneGeometry, Size, Window};
+use mez_mux::theme::UiTheme;
 /// Runs the draw window from screens operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

@@ -1,7 +1,22 @@
 //! Window ownership for terminal frame rendering.
 
-use super::super::*;
-use super::*;
+use super::super::{
+    FrameStatusSegment, MousePaneAgentStatusCell, MouseWindowActionFrameCell, MouseWindowFrameCell,
+    PaneGeometry, PositionedFrameStatus, RenderedFrameStatus, TerminalFrameContext,
+    TerminalFramePosition, TerminalFrameStyle, TerminalStyleSpan, TerminalWindowStatusContext,
+    UiTheme, WindowFrameAction, compose_frame_text_row, fitted_text_width,
+    pane_frame_merges_into_divider, pane_render_region_size_for_geometry, position_frame_status,
+    sanitize_frame_text,
+};
+use super::{
+    WindowFramePillboxTarget, compact_pane_working_directory,
+    pane_agent_status_field_from_frame_field, pane_frame_fill_char, pane_frame_row_layout,
+    pillbox_segment_local_columns, window_action_pillbox_entries, window_frame_action_entry,
+    window_frame_field_value, window_frame_pillbox_entries_from_context,
+    window_frame_pillbox_segments, window_frame_pillbox_text_from_entries,
+    window_pillbox_rendition,
+};
+use mez_mux::layout::Window;
 
 /// Runs the render window frame template operation for this subsystem.
 ///

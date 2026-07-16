@@ -1,6 +1,10 @@
 //! Raw descriptor borrowing and disconnected host-output classification.
 
-use super::*;
+use std::io::ErrorKind;
+use std::os::fd::RawFd;
+
+use crate::error::MezError;
+use rustix::fd::BorrowedFd;
 
 pub(in crate::terminal) fn borrow_raw_fd(fd: RawFd) -> BorrowedFd<'static> {
     // SAFETY: callers pass raw descriptors already validated at API boundaries

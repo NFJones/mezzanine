@@ -5,8 +5,9 @@
 //! style-span construction together so the parent renderer only chooses when to
 //! apply overlays.
 
-use super::*;
-
+use super::{
+    Size, TerminalStyleSpan, UiTheme, agent_live_footer_style_spans, display_overlay_text_rendition,
+};
 use mez_mux::render::{normalize_overlay_style_spans, overlay_text_style_width};
 
 /// Runs the compose display overlay line style spans operation for this subsystem.

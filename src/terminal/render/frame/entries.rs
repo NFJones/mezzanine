@@ -1,6 +1,12 @@
 //! Entries ownership for terminal frame rendering.
 
-use super::super::*;
+use super::super::{
+    FramePillboxEntry, FramePillboxSegment, MouseWindowGroupFrameCell, PaneAgentStatusField,
+    TerminalFrameContext, TerminalWindowFrameContext, TerminalWindowGroupFrameContext,
+    WindowFrameAction, frame_pillbox_segment_columns, group_frame_visible,
+    render_frame_pillbox_segments, render_frame_pillbox_text, sanitize_frame_text,
+};
+use mez_mux::layout::Window;
 
 /// Maps an internal pane-frame field name to a clickable selector field.
 pub(in crate::terminal::render) fn pane_agent_status_field_from_frame_field(
