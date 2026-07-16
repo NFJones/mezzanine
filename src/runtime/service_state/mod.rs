@@ -35,7 +35,6 @@ use mez_agent::{
 };
 use mez_mux::copy::CopyPosition;
 use mez_mux::layout::PaneTitleSource;
-use mez_terminal::TerminalEmojiWidth;
 use secrecy::ExposeSecret;
 
 // Runtime data types, connection tables, and provider/MCP registries.

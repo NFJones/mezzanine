@@ -288,8 +288,8 @@ impl RuntimeSessionService {
                 };
                 let mut screen = TerminalScreen::new_with_history_config(
                     descriptor.size,
-                    self.terminal_history_limit,
-                    self.terminal_history_rotate_lines,
+                    self.process.settings.terminal_history_limit,
+                    self.process.settings.terminal_history_rotate_lines,
                 )?;
                 let history_lines = pane
                     .terminal_history

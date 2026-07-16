@@ -132,33 +132,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) pane_transcript_refs: BTreeMap<String, Vec<String>>,
-    /// Stores the terminal history limit value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) terminal_history_limit: usize,
-    /// Stores the terminal history rotation line count value for this data
-    /// structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) terminal_history_rotate_lines: usize,
-    /// Stores the terminal term value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) terminal_term: String,
-    /// Stores the terminal emoji status-glyph width policy value.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) terminal_emoji_width: TerminalEmojiWidth,
-    /// Stores the hidden shell-output preview tail line count for this data
-    /// structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) terminal_shell_output_preview_lines: usize,
     /// Stores the permission policy value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

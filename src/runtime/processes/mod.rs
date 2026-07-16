@@ -72,6 +72,8 @@ use transactions::{
 /// process metadata.
 #[derive(Debug, Default)]
 pub(in crate::runtime) struct RuntimeProcessComponent {
+    /// Live terminal and shell settings applied to process state.
+    settings: RuntimeProcessSettings,
     /// Live pane process handles and their PTY lifecycle manager.
     pane_processes: PaneProcessManager,
     /// Best-known current working directory for each pane process.
@@ -112,6 +114,34 @@ pub(in crate::runtime) struct RuntimeProcessComponent {
     pane_closing: BTreeSet<String>,
 }
 
+/// Owns terminal configuration that controls pane process and screen behavior.
+///
+/// These values are parsed together during config application and must be
+/// replaced together so newly spawned screens, existing history buffers, and
+/// process environments observe one coherent settings generation.
+#[derive(Debug, Clone)]
+struct RuntimeProcessSettings {
+    /// Maximum retained history lines for each pane screen.
+    terminal_history_limit: usize,
+    /// History lines removed in each overflow rotation batch.
+    terminal_history_rotate_lines: usize,
+    /// TERM value exported to pane processes and attached clients.
+    terminal_term: String,
+    /// Hidden shell output tail lines retained in action previews.
+    terminal_shell_output_preview_lines: usize,
+}
+
+impl Default for RuntimeProcessSettings {
+    fn default() -> Self {
+        Self {
+            terminal_history_limit: mez_terminal::DEFAULT_HISTORY_LIMIT,
+            terminal_history_rotate_lines: mez_terminal::DEFAULT_HISTORY_ROTATE_LINES,
+            terminal_term: mez_terminal::DEFAULT_PANE_TERM.to_string(),
+            terminal_shell_output_preview_lines: 5,
+        }
+    }
+}
+
 impl RuntimeProcessComponent {
     /// Builds process ownership around the manager supplied by runtime construction.
     pub(in crate::runtime) fn with_pane_processes(pane_processes: PaneProcessManager) -> Self {
@@ -123,6 +153,41 @@ impl RuntimeProcessComponent {
 }
 
 impl RuntimeSessionService {
+    /// Returns the active pane-screen history limit.
+    pub(crate) fn terminal_history_limit(&self) -> usize {
+        self.process.settings.terminal_history_limit
+    }
+
+    /// Returns the active pane-screen history rotation batch size.
+    pub(in crate::runtime) fn terminal_history_rotate_lines(&self) -> usize {
+        self.process.settings.terminal_history_rotate_lines
+    }
+
+    /// Returns the TERM value exported to pane processes and clients.
+    pub(in crate::runtime) fn terminal_term(&self) -> &str {
+        &self.process.settings.terminal_term
+    }
+
+    /// Applies one parsed generation of terminal process settings.
+    pub(in crate::runtime) fn apply_process_terminal_settings(
+        &mut self,
+        history_limit: usize,
+        history_rotate_lines: usize,
+        terminal_term: String,
+        terminal_emoji_width: mez_terminal::TerminalEmojiWidth,
+        shell_output_preview_lines: usize,
+    ) -> Result<()> {
+        self.configure_pane_screen_history(history_limit, history_rotate_lines)?;
+        self.process.settings = RuntimeProcessSettings {
+            terminal_history_limit: history_limit,
+            terminal_history_rotate_lines: history_rotate_lines,
+            terminal_term,
+            terminal_shell_output_preview_lines: shell_output_preview_lines,
+        };
+        mez_terminal::set_terminal_emoji_width(terminal_emoji_width);
+        Ok(())
+    }
+
     /// Returns all modeled pane screens for whole-layout presentation.
     pub(in crate::runtime) fn pane_screens(
         &self,
@@ -540,16 +605,16 @@ impl RuntimeSessionService {
             descriptor.pane_id.to_string(),
             TerminalScreen::new_with_history_config(
                 descriptor.size,
-                self.terminal_history_limit,
-                self.terminal_history_rotate_lines,
+                self.process.settings.terminal_history_limit,
+                self.process.settings.terminal_history_rotate_lines,
             )?,
         );
         self.process.pane_transaction_osc_screens.insert(
             descriptor.pane_id.to_string(),
             TerminalScreen::new_with_history_config(
                 descriptor.size,
-                self.terminal_history_limit,
-                self.terminal_history_rotate_lines,
+                self.process.settings.terminal_history_limit,
+                self.process.settings.terminal_history_rotate_lines,
             )?,
         );
         self.process
@@ -991,7 +1056,7 @@ impl RuntimeSessionService {
             &self.session.id,
             &descriptor.window_id,
             &descriptor.pane_id,
-            &self.terminal_term,
+            &self.process.settings.terminal_term,
         )?;
         let launch =
             mez_mux::process::PaneProcessLaunch::new(self.session.shell.path().to_path_buf());
@@ -1013,16 +1078,16 @@ impl RuntimeSessionService {
             descriptor.pane_id.to_string(),
             TerminalScreen::new_with_history_config(
                 descriptor.size,
-                self.terminal_history_limit,
-                self.terminal_history_rotate_lines,
+                self.process.settings.terminal_history_limit,
+                self.process.settings.terminal_history_rotate_lines,
             )?,
         );
         self.process.pane_transaction_osc_screens.insert(
             descriptor.pane_id.to_string(),
             TerminalScreen::new_with_history_config(
                 descriptor.size,
-                self.terminal_history_limit,
-                self.terminal_history_rotate_lines,
+                self.process.settings.terminal_history_limit,
+                self.process.settings.terminal_history_rotate_lines,
             )?,
         );
         self.process

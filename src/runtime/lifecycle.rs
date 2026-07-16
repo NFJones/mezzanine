@@ -68,7 +68,7 @@ impl RuntimeSessionService {
         let terminal = ClientTerminalDescriptor {
             columns: terminal_size.columns,
             rows: terminal_size.rows,
-            term: self.terminal_term.clone(),
+            term: self.terminal_term().to_string(),
             features: Vec::new(),
         };
         let client_id =

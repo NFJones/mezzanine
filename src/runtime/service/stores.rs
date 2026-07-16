@@ -80,29 +80,6 @@ impl RuntimeSessionService {
         &mut self.message_service
     }
 
-    /// Runs the terminal history limit operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn terminal_history_limit(&self) -> usize {
-        self.terminal_history_limit
-    }
-
-    /// Returns the configured history overflow rotation batch size.
-    pub fn terminal_history_rotate_lines(&self) -> usize {
-        self.terminal_history_rotate_lines
-    }
-
-    /// Runs the terminal term operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn terminal_term(&self) -> &str {
-        &self.terminal_term
-    }
-
     /// Runs the record pane transcript ref operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

@@ -8,7 +8,7 @@ impl RuntimeSessionService {
         pane_id: &str,
         bytes: &[u8],
     ) {
-        let output_preview_lines = self.terminal_shell_output_preview_lines;
+        let output_preview_lines = self.process.settings.terminal_shell_output_preview_lines;
         let mut apply_patch_transport_updates = Vec::new();
         let mut status_line_updates = Vec::new();
         for (marker, transaction) in self.running_shell_transactions.iter_mut() {

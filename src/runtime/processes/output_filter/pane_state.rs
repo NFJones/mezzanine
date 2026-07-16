@@ -180,8 +180,8 @@ impl RuntimeSessionService {
                 .entry(output.pane_id.clone())
                 .or_insert(TerminalScreen::new_with_history_config(
                     descriptor_size,
-                    self.terminal_history_limit,
-                    self.terminal_history_rotate_lines,
+                    self.process.settings.terminal_history_limit,
+                    self.process.settings.terminal_history_rotate_lines,
                 )?);
             let previous_activity_events = screen.activity_events();
             let previous_bell_events = screen.bell_events();
@@ -694,8 +694,8 @@ impl RuntimeSessionService {
                     pane_id.to_string(),
                     TerminalScreen::new_with_history_config(
                         size,
-                        self.terminal_history_limit,
-                        self.terminal_history_rotate_lines,
+                        self.process.settings.terminal_history_limit,
+                        self.process.settings.terminal_history_rotate_lines,
                     )?,
                 );
                 self.process

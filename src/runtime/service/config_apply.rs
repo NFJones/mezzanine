@@ -231,6 +231,8 @@ impl RuntimeSessionService {
         let presentation_settings =
             RuntimePresentationSettings::from_config(&structured, &effective)?;
         let terminal_emoji_width = runtime_terminal_emoji_width_from_config(&structured)?;
+        let terminal_shell_output_preview_lines =
+            runtime_terminal_shell_output_preview_lines_from_config(&structured)?;
         let host_clipboard = runtime_host_clipboard_from_config(&structured)?;
         let audit_log = if runtime_audit_config_present(&structured) {
             Some(runtime_audit_log_from_config(
@@ -240,16 +242,16 @@ impl RuntimeSessionService {
         } else {
             None
         };
-        self.terminal_history_limit = terminal_history_limit;
-        self.terminal_history_rotate_lines = terminal_history_rotate_lines;
         if let Some(store) = self.agent_transcript_store.as_mut() {
             store.set_saved_sessions_limit(saved_agent_session_limit)?;
         }
-        self.terminal_term = terminal_term;
-        self.terminal_emoji_width = terminal_emoji_width;
-        mez_terminal::set_terminal_emoji_width(terminal_emoji_width);
-        self.terminal_shell_output_preview_lines =
-            runtime_terminal_shell_output_preview_lines_from_config(&structured)?;
+        self.apply_process_terminal_settings(
+            terminal_history_limit,
+            terminal_history_rotate_lines,
+            terminal_term,
+            terminal_emoji_width,
+            terminal_shell_output_preview_lines,
+        )?;
         self.presentation.apply_settings(presentation_settings);
         self.set_host_clipboard(host_clipboard);
         match audit_log {
@@ -257,10 +259,6 @@ impl RuntimeSessionService {
             Some(None) => self.clear_audit_log(),
             None => {}
         }
-        self.configure_pane_screen_history(
-            self.terminal_history_limit,
-            self.terminal_history_rotate_lines,
-        )?;
         let max_concurrent_agents = runtime_max_concurrent_agents_from_config(&structured)?;
         self.max_subagent_panes_per_window =
             runtime_max_subagent_panes_per_window_from_config(&structured)?;
@@ -360,9 +358,9 @@ impl RuntimeSessionService {
         Ok(RuntimeConfigApplyReport {
             applied_layers: effective.applied_layers().to_vec(),
             skipped_layers: effective.skipped_layers().to_vec(),
-            terminal_history_limit: self.terminal_history_limit,
-            terminal_history_rotate_lines: self.terminal_history_rotate_lines,
-            terminal_term: self.terminal_term.clone(),
+            terminal_history_limit: self.terminal_history_limit(),
+            terminal_history_rotate_lines: self.terminal_history_rotate_lines(),
+            terminal_term: self.terminal_term().to_string(),
             window_frames_enabled: self.window_frames_enabled(),
             pane_frames_enabled: self.pane_frames_enabled(),
             max_concurrent_agents,

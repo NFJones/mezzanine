@@ -256,8 +256,8 @@ impl RuntimeSessionService {
                     if self.pane_screen(pane_id).is_none() {
                         let screen = TerminalScreen::new_with_history_config(
                             descriptor.size,
-                            self.terminal_history_limit,
-                            self.terminal_history_rotate_lines,
+                            self.terminal_history_limit(),
+                            self.terminal_history_rotate_lines(),
                         )?;
                         self.set_pane_screen(pane_id.to_string(), screen);
                     }
@@ -592,8 +592,8 @@ impl RuntimeSessionService {
         if self.pane_screen(pane_id).is_none() {
             let screen = TerminalScreen::new_with_history_config(
                 descriptor.size,
-                self.terminal_history_limit,
-                self.terminal_history_rotate_lines,
+                self.terminal_history_limit(),
+                self.terminal_history_rotate_lines(),
             )?;
             self.set_pane_screen(pane_id.to_string(), screen);
         }
@@ -664,8 +664,8 @@ impl RuntimeSessionService {
         if self.pane_screen(pane_id).is_none() {
             let screen = TerminalScreen::new_with_history_config(
                 descriptor.size,
-                self.terminal_history_limit,
-                self.terminal_history_rotate_lines,
+                self.terminal_history_limit(),
+                self.terminal_history_rotate_lines(),
             )?;
             self.set_pane_screen(pane_id.to_string(), screen);
         }
@@ -733,8 +733,8 @@ impl RuntimeSessionService {
         if self.pane_screen(pane_id).is_none() {
             let screen = TerminalScreen::new_with_history_config(
                 descriptor.size,
-                self.terminal_history_limit,
-                self.terminal_history_rotate_lines,
+                self.terminal_history_limit(),
+                self.terminal_history_rotate_lines(),
             )?;
             self.set_pane_screen(pane_id.to_string(), screen);
         }
