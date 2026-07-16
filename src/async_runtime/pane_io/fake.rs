@@ -1,6 +1,9 @@
 //! Deterministic fake pane backend used by async-runtime tests.
 
-use super::*;
+use super::{
+    AsyncPaneForegroundProcess, AsyncPaneIoFuture, AsyncPaneProcessIo, MezError, ProcessEvent,
+    Result, Size, VecDeque,
+};
 
 /// Deterministic fake backend for async pane driver tests.
 #[cfg(test)]

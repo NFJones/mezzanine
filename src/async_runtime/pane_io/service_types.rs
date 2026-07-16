@@ -1,6 +1,6 @@
 //! Configuration and reports for pane workers and supervisors.
 
-use super::*;
+use super::{Duration, MezError, Result, RuntimeLifecycleState};
 
 /// Configuration for one pane I/O side-effect worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

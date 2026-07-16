@@ -1,6 +1,9 @@
 //! Generic async pane backend contract and per-pane event driver.
 
-use super::*;
+use super::{MezError, PaneEvent, ProcessEvent, Result, RuntimeEvent, Size};
+use std::future::Future;
+use std::path::PathBuf;
+use std::pin::Pin;
 
 /// Boxed future returned by async pane I/O trait methods.
 pub type AsyncPaneIoFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;

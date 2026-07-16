@@ -1,6 +1,6 @@
 //! Pane I/O configuration invariants.
 
-use super::*;
+use super::{Duration, PANE_INPUT_WRITE_READY_TIMEOUT};
 
 /// Verifies async pane-input writes allow ten seconds for PTY writability
 /// before reporting a bounded failure.

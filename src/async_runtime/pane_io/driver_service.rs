@@ -1,6 +1,9 @@
 //! Compatibility service loop for a standalone pane driver.
 
-use super::*;
+use super::{
+    AsyncPaneProcessDriver, AsyncPaneProcessIo, AsyncRuntimeSessionHandle, Duration, MezError,
+    Result, RuntimeEventBatch, sleep,
+};
 
 /// Configuration for a pane process driver service loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
