@@ -6,6 +6,7 @@
 //! so mouse targeting uses the same layout calculations as drawing.
 
 use super::*;
+use mez_mux::render::PaneFrameRowLayout;
 
 /// Renders the unstyled top group bar when more than one group exists.
 pub(super) fn group_frame_text(
@@ -235,7 +236,7 @@ pub(super) fn styled_pane_frame_line(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn pane_frame_right_status_style_spans(
-    layout: &PaneFrameRowLayout,
+    layout: &PaneFrameRowLayout<&'static str>,
     column_offset: usize,
     frame_context: &TerminalFrameContext,
     ui_theme: &UiTheme,
@@ -755,12 +756,6 @@ pub(super) fn render_pane_frame_text(
     pane_frame_row_layout(window, pane, frame_context, template, width, ' ').text
 }
 
-/// Carries Pane Frame Row Layout state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-pub(super) type PaneFrameRowLayout = mez_mux::render::PaneFrameRowLayout<&'static str>;
-
 /// Carries Pane Frame Right Status Segment state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -791,7 +786,7 @@ pub(super) fn pane_frame_row_layout(
     template: &str,
     width: usize,
     fill: char,
-) -> PaneFrameRowLayout {
+) -> PaneFrameRowLayout<&'static str> {
     let text = render_pane_frame_template(window, pane, frame_context, template);
     let right_status = pane_frame_right_status(window, pane, frame_context, template);
     compose_pane_frame_row(&text, right_status, width, fill)
@@ -1826,7 +1821,7 @@ pub(super) fn write_pane_frame_layout_cells(
     pane: &mez_mux::layout::Pane,
     frame_context: &TerminalFrameContext,
     template: &str,
-) -> PaneFrameRowLayout {
+) -> PaneFrameRowLayout<&'static str> {
     let layout = pane_frame_row_layout(
         window,
         pane,

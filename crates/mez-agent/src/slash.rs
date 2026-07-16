@@ -228,5 +228,52 @@ mod tests {
                 .iter()
                 .any(|spec| spec.name == "copy-context")
         );
+
+        let commands = baseline_slash_commands()
+            .into_iter()
+            .map(|command| command.name)
+            .collect::<std::collections::BTreeSet<_>>();
+        for required in [
+            "help",
+            "permissions",
+            "approval",
+            "approve",
+            "trust",
+            "directive",
+            "list-sessions",
+            "list-skills",
+            "copy-context",
+            "copy-trace-log",
+            "copy-patches",
+            "clear",
+            "compact",
+            "copy",
+            "diff",
+            "exit",
+            "init",
+            "thinking",
+            "logout",
+            "list-mcp",
+            "memory",
+            "model",
+            "loop",
+            "stop",
+            "fork",
+            "resume",
+            "new",
+            "status",
+            "debug-config",
+            "statusline",
+            "title",
+            "log-level",
+        ] {
+            assert!(commands.contains(required), "missing {required}");
+        }
+        for removed in ["fast", "agent", "mention", "plan", "ps", "review", "apps"] {
+            assert!(
+                !commands.contains(removed),
+                "removed command must stay absent: {removed}"
+            );
+        }
     }
 }

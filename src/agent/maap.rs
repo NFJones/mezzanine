@@ -6,45 +6,7 @@
 
 use super::{AgentTurnRecord, McpPromptTool, MezError, Result};
 use mez_agent::validate_agent_authored_shell_command;
-use mez_agent::{
-    ActionContentBlock, MaapBatch, MaapContractError, MaapValidationContext,
-    parse_fenced_maap_action_batch as parse_fenced_maap_action_batch_contract,
-    parse_fenced_maap_action_batch_for_turn as parse_fenced_maap_action_batch_for_turn_contract,
-    parse_maap_action_batch_json as parse_maap_action_batch_json_contract,
-    parse_maap_action_batch_json_for_turn as parse_maap_action_batch_json_for_turn_contract,
-};
-
-/// Parses the optional fenced MAAP batch and projects lower contract failures
-/// into the product error used by concrete provider adapters.
-pub fn parse_fenced_maap_action_batch(raw_text: &str) -> Result<Option<MaapBatch>> {
-    parse_fenced_maap_action_batch_contract(raw_text).map_err(MezError::from)
-}
-
-/// Parses the optional fenced MAAP batch with active-turn identity defaults.
-pub fn parse_fenced_maap_action_batch_for_turn(
-    raw_text: &str,
-    turn_id: &str,
-    agent_id: &str,
-) -> Result<Option<MaapBatch>> {
-    parse_fenced_maap_action_batch_for_turn_contract(raw_text, turn_id, agent_id)
-        .map_err(MezError::from)
-}
-
-/// Parses one MAAP JSON batch and projects lower contract failures into the
-/// product error used by concrete provider adapters.
-pub fn parse_maap_action_batch_json(batch_json: &str) -> Result<MaapBatch> {
-    parse_maap_action_batch_json_contract(batch_json).map_err(MezError::from)
-}
-
-/// Parses one MAAP JSON batch with active-turn identity defaults.
-pub fn parse_maap_action_batch_json_for_turn(
-    batch_json: &str,
-    turn_id: &str,
-    agent_id: &str,
-) -> Result<MaapBatch> {
-    parse_maap_action_batch_json_for_turn_contract(batch_json, turn_id, agent_id)
-        .map_err(MezError::from)
-}
+use mez_agent::{ActionContentBlock, MaapBatch, MaapContractError, MaapValidationContext};
 
 /// Adds product-owned validation inputs to the canonical MAAP batch contract.
 pub(crate) trait MaapBatchProductValidation {

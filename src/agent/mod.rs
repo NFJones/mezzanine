@@ -57,7 +57,6 @@ pub mod semantic;
 pub mod slash;
 use context::assemble_model_request;
 use maap::{action_content_blocks_from_json_or_text, json_escape, validate_non_empty};
-use maap::{parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn};
 use mez_agent::action_text_content_blocks;
 use mez_agent::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentLogLevel,

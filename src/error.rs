@@ -154,6 +154,12 @@ impl From<mez_agent::AgentShellValidationError> for MezError {
     }
 }
 
+impl From<mez_agent::SlashCommandParseError> for MezError {
+    fn from(error: mez_agent::SlashCommandParseError) -> Self {
+        Self::invalid_args(error.to_string())
+    }
+}
+
 impl From<mez_agent::ReadinessError> for MezError {
     fn from(error: mez_agent::ReadinessError) -> Self {
         match error.kind() {
@@ -269,6 +275,18 @@ impl From<mez_agent::DeepSeekResponseError> for MezError {
 impl From<mez_agent::ProviderModelCatalogParseError> for MezError {
     fn from(error: mez_agent::ProviderModelCatalogParseError) -> Self {
         Self::invalid_state(error.message())
+    }
+}
+
+impl From<mez_agent::ProviderApiCompatibilityError> for MezError {
+    fn from(error: mez_agent::ProviderApiCompatibilityError) -> Self {
+        Self::config(error.to_string())
+    }
+}
+
+impl From<mez_agent::NetworkActionPlanError> for MezError {
+    fn from(error: mez_agent::NetworkActionPlanError) -> Self {
+        Self::invalid_args(error.message())
     }
 }
 

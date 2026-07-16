@@ -730,7 +730,7 @@ impl RuntimeSessionService {
                     model_profile.provider
                 ))
             })?;
-        let api = effective_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
+        let api = resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
         self.append_credential_access_audit(
             &model_profile.provider,
             &provider_config.auth_profile,

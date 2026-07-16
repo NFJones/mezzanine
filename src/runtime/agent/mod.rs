@@ -55,7 +55,7 @@ use crate::agent::provider::ModelProvider;
 use crate::agent::provider::provider_error_retry_class;
 use crate::agent::provider::{
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
-    effective_provider_api, openai_compatible_provider_from_auth_store_with_provider_options,
+    openai_compatible_provider_from_auth_store_with_provider_options,
     openai_responses_provider_from_auth_store_with_provider_options,
 };
 use crate::agent::semantic::{
@@ -68,6 +68,7 @@ use crate::config::{
 };
 #[cfg(test)]
 use mez_agent::AgentTurnLedger;
+use mez_agent::resolve_provider_api;
 use mez_agent::semantic_patch_planning::{
     ApplyPatchTransactionPhase, apply_patch_error_plan, apply_patch_read_plan_for_paths,
     apply_patch_transaction_phase,
@@ -103,9 +104,20 @@ mod skills;
 mod subagents;
 mod trace;
 
-use mez_agent::outcome::*;
-pub(in crate::runtime) use mez_agent::outcome::{
-    runtime_unrecovered_failure_output_lines, runtime_validate_provider_completion_execution,
+use mez_agent::outcome::{
+    RuntimeSkillActionContext, runtime_action_result_error_code,
+    runtime_action_result_has_error_code, runtime_action_result_is_aggregated_loop_guard_failure,
+    runtime_action_result_is_feedback_candidate, runtime_action_result_is_terminal_failure,
+    runtime_action_status_name, runtime_action_type_is_shell_backed,
+    runtime_execution_can_feed_failure_to_model,
+    runtime_execution_uses_unbounded_apply_patch_recovery, runtime_failure_feedback_attempt_keys,
+    runtime_failure_feedback_evidence_guidance, runtime_failure_feedback_loop_guard_aggregate_note,
+    runtime_failure_feedback_repeat_guidance, runtime_failure_feedback_specific_guidance,
+    runtime_failure_feedback_status_line, runtime_loop_guard_failure_label,
+    runtime_loop_guard_failure_summary_line, runtime_provider_audit_error_message,
+    runtime_skill_action_context_from_blocks, runtime_unrecovered_action_failure_output,
+    runtime_unrecovered_failure_output_lines, runtime_unrecovered_failure_reason,
+    runtime_validate_provider_completion_execution, runtime_validate_provider_completion_identity,
 };
 use mez_agent::progress::{
     PROGRESS_SAY_LEDGER_LABEL as RUNTIME_PROGRESS_SAY_LEDGER_LABEL,
@@ -122,10 +134,25 @@ use mez_agent::progress::{
     rationale_ledger_content as runtime_rationale_ledger_content,
 };
 use mez_agent::subagent_task_output_for_execution;
-use outcome::*;
-use provider_events::*;
-use subagents::*;
-use trace::*;
+use outcome::{
+    normalize_agent_user_visible_text, runtime_action_result_is_suppressed_duplicate_file_mutation,
+    runtime_action_supports_auto_allow, runtime_agent_action_error_suffix,
+    runtime_agent_action_has_runtime_visible_effect, runtime_agent_action_outcome_line,
+    runtime_agent_action_rationale_repeats_visible_batch_text,
+    runtime_agent_action_rationale_repeats_visible_summary,
+    runtime_agent_action_rejects_duplicate_success, runtime_agent_action_summary,
+    runtime_agent_batch_rationale_repeats_visible_batch_text,
+    runtime_agent_batch_visible_action_texts, runtime_agent_context_command,
+    runtime_agent_execution_failure_error, runtime_agent_finished_footer_line,
+    runtime_agent_pending_approval_log_line, runtime_agent_shell_status,
+    runtime_agent_terminal_preview, runtime_agent_turn_steering_context_content,
+};
+use provider_events::{runtime_provider_event_error, runtime_task_state_suffix};
+use subagents::runtime_agent_pane_id;
+use trace::{
+    runtime_maap_message_content_type, runtime_spawn_json_agent_and_turn,
+    runtime_subagent_display_label, runtime_subagent_result_status_label,
+};
 
 // Agent turn execution, provider polling, action dispatch, and approvals.
 

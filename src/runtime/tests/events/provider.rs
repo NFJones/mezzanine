@@ -74,7 +74,8 @@ fn runtime_provider_completion_accepts_controller_failure_summary_state() {
         terminal_state: AgentTurnState::Failed,
     };
 
-    super::agent::runtime_validate_provider_completion_execution(&turn, &mut execution).unwrap();
+    mez_agent::outcome::runtime_validate_provider_completion_execution(&turn, &mut execution)
+        .unwrap();
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
@@ -141,7 +142,8 @@ fn runtime_provider_completion_accepts_terminal_maap_validation_failure_state() 
         terminal_state: AgentTurnState::Failed,
     };
 
-    super::agent::runtime_validate_provider_completion_execution(&turn, &mut execution).unwrap();
+    mez_agent::outcome::runtime_validate_provider_completion_execution(&turn, &mut execution)
+        .unwrap();
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
@@ -190,7 +192,8 @@ fn runtime_provider_completion_rejects_nonterminal_missing_batch_state() {
         terminal_state: AgentTurnState::Running,
     };
 
-    super::agent::runtime_validate_provider_completion_execution(&turn, &mut execution).unwrap();
+    mez_agent::outcome::runtime_validate_provider_completion_execution(&turn, &mut execution)
+        .unwrap();
 
     assert_eq!(execution.terminal_state, AgentTurnState::Failed);
     assert!(execution.final_turn);
@@ -249,8 +252,9 @@ fn runtime_provider_completion_rejects_empty_nonfinal_batch_state() {
         terminal_state: AgentTurnState::Running,
     };
 
-    let error = super::agent::runtime_validate_provider_completion_execution(&turn, &mut execution)
-        .unwrap_err();
+    let error =
+        mez_agent::outcome::runtime_validate_provider_completion_execution(&turn, &mut execution)
+            .unwrap_err();
 
     assert!(
         error
@@ -787,7 +791,7 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
         &success_action,
         vec!["provider document body".to_string()],
         Some(
-            crate::agent::network::network_action_structured_content_json(
+            mez_agent::network_action_structured_content_json(
                 &success_action,
                 serde_json::Value::Null,
                 serde_json::json!({
@@ -813,7 +817,7 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
     )
     .unwrap();
     failed_result.structured_content_json = Some(
-        crate::agent::network::network_action_structured_content_json(
+        mez_agent::network_action_structured_content_json(
             &failed_action,
             serde_json::Value::Null,
             serde_json::json!({

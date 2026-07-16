@@ -210,7 +210,7 @@ pub(super) fn runtime_agent_shell_markdown_overlay_content(
         selections: Vec::new(),
     };
     for rendered in render_command_markdown_body_lines(markdown, ui_theme) {
-        let AgentRenderedLine {
+        let RichTextLine {
             display,
             mut style_spans,
             copy_text,

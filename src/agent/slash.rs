@@ -5,14 +5,12 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AgentLogLevel, AgentShellStore, AgentShellVisibility, MezError, Result,
-    agent_shell_help_display, agent_shell_mcp_display, agent_shell_permissions_display,
-    agent_shell_status_display,
+    AgentLogLevel, AgentShellStore, AgentShellVisibility, Result, agent_shell_help_display,
+    agent_shell_mcp_display, agent_shell_permissions_display, agent_shell_status_display,
 };
 use mez_agent::{
     AgentShellMcpSummary, AgentShellPermissionSummary, AgentShellSessionError,
-    AgentShellSessionErrorKind, AgentShellSessionResult, SlashCommandInvocation,
-    parse_slash_command as parse_agent_slash_command,
+    AgentShellSessionErrorKind, AgentShellSessionResult, parse_slash_command,
 };
 
 // Agent shell slash command registry and dispatch.
@@ -76,15 +74,6 @@ pub enum AgentShellCommandOutcome {
         /// boundary and should remain aligned with the owning type invariant.
         reason: String,
     },
-}
-
-/// Runs the parse slash command operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommandInvocation>> {
-    parse_agent_slash_command(input).map_err(|error| MezError::invalid_args(error.to_string()))
 }
 
 /// Runs the execute agent shell command operation for this subsystem.
@@ -215,7 +204,7 @@ fn execute_agent_shell_command_with_context_inner(
     input: &str,
     context: AgentShellRuntimeContext<'_>,
 ) -> AgentShellSessionResult<Option<AgentShellCommandOutcome>> {
-    let Some(invocation) = parse_agent_slash_command(input)
+    let Some(invocation) = parse_slash_command(input)
         .map_err(|error| AgentShellSessionError::invalid_args(error.to_string()))?
     else {
         return Ok(None);

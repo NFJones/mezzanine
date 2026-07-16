@@ -43,7 +43,13 @@ use mez_agent::AgentActionPayload;
 use mez_agent::semantic_patch_planning::{
     ApplyPatchTransactionPhase, apply_patch_transaction_phase,
 };
-use mez_agent::shell_observation::*;
+use mez_agent::shell_observation::{
+    agent_shell_transaction_bytes_before_end_marker, agent_shell_transaction_observation_bytes,
+    find_byte_subsequence, latest_agent_shell_transaction_output_lines,
+    mez_wrapper_echo_line_is_hidden, mez_wrapper_echo_line_is_possible_prefix,
+    mez_wrapper_echo_line_visible_bytes, mez_wrapper_filter_bytes_may_contain_boilerplate,
+    renderable_shell_transaction_bytes,
+};
 use mez_agent::{
     DEFAULT_BOOTSTRAP_TIMEOUT_MS, bootstrap_script_for_classification, parse_bootstrap_env_output,
     readiness_probe_command_for_classification,
@@ -51,7 +57,11 @@ use mez_agent::{
 use mez_mux::process::PaneProcess;
 use mez_terminal::TerminalStyledLine;
 
-use transactions::*;
+use transactions::{
+    RUNTIME_HIDDEN_SHELL_RENDER_RETENTION_POLLS, RUNTIME_MEZ_OSC_PREFIX,
+    RUNTIME_MEZ_OSC_SCAN_LIMIT_BYTES, RUNTIME_SHELL_WRAPPER_FILTER_RECENT_COMMAND_LIMIT,
+    RUNTIME_SHELL_WRAPPER_FILTER_RETENTION_POLLS, runtime_running_shell_transaction_kind_name,
+};
 
 // Pane process lifecycle and PTY synchronization.
 

@@ -94,9 +94,32 @@ use input::{
     runtime_display_overlay_input_action, runtime_selector_input_action,
     runtime_selector_step_index,
 };
-use mez_mux::render::{push_or_extend_style_span, terminal_color_luminance};
-use overlay::*;
-use presentation::*;
+use mez_mux::render::{RichTextLine, push_or_extend_style_span, terminal_color_luminance};
+#[cfg(test)]
+use mez_mux::render::{RichTextLineKind, wrap_rich_text_line_to_width};
+use overlay::{
+    RuntimeAgentShellDisplayOutput, agent_command_link_at_line_column,
+    agent_shell_mcp_display_state_name, default_runtime_agent_prompt_input,
+    runtime_agent_shell_display_output, runtime_agent_shell_visibility,
+    runtime_command_display_overlay_content, runtime_command_display_should_open_overlay,
+    runtime_pane_agent_selector_rendition, runtime_pane_agent_status_selector_keep_active_visible,
+    runtime_pane_agent_status_selector_layout, runtime_primary_prompt_input, runtime_selector_line,
+};
+#[cfg(test)]
+use overlay::{runtime_agent_shell_markdown_overlay_content, runtime_human_readable_display_lines};
+use presentation::{
+    AgentTerminalPresentationStyle, agent_display_lines_are_error,
+    agent_display_lines_are_low_level_status, agent_prompt_error_display_lines,
+    overlay_styled_lines, render_command_markdown_body_lines, sanitized_agent_terminal_line,
+    wrap_agent_terminal_text,
+};
+#[cfg(test)]
+use presentation::{
+    agent_action_execution_display_header, agent_action_result_uses_diff_preview,
+    agent_thinking_display_lines_for_width, command_preview_terminal_rendered_lines,
+    readable_agent_diff_display_lines, readable_agent_diff_display_lines_for_width,
+    rendered_line_rendition_at, wrapped_prefixed_agent_terminal_lines,
+};
 use time::{runtime_human_system_uptime, runtime_local_datetime_seconds_string};
 
 // Attached terminal input application and client view rendering.
@@ -183,7 +206,7 @@ impl MouseSelectionEdge {
 mod tests {
     use super::super::service_state::RuntimeDisplayOverlay;
     use super::{
-        AgentRenderedLine, AgentRenderedLineKind, RuntimeSessionService,
+        RichTextLine, RichTextLineKind, RuntimeSessionService,
         agent_action_execution_display_header, agent_action_result_uses_diff_preview,
         agent_thinking_display_lines_for_width, command_preview_terminal_rendered_lines,
         overlay_rendered_line_style_spans, overlay_rendered_selection_start,
@@ -191,7 +214,7 @@ mod tests {
         render_command_markdown_body_lines, rendered_line_rendition_at,
         runtime_agent_shell_markdown_overlay_content, runtime_command_display_overlay_content,
         runtime_human_readable_display_lines, runtime_pane_agent_selector_rendition,
-        wrap_agent_rendered_line_to_width, wrap_agent_terminal_text,
+        wrap_agent_terminal_text, wrap_rich_text_line_to_width,
         wrapped_prefixed_agent_terminal_lines,
     };
     use crate::terminal::PaneAgentStatusField;
@@ -647,12 +670,12 @@ mod tests {
     /// in agent transcript panes.
     #[test]
     fn markdown_presentation_wraps_at_space_with_continuation_indent() {
-        let wrapped = wrap_agent_rendered_line_to_width(
-            AgentRenderedLine {
+        let wrapped = wrap_rich_text_line_to_width(
+            RichTextLine {
                 display: "mez> alpha beta gamma".to_string(),
                 style_spans: Vec::new(),
                 copy_text: None,
-                kind: AgentRenderedLineKind::Normal,
+                kind: RichTextLineKind::Normal,
             },
             18,
         )
@@ -673,12 +696,12 @@ mod tests {
     /// soft wrapping to handle the long token.
     #[test]
     fn markdown_presentation_preserves_unbroken_token_after_prompt() {
-        let wrapped = wrap_agent_rendered_line_to_width(
-            AgentRenderedLine {
+        let wrapped = wrap_rich_text_line_to_width(
+            RichTextLine {
                 display: "mez> aaaaaaaaaaaaaaaa".to_string(),
                 style_spans: Vec::new(),
                 copy_text: None,
-                kind: AgentRenderedLineKind::Normal,
+                kind: RichTextLineKind::Normal,
             },
             12,
         )
@@ -696,12 +719,12 @@ mod tests {
     /// emitting a row that exceeds the segment before any progress is possible.
     #[test]
     fn markdown_presentation_replaces_overwide_leading_grapheme() {
-        let wrapped = wrap_agent_rendered_line_to_width(
-            AgentRenderedLine {
+        let wrapped = wrap_rich_text_line_to_width(
+            RichTextLine {
                 display: "漢abc".to_string(),
                 style_spans: Vec::new(),
                 copy_text: None,
-                kind: AgentRenderedLineKind::Normal,
+                kind: RichTextLineKind::Normal,
             },
             1,
         )

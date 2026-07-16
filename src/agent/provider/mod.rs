@@ -6,7 +6,6 @@
 
 use super::{
     BTreeMap, ExposeSecret, MaapBatch, MezError, ModelInteractionKind, Result, SecretString,
-    parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn,
     validate_non_empty,
 };
 use std::future::Future;
@@ -39,17 +38,18 @@ pub use http::{AsyncProviderHttpTransport, ReqwestProviderHttpTransport};
 use mez_agent::provider_quota_usage_from_headers;
 use mez_agent::{
     DEFAULT_PROVIDER_TIMEOUT_MS, ModelRequest, ModelResponse, ModelTokenUsage,
-    ProviderApiCompatibility, ProviderAuthMetadata, ProviderCredentialKind,
-    ProviderCredentialSource, ProviderHttpRequest, ProviderHttpResponse, ProviderModelCatalog,
+    ProviderAuthMetadata, ProviderCredentialKind, ProviderCredentialSource, ProviderHttpRequest,
+    ProviderHttpResponse, ProviderModelCatalog,
 };
 use mez_agent::{
     openai_models_endpoint_for_responses_endpoint, openai_responses_endpoint_for_base_url,
     provider_catalog_reasoning_levels,
 };
 use mez_agent::{openai_responses_request_body_with_stream, parse_openai_responses_provider_body};
+use mez_agent::{parse_fenced_maap_action_batch_for_turn, parse_maap_action_batch_json_for_turn};
 use mez_agent::{
     provider_error_detail as openai_provider_error_detail,
-    provider_failure_json as openai_provider_failure_json, resolve_provider_api,
+    provider_failure_json as openai_provider_failure_json,
 };
 use openai_chat_completions::OpenAiChatCompletionsDialect;
 
@@ -61,10 +61,6 @@ pub const OPENAI_PROJECT_HEADER: &str = "OpenAI-Project";
 /// ChatGPT account selection header required by ChatGPT-backed requests.
 pub const CHATGPT_ACCOUNT_ID_HEADER: &str = "ChatGPT-Account-ID";
 
-/// Resolves an optional configured API id against one provider kind.
-pub fn effective_provider_api(kind: &str, api: Option<&str>) -> Result<ProviderApiCompatibility> {
-    resolve_provider_api(kind, api).map_err(|error| MezError::config(error.to_string()))
-}
 /// Defines the Model Provider behavior contract for this subsystem.
 ///
 /// Implementors provide the concrete I/O or state transition boundary

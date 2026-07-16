@@ -187,6 +187,13 @@ ROOT_FORBIDDEN_DECLARATIONS = {
     "fn parse_agent_unified_diff_sections": "unified-diff parsing",
     "fn append_agent_syntax_spans": "syntax-highlight span generation",
     "fn compose_prompt_region(": "neutral prompt-region composition",
+    "fn parse_slash_command(": "canonical slash-command parsing",
+    "fn effective_provider_api(": "provider API compatibility resolution",
+    "fn parse_fenced_maap_action_batch(": "canonical MAAP parsing",
+    "fn parse_fenced_maap_action_batch_for_turn(": "canonical turn-aware MAAP parsing",
+    "fn parse_maap_action_batch_json(": "canonical MAAP JSON parsing",
+    "fn parse_maap_action_batch_json_for_turn(": "canonical turn-aware MAAP JSON parsing",
+    "fn network_action_structured_content_json(": "canonical network action result shaping",
 }
 
 LOWER_CRATE_PREFIXES = ("mez_agent::", "mez_core::", "mez_mux::", "mez_terminal::")
@@ -294,11 +301,27 @@ def source_ownership_violations() -> list[str]:
                 violations.append(f"{path}: lower-owned {ownership} `{declaration}`")
         for line_number, line in enumerate(source.splitlines(), start=1):
             stripped = line.strip()
-            if stripped.startswith(("pub use ", "pub(crate) use ")) and any(
+            if stripped.startswith(("pub use ", "pub(crate) use ", "pub(super) use ")) and any(
                 prefix in stripped for prefix in LOWER_CRATE_PREFIXES
             ):
                 violations.append(
                     f"{path}:{line_number}: root lower-crate forwarding export `{stripped}`"
+                )
+
+    facade_roots = (
+        path
+        for surface in (Path("src/agent"), Path("src/runtime"), Path("src/terminal"))
+        for path in surface.rglob("mod.rs")
+        if "tests" not in path.parts
+    )
+    for path in sorted(facade_roots):
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            stripped = line.strip()
+            if line.startswith("use ") and stripped.endswith("::*;"):
+                violations.append(
+                    f"{path}:{line_number}: production module facade wildcard import `{stripped}`"
                 )
 
     return violations

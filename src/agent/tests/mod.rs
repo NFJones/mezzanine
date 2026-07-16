@@ -33,7 +33,7 @@ use super::provider::{
 use super::semantic::local_action_plan;
 use super::slash::{
     AgentShellCommandOutcome, execute_agent_shell_command, execute_agent_shell_command_with_mcp,
-    execute_agent_shell_command_with_permissions, parse_slash_command,
+    execute_agent_shell_command_with_permissions,
 };
 use crate::auth::{AuthStore, OpenAiProviderCredential};
 use crate::error::Result;
@@ -51,8 +51,7 @@ use mez_agent::{
     MaapBatch, McpExecutionRequest, McpExecutionResponse, McpPromptTool, ModelMessage,
     ModelMessageRole, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
     OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT, ProviderHttpRequest, ProviderHttpResponse,
-    SlashCommandEffect, TranscriptRole, action_result_context_content,
-    action_result_transcript_content, baseline_slash_commands,
+    TranscriptRole, action_result_context_content, action_result_transcript_content,
     openai_models_endpoint_for_responses_endpoint, openai_prompt_cache_diagnostics_for_request,
     openai_responses_endpoint_for_base_url, openai_responses_request_body,
     openai_stable_prefix_material_for_request, provider_quota_usage_from_headers,
@@ -70,7 +69,6 @@ use mez_agent::{
     McpActionExecutor, PaneShellExecutor, ShellExecutionOutput, ShellExecutionRequest,
 };
 use std::cell::RefCell;
-use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output, Stdio};

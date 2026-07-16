@@ -16,18 +16,11 @@ use crate::agent::semantic::apply_patch_touched_paths;
 use crate::terminal::{agent_wrap_column_cap, terminal_grapheme_width};
 use mez_agent::{AgentAction, AgentActionPayload};
 use mez_mux::copy::COPY_SKIP_LINE as AGENT_COPY_SKIP_LINE;
-use mez_mux::render::overlay_fixed_column_style_spans;
-pub(super) use mez_mux::render::{
-    DiffDisplayLine as AgentDiffDisplayLine, DiffDisplaySection as AgentDiffDisplaySection,
-    RichTextLine as AgentRenderedLine, RichTextLineKind as AgentRenderedLineKind,
-    append_syntax_spans as append_agent_syntax_spans,
-    diff_highlighter_for_path as agent_diff_highlighter_for_path,
-    diff_section_path as agent_diff_section_path,
-    format_diff_display_line as format_agent_diff_display_line,
-    frame_markdown_lines as frame_agent_markdown_lines,
-    parse_unified_diff_sections as parse_agent_unified_diff_sections,
-    wrap_rich_text_line_to_width as wrap_agent_rendered_line_to_width,
-    wrap_rich_text_lines_to_width as wrap_agent_rendered_lines_to_width,
+use mez_mux::render::{
+    DiffDisplayLine, DiffDisplaySection, RichTextLine, RichTextLineKind, append_syntax_spans,
+    diff_highlighter_for_path, diff_section_path, format_diff_display_line, frame_markdown_lines,
+    overlay_fixed_column_style_spans, parse_unified_diff_sections, wrap_rich_text_line_to_width,
+    wrap_rich_text_lines_to_width,
 };
 use mez_mux::render::{
     MARKDOWN_DARK_MUTED_FOREGROUND, MARKDOWN_DARK_NEUTRAL_FOREGROUND,
@@ -343,17 +336,17 @@ pub(super) fn wrapped_prefixed_agent_terminal_lines(
     prefix: &str,
     text: &str,
     display_width: usize,
-) -> Vec<AgentRenderedLine> {
+) -> Vec<RichTextLine> {
     let lines = prefixed_agent_terminal_lines(prefix, text)
         .into_iter()
-        .map(|display| AgentRenderedLine {
+        .map(|display| RichTextLine {
             display,
             style_spans: Vec::new(),
             copy_text: None,
-            kind: AgentRenderedLineKind::Normal,
+            kind: RichTextLineKind::Normal,
         })
         .collect::<Vec<_>>();
-    wrap_agent_rendered_lines_to_width(lines, display_width, display_width)
+    wrap_rich_text_lines_to_width(lines, display_width, display_width)
 }
 
 /// Returns true when a display-only `say` body is a raw Mezzanine patch example.
@@ -378,14 +371,14 @@ pub(super) fn render_agent_markdown_body_lines(
     markdown: &str,
     ui_theme: &UiTheme,
     table_display_width: usize,
-) -> Vec<AgentRenderedLine> {
+) -> Vec<RichTextLine> {
     let trimmed = markdown.trim_end_matches(['\r', '\n']);
     if trimmed.is_empty() {
-        return vec![AgentRenderedLine {
+        return vec![RichTextLine {
             display: "mez> ".to_string(),
             style_spans: Vec::new(),
             copy_text: None,
-            kind: AgentRenderedLineKind::Normal,
+            kind: RichTextLineKind::Normal,
         }];
     }
     let table_body_display_width = table_display_width
@@ -407,7 +400,7 @@ pub(super) fn render_agent_markdown_body_lines(
 pub(super) fn render_command_markdown_body_lines(
     markdown: &str,
     ui_theme: &UiTheme,
-) -> Vec<AgentRenderedLine> {
+) -> Vec<RichTextLine> {
     let trimmed = markdown.trim_end_matches(['\r', '\n']);
     if trimmed.is_empty() {
         return Vec::new();
@@ -464,7 +457,7 @@ pub(super) fn markdown_surface_is_light(ui_theme: &UiTheme) -> bool {
 
 /// Builds product copy rows for a rendered Markdown block.
 pub(super) fn markdown_block_copy_lines(
-    rendered_lines: &[AgentRenderedLine],
+    rendered_lines: &[RichTextLine],
     body_rendered_count: usize,
     raw_body_copy_lines: Vec<String>,
 ) -> Vec<String> {
@@ -529,7 +522,7 @@ pub(super) fn command_preview_terminal_rendered_lines(
     max_lines: usize,
     classification: ShellClassification,
     ui_theme: &UiTheme,
-) -> Vec<AgentRenderedLine> {
+) -> Vec<RichTextLine> {
     let syntax_theme = agent_command_syntax_theme(ui_theme);
     let mut highlighter = agent_shell_command_highlighter(classification, &syntax_theme);
     let command_rendition =
@@ -537,11 +530,11 @@ pub(super) fn command_preview_terminal_rendered_lines(
     command_preview_terminal_lines(command, columns, max_lines)
         .into_iter()
         .map(|display| {
-            let mut rendered = AgentRenderedLine {
+            let mut rendered = RichTextLine {
                 display,
                 style_spans: Vec::new(),
                 copy_text: None,
-                kind: AgentRenderedLineKind::Normal,
+                kind: RichTextLineKind::Normal,
             };
             let line_width = agent_terminal_text_width(rendered.display.as_str());
             push_or_extend_style_span(
@@ -559,7 +552,7 @@ pub(super) fn command_preview_terminal_rendered_lines(
                 .map(|text| (2, text.to_string()))
                 .unwrap_or_else(|| (0, rendered.display.clone()));
             if let Some(highlighter) = highlighter.as_mut() {
-                append_agent_syntax_spans(&mut rendered, text_start, &syntax_text, highlighter);
+                append_syntax_spans(&mut rendered, text_start, &syntax_text, highlighter);
             }
             rendered
         })
@@ -824,7 +817,7 @@ pub(super) fn append_styled_agent_terminal_line(
 pub(super) fn append_styled_agent_terminal_rendered_line(
     bytes: &mut String,
     style: AgentTerminalPresentationStyle,
-    line: &AgentRenderedLine,
+    line: &RichTextLine,
     ui_theme: &UiTheme,
 ) {
     let line_text = sanitized_agent_terminal_line(&line.display);
@@ -1001,7 +994,7 @@ pub(super) fn agent_action_result_uses_diff_preview(action: &AgentAction) -> boo
 pub(super) fn readable_agent_diff_display_lines(
     text: &str,
     ui_theme: &UiTheme,
-) -> Vec<AgentRenderedLine> {
+) -> Vec<RichTextLine> {
     readable_agent_diff_display_lines_for_width(text, ui_theme, usize::MAX)
 }
 
@@ -1015,9 +1008,9 @@ pub(super) fn readable_agent_diff_display_lines_for_width(
     text: &str,
     ui_theme: &UiTheme,
     display_width: usize,
-) -> Vec<AgentRenderedLine> {
+) -> Vec<RichTextLine> {
     let source_lines = cleaned_agent_diff_source_lines(text);
-    let sections = parse_agent_unified_diff_sections(&source_lines);
+    let sections = parse_unified_diff_sections(&source_lines);
     let mut lines = if sections.is_empty() {
         parse_agent_path_delta_display_lines(&source_lines, ui_theme)
     } else {
@@ -1033,7 +1026,7 @@ pub(super) fn readable_agent_diff_display_lines_for_width(
     }
     let wrapped = lines
         .into_iter()
-        .flat_map(|line| wrap_agent_rendered_line_to_width(line, display_width.max(1)))
+        .flat_map(|line| wrap_rich_text_line_to_width(line, display_width.max(1)))
         .collect();
     bound_agent_diff_display_lines(wrapped)
 }
@@ -1140,9 +1133,9 @@ pub(super) fn agent_diff_line_is_wrapper_traffic(trimmed: &str) -> bool {
 
 /// Renders parsed unified diff sections into visible unified-diff previews.
 pub(super) fn render_agent_unified_diff_sections(
-    sections: &[AgentDiffDisplaySection],
+    sections: &[DiffDisplaySection],
     ui_theme: &UiTheme,
-) -> Vec<AgentRenderedLine> {
+) -> Vec<RichTextLine> {
     let mut rendered = Vec::new();
     let syntax_theme = agent_diff_syntax_theme(ui_theme);
     for section in sections {
@@ -1156,8 +1149,7 @@ pub(super) fn render_agent_unified_diff_sections(
             &format!("+++ {}", section.new_label),
             ui_theme,
         ));
-        let mut highlighter =
-            agent_diff_highlighter_for_path(agent_diff_section_path(section), &syntax_theme);
+        let mut highlighter = diff_highlighter_for_path(diff_section_path(section), &syntax_theme);
         for (index, line) in section.lines.iter().enumerate() {
             for (_, hunk_header) in section
                 .hunk_headers
@@ -1182,18 +1174,18 @@ pub(super) fn render_agent_unified_diff_sections(
 
 /// Renders one parsed hunk line with a diff gutter and file-aware code spans.
 pub(super) fn render_agent_diff_display_line(
-    line: &AgentDiffDisplayLine,
+    line: &DiffDisplayLine,
     highlighter: Option<&mut SyntaxHighlighter<'_>>,
     ui_theme: &UiTheme,
-) -> AgentRenderedLine {
-    let display = format_agent_diff_display_line(line);
+) -> RichTextLine {
+    let display = format_diff_display_line(line);
     let marker_style = agent_diff_display_line_style(line.marker);
     let marker_rendition = agent_terminal_label_rendition(marker_style, ui_theme);
-    let mut rendered = AgentRenderedLine {
+    let mut rendered = RichTextLine {
         display,
         style_spans: Vec::new(),
         copy_text: None,
-        kind: AgentRenderedLineKind::Normal,
+        kind: RichTextLineKind::Normal,
     };
     push_or_extend_style_span(
         &mut rendered.style_spans,
@@ -1204,7 +1196,7 @@ pub(super) fn render_agent_diff_display_line(
         },
     );
     if let Some(highlighter) = highlighter {
-        append_agent_syntax_spans(&mut rendered, 15, &line.text, highlighter);
+        append_syntax_spans(&mut rendered, 15, &line.text, highlighter);
     }
     rendered
 }
@@ -1272,7 +1264,7 @@ pub(super) fn agent_diff_syntax_theme(ui_theme: &UiTheme) -> SyntaxTheme {
 pub(super) fn parse_agent_path_delta_display_lines(
     lines: &[String],
     ui_theme: &UiTheme,
-) -> Vec<AgentRenderedLine> {
+) -> Vec<RichTextLine> {
     let mut rendered = Vec::new();
     let mut index = 0usize;
     while index < lines.len() {
@@ -1353,14 +1345,14 @@ pub(super) fn rendered_agent_diff_plain_line(
     style: AgentTerminalPresentationStyle,
     line: &str,
     ui_theme: &UiTheme,
-) -> AgentRenderedLine {
+) -> RichTextLine {
     let display = sanitized_agent_terminal_line(line);
     let length = agent_terminal_text_width(display.as_str());
-    let mut rendered = AgentRenderedLine {
+    let mut rendered = RichTextLine {
         display,
         style_spans: Vec::new(),
         copy_text: None,
-        kind: AgentRenderedLineKind::Normal,
+        kind: RichTextLineKind::Normal,
     };
     push_or_extend_style_span(
         &mut rendered.style_spans,
@@ -1374,28 +1366,26 @@ pub(super) fn rendered_agent_diff_plain_line(
 }
 
 /// Bounds rendered diff display lines for the pane buffer.
-pub(super) fn bound_agent_diff_display_lines(
-    lines: Vec<AgentRenderedLine>,
-) -> Vec<AgentRenderedLine> {
+pub(super) fn bound_agent_diff_display_lines(lines: Vec<RichTextLine>) -> Vec<RichTextLine> {
     let mut bounded = Vec::new();
     let mut used_bytes = 0usize;
     for (index, mut line) in lines.into_iter().enumerate() {
         if index >= AGENT_ACTION_RESULT_DISPLAY_MAX_LINES {
-            bounded.push(AgentRenderedLine {
+            bounded.push(RichTextLine {
                 display: "[mez: diff truncated for pane display]".to_string(),
                 style_spans: Vec::new(),
                 copy_text: None,
-                kind: AgentRenderedLineKind::Normal,
+                kind: RichTextLineKind::Normal,
             });
             break;
         }
         let remaining = AGENT_ACTION_RESULT_DISPLAY_MAX_BYTES.saturating_sub(used_bytes);
         if remaining == 0 {
-            bounded.push(AgentRenderedLine {
+            bounded.push(RichTextLine {
                 display: "[mez: diff truncated for pane display]".to_string(),
                 style_spans: Vec::new(),
                 copy_text: None,
-                kind: AgentRenderedLineKind::Normal,
+                kind: RichTextLineKind::Normal,
             });
             break;
         }
@@ -1406,11 +1396,11 @@ pub(super) fn bound_agent_diff_display_lines(
             line.style_spans
                 .retain(|span| span.start < agent_terminal_text_width(line.display.as_str()));
             bounded.push(line);
-            bounded.push(AgentRenderedLine {
+            bounded.push(RichTextLine {
                 display: "[mez: diff truncated for pane display]".to_string(),
                 style_spans: Vec::new(),
                 copy_text: None,
-                kind: AgentRenderedLineKind::Normal,
+                kind: RichTextLineKind::Normal,
             });
             break;
         }
@@ -1743,7 +1733,7 @@ pub(super) fn agent_action_result_display_header(action: &AgentAction) -> Option
 pub(super) fn agent_action_execution_rendered_line(
     header: &str,
     ui_theme: &UiTheme,
-) -> AgentRenderedLine {
+) -> RichTextLine {
     let display = format!("agent: {header}");
     let mut style_spans = Vec::new();
     let mut status_rendition =
@@ -1787,11 +1777,11 @@ pub(super) fn agent_action_execution_rendered_line(
     }
     push_agent_action_execution_secondary_spans(&mut style_spans, &display, status_rendition);
 
-    AgentRenderedLine {
+    RichTextLine {
         display,
         style_spans,
         copy_text: None,
-        kind: AgentRenderedLineKind::Normal,
+        kind: RichTextLineKind::Normal,
     }
 }
 
@@ -2257,13 +2247,13 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         let frame_width = self.agent_terminal_markdown_frame_width(pane_id)?;
         let table_width = self.agent_terminal_markdown_terminal_width(pane_id)?;
-        let body_rendered_lines = wrap_agent_rendered_lines_to_width(
+        let body_rendered_lines = wrap_rich_text_lines_to_width(
             render_agent_markdown_body_lines(markdown, &self.ui_theme, table_width),
             frame_width,
             table_width,
         );
         let body_rendered_count = body_rendered_lines.len();
-        let rendered_lines = frame_agent_markdown_lines(body_rendered_lines, frame_width);
+        let rendered_lines = frame_markdown_lines(body_rendered_lines, frame_width);
         let trimmed_markdown = markdown.trim_end_matches(['\r', '\n']);
         let raw_copy_lines = if trimmed_markdown.is_empty() {
             vec![String::new()]
@@ -2580,7 +2570,7 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
         style: AgentTerminalPresentationStyle,
-        rendered_lines: &[AgentRenderedLine],
+        rendered_lines: &[RichTextLine],
         copy_lines: &[String],
     ) -> Result<()> {
         if rendered_lines.is_empty() {
@@ -2805,8 +2795,8 @@ impl RuntimeSessionService {
         text: &str,
     ) {
         let source_lines = cleaned_agent_diff_source_lines(text);
-        for section in parse_agent_unified_diff_sections(&source_lines) {
-            let path = agent_diff_section_path(&section).to_string();
+        for section in parse_unified_diff_sections(&source_lines) {
+            let path = diff_section_path(&section).to_string();
             if path.is_empty() || path == "/dev/null" {
                 continue;
             }

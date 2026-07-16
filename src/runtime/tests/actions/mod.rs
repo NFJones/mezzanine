@@ -1,7 +1,7 @@
 //! Runtime actions test modules.
 
 use super::*;
-use crate::runtime::agent::runtime_unrecovered_failure_output_lines;
+use mez_agent::outcome::runtime_unrecovered_failure_output_lines;
 
 mod config;
 mod failure_recovery;

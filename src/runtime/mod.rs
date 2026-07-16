@@ -39,7 +39,6 @@ use crate::agent::provider::{
 use crate::agent::semantic::{local_action_plan, local_action_summary};
 use crate::agent::slash::{
     AgentShellCommandOutcome, AgentShellRuntimeContext, execute_agent_shell_command_with_context,
-    parse_slash_command,
 };
 use crate::audit::{
     AuditActor, AuditConfig, AuditDeferredWrite, AuditLog, AuditRecord, AuditRetentionPolicy,
@@ -126,6 +125,7 @@ use mez_agent::messaging::{
     TaskResultPayload, TaskState, TaskStatusPayload, delivery_batch_json,
     validate_mmp_payload_metadata,
 };
+use mez_agent::parse_slash_command;
 use mez_agent::permissions::{
     ApprovalDecision, ApprovalGrant, ApprovalScope, ArgumentPolicy, BlockedApprovalQueue,
     BlockedApprovalRequest, BlockedApprovalState, CommandRule, CommandRuleScope,

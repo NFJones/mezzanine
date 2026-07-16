@@ -42,7 +42,7 @@ use super::{
 use crate::agent::provider::{
     AsyncModelProvider, ClaudeCodeProvider, ReqwestProviderHttpTransport,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
-    effective_provider_api, openai_compatible_provider_from_auth_store_with_provider_options,
+    openai_compatible_provider_from_auth_store_with_provider_options,
     openai_responses_provider_from_auth_store_with_provider_options,
 };
 use crate::auth::AuthCredentialKind;
@@ -59,6 +59,7 @@ use mez_agent::{
     ModelMessage, ModelMessageRole, ModelRequest, ModelTokenUsage, ModelTokenUsageKey,
     ProviderApiCompatibility, ProviderCapabilities, ProviderModelCatalog, ProviderModelInfo,
     ProviderQuotaUsage, append_mcp_context, openai_default_reasoning_levels_for_model,
+    resolve_provider_api,
 };
 use mez_mux::readline::ReadlineEdit;
 use std::fs;
@@ -78,13 +79,35 @@ mod show_records;
 mod slash;
 mod status;
 
-use approval::*;
+use approval::{
+    AgentProjectTrustRequest, agent_approval_summary_preview, agent_approve_control_error_message,
+    agent_approve_pending_display, agent_path_preview, agent_project_trust_log_line,
+    agent_project_trust_pending_display, agent_select_project_trust_request,
+    parse_agent_approve_selection,
+};
 #[cfg(test)]
-use compaction::*;
+use compaction::{
+    runtime_compact_forced_retained_transcript_entries,
+    runtime_compact_retained_transcript_entries, runtime_compact_transcript_entries_for_summary,
+    runtime_model_compaction_request, runtime_model_compaction_summary_from_response,
+};
 pub(super) use model_catalog::RuntimeModelCatalog;
-use model_catalog::*;
-use remember::*;
-use slash::*;
+#[cfg(test)]
+use model_catalog::runtime_model_catalog_unavailable_reason;
+use model_catalog::{
+    runtime_configured_reasoning_levels_for_model, runtime_markdown_table,
+    runtime_model_catalog_display, runtime_provider_default_models,
+    runtime_routing_model_profile_display,
+};
+use remember::{
+    runtime_git_repository_root, runtime_git_text, runtime_git_untracked_diff,
+    runtime_git_untracked_files, runtime_remember_scope_display,
+};
+use slash::{
+    runtime_agent_init_scaffold, runtime_single_approval_invocation, runtime_single_mode_arg,
+    runtime_single_permissions_invocation, runtime_single_rename_window_invocation,
+    runtime_statusline_fields, runtime_statusline_template, validate_agent_personality,
+};
 
 // Live terminal and agent shell command execution.
 

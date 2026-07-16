@@ -6,7 +6,7 @@
 //! permission, hook, and project-trust config domains.
 
 use super::*;
-use crate::agent::provider::effective_provider_api;
+use mez_agent::resolve_provider_api;
 
 pub(in crate::runtime) fn runtime_provider_registry_from_config(
     root: &Value,
@@ -389,7 +389,7 @@ fn runtime_provider_config_from_config(
     };
     let kind = runtime_json_string(object.get("kind")).unwrap_or(provider_id);
     let api = runtime_json_string(object.get("api")).map(ToOwned::to_owned);
-    effective_provider_api(kind, api.as_deref())?;
+    resolve_provider_api(kind, api.as_deref())?;
     let models = runtime_json_string_array(object.get("models"))?.unwrap_or_default();
     let default_model = runtime_json_string(object.get("default_model"))
         .filter(|model| !model.is_empty())

@@ -55,7 +55,7 @@ impl RuntimeSessionService {
             &provider_config,
             &self.provider_registry,
         );
-        match effective_provider_api(&provider_config.kind, provider_config.api.as_deref())? {
+        match resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())? {
             ProviderApiCompatibility::OpenAiResponses
             | ProviderApiCompatibility::OpenAiChatCompletions
             | ProviderApiCompatibility::DeepSeekChatCompletions => match self
@@ -174,7 +174,7 @@ impl RuntimeSessionService {
         provider_id: &str,
         provider_config: &crate::runtime::RuntimeProviderConfig,
     ) -> Result<ProviderModelCatalog> {
-        let api = effective_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
+        let api = resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
         self.append_credential_access_audit(
             provider_id,
             &provider_config.auth_profile,
@@ -462,7 +462,7 @@ pub(super) fn runtime_configured_reasoning_levels_for_model(
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
     if let Ok(provider_api) =
-        effective_provider_api(&provider_config.kind, provider_config.api.as_deref())
+        resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())
     {
         match provider_api {
             ProviderApiCompatibility::OpenAiResponses => {
@@ -488,7 +488,7 @@ pub(super) fn runtime_configured_reasoning_levels_for_model(
 pub(super) fn runtime_provider_default_models(
     provider_config: &crate::runtime::RuntimeProviderConfig,
 ) -> Vec<String> {
-    match effective_provider_api(&provider_config.kind, provider_config.api.as_deref()) {
+    match resolve_provider_api(&provider_config.kind, provider_config.api.as_deref()) {
         Ok(ProviderApiCompatibility::OpenAiResponses) if provider_config.kind == "openai" => {
             runtime_default_models_for_provider(&provider_config.kind)
                 .map(|models| models.iter().map(|model| (*model).to_string()).collect())
@@ -515,7 +515,7 @@ pub(super) fn runtime_provider_default_models(
 fn runtime_provider_recommended_model(
     provider_config: &crate::runtime::RuntimeProviderConfig,
 ) -> Option<&'static str> {
-    match effective_provider_api(&provider_config.kind, provider_config.api.as_deref()) {
+    match resolve_provider_api(&provider_config.kind, provider_config.api.as_deref()) {
         Ok(ProviderApiCompatibility::OpenAiResponses) if provider_config.kind == "openai" => {
             runtime_recommended_model_for_provider(&provider_config.kind).ok()
         }

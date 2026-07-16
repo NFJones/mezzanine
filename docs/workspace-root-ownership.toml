@@ -124,7 +124,7 @@ role = "Durable live daemon and session registry."
 [[surface]]
 path = "src/runtime"
 state = "temporary"
-role = "Product serialized state, effects, and rendering projection adapters pending Phase 10 cleanup and retained-file decomposition."
+role = "Product serialized state, effects, and rendering projection adapters pending retained production and test-file decomposition."
 
 [[surface]]
 path = "src/selector.rs"
@@ -154,7 +154,7 @@ role = "Product-friendly pane and status display names over canonical mez-agent 
 [[surface]]
 path = "src/terminal"
 state = "temporary"
-role = "Host terminal and product presentation adapters pending Phase 10 wrapper cleanup and retained test decomposition."
+role = "Host terminal and product presentation adapters pending retained production and test-file decomposition."
 
 [[surface]]
 path = "src/test_support"

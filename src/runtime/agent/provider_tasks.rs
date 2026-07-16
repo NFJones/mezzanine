@@ -165,7 +165,7 @@ impl RuntimeSessionService {
         provider_config: &RuntimeProviderConfig,
         audit_scope: &str,
     ) -> Result<RuntimeAgentProviderDispatchProvider> {
-        let api = effective_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
+        let api = resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())?;
         self.append_credential_access_audit(
             provider_name,
             &provider_config.auth_profile,

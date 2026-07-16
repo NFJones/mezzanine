@@ -7,10 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use mez_agent::{
-    ProviderHttpResult,
-    network_action_structured_content_json as lower_network_action_structured_content_json,
-};
+use mez_agent::{ProviderHttpResult, network_action_structured_content_json};
 
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnRecord,
@@ -27,16 +24,6 @@ const MAX_FETCH_URL_MAX_BYTES: usize = 256 * 1024;
 const DEFAULT_WEB_SEARCH_MAX_BYTES: usize = 1024 * 1024;
 /// Timeout applied to runtime-owned network actions.
 const NETWORK_ACTION_TIMEOUT_MS: u64 = 30_000;
-
-/// Builds compact structured content for a network-backed action result.
-pub fn network_action_structured_content_json(
-    action: &AgentAction,
-    approval: serde_json::Value,
-    response: serde_json::Value,
-) -> Result<String> {
-    lower_network_action_structured_content_json(action, approval, response)
-        .map_err(|error| MezError::invalid_args(error.message()))
-}
 
 /// Executes a network-backed semantic action through a runtime HTTP transport.
 pub async fn execute_network_action_with_transport_async<T: AsyncProviderHttpTransport>(
