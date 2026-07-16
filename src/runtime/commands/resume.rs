@@ -215,8 +215,7 @@ impl RuntimeSessionService {
             )?;
             return Ok(());
         }
-        self.pane_current_working_directories
-            .insert(pane_id.to_string(), path.clone());
+        self.set_pane_current_working_directory(pane_id, path.clone());
         if self.primary_pid_for_live_pane_process(pane_id).is_some() {
             let mut command =
                 shell_command_from_argv(&["cd".to_string(), path.to_string_lossy().into_owned()])?;

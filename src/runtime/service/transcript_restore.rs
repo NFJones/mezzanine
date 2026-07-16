@@ -188,8 +188,10 @@ impl RuntimeSessionService {
                 "agent-session-restore",
             )?;
             if let Some(working_directory) = metadata.working_directory.as_ref() {
-                self.pane_current_working_directories
-                    .insert(metadata.pane_id.clone(), PathBuf::from(working_directory));
+                self.set_pane_current_working_directory(
+                    metadata.pane_id.clone(),
+                    PathBuf::from(working_directory),
+                );
             }
             let token_usage_by_model = runtime_agent_token_usage_by_model_from_metadata(&metadata);
             if token_usage_by_model.is_empty() {

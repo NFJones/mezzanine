@@ -134,9 +134,7 @@ fn runtime_frame_context_reports_home_relative_pane_working_directory() {
         .as_ref()
         .map(|_| "~/Documents/repos/mezzanine".to_string())
         .unwrap_or_else(|| path.to_string_lossy().to_string());
-    service
-        .pane_current_working_directories
-        .insert(pane_id.clone(), path);
+    service.set_pane_current_working_directory(pane_id.clone(), path);
 
     let config = service
         .terminal_client_loop_config(TerminalClientLoopConfig::default())
@@ -177,9 +175,7 @@ fn runtime_frame_context_compacts_deep_pane_working_directory() {
         .as_ref()
         .map(|home| home.join("Documents/repos/mezzanine/src/runtime"))
         .unwrap_or_else(|| PathBuf::from("/tmp/worktrees/mez/src/runtime"));
-    service
-        .pane_current_working_directories
-        .insert(pane_id.clone(), path);
+    service.set_pane_current_working_directory(pane_id.clone(), path);
 
     let config = service
         .terminal_client_loop_config(TerminalClientLoopConfig::default())
@@ -235,9 +231,7 @@ fn runtime_frame_context_skips_unused_dynamic_window_status_fields() {
         .as_ref()
         .map(|_| "~/Documents/repos/mezzanine".to_string())
         .unwrap_or_else(|| path.to_string_lossy().to_string());
-    service
-        .pane_current_working_directories
-        .insert(pane_id, path);
+    service.set_pane_current_working_directory(pane_id, path);
     let config = service
         .terminal_client_loop_config(TerminalClientLoopConfig::default())
         .unwrap();

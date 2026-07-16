@@ -121,7 +121,6 @@ impl RuntimeSessionService {
             message_service,
             async_runtime_metrics: None,
             runtime_metrics: Default::default(),
-            pane_current_working_directories: BTreeMap::new(),
             queued_pane_input_effects: Vec::new(),
             queued_pane_resize_effects: BTreeMap::new(),
             queued_pane_termination_effects: BTreeMap::new(),

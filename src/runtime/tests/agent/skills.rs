@@ -177,9 +177,7 @@ fn runtime_agent_prompt_refreshes_project_overlay_and_project_skills_from_pane_c
             text: "[history]\nlines = 3\n".to_string(),
         }])
         .unwrap();
-    service
-        .pane_current_working_directories
-        .insert("%1".to_string(), nested.clone());
+    service.set_pane_current_working_directory("%1".to_string(), nested.clone());
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")

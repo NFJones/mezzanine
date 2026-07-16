@@ -73,6 +73,8 @@ use transactions::{
 pub(in crate::runtime) struct RuntimeProcessComponent {
     /// Live pane process handles and their PTY lifecycle manager.
     pane_processes: PaneProcessManager,
+    /// Best-known current working directory for each pane process.
+    pane_current_working_directories: std::collections::BTreeMap<String, PathBuf>,
     /// Primary process ids for panes whose handles are adapter-owned.
     detached_pane_primary_pids: std::collections::BTreeMap<String, u32>,
     /// Latest foreground process groups observed by pane workers.
@@ -110,6 +112,17 @@ impl RuntimeProcessComponent {
 }
 
 impl RuntimeSessionService {
+    /// Records the best-known current working directory for one pane process.
+    pub(in crate::runtime) fn set_pane_current_working_directory(
+        &mut self,
+        pane_id: impl Into<String>,
+        path: PathBuf,
+    ) {
+        self.process
+            .pane_current_working_directories
+            .insert(pane_id.into(), path);
+    }
+
     /// Terminates every process still owned by the runtime.
     pub(crate) fn terminate_all_pane_processes(&mut self) -> Result<Vec<ExitedPaneProcess>> {
         Ok(self.process.pane_processes.terminate_all()?)
@@ -644,7 +657,8 @@ impl RuntimeSessionService {
         let previous_window_count = self.session.windows().len();
 
         let _ = self.stop_active_pane_pipe(process.pane_id.as_str());
-        self.pane_current_working_directories
+        self.process
+            .pane_current_working_directories
             .remove(process.pane_id.as_str());
         self.fail_agent_turns_for_pane_shutdown(
             std::slice::from_ref(&process.pane_id),
@@ -848,7 +862,7 @@ impl RuntimeSessionService {
         self.pane_bootstrap_pending
             .insert(descriptor.pane_id.to_string());
         if let Some(start_directory) = start_directory {
-            self.pane_current_working_directories.insert(
+            self.process.pane_current_working_directories.insert(
                 descriptor.pane_id.to_string(),
                 start_directory.to_path_buf(),
             );
@@ -900,7 +914,8 @@ impl RuntimeSessionService {
             .pane_processes
             .current_working_directory(pane_id)
         {
-            self.pane_current_working_directories
+            self.process
+                .pane_current_working_directories
                 .insert(pane_id.to_string(), current_working_directory);
         }
         let process = self
@@ -1123,7 +1138,9 @@ impl RuntimeSessionService {
         self.agent_copy_outputs.remove(pane_id);
         self.agent_modified_files.remove(pane_id);
         self.active_copy_modes_mut().remove(pane_id);
-        self.pane_current_working_directories.remove(pane_id);
+        self.process
+            .pane_current_working_directories
+            .remove(pane_id);
         self.process.pane_foreground_process_groups.remove(pane_id);
         self.process.program_owned_pane_titles.remove(pane_id);
         self.queued_pane_input_effects

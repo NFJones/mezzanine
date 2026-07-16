@@ -63,11 +63,6 @@ pub struct RuntimeSessionService {
     /// usage, turn lifecycle, and shell-transaction behavior without parsing
     /// trace logs.
     pub(in crate::runtime) runtime_metrics: RuntimeMetricsSnapshot,
-    /// Stores the pane current working directories value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_current_working_directories: BTreeMap<String, PathBuf>,
     /// Stores the deferred pane inputs value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

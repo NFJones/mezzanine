@@ -170,7 +170,8 @@ impl RuntimeSessionService {
         if let Some(current_working_directory) = current_working_directory
             && !current_working_directory.trim().is_empty()
         {
-            self.pane_current_working_directories
+            self.process
+                .pane_current_working_directories
                 .insert(pane_id.clone(), PathBuf::from(current_working_directory));
         }
         self.process
@@ -222,7 +223,8 @@ impl RuntimeSessionService {
         &self,
         pane_id: &str,
     ) -> Option<PathBuf> {
-        self.pane_current_working_directories
+        self.process
+            .pane_current_working_directories
             .get(pane_id)
             .cloned()
             .or_else(|| {

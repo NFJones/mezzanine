@@ -1080,7 +1080,7 @@ fn runtime_apply_patch_unsafe_path_recovery_guides_relative_headers() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service.pane_current_working_directories.insert(
+    service.set_pane_current_working_directory(
         "%1".to_string(),
         PathBuf::from("/home/neil/Documents/repos/chimera"),
     );

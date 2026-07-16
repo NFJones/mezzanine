@@ -488,9 +488,7 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service
-        .pane_current_working_directories
-        .insert("%1".to_string(), cwd.clone());
+    service.set_pane_current_working_directory("%1".to_string(), cwd.clone());
 
     let resumed = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"restore-resume","method":"agent/shell/command","params":{"idempotency_key":"restore-resume","input":"/resume saved"}}"#,
