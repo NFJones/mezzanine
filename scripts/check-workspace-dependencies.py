@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reject forbidden dependency edges between Mezzanine workspace crates."""
+"""Validate Mezzanine workspace dependencies and source ownership boundaries."""
 
 from __future__ import annotations
 
@@ -25,6 +25,20 @@ EXPECTED_EDGES = {
     "mez-mux": {"mez-core", "mez-terminal"},
     "mez-terminal": set(),
     "mezzanine": {"mez-agent", "mez-core", "mez-mux", "mez-terminal"},
+}
+
+LOWER_FORBIDDEN_PRODUCT_IO_DEPENDENCIES = {
+    "keyring",
+    "keyring-core",
+    "reqwest",
+    "rusqlite",
+    "tokio",
+    "zbus-secret-service-keyring-store",
+}
+
+LOWER_PLATFORM_DEPENDENCY_OWNERS = {
+    "portable-pty": {"mez-mux"},
+    "rustix": {"mez-mux"},
 }
 
 REQUIRED_OWNER_PATHS = {
@@ -354,7 +368,7 @@ def source_structure_violations() -> list[str]:
 
 
 def main() -> int:
-    """Validate package membership, dependency direction, and retired facades."""
+    """Validate package graph, final ownership, and source structure."""
 
     metadata = workspace_metadata()
     workspace_member_ids = set(metadata["workspace_members"])
@@ -381,20 +395,31 @@ def main() -> int:
 
     violations: list[str] = []
     for package_name, package in packages.items():
-        internal_dependencies = {
-            dependency["name"]
-            for dependency in package["dependencies"]
-            if dependency["name"] in EXPECTED_PACKAGES
-        }
+        dependency_names = {dependency["name"] for dependency in package["dependencies"]}
+        internal_dependencies = dependency_names & EXPECTED_PACKAGES
         forbidden = internal_dependencies - EXPECTED_EDGES[package_name]
         absent = EXPECTED_EDGES[package_name] - internal_dependencies
         for dependency_name in sorted(forbidden):
             violations.append(f"{package_name} -> {dependency_name}")
         for dependency_name in sorted(absent):
             violations.append(f"{package_name} missing -> {dependency_name}")
+        if package_name != "mezzanine":
+            for dependency_name in sorted(
+                dependency_names & LOWER_FORBIDDEN_PRODUCT_IO_DEPENDENCIES
+            ):
+                violations.append(
+                    f"{package_name} -> {dependency_name} "
+                    "(product I/O dependencies belong in mezzanine)"
+                )
+            for dependency_name, allowed_owners in LOWER_PLATFORM_DEPENDENCY_OWNERS.items():
+                if dependency_name in dependency_names and package_name not in allowed_owners:
+                    violations.append(
+                        f"{package_name} -> {dependency_name} "
+                        "(platform dependency is outside its approved owner)"
+                    )
 
     if violations:
-        print("forbidden Mezzanine workspace dependency edges:")
+        print("forbidden Mezzanine dependency edges:")
         for violation in violations:
             print(f"  {violation}")
         return 1

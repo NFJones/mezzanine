@@ -1,5 +1,5 @@
 version = 1
-status = "open"
+status = "complete"
 
 [[surface]]
 path = "src/agent"
@@ -123,8 +123,8 @@ role = "Durable live daemon and session registry."
 
 [[surface]]
 path = "src/runtime"
-state = "temporary"
-role = "Product serialized state, effects, and rendering projection adapters pending retained production and test-file decomposition."
+state = "product"
+role = "Product serialized state, cross-crate effects, runtime orchestration, persistence coordination, and rendering projection adapters."
 
 [[surface]]
 path = "src/selector"
@@ -153,8 +153,8 @@ role = "Product-friendly pane and status display names over canonical mez-agent 
 
 [[surface]]
 path = "src/terminal"
-state = "temporary"
-role = "Host terminal and product presentation adapters pending retained production and test-file decomposition."
+state = "adapter"
+role = "Host terminal I/O and product presentation adapters over mez-terminal and mez-mux contracts."
 
 [[surface]]
 path = "src/test_support"

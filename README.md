@@ -600,13 +600,15 @@ Use the repository `justfile`:
 
 ```sh
 just check
+just architecture
 just fmt
 just clippy
 just test
 ```
 
-`just fmt`, `just clippy`, and `just test` are the expected pre-handoff checks
-for repository changes. The repository is a five-package Cargo workspace; see
-the [workspace architecture](docs/workspace-architecture.md) and
+`just architecture`, `just fmt`, `just clippy`, and `just test` are the expected
+pre-handoff checks for repository changes. The repository is a five-package
+Cargo workspace; see the
+[workspace architecture](docs/workspace-architecture.md) and
 [ownership matrix](docs/workspace-ownership-matrix.md) before changing package
 boundaries.

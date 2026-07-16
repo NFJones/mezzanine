@@ -255,6 +255,14 @@ The multiplexer and the agent harness MUST be separable logical subsystems. An
 implementation MUST NOT require application code that uses Mezzanine concepts to
 depend on a specific programming language or implementation framework.
 
+Non-normative reference implementation note: the Rust workspace realizes this
+separation with independent terminal-emulation, multiplexer, and
+provider-independent agent crates beneath a product composition crate. Stable
+cross-subsystem identities live in a low-dependency core crate; product policy,
+persistence, transports, host I/O, and cross-crate orchestration remain in the
+composition root. `docs/workspace-architecture.md` records the exact package
+graph and boundary checks.
+
 ## 5. Session, Client, and Process Lifecycle
 
 Mezzanine MUST support resumable sessions.

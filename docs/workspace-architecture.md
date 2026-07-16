@@ -31,16 +31,18 @@ The current Mezzanine workspace edges are:
 mez-core      -> (none)
 mez-terminal  -> (no workspace dependencies)
 mez-mux       -> mez-core + mez-terminal
-mez-agent     -> (no workspace dependencies)
+mez-agent     -> mez-core
 mezzanine     -> mez-core + mez-terminal + mez-mux + mez-agent
 ```
 
-The architecture policy permits `mez-terminal` and `mez-agent` to depend on
-`mez-core` when a genuinely shared stable contract requires it; neither crate
-currently needs that dependency. No lower-level crate may depend on
-`mezzanine`. The mux and agent crates may not depend on each other, and the
-terminal crate may not depend on mux or agent behavior. Run `just architecture`
-to validate these constraints against `cargo metadata`.
+`mez-agent` uses `mez-core` stable identities for agent messaging, and
+`mez-mux` uses the same identity contracts for multiplexer state. No lower-level
+crate may depend on `mezzanine`. The mux and agent crates may not depend on each
+other, and the terminal crate may not depend on mux or agent behavior. Run
+`just architecture` to validate these constraints against `cargo metadata`.
+Product I/O dependencies for Tokio orchestration, HTTP, SQLite, and keyring
+access remain in `mezzanine`; PTY and Unix process dependencies are explicitly
+owned by `mez-mux`.
 
 ## Ownership rule
 
@@ -55,3 +57,8 @@ The completed module-level audit and acceptance evidence are recorded in the
 dependency graph does not by itself prove that package ownership remains
 correct, so architecture, public API, dependency, feature, and package-content
 audits are part of refactor validation.
+
+The architecture check also verifies the exhaustive root ownership manifest,
+rejects restoration of retired compatibility surfaces and lower-contract
+forwarding exports, and rejects Rust compilation units over 2,000 lines or
+module implementations flattened with `include!`.

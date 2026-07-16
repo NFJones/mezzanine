@@ -49,6 +49,8 @@ implementation logic in subsystem modules rather than expanding `src/main.rs`.
 - `just build-release`: build all targets and features in release mode.
 - `just run -- <args>`: run the release `mez` binary with arguments.
 - `just check`: run `cargo check --all-targets --all-features`.
+- `just architecture`: validate the exact workspace graph, root ownership,
+  retired compatibility boundaries, and Rust source-structure limits.
 - `just fmt`: apply Rust formatting with `cargo fmt --all`.
 - `just clippy`: run clippy for all targets/features with warnings denied.
 - `just test`: run `cargo test --all-targets --all-features`.
