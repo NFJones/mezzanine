@@ -1,6 +1,11 @@
 //! Session access, effect adapters, timers, registry persistence, and metrics.
 
-use super::*;
+use super::{
+    RenderInvalidationReason, Result, RuntimeRegistryUpdatePlan, RuntimeSessionService,
+    RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition, Session,
+    SessionRegistry, TerminalClientLoopConfig, apply_registry_update,
+    runtime_status_refresh_interval_ms_for_config, runtime_status_refresh_required_by_config,
+};
 
 impl RuntimeSessionService {
     /// Runs the session operation for this subsystem.

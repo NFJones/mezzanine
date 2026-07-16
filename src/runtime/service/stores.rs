@@ -1,6 +1,11 @@
 //! Control, diagnostics, process, terminal, permission, approval, and memory stores.
 
-use super::*;
+use super::{
+    AuditActor, AuditRecord, BlockedApprovalQueue, BlockedApprovalRequest, ControlIdempotencyCache,
+    EventKind, MEZ_ENV_FIELD_SEPARATOR, MemoryRecord, MessageService, MezError, PermissionPolicy,
+    Result, RuntimeSessionService, SessionApprovalStore, SessionMemoryStore, current_unix_seconds,
+    json_escape,
+};
 
 impl RuntimeSessionService {
     /// Runs the control idempotency operation for this subsystem.

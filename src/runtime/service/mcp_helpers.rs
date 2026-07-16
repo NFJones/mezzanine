@@ -1,6 +1,6 @@
 //! MCP initialization counts, discovery filtering, labels, and metadata parsing.
 
-use super::*;
+use super::{AgentShellVisibility, McpRegistry, McpServerStatus, MezError, Result};
 
 /// Counts enabled MCP servers by startup-readiness state.
 pub(super) struct RuntimeMcpInitializationCounts {
