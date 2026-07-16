@@ -534,7 +534,7 @@ impl RuntimeSessionService {
     }
     /// Returns the currently configured routing auto-sizing model profile.
     fn active_routing_model_profile(&self) -> Result<(String, ModelProfile)> {
-        let profile_name = self.agent_auto_sizing.router_model_profile.clone();
+        let profile_name = self.agent_auto_sizing().router_model_profile.clone();
         let profile = self.provider_registry.resolve_profile(&profile_name)?;
         Ok((profile_name, profile))
     }
@@ -553,7 +553,7 @@ impl RuntimeSessionService {
                 profile.provider
             )));
         }
-        self.agent_auto_sizing.router_model_profile = profile_name.to_string();
+        self.set_agent_router_model_profile(profile_name);
         Ok(AgentShellCommandOutcome::Mutated {
             command: "model".to_string(),
             body: format!(
@@ -781,8 +781,7 @@ impl RuntimeSessionService {
         if !preset.allowed_reasoning_efforts.is_empty() {
             auto_sizing.allowed_reasoning_efforts = preset.allowed_reasoning_efforts.clone();
         }
-        self.agent_auto_sizing_overrides
-            .insert(pane_id.to_string(), auto_sizing);
+        self.set_agent_auto_sizing_override(pane_id, Some(auto_sizing));
         let resolved = self.provider_registry.resolve_profile(&profile_name)?;
         Ok(AgentShellCommandOutcome::Mutated {
             command: "preset".to_string(),
@@ -810,9 +809,7 @@ impl RuntimeSessionService {
         &self,
         pane_id: &str,
     ) -> &RuntimeAutoSizingConfig {
-        self.agent_auto_sizing_overrides
-            .get(pane_id)
-            .unwrap_or(&self.agent_auto_sizing)
+        self.agent_auto_sizing_for_pane(pane_id)
     }
 
     /// Returns the preset label to render for one pane, when presets exist.

@@ -11,7 +11,7 @@ use super::*;
 fn runtime_config_reload_applies_compaction_raw_retention() {
     let mut service = test_runtime_service();
 
-    assert_eq!(service.agent_compaction_raw_retention_percent, 10);
+    assert_eq!(service.agent_compaction_raw_retention_percent(), 10);
 
     service
         .replace_config_layers(vec![ConfigLayer {
@@ -24,7 +24,7 @@ fn runtime_config_reload_applies_compaction_raw_retention() {
         }])
         .unwrap();
 
-    assert_eq!(service.agent_compaction_raw_retention_percent, 25);
+    assert_eq!(service.agent_compaction_raw_retention_percent(), 25);
 }
 
 /// Verifies large bracketed-paste agent prompt input is displayed compactly in

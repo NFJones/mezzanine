@@ -18,13 +18,13 @@ use super::{
     ReadinessOverrideRevocation, Recipient, ReqwestProviderHttpTransport, Result, RuleDecision,
     RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentCopyOutput,
     RuntimeAgentLoopTurnKind, RuntimeAgentModifiedFileSummary, RuntimeAgentProviderDispatch,
-    RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAutoSizingDispatch,
-    RuntimeAutoSizingTargetProfile, RuntimeHookPipelineBlock, RuntimeHookPipelineDecision,
-    RuntimeMcpActionExecutor, RuntimeProviderConfig, RuntimeSessionService,
-    RuntimeShellTransactionActionFailure, RuntimeSideEffect, SenderIdentity, ShellTransaction,
-    ShellTransactionOutputTransport, SubagentScopeDeclaration, SubagentSpawnRequest,
-    SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload, TranscriptEntry,
-    TranscriptRole, action_result_context_content, assemble_model_request,
+    RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAutoSizingConfig,
+    RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile, RuntimeHookPipelineBlock,
+    RuntimeHookPipelineDecision, RuntimeMcpActionExecutor, RuntimeProviderConfig,
+    RuntimeSessionService, RuntimeShellTransactionActionFailure, RuntimeSideEffect, SenderIdentity,
+    ShellTransaction, ShellTransactionOutputTransport, SubagentScopeDeclaration,
+    SubagentSpawnRequest, SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload,
+    TranscriptEntry, TranscriptRole, action_result_context_content, assemble_model_request,
     compact_model_context_for_budget_with_retained_tail_percent, current_unix_millis,
     current_unix_seconds, decode_shell_output_transport_with_diagnostics, discover_project_root,
     exact_command_sha256, execute_mcp_action_through_runtime,
@@ -127,19 +127,91 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     agent_routing: bool,
     /// Explicit pane-local provider-routing overrides.
     agent_routing_overrides: BTreeMap<String, bool>,
+    /// Percent of raw context retained after compaction.
+    agent_compaction_raw_retention_percent: usize,
+    /// Default model and reasoning auto-sizing policy.
+    agent_auto_sizing: RuntimeAutoSizingConfig,
+    /// Pane-local auto-sizing policy overrides.
+    agent_auto_sizing_overrides: BTreeMap<String, RuntimeAutoSizingConfig>,
 }
 
 impl RuntimeAgentComponent {
-    /// Builds agent ownership with the configured routing default.
-    pub(in crate::runtime) fn with_default_routing(agent_routing: bool) -> Self {
+    /// Builds agent ownership with configured provider-selection defaults.
+    pub(in crate::runtime) fn with_settings(
+        agent_routing: bool,
+        agent_auto_sizing: RuntimeAutoSizingConfig,
+        agent_compaction_raw_retention_percent: usize,
+    ) -> Self {
         Self {
             agent_routing,
+            agent_auto_sizing,
+            agent_compaction_raw_retention_percent,
             ..Self::default()
         }
     }
 }
 
 impl RuntimeSessionService {
+    /// Returns the raw-context percentage retained after compaction.
+    pub(in crate::runtime) fn agent_compaction_raw_retention_percent(&self) -> usize {
+        self.agent.agent_compaction_raw_retention_percent
+    }
+
+    /// Replaces the raw-context percentage retained after compaction.
+    pub(in crate::runtime) fn set_agent_compaction_raw_retention_percent(
+        &mut self,
+        percent: usize,
+    ) {
+        self.agent.agent_compaction_raw_retention_percent = percent;
+    }
+
+    /// Returns the configured default auto-sizing policy.
+    pub(in crate::runtime) fn agent_auto_sizing(&self) -> &RuntimeAutoSizingConfig {
+        &self.agent.agent_auto_sizing
+    }
+
+    /// Replaces the configured default auto-sizing policy.
+    pub(in crate::runtime) fn set_agent_auto_sizing(&mut self, config: RuntimeAutoSizingConfig) {
+        self.agent.agent_auto_sizing = config;
+    }
+
+    /// Replaces the router model profile in the default auto-sizing policy.
+    pub(in crate::runtime) fn set_agent_router_model_profile(&mut self, profile_name: &str) {
+        self.agent.agent_auto_sizing.router_model_profile = profile_name.to_string();
+    }
+
+    /// Returns an explicit pane-local auto-sizing override.
+    pub(in crate::runtime) fn agent_auto_sizing_override(
+        &self,
+        pane_id: &str,
+    ) -> Option<&RuntimeAutoSizingConfig> {
+        self.agent.agent_auto_sizing_overrides.get(pane_id)
+    }
+
+    /// Replaces or clears one pane-local auto-sizing override.
+    pub(in crate::runtime) fn set_agent_auto_sizing_override(
+        &mut self,
+        pane_id: &str,
+        config: Option<RuntimeAutoSizingConfig>,
+    ) {
+        if let Some(config) = config {
+            self.agent
+                .agent_auto_sizing_overrides
+                .insert(pane_id.to_string(), config);
+        } else {
+            self.agent.agent_auto_sizing_overrides.remove(pane_id);
+        }
+    }
+
+    /// Returns the effective auto-sizing policy for one pane.
+    pub(in crate::runtime) fn agent_auto_sizing_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> &RuntimeAutoSizingConfig {
+        self.agent_auto_sizing_override(pane_id)
+            .unwrap_or_else(|| self.agent_auto_sizing())
+    }
+
     /// Returns the configured default provider-routing state.
     pub(in crate::runtime) fn agent_default_routing(&self) -> bool {
         self.agent.agent_routing

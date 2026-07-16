@@ -134,7 +134,7 @@ impl RuntimeSessionService {
             _ => profile_budget_words.saturating_div(4),
         }
         .max(1);
-        let retained_tail_percent = self.agent_compaction_raw_retention_percent;
+        let retained_tail_percent = self.agent_compaction_raw_retention_percent();
         let (compacted_context, report) =
             compact_model_context_for_budget_with_retained_tail_percent(
                 context,

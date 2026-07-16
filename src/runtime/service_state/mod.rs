@@ -4,7 +4,6 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::RuntimeAutoSizingConfig;
 use super::agent_state::{
     RuntimeAgentCompactionTask, RuntimeAgentLoopState, RuntimeAgentLoopTurn,
     RuntimeAgentProviderClaim, RuntimeAgentRememberTask,

@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::runtime::{
-    RuntimeAgentComponent, RuntimePresentationComponent, RuntimeProcessComponent,
+    RuntimeAgentComponent, RuntimeAutoSizingConfig, RuntimePresentationComponent,
+    RuntimeProcessComponent,
 };
 #[cfg(test)]
 use crate::terminal::HostClipboard;
@@ -114,7 +115,11 @@ impl RuntimeSessionService {
         Ok(Self {
             presentation: RuntimePresentationComponent::default(),
             process: RuntimeProcessComponent::with_pane_processes(pane_processes),
-            agent: RuntimeAgentComponent::with_default_routing(DEFAULT_AGENT_ROUTING),
+            agent: RuntimeAgentComponent::with_settings(
+                DEFAULT_AGENT_ROUTING,
+                RuntimeAutoSizingConfig::default(),
+                DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
+            ),
             session,
             window_created_at_unix_seconds,
             config_layers: Vec::new(),
@@ -179,15 +184,12 @@ impl RuntimeSessionService {
             agent_turn_network_action_history: BTreeMap::new(),
             agent_pre_shell_hook_completions: BTreeSet::new(),
             agent_turn_model_profiles: BTreeMap::new(),
-            agent_compaction_raw_retention_percent: DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
             agent_compacting_panes: BTreeMap::new(),
             pending_agent_compaction_tasks: BTreeMap::new(),
             claimed_agent_compaction_tasks: BTreeMap::new(),
             agent_remembering_panes: BTreeMap::new(),
             pending_agent_remember_tasks: BTreeMap::new(),
             claimed_agent_remember_tasks: BTreeMap::new(),
-            agent_auto_sizing: Default::default(),
-            agent_auto_sizing_overrides: BTreeMap::new(),
             agent_token_usage_by_conversation: BTreeMap::new(),
             agent_token_usage_by_pane: BTreeMap::new(),
             agent_context_usage_by_conversation: BTreeMap::new(),

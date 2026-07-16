@@ -309,8 +309,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) agent_turn_model_profiles: BTreeMap<String, ModelProfile>,
-    /// Percent of the active model context retained as uncompacted raw tail.
-    pub(in crate::runtime) agent_compaction_raw_retention_percent: usize,
     /// Panes currently running model-backed context compaction, keyed by start
     /// time for timer rendering.
     pub(in crate::runtime) agent_compacting_panes: BTreeMap<String, u64>,
@@ -327,11 +325,6 @@ pub struct RuntimeSessionService {
     pub(in crate::runtime) pending_agent_remember_tasks: BTreeMap<String, RuntimeAgentRememberTask>,
     /// Model-backed memory-generation tasks claimed by async provider workers.
     pub(in crate::runtime) claimed_agent_remember_tasks: BTreeMap<String, RuntimeAgentRememberTask>,
-    /// Automatic sizing profile and fallback configuration.
-    pub(in crate::runtime) agent_auto_sizing: RuntimeAutoSizingConfig,
-    /// Pane-local automatic sizing profile overrides selected through model
-    /// presets. Missing entries inherit the configured default.
-    pub(in crate::runtime) agent_auto_sizing_overrides: BTreeMap<String, RuntimeAutoSizingConfig>,
     /// Cumulative provider token usage keyed by conversation and provider/model.
     pub(in crate::runtime) agent_token_usage_by_conversation:
         BTreeMap<String, BTreeMap<ModelTokenUsageKey, ModelTokenUsage>>,

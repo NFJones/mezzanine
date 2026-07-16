@@ -482,8 +482,7 @@ impl RuntimeSessionService {
         if let Some(auto_sizing) =
             self.inherited_auto_sizing_for_child_agent(&spawn.parent_agent_id)
         {
-            self.agent_auto_sizing_overrides
-                .insert(started.pane_id.clone(), auto_sizing);
+            self.set_agent_auto_sizing_override(&started.pane_id, Some(auto_sizing));
         }
         if let Some(profile_name) = profile.model_profile.as_deref() {
             self.provider_registry.resolve_profile(profile_name)?;

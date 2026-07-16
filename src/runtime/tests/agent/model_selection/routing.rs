@@ -36,15 +36,13 @@ fn runtime_subagent_routing_inherits_parent_pane_setting() {
 #[test]
 fn runtime_subagent_auto_sizing_inherits_parent_pane_setting() {
     let mut service = test_runtime_service();
-    let mut parent_auto_sizing = service.agent_auto_sizing.clone();
+    let mut parent_auto_sizing = service.agent_auto_sizing().clone();
     parent_auto_sizing.router_model_profile = "deepseek-fast".to_string();
     parent_auto_sizing.small_model_profile = "deepseek-fast".to_string();
     parent_auto_sizing.medium_model_profile = "deepseek-default".to_string();
     parent_auto_sizing.large_model_profile = "deepseek-default".to_string();
     parent_auto_sizing.allowed_reasoning_efforts = vec!["high".to_string(), "xhigh".to_string()];
-    service
-        .agent_auto_sizing_overrides
-        .insert("%1".to_string(), parent_auto_sizing.clone());
+    service.set_agent_auto_sizing_override("%1", Some(parent_auto_sizing.clone()));
 
     assert_eq!(
         service.inherited_auto_sizing_for_child_agent("agent-%1"),

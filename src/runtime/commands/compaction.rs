@@ -103,7 +103,7 @@ impl RuntimeSessionService {
         let agent_id = format!("agent-{pane_id}");
         let (model_profile_name, model_profile) =
             self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
-        let retained_tail_percent = self.agent_compaction_raw_retention_percent;
+        let retained_tail_percent = self.agent_compaction_raw_retention_percent();
         let retained_transcript_entries = if source == "manual" || resume_turn_id.is_some() {
             runtime_compact_forced_retained_transcript_entries(
                 transcript_entries,

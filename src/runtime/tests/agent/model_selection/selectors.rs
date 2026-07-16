@@ -462,10 +462,11 @@ allowed_reasoning_efforts = ["high", "xhigh"]
     assert_eq!(active_profile.provider, "deepseek");
     assert_eq!(active_profile.model, "deepseek-v4-flash");
     assert_eq!(
-        service.agent_auto_sizing.router_model_profile, "openai-router",
+        service.agent_auto_sizing().router_model_profile,
+        "openai-router",
         "preset selection must not mutate the global auto-sizing defaults"
     );
-    let pane_auto_sizing = service.agent_auto_sizing_overrides.get("%1").unwrap();
+    let pane_auto_sizing = service.agent_auto_sizing_override("%1").unwrap();
     assert_eq!(pane_auto_sizing.router_model_profile, "deepseek-fast");
     assert_eq!(pane_auto_sizing.medium_model_profile, "deepseek-default");
     assert_eq!(
@@ -633,7 +634,7 @@ fn runtime_agent_shell_model_command_sets_routing_model_profile() {
     assert!(routing.contains("model=gpt-5.4"), "{routing}");
     assert!(routing.contains("reasoning_profile=high"), "{routing}");
     assert_eq!(
-        service.agent_auto_sizing.router_model_profile,
+        service.agent_auto_sizing().router_model_profile,
         "gpt-5.4:high"
     );
 

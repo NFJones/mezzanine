@@ -267,8 +267,9 @@ impl RuntimeSessionService {
             runtime_max_subagents_per_subagent_from_config(&structured)?;
         self.max_subagent_depth = runtime_max_subagent_depth_from_config(&structured)?;
         self.subagent_wait_policy = runtime_subagent_wait_policy_from_config(&structured)?;
-        self.agent_compaction_raw_retention_percent =
-            runtime_agent_compaction_raw_retention_percent_from_config(&structured)?;
+        self.set_agent_compaction_raw_retention_percent(
+            runtime_agent_compaction_raw_retention_percent_from_config(&structured)?,
+        );
         self.set_agent_default_routing(runtime_agent_routing_from_config(&structured)?);
         self.agent_action_failure_retry_limit =
             runtime_agent_action_failure_retry_limit_from_config(&structured)?;
@@ -277,7 +278,7 @@ impl RuntimeSessionService {
         self.agent_loop_limit = runtime_agent_loop_limit_from_config(&structured)?;
         self.provider_auth_refresh_leeway_seconds =
             runtime_provider_auth_refresh_leeway_seconds_from_config(&structured);
-        self.agent_auto_sizing = runtime_agent_auto_sizing_from_config(&structured)?;
+        self.set_agent_auto_sizing(runtime_agent_auto_sizing_from_config(&structured)?);
         self.agent_scheduler
             .set_max_concurrent_agents(max_concurrent_agents)?;
         self.start_ready_agent_turns()?;
