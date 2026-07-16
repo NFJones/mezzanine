@@ -133,7 +133,8 @@ fn protected_compacted_block_indices(blocks: &[ContextBlock]) -> HashSet<usize> 
             ContextSourceKind::ProjectGuidance
                 | ContextSourceKind::EvidenceLedger
                 | ContextSourceKind::CommittedEvidence
-        ) {
+        ) || model_context_block_is_compaction_summary(block)
+        {
             protected.insert(index);
         }
     }
@@ -144,6 +145,13 @@ fn protected_compacted_block_indices(blocks: &[ContextBlock]) -> HashSet<usize> 
         }
     }
     protected
+}
+
+/// Returns whether a block is an immutable local compaction summary epoch.
+fn model_context_block_is_compaction_summary(block: &ContextBlock) -> bool {
+    block.source == ContextSourceKind::Memory
+        && block.label == "context compaction summary"
+        && block.content.starts_with(MODEL_CONTEXT_COMPACTED_PREFIX)
 }
 
 /// Returns the provider-request word cost of one block.
@@ -396,5 +404,69 @@ mod tests {
             .expect("bulk compaction memory should be present");
 
         assert!(memory_block.content.contains("retained_tail_percent=25"));
+    }
+
+    /// Verifies later recovery creates a new immutable summary epoch without
+    /// rewriting the exact bytes of an earlier compaction boundary.
+    ///
+    /// Successively smaller provider-limit budgets may reduce the raw tail,
+    /// but stable summary bytes must remain reusable across those retries.
+    #[test]
+    fn repeated_context_compaction_preserves_immutable_summary_epochs() {
+        let blocks = (0..24)
+            .map(|index| ContextBlock {
+                source: ContextSourceKind::Transcript,
+                label: format!("transcript {index}"),
+                content: format!("entry-{index} {}", "history word ".repeat(80)),
+            })
+            .collect();
+        let (mut first, first_report) =
+            compact_model_context_for_budget_with_retained_tail_percent(
+                AgentContext::new(blocks).unwrap(),
+                1_200,
+                20,
+            )
+            .unwrap();
+        assert!(first_report.changed());
+        let first_epoch = first
+            .blocks
+            .iter()
+            .find(|block| model_context_block_is_compaction_summary(block))
+            .expect("first compaction epoch should exist")
+            .clone();
+        for index in 24..32 {
+            first.blocks.push(ContextBlock {
+                source: ContextSourceKind::Transcript,
+                label: format!("transcript {index}"),
+                content: format!("entry-{index} {}", "new history word ".repeat(80)),
+            });
+        }
+
+        let (second, second_report) =
+            compact_model_context_for_budget_with_retained_tail_percent(first.clone(), 600, 10)
+                .unwrap();
+        let (repeated, repeated_report) =
+            compact_model_context_for_budget_with_retained_tail_percent(first, 600, 10).unwrap();
+
+        assert!(second_report.changed());
+        assert_eq!(second.blocks, repeated.blocks);
+        assert_eq!(
+            second_report.compacted_blocks,
+            repeated_report.compacted_blocks
+        );
+        assert_eq!(second_report.omitted_blocks, repeated_report.omitted_blocks);
+        assert_eq!(
+            second_report.omitted_original_words,
+            repeated_report.omitted_original_words
+        );
+        assert!(second.blocks.contains(&first_epoch));
+        assert_eq!(
+            second
+                .blocks
+                .iter()
+                .filter(|block| model_context_block_is_compaction_summary(block))
+                .count(),
+            2
+        );
     }
 }

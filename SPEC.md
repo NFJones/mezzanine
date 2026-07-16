@@ -4478,12 +4478,16 @@ when explicit user action or provider feedback shows that context reduction is
 needed. The agent harness MUST NOT block prompt submission or provider request
 assembly solely because a local fallback estimate predicts high context
 pressure. Compaction MUST use the same bulk shape regardless of trigger: older
-compacted context MUST be represented by one memory-style summary block at the
-start of model-visible context, followed by uncompacted recent blocks retained
-as a raw tail. Local context reduction MUST prefer compact summaries over
-partial block truncation so the model does not reason from silently incomplete
-context. Compaction MUST retain a bounded raw recent transcript tail alongside
-the summary so exact recent references remain available after context reduction.
+compacted context MUST be represented by one or more immutable memory-style
+summary epochs at the start of model-visible context, followed by uncompacted
+recent blocks retained as a raw tail. Once emitted, an epoch MUST remain
+byte-stable during later provider context-limit recovery; later recovery MAY
+append another summary epoch for newly compacted raw blocks and MAY shrink the
+raw tail. Local context reduction MUST prefer compact summaries over partial
+block truncation so the model does not reason from silently incomplete context.
+Compaction MUST retain a bounded raw recent transcript tail alongside the
+summary epochs so exact recent references remain available after context
+reduction.
 The raw tail size MUST follow `agents.compaction_raw_retention_percent`, which
 defaults to retaining approximately the newest 10% of the active model context
 budget by estimated replay word count.
