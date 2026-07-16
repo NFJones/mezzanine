@@ -16,10 +16,11 @@ use super::{
     HookEvent, JoinedSubagentDependency, McpToolCallRequest, MezError, ModelProfile, ModelResponse,
     PaneId, PaneReadinessState, PathBuf, PathScopes, PendingFocusedShellHookContinuation,
     PermissionPolicy, ReadinessOverrideRevocation, Recipient, ReqwestProviderHttpTransport, Result,
-    RuleDecision, RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentCopyOutput,
-    RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind,
-    RuntimeAgentModifiedFileSummary, RuntimeAgentPreShellHookCompletion,
-    RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask,
+    RuleDecision, RunningShellTransactionKind, RunningShellTransactionRef,
+    RuntimeAgentCompactionTask, RuntimeAgentCopyOutput, RuntimeAgentLoopState,
+    RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind, RuntimeAgentModifiedFileSummary,
+    RuntimeAgentPreShellHookCompletion, RuntimeAgentProviderDispatch,
+    RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberTask,
     RuntimeAutoSizingConfig, RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile,
     RuntimeHookPipelineBlock, RuntimeHookPipelineDecision, RuntimeMcpActionExecutor,
     RuntimeProviderConfig, RuntimeSessionService, RuntimeShellTransactionActionFailure,
@@ -166,6 +167,39 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     claimed_agent_provider_tasks: BTreeMap<String, RuntimeAgentProviderClaim>,
     /// User steering prompts waiting for the next provider action boundary.
     agent_turn_pending_steering: BTreeMap<String, Vec<AgentTurnSteering>>,
+    /// Panes currently running model-backed context compaction.
+    agent_compacting_panes: BTreeMap<String, u64>,
+    /// Model-backed compaction tasks waiting for provider dispatch.
+    pending_agent_compaction_tasks: BTreeMap<String, RuntimeAgentCompactionTask>,
+    /// Model-backed compaction tasks claimed by provider workers.
+    claimed_agent_compaction_tasks: BTreeMap<String, RuntimeAgentCompactionTask>,
+    /// Panes currently running model-backed durable-memory generation.
+    agent_remembering_panes: BTreeMap<String, u64>,
+    /// Durable-memory generation tasks waiting for provider dispatch.
+    pending_agent_remember_tasks: BTreeMap<String, RuntimeAgentRememberTask>,
+    /// Durable-memory generation tasks claimed by provider workers.
+    claimed_agent_remember_tasks: BTreeMap<String, RuntimeAgentRememberTask>,
+}
+
+/// State removed when a compaction worker reports failure.
+#[derive(Debug, Default)]
+pub(in crate::runtime) struct RuntimeAgentCompactionFailureState {
+    /// Whether pending, claimed, or active compaction state existed.
+    had_task: bool,
+    /// Running provider turn that must fail when recovery compaction failed.
+    resume_turn_id: Option<String>,
+}
+
+impl RuntimeAgentCompactionFailureState {
+    /// Reports whether any compaction state was removed.
+    pub(in crate::runtime) fn had_task(&self) -> bool {
+        self.had_task
+    }
+
+    /// Takes the running turn awaiting failed recovery compaction.
+    pub(in crate::runtime) fn take_resume_turn_id(&mut self) -> Option<String> {
+        self.resume_turn_id.take()
+    }
 }
 
 impl RuntimeAgentComponent {
@@ -191,6 +225,207 @@ impl RuntimeAgentComponent {
 }
 
 impl RuntimeSessionService {
+    /// Reports when model-backed compaction started for one pane.
+    pub(in crate::runtime) fn agent_compaction_started_at(&self, pane_id: &str) -> Option<u64> {
+        self.agent.agent_compacting_panes.get(pane_id).copied()
+    }
+
+    /// Reports when durable-memory generation started for one pane.
+    pub(in crate::runtime) fn agent_remember_started_at(&self, pane_id: &str) -> Option<u64> {
+        self.agent.agent_remembering_panes.get(pane_id).copied()
+    }
+
+    /// Reports whether one pane is compacting its model context.
+    pub(in crate::runtime) fn agent_is_compacting(&self, pane_id: &str) -> bool {
+        self.agent.agent_compacting_panes.contains_key(pane_id)
+    }
+
+    /// Reports whether one pane is generating durable memories.
+    pub(in crate::runtime) fn agent_is_remembering(&self, pane_id: &str) -> bool {
+        self.agent.agent_remembering_panes.contains_key(pane_id)
+    }
+
+    /// Counts background model operations attached to the provided panes.
+    pub(in crate::runtime) fn active_agent_background_work_count(
+        &self,
+        pane_ids: &[String],
+    ) -> usize {
+        self.agent
+            .agent_compacting_panes
+            .keys()
+            .filter(|pane_id| pane_ids.contains(pane_id))
+            .count()
+            .saturating_add(
+                self.agent
+                    .agent_remembering_panes
+                    .keys()
+                    .filter(|pane_id| pane_ids.contains(pane_id))
+                    .count(),
+            )
+    }
+
+    /// Queues one compaction task and marks its pane active.
+    pub(in crate::runtime) fn queue_agent_compaction_task(
+        &mut self,
+        task: RuntimeAgentCompactionTask,
+    ) {
+        let pane_id = task.pane_id.clone();
+        self.agent
+            .agent_compacting_panes
+            .insert(pane_id.clone(), current_unix_seconds().max(1));
+        self.agent
+            .pending_agent_compaction_tasks
+            .insert(pane_id, task);
+    }
+
+    /// Returns pane ids with queued model-backed compaction work.
+    pub(in crate::runtime) fn pending_agent_compaction_task_ids(&self) -> Vec<String> {
+        self.agent
+            .pending_agent_compaction_tasks
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    /// Returns turns waiting for output-limit recovery compaction.
+    pub(in crate::runtime) fn agent_compaction_resume_ids(&self) -> Vec<String> {
+        self.agent
+            .pending_agent_compaction_tasks
+            .values()
+            .chain(self.agent.claimed_agent_compaction_tasks.values())
+            .filter_map(|task| task.resume_turn_id.clone())
+            .collect()
+    }
+
+    /// Removes one pending compaction task for provider construction.
+    pub(in crate::runtime) fn take_pending_agent_compaction_task(
+        &mut self,
+        pane_id: &str,
+    ) -> Option<RuntimeAgentCompactionTask> {
+        self.agent.pending_agent_compaction_tasks.remove(pane_id)
+    }
+
+    /// Records that a provider worker owns one compaction task.
+    pub(in crate::runtime) fn claim_agent_compaction_task_state(
+        &mut self,
+        pane_id: impl Into<String>,
+        task: RuntimeAgentCompactionTask,
+    ) {
+        self.agent
+            .claimed_agent_compaction_tasks
+            .insert(pane_id.into(), task);
+    }
+
+    /// Finishes claimed compaction state and clears its pane activity marker.
+    pub(in crate::runtime) fn finish_agent_compaction_task(
+        &mut self,
+        pane_id: &str,
+    ) -> Option<RuntimeAgentCompactionTask> {
+        let task = self.agent.claimed_agent_compaction_tasks.remove(pane_id);
+        self.agent.agent_compacting_panes.remove(pane_id);
+        task
+    }
+
+    /// Removes all compaction state after provider failure.
+    pub(in crate::runtime) fn fail_agent_compaction_task(
+        &mut self,
+        pane_id: &str,
+    ) -> RuntimeAgentCompactionFailureState {
+        let pending = self.agent.pending_agent_compaction_tasks.remove(pane_id);
+        let claimed = self.agent.claimed_agent_compaction_tasks.remove(pane_id);
+        let resume_turn_id = claimed
+            .as_ref()
+            .or(pending.as_ref())
+            .and_then(|task| task.resume_turn_id.clone());
+        let had_task = pending.is_some()
+            || claimed.is_some()
+            || self.agent.agent_compacting_panes.remove(pane_id).is_some();
+        RuntimeAgentCompactionFailureState {
+            had_task,
+            resume_turn_id,
+        }
+    }
+
+    /// Queues one durable-memory task and marks its pane active.
+    pub(in crate::runtime) fn queue_agent_remember_task(&mut self, task: RuntimeAgentRememberTask) {
+        let pane_id = task.pane_id.clone();
+        self.agent
+            .agent_remembering_panes
+            .insert(pane_id.clone(), current_unix_seconds().max(1));
+        self.agent
+            .pending_agent_remember_tasks
+            .insert(pane_id, task);
+    }
+
+    /// Returns pane ids with queued durable-memory generation work.
+    pub(in crate::runtime) fn pending_agent_remember_task_ids(&self) -> Vec<String> {
+        self.agent
+            .pending_agent_remember_tasks
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    /// Removes one pending durable-memory task for provider construction.
+    pub(in crate::runtime) fn take_pending_agent_remember_task(
+        &mut self,
+        pane_id: &str,
+    ) -> Option<RuntimeAgentRememberTask> {
+        self.agent.pending_agent_remember_tasks.remove(pane_id)
+    }
+
+    /// Records that a provider worker owns one durable-memory task.
+    pub(in crate::runtime) fn claim_agent_remember_task_state(
+        &mut self,
+        pane_id: impl Into<String>,
+        task: RuntimeAgentRememberTask,
+    ) {
+        self.agent
+            .claimed_agent_remember_tasks
+            .insert(pane_id.into(), task);
+    }
+
+    /// Finishes claimed durable-memory state and clears pane activity.
+    pub(in crate::runtime) fn finish_agent_remember_task(
+        &mut self,
+        pane_id: &str,
+    ) -> Option<RuntimeAgentRememberTask> {
+        let task = self.agent.claimed_agent_remember_tasks.remove(pane_id);
+        self.agent.agent_remembering_panes.remove(pane_id);
+        task
+    }
+
+    /// Removes all durable-memory generation state after provider failure.
+    pub(in crate::runtime) fn fail_agent_remember_task(&mut self, pane_id: &str) -> bool {
+        let pending = self
+            .agent
+            .pending_agent_remember_tasks
+            .remove(pane_id)
+            .is_some();
+        let claimed = self
+            .agent
+            .claimed_agent_remember_tasks
+            .remove(pane_id)
+            .is_some();
+        let active = self.agent.agent_remembering_panes.remove(pane_id).is_some();
+        pending || claimed || active
+    }
+
+    /// Marks one pane as compacting in rendering regression tests.
+    #[cfg(test)]
+    pub(crate) fn mark_agent_compacting_for_tests(&mut self, pane_id: impl Into<String>, at: u64) {
+        self.agent.agent_compacting_panes.insert(pane_id.into(), at);
+    }
+
+    /// Returns one queued compaction task to crate-local regression tests.
+    #[cfg(test)]
+    pub(crate) fn pending_agent_compaction_task_for_tests(
+        &self,
+        pane_id: &str,
+    ) -> Option<&RuntimeAgentCompactionTask> {
+        self.agent.pending_agent_compaction_tasks.get(pane_id)
+    }
+
     /// Returns the agent scheduler for read-only diagnostics and prompt context.
     pub(crate) fn agent_scheduler(&self) -> &AgentScheduler {
         &self.agent.agent_scheduler

@@ -1058,12 +1058,9 @@ fn complete_runtime_test_compaction(
     summary: &str,
 ) {
     let task = service
-        .pending_agent_compaction_tasks
-        .remove(pane_id)
+        .take_pending_agent_compaction_task(pane_id)
         .expect("queued compaction task");
-    service
-        .claimed_agent_compaction_tasks
-        .insert(pane_id.to_string(), task);
+    service.claim_agent_compaction_task_state(pane_id, task);
     assert!(
         service
             .apply_agent_compaction_completed_event(

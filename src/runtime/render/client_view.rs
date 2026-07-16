@@ -631,15 +631,15 @@ impl RuntimeSessionService {
 
     /// Builds the live working footer shown at the tail of an active agent pane.
     fn runtime_agent_working_footer_line(&self, pane_id: &str) -> Option<String> {
-        if let Some(started_at) = self.agent_compacting_panes.get(pane_id) {
-            let elapsed = current_unix_seconds().saturating_sub(*started_at);
+        if let Some(started_at) = self.agent_compaction_started_at(pane_id) {
+            let elapsed = current_unix_seconds().saturating_sub(started_at);
             return Some(format!(
                 "compacting ({} • esc to interrupt)",
                 runtime_agent_turn_duration_display(elapsed)
             ));
         }
-        if let Some(started_at) = self.agent_remembering_panes.get(pane_id) {
-            let elapsed = current_unix_seconds().saturating_sub(*started_at);
+        if let Some(started_at) = self.agent_remember_started_at(pane_id) {
+            let elapsed = current_unix_seconds().saturating_sub(started_at);
             return Some(format!(
                 "memorizing ({} • esc to interrupt)",
                 runtime_agent_turn_duration_display(elapsed)
@@ -1010,9 +1010,7 @@ impl RuntimeSessionService {
 
     /// Reports whether the pane currently renders a live agent footer.
     fn pane_has_live_agent_footer(&self, pane_id: &str) -> bool {
-        if self.agent_compacting_panes.contains_key(pane_id)
-            || self.agent_remembering_panes.contains_key(pane_id)
-        {
+        if self.agent_is_compacting(pane_id) || self.agent_is_remembering(pane_id) {
             return true;
         }
         let Some(running_turn_id) = self
@@ -1030,9 +1028,7 @@ impl RuntimeSessionService {
 
     /// Reports whether a pane has an active-work status in its frame context.
     fn pane_has_active_agent_frame_status(&self, pane_id: &str) -> bool {
-        if self.agent_compacting_panes.contains_key(pane_id)
-            || self.agent_remembering_panes.contains_key(pane_id)
-        {
+        if self.agent_is_compacting(pane_id) || self.agent_is_remembering(pane_id) {
             return true;
         }
         self.agent_turn_ledger
@@ -1194,22 +1190,7 @@ impl RuntimeSessionService {
                         && pane_ids.iter().any(|pane_id| pane_id == &turn.pane_id)
                 })
                 .count()
-                .saturating_add(
-                    self.agent_compacting_panes
-                        .iter()
-                        .filter(|(pane_id, _)| {
-                            pane_ids.iter().any(|window_pane| window_pane == *pane_id)
-                        })
-                        .count(),
-                )
-                .saturating_add(
-                    self.agent_remembering_panes
-                        .iter()
-                        .filter(|(pane_id, _)| {
-                            pane_ids.iter().any(|window_pane| window_pane == *pane_id)
-                        })
-                        .count(),
-                );
+                .saturating_add(self.active_agent_background_work_count(&pane_ids));
             context
                 .window_agent_active_counts
                 .insert(window.id.to_string(), active_count);
@@ -1259,12 +1240,10 @@ impl RuntimeSessionService {
                     })
                     .flatten();
                 let agent_status = self
-                    .agent_compacting_panes
-                    .contains_key(&pane_id)
+                    .agent_is_compacting(&pane_id)
                     .then(|| "compacting".to_string())
                     .or_else(|| {
-                        self.agent_remembering_panes
-                            .contains_key(&pane_id)
+                        self.agent_is_remembering(&pane_id)
                             .then(|| "memorizing".to_string())
                     })
                     .or_else(|| {

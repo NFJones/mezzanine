@@ -4,7 +4,6 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::agent_state::{RuntimeAgentCompactionTask, RuntimeAgentRememberTask};
 use super::{
     ActionStatus, AgentContext, AgentShellStore, AgentShellVisibility, AgentTranscriptStore,
     AgentTurnExecution, AgentTurnLedger, AgentTurnState, AuditLog, AuthStore, BTreeMap, BTreeSet,

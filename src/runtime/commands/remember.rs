@@ -507,12 +507,12 @@ impl RuntimeSessionService {
                 "remember requires a configured Mezzanine config root",
             ));
         };
-        if self.agent_remembering_panes.contains_key(pane_id) {
+        if self.agent_is_remembering(pane_id) {
             return Err(MezError::conflict(format!(
                 "cannot remember while pane {pane_id} is already memorizing"
             )));
         }
-        if self.agent_compacting_panes.contains_key(pane_id) {
+        if self.agent_is_compacting(pane_id) {
             return Err(MezError::conflict(format!(
                 "cannot remember while pane {pane_id} is compacting"
             )));
@@ -543,18 +543,13 @@ impl RuntimeSessionService {
             &source_text,
             self.runtime_memory_default_ttl_days(),
         )?;
-        self.agent_remembering_panes
-            .insert(pane_id.to_string(), current_unix_seconds().max(1));
-        self.pending_agent_remember_tasks.insert(
-            pane_id.to_string(),
-            RuntimeAgentRememberTask {
-                pane_id: pane_id.to_string(),
-                model_profile_name: model_profile_name.clone(),
-                model_profile: model_profile.clone(),
-                scope: self.runtime_remember_scope_for_pane(pane_id),
-                request,
-            },
-        );
+        self.queue_agent_remember_task(RuntimeAgentRememberTask {
+            pane_id: pane_id.to_string(),
+            model_profile_name: model_profile_name.clone(),
+            model_profile: model_profile.clone(),
+            scope: self.runtime_remember_scope_for_pane(pane_id),
+            request,
+        });
         self.append_agent_status_text_to_terminal_buffer(
             pane_id,
             &format!(
@@ -602,11 +597,9 @@ impl RuntimeSessionService {
         pane_id: &str,
         response: ModelResponse,
     ) -> Result<bool> {
-        let Some(task) = self.claimed_agent_remember_tasks.remove(pane_id) else {
-            self.agent_remembering_panes.remove(pane_id);
+        let Some(task) = self.finish_agent_remember_task(pane_id) else {
             return Ok(false);
         };
-        self.agent_remembering_panes.remove(pane_id);
         self.record_agent_provider_token_usage_with_profile(
             pane_id,
             response.usage,
@@ -670,9 +663,7 @@ impl RuntimeSessionService {
         pane_id: &str,
         message: &str,
     ) -> Result<bool> {
-        let had_task = self.pending_agent_remember_tasks.remove(pane_id).is_some()
-            || self.claimed_agent_remember_tasks.remove(pane_id).is_some()
-            || self.agent_remembering_panes.remove(pane_id).is_some();
+        let had_task = self.fail_agent_remember_task(pane_id);
         if had_task {
             self.append_agent_status_text_to_terminal_buffer(
                 pane_id,
@@ -684,7 +675,7 @@ impl RuntimeSessionService {
 
     /// Returns pane ids with queued model-backed durable memory tasks.
     pub fn pending_agent_remember_tasks(&self) -> Vec<String> {
-        self.pending_agent_remember_tasks.keys().cloned().collect()
+        self.pending_agent_remember_task_ids()
     }
 
     /// Claims one queued durable memory task for execution outside the actor.
@@ -692,16 +683,15 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> Result<Option<RuntimeAgentRememberDispatch>> {
-        let Some(task) = self.pending_agent_remember_tasks.remove(pane_id) else {
+        let Some(task) = self.take_pending_agent_remember_task(pane_id) else {
             return Ok(None);
         };
-        if !self.agent_remembering_panes.contains_key(pane_id) {
+        if !self.agent_is_remembering(pane_id) {
             return Ok(None);
         }
         let provider =
             self.runtime_model_provider_for_profile(&task.model_profile, "provider_remember")?;
-        self.claimed_agent_remember_tasks
-            .insert(pane_id.to_string(), task.clone());
+        self.claim_agent_remember_task_state(pane_id, task.clone());
         Ok(Some(RuntimeAgentRememberDispatch { task, provider }))
     }
 

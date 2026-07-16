@@ -250,22 +250,6 @@ pub struct RuntimeSessionService {
     /// The key is `turn_id/action_id`, keeping the accumulator scoped to one
     /// running semantic action while successive read transactions complete.
     pub(in crate::runtime) apply_patch_batch_states: BTreeMap<String, RuntimeApplyPatchBatchState>,
-    /// Panes currently running model-backed context compaction, keyed by start
-    /// time for timer rendering.
-    pub(in crate::runtime) agent_compacting_panes: BTreeMap<String, u64>,
-    /// Model-backed compaction tasks waiting for async provider dispatch.
-    pub(in crate::runtime) pending_agent_compaction_tasks:
-        BTreeMap<String, RuntimeAgentCompactionTask>,
-    /// Model-backed compaction tasks claimed by async provider workers.
-    pub(in crate::runtime) claimed_agent_compaction_tasks:
-        BTreeMap<String, RuntimeAgentCompactionTask>,
-    /// Panes currently running model-backed durable memory generation, keyed by
-    /// start time for timer rendering.
-    pub(in crate::runtime) agent_remembering_panes: BTreeMap<String, u64>,
-    /// Model-backed memory-generation tasks waiting for async provider dispatch.
-    pub(in crate::runtime) pending_agent_remember_tasks: BTreeMap<String, RuntimeAgentRememberTask>,
-    /// Model-backed memory-generation tasks claimed by async provider workers.
-    pub(in crate::runtime) claimed_agent_remember_tasks: BTreeMap<String, RuntimeAgentRememberTask>,
     /// Cumulative provider token usage keyed by conversation and provider/model.
     pub(in crate::runtime) agent_token_usage_by_conversation:
         BTreeMap<String, BTreeMap<ModelTokenUsageKey, ModelTokenUsage>>,

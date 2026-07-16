@@ -60,7 +60,7 @@ impl RuntimeSessionService {
                 "cannot compact conversation while turn {turn_id} is running"
             )));
         }
-        if self.agent_compacting_panes.contains_key(pane_id) {
+        if self.agent_is_compacting(pane_id) {
             return Err(MezError::conflict(format!(
                 "cannot compact conversation while pane {pane_id} is already compacting"
             )));
@@ -160,23 +160,18 @@ impl RuntimeSessionService {
             compactable_transcript_records,
             &compaction_context,
         )?;
-        self.agent_compacting_panes
-            .insert(pane_id.to_string(), current_unix_seconds().max(1));
-        self.pending_agent_compaction_tasks.insert(
-            pane_id.to_string(),
-            RuntimeAgentCompactionTask {
-                pane_id: pane_id.to_string(),
-                conversation_id: conversation_id.clone(),
-                source: source.to_string(),
-                transcript_entries,
-                retained_transcript_entries,
-                summarized_entries,
-                model_profile_name: model_profile_name.clone(),
-                model_profile: model_profile.clone(),
-                request,
-                resume_turn_id: resume_turn_id.map(str::to_string),
-            },
-        );
+        self.queue_agent_compaction_task(RuntimeAgentCompactionTask {
+            pane_id: pane_id.to_string(),
+            conversation_id: conversation_id.clone(),
+            source: source.to_string(),
+            transcript_entries,
+            retained_transcript_entries,
+            summarized_entries,
+            model_profile_name: model_profile_name.clone(),
+            model_profile: model_profile.clone(),
+            request,
+            resume_turn_id: resume_turn_id.map(str::to_string),
+        });
         self.append_agent_status_text_to_terminal_buffer(
             pane_id,
             &format!(
@@ -254,7 +249,7 @@ impl RuntimeSessionService {
             self.remove_pending_agent_provider_task(turn_id);
             return Ok(false);
         }
-        if self.agent_compacting_panes.contains_key(&turn.pane_id) {
+        if self.agent_is_compacting(&turn.pane_id) {
             return Ok(false);
         }
         let outcome = self.queue_agent_shell_compaction_with_model(
@@ -284,10 +279,7 @@ impl RuntimeSessionService {
 
     /// Returns pane ids with queued model-backed compaction tasks.
     pub fn pending_agent_compaction_tasks(&self) -> Vec<String> {
-        self.pending_agent_compaction_tasks
-            .keys()
-            .cloned()
-            .collect()
+        self.pending_agent_compaction_task_ids()
     }
 
     /// Returns running turns waiting on model-backed compaction before retry.
@@ -297,11 +289,7 @@ impl RuntimeSessionService {
     /// cleanup uses these ids as valid progress paths until compaction reports
     /// completion or failure.
     pub(crate) fn agent_compaction_resume_turn_ids(&self) -> Vec<String> {
-        self.pending_agent_compaction_tasks
-            .values()
-            .chain(self.claimed_agent_compaction_tasks.values())
-            .filter_map(|task| task.resume_turn_id.clone())
-            .collect()
+        self.agent_compaction_resume_ids()
     }
 
     /// Claims one queued compaction task for execution outside the actor.
@@ -309,10 +297,10 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> Result<Option<RuntimeAgentCompactionDispatch>> {
-        let Some(task) = self.pending_agent_compaction_tasks.remove(pane_id) else {
+        let Some(task) = self.take_pending_agent_compaction_task(pane_id) else {
             return Ok(None);
         };
-        if !self.agent_compacting_panes.contains_key(pane_id) {
+        if !self.agent_is_compacting(pane_id) {
             return Ok(None);
         }
         let provider_config = self
@@ -404,8 +392,7 @@ impl RuntimeSessionService {
             "provider_compact",
             "granted",
         )?;
-        self.claimed_agent_compaction_tasks
-            .insert(pane_id.to_string(), task.clone());
+        self.claim_agent_compaction_task_state(pane_id, task.clone());
         Ok(Some(RuntimeAgentCompactionDispatch { task, provider }))
     }
 
@@ -436,11 +423,9 @@ impl RuntimeSessionService {
         pane_id: &str,
         response: ModelResponse,
     ) -> Result<bool> {
-        let Some(task) = self.claimed_agent_compaction_tasks.remove(pane_id) else {
-            self.agent_compacting_panes.remove(pane_id);
+        let Some(task) = self.finish_agent_compaction_task(pane_id) else {
             return Ok(false);
         };
-        self.agent_compacting_panes.remove(pane_id);
         self.record_agent_provider_token_usage_with_profile(
             pane_id,
             response.usage,
@@ -516,25 +501,17 @@ impl RuntimeSessionService {
         pane_id: &str,
         message: &str,
     ) -> Result<bool> {
-        let pending_task = self.pending_agent_compaction_tasks.remove(pane_id);
-        let claimed_task = self.claimed_agent_compaction_tasks.remove(pane_id);
-        let resume_turn_id = claimed_task
-            .as_ref()
-            .or(pending_task.as_ref())
-            .and_then(|task| task.resume_turn_id.clone());
-        let had_task = pending_task.is_some()
-            || claimed_task.is_some()
-            || self.agent_compacting_panes.remove(pane_id).is_some();
-        if had_task {
+        let mut failed = self.fail_agent_compaction_task(pane_id);
+        if failed.had_task() {
             self.append_agent_status_text_to_terminal_buffer(
                 pane_id,
                 &format!("agent: compact failed during provider request: {message}"),
             )?;
         }
-        if let Some(resume_turn_id) = resume_turn_id {
+        if let Some(resume_turn_id) = failed.take_resume_turn_id() {
             self.fail_running_turn_after_output_limit_compaction_failure(&resume_turn_id, message)?;
         }
-        Ok(had_task)
+        Ok(failed.had_task())
     }
 
     /// Fails a turn whose automatic output-limit compaction could not finish.

@@ -46,7 +46,9 @@ fn runtime_service_owns_session_memory_and_clears_it_on_kill() {
 
 /// Verifies `/compact` opportunistically prunes expired persistent memories
 /// before queueing model-backed compaction while preserving non-expired
-/// persistent records in both disk and session state.
+/// persistent records in both disk and session state. A simulated provider
+/// failure also verifies that pending and active background-task state is
+/// cleared atomically rather than leaving the pane stuck as memorizing.
 #[test]
 fn runtime_agent_shell_compact_prunes_expired_persistent_memory_before_queueing() {
     let mut service = test_runtime_service();
@@ -270,6 +272,20 @@ context_window_tokens = 4500
         session_ids.iter().any(|id| id == "live-remember-memory"),
         "{session_ids:?}"
     );
+    assert!(service.agent_is_remembering("%1"));
+    assert_eq!(service.pending_agent_remember_tasks(), vec!["%1"]);
+    assert!(
+        service
+            .apply_agent_remember_failed_event("%1", "simulated provider failure")
+            .unwrap()
+    );
+    assert!(!service.agent_is_remembering("%1"));
+    assert!(service.pending_agent_remember_tasks().is_empty());
+    assert!(
+        !service
+            .apply_agent_remember_failed_event("%1", "duplicate failure")
+            .unwrap()
+    );
 }
 
 /// Verifies that `/compact` converts the active conversation transcript into a
@@ -378,8 +394,12 @@ context_window_tokens = 4500
     assert!(compact.contains("summarized_entries=6"), "{compact}");
     assert!(compact.contains("source=model-compact"), "{compact}");
     assert!(!compact.contains("requires_runtime"), "{compact}");
-    assert!(service.agent_compacting_panes.contains_key("%1"));
-    assert!(service.pending_agent_compaction_tasks.contains_key("%1"));
+    assert!(service.agent_is_compacting("%1"));
+    assert!(
+        service
+            .pending_agent_compaction_task_for_tests("%1")
+            .is_some()
+    );
 
     complete_runtime_test_compaction(&mut service, "%1", "summarize release plan\n[redacted]");
     let pane_text = service

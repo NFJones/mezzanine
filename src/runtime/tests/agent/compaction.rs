@@ -881,8 +881,7 @@ context_window_tokens = 128000
     assert!(queued);
     assert!(
         service
-            .pending_agent_compaction_tasks
-            .get("%1")
+            .pending_agent_compaction_task_for_tests("%1")
             .and_then(|task| task.resume_turn_id.as_deref())
             == Some("turn-1")
     );
@@ -1093,7 +1092,7 @@ fn runtime_agent_shell_compact_rejects_overlapping_pane_compaction() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service.agent_compacting_panes.insert("%1".to_string(), 1);
+    service.mark_agent_compacting_for_tests("%1", 1);
 
     let response = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"compact-overlap","method":"agent/shell/command","params":{"idempotency_key":"compact-overlap","input":"/compact"}}"#,
