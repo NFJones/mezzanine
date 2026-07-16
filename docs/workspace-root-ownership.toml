@@ -127,7 +127,7 @@ state = "temporary"
 role = "Product serialized state, effects, and rendering projection adapters pending retained production and test-file decomposition."
 
 [[surface]]
-path = "src/selector.rs"
+path = "src/selector"
 state = "adapter"
 role = "Product command, runtime, parameter, and filesystem candidate providers over the mux selector engine."
 
