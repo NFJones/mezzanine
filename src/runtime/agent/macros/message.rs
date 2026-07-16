@@ -71,9 +71,14 @@ impl RuntimeSessionService {
         // step result instead of creating another child turn. Check this before
         // the generic in-flight guard so retries of the same accepted action
         // remain safe while the child turn is still running. ---
-        if let Some(existing) = self.joined_subagent_dependencies.values().find(|dep| {
-            dep.parent_turn_id == parent_turn.turn_id && dep.parent_action_id == action.id
-        }) {
+        if let Some(existing) = self
+            .agent
+            .joined_subagent_dependencies
+            .values()
+            .find(|dep| {
+                dep.parent_turn_id == parent_turn.turn_id && dep.parent_action_id == action.id
+            })
+        {
             if self.joined_subagent_dependency_has_live_child(existing) {
                 // Still in progress — return the same running result.
                 return Ok(Some(ActionResult::running(
@@ -143,7 +148,7 @@ impl RuntimeSessionService {
         }
         // --- Ordering guard: reject if a different macro step is already
         // in-flight for this parent turn + child agent pair. ---
-        let macro_step_in_flight = self.joined_subagent_dependencies.values().any(|dep| {
+        let macro_step_in_flight = self.agent.joined_subagent_dependencies.values().any(|dep| {
             dep.parent_turn_id == parent_turn.turn_id
                 && dep.child_agent_id == child_agent_id
                 && self.joined_subagent_dependency_has_live_child(dep)
@@ -258,7 +263,7 @@ impl RuntimeSessionService {
         self.agent
             .subagent_task_routes
             .insert(turn_id.clone(), parent_turn.agent_id.clone());
-        self.joined_subagent_dependencies.insert(
+        self.agent.joined_subagent_dependencies.insert(
             turn_id.clone(),
             JoinedSubagentDependency {
                 parent_turn_id: parent_turn.turn_id.clone(),

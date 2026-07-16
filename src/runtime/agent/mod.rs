@@ -220,6 +220,8 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     macro_run_by_child_turn: BTreeMap<String, String>,
     /// Approval continuation metadata keyed by blocked approval id.
     blocked_agent_approval_refs: BTreeMap<String, BlockedAgentApprovalRef>,
+    /// Spawned child turns currently joined by parent agent actions.
+    joined_subagent_dependencies: BTreeMap<String, JoinedSubagentDependency>,
 }
 
 /// State removed when a compaction worker reports failure.
@@ -271,6 +273,63 @@ impl RuntimeAgentComponent {
 }
 
 impl RuntimeSessionService {
+    /// Returns the joined dependency for one child turn.
+    pub(in crate::runtime) fn joined_subagent_dependency(
+        &self,
+        child_turn_id: &str,
+    ) -> Option<&JoinedSubagentDependency> {
+        self.agent.joined_subagent_dependencies.get(child_turn_id)
+    }
+
+    /// Reports whether one child turn is joined to a parent action.
+    #[cfg(test)]
+    pub(crate) fn has_joined_subagent_dependency(&self, child_turn_id: &str) -> bool {
+        self.agent
+            .joined_subagent_dependencies
+            .contains_key(child_turn_id)
+    }
+
+    /// Records one child-to-parent join dependency.
+    #[cfg(test)]
+    pub(in crate::runtime) fn insert_joined_subagent_dependency(
+        &mut self,
+        child_turn_id: impl Into<String>,
+        dependency: JoinedSubagentDependency,
+    ) {
+        self.agent
+            .joined_subagent_dependencies
+            .insert(child_turn_id.into(), dependency);
+    }
+
+    /// Reports whether a blocked parent has any joined child work.
+    pub(in crate::runtime) fn parent_has_joined_subagent(&self, parent_turn_id: &str) -> bool {
+        self.agent
+            .joined_subagent_dependencies
+            .values()
+            .any(|dependency| dependency.parent_turn_id == parent_turn_id)
+    }
+
+    /// Removes joined dependencies owned by one child agent.
+    pub(in crate::runtime) fn remove_joined_subagent_dependencies_for_agent(
+        &mut self,
+        child_agent_id: &str,
+    ) {
+        self.agent
+            .joined_subagent_dependencies
+            .retain(|_, dependency| dependency.child_agent_id != child_agent_id);
+    }
+
+    /// Clears all joined child dependencies on session replacement.
+    pub(in crate::runtime) fn clear_all_joined_subagent_dependencies(&mut self) {
+        self.agent.joined_subagent_dependencies.clear();
+    }
+
+    /// Returns the joined child count to crate-local regression tests.
+    #[cfg(test)]
+    pub(crate) fn joined_subagent_dependency_count(&self) -> usize {
+        self.agent.joined_subagent_dependencies.len()
+    }
+
     /// Reports whether one turn is waiting for an approval decision.
     pub(in crate::runtime) fn agent_turn_has_blocked_approval(&self, turn_id: &str) -> bool {
         self.agent

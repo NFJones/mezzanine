@@ -774,7 +774,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
             terminal_state: AgentTurnState::Running,
         },
     );
-    service.joined_subagent_dependencies.insert(
+    service.insert_joined_subagent_dependency(
         child_one.turn_id.clone(),
         JoinedSubagentDependency {
             parent_turn_id: parent.turn_id.clone(),
@@ -784,7 +784,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
             child_display_name: Some("child one".to_string()),
         },
     );
-    service.joined_subagent_dependencies.insert(
+    service.insert_joined_subagent_dependency(
         child_two.turn_id.clone(),
         JoinedSubagentDependency {
             parent_turn_id: parent.turn_id.clone(),
@@ -846,16 +846,8 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
         vec![child_two.turn_id.as_str()]
     );
     assert_eq!(service.agent_scheduler().snapshot().queued, 0);
-    assert!(
-        !service
-            .joined_subagent_dependencies
-            .contains_key(&child_one.turn_id)
-    );
-    assert!(
-        service
-            .joined_subagent_dependencies
-            .contains_key(&child_two.turn_id)
-    );
+    assert!(!service.has_joined_subagent_dependency(&child_one.turn_id));
+    assert!(service.has_joined_subagent_dependency(&child_two.turn_id));
     assert_eq!(
         service
             .agent_turn_ledger

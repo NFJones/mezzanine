@@ -1580,8 +1580,7 @@ impl RuntimeSessionService {
 
         let agent_id = format!("agent-{pane_id}");
         self.remove_subagent_task_routes_for_parent(&agent_id);
-        self.joined_subagent_dependencies
-            .retain(|_child_turn_id, dependency| dependency.child_agent_id != agent_id);
+        self.remove_joined_subagent_dependencies_for_agent(&agent_id);
         self.model_profile_overrides
             .agent_profiles
             .remove(&agent_id);

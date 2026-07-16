@@ -146,11 +146,7 @@ fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
         .as_ref()
         .expect("macro step should join the logical loop controller result");
     assert_eq!(completion.child_agent_id, *child_agent_id);
-    assert!(
-        !service
-            .joined_subagent_dependencies
-            .contains_key(loop_turn_id)
-    );
+    assert!(!service.has_joined_subagent_dependency(loop_turn_id));
     let parent_turn = service
         .agent_turn_ledger
         .turns()
@@ -330,11 +326,7 @@ fn runtime_agent_macro_judge_dispatches_next_step_after_child_result() {
         second_child_turn.parent_turn_id.as_deref(),
         Some(parent_turn.turn_id.as_str())
     );
-    assert!(
-        service
-            .joined_subagent_dependencies
-            .contains_key(&second_child_turn.turn_id)
-    );
+    assert!(service.has_joined_subagent_dependency(&second_child_turn.turn_id));
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
@@ -459,11 +451,7 @@ fn runtime_agent_macro_judge_retries_current_step_after_child_result() {
         retry_child_turn.parent_turn_id.as_deref(),
         Some(parent_turn.turn_id.as_str())
     );
-    assert!(
-        service
-            .joined_subagent_dependencies
-            .contains_key(&retry_child_turn.turn_id)
-    );
+    assert!(service.has_joined_subagent_dependency(&retry_child_turn.turn_id));
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
@@ -820,7 +808,7 @@ fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
             terminal_state: AgentTurnState::Running,
         },
     );
-    service.joined_subagent_dependencies.insert(
+    service.insert_joined_subagent_dependency(
         child.turn_id.clone(),
         JoinedSubagentDependency {
             parent_turn_id: parent.turn_id.clone(),
@@ -851,11 +839,7 @@ fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
         .finish_agent_turn_without_shell_session(&child_record, AgentTurnState::Failed)
         .unwrap();
 
-    assert!(
-        !service
-            .joined_subagent_dependencies
-            .contains_key(&child.turn_id)
-    );
+    assert!(!service.has_joined_subagent_dependency(&child.turn_id));
     assert!(!service.agent_provider_task_is_pending(&parent.turn_id));
     let execution = service.agent_turn_executions.get(&parent.turn_id).unwrap();
     assert_eq!(execution.action_results[0].status, ActionStatus::Failed);

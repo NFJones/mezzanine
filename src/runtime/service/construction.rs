@@ -174,7 +174,6 @@ impl RuntimeSessionService {
             agent_turn_contexts: BTreeMap::new(),
             agent_turn_executions: BTreeMap::new(),
             apply_patch_batch_states: BTreeMap::new(),
-            joined_subagent_dependencies: BTreeMap::new(),
             subagent_scope_declarations: BTreeMap::new(),
             subagent_lineage: BTreeMap::new(),
             tool_discovery_cache: ToolDiscoveryCache::default(),

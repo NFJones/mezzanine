@@ -250,11 +250,6 @@ pub struct RuntimeSessionService {
     /// The key is `turn_id/action_id`, keeping the accumulator scoped to one
     /// running semantic action while successive read transactions complete.
     pub(in crate::runtime) apply_patch_batch_states: BTreeMap<String, RuntimeApplyPatchBatchState>,
-    /// Child turns currently joined by parent `spawn_agent` actions.
-    ///
-    /// The map is keyed by child turn id so task-result delivery can resolve
-    /// the exact parent action result that was waiting.
-    pub(in crate::runtime) joined_subagent_dependencies: BTreeMap<String, JoinedSubagentDependency>,
     /// Stores the subagent scope declarations value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

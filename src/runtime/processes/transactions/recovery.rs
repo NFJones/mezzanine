@@ -224,8 +224,7 @@ impl RuntimeSessionService {
                 .any(|transaction| transaction.turn_id == turn_id)
             || self.turn_has_pending_focused_shell_hook_continuation(turn_id)
             || self
-                .joined_subagent_dependencies
-                .get(turn_id)
+                .joined_subagent_dependency(turn_id)
                 .is_some_and(|dependency| {
                     self.joined_subagent_dependency_has_live_child(dependency)
                 })

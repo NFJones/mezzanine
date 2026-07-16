@@ -84,11 +84,7 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
         .and_then(|state| state.completion.as_ref())
         .expect("runtime-owned loop should retain the macro parent completion");
     assert_eq!(loop_completion.child_agent_id, child_agent_id);
-    assert!(
-        !service
-            .joined_subagent_dependencies
-            .contains_key(&child_turn_id)
-    );
+    assert!(!service.has_joined_subagent_dependency(&child_turn_id));
     let macro_run = service
         .macro_run_for_tests(parent_turn.turn_id.as_str())
         .expect("macro run state should be keyed by parent turn");
@@ -146,7 +142,7 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
             .count(),
         1
     );
-    assert!(service.joined_subagent_dependencies.is_empty());
+    assert_eq!(service.joined_subagent_dependency_count(), 0);
     service.terminate_all_pane_processes().unwrap();
 }
 

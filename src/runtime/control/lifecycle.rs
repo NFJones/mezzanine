@@ -271,7 +271,7 @@ impl RuntimeSessionService {
         self.clear_agent_provider_task_ownership();
         self.reset_agent_scheduler();
         self.clear_subagent_placement_state();
-        self.joined_subagent_dependencies.clear();
+        self.clear_all_joined_subagent_dependencies();
         self.subagent_lineage.clear();
         self.subagent_scope_declarations.clear();
         self.subagent_scopes = ScopeRegistry::default();

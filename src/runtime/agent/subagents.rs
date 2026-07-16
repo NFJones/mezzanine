@@ -18,7 +18,8 @@ impl RuntimeSessionService {
             .agent_loop_turns
             .get(turn_id)
             .map(|loop_turn| format!("agent-{}", loop_turn.pane_id));
-        self.joined_subagent_dependencies
+        self.agent
+            .joined_subagent_dependencies
             .retain(|child_turn_id, dependency| {
                 active_loop_agent.as_ref().is_some_and(|agent_id| {
                     dependency.child_turn_id == turn_id
@@ -77,6 +78,7 @@ impl RuntimeSessionService {
                 result.action_type == "spawn_agent"
                     && result.status == ActionStatus::Running
                     && self
+                        .agent
                         .joined_subagent_dependencies
                         .values()
                         .any(|dependency| {
@@ -253,7 +255,7 @@ impl RuntimeSessionService {
             let child_turn_id = child_turn_id.ok_or_else(|| {
                 MezError::invalid_state("subagent spawn response missing turn id")
             })?;
-            self.joined_subagent_dependencies.insert(
+            self.agent.joined_subagent_dependencies.insert(
                 child_turn_id.clone(),
                 JoinedSubagentDependency {
                     parent_turn_id: turn.turn_id.clone(),
@@ -664,7 +666,7 @@ impl RuntimeSessionService {
     fn subagent_task_result_parent_agent_id(&self, turn: &AgentTurnRecord) -> Option<String> {
         self.subagent_task_parent(&turn.turn_id)
             .or_else(|| {
-                let dependency = self.joined_subagent_dependencies.get(&turn.turn_id)?;
+                let dependency = self.agent.joined_subagent_dependencies.get(&turn.turn_id)?;
                 self.agent_turn_ledger
                     .turns()
                     .iter()
@@ -765,11 +767,13 @@ impl RuntimeSessionService {
         output: &str,
     ) -> Result<()> {
         let Some(dependency) = self
+            .agent
             .joined_subagent_dependencies
             .get(&turn.turn_id)
             .cloned()
             .or_else(|| {
-                self.joined_subagent_dependencies
+                self.agent
+                    .joined_subagent_dependencies
                     .values()
                     .find(|dependency| dependency.child_agent_id == turn.agent_id)
                     .cloned()
@@ -911,7 +915,8 @@ impl RuntimeSessionService {
                 failed_macro_parent_turn = Some(parent_run_id);
             }
         }
-        self.joined_subagent_dependencies
+        self.agent
+            .joined_subagent_dependencies
             .remove(&dependency.child_turn_id);
         if let Some((macro_name, step_index, total_steps, true)) = macro_result_status.as_ref() {
             self.append_agent_macro_status_to_terminal_buffer(

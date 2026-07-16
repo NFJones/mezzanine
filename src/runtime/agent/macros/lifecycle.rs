@@ -336,7 +336,8 @@ impl RuntimeSessionService {
             ));
         };
         let already_recorded_step_action =
-            self.joined_subagent_dependencies
+            self.agent
+                .joined_subagent_dependencies
                 .values()
                 .any(|dependency| {
                     dependency.parent_turn_id == parent_turn.turn_id
@@ -357,6 +358,7 @@ impl RuntimeSessionService {
         )?;
         if result.is_some() {
             let child_turn_id = self
+                .agent
                 .joined_subagent_dependencies
                 .values()
                 .find(|dependency| {
