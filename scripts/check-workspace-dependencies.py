@@ -101,25 +101,33 @@ REQUIRED_OWNER_PATHS = {
     "crates/mez-terminal/src/screen/state.rs",
     "crates/mez-terminal/src/screen/wrap.rs",
     "docs/workspace-ownership-matrix.md",
-    "docs/workspace-root-ownership.toml",
+    "docs/workspace-product-ownership.toml",
 }
 
-ROOT_OWNERSHIP_STATES = {"adapter", "product", "temporary"}
-ROOT_OWNERSHIP_MANIFEST = Path("docs/workspace-root-ownership.toml")
+PRODUCT_OWNERSHIP_STATES = {"adapter", "product", "temporary"}
+PRODUCT_OWNERSHIP_MANIFEST = Path("docs/workspace-product-ownership.toml")
+FINAL_PRODUCT_MANIFEST = Path("crates/mezzanine/Cargo.toml")
+FINAL_WORKSPACE_MEMBERS = {
+    "crates/mezzanine",
+    "crates/mez-agent",
+    "crates/mez-core",
+    "crates/mez-mux",
+    "crates/mez-terminal",
+}
 MAX_RUST_SOURCE_LINES = 2_000
 
 RETIRED_COMPATIBILITY_PATHS = {
-    "src/agent/shell.rs",
-    "src/ids.rs",
-    "src/layout.rs",
-    "src/layout/mod.rs",
-    "src/process.rs",
-    "src/process/mod.rs",
-    "src/readline/prompt_loop.rs",
-    "src/scheduler.rs",
-    "src/session.rs",
-    "src/session/mod.rs",
-    "src/terminal/tests/client/io_loop.rs",
+    "agent/shell.rs",
+    "ids.rs",
+    "layout.rs",
+    "layout/mod.rs",
+    "process.rs",
+    "process/mod.rs",
+    "readline/prompt_loop.rs",
+    "scheduler.rs",
+    "session.rs",
+    "session/mod.rs",
+    "terminal/tests/client/io_loop.rs",
 }
 
 RETIRED_RUST_IDENTIFIERS = {
@@ -129,13 +137,13 @@ RETIRED_RUST_IDENTIFIERS = {
     "run_attached_terminal_client_loop": "test-only synchronous terminal loop",
 }
 
-ROOT_RUNNER_FORBIDDEN_CALLS = {
+PRODUCT_RUNNER_FORBIDDEN_CALLS = {
     "advance_provider_failure(": "provider-failure negotiation",
     "advance_provider_response(": "provider-response negotiation",
     "plan_batch_continuation(": "batch-continuation negotiation",
 }
 
-ROOT_FORBIDDEN_DECLARATIONS = {
+PRODUCT_FORBIDDEN_DECLARATIONS = {
     "enum SelectorCandidateKind": "selector candidate category",
     "fn dedupe_selector_candidates": "selector candidate deduplication",
     "fn filter_and_sort_selector_candidates": "selector candidate ranking",
@@ -234,11 +242,22 @@ def workspace_metadata() -> dict[str, object]:
     return json.loads(completed.stdout)
 
 
-def root_source_surfaces() -> set[str]:
-    """Return top-level root source surfaces that contain Rust source."""
+def product_source_root(metadata: dict[str, object]) -> Path:
+    """Return the product source root relative to the repository workspace."""
+
+    workspace_root = Path(str(metadata["workspace_root"])).resolve()
+    product_package = next(
+        package for package in metadata["packages"] if package["name"] == "mezzanine"
+    )
+    manifest = Path(product_package["manifest_path"]).resolve()
+    return manifest.parent.joinpath("src").relative_to(workspace_root)
+
+
+def product_source_surfaces(source_root: Path) -> set[str]:
+    """Return top-level product source surfaces that contain Rust source."""
 
     surfaces: set[str] = set()
-    for path in Path("src").iterdir():
+    for path in source_root.iterdir():
         if path.is_file() and path.suffix == ".rs":
             surfaces.add(path.as_posix())
         elif path.is_dir() and any(path.rglob("*.rs")):
@@ -246,80 +265,100 @@ def root_source_surfaces() -> set[str]:
     return surfaces
 
 
-def root_ownership_violations() -> tuple[list[str], str, set[str]]:
-    """Validate exhaustive root ownership and return its lifecycle state."""
+def product_ownership_violations(
+    source_root: Path,
+) -> tuple[list[str], str, set[str]]:
+    """Validate exhaustive product ownership and return its lifecycle state."""
 
-    document = tomllib.loads(ROOT_OWNERSHIP_MANIFEST.read_text(encoding="utf-8"))
+    document = tomllib.loads(PRODUCT_OWNERSHIP_MANIFEST.read_text(encoding="utf-8"))
     violations: list[str] = []
     if document.get("version") != 1:
-        violations.append("root ownership manifest version must be 1")
+        violations.append("product ownership manifest version must be 1")
     status = document.get("status")
     if status not in {"open", "complete"}:
-        violations.append("root ownership manifest status must be open or complete")
+        violations.append("product ownership manifest status must be open or complete")
         status = "invalid"
 
     entries = document.get("surface")
     if not isinstance(entries, list):
-        return (["root ownership manifest must contain [[surface]] entries"], status, set())
+        return (
+            ["product ownership manifest must contain [[surface]] entries"],
+            status,
+            set(),
+        )
 
     recorded: dict[str, str] = {}
     for entry in entries:
         if not isinstance(entry, dict):
-            violations.append("root ownership surface entry must be a table")
+            violations.append("product ownership surface entry must be a table")
             continue
         path = entry.get("path")
         state = entry.get("state")
         role = entry.get("role")
-        if not isinstance(path, str) or not path.startswith("src/"):
-            violations.append(f"invalid root ownership path: {path!r}")
+        if not isinstance(path, str) or not path.startswith(f"{source_root.as_posix()}/"):
+            violations.append(
+                f"invalid product ownership path for {source_root}: {path!r}"
+            )
             continue
         if path in recorded:
-            violations.append(f"duplicate root ownership path: {path}")
-        if state not in ROOT_OWNERSHIP_STATES:
-            violations.append(f"{path}: invalid root ownership state {state!r}")
+            violations.append(f"duplicate product ownership path: {path}")
+        if state not in PRODUCT_OWNERSHIP_STATES:
+            violations.append(f"{path}: invalid product ownership state {state!r}")
             continue
         if not isinstance(role, str) or not role.strip():
-            violations.append(f"{path}: root ownership role must not be empty")
+            violations.append(f"{path}: product ownership role must not be empty")
         recorded[path] = state
 
-    actual = root_source_surfaces()
+    actual = product_source_surfaces(source_root)
     missing = actual - recorded.keys()
     stale = recorded.keys() - actual
     for path in sorted(missing):
-        violations.append(f"unclassified root source surface: {path}")
+        violations.append(f"unclassified product source surface: {path}")
     for path in sorted(stale):
-        violations.append(f"stale root ownership surface: {path}")
+        violations.append(f"stale product ownership surface: {path}")
 
     temporary = {path for path, state in recorded.items() if state == "temporary"}
     if status == "open" and not temporary:
-        violations.append("open root decomposition must identify temporary surfaces")
+        violations.append("open product decomposition must identify temporary surfaces")
     if status == "complete" and temporary:
         violations.append(
-            "complete root decomposition still has temporary surfaces: "
+            "complete product decomposition still has temporary surfaces: "
             + ", ".join(sorted(temporary))
         )
     return violations, status, temporary
 
 
-def source_ownership_violations() -> list[str]:
-    """Return source patterns that would restore retired root ownership."""
+def all_source_paths() -> list[Path]:
+    """Return every workspace Rust source file during either migration layout."""
+
+    roots = [Path("crates")]
+    if Path("src").is_dir():
+        roots.append(Path("src"))
+    return sorted(path for root in roots for path in root.rglob("*.rs"))
+
+
+def source_ownership_violations(product_root: Path) -> list[str]:
+    """Return source patterns that would restore retired product ownership."""
 
     violations: list[str] = []
-    for path in sorted((*Path("src").rglob("*.rs"), *Path("crates").rglob("*.rs"))):
+    for path in all_source_paths():
         source = path.read_text(encoding="utf-8")
         for identifier, ownership in RETIRED_RUST_IDENTIFIERS.items():
             if identifier in source:
                 violations.append(f"{path}: retired {ownership} `{identifier}`")
 
-    root_runner = Path("src/agent/actions/runner.rs")
-    runner_source = root_runner.read_text(encoding="utf-8")
-    for call, ownership in ROOT_RUNNER_FORBIDDEN_CALLS.items():
-        if call in runner_source:
-            violations.append(f"{root_runner}: lower-owned {ownership} `{call}`")
+    product_runner = product_root / "agent/actions/runner.rs"
+    if product_runner.is_file():
+        runner_source = product_runner.read_text(encoding="utf-8")
+        for call, ownership in PRODUCT_RUNNER_FORBIDDEN_CALLS.items():
+            if call in runner_source:
+                violations.append(
+                    f"{product_runner}: lower-owned {ownership} `{call}`"
+                )
 
-    for path in sorted(Path("src").rglob("*.rs")):
+    for path in sorted(product_root.rglob("*.rs")):
         source = path.read_text(encoding="utf-8")
-        for declaration, ownership in ROOT_FORBIDDEN_DECLARATIONS.items():
+        for declaration, ownership in PRODUCT_FORBIDDEN_DECLARATIONS.items():
             if declaration in source:
                 violations.append(f"{path}: lower-owned {ownership} `{declaration}`")
         for line_number, line in enumerate(source.splitlines(), start=1):
@@ -328,12 +367,19 @@ def source_ownership_violations() -> list[str]:
                 prefix in stripped for prefix in LOWER_CRATE_PREFIXES
             ):
                 violations.append(
-                    f"{path}:{line_number}: root lower-crate forwarding export `{stripped}`"
+                    f"{path}:{line_number}: product lower-crate forwarding export `{stripped}`"
                 )
 
     facade_roots = (
         path
-        for surface in (Path("src/agent"), Path("src/runtime"), Path("src/terminal"))
+        for surface in (
+            product_root / "agent",
+            product_root / "runtime",
+            product_root / "terminal",
+            product_root / "integrations/agent",
+            product_root / "host/terminal",
+        )
+        if surface.is_dir()
         for path in surface.rglob("mod.rs")
         if "tests" not in path.parts
     )
@@ -354,8 +400,7 @@ def source_structure_violations() -> list[str]:
     """Reject oversized source units and flattened module implementations."""
 
     violations: list[str] = []
-    source_paths = sorted((*Path("src").rglob("*.rs"), *Path("crates").rglob("*.rs")))
-    for path in source_paths:
+    for path in all_source_paths():
         source = path.read_text(encoding="utf-8")
         line_count = len(source.splitlines())
         if line_count > MAX_RUST_SOURCE_LINES:
@@ -364,7 +409,95 @@ def source_structure_violations() -> list[str]:
             )
         if re.search(r"\binclude!\s*\(", source):
             violations.append(f"{path}: `include!` must not flatten Rust module ownership")
+        if "tests" in path.parts and re.fullmatch(r"(?:part|chunk)_?\d+\.rs", path.name):
+            violations.append(f"{path}: numbered test chunks do not express ownership")
     return violations
+
+
+def final_layout_violations(
+    metadata: dict[str, object], product_root: Path, ownership_status: str
+) -> list[str]:
+    """Return target-layout violations once decomposition is marked complete."""
+
+    if ownership_status != "complete":
+        return []
+
+    violations: list[str] = []
+    workspace_root = Path(str(metadata["workspace_root"])).resolve()
+    product_package = next(
+        package for package in metadata["packages"] if package["name"] == "mezzanine"
+    )
+    product_manifest = Path(product_package["manifest_path"]).resolve()
+    expected_manifest = workspace_root / FINAL_PRODUCT_MANIFEST
+    if product_manifest != expected_manifest:
+        violations.append(
+            "complete product decomposition requires the mezzanine manifest at "
+            f"{FINAL_PRODUCT_MANIFEST}, found {product_manifest.relative_to(workspace_root)}"
+        )
+    if product_root != FINAL_PRODUCT_MANIFEST.parent / "src":
+        violations.append(
+            "complete product decomposition requires source under "
+            f"{FINAL_PRODUCT_MANIFEST.parent / 'src'}"
+        )
+    for retired_root in (Path("src"), Path("tests")):
+        if retired_root.exists():
+            violations.append(
+                f"complete product decomposition must remove root {retired_root}/"
+            )
+
+    root_manifest = tomllib.loads(Path("Cargo.toml").read_text(encoding="utf-8"))
+    package_keys = {
+        "package",
+        "dependencies",
+        "dev-dependencies",
+        "build-dependencies",
+        "target",
+        "lib",
+        "bin",
+        "features",
+    }
+    if package_keys & root_manifest.keys():
+        violations.append("complete decomposition requires a virtual root Cargo.toml")
+    workspace_members = set(root_manifest.get("workspace", {}).get("members", []))
+    if workspace_members != FINAL_WORKSPACE_MEMBERS:
+        violations.append(
+            "complete decomposition requires these explicit workspace members: "
+            + ", ".join(sorted(FINAL_WORKSPACE_MEMBERS))
+        )
+
+    for path in sorted(product_root.rglob("*.rs")):
+        if "tests" in path.parts or path.name.endswith("_tests.rs"):
+            continue
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if line.strip() == "use super::*;":
+                violations.append(
+                    f"{path}:{line_number}: production code must use explicit imports"
+                )
+            if "pub(in crate::runtime)" in line:
+                violations.append(
+                    f"{path}:{line_number}: runtime component state must be private"
+                )
+    return violations
+
+
+def open_decomposition_metrics(product_root: Path) -> tuple[int, int]:
+    """Return broad-import and runtime-field counts for visible open-state evidence."""
+
+    wildcard_imports = 0
+    runtime_fields = 0
+    for path in sorted(product_root.rglob("*.rs")):
+        if "tests" in path.parts or path.name.endswith("_tests.rs"):
+            continue
+        source = path.read_text(encoding="utf-8")
+        wildcard_imports += sum(
+            line.strip() == "use super::*;" for line in source.splitlines()
+        )
+        runtime_fields += len(
+            re.findall(r"^\s*pub\(in crate::runtime\)\s+\w+\s*:", source, re.MULTILINE)
+        )
+    return wildcard_imports, runtime_fields
 
 
 def main() -> int:
@@ -392,6 +525,8 @@ def main() -> int:
     if missing:
         print(f"missing Mezzanine workspace packages: {', '.join(sorted(missing))}")
         return 1
+
+    product_root = product_source_root(metadata)
 
     violations: list[str] = []
     for package_name, package in packages.items():
@@ -433,32 +568,36 @@ def main() -> int:
             print(f"  {path}")
         return 1
 
-    root_violations, ownership_status, temporary_surfaces = root_ownership_violations()
-    if root_violations:
-        print("root ownership manifest violations:")
-        for violation in root_violations:
+    product_violations, ownership_status, temporary_surfaces = (
+        product_ownership_violations(product_root)
+    )
+    if product_violations:
+        print("product ownership manifest violations:")
+        for violation in product_violations:
             print(f"  {violation}")
         return 1
 
     ownership_matrix = Path("docs/workspace-ownership-matrix.md").read_text(encoding="utf-8")
     matrix_has_temporary = "| temporary |" in ownership_matrix
     if ownership_status == "open" and not matrix_has_temporary:
-        print("open root decomposition is not reflected by temporary matrix boundaries")
+        print("open product decomposition is not reflected by temporary matrix boundaries")
         return 1
     if ownership_status == "complete" and matrix_has_temporary:
-        print("complete root decomposition matrix still contains temporary boundaries")
+        print("complete product decomposition matrix still contains temporary boundaries")
         return 1
 
     restored_facades = sorted(
-        path for path in RETIRED_COMPATIBILITY_PATHS if Path(path).exists()
+        product_root / path
+        for path in RETIRED_COMPATIBILITY_PATHS
+        if (product_root / path).exists()
     )
     if restored_facades:
-        print("retired root compatibility facades must not be restored:")
+        print("retired product compatibility facades must not be restored:")
         for path in restored_facades:
             print(f"  {path}")
         return 1
 
-    ownership_violations = source_ownership_violations()
+    ownership_violations = source_ownership_violations(product_root)
     if ownership_violations:
         print("source ownership violations:")
         for violation in ownership_violations:
@@ -472,10 +611,22 @@ def main() -> int:
             print(f"  {violation}")
         return 1
 
+    layout_violations = final_layout_violations(
+        metadata, product_root, ownership_status
+    )
+    if layout_violations:
+        print("completed product layout violations:")
+        for violation in layout_violations:
+            print(f"  {violation}")
+        return 1
+
     if ownership_status == "open":
+        wildcard_imports, runtime_fields = open_decomposition_metrics(product_root)
         print(
             "Mezzanine workspace dependency guardrails are valid; "
-            f"root decomposition remains open across {len(temporary_surfaces)} surfaces."
+            f"product decomposition remains open across {len(temporary_surfaces)} "
+            f"surfaces ({wildcard_imports} broad production imports and "
+            f"{runtime_fields} crate-visible runtime fields remain)."
         )
     else:
         print("Mezzanine workspace dependency and ownership guardrails are valid.")

@@ -1,8 +1,10 @@
 # Workspace architecture
 
-Mezzanine is organized as five Cargo packages with one product composition
-root. This structure enforces the specification requirement that the terminal
-multiplexer and agent harness remain separable logical subsystems.
+Mezzanine is organized as five Cargo packages with one product application
+package. That package is temporarily located at the workspace root and will
+move to `crates/mezzanine/`, leaving a virtual repository workspace. This
+structure enforces the specification requirement that the terminal multiplexer
+and agent harness remain separable logical subsystems.
 
 ## Package responsibilities
 
@@ -14,14 +16,15 @@ multiplexer and agent harness remain separable logical subsystems.
   state, PTY behavior, layout, input routing, and multiplexer UI.
 - `mez-agent` owns the provider-independent agent harness and agent protocol
   state machines. Product integrations are supplied through narrow ports.
-- `mezzanine` is the product composition root. It owns the `mez` binary,
+- `mezzanine` is the product application package. It owns the `mez` binary,
   configuration, runtime orchestration, persistence, transports, policy, and
   adapters between lower-level crates.
 
 The lower crates contain production-owned domain behavior and tests. Additional
 behavior moves only after its responsibilities have been separated and reverse
-dependencies have been replaced with explicit contracts or effects; root
-adapters retain product policy, persistence, transports, and host I/O.
+dependencies have been replaced with explicit contracts or effects;
+application adapters retain product policy, persistence, transports, and host
+I/O.
 
 ## Dependency direction
 
@@ -47,10 +50,11 @@ owned by `mez-mux`.
 ## Ownership rule
 
 Deterministic subsystem behavior and its intrinsic tests live in the owning
-lower crate. Root modules may adapt product policy, persistence, transports,
-host I/O, and cross-subsystem orchestration, but must import lower contracts
-directly instead of forwarding them through compatibility facades. New shared
-contracts belong in `mez-core` only when at least two lower crates need them.
+lower crate. Application modules may adapt product policy, persistence,
+transports, host I/O, and cross-subsystem orchestration, but must import lower
+contracts directly instead of forwarding them through compatibility facades.
+New shared contracts belong in `mez-core` only when at least two lower crates
+need them.
 
 The completed module-level audit and acceptance evidence are recorded in the
 [workspace ownership matrix](workspace-ownership-matrix.md). A valid Cargo
@@ -58,7 +62,10 @@ dependency graph does not by itself prove that package ownership remains
 correct, so architecture, public API, dependency, feature, and package-content
 audits are part of refactor validation.
 
-The architecture check also verifies the exhaustive root ownership manifest,
+The architecture check also verifies the exhaustive product ownership manifest,
 rejects restoration of retired compatibility surfaces and lower-contract
 forwarding exports, and rejects Rust compilation units over 2,000 lines or
-module implementations flattened with `include!`.
+module implementations flattened with `include!`. When the ownership state is
+complete, it additionally requires `crates/mezzanine/Cargo.toml`, a virtual
+workspace root with no `src/` or `tests/`, explicit production imports, and
+private runtime component state.

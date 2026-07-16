@@ -1,167 +1,167 @@
 version = 1
-status = "complete"
+status = "open"
 
 [[surface]]
 path = "src/agent"
-state = "adapter"
+state = "temporary"
 role = "Concrete agent providers, credentials, HTTP and process transports, product execution adapters, and embedded prompt assets."
 
 [[surface]]
 path = "src/async_runtime"
-state = "product"
+state = "temporary"
 role = "Tokio actors, workers, supervision, and concrete side-effect services."
 
 [[surface]]
 path = "src/audit"
-state = "product"
+state = "temporary"
 role = "Security audit records, redaction, persistence, hash chaining, and retention."
 
 [[surface]]
 path = "src/auth"
-state = "product"
+state = "temporary"
 role = "Credential stores, OAuth flows, browser callbacks, and secret handling."
 
 [[surface]]
 path = "src/cli"
-state = "product"
+state = "temporary"
 role = "The mez process command line and process-level workflows."
 
 [[surface]]
 path = "src/command"
-state = "adapter"
+state = "temporary"
 role = "Product command dispatch over mux plans, stores, configuration, and runtime effects."
 
 [[surface]]
 path = "src/config"
-state = "product"
+state = "temporary"
 role = "Versioned product configuration schema, defaults, migration, mutation, and validation."
 
 [[surface]]
 path = "src/control"
-state = "product"
+state = "temporary"
 role = "Product JSON-RPC schema, authorization, idempotency, state projection, and dispatch."
 
 [[surface]]
 path = "src/error.rs"
-state = "product"
+state = "temporary"
 role = "Product error taxonomy and lower-crate error projection."
 
 [[surface]]
 path = "src/event"
-state = "product"
+state = "temporary"
 role = "Product event records, retention, audience visibility, and notification encoding."
 
 [[surface]]
 path = "src/framing"
-state = "product"
+state = "temporary"
 role = "Shared product content-length wire framing and Tokio codec."
 
 [[surface]]
 path = "src/hooks"
-state = "product"
+state = "temporary"
 role = "Product lifecycle extension policy and concrete program or focused-shell execution."
 
 [[surface]]
 path = "src/identifiers.rs"
-state = "product"
+state = "temporary"
 role = "Product-local identifier predicates and diagnostics."
 
 [[surface]]
 path = "src/issues"
-state = "adapter"
+state = "temporary"
 role = "Configured SQLite issue repository, project discovery, ID generation, dependency graph checks, and filesystem permissions over canonical mez-agent issue contracts."
 
 [[surface]]
 path = "src/lib.rs"
-state = "product"
+state = "temporary"
 role = "Product composition library root."
 
 [[surface]]
 path = "src/macros"
-state = "adapter"
+state = "temporary"
 role = "Filesystem and embedded macro discovery over mez-agent macro contracts."
 
 [[surface]]
 path = "src/main.rs"
-state = "product"
+state = "temporary"
 role = "Thin mez binary entry point."
 
 [[surface]]
 path = "src/mcp"
-state = "adapter"
+state = "temporary"
 role = "Concrete MCP stdio and HTTP transports, credential and environment resolution, persisted configuration commands, product clock injection, and audit over canonical mez-agent MCP contracts."
 
 [[surface]]
 path = "src/memory"
-state = "adapter"
+state = "temporary"
 role = "SQLite/FTS memory repository, legacy migration, configured paths, filesystem permissions, and retrieval I/O over canonical mez-agent memory records."
 
 [[surface]]
 path = "src/message"
-state = "adapter"
+state = "temporary"
 role = "Product content-length framing and concrete fanout writes over canonical mez-agent MMP contracts and delivery state."
 
 [[surface]]
 path = "src/permissions"
-state = "adapter"
+state = "temporary"
 role = "Borrowed planning adapter binding canonical mez-agent permission policy to live approval and path-scope state."
 
 [[surface]]
 path = "src/project"
-state = "product"
+state = "temporary"
 role = "Project discovery, trust decisions, filesystem posture, and trust persistence."
 
 [[surface]]
 path = "src/readline"
-state = "adapter"
+state = "temporary"
 role = "Product prompt kinds and selector policy over mux readline state."
 
 [[surface]]
 path = "src/registry"
-state = "product"
+state = "temporary"
 role = "Durable live daemon and session registry."
 
 [[surface]]
 path = "src/runtime"
-state = "product"
+state = "temporary"
 role = "Product serialized state, cross-crate effects, runtime orchestration, persistence coordination, and rendering projection adapters."
 
 [[surface]]
 path = "src/selector"
-state = "adapter"
+state = "temporary"
 role = "Product command, runtime, parameter, and filesystem candidate providers over the mux selector engine."
 
 [[surface]]
 path = "src/shell.rs"
-state = "product"
+state = "temporary"
 role = "Host shell discovery and executable resolution."
 
 [[surface]]
 path = "src/skills"
-state = "adapter"
+state = "temporary"
 role = "Filesystem and embedded skill discovery over mez-agent validation contracts."
 
 [[surface]]
 path = "src/snapshot"
-state = "product"
+state = "temporary"
 role = "Cross-crate product snapshot encoding, repository, compatibility, and restore."
 
 [[surface]]
 path = "src/subagent"
-state = "adapter"
+state = "temporary"
 role = "Product-friendly pane and status display names over canonical mez-agent subagent contracts and scope enforcement."
 
 [[surface]]
 path = "src/terminal"
-state = "adapter"
+state = "temporary"
 role = "Host terminal I/O and product presentation adapters over mez-terminal and mez-mux contracts."
 
 [[surface]]
 path = "src/test_support"
-state = "adapter"
+state = "temporary"
 role = "Shared root integration fixtures used by multiple product test owners."
 
 [[surface]]
 path = "src/transcript"
-state = "adapter"
+state = "temporary"
 role = "Filesystem transcript compatibility codecs, retention, compression, prompt history, private permissions, and terminal presentation replay over canonical mez-agent transcript contracts."
