@@ -359,7 +359,7 @@ impl RuntimeSessionService {
                 approval_id, action.id, approval.action_kind
             ),
         )?;
-        let _ = self.agent_scheduler.resume_blocked(&turn.turn_id);
+        let _ = self.agent.agent_scheduler.resume_blocked(&turn.turn_id);
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             &turn.turn_id,
@@ -696,7 +696,7 @@ impl RuntimeSessionService {
                 let transcript_entries =
                     self.persist_runtime_agent_turn_execution_transcript(&turn, &execution)?;
                 self.emit_subagent_task_result_for_execution(&turn, &execution)?;
-                let _ = self.agent_scheduler.cancel(&turn.turn_id);
+                let _ = self.agent.agent_scheduler.cancel(&turn.turn_id);
                 self.blocked_agent_approval_refs.remove(approval_id);
                 self.append_agent_error_text_to_terminal_buffer(
                     &turn.pane_id,
@@ -741,7 +741,7 @@ impl RuntimeSessionService {
                         approval_id, action.id, approval.action_kind
                     ),
                 )?;
-                let _ = self.agent_scheduler.resume_blocked(&turn.turn_id);
+                let _ = self.agent.agent_scheduler.resume_blocked(&turn.turn_id);
                 self.append_agent_trace_turn_event(
                     &turn.pane_id,
                     &turn.turn_id,

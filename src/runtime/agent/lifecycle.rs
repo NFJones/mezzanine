@@ -247,7 +247,7 @@ impl RuntimeSessionService {
         state: AgentTurnState,
         reason: &str,
     ) -> Result<AgentShellSession> {
-        let _ = self.agent_scheduler.complete(&turn.turn_id);
+        let _ = self.agent.agent_scheduler.complete(&turn.turn_id);
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             &turn.turn_id,
@@ -286,7 +286,7 @@ impl RuntimeSessionService {
         suppressed_turn_id: Option<&str>,
     ) -> Result<usize> {
         let mut started = 0usize;
-        while let Some(running) = self.agent_scheduler.start_ready() {
+        while let Some(running) = self.agent.agent_scheduler.start_ready() {
             let turn = self
                 .agent_turn_ledger
                 .turns()
@@ -372,7 +372,7 @@ impl RuntimeSessionService {
             .collect::<Vec<_>>();
         let mut failed = 0usize;
         for turn in turns {
-            let _ = self.agent_scheduler.cancel(&turn.turn_id);
+            let _ = self.agent.agent_scheduler.cancel(&turn.turn_id);
             self.cancel_live_shell_transactions_for_turn(&turn.turn_id)?;
             let running_in_shell = self
                 .agent_shell_store

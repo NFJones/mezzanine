@@ -931,7 +931,7 @@ impl RuntimeSessionService {
         )?;
         if let Some(parent_turn_id) = failed_macro_parent_turn {
             self.macro_runs_by_parent_turn.remove(&parent_turn_id);
-            let _ = self.agent_scheduler.complete(&parent_turn_id);
+            let _ = self.agent.agent_scheduler.complete(&parent_turn_id);
             self.agent_turn_ledger
                 .finish_turn(&parent_turn_id, AgentTurnState::Failed)?;
             self.append_agent_trace_turn_transition(
@@ -954,7 +954,10 @@ impl RuntimeSessionService {
             return Ok(());
         }
         if ready_for_continuation {
-            let _ = self.agent_scheduler.resume_blocked(&parent_turn.turn_id);
+            let _ = self
+                .agent
+                .agent_scheduler
+                .resume_blocked(&parent_turn.turn_id);
             self.append_agent_trace_turn_event(
                 &parent_turn.pane_id,
                 &parent_turn.turn_id,

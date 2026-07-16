@@ -11,6 +11,7 @@ use crate::runtime::{
     AgentShellCommandOutcome, AgentShellRuntimeContext, RuntimeAgentPromptTurnStart,
     execute_agent_shell_command_with_context,
 };
+use mez_agent::ScheduledWorkKind;
 use mez_agent::{
     MacroCatalog, MacroDefinition, MacroJudgeDecision, MacroJudgeOutcome, MacroManagedSubagent,
     MacroRunPhase, MacroRunRegistration, ModelRequest, macro_initial_step_prompt,
@@ -18,7 +19,6 @@ use mez_agent::{
     macro_parent_orchestration_prompt, macro_run_state, macro_step_model_request,
     parse_macro_prompt_invocation,
 };
-use mez_agent::{ScheduledWork, ScheduledWorkKind};
 
 mod judge;
 mod lifecycle;

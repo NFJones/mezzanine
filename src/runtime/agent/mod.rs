@@ -9,26 +9,27 @@ use super::agent_state::RuntimeAgentProviderClaim;
 use super::runtime_execute_auto_sizing_with_provider;
 use super::service_state::{RuntimeAgentPatchRecord, RuntimeApplyPatchBatchState};
 use super::{
-    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentShellSession,
-    AgentShellVisibility, AgentTurnExecution, AgentTurnRecord, AgentTurnState, AuditActor,
-    AuditRecord, BTreeMap, BTreeSet, BlockedAgentApprovalRef, BlockedApprovalRequest, ContextBlock,
-    ContextSourceKind, DEFAULT_COMMAND_SHELL_CLASSIFICATION, Envelope, EventKind, HookEvent,
-    JoinedSubagentDependency, McpToolCallRequest, MezError, ModelProfile, ModelResponse, PaneId,
-    PaneReadinessState, PathBuf, PathScopes, PendingFocusedShellHookContinuation, PermissionPolicy,
-    ReadinessOverrideRevocation, Recipient, ReqwestProviderHttpTransport, Result, RuleDecision,
-    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentCopyOutput,
+    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentScheduler,
+    AgentShellSession, AgentShellVisibility, AgentTurnExecution, AgentTurnRecord, AgentTurnState,
+    AuditActor, AuditRecord, BTreeMap, BTreeSet, BlockedAgentApprovalRef, BlockedApprovalRequest,
+    ContextBlock, ContextSourceKind, DEFAULT_COMMAND_SHELL_CLASSIFICATION, Envelope, EventKind,
+    HookEvent, JoinedSubagentDependency, McpToolCallRequest, MezError, ModelProfile, ModelResponse,
+    PaneId, PaneReadinessState, PathBuf, PathScopes, PendingFocusedShellHookContinuation,
+    PermissionPolicy, ReadinessOverrideRevocation, Recipient, ReqwestProviderHttpTransport, Result,
+    RuleDecision, RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentCopyOutput,
     RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind,
     RuntimeAgentModifiedFileSummary, RuntimeAgentPreShellHookCompletion,
     RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask,
     RuntimeAutoSizingConfig, RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile,
     RuntimeHookPipelineBlock, RuntimeHookPipelineDecision, RuntimeMcpActionExecutor,
     RuntimeProviderConfig, RuntimeSessionService, RuntimeShellTransactionActionFailure,
-    RuntimeSideEffect, SenderIdentity, ShellTransaction, ShellTransactionOutputTransport,
-    SubagentScopeDeclaration, SubagentSpawnRequest, SubagentWaitPolicy, TaskResultPayload,
-    TaskState, TaskStatusPayload, TranscriptEntry, TranscriptRole, action_result_context_content,
-    assemble_model_request, compact_model_context_for_budget_with_retained_tail_percent,
-    current_unix_millis, current_unix_seconds, decode_shell_output_transport_with_diagnostics,
-    discover_project_root, exact_command_sha256, execute_mcp_action_through_runtime,
+    RuntimeSideEffect, ScheduledWork, SenderIdentity, ShellTransaction,
+    ShellTransactionOutputTransport, SubagentScopeDeclaration, SubagentSpawnRequest,
+    SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload, TranscriptEntry,
+    TranscriptRole, action_result_context_content, assemble_model_request,
+    compact_model_context_for_budget_with_retained_tail_percent, current_unix_millis,
+    current_unix_seconds, decode_shell_output_transport_with_diagnostics, discover_project_root,
+    exact_command_sha256, execute_mcp_action_through_runtime,
     execute_mcp_action_through_runtime_async, execute_network_action_with_transport_async,
     json_escape, local_action_plan, network_action_plan, next_transcript_sequence,
     runtime_agent_turn_duration_display, runtime_agent_turn_start_hook_payload,
@@ -109,6 +110,8 @@ use mez_agent::messaging::task_state_name as runtime_task_state_suffix;
 /// private so neighboring runtime subsystems use typed agent operations.
 #[derive(Debug, Default)]
 pub(in crate::runtime) struct RuntimeAgentComponent {
+    /// Fair scheduling state for queued, running, and blocked agent turns.
+    agent_scheduler: AgentScheduler,
     /// Panes whose visible agent session is scoped to a child shell.
     agent_subshell_panes: BTreeSet<String>,
     /// Interrupted subshells that must exit with a line-oriented command.
@@ -188,6 +191,44 @@ impl RuntimeAgentComponent {
 }
 
 impl RuntimeSessionService {
+    /// Returns the agent scheduler for read-only diagnostics and prompt context.
+    pub(crate) fn agent_scheduler(&self) -> &AgentScheduler {
+        &self.agent.agent_scheduler
+    }
+
+    /// Returns mutable scheduler access to crate-local regression tests.
+    #[cfg(test)]
+    pub(crate) fn agent_scheduler_mut(&mut self) -> &mut AgentScheduler {
+        &mut self.agent.agent_scheduler
+    }
+
+    /// Applies the configured global agent concurrency limit.
+    pub(in crate::runtime) fn configure_agent_scheduler_limit(
+        &mut self,
+        max_concurrent_agents: usize,
+    ) -> Result<()> {
+        self.agent
+            .agent_scheduler
+            .set_max_concurrent_agents(max_concurrent_agents)?;
+        Ok(())
+    }
+
+    /// Enqueues one validated unit of agent work.
+    pub(in crate::runtime) fn enqueue_agent_work(&mut self, work: ScheduledWork) -> Result<()> {
+        self.agent.agent_scheduler.enqueue(work)?;
+        Ok(())
+    }
+
+    /// Cancels queued, running, or blocked scheduler work when it exists.
+    pub(in crate::runtime) fn cancel_agent_work(&mut self, turn_id: &str) -> bool {
+        self.agent.agent_scheduler.cancel(turn_id).is_ok()
+    }
+
+    /// Restores an empty scheduler with the repository default limit.
+    pub(in crate::runtime) fn reset_agent_scheduler(&mut self) {
+        self.agent.agent_scheduler = AgentScheduler::with_default_limit();
+    }
+
     /// Appends one steering prompt to an active turn.
     pub(in crate::runtime) fn push_agent_turn_steering(
         &mut self,

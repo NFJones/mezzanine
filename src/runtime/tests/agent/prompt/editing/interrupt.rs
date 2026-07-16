@@ -262,7 +262,7 @@ fn runtime_agent_prompt_ctrl_c_after_failed_turn_is_idempotent() {
         .unwrap();
     let started = service.start_agent_prompt_turn("%1", "run macro").unwrap();
     let turn_id = started.turn_id.clone();
-    let _ = service.agent_scheduler.complete(&turn_id);
+    let _ = service.agent_scheduler_mut().complete(&turn_id);
     service
         .agent_turn_ledger
         .finish_turn(&turn_id, AgentTurnState::Failed)

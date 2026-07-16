@@ -169,7 +169,6 @@ impl RuntimeSessionService {
             provider_auth_refresh_leeway_seconds:
                 crate::auth::DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS,
             audit_log: None,
-            agent_scheduler: AgentScheduler::with_default_limit(),
             agent_shell_store: AgentShellStore::default(),
             agent_turn_ledger: AgentTurnLedger::new(false),
             agent_turn_contexts: BTreeMap::new(),

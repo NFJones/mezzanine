@@ -281,8 +281,7 @@ impl RuntimeSessionService {
         self.provider_auth_refresh_leeway_seconds =
             runtime_provider_auth_refresh_leeway_seconds_from_config(&structured);
         self.set_agent_auto_sizing(runtime_agent_auto_sizing_from_config(&structured)?);
-        self.agent_scheduler
-            .set_max_concurrent_agents(max_concurrent_agents)?;
+        self.configure_agent_scheduler_limit(max_concurrent_agents)?;
         self.start_ready_agent_turns()?;
         let mut permission_policy = runtime_permission_policy_from_config(&structured)?;
         if let Some(approval_policy) = self.live_approval_policy_override {

@@ -7,7 +7,7 @@
 use crate::terminal::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
 
 use super::{
-    AgentLogLevel, AgentScheduler, AgentSessionMetadata, AgentShellStore, AgentShellVisibility,
+    AgentLogLevel, AgentSessionMetadata, AgentShellStore, AgentShellVisibility,
     AgentTranscriptStore, AgentTurnLedger, AgentTurnRecord, AgentTurnState, AgentTurnTrigger,
     AuditActor, AuditDeferredWrite, AuditLog, AuditRecord, AuthStore, BTreeMap, BTreeSet,
     BlockedApprovalQueue, BlockedApprovalRequest, ConfigFormat, ConfigLayer, ConfigScope,

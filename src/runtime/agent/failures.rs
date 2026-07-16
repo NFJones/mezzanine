@@ -64,7 +64,7 @@ impl RuntimeSessionService {
                 error.message()
             ),
         );
-        let _ = self.agent_scheduler.complete(&turn.turn_id);
+        let _ = self.agent.agent_scheduler.complete(&turn.turn_id);
         let _ = self
             .agent_turn_ledger
             .finish_turn(&turn.turn_id, AgentTurnState::Failed);

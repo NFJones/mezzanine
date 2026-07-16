@@ -25,22 +25,4 @@ impl RuntimeSessionService {
         self.project_trust_store = Some(store);
         self.project_trust_database_path = database_path;
     }
-
-    /// Runs the agent scheduler operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn agent_scheduler(&self) -> &AgentScheduler {
-        &self.agent_scheduler
-    }
-
-    /// Runs the agent scheduler mut operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn agent_scheduler_mut(&mut self) -> &mut AgentScheduler {
-        &mut self.agent_scheduler
-    }
 }

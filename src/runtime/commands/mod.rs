@@ -519,13 +519,13 @@ impl RuntimeSessionService {
             .get(pane_id)
             .and_then(|session| session.running_turn_id.clone())
             .or_else(|| {
-                self.agent_scheduler
+                self.agent_scheduler()
                     .queued_turns()
                     .find(|work| work.pane_id.as_deref() == Some(pane_id))
                     .map(|work| work.turn_id.clone())
             })
             .ok_or_else(|| MezError::invalid_state("agent shell session has no running turn"))?;
-        let scheduler_cancelled = self.agent_scheduler.cancel(&turn_id).is_ok();
+        let scheduler_cancelled = self.cancel_agent_work(&turn_id);
         let interrupted_shell_transactions =
             self.cancel_live_shell_transactions_for_turn(&turn_id)?;
         let turn = self
@@ -722,7 +722,7 @@ impl RuntimeSessionService {
             .and_then(|session| session.running_turn_id.as_deref())
             .and_then(|turn_id| self.agent_loop_turn(turn_id))
             .is_some_and(|loop_turn| loop_turn.pane_id == pane_id);
-        let queued_loop_turn_active = self.agent_scheduler.queued_turns().any(|work| {
+        let queued_loop_turn_active = self.agent_scheduler().queued_turns().any(|work| {
             work.pane_id.as_deref() == Some(pane_id)
                 && self
                     .agent_loop_turn(&work.turn_id)
@@ -1068,7 +1068,7 @@ impl RuntimeSessionService {
         )?;
         self.agent_turn_contexts.insert(turn_id.clone(), context);
         self.set_agent_turn_model_profile(turn_id.clone(), model_profile);
-        self.agent_scheduler.enqueue(ScheduledWork {
+        self.enqueue_agent_work(ScheduledWork {
             turn_id: turn_id.clone(),
             agent_id: agent_id.clone(),
             pane_id: Some(pane_id.to_string()),

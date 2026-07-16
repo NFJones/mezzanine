@@ -100,3 +100,9 @@ pub struct AgentScheduler {
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) last_started_agent_id: Option<String>,
 }
+
+impl Default for AgentScheduler {
+    fn default() -> Self {
+        Self::with_default_limit()
+    }
+}

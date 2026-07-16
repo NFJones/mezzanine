@@ -225,11 +225,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) audit_log: Option<AuditLog>,
-    /// Stores the agent scheduler value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) agent_scheduler: AgentScheduler,
     /// Stores the agent shell store value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

@@ -16,23 +16,22 @@ mod snapshot;
 mod state;
 mod subagents;
 use super::{
-    AgentContext, AgentId, AgentScheduler, AgentShellStore, AgentTurnLedger, AgentTurnState,
-    ApprovalDecision, ApprovalDecisionScopePersistence, AttachedTerminalClientStepPlan, AuditActor,
-    AuditRecord, BlockedApprovalRequest, ClientRole, ClientState, ClientViewRole, CommandRule,
-    CommandRuleScope, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,
-    ConfigScope, ContextBlock, ContextSourceKind, ControlConnectionState,
-    DEFAULT_COMMAND_SHELL_CLASSIFICATION, Envelope, EventKind, EventVisibility, HookEvent,
-    MemoryRecord, MezError, PaneCaptureSource, PaneId, PaneProcessStart, PaneReadinessState, Path,
-    PathBuf, ProjectTrustStore, Recipient, Result, RuleDecision, RuleMatch,
-    RuntimeAutoSizingConfig, RuntimeLifecycleState, RuntimeRegistryUpdatePlan,
-    RuntimeSessionService, RuntimeSideEffect, RuntimeSubagentLineage, RuntimeSubagentPlacement,
-    SUBAGENT_FRIENDLY_NAMES, ScopeRegistry, SenderIdentity, SessionRecord, SnapshotCreationContext,
-    SnapshotRepository, SplitDirection, SubagentScopeDeclaration, SubagentSpawnRequest, TaskState,
-    TaskStatusPayload, TerminalClientLoopAction, TerminalClientLoopConfig, TrustDecision,
-    agent_state_control_method, approval_decide_scope_persistence,
-    compare_permission_preset_authority, current_unix_seconds, default_trust_database_path,
-    destination_target_checked_resolved, discover_project_root, dispatch_control_request_cached,
-    dispatch_control_request_for_client_with_agent_state,
+    AgentContext, AgentId, AgentShellStore, AgentTurnLedger, AgentTurnState, ApprovalDecision,
+    ApprovalDecisionScopePersistence, AttachedTerminalClientStepPlan, AuditActor, AuditRecord,
+    BlockedApprovalRequest, ClientRole, ClientState, ClientViewRole, CommandRule, CommandRuleScope,
+    ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigScope, ContextBlock,
+    ContextSourceKind, ControlConnectionState, DEFAULT_COMMAND_SHELL_CLASSIFICATION, Envelope,
+    EventKind, EventVisibility, HookEvent, MemoryRecord, MezError, PaneCaptureSource, PaneId,
+    PaneProcessStart, PaneReadinessState, Path, PathBuf, ProjectTrustStore, Recipient, Result,
+    RuleDecision, RuleMatch, RuntimeAutoSizingConfig, RuntimeLifecycleState,
+    RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSideEffect, RuntimeSubagentLineage,
+    RuntimeSubagentPlacement, SUBAGENT_FRIENDLY_NAMES, ScopeRegistry, SenderIdentity,
+    SessionRecord, SnapshotCreationContext, SnapshotRepository, SplitDirection,
+    SubagentScopeDeclaration, SubagentSpawnRequest, TaskState, TaskStatusPayload,
+    TerminalClientLoopAction, TerminalClientLoopConfig, TrustDecision, agent_state_control_method,
+    approval_decide_scope_persistence, compare_permission_preset_authority, current_unix_seconds,
+    default_trust_database_path, destination_target_checked_resolved, discover_project_root,
+    dispatch_control_request_cached, dispatch_control_request_for_client_with_agent_state,
     dispatch_control_request_for_client_with_agent_state_and_model_profiles,
     dispatch_control_request_for_client_with_config,
     dispatch_control_request_for_client_with_config_and_audit,
@@ -320,7 +319,7 @@ impl RuntimeSessionService {
         });
         let context = AgentContext::new(blocks)?;
         let context = append_permission_policy_context(context)?;
-        let context = append_scheduler_context(context, &self.agent_scheduler)?;
+        let context = append_scheduler_context(context, self.agent_scheduler())?;
         let prompt_memory_records = context_memory_records
             .iter()
             .map(mez_agent::MemoryContextRecord::from)

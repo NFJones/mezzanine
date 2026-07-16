@@ -266,7 +266,7 @@ impl RuntimeSessionService {
             },
         );
         self.append_agent_user_prompt_to_terminal_buffer(child_pane_id, payload)?;
-        self.agent_scheduler.enqueue(ScheduledWork {
+        self.agent.agent_scheduler.enqueue(ScheduledWork {
             turn_id: turn_id.clone(),
             agent_id: child_agent_id.to_string(),
             pane_id: Some(child_pane_id.to_string()),
