@@ -228,13 +228,11 @@ impl RuntimeSessionService {
         let terminal_history_rotate_lines = runtime_history_rotate_lines_from_config(&structured)?;
         let saved_agent_session_limit = runtime_saved_agent_session_limit_from_config(&structured)?;
         let terminal_term = runtime_terminal_term_from_config(&structured)?;
-        let presentation_settings = RuntimePresentationSettings::from_config(&structured)?;
+        let presentation_settings =
+            RuntimePresentationSettings::from_config(&structured, &effective)?;
         let terminal_emoji_width = runtime_terminal_emoji_width_from_config(&structured)?;
         let terminal_clipboard = runtime_terminal_clipboard_from_config(&structured)?;
         let host_clipboard = runtime_host_clipboard_from_config(&structured)?;
-        let ui_theme = runtime_ui_theme_from_config(&structured)?;
-        let key_bindings = runtime_key_bindings_from_config(&structured)?;
-        let command_bindings = runtime_command_bindings_from_effective(&effective)?;
         let audit_log = if runtime_audit_config_present(&structured) {
             Some(runtime_audit_log_from_config(
                 &structured,
@@ -256,9 +254,6 @@ impl RuntimeSessionService {
         self.presentation.apply_settings(presentation_settings);
         self.terminal_clipboard = terminal_clipboard;
         self.host_clipboard = host_clipboard;
-        self.ui_theme = ui_theme;
-        self.key_bindings = key_bindings;
-        self.command_bindings = command_bindings;
         match audit_log {
             Some(Some(audit_log)) => self.set_audit_log(audit_log),
             Some(None) => self.clear_audit_log(),
@@ -381,7 +376,7 @@ impl RuntimeSessionService {
             default_model_profile: self.provider_registry.default_profile.clone(),
             hooks_configured: self.hook_definitions.len(),
             project_trust_prompts_announced: trust_prompts_announced,
-            ui_theme: self.ui_theme.name.clone(),
+            ui_theme: self.ui_theme().name.clone(),
         })
     }
 

@@ -40,7 +40,8 @@ impl RuntimeSessionService {
                     .pending_record_browser_overlay_stacks
                     .insert((pane_id.clone(), target_command), stack);
             }
-            let display_output = runtime_agent_shell_display_output(&body, &self.ui_theme)?;
+            let display_output =
+                runtime_agent_shell_display_output(&body, &self.presentation.settings.ui_theme)?;
             self.set_agent_prompt_display_output(&pane_id, display_output)?;
             if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
                 self.agent_prompt_inputs.remove(&pane_id);
@@ -50,7 +51,9 @@ impl RuntimeSessionService {
         self.presentation.primary_display_overlay = None;
         let content = self
             .execute_terminal_command(primary_client_id, command)
-            .and_then(|body| runtime_command_display_overlay_content(&body, &self.ui_theme))?;
+            .and_then(|body| {
+                runtime_command_display_overlay_content(&body, &self.presentation.settings.ui_theme)
+            })?;
         self.present_runtime_command_display_content(content)?;
         Ok(true)
     }
@@ -119,7 +122,10 @@ impl RuntimeSessionService {
                     record_browser.browser = frame.browser;
                     let scroll_offset = frame.scroll_offset;
                     let active_selection_index = frame.active_selection_index;
-                    let changed = render_record_browser_overlay(overlay, &self.ui_theme);
+                    let changed = render_record_browser_overlay(
+                        overlay,
+                        &self.presentation.settings.ui_theme,
+                    );
                     overlay.scroll_offset = scroll_offset.min(modal_overlay_max_scroll(
                         overlay.lines.len(),
                         self.session.authoritative_size,
@@ -136,7 +142,10 @@ impl RuntimeSessionService {
                     outcome,
                     mez_mux::record_browser::RecordBrowserOutcome::Updated
                 ) {
-                    return Ok(Some(render_record_browser_overlay(overlay, &self.ui_theme)));
+                    return Ok(Some(render_record_browser_overlay(
+                        overlay,
+                        &self.presentation.settings.ui_theme,
+                    )));
                 }
                 return Ok(None);
             }
@@ -152,7 +161,10 @@ impl RuntimeSessionService {
         ) {
             return Ok(None);
         }
-        Ok(Some(render_record_browser_overlay(overlay, &self.ui_theme)))
+        Ok(Some(render_record_browser_overlay(
+            overlay,
+            &self.presentation.settings.ui_theme,
+        )))
     }
 
     /// Applies editing keys while a retained record-browser modal prompt is open.
@@ -257,7 +269,10 @@ impl RuntimeSessionService {
                 let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                     return Ok(false);
                 };
-                Ok(render_record_browser_overlay(overlay, &self.ui_theme))
+                Ok(render_record_browser_overlay(
+                    overlay,
+                    &self.presentation.settings.ui_theme,
+                ))
             }
             mez_mux::record_browser::RecordBrowserOutcome::SaveSubmitted { path, markdown } => {
                 let pane_id = self
@@ -272,13 +287,19 @@ impl RuntimeSessionService {
                 let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                     return Ok(false);
                 };
-                Ok(render_record_browser_overlay(overlay, &self.ui_theme))
+                Ok(render_record_browser_overlay(
+                    overlay,
+                    &self.presentation.settings.ui_theme,
+                ))
             }
             _ => {
                 let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                     return Ok(false);
                 };
-                Ok(render_record_browser_overlay(overlay, &self.ui_theme))
+                Ok(render_record_browser_overlay(
+                    overlay,
+                    &self.presentation.settings.ui_theme,
+                ))
             }
         }
     }

@@ -263,21 +263,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) terminal_clipboard: String,
-    /// Stores the ui theme value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) ui_theme: UiTheme,
-    /// Stores the key bindings value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) key_bindings: KeyBindings,
-    /// Stores the command bindings value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) command_bindings: BTreeMap<KeyChord, RuntimeCommandBinding>,
     /// Stores the permission policy value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

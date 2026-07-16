@@ -377,7 +377,13 @@ fn runtime_resume_picker_view_keeps_selected_link_styling_off_previous_cell() {
 
     assert_ne!(
         previous_rendition.foreground,
-        Some(service.ui_theme.colors.agent_transcript_command.foreground),
+        Some(
+            service
+                .ui_theme()
+                .colors
+                .agent_transcript_command
+                .foreground
+        ),
         "resume picker link foreground shifted left in live view: {view:?}"
     );
     assert!(
@@ -386,12 +392,18 @@ fn runtime_resume_picker_view_keeps_selected_link_styling_off_previous_cell() {
     );
     assert_ne!(
         previous_rendition.background,
-        Some(service.ui_theme.colors.agent_model.background),
+        Some(service.ui_theme().colors.agent_model.background),
         "resume picker active background shifted left in live view: {view:?}"
     );
     assert_eq!(
         first_rendition.foreground,
-        Some(service.ui_theme.colors.agent_transcript_command.foreground),
+        Some(
+            service
+                .ui_theme()
+                .colors
+                .agent_transcript_command
+                .foreground
+        ),
         "resume picker first session-id cell lost link foreground: {view:?}"
     );
     assert!(
@@ -400,7 +412,7 @@ fn runtime_resume_picker_view_keeps_selected_link_styling_off_previous_cell() {
     );
     assert_eq!(
         first_rendition.background,
-        Some(service.ui_theme.colors.agent_model.background),
+        Some(service.ui_theme().colors.agent_model.background),
         "resume picker first session-id cell lost active background: {view:?}"
     );
 }
@@ -567,7 +579,13 @@ fn runtime_resume_picker_attached_frame_keeps_selected_link_styling_off_previous
 
     assert_ne!(
         previous_rendition.foreground,
-        Some(service.ui_theme.colors.agent_transcript_command.foreground),
+        Some(
+            service
+                .ui_theme()
+                .colors
+                .agent_transcript_command
+                .foreground
+        ),
         "resume picker link foreground shifted left after attached frame update: {styled_lines:?}"
     );
     assert!(
@@ -576,12 +594,18 @@ fn runtime_resume_picker_attached_frame_keeps_selected_link_styling_off_previous
     );
     assert_ne!(
         previous_rendition.background,
-        Some(service.ui_theme.colors.agent_model.background),
+        Some(service.ui_theme().colors.agent_model.background),
         "resume picker active background shifted left after attached frame update: {styled_lines:?}"
     );
     assert_eq!(
         first_rendition.foreground,
-        Some(service.ui_theme.colors.agent_transcript_command.foreground),
+        Some(
+            service
+                .ui_theme()
+                .colors
+                .agent_transcript_command
+                .foreground
+        ),
         "resume picker first session-id cell lost link foreground after attached frame update: {styled_lines:?}"
     );
     assert!(
@@ -590,7 +614,7 @@ fn runtime_resume_picker_attached_frame_keeps_selected_link_styling_off_previous
     );
     assert_eq!(
         first_rendition.background,
-        Some(service.ui_theme.colors.agent_model.background),
+        Some(service.ui_theme().colors.agent_model.background),
         "resume picker first session-id cell lost active background after attached frame update: {styled_lines:?}"
     );
 }

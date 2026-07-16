@@ -15,15 +15,15 @@ use super::{
     AgentTranscriptStore, AgentTurnExecution, AgentTurnLedger, AgentTurnState, AuditLog, AuthStore,
     BTreeMap, BTreeSet, BlockedApprovalQueue, ConfigLayer, ControlIdempotencyCache, CopyMode,
     EnvironmentSignature, EventLog, FocusedShellHookQueue, HookDefinition, HookEvent,
-    HookExecutionPlan, HookExecutionResult, HookFailureKind, HostClipboard, KeyBindings, KeyChord,
-    McpRegistry, McpServerStatus, McpStartupPlan, McpStdioConnection, McpToolCallPlan,
-    McpToolCallResponse, MessageService, MezError, ModelProfile, ModelRequest, ModelResponse,
-    ModelTokenUsage, ModelTokenUsageKey, PaneGeometry, PaneId, PaneProcessManager,
-    PaneReadinessOverrideStore, PaneReadinessState, PasteBuffers, PathBuf, PermissionPolicy,
-    ProjectTrustStore, ProviderQuotaUsage, Result, RuntimeSideEffect, ScopeRegistry, Session,
-    SessionApprovalStore, SessionMemoryStore, SessionRecord, SessionRegistry, Size,
-    SnapshotRepository, SplitDirection, SubagentProfile, SubagentScopeDeclaration, TerminalScreen,
-    ToolDiscoveryCache, WindowId, execute_streamable_http_exchange, mcp_tools_call_operation,
+    HookExecutionPlan, HookExecutionResult, HookFailureKind, HostClipboard, McpRegistry,
+    McpServerStatus, McpStartupPlan, McpStdioConnection, McpToolCallPlan, McpToolCallResponse,
+    MessageService, MezError, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
+    ModelTokenUsageKey, PaneGeometry, PaneId, PaneProcessManager, PaneReadinessOverrideStore,
+    PaneReadinessState, PasteBuffers, PathBuf, PermissionPolicy, ProjectTrustStore,
+    ProviderQuotaUsage, Result, RuntimeSideEffect, ScopeRegistry, Session, SessionApprovalStore,
+    SessionMemoryStore, SessionRecord, SessionRegistry, Size, SnapshotRepository, SplitDirection,
+    SubagentProfile, SubagentScopeDeclaration, TerminalScreen, ToolDiscoveryCache, WindowId,
+    execute_streamable_http_exchange, mcp_tools_call_operation,
 };
 use super::{RuntimePresetRegistry, RuntimeProviderRegistry};
 use crate::error::MezErrorKind;
@@ -36,7 +36,6 @@ use mez_agent::{
 };
 use mez_mux::copy::CopyPosition;
 use mez_mux::layout::PaneTitleSource;
-use mez_mux::theme::UiTheme;
 use mez_terminal::TerminalEmojiWidth;
 use secrecy::ExposeSecret;
 

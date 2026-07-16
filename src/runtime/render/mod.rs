@@ -34,21 +34,22 @@ use super::service_state::{
 };
 use super::{
     AgentShellVisibility, AgentTurnRecord, AgentTurnState, AttachedClientStepApplication,
-    AttachedTerminalClientStepPlan, ClientViewRole, CopyMode, CopyModeKeyAction, EventKind,
-    MezError, MouseAction, MouseResizeDragState, MouseSelectionDragState,
-    MouseWindowActionFrameCell, ObserverDecisionState, PaneDescriptor, PaneGeometry,
-    PaneInputDispatch, PaneNavigationDirection, ReadlineInputDecoder, ReadlineOutcome,
-    ReadlinePrompt, ReadlinePromptKind, RenderedClientView, Result,
-    RuntimeAgentModifiedFileSummary, RuntimeAgentPromptInput, RuntimeSessionService,
-    RuntimeSideEffect, RuntimeStatusPillCache, RuntimeStatusPillDefinition, Size, SplitDirection,
-    TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFrameContext, TerminalScreen,
-    WindowFrameAction, agent_prompt_reserved_line_count, current_unix_millis, current_unix_seconds,
-    json_escape, mouse_action_name, mux_action_command_prompt_prefill, mux_action_name,
-    pane_navigation_direction, parse_command_sequence, render_attached_client_view,
-    rendered_pane_geometries, runtime_agent_shell_command_response_json,
-    runtime_agent_turn_duration_display, runtime_agent_turn_state_name,
-    runtime_approval_policy_name, runtime_copy_position_for_view, runtime_fit_status_line,
-    runtime_paste_bytes, window_frame_action_pillbox_cells, window_frame_pillbox_cells,
+    AttachedTerminalClientStepPlan, ClientViewRole, CopyMode, CopyModeKeyAction, EffectiveConfig,
+    EventKind, KeyBindings, KeyChord, MezError, MouseAction, MouseResizeDragState,
+    MouseSelectionDragState, MouseWindowActionFrameCell, ObserverDecisionState, PaneDescriptor,
+    PaneGeometry, PaneInputDispatch, PaneNavigationDirection, ReadlineInputDecoder,
+    ReadlineOutcome, ReadlinePrompt, ReadlinePromptKind, RenderedClientView, Result,
+    RuntimeAgentModifiedFileSummary, RuntimeAgentPromptInput, RuntimeCommandBinding,
+    RuntimeSessionService, RuntimeSideEffect, RuntimeStatusPillCache, RuntimeStatusPillDefinition,
+    Size, SplitDirection, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFrameContext,
+    TerminalScreen, WindowFrameAction, agent_prompt_reserved_line_count, current_unix_millis,
+    current_unix_seconds, json_escape, mouse_action_name, mux_action_command_prompt_prefill,
+    mux_action_name, pane_navigation_direction, parse_command_sequence,
+    render_attached_client_view, rendered_pane_geometries,
+    runtime_agent_shell_command_response_json, runtime_agent_turn_duration_display,
+    runtime_agent_turn_state_name, runtime_approval_policy_name, runtime_copy_position_for_view,
+    runtime_fit_status_line, runtime_paste_bytes, window_frame_action_pillbox_cells,
+    window_frame_pillbox_cells,
 };
 /// Maximum elapsed time between two pane-content clicks recognized as a double click.
 const DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS: u64 = 500;
@@ -100,6 +101,12 @@ pub(in crate::runtime) struct RuntimePresentationSettings {
     terminal_agent_wrap_column_cap: usize,
     /// Whether optional terminal animation is disabled.
     terminal_reduced_motion: bool,
+    /// Resolved color and rendition policy for product UI surfaces.
+    ui_theme: UiTheme,
+    /// Configured mux key chords.
+    key_bindings: KeyBindings,
+    /// Configured prefix-table command bindings keyed by chord.
+    command_bindings: std::collections::BTreeMap<KeyChord, RuntimeCommandBinding>,
 }
 
 impl Default for RuntimePresentationSettings {
@@ -131,13 +138,19 @@ impl Default for RuntimePresentationSettings {
             terminal_render_rate_limit_fps: 5,
             terminal_agent_wrap_column_cap: crate::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP,
             terminal_reduced_motion: false,
+            ui_theme: UiTheme::default(),
+            key_bindings: KeyBindings::default(),
+            command_bindings: std::collections::BTreeMap::new(),
         }
     }
 }
 
 impl RuntimePresentationSettings {
     /// Parses one complete presentation settings replacement.
-    pub(in crate::runtime) fn from_config(root: &serde_json::Value) -> Result<Self> {
+    pub(in crate::runtime) fn from_config(
+        root: &serde_json::Value,
+        effective: &EffectiveConfig,
+    ) -> Result<Self> {
         Ok(Self {
             window_frames_enabled: crate::runtime::runtime_window_frames_enabled_from_config(root)?,
             window_frame_template: crate::runtime::runtime_window_frame_template_from_config(root)?,
@@ -168,6 +181,9 @@ impl RuntimePresentationSettings {
             terminal_reduced_motion: crate::runtime::runtime_terminal_reduced_motion_from_config(
                 root,
             )?,
+            ui_theme: crate::runtime::runtime_ui_theme_from_config(root)?,
+            key_bindings: crate::runtime::runtime_key_bindings_from_config(root)?,
+            command_bindings: crate::runtime::runtime_command_bindings_from_effective(effective)?,
         })
     }
 }
@@ -322,10 +338,32 @@ impl RuntimeSessionService {
         self.presentation.settings.pane_frame_visible_fields = fields;
         self.presentation.settings.pane_frame_template = template;
     }
+
+    /// Returns the active product UI theme.
+    pub(in crate::runtime) fn ui_theme(&self) -> &UiTheme {
+        &self.presentation.settings.ui_theme
+    }
+
+    /// Returns the configured mux key bindings.
+    pub(in crate::runtime) fn key_bindings(&self) -> &KeyBindings {
+        &self.presentation.settings.key_bindings
+    }
+
+    /// Returns configured prefix-table command bindings.
+    pub(in crate::runtime) fn command_bindings(
+        &self,
+    ) -> &std::collections::BTreeMap<KeyChord, RuntimeCommandBinding> {
+        &self.presentation.settings.command_bindings
+    }
 }
 
 #[cfg(test)]
 impl RuntimeSessionService {
+    /// Replaces the active UI theme for a presentation integration fixture.
+    pub(in crate::runtime) fn set_ui_theme_for_tests(&mut self, ui_theme: UiTheme) {
+        self.presentation.settings.ui_theme = ui_theme;
+    }
+
     /// Returns retained primary command-prompt history for integration tests.
     pub(in crate::runtime) fn primary_command_prompt_history(&self) -> &[String] {
         &self.presentation.primary_command_prompt_history

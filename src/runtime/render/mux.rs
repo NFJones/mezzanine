@@ -20,7 +20,8 @@ impl RuntimeSessionService {
     ) -> Result<bool> {
         match action {
             MuxAction::SendPrefixToPane => {
-                let input = key_chord_input_bytes(self.key_bindings.escape).ok_or_else(|| {
+                let input = key_chord_input_bytes(self.presentation.settings.key_bindings.escape)
+                    .ok_or_else(|| {
                     MezError::invalid_state("configured prefix key cannot be sent to pane")
                 })?;
                 self.write_input_to_pane(primary_client_id, None, &input)?;
@@ -182,7 +183,8 @@ impl RuntimeSessionService {
                 truncated
             ),
         )?;
-        let content = runtime_command_display_overlay_content(&output, &self.ui_theme)?;
+        let content =
+            runtime_command_display_overlay_content(&output, &self.presentation.settings.ui_theme)?;
         self.present_runtime_command_display_content(content)
     }
 

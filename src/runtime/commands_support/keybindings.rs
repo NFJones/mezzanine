@@ -24,89 +24,89 @@ pub(in crate::runtime) fn runtime_list_key_bindings_display(
     service: &RuntimeSessionService,
 ) -> Result<String> {
     let effective = compose_effective_config(&service.config_layers)?;
-    let prefix = key_chord_notation(service.key_bindings.escape);
+    let prefix = key_chord_notation(service.key_bindings().escape);
     let mut rows = Vec::new();
     runtime_push_optional_key_binding_row(
         &mut rows,
-        service.key_bindings.split_vertical,
+        service.key_bindings().split_vertical,
         runtime_key_source(&effective, "keys.split_vertical"),
         "split-window",
     );
     runtime_push_optional_key_binding_row(
         &mut rows,
-        service.key_bindings.split_horizontal,
+        service.key_bindings().split_horizontal,
         runtime_key_source(&effective, "keys.split_horizontal"),
         "split-window -h",
     );
     runtime_push_optional_key_binding_row(
         &mut rows,
-        service.key_bindings.new_window,
+        service.key_bindings().new_window,
         runtime_key_source(&effective, "keys.new_window"),
         "new-window",
     );
     runtime_push_optional_key_binding_row(
         &mut rows,
-        service.key_bindings.new_group,
+        service.key_bindings().new_group,
         runtime_key_source(&effective, "keys.new_group"),
         "new-group",
     );
     runtime_push_optional_key_binding_row(
         &mut rows,
-        service.key_bindings.agent_shell,
+        service.key_bindings().agent_shell,
         runtime_key_source(&effective, "keys.agent_shell"),
         "agent-shell",
     );
     runtime_push_optional_key_binding_row(
         &mut rows,
-        service.key_bindings.focus_up,
+        service.key_bindings().focus_up,
         runtime_key_source(&effective, "keys.focus_up"),
         "select-pane -U",
     );
     runtime_push_optional_key_binding_row(
         &mut rows,
-        service.key_bindings.focus_down,
+        service.key_bindings().focus_down,
         runtime_key_source(&effective, "keys.focus_down"),
         "select-pane -D",
     );
     runtime_push_optional_key_binding_row(
         &mut rows,
-        service.key_bindings.focus_left,
+        service.key_bindings().focus_left,
         runtime_key_source(&effective, "keys.focus_left"),
         "select-pane -L",
     );
     runtime_push_optional_key_binding_row(
         &mut rows,
-        service.key_bindings.focus_right,
+        service.key_bindings().focus_right,
         runtime_key_source(&effective, "keys.focus_right"),
         "select-pane -R",
     );
     runtime_push_optional_key_binding_row(
         &mut rows,
-        service.key_bindings.focus_previous_window,
+        service.key_bindings().focus_previous_window,
         runtime_key_source(&effective, "keys.focus_previous_window"),
         "previous-window",
     );
     runtime_push_optional_key_binding_row(
         &mut rows,
-        service.key_bindings.focus_next_window,
+        service.key_bindings().focus_next_window,
         runtime_key_source(&effective, "keys.focus_next_window"),
         "next-window",
     );
     runtime_push_optional_key_binding_row(
         &mut rows,
-        service.key_bindings.focus_previous_group,
+        service.key_bindings().focus_previous_group,
         runtime_key_source(&effective, "keys.focus_previous_group"),
         "previous-group",
     );
     runtime_push_optional_key_binding_row(
         &mut rows,
-        service.key_bindings.focus_next_group,
+        service.key_bindings().focus_next_group,
         runtime_key_source(&effective, "keys.focus_next_group"),
         "next-group",
     );
 
-    for (chord, command) in runtime_default_prefix_bindings(service.key_bindings.escape) {
-        if service.command_bindings.contains_key(&chord) {
+    for (chord, command) in runtime_default_prefix_bindings(service.key_bindings().escape) {
+        if service.command_bindings().contains_key(&chord) {
             continue;
         }
         rows.push(RuntimeKeyBindingDisplayRow {
@@ -115,7 +115,7 @@ pub(in crate::runtime) fn runtime_list_key_bindings_display(
             command: command.to_string(),
         });
     }
-    for binding in service.command_bindings.values() {
+    for binding in service.command_bindings().values() {
         rows.push(RuntimeKeyBindingDisplayRow {
             key: format!("{prefix} {}", binding.notation),
             source: binding.source_layer.clone(),

@@ -523,7 +523,7 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
         span.rendition.bold
             && span.rendition.underline
             && span.rendition.foreground
-                == Some(service.ui_theme.colors.agent_transcript_user.foreground)
+                == Some(service.ui_theme().colors.agent_transcript_user.foreground)
             && span.rendition.background.is_none()
             && span.start >= "▐ mez> ".chars().count()
     }));
@@ -535,7 +535,7 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
     assert!(quote.style_spans.iter().any(|span| {
         span.rendition.dim
             && span.rendition.foreground
-                == Some(service.ui_theme.colors.agent_transcript_status.foreground)
+                == Some(service.ui_theme().colors.agent_transcript_status.foreground)
     }));
     assert!(quote.style_spans.iter().any(|span| span.rendition.bold));
     assert!(
@@ -581,7 +581,13 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
         !span.rendition.inverse
             && span.rendition.background.is_none()
             && span.rendition.foreground
-                == Some(service.ui_theme.colors.agent_transcript_command.foreground)
+                == Some(
+                    service
+                        .ui_theme()
+                        .colors
+                        .agent_transcript_command
+                        .foreground,
+                )
     }));
     assert!(link.style_spans.iter().any(|span| span.rendition.dim));
 
@@ -598,7 +604,7 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
     assert!(table_header.style_spans.iter().any(|span| {
         span.rendition.bold
             && span.rendition.foreground
-                == Some(service.ui_theme.colors.agent_transcript_user.foreground)
+                == Some(service.ui_theme().colors.agent_transcript_user.foreground)
             && span.rendition.background.is_none()
     }));
     assert!(
@@ -614,7 +620,7 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
     assert!(table_separator.style_spans.iter().any(|span| {
         span.rendition.dim
             && span.rendition.foreground
-                == Some(service.ui_theme.colors.agent_transcript_status.foreground)
+                == Some(service.ui_theme().colors.agent_transcript_status.foreground)
     }));
     let table_row = styled_lines
         .iter()
@@ -673,11 +679,13 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
 #[test]
 fn runtime_agent_markdown_uses_dark_neutral_accents_on_light_theme() {
     let mut service = test_runtime_service();
-    service.ui_theme = mez_mux::theme::resolve_ui_theme(
-        "catppuccin_latte",
-        mez_mux::theme::builtin_ui_theme_definition("catppuccin_latte").unwrap(),
-    )
-    .unwrap();
+    service.set_ui_theme_for_tests(
+        mez_mux::theme::resolve_ui_theme(
+            "catppuccin_latte",
+            mez_mux::theme::builtin_ui_theme_definition("catppuccin_latte").unwrap(),
+        )
+        .unwrap(),
+    );
     service
         .attach_primary("primary", true, Size::new(80, 16).unwrap(), 120)
         .unwrap();

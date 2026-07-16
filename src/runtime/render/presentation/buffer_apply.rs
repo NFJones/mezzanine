@@ -318,7 +318,11 @@ impl RuntimeSessionService {
         let frame_width = self.agent_terminal_markdown_frame_width(pane_id)?;
         let table_width = self.agent_terminal_markdown_terminal_width(pane_id)?;
         let body_rendered_lines = wrap_rich_text_lines_to_width(
-            render_agent_markdown_body_lines(markdown, &self.ui_theme, table_width),
+            render_agent_markdown_body_lines(
+                markdown,
+                &self.presentation.settings.ui_theme,
+                table_width,
+            ),
             frame_width,
             table_width,
         );
@@ -508,7 +512,7 @@ impl RuntimeSessionService {
             content_columns,
             MAX_AGENT_COMMAND_PREVIEW_LINES,
             self.shell_classification_for_pane(pane_id),
-            &self.ui_theme,
+            &self.presentation.settings.ui_theme,
         );
         let copy_lines = rendered_lines
             .iter()
@@ -606,7 +610,12 @@ impl RuntimeSessionService {
                 bytes.push_str("\r\n");
             }
             for (style, line) in styled_lines {
-                append_styled_agent_terminal_line(&mut bytes, *style, line, &self.ui_theme);
+                append_styled_agent_terminal_line(
+                    &mut bytes,
+                    *style,
+                    line,
+                    &self.presentation.settings.ui_theme,
+                );
                 bytes.push_str("\x1b[0m\r\n");
             }
             Self::feed_agent_terminal_screen(
@@ -677,7 +686,12 @@ impl RuntimeSessionService {
                 bytes.push_str("\r\n");
             }
             for line in rendered_lines {
-                append_styled_agent_terminal_rendered_line(&mut bytes, style, line, &self.ui_theme);
+                append_styled_agent_terminal_rendered_line(
+                    &mut bytes,
+                    style,
+                    line,
+                    &self.presentation.settings.ui_theme,
+                );
                 bytes.push_str("\x1b[0m\r\n");
             }
             Self::feed_agent_terminal_screen(
@@ -782,7 +796,7 @@ impl RuntimeSessionService {
                 &mut bytes,
                 AgentTerminalPresentationStyle::Status,
                 line,
-                &self.ui_theme,
+                &self.presentation.settings.ui_theme,
             );
             bytes.push_str("\x1b[0m");
         }
@@ -844,8 +858,11 @@ impl RuntimeSessionService {
         text: &str,
     ) -> Result<()> {
         let display_width = self.agent_terminal_markdown_frame_width(pane_id)?;
-        let rendered_lines =
-            readable_agent_diff_display_lines_for_width(text, &self.ui_theme, display_width);
+        let rendered_lines = readable_agent_diff_display_lines_for_width(
+            text,
+            &self.presentation.settings.ui_theme,
+            display_width,
+        );
         self.append_agent_terminal_rendered_lines_to_buffer(
             pane_id,
             AgentTerminalPresentationStyle::DiffContext,
@@ -918,7 +935,8 @@ impl RuntimeSessionService {
                 AgentTerminalPresentationStyle::Status,
             )?;
         }
-        let rendered_line = agent_action_execution_rendered_line(&header, &self.ui_theme);
+        let rendered_line =
+            agent_action_execution_rendered_line(&header, &self.presentation.settings.ui_theme);
         self.append_agent_terminal_rendered_lines_to_buffer(
             pane_id,
             AgentTerminalPresentationStyle::Status,

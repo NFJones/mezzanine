@@ -602,9 +602,9 @@ fn runtime_primary_display_overlay_executes_multiple_action_chips() {
             span.length == "[paste]".len()
                 && !span.rendition.inverse
                 && span.rendition.background
-                    == Some(service.ui_theme.colors.agent_reasoning.background)
+                    == Some(service.ui_theme().colors.agent_reasoning.background)
                 && span.rendition.foreground
-                    == Some(service.ui_theme.colors.agent_reasoning.foreground)
+                    == Some(service.ui_theme().colors.agent_reasoning.foreground)
                 && span.rendition.bold
                 && span.rendition.underline
         }),
@@ -616,7 +616,7 @@ fn runtime_primary_display_overlay_executes_multiple_action_chips() {
                 && !span.rendition.inverse
                 && span.rendition.background.is_none()
                 && span.rendition.foreground
-                    == Some(service.ui_theme.colors.agent_status_failed.foreground)
+                    == Some(service.ui_theme().colors.agent_status_failed.foreground)
                 && span.rendition.bold
                 && span.rendition.underline
         }),

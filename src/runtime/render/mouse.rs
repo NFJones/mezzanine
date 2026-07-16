@@ -581,7 +581,7 @@ impl RuntimeSessionService {
                 return Ok(true);
             }
         };
-        match runtime_agent_shell_display_output(&body, &self.ui_theme) {
+        match runtime_agent_shell_display_output(&body, &self.presentation.settings.ui_theme) {
             Ok(display_output) => self.set_agent_prompt_display_output(pane_id, display_output)?,
             Err(error) => {
                 self.set_agent_prompt_display_lines(
@@ -763,7 +763,7 @@ impl RuntimeSessionService {
             let response =
                 runtime_agent_shell_command_response_json(&pane_id, "/routing", Some(&outcome));
             if let Ok(display_output) =
-                runtime_agent_shell_display_output(&response, &self.ui_theme)
+                runtime_agent_shell_display_output(&response, &self.presentation.settings.ui_theme)
             {
                 self.set_agent_prompt_display_output(&pane_id, display_output)?;
             }
@@ -776,7 +776,7 @@ impl RuntimeSessionService {
             let response =
                 runtime_agent_shell_command_response_json(&pane_id, "/thinking", Some(&outcome));
             if let Ok(display_output) =
-                runtime_agent_shell_display_output(&response, &self.ui_theme)
+                runtime_agent_shell_display_output(&response, &self.presentation.settings.ui_theme)
             {
                 self.set_agent_prompt_display_output(&pane_id, display_output)?;
             }
@@ -915,9 +915,10 @@ impl RuntimeSessionService {
                     "/approval",
                     Some(&outcome),
                 );
-                if let Ok(display_output) =
-                    runtime_agent_shell_display_output(&response, &self.ui_theme)
-                {
+                if let Ok(display_output) = runtime_agent_shell_display_output(
+                    &response,
+                    &self.presentation.settings.ui_theme,
+                ) {
                     self.set_agent_prompt_display_output(&selector.pane_id, display_output)?;
                 }
                 return Ok(());
@@ -940,7 +941,9 @@ impl RuntimeSessionService {
             },
             Some(&outcome),
         );
-        if let Ok(display_output) = runtime_agent_shell_display_output(&response, &self.ui_theme) {
+        if let Ok(display_output) =
+            runtime_agent_shell_display_output(&response, &self.presentation.settings.ui_theme)
+        {
             self.set_agent_prompt_display_output(&selector.pane_id, display_output)?;
         }
         Ok(())

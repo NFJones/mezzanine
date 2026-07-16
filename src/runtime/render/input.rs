@@ -214,7 +214,10 @@ impl RuntimeSessionService {
                         match self
                             .execute_terminal_command(primary_client_id, &command)
                             .and_then(|body| {
-                                runtime_command_display_overlay_content(&body, &self.ui_theme)
+                                runtime_command_display_overlay_content(
+                                    &body,
+                                    &self.presentation.settings.ui_theme,
+                                )
                             }) {
                             Ok(content) => {
                                 self.present_runtime_command_display_content(content)?;
@@ -369,7 +372,10 @@ impl RuntimeSessionService {
                             continue;
                         }
                     };
-                    match runtime_agent_shell_display_output(&body, &self.ui_theme) {
+                    match runtime_agent_shell_display_output(
+                        &body,
+                        &self.presentation.settings.ui_theme,
+                    ) {
                         Ok(display_output) => {
                             self.set_agent_prompt_display_output(pane_id, display_output)?;
                         }
@@ -403,7 +409,10 @@ impl RuntimeSessionService {
                             continue;
                         }
                     };
-                    match runtime_agent_shell_display_output(&body, &self.ui_theme) {
+                    match runtime_agent_shell_display_output(
+                        &body,
+                        &self.presentation.settings.ui_theme,
+                    ) {
                         Ok(display_output) => {
                             self.set_agent_prompt_display_output(pane_id, display_output)?;
                         }
@@ -458,7 +467,7 @@ impl RuntimeSessionService {
             "/exit"
         };
         let body = self.execute_agent_shell_command(primary_client_id, command)?;
-        match runtime_agent_shell_display_output(&body, &self.ui_theme) {
+        match runtime_agent_shell_display_output(&body, &self.presentation.settings.ui_theme) {
             Ok(display_output) => self.set_agent_prompt_display_output(pane_id, display_output)?,
             Err(error) => self.set_agent_prompt_display_lines(
                 pane_id,
@@ -819,7 +828,8 @@ impl RuntimeSessionService {
         pane_id: &str,
         response: &str,
     ) -> Result<()> {
-        let display_output = runtime_agent_shell_display_output(response, &self.ui_theme)?;
+        let display_output =
+            runtime_agent_shell_display_output(response, &self.presentation.settings.ui_theme)?;
         self.set_agent_prompt_display_output(pane_id, display_output)
     }
 }

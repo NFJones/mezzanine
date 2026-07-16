@@ -191,7 +191,7 @@ impl RuntimeSessionService {
             &view.line_style_spans,
             &prompt_input.prompt,
             view.authoritative_size,
-            &self.ui_theme,
+            &self.presentation.settings.ui_theme,
         );
         view.lines = presentation.lines;
         view.line_style_spans = presentation.line_style_spans;
@@ -265,7 +265,7 @@ impl RuntimeSessionService {
                     rendition: runtime_pane_agent_selector_rendition(
                         selector.field,
                         active,
-                        &self.ui_theme,
+                        &self.presentation.settings.ui_theme,
                     ),
                 });
             }
@@ -314,7 +314,7 @@ impl RuntimeSessionService {
                         start,
                         length: selection.width.min(max_columns.saturating_sub(start)),
                         rendition: overlay_selection_rendition(
-                            &self.ui_theme,
+                            &self.presentation.settings.ui_theme,
                             selection.kind,
                             active,
                         ),
@@ -325,7 +325,7 @@ impl RuntimeSessionService {
                         start: 0,
                         length: 1,
                         rendition: overlay_selection_rendition(
-                            &self.ui_theme,
+                            &self.presentation.settings.ui_theme,
                             selection.kind,
                             true,
                         ),
@@ -344,8 +344,12 @@ impl RuntimeSessionService {
             let Some(spans) = view.line_style_spans.get_mut(row) else {
                 continue;
             };
-            *spans =
-                overlay_rendered_line_style_spans(overlay, line_index, max_columns, &self.ui_theme);
+            *spans = overlay_rendered_line_style_spans(
+                overlay,
+                line_index,
+                max_columns,
+                &self.presentation.settings.ui_theme,
+            );
         }
         view.cursor_visible = false;
         view.cursor_row = 0;
@@ -368,9 +372,19 @@ impl RuntimeSessionService {
         }
         if let Some(spans) = view.line_style_spans.get_mut(row) {
             let rendition = if message.starts_with("mez error:") || message.starts_with("error:") {
-                self.ui_theme.colors.agent_status_failed.rendition()
+                self.presentation
+                    .settings
+                    .ui_theme
+                    .colors
+                    .agent_status_failed
+                    .rendition()
             } else {
-                self.ui_theme.colors.agent_status_running.rendition()
+                self.presentation
+                    .settings
+                    .ui_theme
+                    .colors
+                    .agent_status_running
+                    .rendition()
             };
             spans.clear();
             spans.push(TerminalStyleSpan {
@@ -420,7 +434,11 @@ impl RuntimeSessionService {
             && let Some((row, column, size)) = self.copy_mode_overlay_region(window, pane_index)
         {
             let mut lines = copy_mode.visible_styled_lines().to_vec();
-            apply_copy_mode_selection_spans(copy_mode, &mut lines, &self.ui_theme);
+            apply_copy_mode_selection_spans(
+                copy_mode,
+                &mut lines,
+                &self.presentation.settings.ui_theme,
+            );
             overlay_styled_lines(
                 view,
                 row,
@@ -444,7 +462,11 @@ impl RuntimeSessionService {
                 continue;
             };
             let mut lines = copy_mode.visible_styled_lines().to_vec();
-            apply_copy_mode_selection_spans(copy_mode, &mut lines, &self.ui_theme);
+            apply_copy_mode_selection_spans(
+                copy_mode,
+                &mut lines,
+                &self.presentation.settings.ui_theme,
+            );
             overlay_styled_lines(
                 view,
                 row,
@@ -676,8 +698,10 @@ impl RuntimeSessionService {
         &self,
         mut config: TerminalClientLoopConfig,
     ) -> Result<TerminalClientLoopConfig> {
-        config.bindings = self.key_bindings.clone();
+        config.bindings = self.presentation.settings.key_bindings.clone();
         config.command_bindings = self
+            .presentation
+            .settings
             .command_bindings
             .iter()
             .map(|(chord, binding)| (*chord, binding.command.clone()))
@@ -704,7 +728,7 @@ impl RuntimeSessionService {
             self.presentation.settings.terminal_cursor_blink_interval_ms;
         config.resize_debounce_ms = self.presentation.settings.terminal_resize_debounce_ms;
         config.render_rate_limit_fps = self.presentation.settings.terminal_render_rate_limit_fps;
-        config.ui_theme = self.ui_theme.clone();
+        config.ui_theme = self.presentation.settings.ui_theme.clone();
         config.primary_display_overlay_active = self.presentation.primary_display_overlay.is_some();
         let frame_context = self.terminal_frame_context();
         config.mouse_border_cells = self.active_window_mouse_border_cells();

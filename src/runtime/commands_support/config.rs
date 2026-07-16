@@ -566,7 +566,7 @@ pub(in crate::runtime) fn runtime_list_themes_command(
         lines.push(ui_theme_list_table_row(
             theme,
             "builtin",
-            *theme == service.ui_theme.name,
+            *theme == service.ui_theme().name,
             &definition,
         ));
     }
@@ -579,7 +579,7 @@ pub(in crate::runtime) fn runtime_list_themes_command(
                 Ok(ui_theme_list_table_row(
                     theme,
                     "config",
-                    theme == &service.ui_theme.name,
+                    theme == &service.ui_theme().name,
                     &definition,
                 ))
             })

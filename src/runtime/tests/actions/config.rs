@@ -378,11 +378,11 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
         execution.action_results
     );
     assert_eq!(
-        service.ui_theme.colors.prompt.background,
+        service.ui_theme().colors.prompt.background,
         TerminalColor::Rgb(0xff, 0xc7, 0x2c)
     );
     assert_eq!(
-        service.ui_theme.colors.agent_transcript_error.foreground,
+        service.ui_theme().colors.agent_transcript_error.foreground,
         TerminalColor::Rgb(0xb0, 0x00, 0x20)
     );
     let after_config_events = service
@@ -498,7 +498,7 @@ fn runtime_config_change_resumes_after_full_access_change() {
         mez_agent::ApprovalPolicy::FullAccess
     );
     assert_eq!(service.blocked_approvals().pending().len(), 0);
-    assert_eq!(service.ui_theme.name, "catppuccin_latte");
+    assert_eq!(service.ui_theme().name, "catppuccin_latte");
     assert_eq!(
         service.permission_policy().approval_policy,
         mez_agent::ApprovalPolicy::FullAccess
