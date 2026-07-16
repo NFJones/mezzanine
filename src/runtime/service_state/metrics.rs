@@ -9,13 +9,13 @@ use std::collections::BTreeMap;
 
 /// Prior pane title state for a title emitted by a foreground program.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct ProgramOwnedPaneTitle {
+pub(crate) struct ProgramOwnedPaneTitle {
     /// Foreground process group that owned the program title.
-    pub(in crate::runtime) foreground_process_group_id: u32,
+    pub(crate) foreground_process_group_id: u32,
     /// Title to restore when the foreground program exits or changes.
-    pub(in crate::runtime) previous_title: String,
+    pub(crate) previous_title: String,
     /// Title provenance to restore when the foreground program exits or changes.
-    pub(in crate::runtime) previous_source: PaneTitleSource,
+    pub(crate) previous_source: PaneTitleSource,
 }
 
 /// Defines the DEFAULT PTY READ LIMIT BYTES const used by this subsystem.
@@ -49,161 +49,148 @@ pub const DEFAULT_AGENT_LOOP_LIMIT: usize = 8;
 /// snapshot covers the higher-level runtime service path so inspection commands
 /// can debug agent/provider behavior without parsing trace logs.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimeMetricsSnapshot {
+pub(crate) struct RuntimeMetricsSnapshot {
     /// Number of agent turns started by the runtime service.
-    pub(in crate::runtime) agent_turns_started: u64,
+    pub(crate) agent_turns_started: u64,
     /// Number of agent turns that ended completed.
-    pub(in crate::runtime) agent_turns_completed: u64,
+    pub(crate) agent_turns_completed: u64,
     /// Number of agent turns that ended failed.
-    pub(in crate::runtime) agent_turns_failed: u64,
+    pub(crate) agent_turns_failed: u64,
     /// Number of agent turns that ended interrupted.
-    pub(in crate::runtime) agent_turns_interrupted: u64,
+    pub(crate) agent_turns_interrupted: u64,
     /// Number of agent turns that ended blocked waiting for approval or child work.
-    pub(in crate::runtime) agent_turns_blocked: u64,
+    pub(crate) agent_turns_blocked: u64,
     /// Number of provider request shapes recorded from runtime executions.
-    pub(in crate::runtime) provider_requests_started: u64,
+    pub(crate) provider_requests_started: u64,
     /// Number of recorded provider requests in capability-decision mode.
-    pub(in crate::runtime) provider_request_capability_decision: u64,
+    pub(crate) provider_request_capability_decision: u64,
     /// Number of recorded provider requests in action-execution mode.
-    pub(in crate::runtime) provider_request_action_execution: u64,
+    pub(crate) provider_request_action_execution: u64,
     /// Number of recorded provider requests in repair mode.
-    pub(in crate::runtime) provider_request_repair: u64,
+    pub(crate) provider_request_repair: u64,
     /// Number of recorded provider requests in auto-sizing mode.
-    pub(in crate::runtime) provider_request_auto_sizing: u64,
+    pub(crate) provider_request_auto_sizing: u64,
     /// Number of provider executions that returned a usable response.
-    pub(in crate::runtime) provider_responses_succeeded: u64,
+    pub(crate) provider_responses_succeeded: u64,
     /// Number of provider executions that failed before a usable response.
-    pub(in crate::runtime) provider_responses_failed: u64,
+    pub(crate) provider_responses_failed: u64,
     /// Number of request shapes with available prompt-cache diagnostics.
-    pub(in crate::runtime) provider_prompt_cache_diagnostics_available: u64,
+    pub(crate) provider_prompt_cache_diagnostics_available: u64,
     /// Number of request shapes whose prompt-cache diagnostics could not be built.
-    pub(in crate::runtime) provider_prompt_cache_diagnostics_failed: u64,
+    pub(crate) provider_prompt_cache_diagnostics_failed: u64,
     /// Number of provider responses that reported cached input tokens.
-    pub(in crate::runtime) provider_cached_input_reports: u64,
+    pub(crate) provider_cached_input_reports: u64,
     /// Number of provider responses that did not report cached input tokens.
-    pub(in crate::runtime) provider_cached_input_unknown: u64,
+    pub(crate) provider_cached_input_unknown: u64,
     /// Number of provider responses that reported zero cached input tokens.
-    pub(in crate::runtime) provider_cached_input_zero_hits: u64,
+    pub(crate) provider_cached_input_zero_hits: u64,
     /// Accumulated provider input tokens.
-    pub(in crate::runtime) provider_input_tokens: u64,
+    pub(crate) provider_input_tokens: u64,
     /// Accumulated provider output tokens.
-    pub(in crate::runtime) provider_output_tokens: u64,
+    pub(crate) provider_output_tokens: u64,
     /// Accumulated provider reasoning tokens.
-    pub(in crate::runtime) provider_reasoning_tokens: u64,
+    pub(crate) provider_reasoning_tokens: u64,
     /// Accumulated provider cached input tokens when reported.
-    pub(in crate::runtime) provider_cached_input_tokens: u64,
+    pub(crate) provider_cached_input_tokens: u64,
     /// Accumulated provider cache-write input tokens when reported.
-    pub(in crate::runtime) provider_cache_write_input_tokens: u64,
+    pub(crate) provider_cache_write_input_tokens: u64,
     /// Accumulated provider input tokens not reported as cache hits.
-    pub(in crate::runtime) provider_billed_input_tokens: u64,
+    pub(crate) provider_billed_input_tokens: u64,
     /// Accumulated provider token usage grouped by provider/model.
-    pub(in crate::runtime) provider_token_usage_by_model:
-        BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
+    pub(crate) provider_token_usage_by_model: BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
     /// Number of shell action dispatch attempts that reached dispatch accounting.
-    pub(in crate::runtime) shell_action_batches: u64,
+    pub(crate) shell_action_batches: u64,
     /// Number of shell-backed agent actions dispatched to panes.
-    pub(in crate::runtime) shell_actions_dispatched: u64,
+    pub(crate) shell_actions_dispatched: u64,
     /// Number of shell transactions observed to completion.
-    pub(in crate::runtime) shell_transactions_observed: u64,
+    pub(crate) shell_transactions_observed: u64,
     /// Number of shell transactions that exited successfully.
-    pub(in crate::runtime) shell_transactions_succeeded: u64,
+    pub(crate) shell_transactions_succeeded: u64,
     /// Number of shell transactions that exited non-zero.
-    pub(in crate::runtime) shell_transactions_failed: u64,
+    pub(crate) shell_transactions_failed: u64,
     /// Number of shell transaction marker protocol violations.
-    pub(in crate::runtime) shell_transaction_protocol_violations: u64,
+    pub(crate) shell_transaction_protocol_violations: u64,
     /// Histogram of provider request message counts.
-    pub(in crate::runtime) provider_request_message_counts: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_request_message_counts: crate::async_runtime::RuntimeHistogram,
     /// Histogram of total provider request message bytes.
-    pub(in crate::runtime) provider_request_message_bytes: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_request_message_bytes: crate::async_runtime::RuntimeHistogram,
     /// Histogram of OpenAI instruction bytes in cache diagnostics.
-    pub(in crate::runtime) provider_prompt_instructions_bytes:
-        crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_prompt_instructions_bytes: crate::async_runtime::RuntimeHistogram,
     /// Histogram of OpenAI response-format bytes in cache diagnostics.
-    pub(in crate::runtime) provider_prompt_response_format_bytes:
-        crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_prompt_response_format_bytes: crate::async_runtime::RuntimeHistogram,
     /// Histogram of OpenAI tool schema bytes in cache diagnostics.
-    pub(in crate::runtime) provider_prompt_tools_bytes: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_prompt_tools_bytes: crate::async_runtime::RuntimeHistogram,
     /// Histogram of OpenAI tool-choice bytes in cache diagnostics.
-    pub(in crate::runtime) provider_prompt_tool_choice_bytes:
-        crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_prompt_tool_choice_bytes: crate::async_runtime::RuntimeHistogram,
     /// Histogram of stable input bytes in cache diagnostics.
-    pub(in crate::runtime) provider_prompt_stable_input_bytes:
-        crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_prompt_stable_input_bytes: crate::async_runtime::RuntimeHistogram,
     /// Histogram of volatile input bytes in cache diagnostics.
-    pub(in crate::runtime) provider_prompt_volatile_input_bytes:
-        crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_prompt_volatile_input_bytes: crate::async_runtime::RuntimeHistogram,
     /// Histogram of stable prompt-prefix bytes in cache diagnostics.
-    pub(in crate::runtime) provider_prompt_stable_prefix_bytes:
-        crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_prompt_stable_prefix_bytes: crate::async_runtime::RuntimeHistogram,
     /// Histogram of provider request-shape bytes tracked outside the prompt prefix.
-    pub(in crate::runtime) provider_request_shape_bytes: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_request_shape_bytes: crate::async_runtime::RuntimeHistogram,
     /// Histogram of stable observable cacheable prefix bytes.
-    pub(in crate::runtime) provider_prompt_cacheable_prefix_bytes:
-        crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_prompt_cacheable_prefix_bytes: crate::async_runtime::RuntimeHistogram,
     /// Histogram of latest response input tokens.
-    pub(in crate::runtime) provider_input_tokens_per_response:
-        crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_input_tokens_per_response: crate::async_runtime::RuntimeHistogram,
     /// Histogram of latest response output tokens.
-    pub(in crate::runtime) provider_output_tokens_per_response:
-        crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_output_tokens_per_response: crate::async_runtime::RuntimeHistogram,
     /// Histogram of latest response cached input tokens.
-    pub(in crate::runtime) provider_cached_input_tokens_per_response:
-        crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_cached_input_tokens_per_response: crate::async_runtime::RuntimeHistogram,
     /// Histogram of latest response cache-write input tokens.
-    pub(in crate::runtime) provider_cache_write_input_tokens_per_response:
+    pub(crate) provider_cache_write_input_tokens_per_response:
         crate::async_runtime::RuntimeHistogram,
     /// Histogram of latest response cache-hit ratios in basis points.
-    pub(in crate::runtime) provider_cached_input_hit_ratio_basis_points:
-        crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_cached_input_hit_ratio_basis_points: crate::async_runtime::RuntimeHistogram,
     /// Histogram of MAAP action counts per provider response.
-    pub(in crate::runtime) provider_response_action_counts: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_response_action_counts: crate::async_runtime::RuntimeHistogram,
     /// Histogram of shell actions dispatched per dispatch pass.
-    pub(in crate::runtime) shell_actions_dispatched_per_batch:
-        crate::async_runtime::RuntimeHistogram,
+    pub(crate) shell_actions_dispatched_per_batch: crate::async_runtime::RuntimeHistogram,
     /// Histogram of shell transaction elapsed milliseconds.
-    pub(in crate::runtime) shell_transaction_duration_ms: crate::async_runtime::RuntimeHistogram,
+    pub(crate) shell_transaction_duration_ms: crate::async_runtime::RuntimeHistogram,
     /// Histogram of shell transaction model-visible output bytes.
-    pub(in crate::runtime) shell_transaction_output_bytes: crate::async_runtime::RuntimeHistogram,
+    pub(crate) shell_transaction_output_bytes: crate::async_runtime::RuntimeHistogram,
     /// Most recent provider identifier observed by runtime metrics.
-    pub(in crate::runtime) last_provider: Option<String>,
+    pub(crate) last_provider: Option<String>,
     /// Most recent provider model observed by runtime metrics.
-    pub(in crate::runtime) last_model: Option<String>,
+    pub(crate) last_model: Option<String>,
     /// Most recent provider interaction kind observed by runtime metrics.
-    pub(in crate::runtime) last_interaction_kind: Option<String>,
+    pub(crate) last_interaction_kind: Option<String>,
     /// Most recent allowed action surface observed by runtime metrics.
-    pub(in crate::runtime) last_allowed_actions: Option<String>,
+    pub(crate) last_allowed_actions: Option<String>,
     /// Most recent prompt-cache key observed by runtime metrics.
-    pub(in crate::runtime) last_prompt_cache_key: Option<String>,
+    pub(crate) last_prompt_cache_key: Option<String>,
     /// Most recent stable prompt-prefix digest observed by runtime metrics.
-    pub(in crate::runtime) last_stable_prompt_prefix_sha256: Option<String>,
+    pub(crate) last_stable_prompt_prefix_sha256: Option<String>,
     /// Most recent provider request-shape digest observed by runtime metrics.
-    pub(in crate::runtime) last_provider_request_shape_sha256: Option<String>,
+    pub(crate) last_provider_request_shape_sha256: Option<String>,
     /// Most recent tool-choice digest observed by runtime metrics.
-    pub(in crate::runtime) last_tool_choice_sha256: Option<String>,
+    pub(crate) last_tool_choice_sha256: Option<String>,
     /// Most recent provider output-token budget source observed by runtime metrics.
-    pub(in crate::runtime) last_provider_output_token_budget_source: Option<String>,
+    pub(crate) last_provider_output_token_budget_source: Option<String>,
     /// Most recent provider output-token budget value observed by runtime metrics.
-    pub(in crate::runtime) last_provider_output_token_budget_tokens: Option<usize>,
+    pub(crate) last_provider_output_token_budget_tokens: Option<usize>,
     /// Most recent temporary output-limit retry override observed by runtime metrics.
-    pub(in crate::runtime) last_provider_output_limit_retry_override_tokens: Option<usize>,
+    pub(crate) last_provider_output_limit_retry_override_tokens: Option<usize>,
     /// Most recent provider response input tokens observed by runtime metrics.
-    pub(in crate::runtime) last_provider_input_tokens: Option<u64>,
+    pub(crate) last_provider_input_tokens: Option<u64>,
     /// Most recent provider response cached input tokens, when reported.
-    pub(in crate::runtime) last_provider_cached_input_tokens: Option<u64>,
+    pub(crate) last_provider_cached_input_tokens: Option<u64>,
     /// Most recent provider response cache-write input tokens, when reported.
-    pub(in crate::runtime) last_provider_cache_write_input_tokens: Option<u64>,
+    pub(crate) last_provider_cache_write_input_tokens: Option<u64>,
     /// Most recent provider response cache-hit ratio in basis points.
-    pub(in crate::runtime) last_provider_cached_input_hit_ratio_basis_points: Option<u32>,
+    pub(crate) last_provider_cached_input_hit_ratio_basis_points: Option<u32>,
 }
 
 impl RuntimeMetricsSnapshot {
     /// Records that one runtime-owned agent turn started execution.
-    pub(in crate::runtime) fn record_agent_turn_started(&mut self) {
+    pub(crate) fn record_agent_turn_started(&mut self) {
         self.agent_turns_started = self.agent_turns_started.saturating_add(1);
     }
 
     /// Records one terminal or blocked turn outcome.
-    pub(in crate::runtime) fn record_agent_turn_finished(&mut self, state: AgentTurnState) {
+    pub(crate) fn record_agent_turn_finished(&mut self, state: AgentTurnState) {
         match state {
             AgentTurnState::Completed => {
                 self.agent_turns_completed = self.agent_turns_completed.saturating_add(1);
@@ -222,7 +209,7 @@ impl RuntimeMetricsSnapshot {
     }
 
     /// Records one provider request shape and prompt-cache diagnostic snapshot.
-    pub(in crate::runtime) fn record_provider_request_shape(
+    pub(crate) fn record_provider_request_shape(
         &mut self,
         request: &ModelRequest,
         diagnostics: Option<&mez_agent::OpenAiPromptCacheDiagnostics>,
@@ -303,7 +290,7 @@ impl RuntimeMetricsSnapshot {
     }
 
     /// Records one successful provider execution and its response shape.
-    pub(in crate::runtime) fn record_provider_response(
+    pub(crate) fn record_provider_response(
         &mut self,
         response: &ModelResponse,
         latest_usage: ModelTokenUsage,
@@ -321,12 +308,12 @@ impl RuntimeMetricsSnapshot {
     }
 
     /// Records one provider request that failed before yielding a usable response.
-    pub(in crate::runtime) fn record_provider_failure(&mut self) {
+    pub(crate) fn record_provider_failure(&mut self) {
         self.provider_responses_failed = self.provider_responses_failed.saturating_add(1);
     }
 
     /// Records provider token counters and per-response token histograms.
-    pub(in crate::runtime) fn record_provider_token_usage(
+    pub(crate) fn record_provider_token_usage(
         &mut self,
         usage: ModelTokenUsage,
         latest_usage: ModelTokenUsage,
@@ -396,7 +383,7 @@ impl RuntimeMetricsSnapshot {
     }
 
     /// Records the number of shell-backed actions dispatched in one pass.
-    pub(in crate::runtime) fn record_shell_action_batch(&mut self, dispatched: usize) {
+    pub(crate) fn record_shell_action_batch(&mut self, dispatched: usize) {
         self.shell_action_batches = self.shell_action_batches.saturating_add(1);
         self.shell_actions_dispatched = self
             .shell_actions_dispatched
@@ -406,7 +393,7 @@ impl RuntimeMetricsSnapshot {
     }
 
     /// Records one completed shell transaction and its result payload size.
-    pub(in crate::runtime) fn record_shell_transaction_completion(
+    pub(crate) fn record_shell_transaction_completion(
         &mut self,
         started_at_unix_ms: u64,
         finished_at_unix_ms: u64,
@@ -426,7 +413,7 @@ impl RuntimeMetricsSnapshot {
     }
 
     /// Records one shell wrapper marker protocol violation.
-    pub(in crate::runtime) fn record_shell_transaction_protocol_violation(&mut self) {
+    pub(crate) fn record_shell_transaction_protocol_violation(&mut self) {
         self.shell_transaction_protocol_violations =
             self.shell_transaction_protocol_violations.saturating_add(1);
     }

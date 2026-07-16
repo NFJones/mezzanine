@@ -16,7 +16,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     #[cfg(test)]
-    pub(in crate::runtime::agent) fn apply_agent_provider_execution(
+    pub(crate) fn apply_agent_provider_execution(
         &mut self,
         turn: &AgentTurnRecord,
         model_profile: &ModelProfile,

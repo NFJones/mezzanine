@@ -16,7 +16,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn apply_terminal_osc_events(
+    pub(crate) fn apply_terminal_osc_events(
         &mut self,
         events: &[TerminalOscEvent],
     ) -> Result<usize> {
@@ -52,7 +52,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn observe_passive_shell_prompt_candidate(
+    pub(crate) fn observe_passive_shell_prompt_candidate(
         &mut self,
         pane_id: &str,
         source: &str,
@@ -95,7 +95,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn observe_passive_shell_busy(
+    pub(crate) fn observe_passive_shell_busy(
         &mut self,
         pane_id: &str,
         source: &str,
@@ -163,7 +163,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn dispatch_readiness_probe_to_pane(
+    pub(crate) fn dispatch_readiness_probe_to_pane(
         &mut self,
         turn: &AgentTurnRecord,
     ) -> Result<()> {
@@ -265,7 +265,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn observe_readiness_probe_transaction_end(
+    pub(crate) fn observe_readiness_probe_transaction_end(
         &mut self,
         marker: &str,
         turn_id: &str,

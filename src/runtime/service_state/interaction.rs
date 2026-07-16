@@ -9,7 +9,7 @@ use mez_mux::copy::CopyPosition;
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct MouseSelectionDragState {
+pub(crate) struct MouseSelectionDragState {
     /// Stores the pane id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -34,7 +34,7 @@ pub(in crate::runtime) struct MouseSelectionDragState {
 
 /// Last pane-content click used to recognize double-click word selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimeMouseClickState {
+pub(crate) struct RuntimeMouseClickState {
     /// Pane whose content received the click.
     pub pane_id: String,
     /// Pane-local terminal cell clicked by the user.
@@ -48,7 +48,7 @@ pub(in crate::runtime) struct RuntimeMouseClickState {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) enum MouseResizeDragState {
+pub(crate) enum MouseResizeDragState {
     /// Represents the Vertical case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -123,7 +123,7 @@ pub(in crate::runtime) enum MouseResizeDragState {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimeCommandBinding {
+pub(crate) struct RuntimeCommandBinding {
     /// Stores the notation value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -323,75 +323,75 @@ pub struct RuntimeAgentTurnStop {
 
 /// Latest model-authored `say` action retained for user-facing copy operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimeAgentCopyOutput {
+pub(crate) struct RuntimeAgentCopyOutput {
     /// Stores the turn id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) turn_id: String,
+    pub(crate) turn_id: String,
     /// Raw `say.text` payload that should be copied without rendered prefixes.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) output: String,
+    pub(crate) output: String,
     /// Declared `say.content_type` for pane-target rendering.
     ///
     /// Clipboard and paste-buffer targets use `output` directly, while pane
     /// output reuses the regular assistant renderer so markdown and diff
     /// content behaves like the original say action.
-    pub(in crate::runtime) content_type: String,
+    pub(crate) content_type: String,
 }
 
 /// Aggregated file-modification counts for one pane-local agent conversation.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimeAgentModifiedFileSummary {
+pub(crate) struct RuntimeAgentModifiedFileSummary {
     /// Relative path presented to users.
-    pub(in crate::runtime) path: String,
+    pub(crate) path: String,
     /// Number of added lines observed across successful patch diffs.
-    pub(in crate::runtime) added: usize,
+    pub(crate) added: usize,
     /// Number of removed lines observed across successful patch diffs.
-    pub(in crate::runtime) removed: usize,
+    pub(crate) removed: usize,
 }
 
 /// Runtime-local editable prompt and display state for one pane's agent shell.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimeAgentPromptInput {
+pub(crate) struct RuntimeAgentPromptInput {
     /// Stores the prompt value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) prompt: ReadlinePrompt,
+    pub(crate) prompt: ReadlinePrompt,
     /// Stores the decoder value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) decoder: ReadlineInputDecoder,
+    pub(crate) decoder: ReadlineInputDecoder,
     /// Stores the display lines value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) display_lines: Vec<String>,
+    pub(crate) display_lines: Vec<String>,
     /// First idle Ctrl+C timestamp waiting for the second confirmation press.
     ///
     /// Ctrl+C is easy to hit accidentally in a pane-local prompt. Idle prompt
     /// exit therefore requires a second Ctrl+C within a short window while
     /// active turns still use Ctrl+C as an immediate interrupt.
-    pub(in crate::runtime) pending_ctrl_c_exit_at_unix_ms: Option<u64>,
+    pub(crate) pending_ctrl_c_exit_at_unix_ms: Option<u64>,
 }
 
 /// Runtime-local editable prompt state for the primary command surface.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimePrimaryPromptInput {
+pub(crate) struct RuntimePrimaryPromptInput {
     /// Stores the prompt value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) prompt: ReadlinePrompt,
+    pub(crate) prompt: ReadlinePrompt,
     /// Stores the decoder value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) decoder: ReadlineInputDecoder,
+    pub(crate) decoder: ReadlineInputDecoder,
 }
 
 /// Carries Runtime Subagent Placement state for this subsystem.
@@ -399,7 +399,7 @@ pub(in crate::runtime) struct RuntimePrimaryPromptInput {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) enum RuntimeSubagentPlacement {
+pub(crate) enum RuntimeSubagentPlacement {
     /// Represents the New Pane case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path

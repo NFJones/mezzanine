@@ -15,7 +15,7 @@ use super::{
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_show_messages_display(service: &RuntimeSessionService) -> String {
+pub(crate) fn runtime_show_messages_display(service: &RuntimeSessionService) -> String {
     let terminal_width = service.session.authoritative_size.columns;
     let pending_observers = service
         .session

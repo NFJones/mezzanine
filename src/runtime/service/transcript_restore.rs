@@ -235,7 +235,7 @@ impl RuntimeSessionService {
     /// remains in per-conversation transcript files, while this file records
     /// which pane should point at which conversation when the same Mezzanine
     /// session is restored.
-    pub(in crate::runtime) fn checkpoint_agent_session_metadata(&mut self) -> Result<usize> {
+    pub(crate) fn checkpoint_agent_session_metadata(&mut self) -> Result<usize> {
         let Some(store) = self.persistence.cloned_transcript_store() else {
             return Ok(0);
         };
@@ -322,7 +322,7 @@ impl RuntimeSessionService {
     /// explicit session choices such as routing, approval policy, and
     /// provider token accounting continue from saved state instead of falling
     /// back to current defaults.
-    pub(in crate::runtime) fn restore_agent_resume_state_for_conversation(
+    pub(crate) fn restore_agent_resume_state_for_conversation(
         &mut self,
         pane_id: &str,
         conversation_id: &str,

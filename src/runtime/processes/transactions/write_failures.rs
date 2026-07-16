@@ -10,7 +10,7 @@ use super::{
 impl RuntimeSessionService {
     /// Fails one live shell transaction because its wrapper marker protocol
     /// reached an impossible state.
-    pub(in crate::runtime::processes) fn fail_shell_transaction_protocol_violation(
+    pub(crate) fn fail_shell_transaction_protocol_violation(
         &mut self,
         marker: &str,
         transaction: RunningShellTransactionRef,
@@ -124,7 +124,7 @@ impl RuntimeSessionService {
     }
 
     /// Fails live shell transactions for a pane whose PTY input write failed.
-    pub(in crate::runtime::processes) fn fail_shell_transactions_for_pane_write_failure(
+    pub(crate) fn fail_shell_transactions_for_pane_write_failure(
         &mut self,
         pane_id: &str,
         error: &str,

@@ -243,7 +243,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns the latest model-authored `say` text retained for a pane.
-    pub(in crate::runtime) fn latest_agent_copy_output_for_pane(
+    pub(crate) fn latest_agent_copy_output_for_pane(
         &self,
         pane_id: &str,
     ) -> Option<(String, String, String)> {

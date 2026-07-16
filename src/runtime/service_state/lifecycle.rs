@@ -4,7 +4,7 @@ use super::{Result, SessionRecord};
 
 /// One retained `apply_patch` attempt emitted by the current pane agent session.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimeAgentPatchRecord {
+pub(crate) struct RuntimeAgentPatchRecord {
     /// Turn id that contained the patch action.
     pub turn_id: String,
     /// Action id assigned by the model to the patch action.

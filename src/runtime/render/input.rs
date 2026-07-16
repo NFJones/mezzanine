@@ -154,7 +154,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn apply_primary_prompt_input(
+    pub(crate) fn apply_primary_prompt_input(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         input: &[u8],
@@ -318,7 +318,7 @@ impl RuntimeSessionService {
     /// This is used by the ordinary focused-pane input path and by mouse
     /// paste routing, where the click can intentionally target a different
     /// pane-local prompt before bytes are decoded by readline.
-    pub(in crate::runtime) fn apply_attached_agent_prompt_input_for_pane(
+    pub(crate) fn apply_attached_agent_prompt_input_for_pane(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         pane_id: &str,
@@ -702,10 +702,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn reload_agent_prompt_history_for_pane(
-        &mut self,
-        pane_id: &str,
-    ) -> Result<()> {
+    pub(crate) fn reload_agent_prompt_history_for_pane(&mut self, pane_id: &str) -> Result<()> {
         let Some(session_id) = self
             .agent_shell_store()
             .get(pane_id)
@@ -736,7 +733,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn set_agent_prompt_display_lines(
+    pub(crate) fn set_agent_prompt_display_lines(
         &mut self,
         pane_id: &str,
         display_lines: Vec<String>,
@@ -841,7 +838,7 @@ impl RuntimeSessionService {
     /// Presents one encoded agent-shell display response through the same
     /// renderer path used by live terminal input.
     #[cfg(test)]
-    pub(in crate::runtime) fn set_agent_prompt_response_display_output_for_tests(
+    pub(crate) fn set_agent_prompt_response_display_output_for_tests(
         &mut self,
         pane_id: &str,
         response: &str,

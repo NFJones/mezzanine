@@ -250,7 +250,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn require_snapshot_resume_hooks_allow(
+    pub(crate) fn require_snapshot_resume_hooks_allow(
         &mut self,
         payload: &SessionSnapshotPayload,
     ) -> Result<()> {

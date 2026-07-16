@@ -26,10 +26,7 @@ use super::{
 ///
 /// Returns an invalid-argument error when params are not an object, when the
 /// `project_root` field is missing, or when the supplied path is not absolute.
-pub(in crate::runtime) fn runtime_project_root_param(
-    params: &str,
-    method: &str,
-) -> Result<PathBuf> {
+pub(crate) fn runtime_project_root_param(params: &str, method: &str) -> Result<PathBuf> {
     let value = runtime_json_value(params)?;
     let object = value
         .as_object()
@@ -47,7 +44,7 @@ pub(in crate::runtime) fn runtime_project_root_param(
 ///
 /// Accepted decision names are `trust`/`trusted`, `reject`/`rejected`, and
 /// `revoke`/`revoked`; other values return an invalid-argument error.
-pub(in crate::runtime) fn runtime_trust_decision_param(params: &str) -> Result<TrustDecision> {
+pub(crate) fn runtime_trust_decision_param(params: &str) -> Result<TrustDecision> {
     match runtime_json_string_field(params, "decision").as_deref() {
         Some("trust" | "trusted") => Ok(TrustDecision::Trusted),
         Some("reject" | "rejected") => Ok(TrustDecision::Rejected),
@@ -62,10 +59,7 @@ pub(in crate::runtime) fn runtime_trust_decision_param(params: &str) -> Result<T
 ///
 /// Nonexistent paths fall back to their original path values so pending config
 /// overlays can still be matched before all files exist on disk.
-pub(in crate::runtime) fn runtime_path_under_project_root(
-    path: &Path,
-    project_root: &Path,
-) -> bool {
+pub(crate) fn runtime_path_under_project_root(path: &Path, project_root: &Path) -> bool {
     let canonical_root =
         fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
     let canonical_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -76,7 +70,7 @@ pub(in crate::runtime) fn runtime_path_under_project_root(
 ///
 /// The JSON shape is consumed by the control protocol, so this helper preserves
 /// field names, null handling, and diagnostic formatting exactly.
-pub(in crate::runtime) fn runtime_project_trust_record_json(
+pub(crate) fn runtime_project_trust_record_json(
     record: &ProjectTrustRecord,
     layers: &[ConfigLayer],
 ) -> String {
@@ -241,7 +235,7 @@ fn runtime_config_format_name(format: ConfigFormat) -> &'static str {
 }
 
 /// Returns the control-protocol name for a project-trust decision.
-pub(in crate::runtime) fn runtime_trust_decision_name(decision: TrustDecision) -> &'static str {
+pub(crate) fn runtime_trust_decision_name(decision: TrustDecision) -> &'static str {
     match decision {
         TrustDecision::Pending => "pending",
         TrustDecision::Trusted => "trusted",

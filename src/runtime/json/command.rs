@@ -7,7 +7,7 @@ use super::{CommandOutcome, Path, json_escape};
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_command_outcomes_json(outcomes: &[CommandOutcome]) -> String {
+pub(crate) fn runtime_command_outcomes_json(outcomes: &[CommandOutcome]) -> String {
     let outcomes = outcomes
         .iter()
         .map(runtime_command_outcome_json)
@@ -24,7 +24,7 @@ pub(in crate::runtime) fn runtime_command_outcomes_json(outcomes: &[CommandOutco
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_command_outcome_json(outcome: &CommandOutcome) -> String {
+pub(crate) fn runtime_command_outcome_json(outcome: &CommandOutcome) -> String {
     match outcome {
         CommandOutcome::Noop { command } => {
             format!(r#"{{"command":"{}","kind":"noop"}}"#, json_escape(command))
@@ -76,7 +76,7 @@ fn runtime_layout_load_selector_json(selector: &crate::command::LayoutLoadSelect
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn optional_string_json(value: Option<&str>) -> String {
+pub(crate) fn optional_string_json(value: Option<&str>) -> String {
     value
         .map(|value| format!(r#""{}""#, json_escape(value)))
         .unwrap_or_else(|| "null".to_string())
@@ -87,7 +87,7 @@ pub(in crate::runtime) fn optional_string_json(value: Option<&str>) -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn optional_path_json(value: Option<&Path>) -> String {
+pub(crate) fn optional_path_json(value: Option<&Path>) -> String {
     value
         .map(|value| format!(r#""{}""#, json_escape(&value.to_string_lossy())))
         .unwrap_or_else(|| "null".to_string())

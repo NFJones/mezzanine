@@ -10,9 +10,7 @@ use mez_agent::{AgentContext, AgentShellStore, AgentTurnExecution, AgentTurnLedg
 
 impl RuntimeAgentComponent {
     /// Splits the mutable shell store and read-only ledger used by control dispatch.
-    pub(in crate::runtime) fn control_turn_state(
-        &mut self,
-    ) -> (&mut AgentShellStore, &AgentTurnLedger) {
+    pub(crate) fn control_turn_state(&mut self) -> (&mut AgentShellStore, &AgentTurnLedger) {
         (&mut self.agent_shell_store, &self.agent_turn_ledger)
     }
 }

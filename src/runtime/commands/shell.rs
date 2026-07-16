@@ -18,7 +18,7 @@ use crate::{error::MezErrorKind, runtime::commands::issues};
 use mez_agent::parse_macro_prompt_invocation;
 
 /// Result of applying the live side effects for an agent-shell exit request.
-pub(in crate::runtime) struct RuntimeAgentShellExit {
+pub(crate) struct RuntimeAgentShellExit {
     /// Conversation id associated with the pane-local agent shell.
     conversation_id: String,
     /// Visibility after the exit request and any required stop operation.
@@ -55,7 +55,7 @@ fn agent_shell_invalid_command_response_json(
 }
 
 impl RuntimeSessionService {
-    pub(in crate::runtime) fn toggle_active_agent_shell(
+    pub(crate) fn toggle_active_agent_shell(
         &mut self,
     ) -> Result<(String, String, AgentShellVisibility)> {
         let pane_id = self.active_pane_id()?;
@@ -89,7 +89,7 @@ impl RuntimeSessionService {
     ///
     /// # Parameters
     /// - `pane_id`: The pane-local agent shell session to hide.
-    pub(in crate::runtime) fn request_agent_shell_exit_for_pane(
+    pub(crate) fn request_agent_shell_exit_for_pane(
         &mut self,
         pane_id: &str,
     ) -> Result<RuntimeAgentShellExit> {
@@ -139,10 +139,7 @@ impl RuntimeSessionService {
     /// agent panes. It keeps the persisted shell-session visibility, prompt
     /// history, scoped child shell, and tracked PTY size in sync before agent
     /// work can run in the pane.
-    pub(in crate::runtime) fn enter_agent_mode_for_pane(
-        &mut self,
-        pane_id: &str,
-    ) -> Result<String> {
+    pub(crate) fn enter_agent_mode_for_pane(&mut self, pane_id: &str) -> Result<String> {
         let conversation_id = self
             .agent_shell_store_mut()
             .enter_or_resume(pane_id)?
@@ -171,7 +168,7 @@ impl RuntimeSessionService {
 
     /// Executes an agent prompt submission while allowing a collapsed display
     /// form for pane transcript rendering.
-    pub(in crate::runtime) fn execute_agent_shell_command_with_display(
+    pub(crate) fn execute_agent_shell_command_with_display(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         input: &str,
@@ -959,10 +956,7 @@ impl RuntimeSessionService {
     /// issued by the agent can mutate that child, but leaving agent mode returns
     /// to the original interactive shell without inheriting prompt, option, or
     /// environment changes made inside the agent context.
-    pub(in crate::runtime) fn enter_agent_subshell_if_needed(
-        &mut self,
-        pane_id: &str,
-    ) -> Result<bool> {
+    pub(crate) fn enter_agent_subshell_if_needed(&mut self, pane_id: &str) -> Result<bool> {
         if self.agent_subshell_is_active(pane_id)
             || self.primary_pid_for_live_pane_process(pane_id).is_none()
         {
@@ -997,10 +991,7 @@ impl RuntimeSessionService {
     /// If a turn or shell transaction is still active, the subshell remains in
     /// place until the turn finishes so follow-up model actions cannot leak into
     /// the user's parent shell.
-    pub(in crate::runtime) fn exit_agent_subshell_if_active(
-        &mut self,
-        pane_id: &str,
-    ) -> Result<bool> {
+    pub(crate) fn exit_agent_subshell_if_active(&mut self, pane_id: &str) -> Result<bool> {
         if !self.agent_subshell_is_active(pane_id) {
             return Ok(false);
         }
@@ -1049,7 +1040,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn advance_pane_shell_prompt_after_agent_exit(
+    pub(crate) fn advance_pane_shell_prompt_after_agent_exit(
         &mut self,
         pane_id: &str,
     ) -> Result<bool> {

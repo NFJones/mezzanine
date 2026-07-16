@@ -215,7 +215,7 @@ impl RuntimeSessionService {
     }
 
     /// Refreshes a retained record-browser overlay from its backend query context.
-    pub(in crate::runtime) fn refresh_record_browser_overlay_source(
+    pub(crate) fn refresh_record_browser_overlay_source(
         &self,
         source: &RuntimeRecordBrowserOverlaySource,
     ) -> Result<RecordBrowser> {
@@ -294,7 +294,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns a retained browser source updated for one submitted modal filter.
-    pub(in crate::runtime) fn record_browser_source_with_filter(
+    pub(crate) fn record_browser_source_with_filter(
         &self,
         source: &RuntimeRecordBrowserOverlaySource,
         field: RecordBrowserFilterField,
@@ -368,7 +368,7 @@ impl RuntimeSessionService {
     }
 
     /// Writes retained record-browser Markdown using pane-relative path rules.
-    pub(in crate::runtime) fn save_record_browser_overlay_markdown(
+    pub(crate) fn save_record_browser_overlay_markdown(
         &self,
         pane_id: &str,
         path: &str,

@@ -23,10 +23,7 @@ use super::{
 
 impl RuntimeSessionService {
     /// Clears joined-subagent dependencies owned by or waiting on a turn.
-    pub(in crate::runtime) fn clear_joined_subagent_dependencies_for_turn(
-        &mut self,
-        turn_id: &str,
-    ) {
+    pub(crate) fn clear_joined_subagent_dependencies_for_turn(&mut self, turn_id: &str) {
         let active_loop_agent = self
             .agent
             .agent_loop_turns
@@ -50,7 +47,7 @@ impl RuntimeSessionService {
 
     /// Reports whether one joined-subagent dependency still has a live child
     /// turn that can make progress.
-    pub(in crate::runtime) fn joined_subagent_dependency_has_live_child(
+    pub(crate) fn joined_subagent_dependency_has_live_child(
         &self,
         dependency: &JoinedSubagentDependency,
     ) -> bool {
@@ -82,7 +79,7 @@ impl RuntimeSessionService {
     /// maps to the child turn that was created for that specific parent action.
     /// Stale action results without a live dependency must not mask a stranded
     /// parent turn.
-    pub(in crate::runtime) fn execution_waiting_for_live_joined_subagents(
+    pub(crate) fn execution_waiting_for_live_joined_subagents(
         &self,
         parent_turn_id: &str,
         execution: &AgentTurnExecution,
@@ -109,7 +106,7 @@ impl RuntimeSessionService {
     /// status, and audit record through the shared runtime spawn helper;
     /// failures are returned as action-level errors so the parent turn can be
     /// transcripted normally.
-    pub(in crate::runtime) fn execute_running_spawn_actions_for_turn(
+    pub(crate) fn execute_running_spawn_actions_for_turn(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &mut AgentTurnExecution,
@@ -213,7 +210,7 @@ impl RuntimeSessionService {
     /// control schema helper used by `agent/spawn`. Unsupported placements,
     /// invalid cooperation modes, scope inheritance errors, or audit failures are
     /// returned to the caller before child state can leak.
-    pub(in crate::runtime) fn execute_spawn_action_for_turn(
+    pub(crate) fn execute_spawn_action_for_turn(
         &mut self,
         turn: &AgentTurnRecord,
         action: &AgentAction,
@@ -322,7 +319,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn append_subagent_spawn_audit(
+    pub(crate) fn append_subagent_spawn_audit(
         &mut self,
         spawn: &SubagentSpawnRequest,
         child_agent_id: &str,
@@ -353,7 +350,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn emit_subagent_task_result_for_execution(
+    pub(crate) fn emit_subagent_task_result_for_execution(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
@@ -383,7 +380,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn emit_cancelled_subagent_task_result(
+    pub(crate) fn emit_cancelled_subagent_task_result(
         &mut self,
         turn: &AgentTurnRecord,
     ) -> Result<()> {
@@ -402,7 +399,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn emit_subagent_task_result_for_state(
+    pub(crate) fn emit_subagent_task_result_for_state(
         &mut self,
         turn: &AgentTurnRecord,
         state: AgentTurnState,
@@ -465,7 +462,7 @@ impl RuntimeSessionService {
     /// Status delivery is best-effort after spawn setup: an offline parent is
     /// recorded as an undelivered runtime event, but the child turn keeps its
     /// normal lifecycle so approval or provider work can continue.
-    pub(in crate::runtime) fn emit_subagent_task_status(
+    pub(crate) fn emit_subagent_task_status(
         &mut self,
         turn: &AgentTurnRecord,
         state: TaskState,
@@ -1014,7 +1011,7 @@ impl RuntimeSessionService {
     ///
     /// MMP remains the structured delivery mechanism; this visible line gives
     /// the user a copyable, in-context event stream in the parent window.
-    pub(in crate::runtime) fn append_subagent_parent_status_line(
+    pub(crate) fn append_subagent_parent_status_line(
         &mut self,
         parent_agent_id: &str,
         text: &str,
@@ -1029,7 +1026,7 @@ impl RuntimeSessionService {
     }
 
     /// Closes a terminal subagent pane after final turn cleanup has run.
-    pub(in crate::runtime) fn close_terminal_subagent_pane_if_pending(
+    pub(crate) fn close_terminal_subagent_pane_if_pending(
         &mut self,
         turn: &AgentTurnRecord,
     ) -> Result<()> {
@@ -1071,7 +1068,7 @@ impl RuntimeSessionService {
 }
 
 /// Derives the pane identity encoded by runtime-created agent ids.
-pub(in crate::runtime) fn runtime_agent_pane_id(agent_id: &str) -> Option<PaneId> {
+pub(crate) fn runtime_agent_pane_id(agent_id: &str) -> Option<PaneId> {
     agent_id
         .strip_prefix("agent-")
         .and_then(|pane_id| PaneId::parse('%', pane_id.to_string()))

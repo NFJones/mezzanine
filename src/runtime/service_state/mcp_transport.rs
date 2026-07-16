@@ -14,12 +14,12 @@ use std::collections::BTreeMap;
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Default)]
-pub(in crate::runtime) struct RuntimeMcpTransportSet {
+pub(crate) struct RuntimeMcpTransportSet {
     /// Stores the transports value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) transports: BTreeMap<String, RuntimeMcpTransport>,
+    pub(crate) transports: BTreeMap<String, RuntimeMcpTransport>,
 }
 
 /// Carries Runtime Mcp Retry Report state for this subsystem.
@@ -27,42 +27,42 @@ pub(in crate::runtime) struct RuntimeMcpTransportSet {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimeMcpRetryReport {
+pub(crate) struct RuntimeMcpRetryReport {
     /// Stores the server id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) server_id: String,
+    pub(crate) server_id: String,
     /// Stores the previous status value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) previous_status: McpServerStatus,
+    pub(crate) previous_status: McpServerStatus,
     /// Stores the status value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) status: McpServerStatus,
+    pub(crate) status: McpServerStatus,
     /// Stores the retryable before retry value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) retryable_before_retry: bool,
+    pub(crate) retryable_before_retry: bool,
     /// Stores the rediscovered value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) rediscovered: bool,
+    pub(crate) rediscovered: bool,
     /// Stores the tools value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) tools: usize,
+    pub(crate) tools: usize,
     /// Stores the reason value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) reason: Option<String>,
+    pub(crate) reason: Option<String>,
 }
 
 impl RuntimeMcpRetryReport {
@@ -71,7 +71,7 @@ impl RuntimeMcpRetryReport {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn previous_status_name(&self) -> &'static str {
+    pub(crate) fn previous_status_name(&self) -> &'static str {
         runtime_mcp_status_name(self.previous_status)
     }
 
@@ -80,7 +80,7 @@ impl RuntimeMcpRetryReport {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn status_name(&self) -> &'static str {
+    pub(crate) fn status_name(&self) -> &'static str {
         runtime_mcp_status_name(self.status)
     }
 }
@@ -89,7 +89,7 @@ impl RuntimeMcpRetryReport {
 ///
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
-pub(in crate::runtime) enum RuntimeMcpTransport {
+pub(crate) enum RuntimeMcpTransport {
     /// Represents the Stdio case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -107,22 +107,22 @@ pub(in crate::runtime) enum RuntimeMcpTransport {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimeHttpMcpTransportState {
+pub(crate) struct RuntimeHttpMcpTransportState {
     /// Stores the startup plan value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) startup_plan: McpStartupPlan,
+    pub(crate) startup_plan: McpStartupPlan,
     /// Stores the session id value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) session_id: Option<String>,
+    pub(crate) session_id: Option<String>,
     /// Stores the next request id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) next_request_id: u64,
+    pub(crate) next_request_id: u64,
 }
 
 /// Carries Runtime Hook Pipeline Block state for this subsystem.
@@ -130,27 +130,27 @@ pub(in crate::runtime) struct RuntimeHttpMcpTransportState {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimeHookPipelineBlock {
+pub(crate) struct RuntimeHookPipelineBlock {
     /// Stores the hook id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) hook_id: String,
+    pub(crate) hook_id: String,
     /// Stores the event value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) event: HookEvent,
+    pub(crate) event: HookEvent,
     /// Stores the failure kind value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) failure_kind: HookFailureKind,
+    pub(crate) failure_kind: HookFailureKind,
     /// Stores the message value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) message: String,
+    pub(crate) message: String,
 }
 
 impl RuntimeMcpTransportSet {
@@ -159,7 +159,7 @@ impl RuntimeMcpTransportSet {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.transports.clear();
     }
 
@@ -168,7 +168,7 @@ impl RuntimeMcpTransportSet {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn clear_counted(&mut self) -> usize {
+    pub(crate) fn clear_counted(&mut self) -> usize {
         let count = self.transports.len();
         self.clear();
         count
@@ -179,11 +179,7 @@ impl RuntimeMcpTransportSet {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn insert_stdio(
-        &mut self,
-        server_id: String,
-        connection: McpStdioConnection,
-    ) {
+    pub(crate) fn insert_stdio(&mut self, server_id: String, connection: McpStdioConnection) {
         self.transports
             .insert(server_id, RuntimeMcpTransport::Stdio(connection));
     }
@@ -193,7 +189,7 @@ impl RuntimeMcpTransportSet {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn insert_streamable_http(
+    pub(crate) fn insert_streamable_http(
         &mut self,
         server_id: String,
         state: RuntimeHttpMcpTransportState,
@@ -207,7 +203,7 @@ impl RuntimeMcpTransportSet {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn remove(&mut self, server_id: &str) {
+    pub(crate) fn remove(&mut self, server_id: &str) {
         self.transports.remove(server_id);
     }
 
@@ -216,7 +212,7 @@ impl RuntimeMcpTransportSet {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn call_tool(
+    pub(crate) fn call_tool(
         &mut self,
         plan: &McpToolCallPlan,
         _environment: &BTreeMap<String, String>,
@@ -232,7 +228,7 @@ impl RuntimeMcpTransportSet {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) async fn call_tool_async(
+    pub(crate) async fn call_tool_async(
         &mut self,
         plan: &McpToolCallPlan,
         environment: &BTreeMap<String, String>,

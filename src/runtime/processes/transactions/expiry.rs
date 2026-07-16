@@ -11,7 +11,7 @@ use super::{
 impl RuntimeSessionService {
     /// Expires live Mezzanine-owned shell transactions whose runtime timeout has
     /// elapsed without observing their expected terminal marker.
-    pub(in crate::runtime) fn expire_timed_out_shell_transactions(
+    pub(crate) fn expire_timed_out_shell_transactions(
         &mut self,
         now_unix_ms: u64,
     ) -> Result<usize> {
@@ -74,7 +74,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn expire_timed_out_focused_shell_hooks(
+    pub(crate) fn expire_timed_out_focused_shell_hooks(
         &mut self,
         now_unix_ms: u64,
     ) -> Result<usize> {
@@ -306,10 +306,7 @@ impl RuntimeSessionService {
 
     /// Sends an interrupt to the pane shell for a timed-out transaction while
     /// tolerating panes that have already exited.
-    pub(in crate::runtime::processes) fn interrupt_shell_transaction_pane(
-        &mut self,
-        pane_id: &str,
-    ) -> Result<()> {
+    pub(crate) fn interrupt_shell_transaction_pane(&mut self, pane_id: &str) -> Result<()> {
         match self.write_runtime_pane_input(pane_id, b"\x03") {
             Ok(_) => Ok(()),
             Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Ok(()),
@@ -319,10 +316,7 @@ impl RuntimeSessionService {
 
     /// Returns the first still-running shell action that has not produced a
     /// terminal action result for the given turn.
-    pub(in crate::runtime::processes) fn pending_shell_action_id_for_turn(
-        &self,
-        turn_id: &str,
-    ) -> Option<String> {
+    pub(crate) fn pending_shell_action_id_for_turn(&self, turn_id: &str) -> Option<String> {
         let execution = self.agent_turn_executions().get(turn_id)?;
         let batch = execution.response.action_batch.as_ref()?;
         execution

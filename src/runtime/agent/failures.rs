@@ -29,7 +29,7 @@ impl RuntimeSessionService {
     /// - `provider_id`: The provider that produced the completion.
     /// - `model_profile`: The effective model profile for the completion.
     /// - `error`: The runtime application error to surface.
-    pub(in crate::runtime) fn fail_agent_turn_after_provider_completion_application_error(
+    pub(crate) fn fail_agent_turn_after_provider_completion_application_error(
         &mut self,
         turn: &AgentTurnRecord,
         provider_id: &str,
@@ -120,7 +120,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn fail_agent_turn_for_provider_error(
+    pub(crate) fn fail_agent_turn_for_provider_error(
         &mut self,
         turn: &AgentTurnRecord,
         provider_id: &str,
@@ -205,7 +205,7 @@ impl RuntimeSessionService {
 
     /// Settles a running shell action as a runtime failure after its external
     /// pane transaction fails to reach a normal action-result boundary.
-    pub(in crate::runtime) fn fail_running_shell_transaction_action(
+    pub(crate) fn fail_running_shell_transaction_action(
         &mut self,
         transaction_ref: &RunningShellTransactionRef,
         marker: &str,
@@ -358,7 +358,7 @@ impl RuntimeSessionService {
 
     /// Records provider-style audit metadata for an execution that failed after
     /// the provider response was accepted by the runtime.
-    pub(in crate::runtime) fn append_runtime_agent_execution_failure_audit(
+    pub(crate) fn append_runtime_agent_execution_failure_audit(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
@@ -381,7 +381,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn fail_agent_turn_for_hook_block(
+    pub(crate) fn fail_agent_turn_for_hook_block(
         &mut self,
         turn: &AgentTurnRecord,
         model_profile: &ModelProfile,

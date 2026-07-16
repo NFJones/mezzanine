@@ -152,7 +152,7 @@ impl RuntimeSessionService {
 
     /// Seeds the live model catalog cache for focused runtime tests.
     #[cfg(test)]
-    pub(in crate::runtime) fn cache_provider_model_catalog_for_tests(
+    pub(crate) fn cache_provider_model_catalog_for_tests(
         &mut self,
         provider_id: &str,
         models: Vec<ProviderModelInfo>,
@@ -290,7 +290,7 @@ impl RuntimeSessionService {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimeModelCatalog {
+pub(crate) struct RuntimeModelCatalog {
     /// Stores the provider value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

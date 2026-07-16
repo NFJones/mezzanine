@@ -22,7 +22,7 @@ use std::path::Path;
 
 impl RuntimeSessionService {
     /// Executes provider-produced issue actions for one running turn.
-    pub(in crate::runtime) fn execute_running_issue_actions_for_turn(
+    pub(crate) fn execute_running_issue_actions_for_turn(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &mut AgentTurnExecution,

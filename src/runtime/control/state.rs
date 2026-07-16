@@ -401,7 +401,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn runtime_control_pane_state_json(
+    pub(crate) fn runtime_control_pane_state_json(
         &self,
         window: &mez_mux::layout::Window,
         pane: &mez_mux::layout::Pane,

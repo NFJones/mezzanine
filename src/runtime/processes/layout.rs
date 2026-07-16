@@ -154,7 +154,7 @@ impl RuntimeSessionService {
     }
 
     /// Creates an unfocused window and pane process for session-owned orchestration.
-    pub(in crate::runtime) fn create_unfocused_window_in_group_with_pane_process_session_owned(
+    pub(crate) fn create_unfocused_window_in_group_with_pane_process_session_owned(
         &mut self,
         group_id: &mez_core::ids::WindowGroupId,
         name: impl Into<String>,
@@ -417,7 +417,7 @@ impl RuntimeSessionService {
     }
 
     /// Splits a background window and starts its pane process for session-owned orchestration.
-    pub(in crate::runtime) fn split_pane_in_window_with_process_session_owned(
+    pub(crate) fn split_pane_in_window_with_process_session_owned(
         &mut self,
         window_id: &WindowId,
         direction: SplitDirection,

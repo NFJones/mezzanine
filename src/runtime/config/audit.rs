@@ -19,7 +19,7 @@ use super::{runtime_json_bool, runtime_json_object, runtime_json_string};
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_audit_log_from_config(
+pub(crate) fn runtime_audit_log_from_config(
     root: &Value,
     config_root: Option<&Path>,
 ) -> Result<Option<AuditLog>> {
@@ -65,7 +65,7 @@ pub(in crate::runtime) fn runtime_audit_log_from_config(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_audit_config_present(root: &Value) -> bool {
+pub(crate) fn runtime_audit_config_present(root: &Value) -> bool {
     runtime_json_object(root, "audit").is_some()
 }
 
@@ -74,7 +74,7 @@ pub(in crate::runtime) fn runtime_audit_config_present(root: &Value) -> bool {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_audit_retention_policy(
+pub(crate) fn runtime_audit_retention_policy(
     audit: &serde_json::Map<String, Value>,
 ) -> Result<AuditRetentionPolicy> {
     let Some(value) = audit.get("retention_days") else {

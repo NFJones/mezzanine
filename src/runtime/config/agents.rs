@@ -19,7 +19,7 @@ use super::{
 };
 
 /// Parses the maximum number of concurrently scheduled agent turns.
-pub(in crate::runtime) fn runtime_max_concurrent_agents_from_config(root: &Value) -> Result<usize> {
+pub(crate) fn runtime_max_concurrent_agents_from_config(root: &Value) -> Result<usize> {
     runtime_positive_agents_usize_from_config(
         root,
         "max_concurrent_agents",
@@ -28,7 +28,7 @@ pub(in crate::runtime) fn runtime_max_concurrent_agents_from_config(root: &Value
 }
 
 /// Parses the retained raw-tail percentage used during context compaction.
-pub(in crate::runtime) fn runtime_agent_compaction_raw_retention_percent_from_config(
+pub(crate) fn runtime_agent_compaction_raw_retention_percent_from_config(
     root: &Value,
 ) -> Result<usize> {
     let Some(agents) = runtime_json_object(root, "agents") else {
@@ -49,7 +49,7 @@ pub(in crate::runtime) fn runtime_agent_compaction_raw_retention_percent_from_co
 }
 
 /// Parses whether routing model and reasoning sizing is enabled.
-pub(in crate::runtime) fn runtime_agent_routing_from_config(root: &Value) -> Result<bool> {
+pub(crate) fn runtime_agent_routing_from_config(root: &Value) -> Result<bool> {
     let Some(agents) = runtime_json_object(root, "agents") else {
         return Ok(DEFAULT_AGENT_ROUTING);
     };
@@ -61,7 +61,7 @@ pub(in crate::runtime) fn runtime_agent_routing_from_config(root: &Value) -> Res
 }
 
 /// Parses user-configured system prompt text appended to the base prompt.
-pub(in crate::runtime) fn runtime_agent_custom_system_prompt_from_config(
+pub(crate) fn runtime_agent_custom_system_prompt_from_config(
     root: &Value,
 ) -> Result<Option<String>> {
     let Some(agents) = runtime_json_object(root, "agents") else {
@@ -77,7 +77,7 @@ pub(in crate::runtime) fn runtime_agent_custom_system_prompt_from_config(
 }
 
 /// Parses the configured default personality profile id.
-pub(in crate::runtime) fn runtime_default_agent_personality_from_config(
+pub(crate) fn runtime_default_agent_personality_from_config(
     root: &Value,
 ) -> Result<Option<String>> {
     let Some(agents) = runtime_json_object(root, "agents") else {
@@ -97,9 +97,7 @@ pub(in crate::runtime) fn runtime_default_agent_personality_from_config(
 }
 
 /// Parses the model-correctable action failure retry budget.
-pub(in crate::runtime) fn runtime_agent_action_failure_retry_limit_from_config(
-    root: &Value,
-) -> Result<usize> {
+pub(crate) fn runtime_agent_action_failure_retry_limit_from_config(root: &Value) -> Result<usize> {
     runtime_positive_agents_usize_from_config(
         root,
         "action_failure_retry_limit",
@@ -108,7 +106,7 @@ pub(in crate::runtime) fn runtime_agent_action_failure_retry_limit_from_config(
 }
 
 /// Parses the shell-command streak that triggers implementation-pressure hints.
-pub(in crate::runtime) fn runtime_agent_implementation_pressure_after_shell_actions_from_config(
+pub(crate) fn runtime_agent_implementation_pressure_after_shell_actions_from_config(
     root: &Value,
 ) -> Result<usize> {
     runtime_positive_agents_usize_from_config(
@@ -119,12 +117,12 @@ pub(in crate::runtime) fn runtime_agent_implementation_pressure_after_shell_acti
 }
 
 /// Parses the `/loop` work-iteration budget from `[agents]`.
-pub(in crate::runtime) fn runtime_agent_loop_limit_from_config(root: &Value) -> Result<usize> {
+pub(crate) fn runtime_agent_loop_limit_from_config(root: &Value) -> Result<usize> {
     runtime_positive_agents_usize_from_config(root, "loop_limit", DEFAULT_AGENT_LOOP_LIMIT)
 }
 
 /// Parses automatic turn model-sizing configuration from `[agents.auto_sizing]`.
-pub(in crate::runtime) fn runtime_agent_auto_sizing_from_config(
+pub(crate) fn runtime_agent_auto_sizing_from_config(
     root: &Value,
 ) -> Result<RuntimeAutoSizingConfig> {
     let Some(agents) = runtime_json_object(root, "agents") else {
@@ -229,9 +227,7 @@ fn runtime_positive_agents_usize_from_config(
 }
 
 /// Parses the maximum number of subagent panes that may share one window.
-pub(in crate::runtime) fn runtime_max_subagent_panes_per_window_from_config(
-    root: &Value,
-) -> Result<usize> {
+pub(crate) fn runtime_max_subagent_panes_per_window_from_config(root: &Value) -> Result<usize> {
     runtime_positive_agents_usize_from_config(
         root,
         "max_subagent_panes_per_window",
@@ -240,7 +236,7 @@ pub(in crate::runtime) fn runtime_max_subagent_panes_per_window_from_config(
 }
 
 /// Parses the maximum direct subagents available to a root pane agent.
-pub(in crate::runtime) fn runtime_max_root_subagents_from_config(root: &Value) -> Result<usize> {
+pub(crate) fn runtime_max_root_subagents_from_config(root: &Value) -> Result<usize> {
     runtime_positive_agents_usize_from_config(
         root,
         "max_root_subagents",
@@ -249,9 +245,7 @@ pub(in crate::runtime) fn runtime_max_root_subagents_from_config(root: &Value) -
 }
 
 /// Parses the maximum direct subagents available to a spawned subagent.
-pub(in crate::runtime) fn runtime_max_subagents_per_subagent_from_config(
-    root: &Value,
-) -> Result<usize> {
+pub(crate) fn runtime_max_subagents_per_subagent_from_config(root: &Value) -> Result<usize> {
     runtime_positive_agents_usize_from_config(
         root,
         "max_subagents_per_subagent",
@@ -260,14 +254,12 @@ pub(in crate::runtime) fn runtime_max_subagents_per_subagent_from_config(
 }
 
 /// Parses the maximum nested subagent delegation depth.
-pub(in crate::runtime) fn runtime_max_subagent_depth_from_config(root: &Value) -> Result<usize> {
+pub(crate) fn runtime_max_subagent_depth_from_config(root: &Value) -> Result<usize> {
     runtime_positive_agents_usize_from_config(root, "max_depth", DEFAULT_MAX_SUBAGENT_DEPTH)
 }
 
 /// Parses how parent agent turns wait for MAAP-spawned child subagents.
-pub(in crate::runtime) fn runtime_subagent_wait_policy_from_config(
-    root: &Value,
-) -> Result<SubagentWaitPolicy> {
+pub(crate) fn runtime_subagent_wait_policy_from_config(root: &Value) -> Result<SubagentWaitPolicy> {
     let Some(agents) = runtime_json_object(root, "agents") else {
         return Ok(DEFAULT_SUBAGENT_WAIT_POLICY);
     };
@@ -293,7 +285,7 @@ pub(in crate::runtime) fn runtime_subagent_wait_policy_from_config(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_subagent_profiles_from_config(
+pub(crate) fn runtime_subagent_profiles_from_config(
     root: &Value,
 ) -> Result<BTreeMap<String, SubagentProfile>> {
     let mut profiles = builtin_subagent_profiles();
@@ -352,7 +344,7 @@ pub(in crate::runtime) fn runtime_subagent_profiles_from_config(
 }
 
 /// Parses user-defined agent personality profiles.
-pub(in crate::runtime) fn runtime_agent_personality_profiles_from_config(
+pub(crate) fn runtime_agent_personality_profiles_from_config(
     root: &Value,
 ) -> Result<BTreeMap<String, RuntimeAgentPersonalityProfile>> {
     let mut profiles = BTreeMap::new();

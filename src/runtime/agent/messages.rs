@@ -20,7 +20,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn execute_running_message_actions_for_turn(
+    pub(crate) fn execute_running_message_actions_for_turn(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &mut AgentTurnExecution,
@@ -188,7 +188,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn runtime_message_sender_identity(
+    pub(crate) fn runtime_message_sender_identity(
         &mut self,
         turn: &AgentTurnRecord,
     ) -> Result<SenderIdentity> {

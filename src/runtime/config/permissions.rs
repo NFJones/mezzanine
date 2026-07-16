@@ -29,9 +29,7 @@ use super::{
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_approval_decision_name_to_kind(
-    value: &str,
-) -> Option<ApprovalDecision> {
+pub(crate) fn runtime_approval_decision_name_to_kind(value: &str) -> Option<ApprovalDecision> {
     match value {
         "approve" | "allow" => Some(ApprovalDecision::Approve),
         "disapprove" | "deny" | "reject" => Some(ApprovalDecision::Disapprove),
@@ -45,7 +43,7 @@ pub(in crate::runtime) fn runtime_approval_decision_name_to_kind(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_message_recipient(value: &str) -> Result<Recipient> {
+pub(crate) fn runtime_message_recipient(value: &str) -> Result<Recipient> {
     if value == "session" || value == "group:session" {
         return Ok(Recipient::Session);
     }
@@ -112,7 +110,7 @@ pub(in crate::runtime) fn runtime_message_recipient(value: &str) -> Result<Recip
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_blocked_approval_request(
+pub(crate) fn runtime_blocked_approval_request(
     turn: &AgentTurnRecord,
     result: &ActionResult,
     scope: Option<&SubagentScopeDeclaration>,
@@ -201,9 +199,7 @@ pub(super) fn runtime_blocked_approval_summary(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_permission_policy_from_config(
-    root: &Value,
-) -> Result<PermissionPolicy> {
+pub(crate) fn runtime_permission_policy_from_config(root: &Value) -> Result<PermissionPolicy> {
     let mut policy = PermissionPolicy::default();
     let Some(permissions) = runtime_json_object(root, "permissions") else {
         return Ok(policy);
@@ -339,9 +335,7 @@ pub(super) fn runtime_json_rule_pattern(value: Option<&Value>) -> Result<Vec<Str
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_config_permission_preset(
-    value: &str,
-) -> Result<PermissionPreset> {
+pub(crate) fn runtime_config_permission_preset(value: &str) -> Result<PermissionPreset> {
     match value {
         "read-only" | "readonly" => Ok(PermissionPreset::ReadOnly),
         "auto" => Ok(PermissionPreset::Auto),

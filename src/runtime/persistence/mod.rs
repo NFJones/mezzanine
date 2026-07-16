@@ -20,7 +20,7 @@ mod stores;
 
 /// Owns repository handles and deferred effects for one application runtime.
 #[derive(Debug, Default)]
-pub(in crate::runtime) struct RuntimePersistenceComponent {
+pub(crate) struct RuntimePersistenceComponent {
     snapshot_repository: Option<SnapshotRepository>,
     agent_transcript_store: Option<AgentTranscriptStore>,
     session_registry: Option<SessionRegistry>,

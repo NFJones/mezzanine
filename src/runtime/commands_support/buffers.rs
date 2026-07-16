@@ -320,10 +320,7 @@ pub(super) fn runtime_choose_buffer_display(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_paste_bytes(
-    screen: Option<&TerminalScreen>,
-    content: &str,
-) -> Vec<u8> {
+pub(crate) fn runtime_paste_bytes(screen: Option<&TerminalScreen>, content: &str) -> Vec<u8> {
     if screen.is_some_and(TerminalScreen::bracketed_paste_enabled) {
         let mut bytes = Vec::with_capacity(content.len().saturating_add(12));
         bytes.extend_from_slice(b"\x1b[200~");

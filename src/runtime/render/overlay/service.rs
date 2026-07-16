@@ -7,7 +7,7 @@ use crate::runtime::render::*;
 
 impl RuntimeSessionService {
     /// Executes one command selected from the primary display overlay.
-    pub(in crate::runtime::render) fn execute_primary_display_overlay_selection_command(
+    pub(crate) fn execute_primary_display_overlay_selection_command(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         command: &str,
@@ -59,10 +59,7 @@ impl RuntimeSessionService {
     }
 
     /// Applies mouse-wheel scrolling to the primary display overlay.
-    pub(in crate::runtime::render) fn apply_primary_display_overlay_scroll(
-        &mut self,
-        lines: isize,
-    ) -> Result<bool> {
+    pub(crate) fn apply_primary_display_overlay_scroll(&mut self, lines: isize) -> Result<bool> {
         let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
             return Ok(false);
         };
@@ -309,7 +306,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime::render) fn apply_primary_display_overlay_input(
+    pub(crate) fn apply_primary_display_overlay_input(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         input: &[u8],
@@ -406,7 +403,7 @@ impl RuntimeSessionService {
     }
 
     /// Applies one input chunk while the command-output pager search prompt is active.
-    pub(in crate::runtime::render) fn apply_primary_display_overlay_search_input(
+    pub(crate) fn apply_primary_display_overlay_search_input(
         &mut self,
         input: &[u8],
     ) -> Result<bool> {
@@ -456,9 +453,7 @@ impl RuntimeSessionService {
     }
 
     /// Submits the active command-output pager search query.
-    pub(in crate::runtime::render) fn submit_primary_display_overlay_search(
-        &mut self,
-    ) -> Result<bool> {
+    pub(crate) fn submit_primary_display_overlay_search(&mut self) -> Result<bool> {
         let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
             return Ok(false);
         };
@@ -490,10 +485,7 @@ impl RuntimeSessionService {
     }
 
     /// Moves the active command overlay selection and keeps it visible.
-    pub(in crate::runtime::render) fn move_primary_display_overlay_selection(
-        &mut self,
-        delta: isize,
-    ) -> Result<bool> {
+    pub(crate) fn move_primary_display_overlay_selection(&mut self, delta: isize) -> Result<bool> {
         let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
             return Ok(false);
         };
@@ -518,7 +510,7 @@ impl RuntimeSessionService {
     }
 
     /// Sets the active command overlay selection and keeps it visible.
-    pub(in crate::runtime::render) fn set_primary_display_overlay_selection_index(
+    pub(crate) fn set_primary_display_overlay_selection_index(
         &mut self,
         index: usize,
     ) -> Result<bool> {
@@ -550,7 +542,7 @@ impl RuntimeSessionService {
 }
 
 /// Returns a selector row rendition, highlighting the hovered item.
-pub(in crate::runtime::render) fn runtime_pane_agent_selector_rendition(
+pub(crate) fn runtime_pane_agent_selector_rendition(
     field: PaneAgentStatusField,
     active: bool,
     ui_theme: &mez_mux::theme::UiTheme,
@@ -628,7 +620,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime::render) fn show_primary_display_overlay_inner(
+    pub(crate) fn show_primary_display_overlay_inner(
         &mut self,
         lines: Vec<String>,
         mut line_style_spans: Vec<Vec<TerminalStyleSpan>>,
@@ -698,7 +690,7 @@ impl RuntimeSessionService {
     }
 
     /// Presents terminal command display content according to its feedback policy.
-    pub(in crate::runtime::render) fn present_runtime_command_display_content(
+    pub(crate) fn present_runtime_command_display_content(
         &mut self,
         content: RuntimeCommandDisplayOverlayContent,
     ) -> Result<()> {
@@ -721,7 +713,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime::render) fn apply_primary_display_overlay_terminal_action(
+    pub(crate) fn apply_primary_display_overlay_terminal_action(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         action: &TerminalClientLoopAction,
@@ -763,7 +755,7 @@ impl RuntimeSessionService {
     /// diff renderer. Exiting the modal overlay or executing a selected row can
     /// expose a different underlying view or run a command, so those paths keep
     /// the stronger redraw signal.
-    pub(in crate::runtime::render) fn primary_display_overlay_action_requires_full_redraw(
+    pub(crate) fn primary_display_overlay_action_requires_full_redraw(
         &self,
         action: &TerminalClientLoopAction,
     ) -> bool {

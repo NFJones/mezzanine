@@ -23,7 +23,7 @@ use super::{runtime_json_object, runtime_json_string, runtime_json_string_array}
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_pane_frames_enabled_from_config(root: &Value) -> Result<bool> {
+pub(crate) fn runtime_pane_frames_enabled_from_config(root: &Value) -> Result<bool> {
     let Some(frames) = runtime_json_object(root, "frames") else {
         return Ok(true);
     };
@@ -43,7 +43,7 @@ pub(in crate::runtime) fn runtime_pane_frames_enabled_from_config(root: &Value) 
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_window_frames_enabled_from_config(root: &Value) -> Result<bool> {
+pub(crate) fn runtime_window_frames_enabled_from_config(root: &Value) -> Result<bool> {
     let Some(frames) = runtime_json_object(root, "frames") else {
         return Ok(true);
     };
@@ -63,9 +63,7 @@ pub(in crate::runtime) fn runtime_window_frames_enabled_from_config(root: &Value
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_window_frame_template_from_config(
-    root: &Value,
-) -> Result<String> {
+pub(crate) fn runtime_window_frame_template_from_config(root: &Value) -> Result<String> {
     runtime_frame_template_from_config(
         root,
         "window",
@@ -79,7 +77,7 @@ pub(in crate::runtime) fn runtime_window_frame_template_from_config(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_window_frame_right_status_template_from_config(
+pub(crate) fn runtime_window_frame_right_status_template_from_config(
     root: &Value,
 ) -> Result<String> {
     let Some(frames) = runtime_json_object(root, "frames") else {
@@ -102,7 +100,7 @@ pub(in crate::runtime) fn runtime_window_frame_right_status_template_from_config
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_pane_frame_template_from_config(root: &Value) -> Result<String> {
+pub(crate) fn runtime_pane_frame_template_from_config(root: &Value) -> Result<String> {
     runtime_frame_template_from_config(
         root,
         "pane",
@@ -116,7 +114,7 @@ pub(in crate::runtime) fn runtime_pane_frame_template_from_config(root: &Value) 
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_window_frame_position_from_config(
+pub(crate) fn runtime_window_frame_position_from_config(
     root: &Value,
 ) -> Result<TerminalFramePosition> {
     runtime_frame_position_from_config(root, "window", TerminalFramePosition::Bottom)
@@ -127,7 +125,7 @@ pub(in crate::runtime) fn runtime_window_frame_position_from_config(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_pane_frame_position_from_config(
+pub(crate) fn runtime_pane_frame_position_from_config(
     root: &Value,
 ) -> Result<TerminalFramePosition> {
     runtime_frame_position_from_config(root, "pane", TerminalFramePosition::Top)
@@ -138,9 +136,7 @@ pub(in crate::runtime) fn runtime_pane_frame_position_from_config(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_window_frame_style_from_config(
-    root: &Value,
-) -> Result<TerminalFrameStyle> {
+pub(crate) fn runtime_window_frame_style_from_config(root: &Value) -> Result<TerminalFrameStyle> {
     runtime_frame_style_from_config(root, "window")
 }
 
@@ -149,9 +145,7 @@ pub(in crate::runtime) fn runtime_window_frame_style_from_config(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_pane_frame_style_from_config(
-    root: &Value,
-) -> Result<TerminalFrameStyle> {
+pub(crate) fn runtime_pane_frame_style_from_config(root: &Value) -> Result<TerminalFrameStyle> {
     runtime_frame_style_from_config(root, "pane")
 }
 
@@ -160,9 +154,7 @@ pub(in crate::runtime) fn runtime_pane_frame_style_from_config(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_window_frame_visible_fields_from_config(
-    root: &Value,
-) -> Result<Vec<String>> {
+pub(crate) fn runtime_window_frame_visible_fields_from_config(root: &Value) -> Result<Vec<String>> {
     runtime_frame_visible_fields_from_config(
         root,
         "window",
@@ -175,9 +167,7 @@ pub(in crate::runtime) fn runtime_window_frame_visible_fields_from_config(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_pane_frame_visible_fields_from_config(
-    root: &Value,
-) -> Result<Vec<String>> {
+pub(crate) fn runtime_pane_frame_visible_fields_from_config(root: &Value) -> Result<Vec<String>> {
     runtime_frame_visible_fields_from_config(
         root,
         "pane",
@@ -330,7 +320,7 @@ fn frame_template_from_visible_fields(fields: &[String]) -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_key_bindings_from_config(root: &Value) -> Result<KeyBindings> {
+pub(crate) fn runtime_key_bindings_from_config(root: &Value) -> Result<KeyBindings> {
     let Some(keys) = runtime_json_object(root, "keys") else {
         return Ok(KeyBindings::default());
     };
@@ -382,7 +372,7 @@ pub(in crate::runtime) fn runtime_key_bindings_from_config(root: &Value) -> Resu
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_key_binding_value(
+pub(crate) fn runtime_key_binding_value(
     keys: &serde_json::Map<String, Value>,
     field: &str,
     default: KeyChord,
@@ -406,7 +396,7 @@ pub(in crate::runtime) fn runtime_key_binding_value(
 /// - `keys`: The effective `[keys]` object.
 /// - `field`: The direct binding field name.
 /// - `default`: The generated default binding state.
-pub(in crate::runtime) fn runtime_optional_key_binding_value(
+pub(crate) fn runtime_optional_key_binding_value(
     keys: &serde_json::Map<String, Value>,
     field: &str,
     default: Option<KeyChord>,
@@ -432,7 +422,7 @@ pub(in crate::runtime) fn runtime_optional_key_binding_value(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_command_bindings_from_effective(
+pub(crate) fn runtime_command_bindings_from_effective(
     effective: &EffectiveConfig,
 ) -> Result<BTreeMap<KeyChord, RuntimeCommandBinding>> {
     let mut bindings = BTreeMap::new();
@@ -463,7 +453,7 @@ pub(in crate::runtime) fn runtime_command_bindings_from_effective(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_chord_from_binding_config_key(
+pub(crate) fn runtime_chord_from_binding_config_key(
     config_key: &str,
 ) -> Result<(KeyChord, String)> {
     let notation = if let Some(encoded) = config_key.strip_prefix("key_") {
@@ -484,7 +474,7 @@ pub(in crate::runtime) fn runtime_chord_from_binding_config_key(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_decode_binding_config_key(encoded: &str) -> Result<String> {
+pub(crate) fn runtime_decode_binding_config_key(encoded: &str) -> Result<String> {
     if encoded.is_empty() {
         return Err(MezError::config("encoded key binding must not be empty"));
     }

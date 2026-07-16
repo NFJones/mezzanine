@@ -8,10 +8,7 @@ use super::{
 impl RuntimeSessionService {
     /// Reports whether host process metadata can determine if the pane primary
     /// shell is the foreground process group for its PTY.
-    pub(in crate::runtime) fn pane_foreground_primary_shell_state(
-        &self,
-        pane_id: &str,
-    ) -> Option<bool> {
+    pub(crate) fn pane_foreground_primary_shell_state(&self, pane_id: &str) -> Option<bool> {
         let primary_pid = self.process.pane_processes.primary_pid(pane_id)?;
         let foreground_group = self
             .process
@@ -37,7 +34,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn observe_agent_shell_transaction_events(
+    pub(crate) fn observe_agent_shell_transaction_events(
         &mut self,
         output_pane_id: &str,
         events: &[TerminalOscEvent],

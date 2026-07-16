@@ -12,7 +12,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn observe_focused_shell_hook_transaction_end(
+    pub(crate) fn observe_focused_shell_hook_transaction_end(
         &mut self,
         output_pane_id: &str,
         marker: &str,

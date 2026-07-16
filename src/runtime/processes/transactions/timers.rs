@@ -113,7 +113,7 @@ impl RuntimeSessionService {
     }
 
     /// Clears strict marker protocol state for one settled shell transaction.
-    pub(in crate::runtime) fn clear_shell_transaction_protocol_state(&mut self, marker: &str) {
+    pub(crate) fn clear_shell_transaction_protocol_state(&mut self, marker: &str) {
         self.process
             .shell_transaction_require_start_markers
             .remove(marker);

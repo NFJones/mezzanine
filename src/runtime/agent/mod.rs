@@ -110,7 +110,7 @@ use mez_agent::messaging::task_state_name as runtime_task_state_suffix;
 /// by coherent turn, provider, scheduling, and subagent slices. Its fields are
 /// private so neighboring runtime subsystems use typed agent operations.
 #[derive(Debug, Default)]
-pub(in crate::runtime) struct RuntimeAgentComponent {
+pub(crate) struct RuntimeAgentComponent {
     /// Fair scheduling state for queued, running, and blocked agent turns.
     agent_scheduler: AgentScheduler,
     /// Panes whose visible agent session is scoped to a child shell.
@@ -244,7 +244,7 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
 
 /// State removed when a compaction worker reports failure.
 #[derive(Debug, Default)]
-pub(in crate::runtime) struct RuntimeAgentCompactionFailureState {
+pub(crate) struct RuntimeAgentCompactionFailureState {
     /// Whether pending, claimed, or active compaction state existed.
     had_task: bool,
     /// Running provider turn that must fail when recovery compaction failed.
@@ -253,19 +253,19 @@ pub(in crate::runtime) struct RuntimeAgentCompactionFailureState {
 
 impl RuntimeAgentCompactionFailureState {
     /// Reports whether any compaction state was removed.
-    pub(in crate::runtime) fn had_task(&self) -> bool {
+    pub(crate) fn had_task(&self) -> bool {
         self.had_task
     }
 
     /// Takes the running turn awaiting failed recovery compaction.
-    pub(in crate::runtime) fn take_resume_turn_id(&mut self) -> Option<String> {
+    pub(crate) fn take_resume_turn_id(&mut self) -> Option<String> {
         self.resume_turn_id.take()
     }
 }
 
 impl RuntimeAgentComponent {
     /// Builds agent ownership with configured provider-selection defaults.
-    pub(in crate::runtime) fn with_settings(
+    pub(crate) fn with_settings(
         agent_routing: bool,
         agent_auto_sizing: RuntimeAutoSizingConfig,
         agent_compaction_raw_retention_percent: usize,
@@ -292,7 +292,7 @@ impl RuntimeAgentComponent {
 
 impl RuntimeSessionService {
     /// Returns the discovered tool inventory for one environment signature.
-    pub(in crate::runtime) fn agent_tool_inventory(
+    pub(crate) fn agent_tool_inventory(
         &self,
         signature: &EnvironmentSignature,
     ) -> Option<&ToolInventory> {
@@ -300,7 +300,7 @@ impl RuntimeSessionService {
     }
 
     /// Records a discovered tool inventory for one environment signature.
-    pub(in crate::runtime) fn record_agent_tool_inventory(
+    pub(crate) fn record_agent_tool_inventory(
         &mut self,
         signature: EnvironmentSignature,
         inventory: ToolInventory,
@@ -309,7 +309,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns project instruction files discovered for one pane.
-    pub(in crate::runtime) fn pane_agent_instruction_files(
+    pub(crate) fn pane_agent_instruction_files(
         &self,
         pane_id: &str,
     ) -> Option<&[mez_agent::instructions::DiscoveredInstructionFile]> {
@@ -320,7 +320,7 @@ impl RuntimeSessionService {
     }
 
     /// Replaces project instruction files discovered for one pane.
-    pub(in crate::runtime) fn set_pane_agent_instruction_files(
+    pub(crate) fn set_pane_agent_instruction_files(
         &mut self,
         pane_id: impl Into<String>,
         files: Vec<mez_agent::instructions::DiscoveredInstructionFile>,
@@ -334,20 +334,17 @@ impl RuntimeSessionService {
     }
 
     /// Clears pane-scoped instruction discovery during pane teardown.
-    pub(in crate::runtime) fn clear_pane_agent_instruction_files(&mut self, pane_id: &str) {
+    pub(crate) fn clear_pane_agent_instruction_files(&mut self, pane_id: &str) {
         self.agent.pane_instruction_files.remove(pane_id);
     }
 
     /// Returns runtime lineage metadata for one child agent.
-    pub(in crate::runtime) fn subagent_lineage(
-        &self,
-        agent_id: &str,
-    ) -> Option<&RuntimeSubagentLineage> {
+    pub(crate) fn subagent_lineage(&self, agent_id: &str) -> Option<&RuntimeSubagentLineage> {
         self.agent.subagent_lineage.get(agent_id)
     }
 
     /// Records runtime lineage metadata for one child agent.
-    pub(in crate::runtime) fn set_subagent_lineage(
+    pub(crate) fn set_subagent_lineage(
         &mut self,
         agent_id: impl Into<String>,
         lineage: RuntimeSubagentLineage,
@@ -356,10 +353,7 @@ impl RuntimeSessionService {
     }
 
     /// Counts direct active children of one parent agent.
-    pub(in crate::runtime) fn active_direct_subagent_count_for(
-        &self,
-        parent_agent_id: &str,
-    ) -> usize {
+    pub(crate) fn active_direct_subagent_count_for(&self, parent_agent_id: &str) -> usize {
         self.agent
             .subagent_lineage
             .values()
@@ -368,7 +362,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns non-empty active subagent display names.
-    pub(in crate::runtime) fn active_subagent_display_names(&self) -> Vec<String> {
+    pub(crate) fn active_subagent_display_names(&self) -> Vec<String> {
         self.agent
             .subagent_lineage
             .values()
@@ -378,7 +372,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns one inherited subagent scope declaration.
-    pub(in crate::runtime) fn subagent_scope_declaration(
+    pub(crate) fn subagent_scope_declaration(
         &self,
         agent_id: &str,
     ) -> Option<SubagentScopeDeclaration> {
@@ -389,7 +383,7 @@ impl RuntimeSessionService {
     }
 
     /// Records one inherited subagent scope declaration.
-    pub(in crate::runtime) fn set_subagent_scope_declaration(
+    pub(crate) fn set_subagent_scope_declaration(
         &mut self,
         agent_id: impl Into<String>,
         declaration: SubagentScopeDeclaration,
@@ -400,7 +394,7 @@ impl RuntimeSessionService {
     }
 
     /// Reports whether an agent has lineage, declarations, or active scopes.
-    pub(in crate::runtime) fn has_subagent_authority_state(&self, agent_id: &str) -> bool {
+    pub(crate) fn has_subagent_authority_state(&self, agent_id: &str) -> bool {
         self.agent.subagent_lineage.contains_key(agent_id)
             || self
                 .agent
@@ -414,32 +408,29 @@ impl RuntimeSessionService {
     }
 
     /// Removes lineage, declarations, and active scopes for one agent.
-    pub(in crate::runtime) fn remove_subagent_authority_state(&mut self, agent_id: &str) {
+    pub(crate) fn remove_subagent_authority_state(&mut self, agent_id: &str) {
         self.agent.subagent_lineage.remove(agent_id);
         self.agent.subagent_scope_declarations.remove(agent_id);
         self.agent.subagent_scopes.unregister(agent_id);
     }
 
     /// Returns active write scopes for one agent.
-    pub(in crate::runtime) fn active_subagent_write_scopes_for(
-        &self,
-        agent_id: &str,
-    ) -> Vec<ActiveWriteScope> {
+    pub(crate) fn active_subagent_write_scopes_for(&self, agent_id: &str) -> Vec<ActiveWriteScope> {
         self.agent.subagent_scopes.active_write_scopes_for(agent_id)
     }
 
     /// Returns every active subagent write scope.
-    pub(in crate::runtime) fn active_subagent_write_scopes(&self) -> Vec<ActiveWriteScope> {
+    pub(crate) fn active_subagent_write_scopes(&self) -> Vec<ActiveWriteScope> {
         self.agent.subagent_scopes.active_write_scopes()
     }
 
     /// Returns the number of active subagent write scopes.
-    pub(in crate::runtime) fn active_subagent_write_scope_count(&self) -> usize {
+    pub(crate) fn active_subagent_write_scope_count(&self) -> usize {
         self.agent.subagent_scopes.active_write_scope_count()
     }
 
     /// Clears all runtime subagent authority state on session replacement.
-    pub(in crate::runtime) fn clear_all_subagent_authority_state(&mut self) {
+    pub(crate) fn clear_all_subagent_authority_state(&mut self) {
         self.agent.subagent_lineage.clear();
         self.agent.subagent_scope_declarations.clear();
         self.agent.subagent_scopes = mez_agent::ScopeRegistry::default();
@@ -475,7 +466,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns the joined dependency for one child turn.
-    pub(in crate::runtime) fn joined_subagent_dependency(
+    pub(crate) fn joined_subagent_dependency(
         &self,
         child_turn_id: &str,
     ) -> Option<&JoinedSubagentDependency> {
@@ -492,7 +483,7 @@ impl RuntimeSessionService {
 
     /// Records one child-to-parent join dependency.
     #[cfg(test)]
-    pub(in crate::runtime) fn insert_joined_subagent_dependency(
+    pub(crate) fn insert_joined_subagent_dependency(
         &mut self,
         child_turn_id: impl Into<String>,
         dependency: JoinedSubagentDependency,
@@ -503,7 +494,7 @@ impl RuntimeSessionService {
     }
 
     /// Reports whether a blocked parent has any joined child work.
-    pub(in crate::runtime) fn parent_has_joined_subagent(&self, parent_turn_id: &str) -> bool {
+    pub(crate) fn parent_has_joined_subagent(&self, parent_turn_id: &str) -> bool {
         self.agent
             .joined_subagent_dependencies
             .values()
@@ -511,17 +502,14 @@ impl RuntimeSessionService {
     }
 
     /// Removes joined dependencies owned by one child agent.
-    pub(in crate::runtime) fn remove_joined_subagent_dependencies_for_agent(
-        &mut self,
-        child_agent_id: &str,
-    ) {
+    pub(crate) fn remove_joined_subagent_dependencies_for_agent(&mut self, child_agent_id: &str) {
         self.agent
             .joined_subagent_dependencies
             .retain(|_, dependency| dependency.child_agent_id != child_agent_id);
     }
 
     /// Clears all joined child dependencies on session replacement.
-    pub(in crate::runtime) fn clear_all_joined_subagent_dependencies(&mut self) {
+    pub(crate) fn clear_all_joined_subagent_dependencies(&mut self) {
         self.agent.joined_subagent_dependencies.clear();
     }
 
@@ -532,7 +520,7 @@ impl RuntimeSessionService {
     }
 
     /// Reports whether one turn is waiting for an approval decision.
-    pub(in crate::runtime) fn agent_turn_has_blocked_approval(&self, turn_id: &str) -> bool {
+    pub(crate) fn agent_turn_has_blocked_approval(&self, turn_id: &str) -> bool {
         self.agent
             .blocked_agent_approval_refs
             .values()
@@ -540,14 +528,14 @@ impl RuntimeSessionService {
     }
 
     /// Removes every blocked approval continuation owned by one turn.
-    pub(in crate::runtime) fn clear_blocked_agent_approvals_for_turn(&mut self, turn_id: &str) {
+    pub(crate) fn clear_blocked_agent_approvals_for_turn(&mut self, turn_id: &str) {
         self.agent
             .blocked_agent_approval_refs
             .retain(|_, approval_ref| approval_ref.turn_id != turn_id);
     }
 
     /// Clears all blocked approval continuations on session replacement.
-    pub(in crate::runtime) fn clear_all_blocked_agent_approval_refs(&mut self) {
+    pub(crate) fn clear_all_blocked_agent_approval_refs(&mut self) {
         self.agent.blocked_agent_approval_refs.clear();
     }
 
@@ -590,12 +578,12 @@ impl RuntimeSessionService {
     }
 
     /// Returns the parent-agent route for one spawned child turn.
-    pub(in crate::runtime) fn subagent_task_parent(&self, turn_id: &str) -> Option<String> {
+    pub(crate) fn subagent_task_parent(&self, turn_id: &str) -> Option<String> {
         self.agent.subagent_task_routes.get(turn_id).cloned()
     }
 
     /// Records the parent-agent route for one spawned child turn.
-    pub(in crate::runtime) fn set_subagent_task_parent(
+    pub(crate) fn set_subagent_task_parent(
         &mut self,
         turn_id: impl Into<String>,
         parent_agent_id: impl Into<String>,
@@ -606,61 +594,55 @@ impl RuntimeSessionService {
     }
 
     /// Removes the parent-agent route for one spawned child turn.
-    pub(in crate::runtime) fn remove_subagent_task_parent(&mut self, turn_id: &str) {
+    pub(crate) fn remove_subagent_task_parent(&mut self, turn_id: &str) {
         self.agent.subagent_task_routes.remove(turn_id);
     }
 
     /// Removes every child-turn route owned by one parent agent.
-    pub(in crate::runtime) fn remove_subagent_task_routes_for_parent(
-        &mut self,
-        parent_agent_id: &str,
-    ) {
+    pub(crate) fn remove_subagent_task_routes_for_parent(&mut self, parent_agent_id: &str) {
         self.agent
             .subagent_task_routes
             .retain(|_, parent| parent != parent_agent_id);
     }
 
     /// Records a window as reserved for subagent panes.
-    pub(in crate::runtime) fn mark_subagent_window(&mut self, window_id: impl Into<String>) {
+    pub(crate) fn mark_subagent_window(&mut self, window_id: impl Into<String>) {
         self.agent.subagent_window_ids.insert(window_id.into());
     }
 
     /// Reports whether a window is reserved for subagent panes.
-    pub(in crate::runtime) fn is_subagent_window(&self, window_id: &str) -> bool {
+    pub(crate) fn is_subagent_window(&self, window_id: &str) -> bool {
         self.agent.subagent_window_ids.contains(window_id)
     }
 
     /// Returns all currently reserved subagent window ids.
-    pub(in crate::runtime) fn subagent_window_ids(&self) -> Vec<String> {
+    pub(crate) fn subagent_window_ids(&self) -> Vec<String> {
         self.agent.subagent_window_ids.iter().cloned().collect()
     }
 
     /// Retains only subagent windows still present in the mux session.
-    pub(in crate::runtime) fn retain_live_subagent_windows(
-        &mut self,
-        live_window_ids: &BTreeSet<String>,
-    ) {
+    pub(crate) fn retain_live_subagent_windows(&mut self, live_window_ids: &BTreeSet<String>) {
         self.agent
             .subagent_window_ids
             .retain(|window_id| live_window_ids.contains(window_id));
     }
 
     /// Removes one deferred terminal-pane close marker.
-    pub(in crate::runtime) fn clear_terminal_subagent_pane_close(&mut self, pane_id: &str) -> bool {
+    pub(crate) fn clear_terminal_subagent_pane_close(&mut self, pane_id: &str) -> bool {
         self.agent
             .pending_terminal_subagent_pane_closes
             .remove(pane_id)
     }
 
     /// Clears all subagent routing and placement state on session replacement.
-    pub(in crate::runtime) fn clear_subagent_placement_state(&mut self) {
+    pub(crate) fn clear_subagent_placement_state(&mut self) {
         self.agent.subagent_task_routes.clear();
         self.agent.subagent_window_ids.clear();
         self.agent.pending_terminal_subagent_pane_closes.clear();
     }
 
     /// Replaces all configured subagent placement and delegation limits.
-    pub(in crate::runtime) fn configure_subagent_policy(
+    pub(crate) fn configure_subagent_policy(
         &mut self,
         max_subagent_panes_per_window: usize,
         max_root_subagents: usize,
@@ -676,7 +658,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns the configured subagent pane capacity per window.
-    pub(in crate::runtime) fn max_subagent_panes_per_window(&self) -> usize {
+    pub(crate) fn max_subagent_panes_per_window(&self) -> usize {
         self.agent.max_subagent_panes_per_window
     }
 
@@ -702,7 +684,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns a cached live model catalog for one provider.
-    pub(in crate::runtime) fn cached_provider_model_catalog(
+    pub(crate) fn cached_provider_model_catalog(
         &self,
         provider_id: &str,
     ) -> Option<RuntimeModelCatalog> {
@@ -713,7 +695,7 @@ impl RuntimeSessionService {
     }
 
     /// Replaces the cached live model catalog for one provider.
-    pub(in crate::runtime) fn cache_provider_model_catalog(
+    pub(crate) fn cache_provider_model_catalog(
         &mut self,
         provider_id: impl Into<String>,
         catalog: RuntimeModelCatalog,
@@ -724,12 +706,12 @@ impl RuntimeSessionService {
     }
 
     /// Invalidates one provider's cached live model catalog.
-    pub(in crate::runtime) fn remove_cached_provider_model_catalog(&mut self, provider_id: &str) {
+    pub(crate) fn remove_cached_provider_model_catalog(&mut self, provider_id: &str) {
         self.agent.provider_model_catalog_cache.remove(provider_id);
     }
 
     /// Invalidates all live model catalogs after configuration changes.
-    pub(in crate::runtime) fn clear_provider_model_catalog_cache(&mut self) {
+    pub(crate) fn clear_provider_model_catalog_cache(&mut self) {
         self.agent.provider_model_catalog_cache.clear();
     }
 
@@ -742,7 +724,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns cumulative token usage for one pane.
-    pub(in crate::runtime) fn agent_token_usage_for_pane(
+    pub(crate) fn agent_token_usage_for_pane(
         &self,
         pane_id: &str,
     ) -> BTreeMap<ModelTokenUsageKey, ModelTokenUsage> {
@@ -754,7 +736,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns cumulative token usage for one conversation.
-    pub(in crate::runtime) fn agent_token_usage_for_conversation(
+    pub(crate) fn agent_token_usage_for_conversation(
         &self,
         conversation_id: &str,
     ) -> BTreeMap<ModelTokenUsageKey, ModelTokenUsage> {
@@ -766,7 +748,7 @@ impl RuntimeSessionService {
     }
 
     /// Aggregates non-zero token usage across all agent conversations.
-    pub(in crate::runtime) fn total_agent_token_usage_by_model(
+    pub(crate) fn total_agent_token_usage_by_model(
         &self,
     ) -> BTreeMap<ModelTokenUsageKey, ModelTokenUsage> {
         let mut total: BTreeMap<ModelTokenUsageKey, ModelTokenUsage> = BTreeMap::new();
@@ -782,7 +764,7 @@ impl RuntimeSessionService {
     }
 
     /// Replaces restored token usage for one conversation and its pane.
-    pub(in crate::runtime) fn replace_restored_agent_token_usage(
+    pub(crate) fn replace_restored_agent_token_usage(
         &mut self,
         conversation_id: &str,
         pane_id: &str,
@@ -804,7 +786,7 @@ impl RuntimeSessionService {
     }
 
     /// Merges conversation metadata usage into the pane aggregate.
-    pub(in crate::runtime) fn merge_restored_agent_token_usage(
+    pub(crate) fn merge_restored_agent_token_usage(
         &mut self,
         conversation_id: &str,
         pane_id: &str,
@@ -830,7 +812,7 @@ impl RuntimeSessionService {
     }
 
     /// Restores legacy and structured provider context usage together.
-    pub(in crate::runtime) fn restore_agent_context_usage(
+    pub(crate) fn restore_agent_context_usage(
         &mut self,
         conversation_id: &str,
         display: Option<String>,
@@ -862,10 +844,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns the display-ready context usage for one conversation.
-    pub(in crate::runtime) fn agent_context_usage_display(
-        &self,
-        conversation_id: &str,
-    ) -> Option<String> {
+    pub(crate) fn agent_context_usage_display(&self, conversation_id: &str) -> Option<String> {
         self.agent
             .agent_context_usage_by_conversation
             .get(conversation_id)
@@ -873,7 +852,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns the structured context usage for one conversation.
-    pub(in crate::runtime) fn agent_context_usage_snapshot(
+    pub(crate) fn agent_context_usage_snapshot(
         &self,
         conversation_id: &str,
     ) -> Option<mez_agent::AgentContextUsageSnapshot> {
@@ -884,30 +863,27 @@ impl RuntimeSessionService {
     }
 
     /// Reports when model-backed compaction started for one pane.
-    pub(in crate::runtime) fn agent_compaction_started_at(&self, pane_id: &str) -> Option<u64> {
+    pub(crate) fn agent_compaction_started_at(&self, pane_id: &str) -> Option<u64> {
         self.agent.agent_compacting_panes.get(pane_id).copied()
     }
 
     /// Reports when durable-memory generation started for one pane.
-    pub(in crate::runtime) fn agent_remember_started_at(&self, pane_id: &str) -> Option<u64> {
+    pub(crate) fn agent_remember_started_at(&self, pane_id: &str) -> Option<u64> {
         self.agent.agent_remembering_panes.get(pane_id).copied()
     }
 
     /// Reports whether one pane is compacting its model context.
-    pub(in crate::runtime) fn agent_is_compacting(&self, pane_id: &str) -> bool {
+    pub(crate) fn agent_is_compacting(&self, pane_id: &str) -> bool {
         self.agent.agent_compacting_panes.contains_key(pane_id)
     }
 
     /// Reports whether one pane is generating durable memories.
-    pub(in crate::runtime) fn agent_is_remembering(&self, pane_id: &str) -> bool {
+    pub(crate) fn agent_is_remembering(&self, pane_id: &str) -> bool {
         self.agent.agent_remembering_panes.contains_key(pane_id)
     }
 
     /// Counts background model operations attached to the provided panes.
-    pub(in crate::runtime) fn active_agent_background_work_count(
-        &self,
-        pane_ids: &[String],
-    ) -> usize {
+    pub(crate) fn active_agent_background_work_count(&self, pane_ids: &[String]) -> usize {
         self.agent
             .agent_compacting_panes
             .keys()
@@ -923,10 +899,7 @@ impl RuntimeSessionService {
     }
 
     /// Queues one compaction task and marks its pane active.
-    pub(in crate::runtime) fn queue_agent_compaction_task(
-        &mut self,
-        task: RuntimeAgentCompactionTask,
-    ) {
+    pub(crate) fn queue_agent_compaction_task(&mut self, task: RuntimeAgentCompactionTask) {
         let pane_id = task.pane_id.clone();
         self.agent
             .agent_compacting_panes
@@ -937,7 +910,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns pane ids with queued model-backed compaction work.
-    pub(in crate::runtime) fn pending_agent_compaction_task_ids(&self) -> Vec<String> {
+    pub(crate) fn pending_agent_compaction_task_ids(&self) -> Vec<String> {
         self.agent
             .pending_agent_compaction_tasks
             .keys()
@@ -946,7 +919,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns turns waiting for output-limit recovery compaction.
-    pub(in crate::runtime) fn agent_compaction_resume_ids(&self) -> Vec<String> {
+    pub(crate) fn agent_compaction_resume_ids(&self) -> Vec<String> {
         self.agent
             .pending_agent_compaction_tasks
             .values()
@@ -956,7 +929,7 @@ impl RuntimeSessionService {
     }
 
     /// Removes one pending compaction task for provider construction.
-    pub(in crate::runtime) fn take_pending_agent_compaction_task(
+    pub(crate) fn take_pending_agent_compaction_task(
         &mut self,
         pane_id: &str,
     ) -> Option<RuntimeAgentCompactionTask> {
@@ -964,7 +937,7 @@ impl RuntimeSessionService {
     }
 
     /// Records that a provider worker owns one compaction task.
-    pub(in crate::runtime) fn claim_agent_compaction_task_state(
+    pub(crate) fn claim_agent_compaction_task_state(
         &mut self,
         pane_id: impl Into<String>,
         task: RuntimeAgentCompactionTask,
@@ -975,7 +948,7 @@ impl RuntimeSessionService {
     }
 
     /// Finishes claimed compaction state and clears its pane activity marker.
-    pub(in crate::runtime) fn finish_agent_compaction_task(
+    pub(crate) fn finish_agent_compaction_task(
         &mut self,
         pane_id: &str,
     ) -> Option<RuntimeAgentCompactionTask> {
@@ -985,7 +958,7 @@ impl RuntimeSessionService {
     }
 
     /// Removes all compaction state after provider failure.
-    pub(in crate::runtime) fn fail_agent_compaction_task(
+    pub(crate) fn fail_agent_compaction_task(
         &mut self,
         pane_id: &str,
     ) -> RuntimeAgentCompactionFailureState {
@@ -1005,7 +978,7 @@ impl RuntimeSessionService {
     }
 
     /// Queues one durable-memory task and marks its pane active.
-    pub(in crate::runtime) fn queue_agent_remember_task(&mut self, task: RuntimeAgentRememberTask) {
+    pub(crate) fn queue_agent_remember_task(&mut self, task: RuntimeAgentRememberTask) {
         let pane_id = task.pane_id.clone();
         self.agent
             .agent_remembering_panes
@@ -1016,7 +989,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns pane ids with queued durable-memory generation work.
-    pub(in crate::runtime) fn pending_agent_remember_task_ids(&self) -> Vec<String> {
+    pub(crate) fn pending_agent_remember_task_ids(&self) -> Vec<String> {
         self.agent
             .pending_agent_remember_tasks
             .keys()
@@ -1025,7 +998,7 @@ impl RuntimeSessionService {
     }
 
     /// Removes one pending durable-memory task for provider construction.
-    pub(in crate::runtime) fn take_pending_agent_remember_task(
+    pub(crate) fn take_pending_agent_remember_task(
         &mut self,
         pane_id: &str,
     ) -> Option<RuntimeAgentRememberTask> {
@@ -1033,7 +1006,7 @@ impl RuntimeSessionService {
     }
 
     /// Records that a provider worker owns one durable-memory task.
-    pub(in crate::runtime) fn claim_agent_remember_task_state(
+    pub(crate) fn claim_agent_remember_task_state(
         &mut self,
         pane_id: impl Into<String>,
         task: RuntimeAgentRememberTask,
@@ -1044,7 +1017,7 @@ impl RuntimeSessionService {
     }
 
     /// Finishes claimed durable-memory state and clears pane activity.
-    pub(in crate::runtime) fn finish_agent_remember_task(
+    pub(crate) fn finish_agent_remember_task(
         &mut self,
         pane_id: &str,
     ) -> Option<RuntimeAgentRememberTask> {
@@ -1054,7 +1027,7 @@ impl RuntimeSessionService {
     }
 
     /// Removes all durable-memory generation state after provider failure.
-    pub(in crate::runtime) fn fail_agent_remember_task(&mut self, pane_id: &str) -> bool {
+    pub(crate) fn fail_agent_remember_task(&mut self, pane_id: &str) -> bool {
         let pending = self
             .agent
             .pending_agent_remember_tasks
@@ -1085,7 +1058,7 @@ impl RuntimeSessionService {
     }
 
     /// Appends one steering prompt to an active turn.
-    pub(in crate::runtime) fn push_agent_turn_steering(
+    pub(crate) fn push_agent_turn_steering(
         &mut self,
         turn_id: impl Into<String>,
         steering: AgentTurnSteering,
@@ -1098,7 +1071,7 @@ impl RuntimeSessionService {
     }
 
     /// Takes all steering prompts waiting for one turn.
-    pub(in crate::runtime) fn take_agent_turn_steering(
+    pub(crate) fn take_agent_turn_steering(
         &mut self,
         turn_id: &str,
     ) -> Option<Vec<AgentTurnSteering>> {
@@ -1106,54 +1079,51 @@ impl RuntimeSessionService {
     }
 
     /// Reports whether one turn has pending user steering.
-    pub(in crate::runtime) fn agent_turn_has_pending_steering(&self, turn_id: &str) -> bool {
+    pub(crate) fn agent_turn_has_pending_steering(&self, turn_id: &str) -> bool {
         self.agent.agent_turn_pending_steering.contains_key(turn_id)
     }
 
     /// Removes pending steering for one completed turn.
-    pub(in crate::runtime) fn clear_agent_turn_steering(&mut self, turn_id: &str) {
+    pub(crate) fn clear_agent_turn_steering(&mut self, turn_id: &str) {
         self.agent.agent_turn_pending_steering.remove(turn_id);
     }
 
     /// Clears all pending steering for session replacement.
-    pub(in crate::runtime) fn clear_all_agent_turn_steering(&mut self) {
+    pub(crate) fn clear_all_agent_turn_steering(&mut self) {
         self.agent.agent_turn_pending_steering.clear();
     }
 
     /// Reports whether one provider turn is queued for dispatch.
-    pub(in crate::runtime) fn agent_provider_task_is_pending(&self, turn_id: &str) -> bool {
+    pub(crate) fn agent_provider_task_is_pending(&self, turn_id: &str) -> bool {
         self.agent.pending_agent_provider_tasks.contains(turn_id)
     }
 
     /// Reports whether one provider turn is claimed by a worker.
-    pub(in crate::runtime) fn agent_provider_task_is_claimed(&self, turn_id: &str) -> bool {
+    pub(crate) fn agent_provider_task_is_claimed(&self, turn_id: &str) -> bool {
         self.agent
             .claimed_agent_provider_tasks
             .contains_key(turn_id)
     }
 
     /// Reports whether a provider turn is queued or claimed.
-    pub(in crate::runtime) fn agent_provider_task_is_owned(&self, turn_id: &str) -> bool {
+    pub(crate) fn agent_provider_task_is_owned(&self, turn_id: &str) -> bool {
         self.agent_provider_task_is_pending(turn_id) || self.agent_provider_task_is_claimed(turn_id)
     }
 
     /// Queues one provider turn when it is not already pending.
-    pub(in crate::runtime) fn queue_agent_provider_task(
-        &mut self,
-        turn_id: impl Into<String>,
-    ) -> bool {
+    pub(crate) fn queue_agent_provider_task(&mut self, turn_id: impl Into<String>) -> bool {
         self.agent
             .pending_agent_provider_tasks
             .insert(turn_id.into())
     }
 
     /// Removes one pending provider turn.
-    pub(in crate::runtime) fn remove_pending_agent_provider_task(&mut self, turn_id: &str) -> bool {
+    pub(crate) fn remove_pending_agent_provider_task(&mut self, turn_id: &str) -> bool {
         self.agent.pending_agent_provider_tasks.remove(turn_id)
     }
 
     /// Removes one claimed provider turn.
-    pub(in crate::runtime) fn remove_claimed_agent_provider_task(
+    pub(crate) fn remove_claimed_agent_provider_task(
         &mut self,
         turn_id: &str,
     ) -> Option<RuntimeAgentProviderClaim> {
@@ -1161,21 +1131,18 @@ impl RuntimeSessionService {
     }
 
     /// Clears all queued and claimed provider work for session replacement.
-    pub(in crate::runtime) fn clear_agent_provider_task_ownership(&mut self) {
+    pub(crate) fn clear_agent_provider_task_ownership(&mut self) {
         self.agent.pending_agent_provider_tasks.clear();
         self.agent.claimed_agent_provider_tasks.clear();
     }
 
     /// Returns the effective model profile retained for one turn.
-    pub(in crate::runtime) fn agent_turn_model_profile(
-        &self,
-        turn_id: &str,
-    ) -> Option<&ModelProfile> {
+    pub(crate) fn agent_turn_model_profile(&self, turn_id: &str) -> Option<&ModelProfile> {
         self.agent.agent_turn_model_profiles.get(turn_id)
     }
 
     /// Replaces the effective model profile retained for one turn.
-    pub(in crate::runtime) fn set_agent_turn_model_profile(
+    pub(crate) fn set_agent_turn_model_profile(
         &mut self,
         turn_id: impl Into<String>,
         profile: ModelProfile,
@@ -1186,7 +1153,7 @@ impl RuntimeSessionService {
     }
 
     /// Removes the effective model profile retained for one turn.
-    pub(in crate::runtime) fn remove_agent_turn_model_profile(
+    pub(crate) fn remove_agent_turn_model_profile(
         &mut self,
         turn_id: &str,
     ) -> Option<ModelProfile> {
@@ -1194,12 +1161,12 @@ impl RuntimeSessionService {
     }
 
     /// Clears all retained turn model profiles for session replacement.
-    pub(in crate::runtime) fn clear_agent_turn_model_profiles(&mut self) {
+    pub(crate) fn clear_agent_turn_model_profiles(&mut self) {
         self.agent.agent_turn_model_profiles.clear();
     }
 
     /// Clears correction attempts and action histories for one completed turn.
-    pub(in crate::runtime) fn clear_agent_action_bookkeeping_for_turn(&mut self, turn_id: &str) {
+    pub(crate) fn clear_agent_action_bookkeeping_for_turn(&mut self, turn_id: &str) {
         self.clear_agent_failure_feedback_attempts_for_turn(turn_id);
         self.agent.agent_turn_shell_dispatch_history.remove(turn_id);
         self.agent.agent_turn_network_action_history.remove(turn_id);
@@ -1209,7 +1176,7 @@ impl RuntimeSessionService {
     }
 
     /// Clears all action bookkeeping when the live session is replaced.
-    pub(in crate::runtime) fn clear_all_agent_action_bookkeeping(&mut self) {
+    pub(crate) fn clear_all_agent_action_bookkeeping(&mut self) {
         self.agent.agent_turn_failure_feedback_attempts.clear();
         self.agent.agent_turn_shell_dispatch_history.clear();
         self.agent.agent_turn_network_action_history.clear();
@@ -1217,7 +1184,7 @@ impl RuntimeSessionService {
     }
 
     /// Reports whether one pre-shell hook already completed for an action.
-    pub(in crate::runtime) fn agent_pre_shell_hook_completed(
+    pub(crate) fn agent_pre_shell_hook_completed(
         &self,
         continuation: &PendingFocusedShellHookContinuation,
         hook_id: &str,
@@ -1232,7 +1199,7 @@ impl RuntimeSessionService {
     }
 
     /// Records one completed pre-shell hook for an action.
-    pub(in crate::runtime) fn record_agent_pre_shell_hook_completed(
+    pub(crate) fn record_agent_pre_shell_hook_completed(
         &mut self,
         continuation: &PendingFocusedShellHookContinuation,
         hook_id: &str,
@@ -1247,34 +1214,31 @@ impl RuntimeSessionService {
     }
 
     /// Clears completed pre-shell hook records for one turn.
-    pub(in crate::runtime) fn clear_agent_pre_shell_hook_completions_for_turn(
-        &mut self,
-        turn_id: &str,
-    ) {
+    pub(crate) fn clear_agent_pre_shell_hook_completions_for_turn(&mut self, turn_id: &str) {
         self.agent
             .agent_pre_shell_hook_completions
             .retain(|completion| completion.turn_id != turn_id);
     }
 
     /// Returns the bounded model-correction retry limit.
-    pub(in crate::runtime) fn agent_action_failure_retry_limit(&self) -> usize {
+    pub(crate) fn agent_action_failure_retry_limit(&self) -> usize {
         self.agent.agent_action_failure_retry_limit.max(1)
     }
 
     /// Replaces the bounded model-correction retry limit.
-    pub(in crate::runtime) fn set_agent_action_failure_retry_limit(&mut self, limit: usize) {
+    pub(crate) fn set_agent_action_failure_retry_limit(&mut self, limit: usize) {
         self.agent.agent_action_failure_retry_limit = limit;
     }
 
     /// Returns the shell streak that activates implementation-pressure hints.
-    pub(in crate::runtime) fn agent_implementation_pressure_after_shell_actions(&self) -> usize {
+    pub(crate) fn agent_implementation_pressure_after_shell_actions(&self) -> usize {
         self.agent
             .agent_implementation_pressure_after_shell_actions
             .max(1)
     }
 
     /// Replaces the implementation-pressure shell streak.
-    pub(in crate::runtime) fn set_agent_implementation_pressure_after_shell_actions(
+    pub(crate) fn set_agent_implementation_pressure_after_shell_actions(
         &mut self,
         threshold: usize,
     ) {
@@ -1282,37 +1246,34 @@ impl RuntimeSessionService {
     }
 
     /// Returns the configured loop iteration limit.
-    pub(in crate::runtime) fn agent_loop_limit(&self) -> usize {
+    pub(crate) fn agent_loop_limit(&self) -> usize {
         self.agent.agent_loop_limit.max(1)
     }
 
     /// Replaces the configured loop iteration limit.
-    pub(in crate::runtime) fn set_agent_loop_limit(&mut self, limit: usize) {
+    pub(crate) fn set_agent_loop_limit(&mut self, limit: usize) {
         self.agent.agent_loop_limit = limit;
     }
 
     /// Returns loop controller state for one pane.
-    pub(in crate::runtime) fn agent_loop_state(
-        &self,
-        pane_id: &str,
-    ) -> Option<&RuntimeAgentLoopState> {
+    pub(crate) fn agent_loop_state(&self, pane_id: &str) -> Option<&RuntimeAgentLoopState> {
         self.agent.agent_loops_by_pane.get(pane_id)
     }
 
     /// Reports whether a pane has loop controller state.
-    pub(in crate::runtime) fn agent_loop_is_active(&self, pane_id: &str) -> bool {
+    pub(crate) fn agent_loop_is_active(&self, pane_id: &str) -> bool {
         self.agent.agent_loops_by_pane.contains_key(pane_id)
     }
 
     /// Replaces loop controller state for one pane.
-    pub(in crate::runtime) fn insert_agent_loop_state(&mut self, state: RuntimeAgentLoopState) {
+    pub(crate) fn insert_agent_loop_state(&mut self, state: RuntimeAgentLoopState) {
         self.agent
             .agent_loops_by_pane
             .insert(state.pane_id.clone(), state);
     }
 
     /// Removes loop controller state for one pane.
-    pub(in crate::runtime) fn remove_agent_loop_state(
+    pub(crate) fn remove_agent_loop_state(
         &mut self,
         pane_id: &str,
     ) -> Option<RuntimeAgentLoopState> {
@@ -1320,15 +1281,12 @@ impl RuntimeSessionService {
     }
 
     /// Returns loop-owned metadata for one turn.
-    pub(in crate::runtime) fn agent_loop_turn(
-        &self,
-        turn_id: &str,
-    ) -> Option<&RuntimeAgentLoopTurn> {
+    pub(crate) fn agent_loop_turn(&self, turn_id: &str) -> Option<&RuntimeAgentLoopTurn> {
         self.agent.agent_loop_turns.get(turn_id)
     }
 
     /// Records one loop-owned turn.
-    pub(in crate::runtime) fn insert_agent_loop_turn(
+    pub(crate) fn insert_agent_loop_turn(
         &mut self,
         turn_id: String,
         loop_turn: RuntimeAgentLoopTurn,
@@ -1337,50 +1295,44 @@ impl RuntimeSessionService {
     }
 
     /// Removes loop-owned metadata for one turn.
-    pub(in crate::runtime) fn remove_agent_loop_turn(
-        &mut self,
-        turn_id: &str,
-    ) -> Option<RuntimeAgentLoopTurn> {
+    pub(crate) fn remove_agent_loop_turn(&mut self, turn_id: &str) -> Option<RuntimeAgentLoopTurn> {
         self.agent.agent_loop_turns.remove(turn_id)
     }
 
     /// Removes stale loop-owned turns for one pane.
-    pub(in crate::runtime) fn clear_agent_loop_turns_for_pane(&mut self, pane_id: &str) {
+    pub(crate) fn clear_agent_loop_turns_for_pane(&mut self, pane_id: &str) {
         self.agent
             .agent_loop_turns
             .retain(|_, loop_turn| loop_turn.pane_id != pane_id);
     }
 
     /// Returns the raw-context percentage retained after compaction.
-    pub(in crate::runtime) fn agent_compaction_raw_retention_percent(&self) -> usize {
+    pub(crate) fn agent_compaction_raw_retention_percent(&self) -> usize {
         self.agent.agent_compaction_raw_retention_percent
     }
 
     /// Replaces the raw-context percentage retained after compaction.
-    pub(in crate::runtime) fn set_agent_compaction_raw_retention_percent(
-        &mut self,
-        percent: usize,
-    ) {
+    pub(crate) fn set_agent_compaction_raw_retention_percent(&mut self, percent: usize) {
         self.agent.agent_compaction_raw_retention_percent = percent;
     }
 
     /// Returns the configured default auto-sizing policy.
-    pub(in crate::runtime) fn agent_auto_sizing(&self) -> &RuntimeAutoSizingConfig {
+    pub(crate) fn agent_auto_sizing(&self) -> &RuntimeAutoSizingConfig {
         &self.agent.agent_auto_sizing
     }
 
     /// Replaces the configured default auto-sizing policy.
-    pub(in crate::runtime) fn set_agent_auto_sizing(&mut self, config: RuntimeAutoSizingConfig) {
+    pub(crate) fn set_agent_auto_sizing(&mut self, config: RuntimeAutoSizingConfig) {
         self.agent.agent_auto_sizing = config;
     }
 
     /// Replaces the router model profile in the default auto-sizing policy.
-    pub(in crate::runtime) fn set_agent_router_model_profile(&mut self, profile_name: &str) {
+    pub(crate) fn set_agent_router_model_profile(&mut self, profile_name: &str) {
         self.agent.agent_auto_sizing.router_model_profile = profile_name.to_string();
     }
 
     /// Returns an explicit pane-local auto-sizing override.
-    pub(in crate::runtime) fn agent_auto_sizing_override(
+    pub(crate) fn agent_auto_sizing_override(
         &self,
         pane_id: &str,
     ) -> Option<&RuntimeAutoSizingConfig> {
@@ -1388,7 +1340,7 @@ impl RuntimeSessionService {
     }
 
     /// Replaces or clears one pane-local auto-sizing override.
-    pub(in crate::runtime) fn set_agent_auto_sizing_override(
+    pub(crate) fn set_agent_auto_sizing_override(
         &mut self,
         pane_id: &str,
         config: Option<RuntimeAutoSizingConfig>,
@@ -1403,35 +1355,28 @@ impl RuntimeSessionService {
     }
 
     /// Returns the effective auto-sizing policy for one pane.
-    pub(in crate::runtime) fn agent_auto_sizing_for_pane(
-        &self,
-        pane_id: &str,
-    ) -> &RuntimeAutoSizingConfig {
+    pub(crate) fn agent_auto_sizing_for_pane(&self, pane_id: &str) -> &RuntimeAutoSizingConfig {
         self.agent_auto_sizing_override(pane_id)
             .unwrap_or_else(|| self.agent_auto_sizing())
     }
 
     /// Returns the configured default provider-routing state.
-    pub(in crate::runtime) fn agent_default_routing(&self) -> bool {
+    pub(crate) fn agent_default_routing(&self) -> bool {
         self.agent.agent_routing
     }
 
     /// Replaces the configured default provider-routing state.
-    pub(in crate::runtime) fn set_agent_default_routing(&mut self, enabled: bool) {
+    pub(crate) fn set_agent_default_routing(&mut self, enabled: bool) {
         self.agent.agent_routing = enabled;
     }
 
     /// Returns an explicit pane-local routing override.
-    pub(in crate::runtime) fn agent_routing_override(&self, pane_id: &str) -> Option<bool> {
+    pub(crate) fn agent_routing_override(&self, pane_id: &str) -> Option<bool> {
         self.agent.agent_routing_overrides.get(pane_id).copied()
     }
 
     /// Replaces or clears one pane-local routing override.
-    pub(in crate::runtime) fn set_agent_routing_override(
-        &mut self,
-        pane_id: &str,
-        enabled: Option<bool>,
-    ) {
+    pub(crate) fn set_agent_routing_override(&mut self, pane_id: &str, enabled: Option<bool>) {
         if let Some(enabled) = enabled {
             self.agent
                 .agent_routing_overrides
@@ -1442,17 +1387,17 @@ impl RuntimeSessionService {
     }
 
     /// Clears one pane-local routing override during pane teardown.
-    pub(in crate::runtime) fn clear_agent_routing_override(&mut self, pane_id: &str) {
+    pub(crate) fn clear_agent_routing_override(&mut self, pane_id: &str) {
         self.agent.agent_routing_overrides.remove(pane_id);
     }
 
     /// Reports whether planning presentation is enabled for one pane.
-    pub(in crate::runtime) fn agent_planning_enabled(&self, pane_id: &str) -> bool {
+    pub(crate) fn agent_planning_enabled(&self, pane_id: &str) -> bool {
         self.agent.agent_planning_modes.contains(pane_id)
     }
 
     /// Sets pane-local planning presentation state.
-    pub(in crate::runtime) fn set_agent_planning_enabled(&mut self, pane_id: &str, enabled: bool) {
+    pub(crate) fn set_agent_planning_enabled(&mut self, pane_id: &str, enabled: bool) {
         if enabled {
             self.agent.agent_planning_modes.insert(pane_id.to_string());
         } else {
@@ -1461,7 +1406,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns the pane-local response style selection.
-    pub(in crate::runtime) fn agent_response_style(&self, pane_id: &str) -> Option<&str> {
+    pub(crate) fn agent_response_style(&self, pane_id: &str) -> Option<&str> {
         self.agent
             .agent_response_styles
             .get(pane_id)
@@ -1469,11 +1414,7 @@ impl RuntimeSessionService {
     }
 
     /// Replaces or clears one pane-local response style selection.
-    pub(in crate::runtime) fn set_agent_response_style(
-        &mut self,
-        pane_id: &str,
-        style: Option<String>,
-    ) {
+    pub(crate) fn set_agent_response_style(&mut self, pane_id: &str, style: Option<String>) {
         if let Some(style) = style {
             self.agent
                 .agent_response_styles
@@ -1484,13 +1425,13 @@ impl RuntimeSessionService {
     }
 
     /// Clears transcript-persisted pane presentation preferences.
-    pub(in crate::runtime) fn clear_agent_pane_presentation_preferences(&mut self, pane_id: &str) {
+    pub(crate) fn clear_agent_pane_presentation_preferences(&mut self, pane_id: &str) {
         self.agent.agent_planning_modes.remove(pane_id);
         self.agent.agent_response_styles.remove(pane_id);
     }
 
     /// Returns retained patch attempts for one agent session.
-    pub(in crate::runtime) fn retained_agent_patch_records(
+    pub(crate) fn retained_agent_patch_records(
         &self,
         session_id: &str,
     ) -> Option<&[RuntimeAgentPatchRecord]> {
@@ -1501,7 +1442,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns the latest retained copy output for one pane.
-    pub(in crate::runtime) fn retained_agent_copy_output(
+    pub(crate) fn retained_agent_copy_output(
         &self,
         pane_id: &str,
     ) -> Option<&RuntimeAgentCopyOutput> {
@@ -1509,7 +1450,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns modified-file summaries retained for one pane.
-    pub(in crate::runtime) fn retained_agent_modified_files(
+    pub(crate) fn retained_agent_modified_files(
         &self,
         pane_id: &str,
     ) -> Option<&BTreeMap<String, RuntimeAgentModifiedFileSummary>> {
@@ -1517,7 +1458,7 @@ impl RuntimeSessionService {
     }
 
     /// Adds one observed modification delta to a pane-local file summary.
-    pub(in crate::runtime) fn record_agent_modified_file_delta(
+    pub(crate) fn record_agent_modified_file_delta(
         &mut self,
         pane_id: &str,
         path: String,
@@ -1540,54 +1481,51 @@ impl RuntimeSessionService {
     }
 
     /// Clears session-scoped copy and modified-file artifacts.
-    pub(in crate::runtime) fn clear_agent_session_artifacts(&mut self) {
+    pub(crate) fn clear_agent_session_artifacts(&mut self) {
         self.agent.agent_copy_outputs.clear();
         self.agent.agent_modified_files.clear();
     }
 
     /// Clears pane-scoped copy and modified-file artifacts.
-    pub(in crate::runtime) fn clear_agent_pane_artifacts(&mut self, pane_id: &str) {
+    pub(crate) fn clear_agent_pane_artifacts(&mut self, pane_id: &str) {
         self.agent.agent_copy_outputs.remove(pane_id);
         self.agent.agent_modified_files.remove(pane_id);
     }
 
     /// Clears modified-file summaries when a pane starts a fresh conversation.
-    pub(in crate::runtime) fn clear_agent_modified_files(&mut self, pane_id: &str) {
+    pub(crate) fn clear_agent_modified_files(&mut self, pane_id: &str) {
         self.agent.agent_modified_files.remove(pane_id);
     }
 
     /// Reports whether one pane currently owns an agent child shell.
-    pub(in crate::runtime) fn agent_subshell_is_active(&self, pane_id: &str) -> bool {
+    pub(crate) fn agent_subshell_is_active(&self, pane_id: &str) -> bool {
         self.agent.agent_subshell_panes.contains(pane_id)
     }
 
     /// Marks one pane as owning an agent child shell.
-    pub(in crate::runtime) fn enter_agent_subshell(&mut self, pane_id: impl Into<String>) {
+    pub(crate) fn enter_agent_subshell(&mut self, pane_id: impl Into<String>) {
         self.agent.agent_subshell_panes.insert(pane_id.into());
     }
 
     /// Removes one pane from active agent child-shell ownership.
-    pub(in crate::runtime) fn leave_agent_subshell(&mut self, pane_id: &str) -> bool {
+    pub(crate) fn leave_agent_subshell(&mut self, pane_id: &str) -> bool {
         self.agent.agent_subshell_panes.remove(pane_id)
     }
 
     /// Marks an interrupted child shell for line-oriented exit.
-    pub(in crate::runtime) fn mark_agent_subshell_command_exit(
-        &mut self,
-        pane_id: impl Into<String>,
-    ) {
+    pub(crate) fn mark_agent_subshell_command_exit(&mut self, pane_id: impl Into<String>) {
         self.agent
             .agent_subshell_command_exit_panes
             .insert(pane_id.into());
     }
 
     /// Consumes a line-oriented child-shell exit marker.
-    pub(in crate::runtime) fn take_agent_subshell_command_exit(&mut self, pane_id: &str) -> bool {
+    pub(crate) fn take_agent_subshell_command_exit(&mut self, pane_id: &str) -> bool {
         self.agent.agent_subshell_command_exit_panes.remove(pane_id)
     }
 
     /// Clears all agent child-shell state for a removed pane.
-    pub(in crate::runtime) fn clear_agent_subshell_state(&mut self, pane_id: &str) {
+    pub(crate) fn clear_agent_subshell_state(&mut self, pane_id: &str) {
         self.agent.agent_subshell_panes.remove(pane_id);
         self.agent.agent_subshell_command_exit_panes.remove(pane_id);
     }
@@ -1596,38 +1534,31 @@ impl RuntimeSessionService {
 #[cfg(test)]
 impl RuntimeSessionService {
     /// Returns failure-feedback attempts for integration-test observation.
-    pub(in crate::runtime) fn agent_failure_feedback_attempts_for_tests(
-        &self,
-    ) -> &BTreeMap<String, usize> {
+    pub(crate) fn agent_failure_feedback_attempts_for_tests(&self) -> &BTreeMap<String, usize> {
         &self.agent.agent_turn_failure_feedback_attempts
     }
 
     /// Returns failure-feedback attempts for fixture setup.
-    pub(in crate::runtime) fn agent_failure_feedback_attempts_mut_for_tests(
+    pub(crate) fn agent_failure_feedback_attempts_mut_for_tests(
         &mut self,
     ) -> &mut BTreeMap<String, usize> {
         &mut self.agent.agent_turn_failure_feedback_attempts
     }
 
     /// Returns network action history for integration-test observation.
-    pub(in crate::runtime) fn agent_network_action_history_for_tests(
+    pub(crate) fn agent_network_action_history_for_tests(
         &self,
     ) -> &BTreeMap<String, AgentNetworkActionHistory> {
         &self.agent.agent_turn_network_action_history
     }
 
     /// Returns loop-owned turn metadata for integration-test observation.
-    pub(in crate::runtime) fn agent_loop_turns_for_tests(
-        &self,
-    ) -> &BTreeMap<String, RuntimeAgentLoopTurn> {
+    pub(crate) fn agent_loop_turns_for_tests(&self) -> &BTreeMap<String, RuntimeAgentLoopTurn> {
         &self.agent.agent_loop_turns
     }
 
     /// Reports whether a process fixture still has a command-exit marker.
-    pub(in crate::runtime) fn agent_subshell_command_exit_is_pending_for_tests(
-        &self,
-        pane_id: &str,
-    ) -> bool {
+    pub(crate) fn agent_subshell_command_exit_is_pending_for_tests(&self, pane_id: &str) -> bool {
         self.agent
             .agent_subshell_command_exit_panes
             .contains(pane_id)

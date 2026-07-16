@@ -22,7 +22,7 @@ use mez_mux::render::{push_or_extend_style_span, terminal_color_luminance};
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime::render) fn sanitized_agent_terminal_line(line: &str) -> String {
+pub(crate) fn sanitized_agent_terminal_line(line: &str) -> String {
     line.chars()
         .map(|ch| {
             if ch == '\t' || !ch.is_control() {
@@ -39,10 +39,7 @@ pub(in crate::runtime::render) fn sanitized_agent_terminal_line(line: &str) -> S
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime::render) fn prefixed_agent_terminal_lines(
-    prefix: &str,
-    text: &str,
-) -> Vec<String> {
+pub(crate) fn prefixed_agent_terminal_lines(prefix: &str, text: &str) -> Vec<String> {
     let trimmed = text.trim_end_matches(['\r', '\n']);
     if trimmed.is_empty() {
         return vec![prefix.to_string()];
@@ -67,7 +64,7 @@ pub(in crate::runtime::render) fn prefixed_agent_terminal_lines(
 /// Plain `say` output and display-only patch examples should wrap through the
 /// same presentation engine as markdown so continuation rows align under the
 /// first writable column after the speaker indicator.
-pub(in crate::runtime::render) fn wrapped_prefixed_agent_terminal_lines(
+pub(crate) fn wrapped_prefixed_agent_terminal_lines(
     prefix: &str,
     text: &str,
     display_width: usize,
@@ -89,7 +86,7 @@ pub(in crate::runtime::render) fn wrapped_prefixed_agent_terminal_lines(
 /// Markdown treats leading `***` as structural syntax in some contexts. Raw
 /// patch examples should stay literal and copyable instead of being parsed as
 /// markdown or an executable action.
-pub(in crate::runtime::render) fn agent_say_text_is_displayed_patch_block(text: &str) -> bool {
+pub(crate) fn agent_say_text_is_displayed_patch_block(text: &str) -> bool {
     let trimmed = text.trim_start_matches(['\r', '\n']);
     trimmed.starts_with("*** Begin Patch")
         || trimmed
@@ -102,7 +99,7 @@ pub(in crate::runtime::render) fn agent_say_text_is_displayed_patch_block(text: 
 /// The returned display text intentionally omits markdown delimiters where the
 /// terminal style can carry the same meaning. Callers add frame rows and keep
 /// the raw markdown in copy metadata so this is only a visual transformation.
-pub(in crate::runtime::render) fn render_agent_markdown_body_lines(
+pub(crate) fn render_agent_markdown_body_lines(
     markdown: &str,
     ui_theme: &UiTheme,
     table_display_width: usize,
@@ -132,7 +129,7 @@ pub(in crate::runtime::render) fn render_agent_markdown_body_lines(
 }
 
 /// Renders runtime command markdown body lines without the surrounding frame.
-pub(in crate::runtime::render) fn render_command_markdown_body_lines(
+pub(crate) fn render_command_markdown_body_lines(
     markdown: &str,
     ui_theme: &UiTheme,
 ) -> Vec<RichTextLine> {
@@ -157,9 +154,7 @@ pub(super) fn agent_rich_text_theme(ui_theme: &UiTheme) -> RichTextTheme {
 }
 
 /// Returns the foreground used for inline markdown code on the active theme.
-pub(in crate::runtime::render) fn markdown_inline_code_foreground(
-    ui_theme: &UiTheme,
-) -> TerminalColor {
+pub(crate) fn markdown_inline_code_foreground(ui_theme: &UiTheme) -> TerminalColor {
     if markdown_surface_is_light(ui_theme) {
         MARKDOWN_DARK_NEUTRAL_FOREGROUND
     } else {
@@ -168,9 +163,7 @@ pub(in crate::runtime::render) fn markdown_inline_code_foreground(
 }
 
 /// Returns the foreground used to distinguish alternating markdown table rows.
-pub(in crate::runtime::render) fn markdown_table_alternate_row_foreground(
-    ui_theme: &UiTheme,
-) -> TerminalColor {
+pub(crate) fn markdown_table_alternate_row_foreground(ui_theme: &UiTheme) -> TerminalColor {
     if markdown_surface_is_light(ui_theme) {
         MARKDOWN_DARK_MUTED_FOREGROUND
     } else {
@@ -179,9 +172,7 @@ pub(in crate::runtime::render) fn markdown_table_alternate_row_foreground(
 }
 
 /// Returns the foreground used for subdued markdown structural accents.
-pub(in crate::runtime::render) fn markdown_structural_foreground(
-    ui_theme: &UiTheme,
-) -> TerminalColor {
+pub(crate) fn markdown_structural_foreground(ui_theme: &UiTheme) -> TerminalColor {
     if markdown_surface_is_light(ui_theme) {
         MARKDOWN_DARK_MUTED_FOREGROUND
     } else {
@@ -190,14 +181,14 @@ pub(in crate::runtime::render) fn markdown_structural_foreground(
 }
 
 /// Returns whether markdown should use dark neutral text accents.
-pub(in crate::runtime::render) fn markdown_surface_is_light(ui_theme: &UiTheme) -> bool {
+pub(crate) fn markdown_surface_is_light(ui_theme: &UiTheme) -> bool {
     terminal_color_luminance(ui_theme.colors.agent_transcript_assistant.background)
         .or_else(|| terminal_color_luminance(ui_theme.colors.frame_fill.background))
         .is_some_and(|luminance| luminance >= 140)
 }
 
 /// Builds product copy rows for a rendered Markdown block.
-pub(in crate::runtime::render) fn markdown_block_copy_lines(
+pub(crate) fn markdown_block_copy_lines(
     rendered_lines: &[RichTextLine],
     body_rendered_count: usize,
     raw_body_copy_lines: Vec<String>,
@@ -215,7 +206,7 @@ pub(in crate::runtime::render) fn markdown_block_copy_lines(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime::render) fn command_preview_terminal_lines(
+pub(crate) fn command_preview_terminal_lines(
     command: &str,
     columns: usize,
     max_lines: usize,
@@ -257,7 +248,7 @@ pub(in crate::runtime::render) fn command_preview_terminal_lines(
 }
 
 /// Renders a shell command preview with bounded wrapping and syntax spans.
-pub(in crate::runtime::render) fn command_preview_terminal_rendered_lines(
+pub(crate) fn command_preview_terminal_rendered_lines(
     command: &str,
     columns: usize,
     max_lines: usize,
@@ -305,10 +296,7 @@ pub(in crate::runtime::render) fn command_preview_terminal_rendered_lines(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime::render) fn wrap_agent_terminal_text(
-    text: &str,
-    columns: usize,
-) -> Vec<String> {
+pub(crate) fn wrap_agent_terminal_text(text: &str, columns: usize) -> Vec<String> {
     let trimmed = text.trim_end_matches(['\r', '\n']);
     if trimmed.is_empty() {
         return vec![String::new()];
@@ -344,7 +332,7 @@ pub(in crate::runtime::render) fn wrap_agent_terminal_text(
 
 /// Returns one command-preview segment using whitespace first and a hard cell
 /// boundary only when no whitespace break exists.
-pub(in crate::runtime::render) fn take_agent_terminal_word_wrapped_segment(
+pub(crate) fn take_agent_terminal_word_wrapped_segment(
     text: &str,
     columns: usize,
 ) -> Option<(String, usize)> {
@@ -379,10 +367,7 @@ pub(in crate::runtime::render) fn take_agent_terminal_word_wrapped_segment(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime::render) fn fit_agent_terminal_text_width(
-    text: &str,
-    columns: usize,
-) -> String {
+pub(crate) fn fit_agent_terminal_text_width(text: &str, columns: usize) -> String {
     if agent_terminal_text_width(text) <= columns {
         return text.to_string();
     }
@@ -413,9 +398,7 @@ pub(in crate::runtime::render) fn fit_agent_terminal_text_width(
 ///
 /// # Parameters
 /// - `columns`: The current pane width in terminal display cells.
-pub(in crate::runtime::render) fn bounded_agent_terminal_presentation_columns(
-    columns: usize,
-) -> usize {
+pub(crate) fn bounded_agent_terminal_presentation_columns(columns: usize) -> usize {
     columns.clamp(1, agent_wrap_column_cap())
 }
 
@@ -423,7 +406,7 @@ pub(in crate::runtime::render) fn bounded_agent_terminal_presentation_columns(
 ///
 /// # Parameters
 /// - `text`: The agent transcript text to measure.
-pub(in crate::runtime::render) fn agent_terminal_text_width(text: &str) -> usize {
+pub(crate) fn agent_terminal_text_width(text: &str) -> usize {
     UnicodeSegmentation::graphemes(text, true)
         .map(agent_terminal_grapheme_width)
         .sum()
@@ -433,7 +416,7 @@ pub(in crate::runtime::render) fn agent_terminal_text_width(text: &str) -> usize
 ///
 /// # Parameters
 /// - `grapheme`: The grapheme cluster to measure.
-pub(in crate::runtime::render) fn agent_terminal_grapheme_width(grapheme: &str) -> usize {
+pub(crate) fn agent_terminal_grapheme_width(grapheme: &str) -> usize {
     if grapheme == "\t" {
         4
     } else {
@@ -446,7 +429,7 @@ pub(in crate::runtime::render) fn agent_terminal_grapheme_width(grapheme: &str) 
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime::render) fn agent_display_lines_are_error(lines: &[String]) -> bool {
+pub(crate) fn agent_display_lines_are_error(lines: &[String]) -> bool {
     lines.iter().any(|line| {
         line.contains("provider_error")
             || line.contains("hook_blocked")
@@ -460,9 +443,7 @@ pub(in crate::runtime::render) fn agent_display_lines_are_error(lines: &[String]
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime::render) fn agent_display_lines_are_low_level_status(
-    lines: &[String],
-) -> bool {
+pub(crate) fn agent_display_lines_are_low_level_status(lines: &[String]) -> bool {
     let mut nonempty = lines
         .iter()
         .map(|line| line.trim())
@@ -480,7 +461,7 @@ pub(in crate::runtime::render) fn agent_display_lines_are_low_level_status(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime::render) fn agent_display_line_is_low_level_status(line: &str) -> bool {
+pub(crate) fn agent_display_line_is_low_level_status(line: &str) -> bool {
     line.starts_with("agent: turn ")
         || line.starts_with("agent: context ")
         || line.starts_with("agent: provider ")
@@ -495,9 +476,7 @@ pub(in crate::runtime::render) fn agent_display_line_is_low_level_status(line: &
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime::render) fn agent_prompt_error_display_lines(
-    error: &MezError,
-) -> Vec<String> {
+pub(crate) fn agent_prompt_error_display_lines(error: &MezError) -> Vec<String> {
     vec![format!(
         "agent command error: {} ({})",
         error.message(),
@@ -510,7 +489,7 @@ pub(in crate::runtime::render) fn agent_prompt_error_display_lines(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime::render) fn overlay_styled_lines(
+pub(crate) fn overlay_styled_lines(
     view: &mut RenderedClientView,
     row_start: usize,
     column_start: usize,
@@ -543,7 +522,7 @@ pub(in crate::runtime::render) fn overlay_styled_lines(
 }
 
 /// Appends one agent presentation line with the right color span boundaries.
-pub(in crate::runtime::render) fn append_styled_agent_terminal_line(
+pub(crate) fn append_styled_agent_terminal_line(
     bytes: &mut String,
     style: AgentTerminalPresentationStyle,
     line: &str,
@@ -567,7 +546,7 @@ pub(in crate::runtime::render) fn append_styled_agent_terminal_line(
 }
 
 /// Appends one transformed agent line, styling the gutter/label and body spans.
-pub(in crate::runtime::render) fn append_styled_agent_terminal_rendered_line(
+pub(crate) fn append_styled_agent_terminal_rendered_line(
     bytes: &mut String,
     style: AgentTerminalPresentationStyle,
     line: &RichTextLine,
@@ -605,7 +584,7 @@ pub(in crate::runtime::render) fn append_styled_agent_terminal_rendered_line(
 }
 
 /// Returns the themed rendition used for an agent gutter and optional label.
-pub(in crate::runtime::render) fn agent_terminal_label_rendition(
+pub(crate) fn agent_terminal_label_rendition(
     style: AgentTerminalPresentationStyle,
     ui_theme: &UiTheme,
 ) -> GraphicRendition {
@@ -629,7 +608,7 @@ pub(in crate::runtime::render) fn agent_terminal_label_rendition(
 }
 
 /// Returns the presentation rendition active at one display column.
-pub(in crate::runtime::render) fn rendered_line_rendition_at(
+pub(crate) fn rendered_line_rendition_at(
     spans: &[TerminalStyleSpan],
     column: usize,
 ) -> GraphicRendition {

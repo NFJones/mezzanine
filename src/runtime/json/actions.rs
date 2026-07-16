@@ -11,7 +11,7 @@ use super::{
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_pane_by_id<'a>(
+pub(crate) fn runtime_pane_by_id<'a>(
     session: &'a Session,
     pane_id: &str,
 ) -> Result<(&'a mez_mux::layout::Window, &'a mez_mux::layout::Pane)> {
@@ -33,7 +33,7 @@ pub(in crate::runtime) fn runtime_pane_by_id<'a>(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_mutating_method(method: &str) -> bool {
+pub(crate) fn runtime_mutating_method(method: &str) -> bool {
     matches!(
         method,
         "window/create"
@@ -64,7 +64,7 @@ pub(in crate::runtime) fn runtime_mutating_method(method: &str) -> bool {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn agent_state_control_method(method: &str) -> bool {
+pub(crate) fn agent_state_control_method(method: &str) -> bool {
     matches!(
         method,
         "agent/list" | "agent/task/list" | "agent/shell/show" | "agent/shell/hide"
@@ -76,7 +76,7 @@ pub(in crate::runtime) fn agent_state_control_method(method: &str) -> bool {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_split_direction(value: &str) -> Result<SplitDirection> {
+pub(crate) fn runtime_split_direction(value: &str) -> Result<SplitDirection> {
     match value {
         "vertical" | "right" | "left" => Ok(SplitDirection::Vertical),
         "horizontal" | "above" | "below" | "up" | "down" => Ok(SplitDirection::Horizontal),
@@ -89,7 +89,7 @@ pub(in crate::runtime) fn runtime_split_direction(value: &str) -> Result<SplitDi
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_subagent_spawn_request(
+pub(crate) fn runtime_subagent_spawn_request(
     params: &str,
     caller_is_primary: bool,
 ) -> Result<SubagentSpawnRequest> {
@@ -155,9 +155,7 @@ pub(in crate::runtime) fn runtime_subagent_spawn_request(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_subagent_placement_mode(
-    params: &str,
-) -> Result<RuntimeSubagentPlacement> {
+pub(crate) fn runtime_subagent_placement_mode(params: &str) -> Result<RuntimeSubagentPlacement> {
     let value = runtime_json_value(params)?;
     let object = value
         .as_object()
@@ -185,7 +183,7 @@ pub(in crate::runtime) fn runtime_subagent_placement_mode(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_subagent_placement_from_fields(
+pub(crate) fn runtime_subagent_placement_from_fields(
     mode: &str,
     fields: Option<&serde_json::Map<String, Value>>,
 ) -> Result<RuntimeSubagentPlacement> {
@@ -240,7 +238,7 @@ impl RuntimeSubagentPlacement {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_subagent_role_name(value: &str) -> Result<String> {
+pub(crate) fn runtime_subagent_role_name(value: &str) -> Result<String> {
     if value.trim().is_empty() || value.chars().any(char::is_control) {
         return Err(MezError::invalid_args("subagent role is invalid"));
     }
@@ -252,7 +250,7 @@ pub(in crate::runtime) fn runtime_subagent_role_name(value: &str) -> Result<Stri
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_cooperation_mode(value: &str) -> Result<CooperationMode> {
+pub(crate) fn runtime_cooperation_mode(value: &str) -> Result<CooperationMode> {
     match value {
         "safety" | "scope" | "scoped" => Ok(CooperationMode::ExploreOnly),
         "explore-only" | "explore_only" => Ok(CooperationMode::ExploreOnly),
@@ -273,7 +271,7 @@ pub(in crate::runtime) fn runtime_cooperation_mode(value: &str) -> Result<Cooper
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_cooperation_mode_name(mode: CooperationMode) -> &'static str {
+pub(crate) fn runtime_cooperation_mode_name(mode: CooperationMode) -> &'static str {
     match mode {
         CooperationMode::ExploreOnly => "explore-only",
         CooperationMode::OwnedWrite => "owned-write",
@@ -288,7 +286,7 @@ pub(in crate::runtime) fn runtime_cooperation_mode_name(mode: CooperationMode) -
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_value_string_array(
+pub(crate) fn runtime_value_string_array(
     value: Option<&Value>,
     field: &str,
 ) -> Result<Vec<String>> {
@@ -313,9 +311,7 @@ pub(in crate::runtime) fn runtime_value_string_array(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn pane_navigation_direction(
-    direction: PaneFocusDirection,
-) -> PaneNavigationDirection {
+pub(crate) fn pane_navigation_direction(direction: PaneFocusDirection) -> PaneNavigationDirection {
     match direction {
         PaneFocusDirection::Up => PaneNavigationDirection::Up,
         PaneFocusDirection::Down => PaneNavigationDirection::Down,
@@ -329,7 +325,7 @@ pub(in crate::runtime) fn pane_navigation_direction(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn mux_action_name(action: MuxAction) -> &'static str {
+pub(crate) fn mux_action_name(action: MuxAction) -> &'static str {
     match action {
         MuxAction::SendPrefixToPane => "send-prefix",
         MuxAction::EnterCommandPrompt => "command-prompt",
@@ -370,9 +366,7 @@ pub(in crate::runtime) fn mux_action_name(action: MuxAction) -> &'static str {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn mux_action_command_prompt_prefill(
-    action: MuxAction,
-) -> Option<&'static str> {
+pub(crate) fn mux_action_command_prompt_prefill(action: MuxAction) -> Option<&'static str> {
     match action {
         MuxAction::EnterCommandPrompt => Some(""),
         MuxAction::FocusWindow(WindowFocusTarget::PromptForIndex) => Some("select-window "),
@@ -389,7 +383,7 @@ pub(in crate::runtime) fn mux_action_command_prompt_prefill(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn mouse_action_name(action: MouseAction) -> &'static str {
+pub(crate) fn mouse_action_name(action: MouseAction) -> &'static str {
     match action {
         MouseAction::Ignore => "ignore",
         MouseAction::ForwardToPane => "forward-to-pane",
@@ -427,7 +421,7 @@ pub(in crate::runtime) fn mouse_action_name(action: MouseAction) -> &'static str
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_copy_position_for_view(
+pub(crate) fn runtime_copy_position_for_view(
     copy_mode: &CopyMode,
     position: CopyPosition,
 ) -> CopyPosition {

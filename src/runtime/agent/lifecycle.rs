@@ -59,7 +59,7 @@ impl RuntimeSessionService {
     /// cleanup after the parent receives a task result. Late presentation
     /// updates for that child are no longer meaningful and must not turn a
     /// successful terminal cleanup path into a `pane not found` failure.
-    pub(in crate::runtime) fn set_agent_prompt_display_lines_if_pane_present(
+    pub(crate) fn set_agent_prompt_display_lines_if_pane_present(
         &mut self,
         pane_id: &str,
         display_lines: Vec<String>,
@@ -167,7 +167,7 @@ impl RuntimeSessionService {
     /// scheduler slot has been released, need terminal cleanup without going
     /// through `AgentShellStore::finish_turn`. Callers are responsible for
     /// emitting any transcript or task-result records before using this helper.
-    pub(in crate::runtime) fn finish_agent_turn_without_shell_session(
+    pub(crate) fn finish_agent_turn_without_shell_session(
         &mut self,
         turn: &AgentTurnRecord,
         state: AgentTurnState,
@@ -251,7 +251,7 @@ impl RuntimeSessionService {
     /// - `turn`: The running turn being settled.
     /// - `state`: The terminal turn state to record.
     /// - `reason`: Trace reason attached to the scheduler transition.
-    pub(in crate::runtime) fn complete_running_agent_turn_and_start_ready(
+    pub(crate) fn complete_running_agent_turn_and_start_ready(
         &mut self,
         turn: &AgentTurnRecord,
         state: AgentTurnState,
@@ -280,7 +280,7 @@ impl RuntimeSessionService {
     }
 
     /// Starts all scheduler work that is runnable in the current runtime state.
-    pub(in crate::runtime) fn start_ready_agent_turns(&mut self) -> Result<usize> {
+    pub(crate) fn start_ready_agent_turns(&mut self) -> Result<usize> {
         self.start_ready_agent_turns_suppressing_status_for(None)
     }
 
@@ -291,7 +291,7 @@ impl RuntimeSessionService {
     /// The prompt-submission path uses this to preserve the existing
     /// model-profile-bearing status event for the newly submitted turn while
     /// still draining older runnable scheduler entries.
-    pub(in crate::runtime) fn start_ready_agent_turns_suppressing_status_for(
+    pub(crate) fn start_ready_agent_turns_suppressing_status_for(
         &mut self,
         suppressed_turn_id: Option<&str>,
     ) -> Result<usize> {
@@ -349,7 +349,7 @@ impl RuntimeSessionService {
     /// final subagent task results can still identify the child pane, scheduled
     /// work is cancelled, pending shell transactions are interrupted, and any
     /// active subagent write scope is released.
-    pub(in crate::runtime) fn fail_agent_turns_for_pane_shutdown(
+    pub(crate) fn fail_agent_turns_for_pane_shutdown(
         &mut self,
         pane_ids: &[String],
         reason: &str,
@@ -439,7 +439,7 @@ impl RuntimeSessionService {
     /// # Parameters
     /// - `parent_agent_id`: Agent id whose child delegation tree should close.
     /// - `reason`: Human-readable shutdown reason used in trace/status events.
-    pub(in crate::runtime) fn close_subagent_descendants_for_parent_agent(
+    pub(crate) fn close_subagent_descendants_for_parent_agent(
         &mut self,
         parent_agent_id: &str,
         reason: &str,

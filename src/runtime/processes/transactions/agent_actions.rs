@@ -15,7 +15,7 @@ use super::{
 impl RuntimeSessionService {
     /// Sends any deferred transaction payload after the shell wrapper receiver
     /// has started.
-    pub(in crate::runtime) fn observe_agent_shell_transaction_start(
+    pub(crate) fn observe_agent_shell_transaction_start(
         &mut self,
         output_pane_id: &str,
         marker: &str,
@@ -85,7 +85,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn observe_agent_shell_transaction_end(
+    pub(crate) fn observe_agent_shell_transaction_end(
         &mut self,
         output_pane_id: &str,
         marker: &str,

@@ -17,7 +17,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn apply_attached_mux_action(
+    pub(crate) fn apply_attached_mux_action(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         action: MuxAction,
@@ -175,7 +175,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn execute_attached_display_command(
+    pub(crate) fn execute_attached_display_command(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         command: &str,
@@ -235,7 +235,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn approve_observer_with_runtime_cutoff(
+    pub(crate) fn approve_observer_with_runtime_cutoff(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         observer_id: &str,
@@ -264,7 +264,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn active_pane_id(&self) -> Result<String> {
+    pub(crate) fn active_pane_id(&self) -> Result<String> {
         self.session
             .active_window()
             .map(|window| window.active_pane().id.to_string())

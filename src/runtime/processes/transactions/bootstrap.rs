@@ -13,7 +13,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn dispatch_bootstrap_to_pane(&mut self, pane_id: &str) -> Result<()> {
+    pub(crate) fn dispatch_bootstrap_to_pane(&mut self, pane_id: &str) -> Result<()> {
         if self
             .process
             .running_shell_transactions
@@ -79,7 +79,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn observe_bootstrap_transaction_end(
+    pub(crate) fn observe_bootstrap_transaction_end(
         &mut self,
         marker: &str,
         pane_id: &str,

@@ -42,22 +42,22 @@ mod style;
 mod text;
 
 #[cfg(test)]
-pub(in crate::runtime::render) use actions::{
+pub(crate) use actions::{
     agent_action_execution_display_header, agent_thinking_display_lines_for_width,
 };
 #[cfg(test)]
-pub(in crate::runtime::render) use diff::{
+pub(crate) use diff::{
     agent_action_result_uses_diff_preview, readable_agent_diff_display_lines,
     readable_agent_diff_display_lines_for_width,
 };
 pub(crate) use style::AgentTerminalPresentationStyle;
-pub(in crate::runtime::render) use text::{
+pub(crate) use text::{
     agent_display_lines_are_error, agent_display_lines_are_low_level_status,
     agent_prompt_error_display_lines, overlay_styled_lines, render_command_markdown_body_lines,
     sanitized_agent_terminal_line, wrap_agent_terminal_text,
 };
 #[cfg(test)]
-pub(in crate::runtime::render) use text::{
+pub(crate) use text::{
     command_preview_terminal_rendered_lines, rendered_line_rendition_at,
     wrapped_prefixed_agent_terminal_lines,
 };

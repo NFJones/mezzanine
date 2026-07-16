@@ -16,7 +16,7 @@ use super::RuntimeLifecycleState;
 
 /// Owns the mux session and its application lifecycle metadata.
 #[derive(Debug, Clone)]
-pub(in crate::runtime) struct RuntimeSessionComponent {
+pub(crate) struct RuntimeSessionComponent {
     session: Session,
     window_created_at_unix_seconds: BTreeMap<String, u64>,
     lifecycle_state: RuntimeLifecycleState,
@@ -27,7 +27,7 @@ pub(in crate::runtime) struct RuntimeSessionComponent {
 
 impl RuntimeSessionComponent {
     /// Builds session ownership from the validated runtime constructor state.
-    pub(in crate::runtime) fn new(
+    pub(crate) fn new(
         session: Session,
         window_created_at_unix_seconds: BTreeMap<String, u64>,
         lifecycle_state: RuntimeLifecycleState,
@@ -45,52 +45,47 @@ impl RuntimeSessionComponent {
     }
 
     /// Returns window creation timestamps keyed by stable window id.
-    pub(in crate::runtime) fn window_created_at_unix_seconds(&self) -> &BTreeMap<String, u64> {
+    pub(crate) fn window_created_at_unix_seconds(&self) -> &BTreeMap<String, u64> {
         &self.window_created_at_unix_seconds
     }
 
     /// Returns window creation timestamps for transactional mutation.
-    pub(in crate::runtime) fn window_created_at_unix_seconds_mut(
-        &mut self,
-    ) -> &mut BTreeMap<String, u64> {
+    pub(crate) fn window_created_at_unix_seconds_mut(&mut self) -> &mut BTreeMap<String, u64> {
         &mut self.window_created_at_unix_seconds
     }
 
     /// Replaces all window creation timestamps during rollback or restoration.
-    pub(in crate::runtime) fn replace_window_created_at_unix_seconds(
-        &mut self,
-        values: BTreeMap<String, u64>,
-    ) {
+    pub(crate) fn replace_window_created_at_unix_seconds(&mut self, values: BTreeMap<String, u64>) {
         self.window_created_at_unix_seconds = values;
     }
 
     /// Returns the application lifecycle state.
-    pub(in crate::runtime) fn lifecycle_state(&self) -> RuntimeLifecycleState {
+    pub(crate) fn lifecycle_state(&self) -> RuntimeLifecycleState {
         self.lifecycle_state
     }
 
     /// Replaces the application lifecycle state after a validated transition.
-    pub(in crate::runtime) fn set_lifecycle_state(&mut self, state: RuntimeLifecycleState) {
+    pub(crate) fn set_lifecycle_state(&mut self, state: RuntimeLifecycleState) {
         self.lifecycle_state = state;
     }
 
     /// Returns the canonical control socket path.
-    pub(in crate::runtime) fn socket_path(&self) -> &Path {
+    pub(crate) fn socket_path(&self) -> &Path {
         &self.socket_path
     }
 
     /// Returns the session creation timestamp.
-    pub(in crate::runtime) fn created_at_unix_seconds(&self) -> u64 {
+    pub(crate) fn created_at_unix_seconds(&self) -> u64 {
         self.created_at_unix_seconds
     }
 
     /// Returns the most recent primary-client attachment timestamp.
-    pub(in crate::runtime) fn last_attach_at_unix_seconds(&self) -> Option<u64> {
+    pub(crate) fn last_attach_at_unix_seconds(&self) -> Option<u64> {
         self.last_attach_at_unix_seconds
     }
 
     /// Records the most recent primary-client attachment timestamp.
-    pub(in crate::runtime) fn set_last_attach_at_unix_seconds(&mut self, value: Option<u64>) {
+    pub(crate) fn set_last_attach_at_unix_seconds(&mut self, value: Option<u64>) {
         self.last_attach_at_unix_seconds = value;
     }
 }

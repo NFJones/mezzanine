@@ -312,7 +312,7 @@ impl RuntimeSessionService {
     /// The helper owns the stateful spawn sequence so control requests and MAAP
     /// `spawn_agent` actions share scope inheritance, pane rollback, MMP task
     /// status delivery, lifecycle events, and audit behavior.
-    pub(in crate::runtime) fn spawn_runtime_subagent(
+    pub(crate) fn spawn_runtime_subagent(
         &mut self,
         controller: &mez_core::ids::ClientId,
         spawn: SubagentSpawnRequest,
@@ -322,7 +322,7 @@ impl RuntimeSessionService {
     }
 
     /// Creates a child subagent for already-authorized session-owned orchestration.
-    pub(in crate::runtime) fn spawn_runtime_subagent_session_owned(
+    pub(crate) fn spawn_runtime_subagent_session_owned(
         &mut self,
         spawn: SubagentSpawnRequest,
         placement: RuntimeSubagentPlacement,
@@ -692,7 +692,7 @@ impl RuntimeSessionService {
     }
 
     /// Refreshes generated names for all live subagent bucket windows.
-    pub(in crate::runtime) fn refresh_subagent_window_names(
+    pub(crate) fn refresh_subagent_window_names(
         &mut self,
         controller: &mez_core::ids::ClientId,
     ) -> Result<()> {
@@ -760,16 +760,13 @@ impl RuntimeSessionService {
     }
 
     /// Returns the routing preference a child agent should inherit.
-    pub(in crate::runtime) fn inherited_routing_for_child_agent(
-        &self,
-        parent_agent_id: &str,
-    ) -> Option<bool> {
+    pub(crate) fn inherited_routing_for_child_agent(&self, parent_agent_id: &str) -> Option<bool> {
         let parent_pane_id = pane_id_from_runtime_agent_id(parent_agent_id)?;
         Some(self.agent_routing_enabled_for_pane(parent_pane_id.as_str()))
     }
 
     /// Returns the auto-sizing configuration a child agent should inherit.
-    pub(in crate::runtime) fn inherited_auto_sizing_for_child_agent(
+    pub(crate) fn inherited_auto_sizing_for_child_agent(
         &self,
         parent_agent_id: &str,
     ) -> Option<RuntimeAutoSizingConfig> {

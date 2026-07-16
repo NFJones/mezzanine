@@ -233,7 +233,7 @@ impl RuntimeSessionService {
     }
 
     /// Executes `/latency` as a pane-local model-profile latency preference override.
-    pub(in crate::runtime) fn execute_agent_shell_latency_command(
+    pub(crate) fn execute_agent_shell_latency_command(
         &mut self,
         pane_id: &str,
         input: &str,
@@ -302,10 +302,7 @@ impl RuntimeSessionService {
 
     /// Reports whether the provider behind one model profile supports
     /// provider-visible latency preferences.
-    pub(in crate::runtime) fn model_profile_supports_latency_preference(
-        &self,
-        profile: &ModelProfile,
-    ) -> bool {
+    pub(crate) fn model_profile_supports_latency_preference(&self, profile: &ModelProfile) -> bool {
         self.provider_registry()
             .provider(&profile.provider)
             .is_some_and(|provider| {
@@ -316,7 +313,7 @@ impl RuntimeSessionService {
     }
 
     /// Executes `/thinking` as a pane-local provider thinking-mode override.
-    pub(in crate::runtime) fn execute_agent_shell_thinking_command(
+    pub(crate) fn execute_agent_shell_thinking_command(
         &mut self,
         pane_id: &str,
         input: &str,
@@ -387,10 +384,7 @@ impl RuntimeSessionService {
 
     /// Reports whether one profile supports and currently enables provider
     /// thinking mode.
-    pub(in crate::runtime) fn model_profile_thinking_enabled(
-        &self,
-        profile: &ModelProfile,
-    ) -> Option<bool> {
+    pub(crate) fn model_profile_thinking_enabled(&self, profile: &ModelProfile) -> Option<bool> {
         if !self.model_profile_supports_thinking_toggle(profile) {
             return None;
         }
@@ -408,10 +402,7 @@ impl RuntimeSessionService {
 
     /// Reports whether the provider behind one model profile exposes a native
     /// thinking-mode toggle.
-    pub(in crate::runtime) fn model_profile_supports_thinking_toggle(
-        &self,
-        profile: &ModelProfile,
-    ) -> bool {
+    pub(crate) fn model_profile_supports_thinking_toggle(&self, profile: &ModelProfile) -> bool {
         self.provider_registry()
             .provider(&profile.provider)
             .is_some_and(|provider| {
@@ -591,10 +582,7 @@ impl RuntimeSessionService {
     /// The picker path is intentionally synchronous, so it uses configured
     /// provider/profile metadata rather than live provider HTTP. The `/model
     /// list` command remains the richer async path for network-backed catalogs.
-    pub(in crate::runtime) fn configured_model_names_for_pane(
-        &mut self,
-        pane_id: &str,
-    ) -> Result<Vec<String>> {
+    pub(crate) fn configured_model_names_for_pane(&mut self, pane_id: &str) -> Result<Vec<String>> {
         let agent_id = format!("agent-{pane_id}");
         let (_active_name, active_profile) =
             self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
@@ -668,7 +656,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns configured reasoning choices for a pane model picker.
-    pub(in crate::runtime) fn configured_reasoning_levels_for_pane_model(
+    pub(crate) fn configured_reasoning_levels_for_pane_model(
         &mut self,
         pane_id: &str,
         model_name: &str,
@@ -705,7 +693,7 @@ impl RuntimeSessionService {
     }
 
     /// Applies a model selected from the pane-frame model picker.
-    pub(in crate::runtime) fn apply_pane_model_picker_selection(
+    pub(crate) fn apply_pane_model_picker_selection(
         &mut self,
         pane_id: &str,
         model_label: &str,
@@ -747,7 +735,7 @@ impl RuntimeSessionService {
     }
 
     /// Applies a reasoning level selected from the pane-frame reasoning picker.
-    pub(in crate::runtime) fn apply_pane_reasoning_picker_selection(
+    pub(crate) fn apply_pane_reasoning_picker_selection(
         &mut self,
         pane_id: &str,
         reasoning: &str,
@@ -829,7 +817,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns the auto-sizing configuration currently active for one pane.
-    pub(in crate::runtime) fn runtime_auto_sizing_config_for_pane(
+    pub(crate) fn runtime_auto_sizing_config_for_pane(
         &self,
         pane_id: &str,
     ) -> &RuntimeAutoSizingConfig {
@@ -837,10 +825,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns the preset label to render for one pane, when presets exist.
-    pub(in crate::runtime) fn agent_preset_display_value_for_pane(
-        &self,
-        pane_id: &str,
-    ) -> Option<String> {
+    pub(crate) fn agent_preset_display_value_for_pane(&self, pane_id: &str) -> Option<String> {
         if !self.integration.preset_registry().has_presets() {
             return None;
         }
@@ -851,10 +836,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns the active model preset name when the pane state matches one.
-    pub(in crate::runtime) fn active_model_preset_name_for_pane(
-        &self,
-        pane_id: &str,
-    ) -> Option<String> {
+    pub(crate) fn active_model_preset_name_for_pane(&self, pane_id: &str) -> Option<String> {
         if !self.integration.preset_registry().has_presets() {
             return None;
         }
@@ -879,7 +861,7 @@ impl RuntimeSessionService {
     }
 
     /// Applies a latency preference selected from the pane-frame latency picker.
-    pub(in crate::runtime) fn apply_pane_latency_picker_selection(
+    pub(crate) fn apply_pane_latency_picker_selection(
         &mut self,
         pane_id: &str,
         latency: &str,
@@ -1115,7 +1097,7 @@ impl RuntimeSessionService {
         profile_name
     }
 
-    pub(in crate::runtime) fn active_model_profile_for_pane(
+    pub(crate) fn active_model_profile_for_pane(
         &self,
         pane_id: &str,
         agent_id: &str,
@@ -1223,7 +1205,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn inherited_model_profile_for_child_agent(
+    pub(crate) fn inherited_model_profile_for_child_agent(
         &self,
         parent_agent_id: &str,
     ) -> Option<String> {

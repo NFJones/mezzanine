@@ -24,7 +24,7 @@ use super::{runtime_json_object, runtime_json_string, validate_runtime_terminal_
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_history_limit_from_config(root: &Value) -> Result<usize> {
+pub(crate) fn runtime_history_limit_from_config(root: &Value) -> Result<usize> {
     let Some(history) = runtime_json_object(root, "history") else {
         return Ok(DEFAULT_HISTORY_LIMIT);
     };
@@ -43,9 +43,7 @@ pub(in crate::runtime) fn runtime_history_limit_from_config(root: &Value) -> Res
 }
 
 /// Reads the configured saved agent conversation retention limit.
-pub(in crate::runtime) fn runtime_saved_agent_session_limit_from_config(
-    root: &Value,
-) -> Result<usize> {
+pub(crate) fn runtime_saved_agent_session_limit_from_config(root: &Value) -> Result<usize> {
     let Some(history) = runtime_json_object(root, "history") else {
         return Ok(DEFAULT_SAVED_AGENT_SESSION_LIMIT);
     };
@@ -69,7 +67,7 @@ pub(in crate::runtime) fn runtime_saved_agent_session_limit_from_config(
 }
 
 /// Reads the configured terminal history overflow rotation batch.
-pub(in crate::runtime) fn runtime_history_rotate_lines_from_config(root: &Value) -> Result<usize> {
+pub(crate) fn runtime_history_rotate_lines_from_config(root: &Value) -> Result<usize> {
     let Some(history) = runtime_json_object(root, "history") else {
         return Ok(DEFAULT_HISTORY_ROTATE_LINES);
     };
@@ -96,7 +94,7 @@ pub(in crate::runtime) fn runtime_history_rotate_lines_from_config(root: &Value)
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_terminal_term_from_config(root: &Value) -> Result<String> {
+pub(crate) fn runtime_terminal_term_from_config(root: &Value) -> Result<String> {
     let Some(terminal) = runtime_json_object(root, "terminal") else {
         return Ok(DEFAULT_PANE_TERM.to_string());
     };
@@ -115,7 +113,7 @@ pub(in crate::runtime) fn runtime_terminal_term_from_config(root: &Value) -> Res
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_terminal_cursor_style_from_config(
+pub(crate) fn runtime_terminal_cursor_style_from_config(
     root: &Value,
 ) -> Result<TerminalCursorStyle> {
     let Some(terminal) = runtime_json_object(root, "terminal") else {
@@ -142,7 +140,7 @@ pub(in crate::runtime) fn runtime_terminal_cursor_style_from_config(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_terminal_cursor_blink_from_config(root: &Value) -> Result<bool> {
+pub(crate) fn runtime_terminal_cursor_blink_from_config(root: &Value) -> Result<bool> {
     let Some(terminal) = runtime_json_object(root, "terminal") else {
         return Ok(false);
     };
@@ -159,9 +157,7 @@ pub(in crate::runtime) fn runtime_terminal_cursor_blink_from_config(root: &Value
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_terminal_cursor_blink_interval_ms_from_config(
-    root: &Value,
-) -> Result<u64> {
+pub(crate) fn runtime_terminal_cursor_blink_interval_ms_from_config(root: &Value) -> Result<u64> {
     let Some(terminal) = runtime_json_object(root, "terminal") else {
         return Ok(500);
     };
@@ -183,9 +179,7 @@ pub(in crate::runtime) fn runtime_terminal_cursor_blink_interval_ms_from_config(
 
 /// Returns the configured emoji status-glyph width policy for terminal
 /// measurement.
-pub(in crate::runtime) fn runtime_terminal_emoji_width_from_config(
-    root: &Value,
-) -> Result<TerminalEmojiWidth> {
+pub(crate) fn runtime_terminal_emoji_width_from_config(root: &Value) -> Result<TerminalEmojiWidth> {
     let Some(terminal) = runtime_json_object(root, "terminal") else {
         return Ok(TerminalEmojiWidth::Wide);
     };
@@ -209,9 +203,7 @@ pub(in crate::runtime) fn runtime_terminal_emoji_width_from_config(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_terminal_resize_debounce_ms_from_config(
-    root: &Value,
-) -> Result<u64> {
+pub(crate) fn runtime_terminal_resize_debounce_ms_from_config(root: &Value) -> Result<u64> {
     let Some(terminal) = runtime_json_object(root, "terminal") else {
         return Ok(200);
     };
@@ -232,9 +224,7 @@ pub(in crate::runtime) fn runtime_terminal_resize_debounce_ms_from_config(
 }
 
 /// Returns the configured attached-terminal render rate limit in frames per second.
-pub(in crate::runtime) fn runtime_terminal_render_rate_limit_fps_from_config(
-    root: &Value,
-) -> Result<u64> {
+pub(crate) fn runtime_terminal_render_rate_limit_fps_from_config(root: &Value) -> Result<u64> {
     let Some(terminal) = runtime_json_object(root, "terminal") else {
         return Ok(5);
     };
@@ -247,7 +237,7 @@ pub(in crate::runtime) fn runtime_terminal_render_rate_limit_fps_from_config(
 }
 
 /// Returns the configured hidden shell-output preview tail line count.
-pub(in crate::runtime) fn runtime_terminal_shell_output_preview_lines_from_config(
+pub(crate) fn runtime_terminal_shell_output_preview_lines_from_config(
     root: &Value,
 ) -> Result<usize> {
     let Some(terminal) = runtime_json_object(root, "terminal") else {
@@ -272,9 +262,7 @@ pub(in crate::runtime) fn runtime_terminal_shell_output_preview_lines_from_confi
 }
 
 /// Returns the configured maximum display width for Mezzanine-owned agent rows.
-pub(in crate::runtime) fn runtime_terminal_agent_wrap_column_cap_from_config(
-    root: &Value,
-) -> Result<usize> {
+pub(crate) fn runtime_terminal_agent_wrap_column_cap_from_config(root: &Value) -> Result<usize> {
     let Some(terminal) = runtime_json_object(root, "terminal") else {
         return Ok(DEFAULT_AGENT_WRAP_COLUMN_CAP);
     };
@@ -297,9 +285,7 @@ pub(in crate::runtime) fn runtime_terminal_agent_wrap_column_cap_from_config(
 }
 
 /// Returns whether optional terminal animations should render as static UI.
-pub(in crate::runtime) fn runtime_terminal_reduced_motion_from_config(
-    root: &Value,
-) -> Result<bool> {
+pub(crate) fn runtime_terminal_reduced_motion_from_config(root: &Value) -> Result<bool> {
     let Some(terminal) = runtime_json_object(root, "terminal") else {
         return Ok(false);
     };
@@ -316,7 +302,7 @@ pub(in crate::runtime) fn runtime_terminal_reduced_motion_from_config(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_terminal_clipboard_from_config(root: &Value) -> Result<String> {
+pub(crate) fn runtime_terminal_clipboard_from_config(root: &Value) -> Result<String> {
     let Some(terminal) = runtime_json_object(root, "terminal") else {
         return Ok("external".to_string());
     };
@@ -339,9 +325,7 @@ pub(in crate::runtime) fn runtime_terminal_clipboard_from_config(root: &Value) -
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_host_clipboard_from_config(
-    root: &Value,
-) -> Result<HostClipboard> {
+pub(crate) fn runtime_host_clipboard_from_config(root: &Value) -> Result<HostClipboard> {
     let Some(terminal) = runtime_json_object(root, "terminal") else {
         return Ok(HostClipboard::system());
     };

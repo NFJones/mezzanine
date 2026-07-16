@@ -47,7 +47,7 @@ enum RuntimeAgentContextDumpResult {
 /// - `pane_id`: The pane whose current or idle model context should be copied.
 /// - `args`: Shared copy-target arguments: `pane`, `buffer [name]`, or
 ///   `clipboard`.
-pub(in crate::runtime) fn runtime_write_agent_context_for_pane(
+pub(crate) fn runtime_write_agent_context_for_pane(
     service: &mut RuntimeSessionService,
     pane_id: &str,
     args: &str,
@@ -237,7 +237,7 @@ fn runtime_idle_agent_context_dump_for_pane(
 }
 
 /// Writes the retained bounded pane trace log to the requested destination.
-pub(in crate::runtime) fn runtime_write_agent_trace_log_for_pane(
+pub(crate) fn runtime_write_agent_trace_log_for_pane(
     service: &mut RuntimeSessionService,
     pane_id: &str,
     args: &str,
@@ -299,7 +299,7 @@ pub(in crate::runtime) fn runtime_write_agent_trace_log_for_pane(
 }
 
 /// Writes the latest model-authored `say` text to the requested destination.
-pub(in crate::runtime) fn runtime_write_agent_copy_output_for_pane(
+pub(crate) fn runtime_write_agent_copy_output_for_pane(
     service: &mut RuntimeSessionService,
     pane_id: &str,
     args: &str,
@@ -368,7 +368,7 @@ pub(in crate::runtime) fn runtime_write_agent_copy_output_for_pane(
 }
 
 /// Writes retained `apply_patch` payloads and statuses to the target destination.
-pub(in crate::runtime) fn runtime_write_agent_patches_for_pane(
+pub(crate) fn runtime_write_agent_patches_for_pane(
     service: &mut RuntimeSessionService,
     pane_id: &str,
     args: &str,

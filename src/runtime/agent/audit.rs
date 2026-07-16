@@ -18,7 +18,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn append_agent_shell_command_audit(
+    pub(crate) fn append_agent_shell_command_audit(
         &mut self,
         turn: &AgentTurnRecord,
         action: &AgentAction,
@@ -58,7 +58,7 @@ impl RuntimeSessionService {
     /// URL and query values are hashed rather than stored directly so external
     /// content requests remain diagnosable without leaking sensitive inputs into
     /// the audit log.
-    pub(in crate::runtime) fn append_agent_network_action_audit(
+    pub(crate) fn append_agent_network_action_audit(
         &mut self,
         turn: &AgentTurnRecord,
         action: &AgentAction,
@@ -112,7 +112,7 @@ impl RuntimeSessionService {
     /// Freeform search and store content is hashed rather than written
     /// directly so durable-memory inputs remain diagnosable without leaking the
     /// full user-authored payload into the audit log.
-    pub(in crate::runtime) fn append_agent_memory_action_audit(
+    pub(crate) fn append_agent_memory_action_audit(
         &mut self,
         turn: &AgentTurnRecord,
         action: &AgentAction,
@@ -187,7 +187,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn append_credential_access_audit(
+    pub(crate) fn append_credential_access_audit(
         &mut self,
         provider: &str,
         credential_id: &str,
@@ -217,7 +217,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn append_provider_request_audit(
+    pub(crate) fn append_provider_request_audit(
         &mut self,
         turn: &AgentTurnRecord,
         model_profile: &ModelProfile,
@@ -249,7 +249,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn append_provider_request_failure_audit(
+    pub(crate) fn append_provider_request_failure_audit(
         &mut self,
         turn: &AgentTurnRecord,
         model_profile: &ModelProfile,

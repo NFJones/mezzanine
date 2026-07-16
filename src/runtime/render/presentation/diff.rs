@@ -24,9 +24,7 @@ use mez_mux::render::push_or_extend_style_span;
 /// marker. Recognizing both forms lets the pane transcript color additions and
 /// deletions without requiring raw ANSI from the hidden shell transaction to
 /// reach the user view.
-pub(in crate::runtime::render) fn agent_diff_line_style(
-    line: &str,
-) -> AgentTerminalPresentationStyle {
+pub(crate) fn agent_diff_line_style(line: &str) -> AgentTerminalPresentationStyle {
     if line.starts_with("diff --")
         || line.starts_with("--- ")
         || line.starts_with("+++ ")
@@ -48,9 +46,7 @@ pub(in crate::runtime::render) fn agent_diff_line_style(
 }
 
 /// Returns true when an action already emits a diff-shaped preview.
-pub(in crate::runtime::render) fn agent_action_result_uses_diff_preview(
-    action: &AgentAction,
-) -> bool {
+pub(crate) fn agent_action_result_uses_diff_preview(action: &AgentAction) -> bool {
     matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
 }
 
@@ -61,7 +57,7 @@ pub(in crate::runtime::render) fn agent_action_result_uses_diff_preview(
 /// around the actual diff. The pane should present the semantic change, not the
 /// mechanics used to collect it.
 #[cfg(test)]
-pub(in crate::runtime::render) fn readable_agent_diff_display_lines(
+pub(crate) fn readable_agent_diff_display_lines(
     text: &str,
     ui_theme: &UiTheme,
 ) -> Vec<RichTextLine> {
@@ -74,7 +70,7 @@ pub(in crate::runtime::render) fn readable_agent_diff_display_lines(
 /// - `text`: Raw hidden-shell diff output.
 /// - `ui_theme`: The active UI theme.
 /// - `display_width`: Cells available after the agent transcript gutter.
-pub(in crate::runtime::render) fn readable_agent_diff_display_lines_for_width(
+pub(crate) fn readable_agent_diff_display_lines_for_width(
     text: &str,
     ui_theme: &UiTheme,
     display_width: usize,
@@ -102,7 +98,7 @@ pub(in crate::runtime::render) fn readable_agent_diff_display_lines_for_width(
 }
 
 /// Removes Mezzanine wrapper and prompt echo lines around a diff.
-pub(in crate::runtime::render) fn cleaned_agent_diff_source_lines(text: &str) -> Vec<String> {
+pub(crate) fn cleaned_agent_diff_source_lines(text: &str) -> Vec<String> {
     let mut lines = Vec::new();
     let mut seen_diff = false;
     for raw_line in text.replace("\r\n", "\n").replace('\r', "\n").lines() {
@@ -144,7 +140,7 @@ pub(in crate::runtime::render) fn cleaned_agent_diff_source_lines(text: &str) ->
 }
 
 /// Strips prompt glyphs that can be echoed by the shell around commands.
-pub(in crate::runtime::render) fn strip_agent_diff_prompt_prefix(line: &str) -> &str {
+pub(crate) fn strip_agent_diff_prompt_prefix(line: &str) -> &str {
     let mut remaining = line.trim_start();
     loop {
         let trimmed = remaining.trim_start();
@@ -169,14 +165,14 @@ pub(in crate::runtime::render) fn strip_agent_diff_prompt_prefix(line: &str) -> 
 }
 
 /// Returns true when a line only contains decorative prompt glyphs.
-pub(in crate::runtime::render) fn agent_diff_line_is_prompt_glyph(trimmed: &str) -> bool {
+pub(crate) fn agent_diff_line_is_prompt_glyph(trimmed: &str) -> bool {
     trimmed
         .chars()
         .all(|ch| matches!(ch, '' | '∙' | ' ' | '\t'))
 }
 
 /// Returns true for shell wrapper echo that should never appear in diff output.
-pub(in crate::runtime::render) fn agent_diff_line_is_wrapper_traffic(trimmed: &str) -> bool {
+pub(crate) fn agent_diff_line_is_wrapper_traffic(trimmed: &str) -> bool {
     [
         "MEZ_MARKER_TOKEN",
         "MEZ_TURN",
@@ -202,7 +198,7 @@ pub(in crate::runtime::render) fn agent_diff_line_is_wrapper_traffic(trimmed: &s
 }
 
 /// Renders parsed unified diff sections into visible unified-diff previews.
-pub(in crate::runtime::render) fn render_agent_unified_diff_sections(
+pub(crate) fn render_agent_unified_diff_sections(
     sections: &[DiffDisplaySection],
     ui_theme: &UiTheme,
 ) -> Vec<RichTextLine> {
@@ -243,7 +239,7 @@ pub(in crate::runtime::render) fn render_agent_unified_diff_sections(
 }
 
 /// Renders one parsed hunk line with a diff gutter and file-aware code spans.
-pub(in crate::runtime::render) fn render_agent_diff_display_line(
+pub(crate) fn render_agent_diff_display_line(
     line: &DiffDisplayLine,
     highlighter: Option<&mut SyntaxHighlighter<'_>>,
     ui_theme: &UiTheme,
@@ -272,9 +268,7 @@ pub(in crate::runtime::render) fn render_agent_diff_display_line(
 }
 
 /// Returns the presentation style for one parsed diff hunk line.
-pub(in crate::runtime::render) fn agent_diff_display_line_style(
-    marker: char,
-) -> AgentTerminalPresentationStyle {
+pub(crate) fn agent_diff_display_line_style(marker: char) -> AgentTerminalPresentationStyle {
     match marker {
         '+' => AgentTerminalPresentationStyle::DiffAddition,
         '-' => AgentTerminalPresentationStyle::DiffDeletion,
@@ -283,7 +277,7 @@ pub(in crate::runtime::render) fn agent_diff_display_line_style(
 }
 
 /// Creates a syntax highlighter for shell command previews.
-pub(in crate::runtime::render) fn agent_shell_command_highlighter<'a>(
+pub(crate) fn agent_shell_command_highlighter<'a>(
     classification: ShellClassification,
     theme: &'a SyntaxTheme,
 ) -> Option<SyntaxHighlighter<'a>> {
@@ -317,7 +311,7 @@ pub(super) fn agent_syntax_theme_palette(
 }
 
 /// Builds the syntax theme used for shell command previews.
-pub(in crate::runtime::render) fn agent_command_syntax_theme(ui_theme: &UiTheme) -> SyntaxTheme {
+pub(crate) fn agent_command_syntax_theme(ui_theme: &UiTheme) -> SyntaxTheme {
     syntax_theme(
         &format!("mezzanine-{}", ui_theme.name),
         agent_syntax_theme_palette(ui_theme, Some(ui_theme.colors.syntax_plain.background)),
@@ -325,7 +319,7 @@ pub(in crate::runtime::render) fn agent_command_syntax_theme(ui_theme: &UiTheme)
 }
 
 /// Builds the syntax theme used for terminal diff body highlighting.
-pub(in crate::runtime::render) fn agent_diff_syntax_theme(ui_theme: &UiTheme) -> SyntaxTheme {
+pub(crate) fn agent_diff_syntax_theme(ui_theme: &UiTheme) -> SyntaxTheme {
     syntax_theme(
         &format!("mezzanine-{}", ui_theme.name),
         agent_syntax_theme_palette(ui_theme, None),
@@ -333,7 +327,7 @@ pub(in crate::runtime::render) fn agent_diff_syntax_theme(ui_theme: &UiTheme) ->
 }
 
 /// Parses and renders simple path-only delta output.
-pub(in crate::runtime::render) fn parse_agent_path_delta_display_lines(
+pub(crate) fn parse_agent_path_delta_display_lines(
     lines: &[String],
     ui_theme: &UiTheme,
 ) -> Vec<RichTextLine> {
@@ -388,7 +382,7 @@ pub(in crate::runtime::render) fn parse_agent_path_delta_display_lines(
 }
 
 /// Returns a display verb for a path-only delta title.
-pub(in crate::runtime::render) fn agent_path_delta_verb(title: &str) -> &'static str {
+pub(crate) fn agent_path_delta_verb(title: &str) -> &'static str {
     if title.contains("create") {
         "Created"
     } else if title.contains("delete") {
@@ -401,7 +395,7 @@ pub(in crate::runtime::render) fn agent_path_delta_verb(title: &str) -> &'static
 }
 
 /// Returns the compact display path for a path-only delta section.
-pub(in crate::runtime::render) fn agent_path_delta_header_path<'a>(
+pub(crate) fn agent_path_delta_header_path<'a>(
     added: &'a [String],
     removed: &'a [String],
 ) -> &'a str {
@@ -413,7 +407,7 @@ pub(in crate::runtime::render) fn agent_path_delta_header_path<'a>(
 }
 
 /// Builds a rendered diff line whose entire body uses one diff style.
-pub(in crate::runtime::render) fn rendered_agent_diff_plain_line(
+pub(crate) fn rendered_agent_diff_plain_line(
     style: AgentTerminalPresentationStyle,
     line: &str,
     ui_theme: &UiTheme,
@@ -438,9 +432,7 @@ pub(in crate::runtime::render) fn rendered_agent_diff_plain_line(
 }
 
 /// Bounds rendered diff display lines for the pane buffer.
-pub(in crate::runtime::render) fn bound_agent_diff_display_lines(
-    lines: Vec<RichTextLine>,
-) -> Vec<RichTextLine> {
+pub(crate) fn bound_agent_diff_display_lines(lines: Vec<RichTextLine>) -> Vec<RichTextLine> {
     let mut bounded = Vec::new();
     let mut used_bytes = 0usize;
     for (index, mut line) in lines.into_iter().enumerate() {

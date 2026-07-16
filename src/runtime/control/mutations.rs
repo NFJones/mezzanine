@@ -319,7 +319,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn dispatch_runtime_pane_close(
+    pub(crate) fn dispatch_runtime_pane_close(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         params: &str,
@@ -769,7 +769,7 @@ impl RuntimeSessionService {
     /// Agent ids are opaque MMP identities. When the id follows the runtime
     /// `agent-%pane` convention, the identity is enriched with pane and window
     /// metadata so discovery can connect the agent to its terminal surface.
-    pub(in crate::runtime) fn ensure_runtime_message_identity(
+    pub(crate) fn ensure_runtime_message_identity(
         &mut self,
         agent_id: &str,
         pane_id: Option<PaneId>,
@@ -873,7 +873,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn require_attachable(&self) -> Result<()> {
+    pub(crate) fn require_attachable(&self) -> Result<()> {
         match self.session.lifecycle_state() {
             RuntimeLifecycleState::Running | RuntimeLifecycleState::Detached => Ok(()),
             RuntimeLifecycleState::Stopping => {
@@ -893,7 +893,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn require_live(&self) -> Result<()> {
+    pub(crate) fn require_live(&self) -> Result<()> {
         match self.session.lifecycle_state() {
             RuntimeLifecycleState::Running | RuntimeLifecycleState::Detached => Ok(()),
             RuntimeLifecycleState::Stopping => {

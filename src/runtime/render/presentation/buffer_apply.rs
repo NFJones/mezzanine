@@ -40,7 +40,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn append_agent_user_prompt_to_terminal_buffer(
+    pub(crate) fn append_agent_user_prompt_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         prompt: &str,
@@ -60,7 +60,7 @@ impl RuntimeSessionService {
     /// Subagent pane logs should expose the exact parent instruction that
     /// started the child turn so follow-up inspection does not require looking
     /// back through the parent pane.
-    pub(in crate::runtime) fn append_agent_parent_prompt_to_terminal_buffer(
+    pub(crate) fn append_agent_parent_prompt_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         prompt: &str,
@@ -78,7 +78,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn append_agent_assistant_text_to_terminal_buffer(
+    pub(crate) fn append_agent_assistant_text_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         text: &str,
@@ -91,7 +91,7 @@ impl RuntimeSessionService {
     }
 
     /// Appends assistant output using its declared presentation media type.
-    pub(in crate::runtime) fn append_agent_assistant_content_to_terminal_buffer(
+    pub(crate) fn append_agent_assistant_content_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         text: &str,
@@ -138,10 +138,7 @@ impl RuntimeSessionService {
     ///
     /// # Parameters
     /// - `pane_id`: Pane whose current presentation width bounds the prompt.
-    pub(in crate::runtime::render) fn agent_prompt_editable_body_width(
-        &self,
-        pane_id: &str,
-    ) -> Result<usize> {
+    pub(crate) fn agent_prompt_editable_body_width(&self, pane_id: &str) -> Result<usize> {
         let columns = self.agent_terminal_presentation_columns(pane_id)?;
         let prompt_prefix_width = UnicodeWidthStr::width(AGENT_TERMINAL_MESSAGE_PREFIX)
             .saturating_add(UnicodeWidthStr::width(AGENT_PROMPT_TEXT_PREFIX));
@@ -258,7 +255,7 @@ impl RuntimeSessionService {
     }
 
     /// Replays persisted presentation entries into the pane terminal buffer.
-    pub(in crate::runtime) fn replay_agent_presentation_entries_to_terminal_buffer(
+    pub(crate) fn replay_agent_presentation_entries_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         entries: &[AgentPresentationEntry],
@@ -387,7 +384,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn append_agent_status_text_to_terminal_buffer(
+    pub(crate) fn append_agent_status_text_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         text: &str,
@@ -410,7 +407,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn append_agent_verbose_status_text_to_terminal_buffer(
+    pub(crate) fn append_agent_verbose_status_text_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         text: &str,
@@ -426,7 +423,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn append_agent_thinking_text_to_terminal_buffer(
+    pub(crate) fn append_agent_thinking_text_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         text: &str,
@@ -443,7 +440,7 @@ impl RuntimeSessionService {
     }
 
     /// Appends one structured macro lifecycle transition in the parent pane.
-    pub(in crate::runtime) fn append_agent_macro_status_to_terminal_buffer(
+    pub(crate) fn append_agent_macro_status_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         macro_name: &str,
@@ -466,7 +463,7 @@ impl RuntimeSessionService {
     }
 
     /// Appends one failed macro lifecycle transition in the parent pane.
-    pub(in crate::runtime) fn append_agent_macro_error_to_terminal_buffer(
+    pub(crate) fn append_agent_macro_error_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         macro_name: &str,
@@ -493,7 +490,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn append_agent_error_text_to_terminal_buffer(
+    pub(crate) fn append_agent_error_text_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         text: &str,
@@ -516,7 +513,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn append_agent_command_preview_to_terminal_buffer(
+    pub(crate) fn append_agent_command_preview_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         command: &str,
@@ -562,7 +559,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn append_agent_terminal_lines_to_buffer(
+    pub(crate) fn append_agent_terminal_lines_to_buffer(
         &mut self,
         pane_id: &str,
         lines: &[String],
@@ -602,7 +599,7 @@ impl RuntimeSessionService {
     /// Diff previews need additions, deletions, headers, and context to carry
     /// different colors while still flowing through the same pane-buffer gutter
     /// logic as normal agent transcript entries.
-    pub(in crate::runtime) fn append_agent_terminal_styled_lines_to_buffer(
+    pub(crate) fn append_agent_terminal_styled_lines_to_buffer(
         &mut self,
         pane_id: &str,
         styled_lines: &[(AgentTerminalPresentationStyle, String)],
@@ -858,7 +855,7 @@ impl RuntimeSessionService {
     }
 
     /// Appends model-authored action summary text as normal-mode thinking logs.
-    pub(in crate::runtime) fn append_agent_action_model_thinking_to_terminal_buffer(
+    pub(crate) fn append_agent_action_model_thinking_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         action: &AgentAction,
@@ -881,7 +878,7 @@ impl RuntimeSessionService {
     /// The source text is the cleaned shell observation captured from the hidden
     /// transaction, so this path never exposes shell prompts or Mezzanine wrapper
     /// traffic while still giving users a copyable summary of filesystem changes.
-    pub(in crate::runtime) fn append_agent_diff_text_to_terminal_buffer(
+    pub(crate) fn append_agent_diff_text_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         text: &str,
@@ -905,11 +902,7 @@ impl RuntimeSessionService {
     /// The source text is the same cleaned shell observation used for the
     /// normal diff preview, so counts are derived from the semantic patch diff
     /// rather than from shell echo or wrapper traffic.
-    pub(in crate::runtime) fn record_agent_modified_files_from_diff(
-        &mut self,
-        pane_id: &str,
-        text: &str,
-    ) {
+    pub(crate) fn record_agent_modified_files_from_diff(&mut self, pane_id: &str, text: &str) {
         let source_lines = cleaned_agent_diff_source_lines(text);
         for section in parse_unified_diff_sections(&source_lines) {
             let path = diff_section_path(&section).to_string();
@@ -936,7 +929,7 @@ impl RuntimeSessionService {
     /// mode without dumping generated commands or result payloads. The line
     /// uses span-level styling so the action remains salient without forcing
     /// arguments to inherit the same visual weight.
-    pub(in crate::runtime) fn append_agent_action_execution_text_to_terminal_buffer(
+    pub(crate) fn append_agent_action_execution_text_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         action: &AgentAction,
@@ -968,7 +961,7 @@ impl RuntimeSessionService {
     ///
     /// Normal mode uses this renderer for mutating semantic action diffs. Other
     /// result previews remain reserved for elevated log levels.
-    pub(in crate::runtime) fn append_agent_action_result_text_to_terminal_buffer(
+    pub(crate) fn append_agent_action_result_text_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         action: &AgentAction,
@@ -995,10 +988,7 @@ impl RuntimeSessionService {
 
     /// Returns whether a cleaned action result preview should render in normal
     /// logging mode.
-    pub(in crate::runtime) fn agent_action_result_renders_in_normal_mode(
-        &self,
-        action: &AgentAction,
-    ) -> bool {
+    pub(crate) fn agent_action_result_renders_in_normal_mode(&self, action: &AgentAction) -> bool {
         agent_action_result_uses_diff_preview(action)
     }
 
@@ -1007,7 +997,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn agent_verbose_enabled(&self, pane_id: &str) -> bool {
+    pub(crate) fn agent_verbose_enabled(&self, pane_id: &str) -> bool {
         self.agent_shell_store()
             .get(pane_id)
             .is_some_and(|session| session.log_level.shows_verbose_status())
@@ -1018,7 +1008,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn agent_thinking_enabled(&self, pane_id: &str) -> bool {
+    pub(crate) fn agent_thinking_enabled(&self, pane_id: &str) -> bool {
         self.agent_shell_store()
             .get(pane_id)
             .is_some_and(|session| session.log_level.shows_thinking())
@@ -1029,7 +1019,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn agent_debug_enabled(&self, pane_id: &str) -> bool {
+    pub(crate) fn agent_debug_enabled(&self, pane_id: &str) -> bool {
         self.agent_shell_store()
             .get(pane_id)
             .is_some_and(|session| session.log_level.shows_debug())
@@ -1040,7 +1030,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn agent_trace_enabled(&self, pane_id: &str) -> bool {
+    pub(crate) fn agent_trace_enabled(&self, pane_id: &str) -> bool {
         self.agent_shell_store()
             .get(pane_id)
             .is_some_and(|session| session.log_level.shows_trace())
@@ -1051,7 +1041,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn agent_shell_view_enabled(&self, pane_id: &str) -> bool {
+    pub(crate) fn agent_shell_view_enabled(&self, pane_id: &str) -> bool {
         self.agent_shell_store()
             .get(pane_id)
             .is_some_and(|session| session.log_level.shows_shell_view())
@@ -1062,10 +1052,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn agent_diagnostic_level_name(
-        &self,
-        pane_id: &str,
-    ) -> Option<&'static str> {
+    pub(crate) fn agent_diagnostic_level_name(&self, pane_id: &str) -> Option<&'static str> {
         if self.agent_trace_enabled(pane_id) {
             Some("trace")
         } else if self.agent_debug_enabled(pane_id) {

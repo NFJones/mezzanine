@@ -23,7 +23,7 @@ use super::{
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_mcp_registry_from_config(root: &Value) -> Result<McpRegistry> {
+pub(crate) fn runtime_mcp_registry_from_config(root: &Value) -> Result<McpRegistry> {
     let mut registry = McpRegistry::default();
     let Some(servers) = runtime_json_object(root, "mcp_servers") else {
         return Ok(registry);

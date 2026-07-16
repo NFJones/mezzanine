@@ -126,7 +126,7 @@ impl AgentTerminalPresentationStyle {
     }
 
     /// Returns the stable persistence name for this presentation style.
-    pub(in crate::runtime::render) fn persistence_name(self) -> &'static str {
+    pub(crate) fn persistence_name(self) -> &'static str {
         match self {
             Self::UserPrompt => "user-prompt",
             Self::Assistant => "assistant",
@@ -142,7 +142,7 @@ impl AgentTerminalPresentationStyle {
     }
 
     /// Restores one persisted presentation style name.
-    pub(in crate::runtime::render) fn from_persistence_name(name: &str) -> Option<Self> {
+    pub(crate) fn from_persistence_name(name: &str) -> Option<Self> {
         match name {
             "user-prompt" => Some(Self::UserPrompt),
             "assistant" => Some(Self::Assistant),
@@ -163,9 +163,7 @@ impl AgentTerminalPresentationStyle {
 ///
 /// Agent transcript content is injected into pane buffers as ordinary terminal
 /// text. It should not paint a background over the user's terminal theme.
-pub(in crate::runtime::render) fn agent_text_foreground_rendition(
-    pair: UiColorPair,
-) -> GraphicRendition {
+pub(crate) fn agent_text_foreground_rendition(pair: UiColorPair) -> GraphicRendition {
     GraphicRendition {
         foreground: Some(pair.foreground),
         ..GraphicRendition::default()
@@ -173,9 +171,7 @@ pub(in crate::runtime::render) fn agent_text_foreground_rendition(
 }
 
 /// Converts a graphic rendition to an SGR sequence for pane-buffer injection.
-pub(in crate::runtime::render) fn agent_terminal_sgr_sequence(
-    rendition: GraphicRendition,
-) -> String {
+pub(crate) fn agent_terminal_sgr_sequence(rendition: GraphicRendition) -> String {
     if rendition == GraphicRendition::default() {
         return "\x1b[0m".to_string();
     }
@@ -215,7 +211,7 @@ pub(in crate::runtime::render) fn agent_terminal_sgr_sequence(
 }
 
 /// Appends SGR foreground or background color parameters.
-pub(in crate::runtime::render) fn push_agent_terminal_sgr_color_codes(
+pub(crate) fn push_agent_terminal_sgr_color_codes(
     codes: &mut Vec<String>,
     color: TerminalColor,
     background: bool,
@@ -246,10 +242,10 @@ pub(in crate::runtime::render) fn push_agent_terminal_sgr_color_codes(
 ///
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
-pub(in crate::runtime::render) const AGENT_TERMINAL_MESSAGE_PREFIX: &str = "▐ ";
+pub(crate) const AGENT_TERMINAL_MESSAGE_PREFIX: &str = "▐ ";
 /// Editable prompt marker rendered after the agent terminal gutter.
-pub(in crate::runtime::render) const AGENT_PROMPT_TEXT_PREFIX: &str = "mez> ";
+pub(crate) const AGENT_PROMPT_TEXT_PREFIX: &str = "mez> ";
 /// Maximum action-result lines rendered directly into the pane buffer.
-pub(in crate::runtime::render) const AGENT_ACTION_RESULT_DISPLAY_MAX_LINES: usize = 200;
+pub(crate) const AGENT_ACTION_RESULT_DISPLAY_MAX_LINES: usize = 200;
 /// Maximum action-result bytes rendered directly into the pane buffer.
-pub(in crate::runtime::render) const AGENT_ACTION_RESULT_DISPLAY_MAX_BYTES: usize = 64 * 1024;
+pub(crate) const AGENT_ACTION_RESULT_DISPLAY_MAX_BYTES: usize = 64 * 1024;

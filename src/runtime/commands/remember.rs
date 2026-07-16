@@ -714,7 +714,7 @@ impl RuntimeSessionService {
     }
 
     /// Builds the durable memory scope used for `/remember` records.
-    pub(in crate::runtime) fn runtime_remember_scope_for_pane(&self, pane_id: &str) -> MemoryScope {
+    pub(crate) fn runtime_remember_scope_for_pane(&self, pane_id: &str) -> MemoryScope {
         self.pane_current_working_directory(pane_id)
             .map(|path| MemoryScope::Project {
                 root: discover_project_root(&path).to_string_lossy().into_owned(),
@@ -832,7 +832,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns whether persistent memory is enabled in the live effective config.
-    pub(in crate::runtime) fn runtime_persistent_memory_enabled(&self) -> bool {
+    pub(crate) fn runtime_persistent_memory_enabled(&self) -> bool {
         runtime_effective_config_value(self.integration.config_layers())
             .ok()
             .and_then(|root| {
@@ -844,7 +844,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns the configured default memory TTL in days.
-    pub(in crate::runtime) fn runtime_memory_default_ttl_days(&self) -> u64 {
+    pub(crate) fn runtime_memory_default_ttl_days(&self) -> u64 {
         runtime_effective_config_value(self.integration.config_layers())
             .ok()
             .and_then(|root| {
@@ -857,9 +857,7 @@ impl RuntimeSessionService {
     }
 
     /// Best-effort prunes expired persistent memory records from disk and session state.
-    pub(in crate::runtime) fn runtime_prune_expired_persistent_memory_best_effort(
-        &mut self,
-    ) -> usize {
+    pub(crate) fn runtime_prune_expired_persistent_memory_best_effort(&mut self) -> usize {
         if !self.runtime_persistent_memory_enabled() {
             return 0;
         }

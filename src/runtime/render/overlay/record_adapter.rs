@@ -7,11 +7,11 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Structured representation of one compact display row.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime::render) struct RuntimeDisplayRecord {
+pub(crate) struct RuntimeDisplayRecord {
     /// Leading non-key fields, such as an index or key-binding notation.
     prefix: Vec<String>,
     /// Parsed key/value fields from the display row.
-    pub(in crate::runtime::render) fields: Vec<(String, String)>,
+    pub(crate) fields: Vec<(String, String)>,
 }
 
 impl RuntimeDisplayRecord {
@@ -172,7 +172,7 @@ impl RuntimeDisplayRecord {
 }
 
 /// Splits a compact display choice field into command candidates.
-pub(in crate::runtime::render) fn runtime_split_display_commands(
+pub(crate) fn runtime_split_display_commands(
     value: &str,
     separator: char,
 ) -> impl Iterator<Item = &str> {
@@ -183,7 +183,7 @@ pub(in crate::runtime::render) fn runtime_split_display_commands(
 }
 
 /// Pushes one executable choice if it is not already present.
-pub(in crate::runtime::render) fn runtime_push_unique_display_choice(
+pub(crate) fn runtime_push_unique_display_choice(
     choices: &mut Vec<RuntimeDisplayChoice>,
     command: &str,
 ) {
@@ -200,9 +200,7 @@ pub(in crate::runtime::render) fn runtime_push_unique_display_choice(
 }
 
 /// Converts a command string into a selectable display choice when valid.
-pub(in crate::runtime::render) fn runtime_display_executable_choice(
-    command: &str,
-) -> Option<RuntimeDisplayChoice> {
+pub(crate) fn runtime_display_executable_choice(command: &str) -> Option<RuntimeDisplayChoice> {
     let command = command.trim();
     let invocations = parse_command_sequence(command).ok()?;
     let first = invocations.first()?;
@@ -220,14 +218,14 @@ pub(in crate::runtime::render) fn runtime_display_executable_choice(
 }
 
 /// Returns whether a command name is part of the Mez terminal command set.
-pub(in crate::runtime::render) fn runtime_display_is_known_command(command_name: &str) -> bool {
+pub(crate) fn runtime_display_is_known_command(command_name: &str) -> bool {
     baseline_commands()
         .iter()
         .any(|command| command.name == command_name)
 }
 
 /// Returns a concise action label for one command name.
-pub(in crate::runtime::render) fn runtime_display_choice_label(command_name: &str) -> String {
+pub(crate) fn runtime_display_choice_label(command_name: &str) -> String {
     match command_name {
         "select-window" | "select-group" | "select-pane" | "select-layout" => "select",
         "detach-client" => "detach",
@@ -243,9 +241,7 @@ pub(in crate::runtime::render) fn runtime_display_choice_label(command_name: &st
 }
 
 /// Returns the themed visual category for one command name.
-pub(in crate::runtime::render) fn runtime_display_choice_kind(
-    command_name: &str,
-) -> OverlaySelectionKind {
+pub(crate) fn runtime_display_choice_kind(command_name: &str) -> OverlaySelectionKind {
     match command_name {
         "delete-buffer" | "detach-client" | "reject-observer" | "revoke-observer" | "kill-pane"
         | "kill-window" | "kill-group" | "kill-session" => OverlaySelectionKind::Danger,
@@ -255,9 +251,7 @@ pub(in crate::runtime::render) fn runtime_display_choice_kind(
 }
 
 /// Parses one `key=value` display field.
-pub(in crate::runtime::render) fn runtime_parse_display_field(
-    segment: &str,
-) -> Option<(String, String)> {
+pub(crate) fn runtime_parse_display_field(segment: &str) -> Option<(String, String)> {
     let (key, value) = segment.split_once('=')?;
     let key = key.trim();
     if key.is_empty()
@@ -271,7 +265,7 @@ pub(in crate::runtime::render) fn runtime_parse_display_field(
 }
 
 /// Returns a lowercase human-readable label for a compact display field name.
-pub(in crate::runtime::render) fn runtime_display_field_label(key: &str) -> String {
+pub(crate) fn runtime_display_field_label(key: &str) -> String {
     key.split(['_', '-'])
         .filter(|part| !part.is_empty())
         .map(|part| part.to_ascii_lowercase())
@@ -280,7 +274,7 @@ pub(in crate::runtime::render) fn runtime_display_field_label(key: &str) -> Stri
 }
 
 /// Returns a readable value for common compact display values.
-pub(in crate::runtime::render) fn runtime_display_field_value(value: &str) -> String {
+pub(crate) fn runtime_display_field_value(value: &str) -> String {
     match value {
         "true" => "yes".to_string(),
         "false" => "no".to_string(),

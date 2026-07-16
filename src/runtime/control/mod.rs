@@ -68,7 +68,7 @@ use crate::control::{
     validate_control_method_params_schema,
 };
 use crate::skills::{BUILTIN_MEZ_REFERENCE_SKILL_NAME, load_skill_document};
-pub(in crate::runtime) use component::RuntimeControlComponent;
+pub(crate) use component::RuntimeControlComponent;
 use context::{
     AGENT_TRANSCRIPT_CONTEXT_READ_BYTES, runtime_agent_transcript_context_blocks,
     runtime_context_block_is_compaction_refresh_owned, runtime_local_message_context_content,
@@ -422,7 +422,7 @@ impl RuntimeSessionService {
     /// active turn remains running. The provider retry must then see the newly
     /// written summary and shorter transcript tail without discarding same-turn
     /// action results, steering, rationale ledgers, or execution pressure.
-    pub(in crate::runtime) fn refresh_running_turn_context_after_conversation_compaction(
+    pub(crate) fn refresh_running_turn_context_after_conversation_compaction(
         &mut self,
         turn_id: &str,
     ) -> Result<bool> {

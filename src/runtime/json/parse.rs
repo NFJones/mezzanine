@@ -10,7 +10,7 @@ use super::{
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_json_rpc_error(
+pub(crate) fn runtime_json_rpc_error(
     id: &str,
     kind: crate::error::MezErrorKind,
     message: &str,
@@ -29,7 +29,7 @@ pub(in crate::runtime) fn runtime_json_rpc_error(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_error_code(kind: crate::error::MezErrorKind) -> i32 {
+pub(crate) fn runtime_error_code(kind: crate::error::MezErrorKind) -> i32 {
     match kind {
         crate::error::MezErrorKind::InvalidArgs => -32602,
         crate::error::MezErrorKind::InvalidState => -32004,
@@ -46,9 +46,7 @@ pub(in crate::runtime) fn runtime_error_code(kind: crate::error::MezErrorKind) -
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_mezzanine_error_code(
-    kind: crate::error::MezErrorKind,
-) -> &'static str {
+pub(crate) fn runtime_mezzanine_error_code(kind: crate::error::MezErrorKind) -> &'static str {
     match kind {
         crate::error::MezErrorKind::InvalidArgs => "invalid_params",
         crate::error::MezErrorKind::InvalidState => "invalid_state",
@@ -65,7 +63,7 @@ pub(in crate::runtime) fn runtime_mezzanine_error_code(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_json_string_field(body: &str, field: &str) -> Option<String> {
+pub(crate) fn runtime_json_string_field(body: &str, field: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()?
         .as_object()?
@@ -79,7 +77,7 @@ pub(in crate::runtime) fn runtime_json_string_field(body: &str, field: &str) -> 
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_json_bool_field(body: &str, field: &str) -> Option<bool> {
+pub(crate) fn runtime_json_bool_field(body: &str, field: &str) -> Option<bool> {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()?
         .as_object()?
@@ -92,7 +90,7 @@ pub(in crate::runtime) fn runtime_json_bool_field(body: &str, field: &str) -> Op
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_json_creation_command(body: &str) -> Result<Option<String>> {
+pub(crate) fn runtime_json_creation_command(body: &str) -> Result<Option<String>> {
     let value = runtime_json_value(body)?;
     let Some(command) = value
         .as_object()
@@ -124,7 +122,7 @@ pub(in crate::runtime) fn runtime_json_creation_command(body: &str) -> Result<Op
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_json_start_directory(body: &str) -> Result<Option<PathBuf>> {
+pub(crate) fn runtime_json_start_directory(body: &str) -> Result<Option<PathBuf>> {
     let value = runtime_json_value(body)?;
     let Some(start_directory) = value
         .as_object()
@@ -149,7 +147,7 @@ pub(in crate::runtime) fn runtime_json_start_directory(body: &str) -> Result<Opt
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_json_optional_size_field(
+pub(crate) fn runtime_json_optional_size_field(
     body: &str,
     field: &str,
 ) -> Result<Option<PaneSizeSpec>> {
@@ -168,7 +166,7 @@ pub(in crate::runtime) fn runtime_json_optional_size_field(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_initialize_terminal_size(
+pub(crate) fn runtime_initialize_terminal_size(
     request: &crate::control::JsonRpcRequest,
 ) -> Option<Size> {
     let params = request.params.as_ref()?;
@@ -189,7 +187,7 @@ pub(in crate::runtime) fn runtime_initialize_terminal_size(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_initialize_requested_primary(
+pub(crate) fn runtime_initialize_requested_primary(
     request: &crate::control::JsonRpcRequest,
 ) -> bool {
     request
@@ -208,7 +206,7 @@ pub(in crate::runtime) fn runtime_initialize_requested_primary(
 }
 
 /// Returns whether one initialize request is asking for a pending observer role.
-pub(in crate::runtime) fn runtime_initialize_requested_observer(
+pub(crate) fn runtime_initialize_requested_observer(
     request: &crate::control::JsonRpcRequest,
 ) -> bool {
     request
@@ -231,7 +229,7 @@ pub(in crate::runtime) fn runtime_initialize_requested_observer(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn current_unix_seconds() -> u64 {
+pub(crate) fn current_unix_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -239,7 +237,7 @@ pub(in crate::runtime) fn current_unix_seconds() -> u64 {
 }
 
 /// Formats an elapsed duration for human-facing agent status lines.
-pub(in crate::runtime) fn runtime_agent_turn_duration_display(elapsed_seconds: u64) -> String {
+pub(crate) fn runtime_agent_turn_duration_display(elapsed_seconds: u64) -> String {
     let hours = elapsed_seconds / 3600;
     let minutes = (elapsed_seconds % 3600) / 60;
     let seconds = elapsed_seconds % 60;
@@ -254,7 +252,7 @@ pub(in crate::runtime) fn runtime_agent_turn_duration_display(elapsed_seconds: u
 
 /// Returns the current Unix timestamp in milliseconds, saturating when the
 /// host clock cannot fit the millisecond count into the runtime representation.
-pub(in crate::runtime) fn current_unix_millis() -> u64 {
+pub(crate) fn current_unix_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
@@ -266,7 +264,7 @@ pub(in crate::runtime) fn current_unix_millis() -> u64 {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_json_size(body: &str) -> Result<PaneSizeSpec> {
+pub(crate) fn runtime_json_size(body: &str) -> Result<PaneSizeSpec> {
     let value = runtime_json_value(body)?;
     let object = value
         .as_object()
@@ -282,7 +280,7 @@ pub(in crate::runtime) fn runtime_json_size(body: &str) -> Result<PaneSizeSpec> 
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_json_optional_client_size(body: &str) -> Result<Option<Size>> {
+pub(crate) fn runtime_json_optional_client_size(body: &str) -> Result<Option<Size>> {
     let value = runtime_json_value(body)?;
     let Some(size) = value
         .as_object()
@@ -313,9 +311,7 @@ pub(in crate::runtime) fn runtime_json_optional_client_size(body: &str) -> Resul
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_json_optional_view_offset(
-    body: &str,
-) -> Result<Option<(usize, usize)>> {
+pub(crate) fn runtime_json_optional_view_offset(body: &str) -> Result<Option<(usize, usize)>> {
     let value = runtime_json_value(body)?;
     let Some(offset) = value
         .as_object()
@@ -346,7 +342,7 @@ pub(in crate::runtime) fn runtime_json_optional_view_offset(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_json_input_bytes(body: &str) -> Result<Vec<u8>> {
+pub(crate) fn runtime_json_input_bytes(body: &str) -> Result<Vec<u8>> {
     let value = runtime_json_value(body)?;
     let Some(input) = value
         .as_object()
@@ -375,7 +371,7 @@ pub(in crate::runtime) fn runtime_json_input_bytes(body: &str) -> Result<Vec<u8>
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_json_value(body: &str) -> Result<serde_json::Value> {
+pub(crate) fn runtime_json_value(body: &str) -> Result<serde_json::Value> {
     serde_json::from_str::<serde_json::Value>(body).map_err(|error| {
         MezError::invalid_args(format!("runtime control params are invalid JSON: {error}"))
     })

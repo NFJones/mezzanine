@@ -19,47 +19,47 @@ use super::RuntimeSessionService;
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimeModelCommandArgs {
+pub(crate) struct RuntimeModelCommandArgs {
     /// Stores the profile value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) profile: Option<String>,
+    pub(crate) profile: Option<String>,
     /// Stores the reasoning profile value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) reasoning_profile: Option<String>,
+    pub(crate) reasoning_profile: Option<String>,
     /// Stores the scope value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) scope: Option<String>,
+    pub(crate) scope: Option<String>,
     /// Stores the target value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) target: Option<String>,
+    pub(crate) target: Option<String>,
     /// Stores the clear value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) clear: bool,
+    pub(crate) clear: bool,
     /// Stores the list value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) list: bool,
+    pub(crate) list: bool,
     /// Stores the show value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) show: bool,
+    pub(crate) show: bool,
     /// Stores whether the command targets the routing auto-sizing router.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) routing: bool,
+    pub(crate) routing: bool,
 }
 
 /// Runs the runtime model command args operation for this subsystem.
@@ -67,9 +67,7 @@ pub(in crate::runtime) struct RuntimeModelCommandArgs {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_model_command_args(
-    args: &str,
-) -> Result<RuntimeModelCommandArgs> {
+pub(crate) fn runtime_model_command_args(args: &str) -> Result<RuntimeModelCommandArgs> {
     let mut parsed = RuntimeModelCommandArgs::default();
     let mut words = args.split_whitespace().peekable();
     while let Some(word) = words.next() {
@@ -146,7 +144,7 @@ pub(in crate::runtime) fn runtime_model_command_args(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_model_override_scope_for_args(
+pub(crate) fn runtime_model_override_scope_for_args(
     service: &RuntimeSessionService,
     pane_id: &str,
     agent_id: &str,
@@ -194,7 +192,7 @@ pub(in crate::runtime) fn runtime_model_override_scope_for_args(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_model_override_scope_name(
+pub(crate) fn runtime_model_override_scope_name(
     scope: &RuntimeModelProfileOverrideScope,
 ) -> String {
     match scope {
@@ -206,10 +204,10 @@ pub(in crate::runtime) fn runtime_model_override_scope_name(
     }
 }
 /// Supported pane-local model latency preferences in display order.
-pub(in crate::runtime) const RUNTIME_LATENCY_PREFERENCES: &[&str] = &["slow", "default", "fast"];
+pub(crate) const RUNTIME_LATENCY_PREFERENCES: &[&str] = &["slow", "default", "fast"];
 
 /// Validates a user-facing latency preference value.
-pub(in crate::runtime) fn runtime_validate_latency_preference(value: &str) -> Result<&str> {
+pub(crate) fn runtime_validate_latency_preference(value: &str) -> Result<&str> {
     let value = value.trim();
     if RUNTIME_LATENCY_PREFERENCES
         .iter()
@@ -228,7 +226,7 @@ pub(in crate::runtime) fn runtime_validate_latency_preference(value: &str) -> Re
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_model_profile_display(
+pub(crate) fn runtime_model_profile_display(
     active_name: &str,
     active_profile: &ModelProfile,
     profiles: &BTreeMap<String, ModelProfile>,

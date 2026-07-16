@@ -19,7 +19,7 @@ use super::{runtime_flag_value, runtime_positional_args};
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_permissions_command(
+pub(crate) fn runtime_permissions_command(
     service: &mut RuntimeSessionService,
     invocation: &CommandInvocation,
 ) -> Result<String> {
@@ -135,7 +135,7 @@ pub(in crate::runtime) fn runtime_permissions_command(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_approval_command(
+pub(crate) fn runtime_approval_command(
     service: &mut RuntimeSessionService,
     invocation: &CommandInvocation,
 ) -> Result<String> {
@@ -186,7 +186,7 @@ pub(in crate::runtime) fn runtime_approval_command(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_permission_policy_display(policy: &PermissionPolicy) -> String {
+pub(crate) fn runtime_permission_policy_display(policy: &PermissionPolicy) -> String {
     format!(
         "preset={} approval_policy={} bypass={} rules={} source=runtime-policy",
         runtime_permission_preset_name(policy.preset),
@@ -201,7 +201,7 @@ pub(in crate::runtime) fn runtime_permission_policy_display(policy: &PermissionP
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_permission_change_display(
+pub(crate) fn runtime_permission_change_display(
     field: &str,
     current: &str,
     requested: &str,
@@ -225,7 +225,7 @@ pub(in crate::runtime) fn runtime_permission_change_display(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_list_command_rules_display(policy: &PermissionPolicy) -> String {
+pub(crate) fn runtime_list_command_rules_display(policy: &PermissionPolicy) -> String {
     if policy.rules().is_empty() {
         return "rules=0 source=runtime-policy".to_string();
     }
@@ -243,10 +243,7 @@ pub(in crate::runtime) fn runtime_list_command_rules_display(policy: &Permission
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_command_rule_display_line(
-    index: usize,
-    rule: &CommandRule,
-) -> String {
+pub(crate) fn runtime_command_rule_display_line(index: usize, rule: &CommandRule) -> String {
     format!(
         "rule{}:scope={}:decision={}:match={}:pattern={}:argument_policy={}:source=runtime-policy",
         index,
@@ -263,7 +260,7 @@ pub(in crate::runtime) fn runtime_command_rule_display_line(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_add_command_rule(
+pub(crate) fn runtime_add_command_rule(
     service: &mut RuntimeSessionService,
     invocation: &CommandInvocation,
 ) -> Result<String> {
@@ -291,7 +288,7 @@ pub(in crate::runtime) fn runtime_add_command_rule(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_remove_command_rule(
+pub(crate) fn runtime_remove_command_rule(
     service: &mut RuntimeSessionService,
     invocation: &CommandInvocation,
 ) -> Result<String> {
@@ -319,7 +316,7 @@ pub(in crate::runtime) fn runtime_remove_command_rule(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_command_rule_from_invocation(
+pub(crate) fn runtime_command_rule_from_invocation(
     invocation: &CommandInvocation,
 ) -> Result<CommandRule> {
     let decision = match invocation.name.as_str() {
@@ -370,9 +367,7 @@ pub(in crate::runtime) fn runtime_command_rule_from_invocation(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_command_rule_pattern_args(
-    invocation: &CommandInvocation,
-) -> Vec<&str> {
+pub(crate) fn runtime_command_rule_pattern_args(invocation: &CommandInvocation) -> Vec<&str> {
     let mut values = Vec::new();
     let mut index = 0;
     while index < invocation.args.len() {
@@ -399,7 +394,7 @@ pub(in crate::runtime) fn runtime_command_rule_pattern_args(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_command_rule_scope(
+pub(crate) fn runtime_command_rule_scope(
     invocation: &CommandInvocation,
 ) -> Result<CommandRuleScope> {
     let value = runtime_flag_value(&invocation.args, "--scope").unwrap_or("session");
@@ -422,9 +417,7 @@ pub(in crate::runtime) fn runtime_command_rule_scope(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_command_rule_match(
-    invocation: &CommandInvocation,
-) -> Result<RuleMatch> {
+pub(crate) fn runtime_command_rule_match(invocation: &CommandInvocation) -> Result<RuleMatch> {
     if let Some(digest) = runtime_flag_value(&invocation.args, "--exact-sha256") {
         return Ok(RuleMatch::ExactSha256 {
             digest_hex: digest.to_string(),
@@ -450,7 +443,7 @@ pub(in crate::runtime) fn runtime_command_rule_match(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_bypass_approvals_command(
+pub(crate) fn runtime_bypass_approvals_command(
     service: &mut RuntimeSessionService,
     invocation: &CommandInvocation,
 ) -> Result<String> {
@@ -506,7 +499,7 @@ pub(in crate::runtime) fn runtime_bypass_approvals_command(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_append_permission_audit(
+pub(crate) fn runtime_append_permission_audit(
     service: &mut RuntimeSessionService,
     permission_id: &str,
     action_kind: &str,
@@ -539,7 +532,7 @@ pub(in crate::runtime) fn runtime_append_permission_audit(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_bypass_action(invocation: &CommandInvocation) -> Option<&str> {
+pub(crate) fn runtime_bypass_action(invocation: &CommandInvocation) -> Option<&str> {
     invocation
         .args
         .iter()
@@ -557,7 +550,7 @@ pub(in crate::runtime) fn runtime_bypass_action(invocation: &CommandInvocation) 
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_has_bypass_confirmation(invocation: &CommandInvocation) -> bool {
+pub(crate) fn runtime_has_bypass_confirmation(invocation: &CommandInvocation) -> bool {
     invocation.args.iter().any(|arg| {
         matches!(
             arg.as_str(),
@@ -571,7 +564,7 @@ pub(in crate::runtime) fn runtime_has_bypass_confirmation(invocation: &CommandIn
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_parse_permission_preset(
+pub(crate) fn runtime_parse_permission_preset(
     value: &str,
 ) -> std::result::Result<PermissionPreset, ()> {
     match value {
@@ -586,7 +579,7 @@ pub(in crate::runtime) fn runtime_parse_permission_preset(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_parse_approval_policy(
+pub(crate) fn runtime_parse_approval_policy(
     value: &str,
 ) -> std::result::Result<ApprovalPolicy, ()> {
     match value {
@@ -602,7 +595,7 @@ pub(in crate::runtime) fn runtime_parse_approval_policy(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_permission_preset_name(preset: PermissionPreset) -> &'static str {
+pub(crate) fn runtime_permission_preset_name(preset: PermissionPreset) -> &'static str {
     match preset {
         PermissionPreset::ReadOnly => "read-only",
         PermissionPreset::Auto => "auto",
@@ -614,7 +607,7 @@ pub(in crate::runtime) fn runtime_permission_preset_name(preset: PermissionPrese
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_approval_policy_name(policy: ApprovalPolicy) -> &'static str {
+pub(crate) fn runtime_approval_policy_name(policy: ApprovalPolicy) -> &'static str {
     match policy {
         ApprovalPolicy::Ask => "ask",
         ApprovalPolicy::AutoAllow => "auto-allow",
@@ -627,7 +620,7 @@ pub(in crate::runtime) fn runtime_approval_policy_name(policy: ApprovalPolicy) -
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_permission_authority_change_name(
+pub(crate) fn runtime_permission_authority_change_name(
     change: PermissionAuthorityChange,
 ) -> &'static str {
     match change {
@@ -642,7 +635,7 @@ pub(in crate::runtime) fn runtime_permission_authority_change_name(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_command_rule_scope_name(scope: CommandRuleScope) -> &'static str {
+pub(crate) fn runtime_command_rule_scope_name(scope: CommandRuleScope) -> &'static str {
     match scope {
         CommandRuleScope::BuiltIn => "built-in",
         CommandRuleScope::Session => "session",
@@ -657,7 +650,7 @@ pub(in crate::runtime) fn runtime_command_rule_scope_name(scope: CommandRuleScop
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_rule_decision_name(decision: RuleDecision) -> &'static str {
+pub(crate) fn runtime_rule_decision_name(decision: RuleDecision) -> &'static str {
     match decision {
         RuleDecision::Forbid => "deny",
         RuleDecision::Prompt => "prompt",
@@ -670,7 +663,7 @@ pub(in crate::runtime) fn runtime_rule_decision_name(decision: RuleDecision) -> 
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_rule_match_name(rule_match: &RuleMatch) -> &'static str {
+pub(crate) fn runtime_rule_match_name(rule_match: &RuleMatch) -> &'static str {
     match rule_match {
         RuleMatch::Prefix => "prefix",
         RuleMatch::Exact => "exact",
@@ -683,9 +676,7 @@ pub(in crate::runtime) fn runtime_rule_match_name(rule_match: &RuleMatch) -> &'s
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_argument_policy_name(
-    argument_policy: &ArgumentPolicy,
-) -> &'static str {
+pub(crate) fn runtime_argument_policy_name(argument_policy: &ArgumentPolicy) -> &'static str {
     match argument_policy {
         ArgumentPolicy::None => "none",
         ArgumentPolicy::ExecutableProbe { .. } => "executable_probe",

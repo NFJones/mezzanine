@@ -38,7 +38,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns the retained trace log text for one pane.
-    pub(in crate::runtime) fn agent_pane_trace_log_text(&self, pane_id: &str) -> Option<String> {
+    pub(crate) fn agent_pane_trace_log_text(&self, pane_id: &str) -> Option<String> {
         let log = self.agent.agent_pane_trace_logs.get(pane_id)?;
         (!log.is_empty()).then(|| log.join("\n"))
     }
@@ -49,7 +49,7 @@ impl RuntimeSessionService {
     }
 
     /// Appends a trace line for an agent turn state transition.
-    pub(in crate::runtime) fn append_agent_trace_turn_transition(
+    pub(crate) fn append_agent_trace_turn_transition(
         &mut self,
         turn: &AgentTurnRecord,
         from: AgentTurnState,
@@ -80,7 +80,7 @@ impl RuntimeSessionService {
     }
 
     /// Appends one diagnostic trace event for an agent turn.
-    pub(in crate::runtime) fn append_agent_trace_turn_event(
+    pub(crate) fn append_agent_trace_turn_event(
         &mut self,
         pane_id: &str,
         turn_id: &str,
@@ -144,7 +144,7 @@ impl RuntimeSessionService {
     }
 
     /// Appends the model request submitted for one agent turn to trace output.
-    pub(in crate::runtime) fn append_agent_trace_maap_request(
+    pub(crate) fn append_agent_trace_maap_request(
         &mut self,
         turn: &AgentTurnRecord,
         request: &ModelRequest,
@@ -163,7 +163,7 @@ impl RuntimeSessionService {
     }
 
     /// Records the provider request shape that the runtime is about to submit.
-    pub(in crate::runtime) fn record_runtime_provider_request_shape_for_context(
+    pub(crate) fn record_runtime_provider_request_shape_for_context(
         &mut self,
         model_profile: &ModelProfile,
         turn: &AgentTurnRecord,
@@ -195,7 +195,7 @@ impl RuntimeSessionService {
     }
 
     /// Appends the model response returned for one agent turn to trace output.
-    pub(in crate::runtime) fn append_agent_trace_maap_response(
+    pub(crate) fn append_agent_trace_maap_response(
         &mut self,
         turn: &AgentTurnRecord,
         response: &ModelResponse,
@@ -210,7 +210,7 @@ impl RuntimeSessionService {
     }
 
     /// Appends action results from one MAAP batch to trace output.
-    pub(in crate::runtime) fn append_agent_trace_maap_action_results(
+    pub(crate) fn append_agent_trace_maap_action_results(
         &mut self,
         pane_id: &str,
         turn_id: &str,
@@ -227,7 +227,7 @@ impl RuntimeSessionService {
     }
 
     /// Appends one provider error to trace output.
-    pub(in crate::runtime) fn append_agent_trace_provider_error(
+    pub(crate) fn append_agent_trace_provider_error(
         &mut self,
         turn: &AgentTurnRecord,
         provider_id: &str,

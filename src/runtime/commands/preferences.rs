@@ -12,7 +12,7 @@ use super::{
 
 impl RuntimeSessionService {
     /// Executes `/routing` against pane-scoped auto-sizing state.
-    pub(in crate::runtime) fn execute_agent_shell_routing_command(
+    pub(crate) fn execute_agent_shell_routing_command(
         &mut self,
         pane_id: &str,
         input: &str,
@@ -231,7 +231,7 @@ impl RuntimeSessionService {
     ///
     /// # Parameters
     /// - `pane_id`: The pane whose selected profile should be resolved.
-    pub(in crate::runtime) fn agent_selected_personality_profile(
+    pub(crate) fn agent_selected_personality_profile(
         &self,
         pane_id: &str,
     ) -> Option<&crate::runtime::RuntimeAgentPersonalityProfile> {

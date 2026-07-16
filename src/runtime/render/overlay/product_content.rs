@@ -9,28 +9,28 @@ use unicode_width::UnicodeWidthStr;
 
 /// Render placement for an open pane agent status selector.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime::render) struct PaneAgentStatusSelectorLayout {
+pub(crate) struct PaneAgentStatusSelectorLayout {
     /// Zero-based column where selector rows begin.
-    pub(in crate::runtime::render) column: u16,
+    pub(crate) column: u16,
     /// Width in terminal cells reserved for selector rows.
-    pub(in crate::runtime::render) width: u16,
+    pub(crate) width: u16,
     /// Visible selector items with their rendered rows.
-    pub(in crate::runtime::render) visible_items: Vec<PaneAgentStatusSelectorLayoutItem>,
+    pub(crate) visible_items: Vec<PaneAgentStatusSelectorLayoutItem>,
 }
 
 /// Render placement for one visible selector item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::runtime::render) struct PaneAgentStatusSelectorLayoutItem {
+pub(crate) struct PaneAgentStatusSelectorLayoutItem {
     /// Index into the selector item list.
-    pub(in crate::runtime::render) item_index: usize,
+    pub(crate) item_index: usize,
     /// Zero-based terminal row where this item is drawn.
-    pub(in crate::runtime::render) row: u16,
+    pub(crate) row: u16,
 }
 
 /// Maximum number of model/reasoning picker rows shown at once.
-pub(in crate::runtime::render) const PANE_AGENT_STATUS_SELECTOR_MAX_ROWS: usize = 30;
+pub(crate) const PANE_AGENT_STATUS_SELECTOR_MAX_ROWS: usize = 30;
 /// Returns a compact MCP server state label for command completion details.
-pub(in crate::runtime::render) fn agent_shell_mcp_display_state_name(
+pub(crate) fn agent_shell_mcp_display_state_name(
     enabled: bool,
     status: McpServerStatus,
 ) -> &'static str {
@@ -52,7 +52,7 @@ pub(in crate::runtime::render) fn agent_shell_mcp_display_state_name(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime::render) fn default_runtime_agent_prompt_input() -> RuntimeAgentPromptInput {
+pub(crate) fn default_runtime_agent_prompt_input() -> RuntimeAgentPromptInput {
     RuntimeAgentPromptInput {
         prompt: ReadlinePrompt::new(ReadlinePromptKind::Agent),
         decoder: ReadlineInputDecoder::new(),
@@ -66,7 +66,7 @@ pub(in crate::runtime::render) fn default_runtime_agent_prompt_input() -> Runtim
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime::render) fn runtime_primary_prompt_input(
+pub(crate) fn runtime_primary_prompt_input(
     kind: ReadlinePromptKind,
     prefill: &str,
 ) -> RuntimePrimaryPromptInput {
@@ -89,7 +89,7 @@ pub(in crate::runtime::render) fn runtime_primary_prompt_input(
 /// renderer and copy-preservation path as model-authored markdown `say`
 /// actions. Plain output remains line-oriented because legacy command display
 /// bodies are key/value text rather than presentation markup.
-pub(in crate::runtime::render) enum RuntimeAgentShellDisplayOutput {
+pub(crate) enum RuntimeAgentShellDisplayOutput {
     /// No user-facing display should be rendered for this command response.
     Suppressed,
     /// One-line command feedback rendered through the transient status bar.
@@ -105,7 +105,7 @@ pub(in crate::runtime::render) enum RuntimeAgentShellDisplayOutput {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime::render) fn runtime_agent_shell_display_output(
+pub(crate) fn runtime_agent_shell_display_output(
     body: &str,
     ui_theme: &UiTheme,
 ) -> Result<RuntimeAgentShellDisplayOutput> {
@@ -195,7 +195,7 @@ pub(super) fn runtime_agent_shell_transient_display_command_name(command: &str) 
 
 /// Renders slash-command markdown display output into the command overlay
 /// pager while preserving clickable `mez-agent:` links.
-pub(in crate::runtime::render) fn runtime_agent_shell_markdown_overlay_content(
+pub(crate) fn runtime_agent_shell_markdown_overlay_content(
     command: Option<String>,
     markdown: &str,
     ui_theme: &UiTheme,
@@ -309,7 +309,7 @@ pub(super) fn runtime_markdown_table_cells(line: &str) -> Vec<&str> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime::render) fn runtime_agent_shell_visibility(body: &str) -> Option<String> {
+pub(crate) fn runtime_agent_shell_visibility(body: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
         .and_then(|parsed| {
@@ -321,7 +321,7 @@ pub(in crate::runtime::render) fn runtime_agent_shell_visibility(body: &str) -> 
 }
 
 /// Formats a recoverable runtime error for the transient status overlay.
-pub(in crate::runtime::render) fn runtime_primary_error_status_text(line: &str) -> String {
+pub(crate) fn runtime_primary_error_status_text(line: &str) -> String {
     let normalized = line
         .trim()
         .chars()
@@ -335,7 +335,7 @@ pub(in crate::runtime::render) fn runtime_primary_error_status_text(line: &str) 
 }
 
 /// Formats a successful command acknowledgement for the transient status overlay.
-pub(in crate::runtime::render) fn runtime_primary_notice_status_text(line: &str) -> String {
+pub(crate) fn runtime_primary_notice_status_text(line: &str) -> String {
     let normalized = line
         .trim()
         .chars()
@@ -349,10 +349,7 @@ pub(in crate::runtime::render) fn runtime_primary_notice_status_text(line: &str)
 }
 
 /// Returns the agent command link at one rendered line column.
-pub(in crate::runtime::render) fn agent_command_link_at_line_column(
-    line: &str,
-    column: usize,
-) -> Option<String> {
+pub(crate) fn agent_command_link_at_line_column(line: &str, column: usize) -> Option<String> {
     agent_command_links_in_line(line)
         .into_iter()
         .find(|(start_column, width, _command)| {
@@ -362,9 +359,7 @@ pub(in crate::runtime::render) fn agent_command_link_at_line_column(
 }
 
 /// Returns visible agent command link ranges in one rendered line.
-pub(in crate::runtime::render) fn agent_command_links_in_line(
-    line: &str,
-) -> Vec<(usize, usize, String)> {
+pub(crate) fn agent_command_links_in_line(line: &str) -> Vec<(usize, usize, String)> {
     let scheme = "mez-agent:";
     let mut search_start = 0;
     let mut links = Vec::new();
@@ -408,7 +403,7 @@ pub(in crate::runtime::render) fn agent_command_links_in_line(
 }
 
 /// Returns source-aligned hidden `mez-agent:` link ranges for one rendered row.
-pub(in crate::runtime::render) fn agent_command_hidden_link_ranges_for_rendered_line(
+pub(crate) fn agent_command_hidden_link_ranges_for_rendered_line(
     source_line: &str,
     display: &str,
 ) -> Vec<(usize, usize, String)> {
@@ -420,16 +415,14 @@ pub(in crate::runtime::render) fn agent_command_hidden_link_ranges_for_rendered_
 }
 
 /// Decodes one `mez-agent:` markdown destination into an executable command.
-pub(in crate::runtime::render) fn agent_command_link_destination(
-    destination: &str,
-) -> Option<String> {
+pub(crate) fn agent_command_link_destination(destination: &str) -> Option<String> {
     let encoded = destination.strip_prefix("mez-agent:")?;
     let command = percent_decode_agent_command(encoded)?;
     (!command.is_empty()).then_some(command)
 }
 
 /// Percent-decodes a markdown command link destination.
-pub(in crate::runtime::render) fn percent_decode_agent_command(encoded: &str) -> Option<String> {
+pub(crate) fn percent_decode_agent_command(encoded: &str) -> Option<String> {
     let mut output = Vec::with_capacity(encoded.len());
     let bytes = encoded.as_bytes();
     let mut index = 0;
@@ -448,7 +441,7 @@ pub(in crate::runtime::render) fn percent_decode_agent_command(encoded: &str) ->
 }
 
 /// Decodes one ASCII hexadecimal digit.
-pub(in crate::runtime::render) fn hex_value(byte: u8) -> Option<u8> {
+pub(crate) fn hex_value(byte: u8) -> Option<u8> {
     match byte {
         b'0'..=b'9' => Some(byte - b'0'),
         b'a'..=b'f' => Some(byte - b'a' + 10),

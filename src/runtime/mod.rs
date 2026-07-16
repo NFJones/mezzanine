@@ -204,7 +204,7 @@ pub struct RuntimeSessionService {
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod agent;
-pub(in crate::runtime) use agent::RuntimeAgentComponent;
+pub(crate) use agent::RuntimeAgentComponent;
 /// Exposes runtime agent provider dispatch and loop state records.
 ///
 /// The nested module keeps provider-backed agent worker records out of the
@@ -235,7 +235,7 @@ mod config;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod control;
-pub(in crate::runtime) use control::RuntimeControlComponent;
+pub(crate) use control::RuntimeControlComponent;
 /// Exposes deferred runtime side-effect value types.
 ///
 /// The nested module keeps side-effect planning records out of the central
@@ -273,7 +273,7 @@ mod integration;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod json;
-pub(in crate::runtime) use integration::RuntimeIntegrationComponent;
+pub(crate) use integration::RuntimeIntegrationComponent;
 /// Exposes the lifecycle module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -285,13 +285,13 @@ mod lifecycle;
 /// declaration makes the boundary available to the crate.
 mod pane_io;
 mod persistence;
-pub(in crate::runtime) use persistence::RuntimePersistenceComponent;
+pub(crate) use persistence::RuntimePersistenceComponent;
 /// Exposes the processes module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod processes;
-pub(in crate::runtime) use processes::RuntimeProcessComponent;
+pub(crate) use processes::RuntimeProcessComponent;
 /// Exposes runtime provider registry and model preset records.
 ///
 /// The nested module keeps provider configuration records out of the central
@@ -305,7 +305,7 @@ pub(in crate::runtime) use processes::RuntimeProcessComponent;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod render;
-pub(in crate::runtime) use render::{RuntimePresentationComponent, RuntimePresentationSettings};
+pub(crate) use render::{RuntimePresentationComponent, RuntimePresentationSettings};
 /// Exposes the service module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -320,7 +320,7 @@ pub(crate) use service::coalesce_config_persistence_effects;
 mod service_state;
 /// Exposes mux-session and runtime lifecycle metadata ownership.
 mod session;
-pub(in crate::runtime) use session::RuntimeSessionComponent;
+pub(crate) use session::RuntimeSessionComponent;
 /// Exposes the sockets module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

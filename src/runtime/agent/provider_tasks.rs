@@ -586,7 +586,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn fail_configured_agent_provider_task(
+    pub(crate) fn fail_configured_agent_provider_task(
         &mut self,
         turn_id: &str,
         error: &MezError,

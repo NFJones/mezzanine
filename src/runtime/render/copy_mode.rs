@@ -76,7 +76,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn copy_text_to_buffer_and_host_clipboard(
+    pub(crate) fn copy_text_to_buffer_and_host_clipboard(
         &mut self,
         name: &str,
         content: String,
@@ -96,7 +96,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn copy_mode_viewport_rows_for_pane(&self, pane_id: &str) -> usize {
+    pub(crate) fn copy_mode_viewport_rows_for_pane(&self, pane_id: &str) -> usize {
         self.session
             .active_window()
             .and_then(|window| {
@@ -120,10 +120,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn ensure_active_copy_mode(
-        &mut self,
-        pane_id: &str,
-    ) -> Result<&mut CopyMode> {
+    pub(crate) fn ensure_active_copy_mode(&mut self, pane_id: &str) -> Result<&mut CopyMode> {
         if !self
             .presentation
             .copy

@@ -23,7 +23,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn apply_permission_request_hooks_for_execution(
+    pub(crate) fn apply_permission_request_hooks_for_execution(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &mut AgentTurnExecution,
@@ -75,7 +75,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn queue_blocked_approvals_for_execution(
+    pub(crate) fn queue_blocked_approvals_for_execution(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
@@ -119,7 +119,7 @@ impl RuntimeSessionService {
     /// - `caller_client_id`: Client that caused the policy update, when known.
     /// - `previous`: Permission policy before the update.
     /// - `source`: Human-readable source of the policy update for lifecycle events.
-    pub(in crate::runtime) fn reconcile_pending_agent_approvals_after_permission_change(
+    pub(crate) fn reconcile_pending_agent_approvals_after_permission_change(
         &mut self,
         caller_client_id: Option<&mez_core::ids::ClientId>,
         previous: &PermissionPolicy,
@@ -307,7 +307,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn resume_approved_blocked_agent_action(
+    pub(crate) fn resume_approved_blocked_agent_action(
         &mut self,
         approval_id: &str,
         approval: &BlockedApprovalRequest,
@@ -624,7 +624,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn settle_decided_blocked_agent_action(
+    pub(crate) fn settle_decided_blocked_agent_action(
         &mut self,
         approval_id: &str,
         approval: &BlockedApprovalRequest,

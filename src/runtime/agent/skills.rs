@@ -28,10 +28,7 @@ impl RuntimeSessionService {
     ///
     /// # Parameters
     /// - `pane_id`: Pane whose current working directory scopes project skills.
-    pub(in crate::runtime) fn effective_skill_catalog_for_pane(
-        &self,
-        pane_id: &str,
-    ) -> SkillCatalog {
+    pub(crate) fn effective_skill_catalog_for_pane(&self, pane_id: &str) -> SkillCatalog {
         let project_root = self.trusted_skill_project_root_for_pane(pane_id);
         discover_skill_catalog(self.integration.config_root(), project_root.as_deref())
     }

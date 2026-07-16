@@ -24,7 +24,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn present_agent_response_actions_to_terminal_buffer(
+    pub(crate) fn present_agent_response_actions_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         execution: &AgentTurnExecution,
@@ -143,7 +143,7 @@ impl RuntimeSessionService {
 
     /// Presents deferred `say` actions once a mixed response's runtime-visible
     /// actions have finished and emitted their own logs or diffs.
-    pub(in crate::runtime) fn present_deferred_agent_say_actions_to_terminal_buffer(
+    pub(crate) fn present_deferred_agent_say_actions_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         execution: &AgentTurnExecution,
@@ -186,7 +186,7 @@ impl RuntimeSessionService {
 
     /// Presents runtime-gated action outcomes that otherwise would not have a
     /// natural command, tool, or assistant-output line in the pane buffer.
-    pub(in crate::runtime) fn present_agent_action_outcomes_to_terminal_buffer(
+    pub(crate) fn present_agent_action_outcomes_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         execution: &AgentTurnExecution,
@@ -260,7 +260,7 @@ impl RuntimeSessionService {
 
     /// Presents bounded failure details when the runtime is ending a failed
     /// turn instead of giving the model another recovery attempt.
-    pub(in crate::runtime) fn present_unrecovered_agent_failure_diagnostics_to_terminal_buffer(
+    pub(crate) fn present_unrecovered_agent_failure_diagnostics_to_terminal_buffer(
         &mut self,
         pane_id: &str,
         execution: &AgentTurnExecution,

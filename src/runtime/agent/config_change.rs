@@ -217,7 +217,7 @@ impl RuntimeSessionService {
     /// - `approval_state`: The structured approval state to report, such as
     ///   `approved` for a routed approval or `full_access` for policy-accepted
     ///   execution.
-    pub(in crate::runtime) fn execute_config_change_action_for_turn(
+    pub(crate) fn execute_config_change_action_for_turn(
         &mut self,
         turn: &AgentTurnRecord,
         action: &AgentAction,
@@ -652,7 +652,7 @@ impl RuntimeSessionService {
     /// control path. While detached, the action therefore remains running in
     /// its retained execution instead of failing the agent turn. Reattachment
     /// supplies the primary identity required to finish that work.
-    pub(in crate::runtime) fn resume_detached_config_change_actions(&mut self) -> Result<()> {
+    pub(crate) fn resume_detached_config_change_actions(&mut self) -> Result<()> {
         let turns = self
             .agent_turn_ledger()
             .turns()

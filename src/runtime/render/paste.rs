@@ -54,7 +54,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn paste_clipboard_or_most_recent_buffer_to_pane(
+    pub(crate) fn paste_clipboard_or_most_recent_buffer_to_pane(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         descriptor: &PaneDescriptor,

@@ -48,7 +48,7 @@ pub struct RuntimeAgentProviderTask {
 /// the actor a finite lease it can enforce if the worker never submits a
 /// completion or failure event.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct RuntimeAgentProviderClaim {
+pub(crate) struct RuntimeAgentProviderClaim {
     /// Runtime turn owned by the claimed provider worker.
     pub turn_id: String,
     /// Agent identity that owns the turn.

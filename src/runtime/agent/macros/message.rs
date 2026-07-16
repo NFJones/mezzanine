@@ -26,7 +26,7 @@ impl RuntimeSessionService {
     /// - `recipient`: Model-supplied recipient string from the action.
     /// - `content_type`: Canonical MMP content type for the payload.
     /// - `payload`: Text prompt to queue in the child agent shell.
-    pub(in crate::runtime) fn queue_macro_managed_message_step(
+    pub(crate) fn queue_macro_managed_message_step(
         &mut self,
         parent_turn: &AgentTurnRecord,
         action: &AgentAction,

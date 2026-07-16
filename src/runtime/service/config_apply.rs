@@ -92,7 +92,7 @@ impl RuntimeSessionService {
     /// # Parameters
     /// - `pane_id`: Pane whose current working directory determines the
     ///   effective project root and overlay files.
-    pub(in crate::runtime) fn refresh_project_config_layers_for_pane(
+    pub(crate) fn refresh_project_config_layers_for_pane(
         &mut self,
         pane_id: &str,
     ) -> Result<usize> {
@@ -523,7 +523,7 @@ impl RuntimeSessionService {
     /// Loads global and project-scoped persistent memory records into the
     /// session memory store so agents can benefit from user-stored context
     /// loaded through the CLI.
-    pub(in crate::runtime) fn load_persistent_memory_into_session(&mut self) -> Result<()> {
+    pub(crate) fn load_persistent_memory_into_session(&mut self) -> Result<()> {
         let Some(config_root) = self.integration.config_root() else {
             return Ok(());
         };
@@ -547,7 +547,7 @@ impl RuntimeSessionService {
 
     /// Persists global and project-scoped session memory records to the
     /// persistent store so they survive beyond this session.
-    pub(in crate::runtime) fn persist_session_memory_to_disk(&mut self) {
+    pub(crate) fn persist_session_memory_to_disk(&mut self) {
         let Some(config_root) = self.integration.config_root() else {
             return;
         };
@@ -570,7 +570,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn append_project_trust_prompt_events_for_pending_layers(
+    pub(crate) fn append_project_trust_prompt_events_for_pending_layers(
         &mut self,
     ) -> Result<usize> {
         let mut overlays_by_root: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();

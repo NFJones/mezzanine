@@ -8,7 +8,7 @@ use mez_agent::outcome::runtime_execution_has_apply_patch_action;
 
 impl RuntimeSessionService {
     /// Continues or stops an active `/loop` controller after one owned turn settles.
-    pub(in crate::runtime) fn follow_up_agent_loop_after_terminal_execution(
+    pub(crate) fn follow_up_agent_loop_after_terminal_execution(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
@@ -89,7 +89,7 @@ impl RuntimeSessionService {
     }
 
     /// Reports whether a completed loop work turn will schedule another iteration.
-    pub(in crate::runtime) fn agent_loop_execution_will_continue(
+    pub(crate) fn agent_loop_execution_will_continue(
         &self,
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,

@@ -19,17 +19,13 @@ use crate::command::command_help_display_with_key_bindings;
 ///
 /// The function reuses the baseline help prose while substituting the effective
 /// runtime key binding table so `help` matches the configured live bindings.
-pub(in crate::runtime) fn runtime_command_help_display(
-    service: &RuntimeSessionService,
-) -> Result<String> {
+pub(crate) fn runtime_command_help_display(service: &RuntimeSessionService) -> Result<String> {
     let key_bindings = runtime_list_key_bindings_display(service)?;
     Ok(command_help_display_with_key_bindings(&key_bindings))
 }
 
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_list_key_bindings_display(
-    service: &RuntimeSessionService,
-) -> Result<String> {
+pub(crate) fn runtime_list_key_bindings_display(service: &RuntimeSessionService) -> Result<String> {
     let effective = compose_effective_config(service.integration.config_layers())?;
     let prefix = key_chord_notation(service.key_bindings().escape);
     let mut rows = Vec::new();
@@ -137,7 +133,7 @@ pub(in crate::runtime) fn runtime_list_key_bindings_display(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_bind_key_command(
+pub(crate) fn runtime_bind_key_command(
     service: &mut RuntimeSessionService,
     invocation: &CommandInvocation,
 ) -> Result<String> {
@@ -170,7 +166,7 @@ pub(in crate::runtime) fn runtime_bind_key_command(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_unbind_key_command(
+pub(crate) fn runtime_unbind_key_command(
     service: &mut RuntimeSessionService,
     invocation: &CommandInvocation,
 ) -> Result<String> {
@@ -203,7 +199,7 @@ pub(in crate::runtime) fn runtime_unbind_key_command(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_key_source<'a>(
+pub(crate) fn runtime_key_source<'a>(
     effective: &'a crate::config::EffectiveConfig,
     path: &str,
 ) -> &'a str {
@@ -283,9 +279,7 @@ fn runtime_key_binding_rows_display(rows: &[RuntimeKeyBindingDisplayRow]) -> Str
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_default_prefix_bindings(
-    escape: KeyChord,
-) -> Vec<(KeyChord, &'static str)> {
+pub(crate) fn runtime_default_prefix_bindings(escape: KeyChord) -> Vec<(KeyChord, &'static str)> {
     vec![
         (escape, "send-prefix"),
         (KeyChord::new(KeyCode::Char(':')), "command-prompt"),

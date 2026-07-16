@@ -8,11 +8,7 @@ use super::{
 };
 
 impl RuntimeSessionService {
-    pub(in crate::runtime) fn record_running_shell_transaction_output(
-        &mut self,
-        pane_id: &str,
-        bytes: &[u8],
-    ) {
+    pub(crate) fn record_running_shell_transaction_output(&mut self, pane_id: &str, bytes: &[u8]) {
         let output_preview_lines = self.process.settings.terminal_shell_output_preview_lines;
         let mut apply_patch_transport_updates = Vec::new();
         let mut status_line_updates = Vec::new();

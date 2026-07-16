@@ -21,7 +21,7 @@ use super::{
     runtime_json_string_map, runtime_validate_latency_preference,
 };
 
-pub(in crate::runtime) fn runtime_provider_registry_from_config(
+pub(crate) fn runtime_provider_registry_from_config(
     root: &Value,
 ) -> Result<RuntimeProviderRegistry> {
     let agents = runtime_json_object(root, "agents");
@@ -141,7 +141,7 @@ pub(in crate::runtime) fn runtime_provider_registry_from_config(
 }
 
 /// Parses model presets from the config root.
-pub(in crate::runtime) fn runtime_preset_registry_from_config(
+pub(crate) fn runtime_preset_registry_from_config(
     root: &Value,
     profiles: &BTreeMap<String, ModelProfile>,
 ) -> Result<RuntimePresetRegistry> {
@@ -471,9 +471,7 @@ pub(crate) fn runtime_default_models_for_provider(kind: &str) -> Result<&'static
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_recommended_model_for_provider(
-    kind: &str,
-) -> Result<&'static str> {
+pub(crate) fn runtime_recommended_model_for_provider(kind: &str) -> Result<&'static str> {
     runtime_default_models_for_provider(kind)?
         .first()
         .copied()

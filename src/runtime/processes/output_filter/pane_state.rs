@@ -135,7 +135,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn apply_pane_process_output(
+    pub(crate) fn apply_pane_process_output(
         &mut self,
         output: PaneProcessOutput,
         terminal_title_panes: &mut BTreeSet<String>,
@@ -288,11 +288,7 @@ impl RuntimeSessionService {
     /// observation hides them while preserving command output and the OSC
     /// transaction markers that drive the runtime state machine. Trace logging
     /// disables this filter for diagnosis.
-    pub(in crate::runtime) fn visible_pane_output_bytes(
-        &mut self,
-        pane_id: &str,
-        bytes: &[u8],
-    ) -> Vec<u8> {
+    pub(crate) fn visible_pane_output_bytes(&mut self, pane_id: &str, bytes: &[u8]) -> Vec<u8> {
         if bytes.is_empty() {
             return Vec::new();
         }
@@ -437,7 +433,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn renderable_pane_output_bytes(
+    pub(crate) fn renderable_pane_output_bytes(
         &mut self,
         pane_id: &str,
         transaction_bytes: &[u8],
@@ -475,7 +471,7 @@ impl RuntimeSessionService {
 
     /// Retains short-lived shell-output suppression after a hidden agent shell
     /// transaction so delayed prompt repaint bytes do not leak into the pane.
-    pub(in crate::runtime) fn remember_hidden_shell_render_suppression(&mut self, pane_id: &str) {
+    pub(crate) fn remember_hidden_shell_render_suppression(&mut self, pane_id: &str) {
         self.process.pane_hidden_shell_render_recent_polls.insert(
             pane_id.to_string(),
             RUNTIME_HIDDEN_SHELL_RENDER_RETENTION_POLLS,
@@ -489,10 +485,7 @@ impl RuntimeSessionService {
     /// control returns to the pane, following PTY output belongs to the user's
     /// interaction and must not be swallowed or reduced to cursor-control
     /// remnants by the previous agent turn's cleanup window.
-    pub(in crate::runtime) fn clear_shell_output_filters_for_foreground_input(
-        &mut self,
-        pane_id: &str,
-    ) {
+    pub(crate) fn clear_shell_output_filters_for_foreground_input(&mut self, pane_id: &str) {
         self.process
             .pane_hidden_shell_render_recent_polls
             .remove(pane_id);
@@ -507,7 +500,7 @@ impl RuntimeSessionService {
 
     /// Ages out retained shell-output suppression for panes whose agent turn and
     /// Mezzanine-owned shell transaction have both settled.
-    pub(in crate::runtime) fn tick_hidden_shell_render_retention(&mut self) -> usize {
+    pub(crate) fn tick_hidden_shell_render_retention(&mut self) -> usize {
         let mut aged = 0usize;
         let retained = self
             .process
@@ -669,7 +662,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn terminal_osc_events_for_pane_bytes(
+    pub(crate) fn terminal_osc_events_for_pane_bytes(
         &mut self,
         pane_id: &str,
         size: Size,
@@ -758,11 +751,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn remember_mez_wrapper_filter_command(
-        &mut self,
-        pane_id: &str,
-        command: &str,
-    ) {
+    pub(crate) fn remember_mez_wrapper_filter_command(&mut self, pane_id: &str, command: &str) {
         let retained = self
             .process
             .pane_mez_wrapper_filter_recent_commands

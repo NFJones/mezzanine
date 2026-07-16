@@ -10,56 +10,56 @@ use unicode_width::UnicodeWidthStr;
 
 /// Display lines and selectable actions derived from command JSON output.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime::render) struct RuntimeCommandDisplayOverlayContent {
+pub(crate) struct RuntimeCommandDisplayOverlayContent {
     /// Terminal command that produced these display lines, when present.
-    pub(in crate::runtime::render) command: Option<String>,
+    pub(crate) command: Option<String>,
     /// Human-readable lines rendered in the command display overlay.
-    pub(in crate::runtime::render) lines: Vec<String>,
+    pub(crate) lines: Vec<String>,
     /// Visible terminal styles for each rendered display line.
-    pub(in crate::runtime::render) line_style_spans: Vec<Vec<TerminalStyleSpan>>,
+    pub(crate) line_style_spans: Vec<Vec<TerminalStyleSpan>>,
     /// Optional command actions keyed by line index.
-    pub(in crate::runtime::render) selections: Vec<OverlaySelection>,
+    pub(crate) selections: Vec<OverlaySelection>,
 }
 
 /// One rendered command-overlay display line with selectable choices.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime::render) struct RuntimeDisplayLine {
+pub(crate) struct RuntimeDisplayLine {
     /// Human-readable text shown in the overlay.
-    pub(in crate::runtime::render) text: String,
+    pub(crate) text: String,
     /// Interactive choices rendered inside `text`.
-    pub(in crate::runtime::render) choices: Vec<RuntimeDisplayChoicePlacement>,
+    pub(crate) choices: Vec<RuntimeDisplayChoicePlacement>,
     /// Visible terminal styles applied to `text`.
-    pub(in crate::runtime::render) style_spans: Vec<TerminalStyleSpan>,
+    pub(crate) style_spans: Vec<TerminalStyleSpan>,
 }
 
 /// One selectable choice and its location in a display line.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime::render) struct RuntimeDisplayChoicePlacement {
+pub(crate) struct RuntimeDisplayChoicePlacement {
     /// Zero-based display column where the choice starts.
-    pub(in crate::runtime::render) start_column: usize,
+    pub(crate) start_column: usize,
     /// Display-cell width of the choice label.
-    pub(in crate::runtime::render) width: usize,
+    pub(crate) width: usize,
     /// Human-readable label shown to the user.
-    pub(in crate::runtime::render) label: String,
+    pub(crate) label: String,
     /// Terminal command executed by this choice.
-    pub(in crate::runtime::render) command: String,
+    pub(crate) command: String,
     /// Visual importance of this choice.
-    pub(in crate::runtime::render) kind: OverlaySelectionKind,
+    pub(crate) kind: OverlaySelectionKind,
 }
 
 /// One parsed executable display choice before it has a line position.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime::render) struct RuntimeDisplayChoice {
+pub(crate) struct RuntimeDisplayChoice {
     /// Human-readable label shown to the user.
-    pub(in crate::runtime::render) label: String,
+    pub(crate) label: String,
     /// Terminal command executed by this choice.
-    pub(in crate::runtime::render) command: String,
+    pub(crate) command: String,
     /// Visual importance of this choice.
-    pub(in crate::runtime::render) kind: OverlaySelectionKind,
+    pub(crate) kind: OverlaySelectionKind,
 }
 
 /// Parses command JSON output into human-readable overlay content.
-pub(in crate::runtime::render) fn runtime_command_display_overlay_content(
+pub(crate) fn runtime_command_display_overlay_content(
     body: &str,
     ui_theme: &UiTheme,
 ) -> Result<RuntimeCommandDisplayOverlayContent> {
@@ -221,7 +221,7 @@ pub(super) fn list_themes_rendered_overlay_lines_align_headers_with_selectable_r
 }
 
 /// Returns whether a terminal command response needs the modal display overlay.
-pub(in crate::runtime::render) fn runtime_command_display_should_open_overlay(
+pub(crate) fn runtime_command_display_should_open_overlay(
     content: &RuntimeCommandDisplayOverlayContent,
 ) -> bool {
     if content.lines.is_empty() {
@@ -240,7 +240,7 @@ pub(in crate::runtime::render) fn runtime_command_display_should_open_overlay(
 }
 
 /// Returns the transient status line for short terminal command feedback.
-pub(in crate::runtime::render) fn runtime_command_display_transient_status_line(
+pub(crate) fn runtime_command_display_transient_status_line(
     content: &RuntimeCommandDisplayOverlayContent,
 ) -> Option<String> {
     if !content.selections.is_empty() {
@@ -261,7 +261,7 @@ pub(in crate::runtime::render) fn runtime_command_display_transient_status_line(
 }
 
 /// Returns true for terminal commands whose one-line feedback is transient.
-pub(in crate::runtime::render) fn runtime_transient_terminal_command_name(command: &str) -> bool {
+pub(crate) fn runtime_transient_terminal_command_name(command: &str) -> bool {
     matches!(
         command,
         "auth-status"
@@ -289,7 +289,7 @@ pub(in crate::runtime::render) fn runtime_transient_terminal_command_name(comman
 }
 
 /// Returns true for terminal commands whose success is already observable.
-pub(in crate::runtime::render) fn runtime_immediate_terminal_command_name(command: &str) -> bool {
+pub(crate) fn runtime_immediate_terminal_command_name(command: &str) -> bool {
     matches!(
         command,
         "send-prefix"
@@ -317,7 +317,7 @@ pub(in crate::runtime::render) fn runtime_immediate_terminal_command_name(comman
 /// Runtime command results keep their JSON bodies stable for control clients
 /// and automation. This presentation helper only affects text shown in the TUI
 /// command overlay or pane-local agent shell output.
-pub(in crate::runtime::render) fn runtime_human_readable_display_lines(body: &str) -> Vec<String> {
+pub(crate) fn runtime_human_readable_display_lines(body: &str) -> Vec<String> {
     let mut lines = Vec::new();
     for line in body.lines() {
         lines.extend(
@@ -330,7 +330,7 @@ pub(in crate::runtime::render) fn runtime_human_readable_display_lines(body: &st
 }
 
 /// Converts one compact display line and returns selector choices.
-pub(in crate::runtime::render) fn runtime_human_readable_display_line_with_choices(
+pub(crate) fn runtime_human_readable_display_line_with_choices(
     line: &str,
 ) -> Vec<RuntimeDisplayLine> {
     let record = if line.split_whitespace().count() > 1 {
@@ -360,7 +360,7 @@ pub(in crate::runtime::render) fn runtime_human_readable_display_line_with_choic
 }
 
 /// Formats high-volume runtime status records as terse sentences.
-pub(in crate::runtime::render) fn runtime_custom_human_readable_display_line(
+pub(crate) fn runtime_custom_human_readable_display_line(
     record: &RuntimeDisplayRecord,
 ) -> Option<String> {
     if record.field_value("source") == Some("runtime-agent-say") {
@@ -377,9 +377,7 @@ pub(in crate::runtime::render) fn runtime_custom_human_readable_display_line(
 }
 
 /// Formats `/copy` rows for retained say text as concise runtime status text.
-pub(in crate::runtime::render) fn runtime_agent_say_copy_sentence(
-    record: &RuntimeDisplayRecord,
-) -> Option<String> {
+pub(crate) fn runtime_agent_say_copy_sentence(record: &RuntimeDisplayRecord) -> Option<String> {
     match record.field_value("say")? {
         "written" => Some(format!(
             "copied {} bytes from {} to {}.",
@@ -396,9 +394,7 @@ pub(in crate::runtime::render) fn runtime_agent_say_copy_sentence(
 }
 
 /// Formats the target destination carried by a `/copy` status row.
-pub(in crate::runtime::render) fn runtime_copy_destination_display(
-    record: &RuntimeDisplayRecord,
-) -> String {
+pub(crate) fn runtime_copy_destination_display(record: &RuntimeDisplayRecord) -> String {
     match record.field_value("destination").unwrap_or("pane") {
         "buffer" => format!(
             "buffer {}",
@@ -411,9 +407,7 @@ pub(in crate::runtime::render) fn runtime_copy_destination_display(
 }
 
 /// Formats `/fork` rows as a readable sentence rather than raw key/value data.
-pub(in crate::runtime::render) fn runtime_agent_fork_sentence(
-    record: &RuntimeDisplayRecord,
-) -> Option<String> {
+pub(crate) fn runtime_agent_fork_sentence(record: &RuntimeDisplayRecord) -> Option<String> {
     let pane = record.field_value("pane")?;
     let source_pane = record.field_value("source_pane").unwrap_or("unknown pane");
     let conversation_id = record.field_value("conversation_id")?;
@@ -431,9 +425,7 @@ pub(in crate::runtime::render) fn runtime_agent_fork_sentence(
 }
 
 /// Formats pane-local routing status and mutation rows.
-pub(in crate::runtime::render) fn runtime_routing_sentence(
-    record: &RuntimeDisplayRecord,
-) -> Option<String> {
+pub(crate) fn runtime_routing_sentence(record: &RuntimeDisplayRecord) -> Option<String> {
     let pane = record.field_value("pane")?;
     let enabled = runtime_enabled_phrase(record.field_value("enabled")?);
     let default = runtime_enabled_phrase(record.field_value("default")?);
@@ -461,9 +453,7 @@ pub(in crate::runtime::render) fn runtime_routing_sentence(
 }
 
 /// Formats permission and approval-policy rows as human-readable statements.
-pub(in crate::runtime::render) fn runtime_policy_sentence(
-    record: &RuntimeDisplayRecord,
-) -> Option<String> {
+pub(crate) fn runtime_policy_sentence(record: &RuntimeDisplayRecord) -> Option<String> {
     if let (Some(field), Some(current), Some(requested)) = (
         record.field_value("field"),
         record.field_value("current"),
@@ -509,7 +499,7 @@ pub(in crate::runtime::render) fn runtime_policy_sentence(
 }
 
 /// Returns `enabled` or `disabled` for compact boolean display values.
-pub(in crate::runtime::render) fn runtime_enabled_phrase(value: &str) -> &'static str {
+pub(crate) fn runtime_enabled_phrase(value: &str) -> &'static str {
     if value == "true" {
         "enabled"
     } else {

@@ -802,7 +802,7 @@ impl RuntimeSessionService {
     }
 
     /// Starts one loop-owned work turn using the current pane loop state.
-    pub(in crate::runtime) fn start_agent_loop_work_turn(
+    pub(crate) fn start_agent_loop_work_turn(
         &mut self,
         pane_id: &str,
     ) -> Result<RuntimeAgentPromptTurnStart> {
@@ -887,7 +887,7 @@ impl RuntimeSessionService {
 
     /// Restores the pane's durable parent conversation after a loop-owned
     /// ephemeral fork attempt finishes or is interrupted.
-    pub(in crate::runtime) fn restore_agent_loop_parent_conversation(
+    pub(crate) fn restore_agent_loop_parent_conversation(
         &mut self,
         pane_id: &str,
         state: &RuntimeAgentLoopState,

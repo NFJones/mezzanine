@@ -11,7 +11,7 @@ use super::{
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn rendered_client_view_json(view: &RenderedClientView) -> String {
+pub(crate) fn rendered_client_view_json(view: &RenderedClientView) -> String {
     let (presentation_lines, presentation_spans) =
         compose_client_presentation_with_styles(view, None);
     let lines = presentation_lines
@@ -142,9 +142,7 @@ fn terminal_cursor_style_name(style: TerminalCursorStyle) -> &'static str {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn terminal_line_style_spans_json(
-    line_spans: &[Vec<TerminalStyleSpan>],
-) -> String {
+pub(crate) fn terminal_line_style_spans_json(line_spans: &[Vec<TerminalStyleSpan>]) -> String {
     let lines = line_spans
         .iter()
         .map(|spans| terminal_style_spans_json(spans))
@@ -215,7 +213,7 @@ fn terminal_color_json(color: Option<TerminalColor>) -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn client_view_role_name(role: ClientViewRole) -> &'static str {
+pub(crate) fn client_view_role_name(role: ClientViewRole) -> &'static str {
     match role {
         ClientViewRole::Primary => "primary",
         ClientViewRole::Observer => "observer",

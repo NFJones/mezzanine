@@ -23,10 +23,7 @@ impl RuntimeSessionService {
     ///
     /// # Parameters
     /// - `turn_id`: Parent macro orchestration turn id.
-    pub(in crate::runtime) fn macro_judge_step_index_for_turn(
-        &self,
-        turn_id: &str,
-    ) -> Option<usize> {
+    pub(crate) fn macro_judge_step_index_for_turn(&self, turn_id: &str) -> Option<usize> {
         match self.agent.macro_runs_by_parent_turn.get(turn_id)?.phase {
             MacroRunPhase::WaitingForJudge { step_index } => Some(step_index),
             _ => None,
@@ -46,7 +43,7 @@ impl RuntimeSessionService {
     /// - `model_profile`: Parent model profile used to make the judge request.
     /// - `step_index`: Completed step index that needs semantic judgment.
     #[cfg(test)]
-    pub(in crate::runtime) fn execute_macro_judge_with_provider<P: ModelProvider>(
+    pub(crate) fn execute_macro_judge_with_provider<P: ModelProvider>(
         &mut self,
         provider: &P,
         turn: &AgentTurnRecord,
@@ -103,7 +100,7 @@ impl RuntimeSessionService {
 
     /// Builds the structured provider request used to judge one completed
     /// macro step.
-    pub(in crate::runtime) fn macro_judge_request_for_turn(
+    pub(crate) fn macro_judge_request_for_turn(
         &self,
         turn: &AgentTurnRecord,
         model_profile: &ModelProfile,
@@ -138,7 +135,7 @@ impl RuntimeSessionService {
     }
 
     /// Applies one validated macro judge decision to the parent macro run.
-    pub(in crate::runtime) fn apply_macro_judge_provider_response(
+    pub(crate) fn apply_macro_judge_provider_response(
         &mut self,
         turn: &AgentTurnRecord,
         step_index: usize,

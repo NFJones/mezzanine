@@ -20,7 +20,7 @@ use mez_agent::memory::{
 
 impl RuntimeSessionService {
     /// Executes provider-produced persistent-memory actions for one running turn.
-    pub(in crate::runtime) fn execute_running_memory_actions_for_turn(
+    pub(crate) fn execute_running_memory_actions_for_turn(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &mut AgentTurnExecution,

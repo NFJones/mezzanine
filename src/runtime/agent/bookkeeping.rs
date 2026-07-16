@@ -20,7 +20,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn persist_runtime_agent_turn_execution_transcript(
+    pub(crate) fn persist_runtime_agent_turn_execution_transcript(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
@@ -156,7 +156,7 @@ impl RuntimeSessionService {
     /// Recovery paths can remove an in-flight execution before transcript
     /// persistence runs, so action-result boundaries call this helper to keep
     /// `/copy-patches` complete for failed attempts as well as settled turns.
-    pub(in crate::runtime) fn record_runtime_agent_patch_results_for_turn(
+    pub(crate) fn record_runtime_agent_patch_results_for_turn(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
@@ -263,7 +263,7 @@ impl RuntimeSessionService {
     }
 
     /// Retains the latest model-authored `say` text for pane-local copy commands.
-    pub(in crate::runtime) fn record_agent_copy_output(
+    pub(crate) fn record_agent_copy_output(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
@@ -296,7 +296,7 @@ impl RuntimeSessionService {
 
     /// Adds provider-reported token usage to the active pane conversation.
     #[cfg(test)]
-    pub(in crate::runtime) fn record_agent_provider_token_usage(
+    pub(crate) fn record_agent_provider_token_usage(
         &mut self,
         pane_id: &str,
         usage: ModelTokenUsage,
@@ -315,7 +315,7 @@ impl RuntimeSessionService {
     }
 
     /// Adds provider-reported token usage using the exact selected model profile.
-    pub(in crate::runtime) fn record_agent_provider_token_usage_with_profile(
+    pub(crate) fn record_agent_provider_token_usage_with_profile(
         &mut self,
         pane_id: &str,
         usage: ModelTokenUsage,
@@ -377,7 +377,7 @@ impl RuntimeSessionService {
     /// therefore do not have a user-visible model profile for context-window
     /// display. They should still appear in provider/model token accounting so
     /// `/status` and durable metadata include their cost.
-    pub(in crate::runtime) fn record_agent_provider_token_usage_by_model(
+    pub(crate) fn record_agent_provider_token_usage_by_model(
         &mut self,
         pane_id: &str,
         usage_by_model: &BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
@@ -421,7 +421,7 @@ impl RuntimeSessionService {
     }
 
     /// Stores the latest provider-reported quota usage for the active pane conversation.
-    pub(in crate::runtime) fn record_agent_provider_quota_usage(
+    pub(crate) fn record_agent_provider_quota_usage(
         &mut self,
         pane_id: &str,
         quota_usage: &[ProviderQuotaUsage],

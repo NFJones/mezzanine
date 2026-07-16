@@ -34,7 +34,7 @@ const RUNTIME_ACTION_PRESSURE_LABEL: &str = "action pressure";
 
 impl RuntimeSessionService {
     /// Appends one transported read chunk to an active apply-patch batch.
-    pub(in crate::runtime) fn append_apply_patch_batch_transport(
+    pub(crate) fn append_apply_patch_batch_transport(
         &mut self,
         state_key: &str,
         transport_chunk: &[u8],
@@ -47,10 +47,7 @@ impl RuntimeSessionService {
     }
 
     /// Builds the state key for one batched shell-backed `apply_patch` action.
-    pub(in crate::runtime) fn apply_patch_batch_state_key(
-        turn_id: &str,
-        action_id: &str,
-    ) -> String {
+    pub(crate) fn apply_patch_batch_state_key(turn_id: &str, action_id: &str) -> String {
         format!("{turn_id}/{action_id}")
     }
 
@@ -92,7 +89,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn execution_has_pending_shell_dispatch(
+    pub(crate) fn execution_has_pending_shell_dispatch(
         &self,
         turn_id: &str,
         execution: &AgentTurnExecution,
@@ -141,7 +138,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn turn_has_running_readiness_probe(&self, turn_id: &str) -> bool {
+    pub(crate) fn turn_has_running_readiness_probe(&self, turn_id: &str) -> bool {
         self.turn_has_running_shell_transaction_kind(
             turn_id,
             &RunningShellTransactionKind::ReadinessProbe,
@@ -194,11 +191,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn record_shell_dispatch_history(
-        &mut self,
-        turn_id: &str,
-        command: &str,
-    ) {
+    pub(crate) fn record_shell_dispatch_history(&mut self, turn_id: &str, command: &str) {
         self.agent
             .agent_turn_shell_dispatch_history
             .entry(turn_id.to_string())
@@ -209,7 +202,7 @@ impl RuntimeSessionService {
 
     /// Records a shell command that exited successfully for loop detection and
     /// mutation/validation phase tracking.
-    pub(in crate::runtime) fn record_shell_dispatch_success(
+    pub(crate) fn record_shell_dispatch_success(
         &mut self,
         turn_id: &str,
         command: &str,
@@ -306,7 +299,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn dispatch_stored_running_shell_actions(
+    pub(crate) fn dispatch_stored_running_shell_actions(
         &mut self,
         turn_id: &str,
     ) -> Result<Option<AgentTurnExecution>> {
@@ -402,7 +395,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn fail_pending_shell_action_for_hook_block(
+    pub(crate) fn fail_pending_shell_action_for_hook_block(
         &mut self,
         continuation: &PendingFocusedShellHookContinuation,
         block: &RuntimeHookPipelineBlock,
@@ -964,7 +957,7 @@ impl RuntimeSessionService {
     /// - `action_id`: The action whose read transaction completed.
     /// - `transaction`: The completed read transaction state.
     /// - `exit_code`: The shell exit status observed for the read transaction.
-    pub(in crate::runtime) fn dispatch_apply_patch_followup_if_needed(
+    pub(crate) fn dispatch_apply_patch_followup_if_needed(
         &mut self,
         turn: &AgentTurnRecord,
         action_id: &str,

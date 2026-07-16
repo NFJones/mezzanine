@@ -26,7 +26,7 @@ use super::{
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_marker_for_action(
+pub(crate) fn runtime_marker_for_action(
     turn: &AgentTurnRecord,
     action_id: &str,
 ) -> Result<MarkerToken> {
@@ -42,7 +42,7 @@ pub(in crate::runtime) fn runtime_marker_for_action(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_random_marker_token(material: &str) -> Result<MarkerToken> {
+pub(crate) fn runtime_random_marker_token(material: &str) -> Result<MarkerToken> {
     let mut random = [0u8; 32];
     {
         use std::io::Read as _;
@@ -66,7 +66,7 @@ pub(in crate::runtime) fn runtime_random_marker_token(material: &str) -> Result<
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_pre_shell_hook_payload(
+pub(crate) fn runtime_pre_shell_hook_payload(
     turn: &AgentTurnRecord,
     action: &AgentAction,
     command: &str,
@@ -87,7 +87,7 @@ pub(in crate::runtime) fn runtime_pre_shell_hook_payload(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_post_shell_hook_payload(
+pub(crate) fn runtime_post_shell_hook_payload(
     turn: &AgentTurnRecord,
     action: &AgentAction,
     result: &ActionResult,
@@ -110,7 +110,7 @@ pub(in crate::runtime) fn runtime_post_shell_hook_payload(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_hook_target_pane_id(event_payload_json: &str) -> Option<String> {
+pub(crate) fn runtime_hook_target_pane_id(event_payload_json: &str) -> Option<String> {
     let value = serde_json::from_str::<Value>(event_payload_json).ok()?;
     value
         .get("pane_id")
@@ -126,7 +126,7 @@ pub(in crate::runtime) fn runtime_hook_target_pane_id(event_payload_json: &str) 
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_user_prompt_hook_payload(pane_id: &str, prompt: &str) -> String {
+pub(crate) fn runtime_user_prompt_hook_payload(pane_id: &str, prompt: &str) -> String {
     format!(
         r#"{{"pane_id":"{}","prompt_bytes":{},"prompt_sha256":"{}"}}"#,
         json_escape(pane_id),
@@ -140,7 +140,7 @@ pub(in crate::runtime) fn runtime_user_prompt_hook_payload(pane_id: &str, prompt
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_agent_turn_start_hook_payload(
+pub(crate) fn runtime_agent_turn_start_hook_payload(
     turn: &AgentTurnRecord,
     model_profile: &ModelProfile,
 ) -> String {
@@ -159,7 +159,7 @@ pub(in crate::runtime) fn runtime_agent_turn_start_hook_payload(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_pre_mcp_hook_payload(
+pub(crate) fn runtime_pre_mcp_hook_payload(
     turn: &AgentTurnRecord,
     action: &AgentAction,
     server: &str,
@@ -184,7 +184,7 @@ pub(in crate::runtime) fn runtime_pre_mcp_hook_payload(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_post_mcp_hook_payload(
+pub(crate) fn runtime_post_mcp_hook_payload(
     turn: &AgentTurnRecord,
     action: &AgentAction,
     result: &ActionResult,
@@ -205,7 +205,7 @@ pub(in crate::runtime) fn runtime_post_mcp_hook_payload(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_permission_request_hook_payload(
+pub(crate) fn runtime_permission_request_hook_payload(
     turn: &AgentTurnRecord,
     action: &AgentAction,
     result: &ActionResult,
@@ -229,7 +229,7 @@ pub(in crate::runtime) fn runtime_permission_request_hook_payload(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_permission_decision_hook_payload(
+pub(crate) fn runtime_permission_decision_hook_payload(
     approval_id: &str,
     decision: &str,
 ) -> String {
@@ -245,7 +245,7 @@ pub(in crate::runtime) fn runtime_permission_decision_hook_payload(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_mcp_error_code(error: &MezError) -> &'static str {
+pub(crate) fn runtime_mcp_error_code(error: &MezError) -> &'static str {
     match error.kind() {
         crate::error::MezErrorKind::InvalidState
             if error.message().contains("MCP protocol error")
@@ -265,9 +265,7 @@ pub(in crate::runtime) fn runtime_mcp_error_code(error: &MezError) -> &'static s
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_hook_definitions_from_config(
-    root: &Value,
-) -> Result<Vec<HookDefinition>> {
+pub(crate) fn runtime_hook_definitions_from_config(root: &Value) -> Result<Vec<HookDefinition>> {
     let mut definitions = Vec::new();
     let Some(hooks) = runtime_json_object(root, "hooks") else {
         return Ok(definitions);

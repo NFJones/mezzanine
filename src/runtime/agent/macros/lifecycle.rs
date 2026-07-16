@@ -21,10 +21,7 @@ impl RuntimeSessionService {
     ///
     /// # Parameters
     /// - `pane_id`: Pane whose current working directory scopes project macros.
-    pub(in crate::runtime) fn effective_macro_catalog_for_pane(
-        &self,
-        pane_id: &str,
-    ) -> MacroCatalog {
+    pub(crate) fn effective_macro_catalog_for_pane(&self, pane_id: &str) -> MacroCatalog {
         let project_root = self.trusted_macro_project_root_for_pane(pane_id);
         discover_macro_catalog(self.integration.config_root(), project_root.as_deref())
     }
@@ -132,7 +129,7 @@ impl RuntimeSessionService {
     /// # Parameters
     /// - `pane_id`: Parent pane where the user invoked the macro.
     /// - `prompt`: Original user prompt beginning with `#<macro-name>`.
-    pub(in crate::runtime) fn start_agent_macro_prompt_turn(
+    pub(crate) fn start_agent_macro_prompt_turn(
         &mut self,
         pane_id: &str,
         prompt: &str,

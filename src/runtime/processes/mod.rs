@@ -71,7 +71,7 @@ use transactions::{
 /// this component prevents unrelated runtime leaves from mutating incomplete
 /// process metadata.
 #[derive(Debug, Default)]
-pub(in crate::runtime) struct RuntimeProcessComponent {
+pub(crate) struct RuntimeProcessComponent {
     /// Live terminal and shell settings applied to process state.
     settings: RuntimeProcessSettings,
     /// Live pane process handles and their PTY lifecycle manager.
@@ -152,7 +152,7 @@ impl Default for RuntimeProcessSettings {
 
 impl RuntimeProcessComponent {
     /// Builds process ownership around the manager supplied by runtime construction.
-    pub(in crate::runtime) fn with_pane_processes(pane_processes: PaneProcessManager) -> Self {
+    pub(crate) fn with_pane_processes(pane_processes: PaneProcessManager) -> Self {
         Self {
             pane_processes,
             ..Self::default()
@@ -162,12 +162,12 @@ impl RuntimeProcessComponent {
 
 impl RuntimeSessionService {
     /// Returns the number of active pane output pipes.
-    pub(in crate::runtime) fn active_pane_pipe_count(&self) -> usize {
+    pub(crate) fn active_pane_pipe_count(&self) -> usize {
         self.process.active_pane_pipes.len()
     }
 
     /// Registers one live shell transaction and its start-marker invariant.
-    pub(in crate::runtime) fn register_running_shell_transaction(
+    pub(crate) fn register_running_shell_transaction(
         &mut self,
         marker: String,
         transaction: RunningShellTransactionRef,
@@ -184,7 +184,7 @@ impl RuntimeSessionService {
     }
 
     /// Reports whether an agent action has a live shell transaction.
-    pub(in crate::runtime) fn agent_action_has_running_shell_transaction(
+    pub(crate) fn agent_action_has_running_shell_transaction(
         &self,
         turn_id: &str,
         action_id: &str,
@@ -204,10 +204,7 @@ impl RuntimeSessionService {
     }
 
     /// Reports whether a turn has any live agent-action shell transaction.
-    pub(in crate::runtime) fn turn_has_running_agent_action_shell_transaction(
-        &self,
-        turn_id: &str,
-    ) -> bool {
+    pub(crate) fn turn_has_running_agent_action_shell_transaction(&self, turn_id: &str) -> bool {
         self.process
             .running_shell_transactions
             .values()
@@ -221,7 +218,7 @@ impl RuntimeSessionService {
     }
 
     /// Reports whether a turn has a live transaction of the requested kind.
-    pub(in crate::runtime) fn turn_has_running_shell_transaction_kind(
+    pub(crate) fn turn_has_running_shell_transaction_kind(
         &self,
         turn_id: &str,
         kind: &RunningShellTransactionKind,
@@ -233,7 +230,7 @@ impl RuntimeSessionService {
     }
 
     /// Reports whether one pane has any live shell transaction.
-    pub(in crate::runtime) fn pane_has_running_shell_transaction(&self, pane_id: &str) -> bool {
+    pub(crate) fn pane_has_running_shell_transaction(&self, pane_id: &str) -> bool {
         self.process
             .running_shell_transactions
             .values()
@@ -241,7 +238,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns marker and pane pairs for every live transaction in one turn.
-    pub(in crate::runtime) fn running_shell_transaction_targets_for_turn(
+    pub(crate) fn running_shell_transaction_targets_for_turn(
         &self,
         turn_id: &str,
     ) -> Vec<(String, String)> {
@@ -254,7 +251,7 @@ impl RuntimeSessionService {
     }
 
     /// Removes one live shell transaction by marker.
-    pub(in crate::runtime) fn remove_running_shell_transaction(
+    pub(crate) fn remove_running_shell_transaction(
         &mut self,
         marker: &str,
     ) -> Option<RunningShellTransactionRef> {
@@ -262,7 +259,7 @@ impl RuntimeSessionService {
     }
 
     /// Clears all live shell transactions and marker protocol state.
-    pub(in crate::runtime) fn clear_all_shell_transaction_state(&mut self) {
+    pub(crate) fn clear_all_shell_transaction_state(&mut self) {
         self.process.running_shell_transactions.clear();
         self.process.shell_transaction_require_start_markers.clear();
         self.process.shell_transaction_started_markers.clear();
@@ -274,17 +271,17 @@ impl RuntimeSessionService {
     }
 
     /// Returns the active pane-screen history rotation batch size.
-    pub(in crate::runtime) fn terminal_history_rotate_lines(&self) -> usize {
+    pub(crate) fn terminal_history_rotate_lines(&self) -> usize {
         self.process.settings.terminal_history_rotate_lines
     }
 
     /// Returns the TERM value exported to pane processes and clients.
-    pub(in crate::runtime) fn terminal_term(&self) -> &str {
+    pub(crate) fn terminal_term(&self) -> &str {
         &self.process.settings.terminal_term
     }
 
     /// Applies one parsed generation of terminal process settings.
-    pub(in crate::runtime) fn apply_process_terminal_settings(
+    pub(crate) fn apply_process_terminal_settings(
         &mut self,
         history_limit: usize,
         history_rotate_lines: usize,
@@ -304,9 +301,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns all modeled pane screens for whole-layout presentation.
-    pub(in crate::runtime) fn pane_screens(
-        &self,
-    ) -> &std::collections::BTreeMap<String, TerminalScreen> {
+    pub(crate) fn pane_screens(&self) -> &std::collections::BTreeMap<String, TerminalScreen> {
         &self.process.pane_screens
     }
 
@@ -316,29 +311,22 @@ impl RuntimeSessionService {
     }
 
     /// Returns mutable modeled terminal state for one runtime operation.
-    pub(in crate::runtime) fn pane_screen_mut(
-        &mut self,
-        pane_id: &str,
-    ) -> Option<&mut TerminalScreen> {
+    pub(crate) fn pane_screen_mut(&mut self, pane_id: &str) -> Option<&mut TerminalScreen> {
         self.process.pane_screens.get_mut(pane_id)
     }
 
     /// Replaces the modeled terminal screen for one pane.
-    pub(in crate::runtime) fn set_pane_screen(
-        &mut self,
-        pane_id: impl Into<String>,
-        screen: TerminalScreen,
-    ) {
+    pub(crate) fn set_pane_screen(&mut self, pane_id: impl Into<String>, screen: TerminalScreen) {
         self.process.pane_screens.insert(pane_id.into(), screen);
     }
 
     /// Clears modeled terminal state when the live session is replaced.
-    pub(in crate::runtime) fn clear_pane_screens(&mut self) {
+    pub(crate) fn clear_pane_screens(&mut self) {
         self.process.pane_screens.clear();
     }
 
     /// Applies new history retention policy to every modeled pane screen.
-    pub(in crate::runtime) fn configure_pane_screen_history(
+    pub(crate) fn configure_pane_screen_history(
         &mut self,
         history_limit: usize,
         rotate_lines: usize,
@@ -351,7 +339,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns the last readiness state observed for a pane shell.
-    pub(in crate::runtime) fn pane_readiness_state(&self, pane_id: &str) -> PaneReadinessState {
+    pub(crate) fn pane_readiness_state(&self, pane_id: &str) -> PaneReadinessState {
         self.process
             .pane_readiness_states
             .get(pane_id)
@@ -360,18 +348,14 @@ impl RuntimeSessionService {
     }
 
     /// Records the current readiness state for one pane shell.
-    pub(in crate::runtime) fn set_pane_readiness(
-        &mut self,
-        pane_id: &str,
-        state: PaneReadinessState,
-    ) {
+    pub(crate) fn set_pane_readiness(&mut self, pane_id: &str, state: PaneReadinessState) {
         self.process
             .pane_readiness_states
             .insert(pane_id.to_string(), state);
     }
 
     /// Revokes readiness authority for one pane after a shell lifecycle event.
-    pub(in crate::runtime) fn revoke_pane_readiness_override(
+    pub(crate) fn revoke_pane_readiness_override(
         &mut self,
         pane_id: &str,
         reason: ReadinessOverrideRevocation,
@@ -382,17 +366,14 @@ impl RuntimeSessionService {
     }
 
     /// Reports whether one pane still has a readiness probe in flight.
-    pub(in crate::runtime) fn pane_readiness_override_has_pending_probe(
-        &self,
-        pane_id: &str,
-    ) -> bool {
+    pub(crate) fn pane_readiness_override_has_pending_probe(&self, pane_id: &str) -> bool {
         self.process
             .pane_readiness_overrides
             .has_pending_probe(pane_id)
     }
 
     /// Executes the readiness override command against process-owned state.
-    pub(in crate::runtime) fn execute_pane_readiness_override_command(
+    pub(crate) fn execute_pane_readiness_override_command(
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         invocation: &CommandInvocation,
@@ -411,7 +392,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns the bootstrap-derived environment signature for one pane.
-    pub(in crate::runtime) fn pane_environment_signature(
+    pub(crate) fn pane_environment_signature(
         &self,
         pane_id: &str,
     ) -> Option<&EnvironmentSignature> {
@@ -419,13 +400,13 @@ impl RuntimeSessionService {
     }
 
     /// Clears pane readiness states and manual overrides for session replacement.
-    pub(in crate::runtime) fn clear_pane_readiness_state_and_overrides(&mut self) {
+    pub(crate) fn clear_pane_readiness_state_and_overrides(&mut self) {
         self.process.pane_readiness_states.clear();
         self.process.pane_readiness_overrides = Default::default();
     }
 
     /// Records the best-known current working directory for one pane process.
-    pub(in crate::runtime) fn set_pane_current_working_directory(
+    pub(crate) fn set_pane_current_working_directory(
         &mut self,
         pane_id: impl Into<String>,
         path: PathBuf,
@@ -441,17 +422,14 @@ impl RuntimeSessionService {
     }
 
     /// Returns the current output-activity sequence for one pane process.
-    pub(in crate::runtime) fn pane_process_output_activity_sequence(
-        &self,
-        pane_id: &str,
-    ) -> Option<u64> {
+    pub(crate) fn pane_process_output_activity_sequence(&self, pane_id: &str) -> Option<u64> {
         self.process
             .pane_processes
             .output_activity_sequence(pane_id)
     }
 
     /// Waits for a pane process to publish output after a known sequence.
-    pub(in crate::runtime) fn wait_for_pane_process_output_activity_after(
+    pub(crate) fn wait_for_pane_process_output_activity_after(
         &self,
         pane_id: &str,
         sequence: u64,
@@ -463,29 +441,29 @@ impl RuntimeSessionService {
     }
 
     /// Returns the executable name observed for one live pane process.
-    pub(in crate::runtime) fn pane_process_name(&self, pane_id: &str) -> Option<String> {
+    pub(crate) fn pane_process_name(&self, pane_id: &str) -> Option<String> {
         self.process.pane_processes.process_name(pane_id)
     }
 
     /// Returns pane ids currently tracked by the live process manager.
-    pub(in crate::runtime) fn tracked_runtime_pane_process_ids(&self) -> Vec<String> {
+    pub(crate) fn tracked_runtime_pane_process_ids(&self) -> Vec<String> {
         self.process.pane_processes.tracked_pane_ids()
     }
 
     /// Clears visible and hidden shell transaction parser state on shutdown.
-    pub(in crate::runtime) fn clear_pane_transaction_parsers(&mut self) {
+    pub(crate) fn clear_pane_transaction_parsers(&mut self) {
         self.process.pane_transaction_osc_screens.clear();
         self.process.pane_transaction_osc_pending.clear();
     }
 
     /// Clears pane exit and closing markers when the live session is replaced.
-    pub(in crate::runtime) fn clear_pane_process_lifecycle_tracking(&mut self) {
+    pub(crate) fn clear_pane_process_lifecycle_tracking(&mut self) {
         self.process.pane_exit_records.clear();
         self.process.pane_closing.clear();
     }
 
     /// Returns the last observed exit status for a pane process.
-    pub(in crate::runtime) fn pane_exit_status(&self, pane_id: &str) -> Option<PaneExitStatus> {
+    pub(crate) fn pane_exit_status(&self, pane_id: &str) -> Option<PaneExitStatus> {
         self.process
             .pane_exit_records
             .get(pane_id)
@@ -493,12 +471,12 @@ impl RuntimeSessionService {
     }
 
     /// Marks a pane as being in process teardown.
-    pub(in crate::runtime) fn mark_pane_closing(&mut self, pane_id: impl Into<String>) {
+    pub(crate) fn mark_pane_closing(&mut self, pane_id: impl Into<String>) {
         self.process.pane_closing.insert(pane_id.into());
     }
 
     /// Reports whether a pane is already in process teardown.
-    pub(in crate::runtime) fn pane_is_closing(&self, pane_id: &str) -> bool {
+    pub(crate) fn pane_is_closing(&self, pane_id: &str) -> bool {
         self.process.pane_closing.contains(pane_id)
     }
 }
@@ -506,37 +484,34 @@ impl RuntimeSessionService {
 #[cfg(test)]
 impl RuntimeSessionService {
     /// Returns live shell transactions for integration-test observation.
-    pub(in crate::runtime) fn running_shell_transactions_for_tests(
+    pub(crate) fn running_shell_transactions_for_tests(
         &self,
     ) -> &std::collections::BTreeMap<String, RunningShellTransactionRef> {
         &self.process.running_shell_transactions
     }
 
     /// Returns live shell transactions for process-fixture mutation.
-    pub(in crate::runtime) fn running_shell_transactions_mut_for_tests(
+    pub(crate) fn running_shell_transactions_mut_for_tests(
         &mut self,
     ) -> &mut std::collections::BTreeMap<String, RunningShellTransactionRef> {
         &mut self.process.running_shell_transactions
     }
 
     /// Reports whether a transaction still requires a start marker.
-    pub(in crate::runtime) fn shell_transaction_requires_start_marker_for_tests(
-        &self,
-        marker: &str,
-    ) -> bool {
+    pub(crate) fn shell_transaction_requires_start_marker_for_tests(&self, marker: &str) -> bool {
         self.process
             .shell_transaction_require_start_markers
             .contains(marker)
     }
 
     /// Reports whether a transaction start marker has been observed.
-    pub(in crate::runtime) fn shell_transaction_started_for_tests(&self, marker: &str) -> bool {
+    pub(crate) fn shell_transaction_started_for_tests(&self, marker: &str) -> bool {
         self.process
             .shell_transaction_started_markers
             .contains(marker)
     }
     /// Installs a manual readiness override for a test epoch.
-    pub(in crate::runtime) fn mark_pane_readiness_override_for_tests(
+    pub(crate) fn mark_pane_readiness_override_for_tests(
         &mut self,
         pane_id: &str,
         epoch: u64,
@@ -550,7 +525,7 @@ impl RuntimeSessionService {
     }
 
     /// Reports whether a manual readiness override allows a test epoch.
-    pub(in crate::runtime) fn pane_readiness_override_allows_epoch_for_tests(
+    pub(crate) fn pane_readiness_override_allows_epoch_for_tests(
         &self,
         pane_id: &str,
         epoch: u64,
@@ -561,7 +536,7 @@ impl RuntimeSessionService {
     }
 
     /// Reports whether bootstrap remains pending for a process fixture.
-    pub(in crate::runtime) fn pane_bootstrap_is_pending_for_tests(&self, pane_id: &str) -> bool {
+    pub(crate) fn pane_bootstrap_is_pending_for_tests(&self, pane_id: &str) -> bool {
         self.process.pane_bootstrap_pending.contains(pane_id)
     }
     /// Returns the process manager for integration-test observation.
@@ -575,28 +550,28 @@ impl RuntimeSessionService {
     }
 
     /// Returns mutable visible transaction parsers for a process fixture.
-    pub(in crate::runtime) fn pane_transaction_osc_screens_mut_for_tests(
+    pub(crate) fn pane_transaction_osc_screens_mut_for_tests(
         &mut self,
     ) -> &mut std::collections::BTreeMap<String, TerminalScreen> {
         &mut self.process.pane_transaction_osc_screens
     }
 
     /// Returns visible transaction parsers for process integration tests.
-    pub(in crate::runtime) fn pane_transaction_osc_screens_for_tests(
+    pub(crate) fn pane_transaction_osc_screens_for_tests(
         &self,
     ) -> &std::collections::BTreeMap<String, TerminalScreen> {
         &self.process.pane_transaction_osc_screens
     }
 
     /// Returns hidden transaction fragments for process integration tests.
-    pub(in crate::runtime) fn pane_transaction_osc_pending_for_tests(
+    pub(crate) fn pane_transaction_osc_pending_for_tests(
         &self,
     ) -> &std::collections::BTreeMap<String, Vec<u8>> {
         &self.process.pane_transaction_osc_pending
     }
 
     /// Installs one pane exit status for presentation integration tests.
-    pub(in crate::runtime) fn set_pane_exit_status_for_tests(
+    pub(crate) fn set_pane_exit_status_for_tests(
         &mut self,
         pane_id: impl Into<String>,
         exit_status: PaneExitStatus,

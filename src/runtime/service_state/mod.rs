@@ -19,7 +19,7 @@ mod interaction;
 mod lifecycle;
 mod mcp_transport;
 mod metrics;
-pub(in crate::runtime) use agent_state::{
+pub(crate) use agent_state::{
     BlockedAgentApprovalRef, JoinedSubagentDependency, PaneDescriptor,
     PendingFocusedShellHookContinuation, PendingFocusedShellHookTransaction,
     RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentPersonalityProfile,
@@ -32,7 +32,7 @@ pub(in crate::runtime) use agent_state::{
 pub use agent_state::{
     RuntimeShellTransactionTimerKind, RuntimeShellTransactionTimerRef, SubagentWaitPolicy,
 };
-pub(in crate::runtime) use interaction::{
+pub(crate) use interaction::{
     MouseResizeDragState, MouseSelectionDragState, RuntimeAgentCopyOutput,
     RuntimeAgentModifiedFileSummary, RuntimeAgentPromptInput, RuntimeCommandBinding,
     RuntimeMouseClickState, RuntimePrimaryPromptInput, RuntimeSubagentPlacement,
@@ -40,13 +40,13 @@ pub(in crate::runtime) use interaction::{
 pub use interaction::{
     RuntimeAgentPromptTurnStart, RuntimeAgentTurnStop, RuntimeConfigApplyReport,
 };
-pub(in crate::runtime) use lifecycle::RuntimeAgentPatchRecord;
+pub(crate) use lifecycle::RuntimeAgentPatchRecord;
 pub use lifecycle::{RuntimeLifecycleState, RuntimeRegistryUpdatePlan};
 pub(crate) use lifecycle::{
     RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
     RuntimeSnapshotControlAsyncWorkKind, RuntimeSnapshotOwnedCreationContext,
 };
-pub(in crate::runtime) use mcp_transport::{
+pub(crate) use mcp_transport::{
     RuntimeHookPipelineBlock, RuntimeHttpMcpTransportState, RuntimeMcpRetryReport,
     RuntimeMcpTransportSet,
 };
@@ -57,4 +57,4 @@ pub use metrics::{
     DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW, DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT,
     DEFAULT_PTY_READ_LIMIT_BYTES, DEFAULT_SUBAGENT_WAIT_POLICY,
 };
-pub(in crate::runtime) use metrics::{ProgramOwnedPaneTitle, RuntimeMetricsSnapshot};
+pub(crate) use metrics::{ProgramOwnedPaneTitle, RuntimeMetricsSnapshot};

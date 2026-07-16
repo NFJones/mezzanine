@@ -42,7 +42,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn retry_runtime_mcp_server(
+    pub(crate) fn retry_runtime_mcp_server(
         &mut self,
         server_id: &str,
     ) -> Result<RuntimeMcpRetryReport> {
@@ -126,7 +126,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) async fn discover_runtime_mcp_transports_async(
+    pub(crate) async fn discover_runtime_mcp_transports_async(
         &mut self,
         registry: &mut McpRegistry,
         environment: &BTreeMap<String, String>,
@@ -198,7 +198,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn discover_runtime_mcp_transport(
+    pub(crate) fn discover_runtime_mcp_transport(
         &mut self,
         registry: &mut McpRegistry,
         server_id: &str,
@@ -215,7 +215,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) async fn discover_runtime_mcp_transport_async(
+    pub(crate) async fn discover_runtime_mcp_transport_async(
         &mut self,
         registry: &mut McpRegistry,
         server_id: &str,

@@ -15,9 +15,7 @@ use super::{
 use mez_mux::render::push_or_extend_style_span;
 
 /// Builds the compact header shown for action execution/result output.
-pub(in crate::runtime::render) fn agent_action_execution_display_header(
-    action: &AgentAction,
-) -> Option<String> {
+pub(crate) fn agent_action_execution_display_header(action: &AgentAction) -> Option<String> {
     let header = match &action.payload {
         AgentActionPayload::WebSearch { query, .. } => {
             format!("web search: {}", agent_action_display_preview(query))
@@ -234,9 +232,7 @@ pub(in crate::runtime::render) fn agent_action_execution_display_header(
 }
 
 /// Returns model-authored action summary lines for normal thinking logs.
-pub(in crate::runtime::render) fn agent_action_model_thinking_lines(
-    action: &AgentAction,
-) -> Vec<String> {
+pub(crate) fn agent_action_model_thinking_lines(action: &AgentAction) -> Vec<String> {
     match &action.payload {
         AgentActionPayload::ShellCommand { summary, .. } => {
             let summary = sanitized_agent_terminal_line(summary.trim());
@@ -251,7 +247,7 @@ pub(in crate::runtime::render) fn agent_action_model_thinking_lines(
 }
 
 /// Normalizes model-authored thinking text before presenting it as assistant output.
-pub(in crate::runtime::render) fn agent_thinking_display_text(text: &str) -> String {
+pub(crate) fn agent_thinking_display_text(text: &str) -> String {
     text.trim_end_matches(['\r', '\n'])
         .lines()
         .map(|line| {
@@ -267,10 +263,7 @@ pub(in crate::runtime::render) fn agent_thinking_display_text(text: &str) -> Str
 }
 
 /// Builds width-bounded status-style thinking lines from rationale text.
-pub(in crate::runtime::render) fn agent_thinking_display_lines_for_width(
-    text: &str,
-    columns: usize,
-) -> Vec<String> {
+pub(crate) fn agent_thinking_display_lines_for_width(text: &str, columns: usize) -> Vec<String> {
     let prefix = "thinking: ";
     let prefix_width = UnicodeWidthStr::width(prefix);
     let content_width = bounded_agent_terminal_presentation_columns(columns)
@@ -299,7 +292,7 @@ pub(in crate::runtime::render) fn agent_thinking_display_lines_for_width(
 }
 
 /// Builds one width-bounded macro lifecycle line for the parent transcript.
-pub(in crate::runtime::render) fn agent_macro_lifecycle_display_lines_for_width(
+pub(crate) fn agent_macro_lifecycle_display_lines_for_width(
     macro_name: &str,
     step_index: Option<usize>,
     total_steps: usize,
@@ -327,9 +320,7 @@ pub(in crate::runtime::render) fn agent_macro_lifecycle_display_lines_for_width(
 }
 
 /// Builds the compact header shown above elevated action result output.
-pub(in crate::runtime::render) fn agent_action_result_display_header(
-    action: &AgentAction,
-) -> Option<String> {
+pub(crate) fn agent_action_result_display_header(action: &AgentAction) -> Option<String> {
     agent_action_execution_display_header(action)
 }
 
@@ -339,7 +330,7 @@ pub(in crate::runtime::render) fn agent_action_result_display_header(
 /// grammar while applying color only to the semantic pieces that need emphasis:
 /// the prefix is quiet status text, the action phrase is command-accented, and
 /// arguments fall back to the terminal foreground for readability.
-pub(in crate::runtime::render) fn agent_action_execution_rendered_line(
+pub(crate) fn agent_action_execution_rendered_line(
     header: &str,
     ui_theme: &UiTheme,
 ) -> RichTextLine {
@@ -402,7 +393,7 @@ pub(in crate::runtime::render) fn agent_action_execution_rendered_line(
 /// - `start_bytes`: The byte offset where styling begins.
 /// - `end_bytes`: The byte offset where styling ends.
 /// - `rendition`: The terminal style applied to the range.
-pub(in crate::runtime::render) fn push_agent_action_execution_style_span(
+pub(crate) fn push_agent_action_execution_style_span(
     spans: &mut Vec<TerminalStyleSpan>,
     display: &str,
     start_bytes: usize,
@@ -430,7 +421,7 @@ pub(in crate::runtime::render) fn push_agent_action_execution_style_span(
 /// - `spans`: The style span collection being assembled.
 /// - `display`: The full action execution line.
 /// - `rendition`: The muted terminal style applied to secondary fragments.
-pub(in crate::runtime::render) fn push_agent_action_execution_secondary_spans(
+pub(crate) fn push_agent_action_execution_secondary_spans(
     spans: &mut Vec<TerminalStyleSpan>,
     display: &str,
     rendition: GraphicRendition,
@@ -451,7 +442,7 @@ pub(in crate::runtime::render) fn push_agent_action_execution_secondary_spans(
 }
 
 /// Builds a compact, single-line preview for action-result headers.
-pub(in crate::runtime::render) fn agent_action_display_preview(value: &str) -> String {
+pub(crate) fn agent_action_display_preview(value: &str) -> String {
     /// Maximum preview characters included in an action-result header.
     const MAX_AGENT_ACTION_RESULT_HEADER_CHARS: usize = 120;
     let trimmed = value.trim();
@@ -474,7 +465,7 @@ pub(in crate::runtime::render) fn agent_action_display_preview(value: &str) -> S
 }
 
 /// Builds a compact preview for action arguments that are already JSON.
-pub(in crate::runtime::render) fn agent_action_json_argument_preview(value: &str) -> String {
+pub(crate) fn agent_action_json_argument_preview(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() || trimmed == "{}" || trimmed == "null" {
         return String::new();
@@ -487,7 +478,7 @@ pub(in crate::runtime::render) fn agent_action_json_argument_preview(value: &str
 }
 
 /// Builds a compact preview for one or more action paths.
-pub(in crate::runtime::render) fn agent_action_path_list_preview(paths: &[String]) -> String {
+pub(crate) fn agent_action_path_list_preview(paths: &[String]) -> String {
     match paths {
         [] => "(none)".to_string(),
         [single] => agent_action_display_preview(single),
@@ -499,9 +490,7 @@ pub(in crate::runtime::render) fn agent_action_path_list_preview(paths: &[String
 }
 
 /// Returns bounded, sanitized payload lines for normal pane display.
-pub(in crate::runtime::render) fn bounded_agent_action_result_display_lines(
-    text: &str,
-) -> Vec<String> {
+pub(crate) fn bounded_agent_action_result_display_lines(text: &str) -> Vec<String> {
     let normalized = text
         .trim_end_matches(['\r', '\n'])
         .replace("\r\n", "\n")
@@ -543,10 +532,7 @@ pub(in crate::runtime::render) fn bounded_agent_action_result_display_lines(
 }
 
 /// Truncates text to a valid UTF-8 byte boundary.
-pub(in crate::runtime::render) fn truncate_to_utf8_boundary(
-    value: &str,
-    max_bytes: usize,
-) -> String {
+pub(crate) fn truncate_to_utf8_boundary(value: &str, max_bytes: usize) -> String {
     if value.len() <= max_bytes {
         return value.to_string();
     }

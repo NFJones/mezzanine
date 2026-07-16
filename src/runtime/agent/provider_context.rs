@@ -22,7 +22,7 @@ impl RuntimeSessionService {
     /// Provider continuations can happen after file mutations and shell output
     /// observations. This keeps discovered repository instruction content in
     /// every provider-bound context without duplicating stale guidance blocks.
-    pub(in crate::runtime) fn refresh_agent_turn_project_guidance_context(
+    pub(crate) fn refresh_agent_turn_project_guidance_context(
         &mut self,
         turn: &AgentTurnRecord,
     ) -> Result<()> {
@@ -50,7 +50,7 @@ impl RuntimeSessionService {
     /// The block template tells the model that the text was submitted while
     /// the current turn was already active and should be incorporated from the
     /// next action boundary forward.
-    pub(in crate::runtime) fn drain_pending_agent_turn_steering_context(
+    pub(crate) fn drain_pending_agent_turn_steering_context(
         &mut self,
         turn: &AgentTurnRecord,
     ) -> Result<usize> {
@@ -328,7 +328,7 @@ impl RuntimeSessionService {
     /// incorporated, finishing the turn would silently discard the user's
     /// steering. Instead, the runtime converts that completion into one more
     /// provider continuation so the pending input can be drained into context.
-    pub(in crate::runtime) fn continue_completed_turn_for_pending_steering(
+    pub(crate) fn continue_completed_turn_for_pending_steering(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &mut AgentTurnExecution,
@@ -354,7 +354,7 @@ impl RuntimeSessionService {
 
     /// Returns the pane-local routing preference, falling back to
     /// the configured default when the pane has no explicit override.
-    pub(in crate::runtime) fn agent_routing_enabled_for_pane(&self, pane_id: &str) -> bool {
+    pub(crate) fn agent_routing_enabled_for_pane(&self, pane_id: &str) -> bool {
         self.agent_routing_override(pane_id)
             .or_else(|| {
                 self.agent_selected_personality_profile(pane_id)
@@ -365,7 +365,7 @@ impl RuntimeSessionService {
 
     /// Builds an automatic sizing dispatch for the first provider request of a
     /// turn.
-    pub(in crate::runtime) fn runtime_auto_sizing_dispatch_for_turn(
+    pub(crate) fn runtime_auto_sizing_dispatch_for_turn(
         &self,
         turn: &AgentTurnRecord,
         default_profile: &ModelProfile,
@@ -457,7 +457,7 @@ impl RuntimeSessionService {
     /// Logs a bounded auto-sizing decision without placing router
     /// correspondence into model context or transcript content.
     #[cfg(test)]
-    pub(in crate::runtime) fn record_auto_sizing_outcome(
+    pub(crate) fn record_auto_sizing_outcome(
         &mut self,
         turn: &AgentTurnRecord,
         profile: &ModelProfile,

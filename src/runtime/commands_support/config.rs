@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_show_options_command(
+pub(crate) fn runtime_show_options_command(
     service: &RuntimeSessionService,
     invocation: &CommandInvocation,
 ) -> Result<String> {
@@ -61,7 +61,7 @@ pub(in crate::runtime) fn runtime_show_options_command(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_set_option_command(
+pub(crate) fn runtime_set_option_command(
     service: &mut RuntimeSessionService,
     invocation: &CommandInvocation,
 ) -> Result<String> {
@@ -113,7 +113,7 @@ pub(in crate::runtime) fn runtime_set_option_command(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_set_theme_command(
+pub(crate) fn runtime_set_theme_command(
     service: &mut RuntimeSessionService,
     invocation: &CommandInvocation,
 ) -> Result<String> {
@@ -199,7 +199,7 @@ struct RuntimeThemePersistenceReport {
 }
 
 /// Result of applying a persisted model-authored config mutation batch.
-pub(in crate::runtime) struct RuntimePersistedConfigMutationBatchReport {
+pub(crate) struct RuntimePersistedConfigMutationBatchReport {
     /// Primary config file that received the batch.
     pub path: PathBuf,
     /// Whether the persisted target changed.
@@ -399,7 +399,7 @@ fn runtime_persist_theme_plan(
 /// - `mutations`: Ordered scalar mutations to fold into the target document.
 /// - `event_source`: Event payload source used for the resulting config-change
 ///   lifecycle event.
-pub(in crate::runtime) fn runtime_apply_persisted_config_mutation_batch(
+pub(crate) fn runtime_apply_persisted_config_mutation_batch(
     service: &mut RuntimeSessionService,
     path: PathBuf,
     mutations: &[ConfigMutation],
@@ -551,9 +551,7 @@ fn runtime_theme_available(service: &RuntimeSessionService, theme: &str) -> Resu
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_list_themes_command(
-    service: &RuntimeSessionService,
-) -> Result<String> {
+pub(crate) fn runtime_list_themes_command(service: &RuntimeSessionService) -> Result<String> {
     let structured = runtime_effective_config_value(service.integration.config_layers())?;
     let mut custom_theme_names = structured
         .get("themes")
@@ -597,7 +595,7 @@ pub(in crate::runtime) fn runtime_list_themes_command(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_source_file_command(
+pub(crate) fn runtime_source_file_command(
     service: &mut RuntimeSessionService,
     invocation: &CommandInvocation,
 ) -> Result<String> {
@@ -659,7 +657,7 @@ pub(in crate::runtime) fn runtime_source_file_command(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_refresh_client_command(
+pub(crate) fn runtime_refresh_client_command(
     service: &mut RuntimeSessionService,
 ) -> Result<String> {
     let primary = service
@@ -688,7 +686,7 @@ pub(in crate::runtime) fn runtime_refresh_client_command(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_plan_live_override_mutation(
+pub(crate) fn runtime_plan_live_override_mutation(
     service: &RuntimeSessionService,
     mutation: ConfigMutation,
 ) -> Result<crate::config::ConfigMutationPlan> {
@@ -715,10 +713,7 @@ pub(in crate::runtime) fn runtime_plan_live_override_mutation(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_store_live_override_plan(
-    service: &mut RuntimeSessionService,
-    text: &str,
-) {
+pub(crate) fn runtime_store_live_override_plan(service: &mut RuntimeSessionService, text: &str) {
     if let Some(layer) = service
         .integration
         .config_layers_mut()
@@ -746,7 +741,7 @@ pub(in crate::runtime) fn runtime_store_live_override_plan(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_config_command_value(value: &str) -> ConfigMutationValue {
+pub(crate) fn runtime_config_command_value(value: &str) -> ConfigMutationValue {
     match value {
         "true" => ConfigMutationValue::Boolean(true),
         "false" => ConfigMutationValue::Boolean(false),
@@ -762,7 +757,7 @@ pub(in crate::runtime) fn runtime_config_command_value(value: &str) -> ConfigMut
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_option_live_mutable(path: &str) -> bool {
+pub(crate) fn runtime_option_live_mutable(path: &str) -> bool {
     path.starts_with("mcp_servers.")
         || path.starts_with("agents.auto_sizing.")
         || path.starts_with("theme.aliases.")

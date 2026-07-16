@@ -4,7 +4,7 @@ use super::product_content::*;
 use crate::runtime::render::*;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-pub(in crate::runtime::render) fn runtime_pane_agent_status_selector_layout(
+pub(crate) fn runtime_pane_agent_status_selector_layout(
     selector: &RuntimePaneAgentStatusSelector,
     size: Size,
 ) -> PaneAgentStatusSelectorLayout {
@@ -60,7 +60,7 @@ pub(in crate::runtime::render) fn runtime_pane_agent_status_selector_layout(
 }
 
 /// Adjusts selector scroll so keyboard-selected rows stay reachable.
-pub(in crate::runtime::render) fn runtime_pane_agent_status_selector_keep_active_visible(
+pub(crate) fn runtime_pane_agent_status_selector_keep_active_visible(
     selector: &mut RuntimePaneAgentStatusSelector,
     visible_rows: usize,
 ) {
@@ -78,11 +78,7 @@ pub(in crate::runtime::render) fn runtime_pane_agent_status_selector_keep_active
 }
 
 /// Builds one padded selector row clipped to the available terminal width.
-pub(in crate::runtime::render) fn runtime_selector_line(
-    marker: &str,
-    value: &str,
-    width: usize,
-) -> String {
+pub(crate) fn runtime_selector_line(marker: &str, value: &str, width: usize) -> String {
     let mut line = format!("{marker} {value}");
     let mut fitted = String::new();
     let mut used = 0usize;

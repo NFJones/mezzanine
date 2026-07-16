@@ -21,7 +21,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn dispatch_shell_action_to_pane(
+    pub(crate) fn dispatch_shell_action_to_pane(
         &mut self,
         turn: &AgentTurnRecord,
         action: &AgentAction,
@@ -168,10 +168,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn require_pane_ready_for_agent_command(
-        &self,
-        pane_id: &str,
-    ) -> Result<()> {
+    pub(crate) fn require_pane_ready_for_agent_command(&self, pane_id: &str) -> Result<()> {
         match self.pane_readiness_state(pane_id) {
             PaneReadinessState::Ready => Ok(()),
             state => Err(MezError::conflict(format!(
@@ -188,7 +185,7 @@ impl RuntimeSessionService {
     /// recorded during bootstrap. Canonical path evidence is not yet resolved
     /// through the pane shell, so the resolution status is `Unresolved`, which
     /// fails closed on scoped path decisions.
-    pub(in crate::runtime) fn path_scopes_for_pane(&self, pane_id: &str) -> Option<PathScopes> {
+    pub(crate) fn path_scopes_for_pane(&self, pane_id: &str) -> Option<PathScopes> {
         let signature = self.pane_environment_signature(pane_id)?;
         Some(PathScopes::unresolved(
             signature.working_directory.clone(),
@@ -199,7 +196,7 @@ impl RuntimeSessionService {
 
     /// Reports whether a running shell transaction should display a transient
     /// latest-output line in the pane while its output is otherwise hidden.
-    pub(in crate::runtime) fn agent_shell_transaction_action_shows_live_output(
+    pub(crate) fn agent_shell_transaction_action_shows_live_output(
         &self,
         turn_id: &str,
         action_id: &str,
@@ -216,7 +213,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn subagent_scope_declaration_for_turn(
+    pub(crate) fn subagent_scope_declaration_for_turn(
         &self,
         turn: &AgentTurnRecord,
     ) -> Option<SubagentScopeDeclaration> {
@@ -232,10 +229,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn permission_policy_for_turn(
-        &self,
-        turn: &AgentTurnRecord,
-    ) -> PermissionPolicy {
+    pub(crate) fn permission_policy_for_turn(&self, turn: &AgentTurnRecord) -> PermissionPolicy {
         let mut policy = self.permission_policy().clone();
         if let Some(preset) = self
             .subagent_scope_declaration_for_turn(turn)
@@ -253,10 +247,7 @@ impl RuntimeSessionService {
     /// completes. Manual readiness overrides use this helper so an operator
     /// can unblock a turn waiting for readiness without waiting for a pending
     /// probe marker to finish.
-    pub(in crate::runtime) fn queue_ready_provider_continuation_for_pane(
-        &mut self,
-        pane_id: &str,
-    ) -> usize {
+    pub(crate) fn queue_ready_provider_continuation_for_pane(&mut self, pane_id: &str) -> usize {
         if self.pane_readiness_state(pane_id) != PaneReadinessState::Ready
             || self.pane_readiness_override_has_pending_probe(pane_id)
         {

@@ -61,7 +61,7 @@ const DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS: u64 = 500;
 /// invalid option cannot leave cursor, frame-status, or render pacing policy
 /// partially updated.
 #[derive(Debug)]
-pub(in crate::runtime) struct RuntimePresentationSettings {
+pub(crate) struct RuntimePresentationSettings {
     /// Whether window frame rows are rendered.
     window_frames_enabled: bool,
     /// Window frame template rendered around each visible window.
@@ -149,7 +149,7 @@ impl Default for RuntimePresentationSettings {
 
 impl RuntimePresentationSettings {
     /// Parses one complete presentation settings replacement.
-    pub(in crate::runtime) fn from_config(
+    pub(crate) fn from_config(
         root: &serde_json::Value,
         effective: &EffectiveConfig,
     ) -> Result<Self> {
@@ -224,7 +224,7 @@ impl Default for RuntimeCopyPresentationState {
 /// runtime components cross this boundary through narrow methods instead of
 /// reaching into the session coordinator's former shared field bag.
 #[derive(Debug, Default)]
-pub(in crate::runtime) struct RuntimePresentationComponent {
+pub(crate) struct RuntimePresentationComponent {
     /// Current atomically replaceable presentation configuration.
     settings: RuntimePresentationSettings,
     /// Cached output for command-backed window status pills.
@@ -272,13 +272,13 @@ pub(in crate::runtime) struct RuntimePresentationComponent {
 
 impl RuntimePresentationComponent {
     /// Replaces validated presentation settings and synchronizes global width policy.
-    pub(in crate::runtime) fn apply_settings(&mut self, settings: RuntimePresentationSettings) {
+    pub(crate) fn apply_settings(&mut self, settings: RuntimePresentationSettings) {
         crate::terminal::set_agent_wrap_column_cap(settings.terminal_agent_wrap_column_cap);
         self.settings = settings;
     }
 
     /// Clears an in-progress pane-resize gesture after layout mutation.
-    pub(in crate::runtime) fn clear_mouse_resize_drag_state(&mut self) {
+    pub(crate) fn clear_mouse_resize_drag_state(&mut self) {
         self.mouse_resize_drag_state = None;
     }
 }
@@ -286,19 +286,19 @@ impl RuntimePresentationComponent {
 impl RuntimeSessionService {
     /// Returns host clipboard state for presentation integration tests.
     #[cfg(test)]
-    pub(in crate::runtime) fn host_clipboard_for_tests(&self) -> &HostClipboard {
+    pub(crate) fn host_clipboard_for_tests(&self) -> &HostClipboard {
         &self.presentation.copy.host_clipboard
     }
 
     /// Returns mutable host clipboard state for presentation integration fixtures.
     #[cfg(test)]
-    pub(in crate::runtime) fn host_clipboard_mut_for_tests(&mut self) -> &mut HostClipboard {
+    pub(crate) fn host_clipboard_mut_for_tests(&mut self) -> &mut HostClipboard {
         &mut self.presentation.copy.host_clipboard
     }
 
     /// Returns panes using copy mode as transient mouse scrollback.
     #[cfg(test)]
-    pub(in crate::runtime) fn scrollback_copy_mode_panes_for_tests(
+    pub(crate) fn scrollback_copy_mode_panes_for_tests(
         &self,
     ) -> &std::collections::BTreeSet<String> {
         &self.presentation.copy.scrollback_copy_mode_panes
@@ -306,7 +306,7 @@ impl RuntimeSessionService {
 
     /// Returns active agent prompt editors for integration tests.
     #[cfg(test)]
-    pub(in crate::runtime) fn agent_prompt_inputs_for_tests(
+    pub(crate) fn agent_prompt_inputs_for_tests(
         &self,
     ) -> &std::collections::BTreeMap<String, RuntimeAgentPromptInput> {
         &self.presentation.agent_prompt_inputs
@@ -314,7 +314,7 @@ impl RuntimeSessionService {
 
     /// Returns mutable agent prompt editors for integration fixtures.
     #[cfg(test)]
-    pub(in crate::runtime) fn agent_prompt_inputs_mut_for_tests(
+    pub(crate) fn agent_prompt_inputs_mut_for_tests(
         &mut self,
     ) -> &mut std::collections::BTreeMap<String, RuntimeAgentPromptInput> {
         &mut self.presentation.agent_prompt_inputs
@@ -322,7 +322,7 @@ impl RuntimeSessionService {
 
     /// Replaces frame visibility for a presentation integration fixture.
     #[cfg(test)]
-    pub(in crate::runtime) fn set_frame_visibility_for_tests(
+    pub(crate) fn set_frame_visibility_for_tests(
         &mut self,
         window_frames_enabled: bool,
         pane_frames_enabled: bool,
@@ -333,15 +333,12 @@ impl RuntimeSessionService {
 
     /// Replaces pane frame placement for a presentation integration fixture.
     #[cfg(test)]
-    pub(in crate::runtime) fn set_pane_frame_position_for_tests(
-        &mut self,
-        position: TerminalFramePosition,
-    ) {
+    pub(crate) fn set_pane_frame_position_for_tests(&mut self, position: TerminalFramePosition) {
         self.presentation.settings.pane_frame_position = position;
     }
 
     /// Registers typed browser state for a later agent-shell display response.
-    pub(in crate::runtime) fn register_pending_record_browser_overlay(
+    pub(crate) fn register_pending_record_browser_overlay(
         &mut self,
         pane_id: &str,
         command: &str,
@@ -360,78 +357,74 @@ impl RuntimeSessionService {
     }
 
     /// Reports whether product window frames are enabled.
-    pub(in crate::runtime) fn window_frames_enabled(&self) -> bool {
+    pub(crate) fn window_frames_enabled(&self) -> bool {
         self.presentation.settings.window_frames_enabled
     }
 
     /// Returns the configured window frame template.
-    pub(in crate::runtime) fn window_frame_template(&self) -> &str {
+    pub(crate) fn window_frame_template(&self) -> &str {
         &self.presentation.settings.window_frame_template
     }
 
     /// Returns the configured window frame placement.
-    pub(in crate::runtime) fn window_frame_position(&self) -> TerminalFramePosition {
+    pub(crate) fn window_frame_position(&self) -> TerminalFramePosition {
         self.presentation.settings.window_frame_position
     }
 
     /// Returns the configured window frame style.
-    pub(in crate::runtime) fn window_frame_style(&self) -> TerminalFrameStyle {
+    pub(crate) fn window_frame_style(&self) -> TerminalFrameStyle {
         self.presentation.settings.window_frame_style
     }
 
     /// Returns window fields eligible for frame template expansion.
-    pub(in crate::runtime) fn window_frame_visible_fields(&self) -> &[String] {
+    pub(crate) fn window_frame_visible_fields(&self) -> &[String] {
         &self.presentation.settings.window_frame_visible_fields
     }
 
     /// Reports whether product pane frames are enabled.
-    pub(in crate::runtime) fn pane_frames_enabled(&self) -> bool {
+    pub(crate) fn pane_frames_enabled(&self) -> bool {
         self.presentation.settings.pane_frames_enabled
     }
 
     /// Returns the configured pane frame template.
-    pub(in crate::runtime) fn pane_frame_template(&self) -> &str {
+    pub(crate) fn pane_frame_template(&self) -> &str {
         &self.presentation.settings.pane_frame_template
     }
 
     /// Returns the configured pane frame placement.
-    pub(in crate::runtime) fn pane_frame_position(&self) -> TerminalFramePosition {
+    pub(crate) fn pane_frame_position(&self) -> TerminalFramePosition {
         self.presentation.settings.pane_frame_position
     }
 
     /// Returns the configured pane frame style.
-    pub(in crate::runtime) fn pane_frame_style(&self) -> TerminalFrameStyle {
+    pub(crate) fn pane_frame_style(&self) -> TerminalFrameStyle {
         self.presentation.settings.pane_frame_style
     }
 
     /// Returns pane fields eligible for frame template expansion.
-    pub(in crate::runtime) fn pane_frame_visible_fields(&self) -> &[String] {
+    pub(crate) fn pane_frame_visible_fields(&self) -> &[String] {
         &self.presentation.settings.pane_frame_visible_fields
     }
 
     /// Replaces pane statusline presentation selected by the agent command.
-    pub(in crate::runtime) fn configure_pane_statusline(
-        &mut self,
-        fields: Vec<String>,
-        template: String,
-    ) {
+    pub(crate) fn configure_pane_statusline(&mut self, fields: Vec<String>, template: String) {
         self.presentation.settings.pane_frames_enabled = true;
         self.presentation.settings.pane_frame_visible_fields = fields;
         self.presentation.settings.pane_frame_template = template;
     }
 
     /// Returns the active product UI theme.
-    pub(in crate::runtime) fn ui_theme(&self) -> &UiTheme {
+    pub(crate) fn ui_theme(&self) -> &UiTheme {
         &self.presentation.settings.ui_theme
     }
 
     /// Returns the configured mux key bindings.
-    pub(in crate::runtime) fn key_bindings(&self) -> &KeyBindings {
+    pub(crate) fn key_bindings(&self) -> &KeyBindings {
         &self.presentation.settings.key_bindings
     }
 
     /// Returns configured prefix-table command bindings.
-    pub(in crate::runtime) fn command_bindings(
+    pub(crate) fn command_bindings(
         &self,
     ) -> &std::collections::BTreeMap<KeyChord, RuntimeCommandBinding> {
         &self.presentation.settings.command_bindings
@@ -443,46 +436,44 @@ impl RuntimeSessionService {
     }
 
     /// Returns mutable paste-buffer storage to product command adapters.
-    pub(in crate::runtime) fn paste_buffers_mut(&mut self) -> &mut PasteBuffers {
+    pub(crate) fn paste_buffers_mut(&mut self) -> &mut PasteBuffers {
         &mut self.presentation.copy.paste_buffers
     }
 
     /// Returns the selected implicit copy and paste buffer.
-    pub(in crate::runtime) fn active_paste_buffer(&self) -> Option<&str> {
+    pub(crate) fn active_paste_buffer(&self) -> Option<&str> {
         self.presentation.copy.active_paste_buffer.as_deref()
     }
 
     /// Replaces the selected implicit copy and paste buffer.
-    pub(in crate::runtime) fn set_active_paste_buffer(&mut self, name: Option<String>) {
+    pub(crate) fn set_active_paste_buffer(&mut self, name: Option<String>) {
         self.presentation.copy.active_paste_buffer = name;
     }
 
     /// Returns active per-pane copy modes.
-    pub(in crate::runtime) fn active_copy_modes(
-        &self,
-    ) -> &std::collections::BTreeMap<String, CopyMode> {
+    pub(crate) fn active_copy_modes(&self) -> &std::collections::BTreeMap<String, CopyMode> {
         &self.presentation.copy.active_copy_modes
     }
 
     /// Returns mutable per-pane copy modes to copy and process adapters.
-    pub(in crate::runtime) fn active_copy_modes_mut(
+    pub(crate) fn active_copy_modes_mut(
         &mut self,
     ) -> &mut std::collections::BTreeMap<String, CopyMode> {
         &mut self.presentation.copy.active_copy_modes
     }
 
     /// Replaces the desktop clipboard adapter after configuration changes.
-    pub(in crate::runtime) fn set_host_clipboard(&mut self, host_clipboard: HostClipboard) {
+    pub(crate) fn set_host_clipboard(&mut self, host_clipboard: HostClipboard) {
         self.presentation.copy.host_clipboard = host_clipboard;
     }
 
     /// Returns the configured OSC 52 terminal clipboard policy.
-    pub(in crate::runtime) fn terminal_clipboard(&self) -> &str {
+    pub(crate) fn terminal_clipboard(&self) -> &str {
         &self.presentation.settings.terminal_clipboard
     }
 
     /// Removes one active agent prompt editor and returns its state.
-    pub(in crate::runtime) fn remove_agent_prompt_input(
+    pub(crate) fn remove_agent_prompt_input(
         &mut self,
         pane_id: &str,
     ) -> Option<RuntimeAgentPromptInput> {
@@ -490,7 +481,7 @@ impl RuntimeSessionService {
     }
 
     /// Returns mutable agent prompt editor state for one pane.
-    pub(in crate::runtime) fn agent_prompt_input_mut(
+    pub(crate) fn agent_prompt_input_mut(
         &mut self,
         pane_id: &str,
     ) -> Option<&mut RuntimeAgentPromptInput> {
@@ -498,7 +489,7 @@ impl RuntimeSessionService {
     }
 
     /// Clears every active agent prompt editor during lifecycle teardown.
-    pub(in crate::runtime) fn clear_agent_prompt_inputs(&mut self) {
+    pub(crate) fn clear_agent_prompt_inputs(&mut self) {
         self.presentation.agent_prompt_inputs.clear();
     }
 }
@@ -506,50 +497,44 @@ impl RuntimeSessionService {
 #[cfg(test)]
 impl RuntimeSessionService {
     /// Replaces the active UI theme for a presentation integration fixture.
-    pub(in crate::runtime) fn set_ui_theme_for_tests(&mut self, ui_theme: UiTheme) {
+    pub(crate) fn set_ui_theme_for_tests(&mut self, ui_theme: UiTheme) {
         self.presentation.settings.ui_theme = ui_theme;
     }
 
     /// Returns retained primary command-prompt history for integration tests.
-    pub(in crate::runtime) fn primary_command_prompt_history(&self) -> &[String] {
+    pub(crate) fn primary_command_prompt_history(&self) -> &[String] {
         &self.presentation.primary_command_prompt_history
     }
 
     /// Replaces retained command-prompt history for an integration fixture.
-    pub(in crate::runtime) fn set_primary_command_prompt_history_for_tests(
-        &mut self,
-        history: Vec<String>,
-    ) {
+    pub(crate) fn set_primary_command_prompt_history_for_tests(&mut self, history: Vec<String>) {
         self.presentation.primary_command_prompt_history = history;
     }
 
     /// Adds one command-prompt history entry for an integration fixture.
-    pub(in crate::runtime) fn push_primary_command_prompt_history_for_tests(
-        &mut self,
-        command: String,
-    ) {
+    pub(crate) fn push_primary_command_prompt_history_for_tests(&mut self, command: String) {
         self.presentation
             .primary_command_prompt_history
             .push(command);
     }
 
     /// Returns the active primary prompt for product integration tests.
-    pub(in crate::runtime) fn primary_prompt_input(&self) -> Option<&RuntimePrimaryPromptInput> {
+    pub(crate) fn primary_prompt_input(&self) -> Option<&RuntimePrimaryPromptInput> {
         self.presentation.primary_prompt_input.as_ref()
     }
 
     /// Reports whether the primary client is waiting for a prefix-table key.
-    pub(in crate::runtime) fn primary_prefix_key_pending(&self) -> bool {
+    pub(crate) fn primary_prefix_key_pending(&self) -> bool {
         self.presentation.primary_prefix_key_pending
     }
 
     /// Returns the active primary display overlay for product integration tests.
-    pub(in crate::runtime) fn primary_display_overlay(&self) -> Option<&RuntimeDisplayOverlay> {
+    pub(crate) fn primary_display_overlay(&self) -> Option<&RuntimeDisplayOverlay> {
         self.presentation.primary_display_overlay.as_ref()
     }
 
     /// Returns the right-side frame status template for integration tests.
-    pub(in crate::runtime) fn window_frame_right_status_template(&self) -> &str {
+    pub(crate) fn window_frame_right_status_template(&self) -> &str {
         &self
             .presentation
             .settings
@@ -557,7 +542,7 @@ impl RuntimeSessionService {
     }
 
     /// Replaces a pending record browser's parent stack for a test fixture.
-    pub(in crate::runtime) fn set_pending_record_browser_overlay_stack_for_tests(
+    pub(crate) fn set_pending_record_browser_overlay_stack_for_tests(
         &mut self,
         pane_id: &str,
         command: &str,
@@ -569,24 +554,22 @@ impl RuntimeSessionService {
     }
 
     /// Reports whether any typed record browser still awaits presentation.
-    pub(in crate::runtime) fn pending_record_browser_overlays_is_empty(&self) -> bool {
+    pub(crate) fn pending_record_browser_overlays_is_empty(&self) -> bool {
         self.presentation.pending_record_browser_overlays.is_empty()
     }
 
     /// Returns the transient primary error status for product integration tests.
-    pub(in crate::runtime) fn primary_error_status_overlay(&self) -> Option<&str> {
+    pub(crate) fn primary_error_status_overlay(&self) -> Option<&str> {
         self.presentation.primary_error_status_overlay.as_deref()
     }
 
     /// Returns the active pane-agent selector for product integration tests.
-    pub(in crate::runtime) fn pane_agent_status_selector(
-        &self,
-    ) -> Option<&RuntimePaneAgentStatusSelector> {
+    pub(crate) fn pane_agent_status_selector(&self) -> Option<&RuntimePaneAgentStatusSelector> {
         self.presentation.pane_agent_status_selector.as_ref()
     }
 
     /// Returns deferred copied-word cleanup state for product integration tests.
-    pub(in crate::runtime) fn deferred_word_copy_cleanup(
+    pub(crate) fn deferred_word_copy_cleanup(
         &self,
     ) -> &std::cell::RefCell<Option<(String, CopyMode, u64)>> {
         &self.presentation.deferred_word_copy_cleanup

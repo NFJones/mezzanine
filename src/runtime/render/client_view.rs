@@ -608,7 +608,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn agent_prompt_reserved_rows_for_pane(
+    pub(crate) fn agent_prompt_reserved_rows_for_pane(
         &self,
         pane_id: &str,
         width: usize,
@@ -1139,7 +1139,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn terminal_frame_context(&self) -> TerminalFrameContext {
+    pub(crate) fn terminal_frame_context(&self) -> TerminalFrameContext {
         let pending_observer_count = self
             .session
             .observers()

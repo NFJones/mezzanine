@@ -17,7 +17,7 @@ pub enum SubagentWaitPolicy {
 
 /// Tracks one spawned child turn that a parent turn is waiting to join.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct JoinedSubagentDependency {
+pub(crate) struct JoinedSubagentDependency {
     /// Parent turn that emitted the MAAP `spawn_agent` action.
     pub parent_turn_id: String,
     /// Parent action that should receive the child task result.
@@ -36,7 +36,7 @@ pub(in crate::runtime) struct JoinedSubagentDependency {
 /// entries. Only active spawned children are tracked so width and depth limits
 /// reflect currently running delegation state rather than historical turns.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimeSubagentLineage {
+pub(crate) struct RuntimeSubagentLineage {
     /// Direct parent agent that spawned this child.
     pub parent_agent_id: String,
     /// Root pane agent that owns this delegation tree.
@@ -48,20 +48,20 @@ pub(in crate::runtime) struct RuntimeSubagentLineage {
 }
 
 /// Product-specialized mux overlay carrying issue or memory refresh sources.
-pub(in crate::runtime) type RuntimeDisplayOverlay =
+pub(crate) type RuntimeDisplayOverlay =
     mez_mux::overlay::DisplayOverlay<RuntimeRecordBrowserOverlaySource>;
 
 /// Product-specialized record-browser overlay state.
-pub(in crate::runtime) type RuntimeRecordBrowserOverlayState =
+pub(crate) type RuntimeRecordBrowserOverlayState =
     mez_mux::overlay::RecordBrowserOverlayState<RuntimeRecordBrowserOverlaySource>;
 
 /// Product-specialized preserved record-browser frame.
-pub(in crate::runtime) type RuntimeRecordBrowserOverlayFrame =
+pub(crate) type RuntimeRecordBrowserOverlayFrame =
     mez_mux::overlay::RecordBrowserOverlayFrame<RuntimeRecordBrowserOverlaySource>;
 
 /// Query context retained for one backend-specific record-browser overlay.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) enum RuntimeRecordBrowserOverlaySource {
+pub(crate) enum RuntimeRecordBrowserOverlaySource {
     /// Issue browser filters and bounded result limit.
     Issues {
         /// Optional project glob filter; `None` means all projects.
@@ -96,25 +96,25 @@ pub(in crate::runtime) enum RuntimeRecordBrowserOverlaySource {
 /// the terminal client loop, while rendering uses this record to draw the
 /// current list and highlight the row under the pointer.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimePaneAgentStatusSelector {
+pub(crate) struct RuntimePaneAgentStatusSelector {
     /// Stable pane identity targeted by the selector.
-    pub(in crate::runtime) pane_id: String,
+    pub(crate) pane_id: String,
     /// Pane index targeted by rendered mouse cells.
-    pub(in crate::runtime) pane_index: usize,
+    pub(crate) pane_index: usize,
     /// Status field being selected.
-    pub(in crate::runtime) field: PaneAgentStatusField,
+    pub(crate) field: PaneAgentStatusField,
     /// Available values in display and selection order.
-    pub(in crate::runtime) items: Vec<String>,
+    pub(crate) items: Vec<String>,
     /// Item currently highlighted by hover or initial active value.
-    pub(in crate::runtime) active_index: usize,
+    pub(crate) active_index: usize,
     /// First item currently visible in the drop-down viewport.
-    pub(in crate::runtime) scroll_offset: usize,
+    pub(crate) scroll_offset: usize,
     /// Column of the source pill used to place the drop-down.
-    pub(in crate::runtime) anchor_column: u16,
+    pub(crate) anchor_column: u16,
     /// Row of the source pill used to place the drop-down.
-    pub(in crate::runtime) anchor_row: u16,
+    pub(crate) anchor_row: u16,
     /// Width of the source pill used as a minimum drop-down width.
-    pub(in crate::runtime) anchor_width: u16,
+    pub(crate) anchor_width: u16,
 }
 
 /// Carries Pane Descriptor state for this subsystem.
@@ -122,22 +122,22 @@ pub(in crate::runtime) struct RuntimePaneAgentStatusSelector {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct PaneDescriptor {
+pub(crate) struct PaneDescriptor {
     /// Stores the window id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) window_id: WindowId,
+    pub(crate) window_id: WindowId,
     /// Stores the pane id value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_id: PaneId,
+    pub(crate) pane_id: PaneId,
     /// Stores the size value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) size: Size,
+    pub(crate) size: Size,
 }
 
 /// Carries Blocked Agent Approval Ref state for this subsystem.
@@ -145,17 +145,17 @@ pub(in crate::runtime) struct PaneDescriptor {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct BlockedAgentApprovalRef {
+pub(crate) struct BlockedAgentApprovalRef {
     /// Stores the turn id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) turn_id: String,
+    pub(crate) turn_id: String,
     /// Stores the action id value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) action_id: String,
+    pub(crate) action_id: String,
 }
 
 /// Carries Running Shell Transaction Ref state for this subsystem.
@@ -163,57 +163,57 @@ pub(in crate::runtime) struct BlockedAgentApprovalRef {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct RunningShellTransactionRef {
+pub(crate) struct RunningShellTransactionRef {
     /// Stores the turn id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) turn_id: String,
+    pub(crate) turn_id: String,
     /// Stores the kind value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) kind: RunningShellTransactionKind,
+    pub(crate) kind: RunningShellTransactionKind,
     /// Stores the pane id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_id: String,
+    pub(crate) pane_id: String,
     /// Stores the command value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) command: String,
+    pub(crate) command: String,
     /// Stores the started at unix ms value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) started_at_unix_ms: u64,
+    pub(crate) started_at_unix_ms: u64,
     /// Stores the timeout ms value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) timeout_ms: Option<u64>,
+    pub(crate) timeout_ms: Option<u64>,
     /// Pane input payload that must be sent after the transaction start marker.
     ///
     /// Large generated command bodies are streamed after the wrapper receiver
     /// starts so they are consumed as data rather than parsed as shell source.
-    pub(in crate::runtime) pending_input_payload: Option<Vec<u8>>,
+    pub(crate) pending_input_payload: Option<Vec<u8>>,
     /// Stores the observed output bytes value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) observed_output_bytes: usize,
+    pub(crate) observed_output_bytes: usize,
     /// Stores the observed output preview value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) observed_output_preview: String,
+    pub(crate) observed_output_preview: String,
     /// Stores the observed output truncated value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) observed_output_truncated: bool,
+    pub(crate) observed_output_truncated: bool,
 }
 
 /// Tracks a shell-backed `apply_patch` action across batched read phases.
@@ -223,17 +223,17 @@ pub(in crate::runtime) struct RunningShellTransactionRef {
 /// dispatching one read transaction per path and then builds the verified write
 /// phase from the accumulated snapshot outputs.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimeApplyPatchBatchState {
+pub(crate) struct RuntimeApplyPatchBatchState {
     /// Paths that still need read-phase snapshots.
-    pub(in crate::runtime) remaining_paths: Vec<String>,
+    pub(crate) remaining_paths: Vec<String>,
     /// Full transport bytes captured for the currently running read-phase batch.
     ///
     /// Pane previews stay size-bounded for display, but write-phase planning
     /// still needs the complete snapshot payload bytes so large read batches can
     /// be verified after preview text truncates or normalizes lossy UTF-8.
-    pub(in crate::runtime) current_read_transport: Vec<u8>,
+    pub(crate) current_read_transport: Vec<u8>,
     /// Decoded read-phase outputs that completed without transport truncation.
-    pub(in crate::runtime) read_outputs: Vec<String>,
+    pub(crate) read_outputs: Vec<String>,
 }
 
 /// Carries Running Shell Transaction Kind state for this subsystem.
@@ -241,7 +241,7 @@ pub(in crate::runtime) struct RuntimeApplyPatchBatchState {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) enum RunningShellTransactionKind {
+pub(crate) enum RunningShellTransactionKind {
     /// Represents the Agent Action case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
@@ -294,21 +294,21 @@ pub struct RuntimeShellTransactionTimerRef {
 /// Runtime-owned failure payload used to settle a shell action whose external
 /// shell transaction could not complete normally.
 #[derive(Debug, Clone, PartialEq)]
-pub(in crate::runtime) struct RuntimeShellTransactionActionFailure {
+pub(crate) struct RuntimeShellTransactionActionFailure {
     /// Runtime action id for the MAAP shell command being failed.
-    pub(in crate::runtime) action_id: String,
+    pub(crate) action_id: String,
     /// Terminal action status to report to the MAAP action result.
-    pub(in crate::runtime) status: ActionStatus,
+    pub(crate) status: ActionStatus,
     /// Stable machine-readable failure code for the action error object.
-    pub(in crate::runtime) code: String,
+    pub(crate) code: String,
     /// User-facing failure message rendered into the pane and transcript.
-    pub(in crate::runtime) message: String,
+    pub(crate) message: String,
     /// Whether the shell command itself was sent to the pane before failure.
-    pub(in crate::runtime) sent_to_pane: bool,
+    pub(crate) sent_to_pane: bool,
     /// Structured timeout or observation data attached to the action result.
-    pub(in crate::runtime) terminal_observation: serde_json::Value,
+    pub(crate) terminal_observation: serde_json::Value,
     /// Trace-level reason used for state-transition diagnostics.
-    pub(in crate::runtime) trace_reason: String,
+    pub(crate) trace_reason: String,
 }
 
 /// Carries Pending Focused Shell Hook Transaction state for this subsystem.
@@ -316,57 +316,57 @@ pub(in crate::runtime) struct RuntimeShellTransactionActionFailure {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct PendingFocusedShellHookTransaction {
+pub(crate) struct PendingFocusedShellHookTransaction {
     /// Stores the pane id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_id: String,
+    pub(crate) pane_id: String,
     /// Stores the plan value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) plan: HookExecutionPlan,
+    pub(crate) plan: HookExecutionPlan,
     /// Stores the started at unix ms value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) started_at_unix_ms: u64,
+    pub(crate) started_at_unix_ms: u64,
     /// Stores the timeout ms value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) timeout_ms: u64,
+    pub(crate) timeout_ms: u64,
     /// Stores the continuation value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) continuation: Option<PendingFocusedShellHookContinuation>,
+    pub(crate) continuation: Option<PendingFocusedShellHookContinuation>,
 }
 
 /// Agent shell action suspended behind a blocking focused-shell pre-action hook.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct PendingFocusedShellHookContinuation {
+pub(crate) struct PendingFocusedShellHookContinuation {
     /// Turn that owns the shell action waiting on the hook result.
-    pub(in crate::runtime) turn_id: String,
+    pub(crate) turn_id: String,
     /// Action to resume or deny after the hook result is known.
-    pub(in crate::runtime) action_id: String,
+    pub(crate) action_id: String,
 }
 
 /// Completed pre-shell hook identity for a running action.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(in crate::runtime) struct RuntimeAgentPreShellHookCompletion {
+pub(crate) struct RuntimeAgentPreShellHookCompletion {
     /// Turn whose pending action ran the hook.
-    pub(in crate::runtime) turn_id: String,
+    pub(crate) turn_id: String,
     /// Shell action guarded by the hook.
-    pub(in crate::runtime) action_id: String,
+    pub(crate) action_id: String,
     /// Hook that has already completed for this action.
-    pub(in crate::runtime) hook_id: String,
+    pub(crate) hook_id: String,
 }
 
 /// Outcome of evaluating pre-action hooks.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) enum RuntimeHookPipelineDecision {
+pub(crate) enum RuntimeHookPipelineDecision {
     /// No blocking hook prevented the caller from continuing immediately.
     Continue,
     /// A hook failure policy blocked the action.
@@ -380,32 +380,32 @@ pub(in crate::runtime) enum RuntimeHookPipelineDecision {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimeModelProfileOverrideStore {
+pub(crate) struct RuntimeModelProfileOverrideStore {
     /// Stores the session profile value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) session_profile: Option<String>,
+    pub(crate) session_profile: Option<String>,
     /// Stores the window profiles value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) window_profiles: BTreeMap<String, String>,
+    pub(crate) window_profiles: BTreeMap<String, String>,
     /// Stores the pane profiles value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_profiles: BTreeMap<String, String>,
+    pub(crate) pane_profiles: BTreeMap<String, String>,
     /// Stores the agent profiles value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) agent_profiles: BTreeMap<String, String>,
+    pub(crate) agent_profiles: BTreeMap<String, String>,
     /// Stores the subagent profiles value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) subagent_profiles: BTreeMap<String, String>,
+    pub(crate) subagent_profiles: BTreeMap<String, String>,
 }
 
 /// User-defined pane personality profile.
@@ -414,22 +414,22 @@ pub(in crate::runtime) struct RuntimeModelProfileOverrideStore {
 /// preferences. They never replace Mezzanine's built-in system prompt; instead
 /// they append user-configured instructions and selected agent preferences.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimeAgentPersonalityProfile {
+pub(crate) struct RuntimeAgentPersonalityProfile {
     /// Stable profile id from configuration.
-    pub(in crate::runtime) id: String,
+    pub(crate) id: String,
     /// Optional human-readable profile name.
-    pub(in crate::runtime) name: Option<String>,
+    pub(crate) name: Option<String>,
     /// Optional system-level instruction text appended after Mezzanine's base
     /// system prompt.
-    pub(in crate::runtime) system_prompt: Option<String>,
+    pub(crate) system_prompt: Option<String>,
     /// Optional response style preference.
-    pub(in crate::runtime) response_style: Option<String>,
+    pub(crate) response_style: Option<String>,
     /// Optional model profile override.
-    pub(in crate::runtime) model_profile: Option<String>,
+    pub(crate) model_profile: Option<String>,
     /// Optional planning-mode override.
-    pub(in crate::runtime) planning_enabled: Option<bool>,
+    pub(crate) planning_enabled: Option<bool>,
     /// Optional routing override.
-    pub(in crate::runtime) routing_enabled: Option<bool>,
+    pub(crate) routing_enabled: Option<bool>,
 }
 
 /// Carries Runtime Model Profile Override Scope state for this subsystem.
@@ -437,7 +437,7 @@ pub(in crate::runtime) struct RuntimeAgentPersonalityProfile {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) enum RuntimeModelProfileOverrideScope {
+pub(crate) enum RuntimeModelProfileOverrideScope {
     /// Represents the Session case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path

@@ -15,7 +15,7 @@ use super::{
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_terminal_step_result_json(
+pub(crate) fn runtime_terminal_step_result_json(
     input_bytes: usize,
     application: &AttachedClientStepApplication,
     view: Option<&RenderedClientView>,
@@ -51,7 +51,7 @@ pub(in crate::runtime) fn runtime_terminal_step_result_json(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_agent_shell_command_response_json(
+pub(crate) fn runtime_agent_shell_command_response_json(
     pane_id: &str,
     input: &str,
     outcome: Option<&AgentShellCommandOutcome>,
@@ -96,7 +96,7 @@ pub(in crate::runtime) fn runtime_agent_shell_command_response_json(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_agent_shell_prompt_turn_response_json(
+pub(crate) fn runtime_agent_shell_prompt_turn_response_json(
     pane_id: &str,
     input: &str,
     started: &RuntimeAgentPromptTurnStart,
@@ -115,9 +115,7 @@ pub(in crate::runtime) fn runtime_agent_shell_prompt_turn_response_json(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_agent_turn_state_json(
-    started: &RuntimeAgentPromptTurnStart,
-) -> String {
+pub(crate) fn runtime_agent_turn_state_json(started: &RuntimeAgentPromptTurnStart) -> String {
     let approval_ids = started
         .approval_ids
         .iter()
@@ -149,7 +147,7 @@ pub(in crate::runtime) fn runtime_agent_turn_state_json(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_subagent_state_json(
+pub(crate) fn runtime_subagent_state_json(
     session: &Session,
     pane: &mez_mux::layout::Pane,
     agent_id: &str,
@@ -187,7 +185,7 @@ pub(in crate::runtime) fn runtime_subagent_state_json(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_agent_shell_stop_response_json(
+pub(crate) fn runtime_agent_shell_stop_response_json(
     pane_id: &str,
     input: &str,
     stopped: &RuntimeAgentTurnStop,
@@ -208,7 +206,7 @@ pub(in crate::runtime) fn runtime_agent_shell_stop_response_json(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_agent_turn_state_name(state: AgentTurnState) -> &'static str {
+pub(crate) fn runtime_agent_turn_state_name(state: AgentTurnState) -> &'static str {
     match state {
         AgentTurnState::Queued => "queued",
         AgentTurnState::Running => "running",
@@ -259,9 +257,7 @@ fn runtime_optional_timestamp_json(value: Option<u64>) -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_pane_readiness_state_name(
-    state: PaneReadinessState,
-) -> &'static str {
+pub(crate) fn runtime_pane_readiness_state_name(state: PaneReadinessState) -> &'static str {
     match state {
         PaneReadinessState::Unknown => "unknown",
         PaneReadinessState::PromptCandidate => "prompt-candidate",
@@ -280,9 +276,7 @@ pub(in crate::runtime) fn runtime_pane_readiness_state_name(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_hook_execution_status_name(
-    status: HookExecutionStatus,
-) -> &'static str {
+pub(crate) fn runtime_hook_execution_status_name(status: HookExecutionStatus) -> &'static str {
     match status {
         HookExecutionStatus::Succeeded => "succeeded",
         HookExecutionStatus::Failed => "failed",
@@ -296,7 +290,7 @@ pub(in crate::runtime) fn runtime_hook_execution_status_name(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_execution_ready_for_provider_continuation(
+pub(crate) fn runtime_execution_ready_for_provider_continuation(
     execution: &AgentTurnExecution,
 ) -> bool {
     execution.terminal_state == AgentTurnState::Running
@@ -312,9 +306,7 @@ pub(in crate::runtime) fn runtime_execution_ready_for_provider_continuation(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn agent_shell_visibility_json_name(
-    visibility: AgentShellVisibility,
-) -> &'static str {
+pub(crate) fn agent_shell_visibility_json_name(visibility: AgentShellVisibility) -> &'static str {
     match visibility {
         AgentShellVisibility::Hidden => "hidden",
         AgentShellVisibility::Visible => "visible",

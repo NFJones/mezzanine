@@ -12,7 +12,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime::processes) fn sync_pane_titles_from_foreground_processes(
+    pub(crate) fn sync_pane_titles_from_foreground_processes(
         &mut self,
         skipped_panes: &BTreeSet<String>,
     ) -> Result<usize> {
@@ -54,7 +54,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime::processes) fn should_sync_pane_titles_from_foreground_processes(
+    pub(crate) fn should_sync_pane_titles_from_foreground_processes(
         &mut self,
         observed_output: bool,
     ) -> bool {
@@ -219,10 +219,7 @@ impl RuntimeSessionService {
     /// `pane_current_working_directories`; prefer that actor-owned snapshot so
     /// command planning does not synchronously probe host process metadata when
     /// an async observation is already available.
-    pub(in crate::runtime) fn pane_current_working_directory(
-        &self,
-        pane_id: &str,
-    ) -> Option<PathBuf> {
+    pub(crate) fn pane_current_working_directory(&self, pane_id: &str) -> Option<PathBuf> {
         self.process
             .pane_current_working_directories
             .get(pane_id)

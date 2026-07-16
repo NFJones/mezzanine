@@ -210,7 +210,7 @@ fn runtime_mcp_retry_display(report: &RuntimeMcpRetryReport) -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::runtime) fn runtime_mcp_retry_event_payload(
+pub(crate) fn runtime_mcp_retry_event_payload(
     source: &str,
     report: &RuntimeMcpRetryReport,
 ) -> String {
@@ -232,7 +232,7 @@ pub(in crate::runtime) fn runtime_mcp_retry_event_payload(
 }
 
 /// Applies a sequence of live config mutations before reloading runtime state once.
-pub(in crate::runtime) fn runtime_apply_live_override_mutations(
+pub(crate) fn runtime_apply_live_override_mutations(
     service: &mut RuntimeSessionService,
     mutations: Vec<ConfigMutation>,
 ) -> Result<(bool, bool, crate::runtime::RuntimeConfigApplyReport)> {

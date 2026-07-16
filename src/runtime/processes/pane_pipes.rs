@@ -64,7 +64,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn start_file_pane_pipe(
+    pub(crate) fn start_file_pane_pipe(
         &mut self,
         pane_id: String,
         path: PathBuf,
@@ -91,7 +91,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn start_command_pane_pipe(
+    pub(crate) fn start_command_pane_pipe(
         &mut self,
         pane_id: String,
         command: String,
@@ -118,10 +118,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn stop_active_pane_pipe(
-        &mut self,
-        pane_id: &str,
-    ) -> Result<StoppedPanePipe> {
+    pub(crate) fn stop_active_pane_pipe(&mut self, pane_id: &str) -> Result<StoppedPanePipe> {
         let pipe = self
             .process
             .active_pane_pipes
@@ -137,10 +134,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn stop_active_pane_pipes_for(
-        &mut self,
-        pane_ids: &[&str],
-    ) -> Vec<StoppedPanePipe> {
+    pub(crate) fn stop_active_pane_pipes_for(&mut self, pane_ids: &[&str]) -> Vec<StoppedPanePipe> {
         pane_ids
             .iter()
             .filter_map(|pane_id| {
@@ -157,7 +151,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn stop_all_active_pane_pipes(&mut self) -> Vec<StoppedPanePipe> {
+    pub(crate) fn stop_all_active_pane_pipes(&mut self) -> Vec<StoppedPanePipe> {
         std::mem::take(&mut self.process.active_pane_pipes)
             .into_values()
             .map(ActivePanePipe::stop)

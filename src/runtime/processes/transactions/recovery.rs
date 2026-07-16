@@ -9,7 +9,7 @@ use super::{
 impl RuntimeSessionService {
     /// Requeues pending shell dispatches that have no live transaction and are
     /// waiting behind readiness state that can be safely retried.
-    pub(in crate::runtime) fn recover_stranded_agent_shell_dispatches(&mut self) -> Result<usize> {
+    pub(crate) fn recover_stranded_agent_shell_dispatches(&mut self) -> Result<usize> {
         let candidates = self.stranded_agent_shell_dispatch_recovery_candidates();
         let mut recovered = 0usize;
         for turn_id in candidates {
@@ -138,9 +138,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(in crate::runtime::processes) fn stranded_agent_shell_dispatch_recovery_candidates(
-        &self,
-    ) -> Vec<String> {
+    pub(crate) fn stranded_agent_shell_dispatch_recovery_candidates(&self) -> Vec<String> {
         self.agent_turn_executions()
             .iter()
             .filter(|(turn_id, execution)| {
@@ -162,7 +160,7 @@ impl RuntimeSessionService {
     /// # Parameters
     /// - `actor_progress_turn_ids`: Running turns with progress represented by
     ///   actor-owned scheduler state.
-    pub(in crate::runtime::processes) fn fail_unreachable_running_agent_turns_with_actor_progress(
+    pub(crate) fn fail_unreachable_running_agent_turns_with_actor_progress(
         &mut self,
         actor_progress_turn_ids: &BTreeSet<String>,
     ) -> Result<usize> {
@@ -198,7 +196,7 @@ impl RuntimeSessionService {
 
     /// Returns running turns that cannot make forward progress without runtime
     /// intervention.
-    pub(in crate::runtime::processes) fn unreachable_running_agent_turn_candidates(
+    pub(crate) fn unreachable_running_agent_turn_candidates(
         &self,
         actor_progress_turn_ids: &BTreeSet<String>,
     ) -> Vec<String> {

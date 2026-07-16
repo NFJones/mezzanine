@@ -36,7 +36,7 @@ impl RuntimeSessionService {
     /// correct itself. Policy denials, rejected actions, cancellations, and
     /// user interrupts are intentionally excluded because repeating them would
     /// violate user intent or approval boundaries.
-    pub(in crate::runtime) fn queue_agent_failure_feedback_for_correction(
+    pub(crate) fn queue_agent_failure_feedback_for_correction(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &mut AgentTurnExecution,
@@ -225,10 +225,7 @@ impl RuntimeSessionService {
     }
 
     /// Removes all failure-feedback attempt counters owned by one turn.
-    pub(in crate::runtime) fn clear_agent_failure_feedback_attempts_for_turn(
-        &mut self,
-        turn_id: &str,
-    ) {
+    pub(crate) fn clear_agent_failure_feedback_attempts_for_turn(&mut self, turn_id: &str) {
         let scoped_prefix = format!("{turn_id}:");
         self.agent
             .agent_turn_failure_feedback_attempts
@@ -237,7 +234,7 @@ impl RuntimeSessionService {
 
     /// Appends one action result to the active model context if it has not
     /// already been recorded.
-    pub(in crate::runtime) fn append_action_result_context_if_absent(
+    pub(crate) fn append_action_result_context_if_absent(
         &mut self,
         turn_id: &str,
         result: &ActionResult,
