@@ -326,13 +326,15 @@ impl RuntimeSessionService {
         let token_usage_key = profile
             .map(|profile| ModelTokenUsageKey::new(profile.provider.clone(), profile.model.clone()))
             .unwrap_or_else(ModelTokenUsageKey::unknown);
-        self.agent_token_usage_by_conversation
+        self.agent
+            .agent_token_usage_by_conversation
             .entry(conversation_id.clone())
             .or_default()
             .entry(token_usage_key.clone())
             .or_default()
             .add_assign(usage);
-        self.agent_token_usage_by_pane
+        self.agent
+            .agent_token_usage_by_pane
             .entry(pane_id.to_string())
             .or_default()
             .entry(token_usage_key)
@@ -343,15 +345,19 @@ impl RuntimeSessionService {
                 mez_agent::agent_context_usage_snapshot(profile, latest_context_usage)
             {
                 if let Some(display) = runtime_agent_provider_context_usage_display(snapshot) {
-                    self.agent_context_usage_by_conversation
+                    self.agent
+                        .agent_context_usage_by_conversation
                         .insert(conversation_id.clone(), display);
                 }
-                self.agent_context_usage_snapshot_by_conversation
+                self.agent
+                    .agent_context_usage_snapshot_by_conversation
                     .insert(conversation_id, snapshot);
             } else {
-                self.agent_context_usage_by_conversation
+                self.agent
+                    .agent_context_usage_by_conversation
                     .remove(&conversation_id);
-                self.agent_context_usage_snapshot_by_conversation
+                self.agent
+                    .agent_context_usage_snapshot_by_conversation
                     .remove(&conversation_id);
             }
         }
@@ -379,10 +385,12 @@ impl RuntimeSessionService {
             .unwrap_or_else(|| format!("pane:{pane_id}"));
         let mut changed = false;
         let conversation_usage = self
+            .agent
             .agent_token_usage_by_conversation
             .entry(conversation_id)
             .or_default();
         let pane_usage = self
+            .agent
             .agent_token_usage_by_pane
             .entry(pane_id.to_string())
             .or_default();
@@ -419,7 +427,8 @@ impl RuntimeSessionService {
             .get(pane_id)
             .map(|session| session.session_id.clone())
             .unwrap_or_else(|| format!("pane:{pane_id}"));
-        self.agent_quota_usage_by_conversation
+        self.agent
+            .agent_quota_usage_by_conversation
             .insert(conversation_id, quota_usage.to_vec());
         let _ = self.checkpoint_agent_session_metadata();
     }

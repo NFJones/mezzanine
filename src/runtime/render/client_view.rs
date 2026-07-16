@@ -1319,11 +1319,8 @@ impl RuntimeSessionService {
                                 .unwrap_or_else(|| "default".to_string())
                         })
                 });
-                let agent_context_usage = agent_session.and_then(|session| {
-                    self.agent_context_usage_by_conversation
-                        .get(&session.session_id)
-                        .cloned()
-                });
+                let agent_context_usage = agent_session
+                    .and_then(|session| self.agent_context_usage_display(&session.session_id));
                 let history_position = self
                     .presentation
                     .copy

@@ -179,6 +179,18 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     pending_agent_remember_tasks: BTreeMap<String, RuntimeAgentRememberTask>,
     /// Durable-memory generation tasks claimed by provider workers.
     claimed_agent_remember_tasks: BTreeMap<String, RuntimeAgentRememberTask>,
+    /// Cumulative provider token usage keyed by conversation and model.
+    agent_token_usage_by_conversation:
+        BTreeMap<String, BTreeMap<ModelTokenUsageKey, ModelTokenUsage>>,
+    /// Cumulative provider token usage keyed by pane and model.
+    agent_token_usage_by_pane: BTreeMap<String, BTreeMap<ModelTokenUsageKey, ModelTokenUsage>>,
+    /// Latest display-ready context usage keyed by conversation.
+    agent_context_usage_by_conversation: BTreeMap<String, String>,
+    /// Latest structured context usage keyed by conversation.
+    agent_context_usage_snapshot_by_conversation:
+        BTreeMap<String, mez_agent::AgentContextUsageSnapshot>,
+    /// Latest provider quota usage keyed by conversation.
+    agent_quota_usage_by_conversation: BTreeMap<String, Vec<ProviderQuotaUsage>>,
 }
 
 /// State removed when a compaction worker reports failure.
@@ -225,6 +237,148 @@ impl RuntimeAgentComponent {
 }
 
 impl RuntimeSessionService {
+    /// Returns cumulative token usage for one pane.
+    pub(in crate::runtime) fn agent_token_usage_for_pane(
+        &self,
+        pane_id: &str,
+    ) -> BTreeMap<ModelTokenUsageKey, ModelTokenUsage> {
+        self.agent
+            .agent_token_usage_by_pane
+            .get(pane_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Returns cumulative token usage for one conversation.
+    pub(in crate::runtime) fn agent_token_usage_for_conversation(
+        &self,
+        conversation_id: &str,
+    ) -> BTreeMap<ModelTokenUsageKey, ModelTokenUsage> {
+        self.agent
+            .agent_token_usage_by_conversation
+            .get(conversation_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Aggregates non-zero token usage across all agent conversations.
+    pub(in crate::runtime) fn total_agent_token_usage_by_model(
+        &self,
+    ) -> BTreeMap<ModelTokenUsageKey, ModelTokenUsage> {
+        let mut total: BTreeMap<ModelTokenUsageKey, ModelTokenUsage> = BTreeMap::new();
+        for session_usage in self.agent.agent_token_usage_by_conversation.values() {
+            for (key, usage) in session_usage {
+                if usage.is_zero() {
+                    continue;
+                }
+                total.entry(key.clone()).or_default().add_assign(*usage);
+            }
+        }
+        total
+    }
+
+    /// Replaces restored token usage for one conversation and its pane.
+    pub(in crate::runtime) fn replace_restored_agent_token_usage(
+        &mut self,
+        conversation_id: &str,
+        pane_id: &str,
+        usage: BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
+    ) {
+        if usage.is_empty() {
+            self.agent
+                .agent_token_usage_by_conversation
+                .remove(conversation_id);
+            self.agent.agent_token_usage_by_pane.remove(pane_id);
+        } else {
+            self.agent
+                .agent_token_usage_by_conversation
+                .insert(conversation_id.to_string(), usage.clone());
+            self.agent
+                .agent_token_usage_by_pane
+                .insert(pane_id.to_string(), usage);
+        }
+    }
+
+    /// Merges conversation metadata usage into the pane aggregate.
+    pub(in crate::runtime) fn merge_restored_agent_token_usage(
+        &mut self,
+        conversation_id: &str,
+        pane_id: &str,
+        usage: BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
+    ) {
+        if usage.is_empty() {
+            self.agent
+                .agent_token_usage_by_conversation
+                .remove(conversation_id);
+            return;
+        }
+        self.agent
+            .agent_token_usage_by_conversation
+            .insert(conversation_id.to_string(), usage.clone());
+        let pane_usage = self
+            .agent
+            .agent_token_usage_by_pane
+            .entry(pane_id.to_string())
+            .or_default();
+        for (key, value) in usage {
+            pane_usage.entry(key).or_default().add_assign(value);
+        }
+    }
+
+    /// Restores legacy and structured provider context usage together.
+    pub(in crate::runtime) fn restore_agent_context_usage(
+        &mut self,
+        conversation_id: &str,
+        display: Option<String>,
+        snapshot: Option<mez_agent::AgentContextUsageSnapshot>,
+    ) {
+        if let Some(display) = display {
+            self.agent
+                .agent_context_usage_by_conversation
+                .insert(conversation_id.to_string(), display);
+        } else {
+            self.agent
+                .agent_context_usage_by_conversation
+                .remove(conversation_id);
+        }
+        if let Some(snapshot) = snapshot {
+            self.agent
+                .agent_context_usage_snapshot_by_conversation
+                .insert(conversation_id.to_string(), snapshot);
+            if let Some(display) = runtime_agent_provider_context_usage_display(snapshot) {
+                self.agent
+                    .agent_context_usage_by_conversation
+                    .insert(conversation_id.to_string(), display);
+            }
+        } else {
+            self.agent
+                .agent_context_usage_snapshot_by_conversation
+                .remove(conversation_id);
+        }
+    }
+
+    /// Returns the display-ready context usage for one conversation.
+    pub(in crate::runtime) fn agent_context_usage_display(
+        &self,
+        conversation_id: &str,
+    ) -> Option<String> {
+        self.agent
+            .agent_context_usage_by_conversation
+            .get(conversation_id)
+            .cloned()
+    }
+
+    /// Returns the structured context usage for one conversation.
+    pub(in crate::runtime) fn agent_context_usage_snapshot(
+        &self,
+        conversation_id: &str,
+    ) -> Option<mez_agent::AgentContextUsageSnapshot> {
+        self.agent
+            .agent_context_usage_snapshot_by_conversation
+            .get(conversation_id)
+            .copied()
+    }
+
     /// Reports when model-backed compaction started for one pane.
     pub(in crate::runtime) fn agent_compaction_started_at(&self, pane_id: &str) -> Option<u64> {
         self.agent.agent_compacting_panes.get(pane_id).copied()

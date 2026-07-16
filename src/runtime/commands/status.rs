@@ -164,11 +164,7 @@ impl RuntimeSessionService {
             .and_then(|turn| self.agent_turn_executions.get(&turn.turn_id))
             .map(|execution| execution.request.messages.len())
             .unwrap_or(0);
-        let token_usage_by_model = self
-            .agent_token_usage_by_pane
-            .get(pane_id)
-            .cloned()
-            .unwrap_or_default();
+        let token_usage_by_model = self.agent_token_usage_for_pane(pane_id);
         let instance_token_usage_by_model =
             self.runtime_agent_instance_provider_token_usage_by_model();
         let running_turn = session
@@ -354,19 +350,7 @@ impl RuntimeSessionService {
     fn runtime_agent_instance_provider_token_usage_by_model(
         &self,
     ) -> BTreeMap<ModelTokenUsageKey, ModelTokenUsage> {
-        let mut usage_by_model: BTreeMap<ModelTokenUsageKey, ModelTokenUsage> = BTreeMap::new();
-        for session_usage in self.agent_token_usage_by_conversation.values() {
-            for (key, usage) in session_usage {
-                if usage.is_zero() {
-                    continue;
-                }
-                usage_by_model
-                    .entry(key.clone())
-                    .or_default()
-                    .add_assign(*usage);
-            }
-        }
-        usage_by_model
+        self.total_agent_token_usage_by_model()
     }
 
     /// Builds markdown table rows for per-model provider token accounting.

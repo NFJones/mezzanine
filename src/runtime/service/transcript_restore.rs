@@ -180,18 +180,11 @@ impl RuntimeSessionService {
                 );
             }
             let token_usage_by_model = runtime_agent_token_usage_by_model_from_metadata(&metadata);
-            if token_usage_by_model.is_empty() {
-                self.agent_token_usage_by_conversation
-                    .remove(&metadata.conversation_id);
-                self.agent_token_usage_by_pane.remove(&metadata.pane_id);
-            } else {
-                self.agent_token_usage_by_conversation.insert(
-                    metadata.conversation_id.clone(),
-                    token_usage_by_model.clone(),
-                );
-                self.agent_token_usage_by_pane
-                    .insert(metadata.pane_id.clone(), token_usage_by_model);
-            }
+            self.replace_restored_agent_token_usage(
+                &metadata.conversation_id,
+                &metadata.pane_id,
+                token_usage_by_model,
+            );
             self.record_pane_transcript_ref(
                 &metadata.pane_id,
                 format!(
@@ -283,11 +276,8 @@ impl RuntimeSessionService {
                     .as_deref()
                     .map(PathBuf::from)
                     .map(|path| discover_project_root(&path).to_string_lossy().into_owned());
-                let token_usage_by_model = self
-                    .agent_token_usage_by_conversation
-                    .get(&conversation_id)
-                    .cloned()
-                    .unwrap_or_default();
+                let token_usage_by_model =
+                    self.agent_token_usage_for_conversation(&conversation_id);
                 AgentSessionMetadata {
                     mezzanine_session_id: mezzanine_session_id.clone(),
                     pane_id: session.pane_id.clone(),
@@ -316,14 +306,8 @@ impl RuntimeSessionService {
                     project_root,
                     token_usage: runtime_agent_total_token_usage_by_model(&token_usage_by_model),
                     token_usage_by_model,
-                    context_usage: self
-                        .agent_context_usage_by_conversation
-                        .get(&conversation_id)
-                        .cloned(),
-                    context_usage_snapshot: self
-                        .agent_context_usage_snapshot_by_conversation
-                        .get(&conversation_id)
-                        .copied(),
+                    context_usage: self.agent_context_usage_display(&conversation_id),
+                    context_usage_snapshot: self.agent_context_usage_snapshot(&conversation_id),
                 }
             })
             .collect::<Vec<_>>();
@@ -368,40 +352,12 @@ impl RuntimeSessionService {
                 "agent-session-resume",
             )?;
             let token_usage_by_model = runtime_agent_token_usage_by_model_from_metadata(&metadata);
-            if token_usage_by_model.is_empty() {
-                self.agent_token_usage_by_conversation
-                    .remove(conversation_id);
-            } else {
-                self.agent_token_usage_by_conversation
-                    .insert(conversation_id.to_string(), token_usage_by_model.clone());
-                let pane_usage = self
-                    .agent_token_usage_by_pane
-                    .entry(pane_id.to_string())
-                    .or_default();
-                for (key, usage) in token_usage_by_model {
-                    pane_usage.entry(key).or_default().add_assign(usage);
-                }
-            }
-            if let Some(context_usage) = metadata.context_usage {
-                self.agent_context_usage_by_conversation
-                    .insert(conversation_id.to_string(), context_usage);
-            } else {
-                self.agent_context_usage_by_conversation
-                    .remove(conversation_id);
-            }
-            if let Some(snapshot) = metadata.context_usage_snapshot {
-                self.agent_context_usage_snapshot_by_conversation
-                    .insert(conversation_id.to_string(), snapshot);
-                if let Some(display) =
-                    crate::runtime::agent::runtime_agent_provider_context_usage_display(snapshot)
-                {
-                    self.agent_context_usage_by_conversation
-                        .insert(conversation_id.to_string(), display);
-                }
-            } else {
-                self.agent_context_usage_snapshot_by_conversation
-                    .remove(conversation_id);
-            }
+            self.merge_restored_agent_token_usage(conversation_id, pane_id, token_usage_by_model);
+            self.restore_agent_context_usage(
+                conversation_id,
+                metadata.context_usage,
+                metadata.context_usage_snapshot,
+            );
             let _ = self.checkpoint_agent_session_metadata();
             break;
         }

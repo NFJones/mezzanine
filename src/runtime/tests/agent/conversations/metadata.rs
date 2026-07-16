@@ -91,9 +91,8 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
     );
     assert_eq!(
         service
-            .agent_context_usage_by_conversation
-            .get("saved-tokens")
-            .map(String::as_str),
+            .agent_context_usage_display("saved-tokens")
+            .as_deref(),
         Some("42%")
     );
     let status = service.dispatch_runtime_control_body(

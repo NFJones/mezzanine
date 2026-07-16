@@ -250,22 +250,6 @@ pub struct RuntimeSessionService {
     /// The key is `turn_id/action_id`, keeping the accumulator scoped to one
     /// running semantic action while successive read transactions complete.
     pub(in crate::runtime) apply_patch_batch_states: BTreeMap<String, RuntimeApplyPatchBatchState>,
-    /// Cumulative provider token usage keyed by conversation and provider/model.
-    pub(in crate::runtime) agent_token_usage_by_conversation:
-        BTreeMap<String, BTreeMap<ModelTokenUsageKey, ModelTokenUsage>>,
-    /// Cumulative provider token usage keyed by pane and provider/model.
-    pub(in crate::runtime) agent_token_usage_by_pane:
-        BTreeMap<String, BTreeMap<ModelTokenUsageKey, ModelTokenUsage>>,
-    /// Latest provider-response input context usage percentage keyed by
-    /// conversation id for terminal rendering and legacy persistence.
-    pub(in crate::runtime) agent_context_usage_by_conversation: BTreeMap<String, String>,
-    /// Latest provider-response request-context snapshots keyed by
-    /// conversation id.
-    pub(in crate::runtime) agent_context_usage_snapshot_by_conversation:
-        BTreeMap<String, mez_agent::AgentContextUsageSnapshot>,
-    /// Latest provider quota usage percentages keyed by agent conversation id.
-    pub(in crate::runtime) agent_quota_usage_by_conversation:
-        BTreeMap<String, Vec<ProviderQuotaUsage>>,
     /// Latest live provider model catalogs keyed by provider id.
     pub(in crate::runtime) provider_model_catalog_cache:
         BTreeMap<String, crate::runtime::commands::RuntimeModelCatalog>,

@@ -568,9 +568,8 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
     assert_eq!(restored_session.log_level, AgentLogLevel::Trace);
     assert_eq!(
         restored
-            .agent_token_usage_by_conversation
-            .get("saved")
-            .and_then(|usage_by_model| usage_by_model.get(&saved_token_usage_key))
+            .agent_token_usage_for_conversation("saved")
+            .get(&saved_token_usage_key)
             .copied(),
         Some(saved_token_usage)
     );
