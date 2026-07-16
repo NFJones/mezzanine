@@ -35,9 +35,9 @@ use super::service_state::{
 use super::{
     AgentShellVisibility, AgentTurnRecord, AgentTurnState, AttachedClientStepApplication,
     AttachedTerminalClientStepPlan, ClientViewRole, CopyMode, CopyModeKeyAction, EffectiveConfig,
-    EventKind, KeyBindings, KeyChord, MezError, MouseAction, MouseResizeDragState,
+    EventKind, HostClipboard, KeyBindings, KeyChord, MezError, MouseAction, MouseResizeDragState,
     MouseSelectionDragState, MouseWindowActionFrameCell, ObserverDecisionState, PaneDescriptor,
-    PaneGeometry, PaneInputDispatch, PaneNavigationDirection, ReadlineInputDecoder,
+    PaneGeometry, PaneInputDispatch, PaneNavigationDirection, PasteBuffers, ReadlineInputDecoder,
     ReadlineOutcome, ReadlinePrompt, ReadlinePromptKind, RenderedClientView, Result,
     RuntimeAgentModifiedFileSummary, RuntimeAgentPromptInput, RuntimeCommandBinding,
     RuntimeSessionService, RuntimeSideEffect, RuntimeStatusPillCache, RuntimeStatusPillDefinition,
@@ -107,6 +107,8 @@ pub(in crate::runtime) struct RuntimePresentationSettings {
     key_bindings: KeyBindings,
     /// Configured prefix-table command bindings keyed by chord.
     command_bindings: std::collections::BTreeMap<KeyChord, RuntimeCommandBinding>,
+    /// Clipboard policy used for OSC 52 terminal writes.
+    terminal_clipboard: String,
 }
 
 impl Default for RuntimePresentationSettings {
@@ -141,6 +143,7 @@ impl Default for RuntimePresentationSettings {
             ui_theme: UiTheme::default(),
             key_bindings: KeyBindings::default(),
             command_bindings: std::collections::BTreeMap::new(),
+            terminal_clipboard: "external".to_string(),
         }
     }
 }
@@ -184,11 +187,39 @@ impl RuntimePresentationSettings {
             ui_theme: crate::runtime::runtime_ui_theme_from_config(root)?,
             key_bindings: crate::runtime::runtime_key_bindings_from_config(root)?,
             command_bindings: crate::runtime::runtime_command_bindings_from_effective(effective)?,
+            terminal_clipboard: crate::runtime::runtime_terminal_clipboard_from_config(root)?,
         })
     }
 }
 
-/// Owns transient client interaction state used by product presentation.
+/// Owns paste-buffer, host-clipboard, and copy-mode presentation state.
+#[derive(Debug)]
+struct RuntimeCopyPresentationState {
+    /// Named internal paste buffers and their bounded contents.
+    paste_buffers: PasteBuffers,
+    /// Buffer selected as the implicit copy and paste target.
+    active_paste_buffer: Option<String>,
+    /// Configured desktop clipboard adapter.
+    host_clipboard: HostClipboard,
+    /// Interactive copy modes keyed by pane id.
+    active_copy_modes: std::collections::BTreeMap<String, CopyMode>,
+    /// Panes using copy mode only as transient mouse scrollback.
+    scrollback_copy_mode_panes: std::collections::BTreeSet<String>,
+}
+
+impl Default for RuntimeCopyPresentationState {
+    fn default() -> Self {
+        Self {
+            paste_buffers: PasteBuffers::default_limit(),
+            active_paste_buffer: None,
+            host_clipboard: HostClipboard::system(),
+            active_copy_modes: std::collections::BTreeMap::new(),
+            scrollback_copy_mode_panes: std::collections::BTreeSet::new(),
+        }
+    }
+}
+
+/// Owns product presentation configuration and mutable client interaction state.
 ///
 /// Fields are private to the render component and its descendants. Other
 /// runtime components cross this boundary through narrow methods instead of
@@ -199,6 +230,10 @@ pub(in crate::runtime) struct RuntimePresentationComponent {
     settings: RuntimePresentationSettings,
     /// Cached output for command-backed window status pills.
     window_status_pill_cache: std::cell::RefCell<RuntimeStatusPillCache>,
+    /// Copy, paste-buffer, and host-clipboard state.
+    copy: RuntimeCopyPresentationState,
+    /// Active agent prompt editor state keyed by pane id.
+    agent_prompt_inputs: std::collections::BTreeMap<String, RuntimeAgentPromptInput>,
     /// Submitted command-prompt history retained across prompt openings.
     primary_command_prompt_history: Vec<String>,
     /// Active primary-client readline prompt, when one is open.
@@ -216,12 +251,19 @@ pub(in crate::runtime) struct RuntimePresentationComponent {
     /// Parent browser views waiting to accompany pending child views.
     pending_record_browser_overlay_stacks:
         std::collections::BTreeMap<(String, String), Vec<RuntimeRecordBrowserOverlayFrame>>,
+    /// Active pane-divider resize gesture.
     mouse_resize_drag_state: Option<MouseResizeDragState>,
+    /// Active mouse text-selection gesture.
     mouse_selection_drag_state: Option<MouseSelectionDragState>,
+    /// Last pane-content click retained for double-click classification.
     last_mouse_click_state: Option<RuntimeMouseClickState>,
+    /// Deferred copied-word highlight cleanup.
     deferred_word_copy_cleanup: std::cell::RefCell<Option<(String, CopyMode, u64)>>,
+    /// Window-frame action pressed until a matching mouse release.
     pressed_window_action: Option<WindowFrameAction>,
+    /// Transient primary-client error status.
     primary_error_status_overlay: Option<String>,
+    /// Active pane-agent status selector.
     pane_agent_status_selector: Option<RuntimePaneAgentStatusSelector>,
 }
 
@@ -239,6 +281,42 @@ impl RuntimePresentationComponent {
 }
 
 impl RuntimeSessionService {
+    /// Returns host clipboard state for presentation integration tests.
+    #[cfg(test)]
+    pub(in crate::runtime) fn host_clipboard_for_tests(&self) -> &HostClipboard {
+        &self.presentation.copy.host_clipboard
+    }
+
+    /// Returns mutable host clipboard state for presentation integration fixtures.
+    #[cfg(test)]
+    pub(in crate::runtime) fn host_clipboard_mut_for_tests(&mut self) -> &mut HostClipboard {
+        &mut self.presentation.copy.host_clipboard
+    }
+
+    /// Returns panes using copy mode as transient mouse scrollback.
+    #[cfg(test)]
+    pub(in crate::runtime) fn scrollback_copy_mode_panes_for_tests(
+        &self,
+    ) -> &std::collections::BTreeSet<String> {
+        &self.presentation.copy.scrollback_copy_mode_panes
+    }
+
+    /// Returns active agent prompt editors for integration tests.
+    #[cfg(test)]
+    pub(in crate::runtime) fn agent_prompt_inputs_for_tests(
+        &self,
+    ) -> &std::collections::BTreeMap<String, RuntimeAgentPromptInput> {
+        &self.presentation.agent_prompt_inputs
+    }
+
+    /// Returns mutable agent prompt editors for integration fixtures.
+    #[cfg(test)]
+    pub(in crate::runtime) fn agent_prompt_inputs_mut_for_tests(
+        &mut self,
+    ) -> &mut std::collections::BTreeMap<String, RuntimeAgentPromptInput> {
+        &mut self.presentation.agent_prompt_inputs
+    }
+
     /// Replaces frame visibility for a presentation integration fixture.
     #[cfg(test)]
     pub(in crate::runtime) fn set_frame_visibility_for_tests(
@@ -354,6 +432,71 @@ impl RuntimeSessionService {
         &self,
     ) -> &std::collections::BTreeMap<KeyChord, RuntimeCommandBinding> {
         &self.presentation.settings.command_bindings
+    }
+
+    /// Returns the runtime's bounded internal paste-buffer store.
+    pub fn paste_buffers(&self) -> &PasteBuffers {
+        &self.presentation.copy.paste_buffers
+    }
+
+    /// Returns mutable paste-buffer storage to product command adapters.
+    pub(in crate::runtime) fn paste_buffers_mut(&mut self) -> &mut PasteBuffers {
+        &mut self.presentation.copy.paste_buffers
+    }
+
+    /// Returns the selected implicit copy and paste buffer.
+    pub(in crate::runtime) fn active_paste_buffer(&self) -> Option<&str> {
+        self.presentation.copy.active_paste_buffer.as_deref()
+    }
+
+    /// Replaces the selected implicit copy and paste buffer.
+    pub(in crate::runtime) fn set_active_paste_buffer(&mut self, name: Option<String>) {
+        self.presentation.copy.active_paste_buffer = name;
+    }
+
+    /// Returns active per-pane copy modes.
+    pub(in crate::runtime) fn active_copy_modes(
+        &self,
+    ) -> &std::collections::BTreeMap<String, CopyMode> {
+        &self.presentation.copy.active_copy_modes
+    }
+
+    /// Returns mutable per-pane copy modes to copy and process adapters.
+    pub(in crate::runtime) fn active_copy_modes_mut(
+        &mut self,
+    ) -> &mut std::collections::BTreeMap<String, CopyMode> {
+        &mut self.presentation.copy.active_copy_modes
+    }
+
+    /// Replaces the desktop clipboard adapter after configuration changes.
+    pub(in crate::runtime) fn set_host_clipboard(&mut self, host_clipboard: HostClipboard) {
+        self.presentation.copy.host_clipboard = host_clipboard;
+    }
+
+    /// Returns the configured OSC 52 terminal clipboard policy.
+    pub(in crate::runtime) fn terminal_clipboard(&self) -> &str {
+        &self.presentation.settings.terminal_clipboard
+    }
+
+    /// Removes one active agent prompt editor and returns its state.
+    pub(in crate::runtime) fn remove_agent_prompt_input(
+        &mut self,
+        pane_id: &str,
+    ) -> Option<RuntimeAgentPromptInput> {
+        self.presentation.agent_prompt_inputs.remove(pane_id)
+    }
+
+    /// Returns mutable agent prompt editor state for one pane.
+    pub(in crate::runtime) fn agent_prompt_input_mut(
+        &mut self,
+        pane_id: &str,
+    ) -> Option<&mut RuntimeAgentPromptInput> {
+        self.presentation.agent_prompt_inputs.get_mut(pane_id)
+    }
+
+    /// Clears every active agent prompt editor during lifecycle teardown.
+    pub(in crate::runtime) fn clear_agent_prompt_inputs(&mut self) {
+        self.presentation.agent_prompt_inputs.clear();
     }
 }
 

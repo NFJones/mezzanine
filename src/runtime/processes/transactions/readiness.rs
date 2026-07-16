@@ -16,7 +16,7 @@ impl RuntimeSessionService {
         for event in events {
             match event {
                 TerminalOscEvent::ClipboardSet { selection, content }
-                    if terminal_clipboard_policy_accepts_osc52(&self.terminal_clipboard) =>
+                    if terminal_clipboard_policy_accepts_osc52(self.terminal_clipboard()) =>
                 {
                     self.copy_text_to_buffer_and_host_clipboard(
                         "osc52",

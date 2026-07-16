@@ -100,8 +100,13 @@ impl RuntimeSessionService {
                 )
             })?;
         self.clear_shell_output_filters_for_foreground_input(descriptor.pane_id.as_str());
-        self.active_copy_modes.remove(descriptor.pane_id.as_str());
-        self.scrollback_copy_mode_panes
+        self.presentation
+            .copy
+            .active_copy_modes
+            .remove(descriptor.pane_id.as_str());
+        self.presentation
+            .copy
+            .scrollback_copy_mode_panes
             .remove(descriptor.pane_id.as_str());
         self.write_runtime_pane_input(descriptor.pane_id.as_str(), input)?;
         Ok(PaneInputDispatch {
@@ -387,8 +392,13 @@ impl RuntimeSessionService {
                                 self.clear_shell_output_filters_for_foreground_input(
                                     descriptor.pane_id.as_str(),
                                 );
-                                self.active_copy_modes.remove(descriptor.pane_id.as_str());
-                                self.scrollback_copy_mode_panes
+                                self.presentation
+                                    .copy
+                                    .active_copy_modes
+                                    .remove(descriptor.pane_id.as_str());
+                                self.presentation
+                                    .copy
+                                    .scrollback_copy_mode_panes
                                     .remove(descriptor.pane_id.as_str());
                                 pane_input_effects.push(RuntimeSideEffect::WritePaneInput {
                                     pane_id: descriptor.pane_id.to_string(),
@@ -422,8 +432,13 @@ impl RuntimeSessionService {
                         self.clear_shell_output_filters_for_foreground_input(
                             descriptor.pane_id.as_str(),
                         );
-                        self.active_copy_modes.remove(descriptor.pane_id.as_str());
-                        self.scrollback_copy_mode_panes
+                        self.presentation
+                            .copy
+                            .active_copy_modes
+                            .remove(descriptor.pane_id.as_str());
+                        self.presentation
+                            .copy
+                            .scrollback_copy_mode_panes
                             .remove(descriptor.pane_id.as_str());
                         pane_input_effects.push(RuntimeSideEffect::WritePaneInput {
                             pane_id: descriptor.pane_id.to_string(),

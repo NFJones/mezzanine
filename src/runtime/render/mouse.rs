@@ -522,11 +522,18 @@ impl RuntimeSessionService {
                     lines > 0 && copy_mode.is_at_bottom() && copy_mode.selection().is_none()
                 };
                 if should_exit {
-                    self.active_copy_modes.remove(target.pane_id.as_str());
-                    self.scrollback_copy_mode_panes
+                    self.presentation
+                        .copy
+                        .active_copy_modes
+                        .remove(target.pane_id.as_str());
+                    self.presentation
+                        .copy
+                        .scrollback_copy_mode_panes
                         .remove(target.pane_id.as_str());
                 } else {
-                    self.scrollback_copy_mode_panes
+                    self.presentation
+                        .copy
+                        .scrollback_copy_mode_panes
                         .insert(target.pane_id.clone());
                 }
                 Ok(true)
@@ -591,7 +598,7 @@ impl RuntimeSessionService {
             }
         }
         if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
-            self.agent_prompt_inputs.remove(pane_id);
+            self.presentation.agent_prompt_inputs.remove(pane_id);
         }
         Ok(true)
     }
@@ -1037,7 +1044,13 @@ impl RuntimeSessionService {
             .filter(|state| state.pane_id == pane_id)
             .map(|state| state.origin_position)
             .unwrap_or(position);
-        if finish && !self.active_copy_modes.contains_key(pane_id.as_str()) {
+        if finish
+            && !self
+                .presentation
+                .copy
+                .active_copy_modes
+                .contains_key(pane_id.as_str())
+        {
             self.presentation.mouse_selection_drag_state = None;
             return Ok(true);
         }
@@ -1056,8 +1069,14 @@ impl RuntimeSessionService {
         };
         if finish {
             self.presentation.mouse_selection_drag_state = None;
-            self.active_copy_modes.remove(pane_id.as_str());
-            self.scrollback_copy_mode_panes.remove(pane_id.as_str());
+            self.presentation
+                .copy
+                .active_copy_modes
+                .remove(pane_id.as_str());
+            self.presentation
+                .copy
+                .scrollback_copy_mode_panes
+                .remove(pane_id.as_str());
             if let Some(copied) = copied {
                 self.copy_text_to_buffer_and_host_clipboard(
                     "mouse",
@@ -1084,7 +1103,12 @@ impl RuntimeSessionService {
     /// full-screen terminal apps can still be copied without changing history
     /// capture semantics.
     fn ensure_mouse_selection_copy_mode(&mut self, pane_id: &str) -> Result<&mut CopyMode> {
-        if !self.active_copy_modes.contains_key(pane_id) {
+        if !self
+            .presentation
+            .copy
+            .active_copy_modes
+            .contains_key(pane_id)
+        {
             let viewport_rows = self.copy_mode_viewport_rows_for_pane(pane_id);
             let screen = self.pane_screens.get(pane_id).ok_or_else(|| {
                 MezError::new(
@@ -1097,10 +1121,14 @@ impl RuntimeSessionService {
             } else {
                 CopyMode::from_screen(screen, viewport_rows)?
             };
-            self.active_copy_modes
+            self.presentation
+                .copy
+                .active_copy_modes
                 .insert(pane_id.to_string(), copy_mode);
         }
-        self.active_copy_modes
+        self.presentation
+            .copy
+            .active_copy_modes
             .get_mut(pane_id)
             .ok_or_else(|| MezError::invalid_state("active copy mode was not retained"))
     }
@@ -1123,6 +1151,8 @@ impl RuntimeSessionService {
         // highlight persists for one render frame before cleanup.
         self.ensure_active_copy_mode(pane_id)?;
         let mut copy_mode = self
+            .presentation
+            .copy
             .active_copy_modes
             .remove(pane_id)
             .ok_or_else(|| MezError::invalid_state("active copy mode was not retained"))?;
@@ -1132,7 +1162,10 @@ impl RuntimeSessionService {
             copy_mode.copy_selection()?
         };
         self.presentation.mouse_selection_drag_state = None;
-        self.scrollback_copy_mode_panes.remove(pane_id);
+        self.presentation
+            .copy
+            .scrollback_copy_mode_panes
+            .remove(pane_id);
         self.presentation.deferred_word_copy_cleanup.replace(Some((
             pane_id.to_string(),
             copy_mode,

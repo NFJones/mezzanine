@@ -203,7 +203,7 @@ fn runtime_primary_command_prompt_immediate_command_does_not_open_overlay() {
     assert!(create_buffer.view_refresh_required);
     assert!(service.primary_prompt_input().is_none());
     assert!(service.primary_display_overlay().is_none());
-    assert_eq!(service.paste_buffers.get("ack"), Some("hello"));
+    assert_eq!(service.paste_buffers().get("ack"), Some("hello"));
     assert!(
         service
             .primary_error_status_overlay()

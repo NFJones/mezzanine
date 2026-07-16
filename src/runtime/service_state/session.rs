@@ -200,32 +200,6 @@ pub struct RuntimeSessionService {
     pub(in crate::runtime) config_effects_use_adapter: bool,
     /// Whether non-blocking program hooks execute through an adapter.
     pub(in crate::runtime) hook_effects_use_adapter: bool,
-    /// Stores the paste buffers value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) paste_buffers: PasteBuffers,
-    /// Stores the active paste buffer value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) active_paste_buffer: Option<String>,
-    /// Stores the host clipboard value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) host_clipboard: HostClipboard,
-    /// Stores the active copy modes value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) active_copy_modes: BTreeMap<String, CopyMode>,
-    /// Panes currently using copy-mode storage as transient mouse scrollback.
-    ///
-    /// Keyboard copy-mode is an explicit modal workflow; mouse-wheel
-    /// scrollback is only a temporary viewport offset and should return to the
-    /// live pane on the next key press.
-    pub(in crate::runtime) scrollback_copy_mode_panes: BTreeSet<String>,
     /// Stores the pane transcript refs value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -258,11 +232,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) terminal_shell_output_preview_lines: usize,
-    /// Stores the terminal clipboard value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) terminal_clipboard: String,
     /// Stores the permission policy value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -474,11 +443,6 @@ pub struct RuntimeSessionService {
     /// current conversation without re-reading the working tree.
     pub(in crate::runtime) agent_modified_files:
         BTreeMap<String, BTreeMap<String, RuntimeAgentModifiedFileSummary>>,
-    /// Stores the agent prompt inputs value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) agent_prompt_inputs: BTreeMap<String, RuntimeAgentPromptInput>,
     /// Stores the agent turn model profiles value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

@@ -50,7 +50,7 @@ fn runtime_double_click_copies_readline_word_under_pointer() {
     let _clipboard_guard = TEST_HOST_CLIPBOARD_TEST_LOCK.lock().unwrap();
     TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().clear();
     let mut service = test_runtime_service();
-    service.host_clipboard =
+    *service.host_clipboard_mut_for_tests() =
         HostClipboard::new(record_host_clipboard_copy, empty_host_clipboard_read);
     let primary = service
         .attach_primary("primary", true, Size::new(20, 4).unwrap(), 120)
@@ -77,12 +77,12 @@ fn runtime_double_click_copies_readline_word_under_pointer() {
             .unwrap();
     }
 
-    assert_eq!(service.paste_buffers.get("mouse"), Some("beta"));
+    assert_eq!(service.paste_buffers().get("mouse"), Some("beta"));
     assert_eq!(
         TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().as_slice(),
         ["beta"]
     );
-    assert!(!service.active_copy_modes.contains_key("%1"));
+    assert!(!service.active_copy_modes().contains_key("%1"));
 }
 
 /// Verifies that runtime `terminal/command` accepts only the spec-defined

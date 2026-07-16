@@ -38,7 +38,7 @@ fn runtime_attached_agent_prompt_logs_invalid_state_errors_non_modally() {
     assert!(report.view_refresh_required);
     assert!(!report.full_redraw_required);
     assert!(service.pending_agent_provider_tasks().is_empty());
-    let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
+    let prompt_state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
     assert_eq!(prompt_state.prompt.buffer.line(), "");
     let pane_text = service
         .pane_screen("%1")
@@ -445,7 +445,7 @@ fn runtime_agent_prompt_ctrl_c_clears_nonempty_buffer_when_idle() {
     assert_eq!(edit.agent_prompt_inputs_applied, 1);
     assert_eq!(
         service
-            .agent_prompt_inputs
+            .agent_prompt_inputs_for_tests()
             .get("%1")
             .unwrap()
             .prompt
@@ -470,7 +470,7 @@ fn runtime_agent_prompt_ctrl_c_clears_nonempty_buffer_when_idle() {
 
     assert_eq!(clear.forwarded_bytes, 0);
     assert_eq!(clear.agent_prompt_inputs_applied, 1);
-    let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
+    let prompt_state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
     assert_eq!(prompt_state.prompt.buffer.line(), "");
     assert!(prompt_state.display_lines.is_empty());
     assert_eq!(

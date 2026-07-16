@@ -559,10 +559,10 @@ fn runtime_primary_display_overlay_executes_multiple_action_chips() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     service
-        .paste_buffers
+        .paste_buffers_mut()
         .set_with_origin("main", "pasted\n", Some("test".to_string()))
         .unwrap();
-    service.active_paste_buffer = Some("main".to_string());
+    service.set_active_paste_buffer(Some("main".to_string()));
 
     service
         .execute_attached_display_command(&primary, "choose-buffer")
@@ -642,8 +642,8 @@ fn runtime_primary_display_overlay_executes_multiple_action_chips() {
 
     assert_eq!(report.forwarded_bytes, 0);
     assert!(report.view_refresh_required);
-    assert!(service.paste_buffers.get("main").is_none());
-    assert_eq!(service.active_paste_buffer.as_deref(), None);
+    assert!(service.paste_buffers().get("main").is_none());
+    assert_eq!(service.active_paste_buffer(), None);
     assert!(service.primary_display_overlay().is_none());
     service.pane_processes_mut().terminate_all().unwrap();
 }
@@ -658,10 +658,10 @@ fn runtime_primary_display_overlay_mouse_selects_action_chip() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     service
-        .paste_buffers
+        .paste_buffers_mut()
         .set_with_origin("main", "pasted\n", Some("test".to_string()))
         .unwrap();
-    service.active_paste_buffer = Some("main".to_string());
+    service.set_active_paste_buffer(Some("main".to_string()));
 
     service
         .execute_attached_display_command(&primary, "choose-buffer")
@@ -703,8 +703,8 @@ fn runtime_primary_display_overlay_mouse_selects_action_chip() {
         )
         .unwrap();
 
-    assert!(service.paste_buffers.get("main").is_none());
-    assert_eq!(service.active_paste_buffer.as_deref(), None);
+    assert!(service.paste_buffers().get("main").is_none());
+    assert_eq!(service.active_paste_buffer(), None);
     service.pane_processes_mut().terminate_all().unwrap();
 }
 

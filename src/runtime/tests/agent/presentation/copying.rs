@@ -50,7 +50,7 @@ fn runtime_deferred_foreground_paste_stays_ordered_and_exits_copy_mode() {
             .iter()
             .all(|effect| !effect.pane_input_parts().2)
     );
-    assert!(!service.active_copy_modes.contains_key("%1"));
+    assert!(!service.active_copy_modes().contains_key("%1"));
 }
 
 /// Verifies the terminal `copy-mode` command opens over the same live pane
@@ -76,7 +76,7 @@ fn runtime_copy_mode_command_preserves_live_viewport_height() {
         .unwrap();
 
     let visible = service
-        .active_copy_modes
+        .active_copy_modes()
         .get(&pane_id)
         .unwrap()
         .visible_lines()
@@ -121,7 +121,7 @@ fn runtime_copy_mode_key_navigation_requests_diff_refresh() {
 
     assert!(report.view_refresh_required);
     assert!(!report.full_redraw_required);
-    assert!(service.active_copy_modes.contains_key(&pane_id));
+    assert!(service.active_copy_modes().contains_key(&pane_id));
 }
 
 /// Verifies that `/copy` uses retained model-authored `say` text and supports
@@ -135,7 +135,7 @@ fn runtime_agent_shell_copy_writes_latest_say_text_to_destinations() {
     let _clipboard_guard = TEST_HOST_CLIPBOARD_TEST_LOCK.lock().unwrap();
     TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().clear();
     let mut service = test_runtime_service();
-    service.host_clipboard =
+    *service.host_clipboard_mut_for_tests() =
         HostClipboard::new(record_host_clipboard_copy, empty_host_clipboard_read);
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -231,14 +231,14 @@ fn runtime_agent_shell_copy_writes_latest_say_text_to_destinations() {
         "{buffer_response}"
     );
     assert_eq!(
-        service.paste_buffers.get("retained-say"),
+        service.paste_buffers().get("retained-say"),
         Some("Latest say text.")
     );
     assert_ne!(
-        service.paste_buffers.get("retained-say"),
+        service.paste_buffers().get("retained-say"),
         Some("raw transport envelope should not be copied")
     );
-    let buffers = service.paste_buffers.list();
+    let buffers = service.paste_buffers().list();
     assert!(
         buffers.iter().any(|buffer| {
             buffer.name == "retained-say" && buffer.origin.as_deref() == Some("agent:turn-1:say")
@@ -255,7 +255,7 @@ fn runtime_agent_shell_copy_writes_latest_say_text_to_destinations() {
         "{clipboard_response}"
     );
     assert_eq!(
-        service.paste_buffers.get("clipboard"),
+        service.paste_buffers().get("clipboard"),
         Some("Latest say text.")
     );
     assert!(
@@ -300,7 +300,7 @@ fn runtime_agent_copy_trace_log_retains_hidden_trace_and_writes_destinations() {
     let _clipboard_guard = TEST_HOST_CLIPBOARD_TEST_LOCK.lock().unwrap();
     TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().clear();
     let mut service = test_runtime_service();
-    service.host_clipboard =
+    *service.host_clipboard_mut_for_tests() =
         HostClipboard::new(record_host_clipboard_copy, empty_host_clipboard_read);
     let primary = service
         .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
@@ -381,7 +381,7 @@ fn runtime_agent_copy_trace_log_retains_hidden_trace_and_writes_destinations() {
         buffer_response.contains("destination=buffer"),
         "{buffer_response}"
     );
-    let buffer = service.paste_buffers.get("retained-trace").unwrap();
+    let buffer = service.paste_buffers().get("retained-trace").unwrap();
     assert!(buffer.contains("trace raw sentinel"), "{buffer}");
     assert!(
         buffer.contains("agent trace: turn turn-1: MAAP response"),
@@ -395,7 +395,7 @@ fn runtime_agent_copy_trace_log_retains_hidden_trace_and_writes_destinations() {
         clipboard_response.contains("destination=clipboard"),
         "{clipboard_response}"
     );
-    let clipboard = service.paste_buffers.get("clipboard").unwrap();
+    let clipboard = service.paste_buffers().get("clipboard").unwrap();
     assert!(clipboard.contains("trace raw sentinel"), "{clipboard}");
     assert!(
         TEST_HOST_CLIPBOARD_WRITES
@@ -440,7 +440,7 @@ fn runtime_agent_copy_context_writes_idle_context_to_destinations() {
     let _clipboard_guard = TEST_HOST_CLIPBOARD_TEST_LOCK.lock().unwrap();
     TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().clear();
     let mut service = test_runtime_service();
-    service.host_clipboard =
+    *service.host_clipboard_mut_for_tests() =
         HostClipboard::new(record_host_clipboard_copy, empty_host_clipboard_read);
     let primary = service
         .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
@@ -466,7 +466,7 @@ fn runtime_agent_copy_context_writes_idle_context_to_destinations() {
         buffer_response.contains("destination=buffer"),
         "{buffer_response}"
     );
-    let buffer = service.paste_buffers.get("retained-context").unwrap();
+    let buffer = service.paste_buffers().get("retained-context").unwrap();
     assert!(
         buffer.contains(r#""kind": "model_request_context_dump""#),
         "{buffer}"
@@ -480,7 +480,7 @@ fn runtime_agent_copy_context_writes_idle_context_to_destinations() {
         clipboard_response.contains("destination=clipboard"),
         "{clipboard_response}"
     );
-    let clipboard = service.paste_buffers.get("clipboard").unwrap();
+    let clipboard = service.paste_buffers().get("clipboard").unwrap();
     assert!(
         clipboard.contains(r#""kind": "model_request_context_dump""#),
         "{clipboard}"
@@ -523,7 +523,7 @@ fn runtime_agent_copy_patches_writes_retained_patches_to_destinations() {
     let _clipboard_guard = TEST_HOST_CLIPBOARD_TEST_LOCK.lock().unwrap();
     TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().clear();
     let mut service = test_runtime_service();
-    service.host_clipboard =
+    *service.host_clipboard_mut_for_tests() =
         HostClipboard::new(record_host_clipboard_copy, empty_host_clipboard_read);
     let primary = service
         .attach_primary("primary", true, Size::new(100, 30).unwrap(), 120)
@@ -593,7 +593,7 @@ fn runtime_agent_copy_patches_writes_retained_patches_to_destinations() {
         buffer_response.contains("destination=buffer"),
         "{buffer_response}"
     );
-    let buffer = service.paste_buffers.get("retained-patches").unwrap();
+    let buffer = service.paste_buffers().get("retained-patches").unwrap();
     assert!(buffer.contains("agent patches for pane %1"), "{buffer}");
     assert!(
         buffer.contains("patch 1: turn=turn-1 action=patch-1 status=succeeded"),
@@ -610,7 +610,7 @@ fn runtime_agent_copy_patches_writes_retained_patches_to_destinations() {
         clipboard_response.contains("destination=clipboard"),
         "{clipboard_response}"
     );
-    let clipboard = service.paste_buffers.get("clipboard").unwrap();
+    let clipboard = service.paste_buffers().get("clipboard").unwrap();
     assert!(clipboard.contains("status=succeeded"), "{clipboard}");
     assert!(
         TEST_HOST_CLIPBOARD_WRITES
@@ -774,7 +774,7 @@ fn runtime_agent_copy_patches_retains_reused_action_id_attempts() {
         "{copy_response}"
     );
     assert!(copy_response.contains("patches=2"), "{copy_response}");
-    let retained = service.paste_buffers.get("all-patches").unwrap();
+    let retained = service.paste_buffers().get("all-patches").unwrap();
     assert!(
         retained.contains("patch 1: turn=turn-1 action=patch-retry status=failed"),
         "{retained}"

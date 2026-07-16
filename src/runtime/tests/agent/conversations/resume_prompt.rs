@@ -49,7 +49,7 @@ fn runtime_agent_prompt_resume_autocompletes_saved_session_uuid() {
     assert_eq!(report.forwarded_bytes, 0);
     assert_eq!(
         service
-            .agent_prompt_inputs
+            .agent_prompt_inputs_for_tests()
             .get("%1")
             .unwrap()
             .prompt

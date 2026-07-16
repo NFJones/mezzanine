@@ -380,7 +380,7 @@ fn runtime_applies_attached_terminal_step_actions() {
     assert!(report.view_refresh_required);
     assert!(report.full_redraw_required);
     assert!(report.unsupported_actions.is_empty());
-    assert!(!service.active_copy_modes.is_empty());
+    assert!(!service.active_copy_modes().is_empty());
     assert_eq!(service.session().windows()[0].panes().len(), 2);
     assert_eq!(service.pane_processes().len(), 2);
     service.pane_processes_mut().terminate_all().unwrap();

@@ -44,7 +44,7 @@ impl RuntimeSessionService {
                 runtime_agent_shell_display_output(&body, &self.presentation.settings.ui_theme)?;
             self.set_agent_prompt_display_output(&pane_id, display_output)?;
             if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
-                self.agent_prompt_inputs.remove(&pane_id);
+                self.presentation.agent_prompt_inputs.remove(&pane_id);
             }
             return Ok(true);
         }

@@ -23,7 +23,10 @@ fn runtime_agent_prompt_up_moves_within_soft_wrapped_draft_before_history() {
         TerminalScreen::new(Size::new(24, 8).unwrap(), 10).unwrap(),
     );
     {
-        let prompt_state = service.agent_prompt_inputs.get_mut("%1").unwrap();
+        let prompt_state = service
+            .agent_prompt_inputs_mut_for_tests()
+            .get_mut("%1")
+            .unwrap();
         prompt_state.prompt.buffer.set_history(vec![
             "first saved prompt".to_string(),
             "second saved prompt".to_string(),
@@ -34,7 +37,7 @@ fn runtime_agent_prompt_up_moves_within_soft_wrapped_draft_before_history() {
             .set_line("alpha beta gamma delta");
     }
     let original_cursor = service
-        .agent_prompt_inputs
+        .agent_prompt_inputs_for_tests()
         .get("%1")
         .unwrap()
         .prompt
@@ -57,7 +60,7 @@ fn runtime_agent_prompt_up_moves_within_soft_wrapped_draft_before_history() {
 
     assert_eq!(report.forwarded_bytes, 0);
     assert_eq!(report.agent_prompt_inputs_applied, 1);
-    let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
+    let prompt_state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
     assert_eq!(prompt_state.prompt.buffer.line(), "alpha beta gamma delta");
     assert!(prompt_state.prompt.buffer.cursor() < original_cursor);
 
@@ -74,7 +77,7 @@ fn runtime_agent_prompt_up_moves_within_soft_wrapped_draft_before_history() {
             },
         )
         .unwrap();
-    let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
+    let prompt_state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
     assert_eq!(prompt_state.prompt.buffer.line(), "alpha beta gamma delta");
 
     service
@@ -103,7 +106,7 @@ fn runtime_agent_prompt_up_moves_within_soft_wrapped_draft_before_history() {
             },
         )
         .unwrap();
-    let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
+    let prompt_state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
     assert_eq!(prompt_state.prompt.buffer.line(), "second saved prompt");
 }
 
@@ -130,11 +133,14 @@ fn runtime_agent_prompt_navigation_uses_split_pane_render_width() {
         .unwrap();
     service.reload_agent_prompt_history_for_pane("%1").unwrap();
     {
-        let prompt_state = service.agent_prompt_inputs.get_mut("%1").unwrap();
+        let prompt_state = service
+            .agent_prompt_inputs_mut_for_tests()
+            .get_mut("%1")
+            .unwrap();
         prompt_state.prompt.buffer.set_line("abcde fghij klmno");
     }
     let original_cursor = service
-        .agent_prompt_inputs
+        .agent_prompt_inputs_for_tests()
         .get("%1")
         .unwrap()
         .prompt
@@ -157,7 +163,7 @@ fn runtime_agent_prompt_navigation_uses_split_pane_render_width() {
 
     assert_eq!(report.forwarded_bytes, 0);
     assert_eq!(report.agent_prompt_inputs_applied, 1);
-    let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
+    let prompt_state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
     assert_eq!(prompt_state.prompt.buffer.line(), "abcde fghij klmno");
     assert!(prompt_state.prompt.buffer.cursor() < original_cursor);
     assert_eq!(prompt_state.prompt.buffer.cursor(), "abcde fghij".len());
@@ -185,7 +191,10 @@ fn runtime_agent_prompt_navigation_scrolls_visible_rows_with_cursor() {
         TerminalScreen::new(Size::new(24, 8).unwrap(), 10).unwrap(),
     );
     {
-        let prompt_state = service.agent_prompt_inputs.get_mut("%1").unwrap();
+        let prompt_state = service
+            .agent_prompt_inputs_mut_for_tests()
+            .get_mut("%1")
+            .unwrap();
         prompt_state
             .prompt
             .buffer
@@ -210,7 +219,7 @@ fn runtime_agent_prompt_navigation_scrolls_visible_rows_with_cursor() {
 
     assert_eq!(report.forwarded_bytes, 0);
     assert_eq!(report.agent_prompt_inputs_applied, 1);
-    let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
+    let prompt_state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
     assert_eq!(prompt_state.prompt.buffer.cursor(), "row1".len());
     let config = service
         .terminal_client_loop_config(TerminalClientLoopConfig::default())
@@ -309,14 +318,17 @@ fn runtime_agent_prompt_accepts_application_cursor_arrow_sequences() {
         TerminalScreen::new(Size::new(24, 8).unwrap(), 10).unwrap(),
     );
     {
-        let prompt_state = service.agent_prompt_inputs.get_mut("%1").unwrap();
+        let prompt_state = service
+            .agent_prompt_inputs_mut_for_tests()
+            .get_mut("%1")
+            .unwrap();
         prompt_state
             .prompt
             .buffer
             .set_line("alpha beta gamma delta");
     }
     let original_cursor = service
-        .agent_prompt_inputs
+        .agent_prompt_inputs_for_tests()
         .get("%1")
         .unwrap()
         .prompt
@@ -339,7 +351,7 @@ fn runtime_agent_prompt_accepts_application_cursor_arrow_sequences() {
 
     assert_eq!(report.forwarded_bytes, 0);
     assert_eq!(report.agent_prompt_inputs_applied, 1);
-    let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
+    let prompt_state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
     assert_eq!(prompt_state.prompt.buffer.line(), "alpha beta gamma delta");
     assert!(prompt_state.prompt.buffer.cursor() < original_cursor);
 }
@@ -362,7 +374,10 @@ fn runtime_agent_prompt_up_moves_within_multiline_draft_before_history() {
         TerminalScreen::new(Size::new(24, 8).unwrap(), 10).unwrap(),
     );
     {
-        let prompt_state = service.agent_prompt_inputs.get_mut("%1").unwrap();
+        let prompt_state = service
+            .agent_prompt_inputs_mut_for_tests()
+            .get_mut("%1")
+            .unwrap();
         prompt_state.prompt.buffer.set_history(vec![
             "first saved prompt".to_string(),
             "second saved prompt".to_string(),
@@ -374,7 +389,7 @@ fn runtime_agent_prompt_up_moves_within_multiline_draft_before_history() {
     }
 
     let original_cursor = service
-        .agent_prompt_inputs
+        .agent_prompt_inputs_for_tests()
         .get("%1")
         .unwrap()
         .prompt
@@ -396,7 +411,7 @@ fn runtime_agent_prompt_up_moves_within_multiline_draft_before_history() {
 
     assert_eq!(report.forwarded_bytes, 0);
     assert_eq!(report.agent_prompt_inputs_applied, 1);
-    let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
+    let prompt_state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
     assert_eq!(
         prompt_state.prompt.buffer.line(),
         "first line\nsecond line\nthird line"
@@ -446,6 +461,6 @@ fn runtime_agent_prompt_allows_navigation_and_other_pane_input() {
         service.session().windows()[0].active_pane().id.as_str(),
         "%2"
     );
-    assert!(!service.agent_prompt_inputs.contains_key("%2"));
+    assert!(!service.agent_prompt_inputs_for_tests().contains_key("%2"));
     service.pane_processes_mut().terminate_all().unwrap();
 }

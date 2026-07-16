@@ -454,7 +454,12 @@ impl RuntimeSessionService {
         }
         drop(deferred_cleanup);
         for pane in window.panes() {
-            let Some(copy_mode) = self.active_copy_modes.get(pane.id.as_str()) else {
+            let Some(copy_mode) = self
+                .presentation
+                .copy
+                .active_copy_modes
+                .get(pane.id.as_str())
+            else {
                 continue;
             };
             let Some((row, column, size)) = self.copy_mode_overlay_region(window, pane.index)
@@ -598,7 +603,8 @@ impl RuntimeSessionService {
         }
         let pane_context = TerminalPaneFrameContext {
             agent_prompt: Some(
-                self.agent_prompt_inputs
+                self.presentation
+                    .agent_prompt_inputs
                     .get(pane_id)
                     .map(|input| input.prompt.clone())
                     .unwrap_or_else(|| ReadlinePrompt::new(ReadlinePromptKind::Agent)),
@@ -612,6 +618,7 @@ impl RuntimeSessionService {
     /// Returns pane-local agent display lines plus the live turn timer footer.
     fn runtime_agent_prompt_display_lines_for_pane(&self, pane_id: &str) -> Vec<String> {
         let mut lines = self
+            .presentation
             .agent_prompt_inputs
             .get(pane_id)
             .map(|input| input.display_lines.clone())
@@ -755,11 +762,17 @@ impl RuntimeSessionService {
         config.mouse_selection_autoscroll_position =
             active_mouse_selection_state.and_then(|state| state.autoscroll_position);
         if let Some(pane_id) = active_pane_id {
-            config.mouse_policy.copy_mode_active =
-                self.active_copy_modes.contains_key(pane_id.as_str())
-                    || active_mouse_selection_state.is_some();
-            config.scrollback_copy_mode_active =
-                self.scrollback_copy_mode_panes.contains(pane_id.as_str());
+            config.mouse_policy.copy_mode_active = self
+                .presentation
+                .copy
+                .active_copy_modes
+                .contains_key(pane_id.as_str())
+                || active_mouse_selection_state.is_some();
+            config.scrollback_copy_mode_active = self
+                .presentation
+                .copy
+                .scrollback_copy_mode_panes
+                .contains(pane_id.as_str());
             config.mouse_policy.pane_application_mouse_mode = self
                 .pane_screens
                 .get(pane_id.as_str())
@@ -816,7 +829,11 @@ impl RuntimeSessionService {
                         .pane_screens
                         .get(pane_id.as_str())
                         .is_some_and(TerminalScreen::application_mouse_enabled),
-                    copy_mode_active: self.active_copy_modes.contains_key(pane_id.as_str()),
+                    copy_mode_active: self
+                        .presentation
+                        .copy
+                        .active_copy_modes
+                        .contains_key(pane_id.as_str()),
                     active: pane_id == active_pane_id,
                 })
             })
@@ -1217,7 +1234,12 @@ impl RuntimeSessionService {
                     .rev()
                     .find(|turn| turn.pane_id == pane_id);
                 let agent_session = self.agent_shell_store.get(&pane_id);
-                let mode = if self.active_copy_modes.contains_key(pane_id.as_str()) {
+                let mode = if self
+                    .presentation
+                    .copy
+                    .active_copy_modes
+                    .contains_key(pane_id.as_str())
+                {
                     "copy"
                 } else if agent_session.is_some_and(|session| {
                     matches!(session.visibility, AgentShellVisibility::Visible)
@@ -1335,6 +1357,8 @@ impl RuntimeSessionService {
                         .cloned()
                 });
                 let history_position = self
+                    .presentation
+                    .copy
                     .active_copy_modes
                     .get(pane_id.as_str())
                     .filter(|copy_mode| !copy_mode.is_at_bottom())
@@ -1381,7 +1405,8 @@ impl RuntimeSessionService {
                                 matches!(session.visibility, AgentShellVisibility::Visible)
                             })
                             .then(|| {
-                                self.agent_prompt_inputs
+                                self.presentation
+                                    .agent_prompt_inputs
                                     .get(&pane_id)
                                     .map(|input| input.prompt.clone())
                                     .unwrap_or_else(|| {

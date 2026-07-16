@@ -2,6 +2,8 @@
 
 use super::*;
 use crate::runtime::RuntimePresentationComponent;
+#[cfg(test)]
+use crate::terminal::HostClipboard;
 
 impl RuntimeSessionService {
     /// Runs the new operation for this subsystem.
@@ -55,7 +57,7 @@ impl RuntimeSessionService {
     /// parent desktop/session clipboard.
     #[cfg(test)]
     pub(crate) fn set_host_clipboard_for_tests(&mut self, host_clipboard: HostClipboard) {
-        self.host_clipboard = host_clipboard;
+        self.set_host_clipboard(host_clipboard);
     }
 
     /// Runs the from parts operation for this subsystem.
@@ -145,18 +147,12 @@ impl RuntimeSessionService {
             registry_effects_use_adapter: false,
             config_effects_use_adapter: false,
             hook_effects_use_adapter: false,
-            paste_buffers: PasteBuffers::default_limit(),
-            active_paste_buffer: None,
-            host_clipboard: HostClipboard::system(),
-            active_copy_modes: BTreeMap::new(),
-            scrollback_copy_mode_panes: BTreeSet::new(),
             pane_transcript_refs: BTreeMap::new(),
             terminal_history_limit: DEFAULT_HISTORY_LIMIT,
             terminal_history_rotate_lines: DEFAULT_HISTORY_ROTATE_LINES,
             terminal_term: DEFAULT_PANE_TERM.to_string(),
             terminal_emoji_width,
             terminal_shell_output_preview_lines: 5,
-            terminal_clipboard: "external".to_string(),
             permission_policy: PermissionPolicy::default(),
             live_approval_bypass_override: None,
             live_approval_policy_override: None,
@@ -202,7 +198,6 @@ impl RuntimeSessionService {
             agent_pre_shell_hook_completions: BTreeSet::new(),
             agent_copy_outputs: BTreeMap::new(),
             agent_modified_files: BTreeMap::new(),
-            agent_prompt_inputs: BTreeMap::new(),
             agent_turn_model_profiles: BTreeMap::new(),
             agent_planning_modes: BTreeSet::new(),
             agent_response_styles: BTreeMap::new(),

@@ -55,7 +55,7 @@ fn runtime_agent_prompt_personality_autocompletes_configured_profile() {
     assert_eq!(report.forwarded_bytes, 0);
     assert_eq!(
         service
-            .agent_prompt_inputs
+            .agent_prompt_inputs_for_tests()
             .get("%1")
             .unwrap()
             .prompt

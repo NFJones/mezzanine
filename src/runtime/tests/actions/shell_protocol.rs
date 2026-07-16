@@ -527,7 +527,7 @@ fn runtime_bash_agent_shell_transaction_keeps_parent_shell_alive() {
         1024,
     )
     .unwrap();
-    service.host_clipboard = HostClipboard::disabled();
+    *service.host_clipboard_mut_for_tests() = HostClipboard::disabled();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
@@ -640,7 +640,7 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
         1024,
     )
     .unwrap();
-    service.host_clipboard = HostClipboard::disabled();
+    *service.host_clipboard_mut_for_tests() = HostClipboard::disabled();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();

@@ -19,8 +19,16 @@ impl RuntimeSessionService {
         action: CopyModeKeyAction,
     ) -> Result<bool> {
         let pane_id = self.active_pane_id()?;
-        if self.scrollback_copy_mode_panes.remove(pane_id.as_str()) {
-            self.active_copy_modes.remove(pane_id.as_str());
+        if self
+            .presentation
+            .copy
+            .scrollback_copy_mode_panes
+            .remove(pane_id.as_str())
+        {
+            self.presentation
+                .copy
+                .active_copy_modes
+                .remove(pane_id.as_str());
             return Ok(true);
         }
         let mut should_exit = false;
@@ -39,6 +47,8 @@ impl RuntimeSessionService {
         }
         if let Some(copied) = copied {
             let buffer_name = self
+                .presentation
+                .copy
                 .active_paste_buffer
                 .clone()
                 .unwrap_or_else(|| "clipboard".to_string());
@@ -49,8 +59,14 @@ impl RuntimeSessionService {
             )?;
         }
         if should_exit {
-            self.active_copy_modes.remove(pane_id.as_str());
-            self.scrollback_copy_mode_panes.remove(pane_id.as_str());
+            self.presentation
+                .copy
+                .active_copy_modes
+                .remove(pane_id.as_str());
+            self.presentation
+                .copy
+                .scrollback_copy_mode_panes
+                .remove(pane_id.as_str());
         }
         Ok(true)
     }
@@ -66,9 +82,12 @@ impl RuntimeSessionService {
         content: String,
         origin: String,
     ) -> Result<()> {
-        self.paste_buffers
-            .set_with_origin(name, content.as_str(), Some(origin))?;
-        let _ = self.host_clipboard.copy(content.as_str());
+        self.presentation.copy.paste_buffers.set_with_origin(
+            name,
+            content.as_str(),
+            Some(origin),
+        )?;
+        let _ = self.presentation.copy.host_clipboard.copy(content.as_str());
         Ok(())
     }
 
@@ -105,7 +124,12 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> Result<&mut CopyMode> {
-        if !self.active_copy_modes.contains_key(pane_id) {
+        if !self
+            .presentation
+            .copy
+            .active_copy_modes
+            .contains_key(pane_id)
+        {
             let viewport_rows = self.copy_mode_viewport_rows_for_pane(pane_id);
             let screen = self.pane_screens.get(pane_id).ok_or_else(|| {
                 MezError::new(
@@ -114,10 +138,14 @@ impl RuntimeSessionService {
                 )
             })?;
             let copy_mode = CopyMode::from_screen(screen, viewport_rows)?;
-            self.active_copy_modes
+            self.presentation
+                .copy
+                .active_copy_modes
                 .insert(pane_id.to_string(), copy_mode);
         }
-        self.active_copy_modes
+        self.presentation
+            .copy
+            .active_copy_modes
             .get_mut(pane_id)
             .ok_or_else(|| MezError::invalid_state("active copy mode was not retained"))
     }

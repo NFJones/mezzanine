@@ -138,7 +138,12 @@ impl RuntimeSessionService {
                 self.execute_attached_display_command(primary_client_id, "list-buffers")?;
             }
             MuxAction::DeleteMostRecentPasteBuffer => {
-                let Some(name) = self.paste_buffers.most_recent_name().map(ToOwned::to_owned)
+                let Some(name) = self
+                    .presentation
+                    .copy
+                    .paste_buffers
+                    .most_recent_name()
+                    .map(ToOwned::to_owned)
                 else {
                     return Ok(false);
                 };

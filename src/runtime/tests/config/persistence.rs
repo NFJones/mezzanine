@@ -76,7 +76,7 @@ fn runtime_applies_host_clipboard_pipe_commands_from_config_layers() {
         .unwrap();
 
     let started = Instant::now();
-    assert!(service.host_clipboard.copy("configured-copy"));
+    assert!(service.host_clipboard_for_tests().copy("configured-copy"));
     assert!(
         started.elapsed() < Duration::from_millis(250),
         "clipboard copy blocked for {:?}",
@@ -95,7 +95,7 @@ fn runtime_applies_host_clipboard_pipe_commands_from_config_layers() {
     }
     assert_eq!(copied, "configured-copy");
     assert_eq!(
-        service.host_clipboard.read(),
+        service.host_clipboard_for_tests().read(),
         Some("configured-paste".to_string())
     );
     let _ = fs::remove_dir_all(root);

@@ -593,7 +593,7 @@ impl RuntimeSessionService {
         )?;
         self.enter_agent_mode_for_pane(&started.pane_id)?;
         if let Some(seed) = prompt_seed
-            && let Some(prompt_input) = self.agent_prompt_inputs.get_mut(&started.pane_id)
+            && let Some(prompt_input) = self.agent_prompt_input_mut(&started.pane_id)
         {
             prompt_input
                 .prompt

@@ -43,7 +43,7 @@ pub(super) fn runtime_copy_target_buffer_name(
 ) -> String {
     runtime_buffer_name(invocation)
         .map(ToOwned::to_owned)
-        .or_else(|| service.active_paste_buffer.clone())
+        .or_else(|| service.active_paste_buffer().map(ToOwned::to_owned))
         .unwrap_or_else(|| "clipboard".to_string())
 }
 
@@ -63,10 +63,10 @@ pub(super) fn runtime_copy_mode_command(
         .iter()
         .any(|arg| arg == "--cancel" || arg == "-q")
     {
-        service.active_copy_modes.remove(pane_id.as_str());
+        service.active_copy_modes_mut().remove(pane_id.as_str());
         return Ok(());
     }
-    if !service.active_copy_modes.contains_key(pane_id.as_str()) {
+    if !service.active_copy_modes().contains_key(pane_id.as_str()) {
         let screen = service.pane_screens.get(pane_id.as_str()).ok_or_else(|| {
             MezError::new(
                 crate::error::MezErrorKind::NotFound,
@@ -74,10 +74,10 @@ pub(super) fn runtime_copy_mode_command(
             )
         })?;
         let viewport_rows = service.copy_mode_viewport_rows_for_pane(pane_id.as_str());
-        service.active_copy_modes.insert(
-            pane_id.clone(),
-            CopyMode::from_screen(screen, viewport_rows)?,
-        );
+        let copy_mode = CopyMode::from_screen(screen, viewport_rows)?;
+        service
+            .active_copy_modes_mut()
+            .insert(pane_id.clone(), copy_mode);
     }
     let copy_target_buffer = invocation
         .args
@@ -87,7 +87,7 @@ pub(super) fn runtime_copy_mode_command(
     let mut copied = None;
     {
         let copy_mode = service
-            .active_copy_modes
+            .active_copy_modes_mut()
             .get_mut(pane_id.as_str())
             .ok_or_else(|| MezError::invalid_state("copy mode was not retained"))?;
         if invocation
@@ -132,7 +132,7 @@ pub(super) fn runtime_copy_selection_command(
     let descriptor = service.active_window_pane_descriptor(invocation.target_arg())?;
     let pane_id = descriptor.pane_id.to_string();
     let buffer_name = runtime_copy_target_buffer_name(service, invocation);
-    let Some(copy_mode) = service.active_copy_modes.get(pane_id.as_str()) else {
+    let Some(copy_mode) = service.active_copy_modes().get(pane_id.as_str()) else {
         return Ok(format!(
             "target={pane_id}:copy=not-copied:reason=copy-mode-inactive"
         ));
@@ -145,7 +145,7 @@ pub(super) fn runtime_copy_selection_command(
         format!("pane:{pane_id}:copy-mode"),
     )?;
     if invocation.has_flag("-x", "--exit") {
-        service.active_copy_modes.remove(pane_id.as_str());
+        service.active_copy_modes_mut().remove(pane_id.as_str());
     }
     Ok(format!(
         "target={pane_id}:copy=copied:buffer={buffer_name}:bytes={bytes}"
@@ -196,8 +196,8 @@ pub(super) fn runtime_choose_buffer_command(
     invocation: &CommandInvocation,
 ) -> Result<String> {
     if let Some(buffer_name) = runtime_positional_args(invocation).first() {
-        let created = if service.paste_buffers.get(buffer_name).is_none() {
-            service.paste_buffers.set_with_origin(
+        let created = if service.paste_buffers().get(buffer_name).is_none() {
+            service.paste_buffers_mut().set_with_origin(
                 *buffer_name,
                 "",
                 Some("runtime:choose-buffer".to_string()),
@@ -206,15 +206,15 @@ pub(super) fn runtime_choose_buffer_command(
         } else {
             false
         };
-        service.active_paste_buffer = Some((*buffer_name).to_string());
+        service.set_active_paste_buffer(Some((*buffer_name).to_string()));
         return Ok(format!(
             "buffer={}:selected=true:copy_target=active:paste_source=active:created={} source=runtime",
             buffer_name, created
         ));
     }
     Ok(runtime_choose_buffer_display(
-        service.paste_buffers.list(),
-        service.active_paste_buffer.as_deref(),
+        service.paste_buffers().list(),
+        service.active_paste_buffer(),
     ))
 }
 
@@ -238,27 +238,27 @@ pub(super) fn runtime_create_buffer_command(
         .any(|arg| matches!(arg.as_str(), "-r" | "--replace"));
     let select = invocation.args.iter().any(|arg| arg == "--select");
 
-    let existed = service.paste_buffers.get(buffer_name).is_some();
+    let existed = service.paste_buffers().get(buffer_name).is_some();
     let (created, replaced, bytes) = if existed && !replace {
         (
             false,
             false,
             service
-                .paste_buffers
+                .paste_buffers()
                 .get(buffer_name)
                 .map(str::len)
                 .unwrap_or(0),
         )
     } else {
         let created = if replace {
-            service.paste_buffers.set_with_origin(
+            service.paste_buffers_mut().set_with_origin(
                 buffer_name,
                 content,
                 Some("runtime:create-buffer".to_string()),
             )?;
             !existed
         } else {
-            service.paste_buffers.create_with_origin(
+            service.paste_buffers_mut().create_with_origin(
                 buffer_name,
                 content,
                 Some("runtime:create-buffer".to_string()),
@@ -268,7 +268,7 @@ pub(super) fn runtime_create_buffer_command(
     };
 
     if select {
-        service.active_paste_buffer = Some(buffer_name.to_string());
+        service.set_active_paste_buffer(Some(buffer_name.to_string()));
     }
 
     Ok(format!(

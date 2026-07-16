@@ -299,6 +299,7 @@ impl RuntimeSessionService {
                 }
             }
             let state = self
+                .presentation
                 .agent_prompt_inputs
                 .entry(pane_id.to_string())
                 .or_insert_with(default_runtime_agent_prompt_input);

@@ -884,7 +884,7 @@ fn runtime_apply_patch_write_phase_hunk_mismatch_queues_model_recovery() {
         copy_response.contains("destination=buffer"),
         "{copy_response}"
     );
-    let failed_patches = service.paste_buffers.get("failed-patches").unwrap();
+    let failed_patches = service.paste_buffers().get("failed-patches").unwrap();
     assert!(
         failed_patches.contains("patch 1: turn=turn-1 action=patch-write status=failed"),
         "{failed_patches}"

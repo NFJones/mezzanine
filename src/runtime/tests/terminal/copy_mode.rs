@@ -39,8 +39,12 @@ fn runtime_mouse_history_scroll_requests_diff_refresh() {
 
     assert!(report.view_refresh_required);
     assert!(!report.full_redraw_required);
-    assert!(service.active_copy_modes.contains_key(&pane_id));
-    assert!(service.scrollback_copy_mode_panes.contains(&pane_id));
+    assert!(service.active_copy_modes().contains_key(&pane_id));
+    assert!(
+        service
+            .scrollback_copy_mode_panes_for_tests()
+            .contains(&pane_id)
+    );
 
     let config = service
         .terminal_client_loop_config(TerminalClientLoopConfig::default())
@@ -66,7 +70,7 @@ fn runtime_double_click_highlight_persists_until_cleanup_deadline() {
     let _clipboard_guard = TEST_HOST_CLIPBOARD_TEST_LOCK.lock().unwrap();
     TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().clear();
     let mut service = test_runtime_service();
-    service.host_clipboard =
+    *service.host_clipboard_mut_for_tests() =
         HostClipboard::new(record_host_clipboard_copy, empty_host_clipboard_read);
     let primary = service
         .attach_primary("primary", true, Size::new(20, 4).unwrap(), 120)

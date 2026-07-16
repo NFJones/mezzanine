@@ -74,7 +74,7 @@ pub(in crate::runtime) fn runtime_write_agent_context_for_pane(
                     ))
                 }
                 RuntimeAgentExportTarget::Buffer(name) => {
-                    service.paste_buffers.set_with_origin(
+                    service.paste_buffers_mut().set_with_origin(
                         &name,
                         &context_dump.dump,
                         Some(format!("pane:{pane_id}:agent-context")),
@@ -269,7 +269,7 @@ pub(in crate::runtime) fn runtime_write_agent_trace_log_for_pane(
             ))
         }
         RuntimeAgentExportTarget::Buffer(name) => {
-            service.paste_buffers.set_with_origin(
+            service.paste_buffers_mut().set_with_origin(
                 name.as_str(),
                 dump,
                 Some(format!("pane:{pane_id}:agent-trace-log")),
@@ -338,7 +338,7 @@ pub(in crate::runtime) fn runtime_write_agent_copy_output_for_pane(
             ))
         }
         RuntimeAgentExportTarget::Buffer(name) => {
-            service.paste_buffers.set_with_origin(
+            service.paste_buffers_mut().set_with_origin(
                 name.as_str(),
                 output,
                 Some(format!("agent:{turn_id}:say")),
@@ -410,7 +410,7 @@ pub(in crate::runtime) fn runtime_write_agent_patches_for_pane(
             ))
         }
         RuntimeAgentExportTarget::Buffer(name) => {
-            service.paste_buffers.set_with_origin(
+            service.paste_buffers_mut().set_with_origin(
                 name.as_str(),
                 dump,
                 Some(format!("pane:{pane_id}:agent-patches")),

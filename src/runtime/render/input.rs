@@ -337,6 +337,7 @@ impl RuntimeSessionService {
 
         let outcomes = {
             let state = self
+                .presentation
                 .agent_prompt_inputs
                 .entry(pane_id.to_string())
                 .or_insert_with(default_runtime_agent_prompt_input);
@@ -387,7 +388,7 @@ impl RuntimeSessionService {
                         }
                     }
                     if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
-                        self.agent_prompt_inputs.remove(pane_id);
+                        self.presentation.agent_prompt_inputs.remove(pane_id);
                     }
                 }
                 ReadlineOutcome::SubmittedWithDisplay { text, display } => {
@@ -424,7 +425,7 @@ impl RuntimeSessionService {
                         }
                     }
                     if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
-                        self.agent_prompt_inputs.remove(pane_id);
+                        self.presentation.agent_prompt_inputs.remove(pane_id);
                     }
                 }
                 ReadlineOutcome::Cancelled => {
@@ -436,7 +437,7 @@ impl RuntimeSessionService {
                 ReadlineOutcome::Eof => {
                     changed = true;
                     let _ = self.execute_agent_shell_command(primary_client_id, "/exit")?;
-                    self.agent_prompt_inputs.remove(pane_id);
+                    self.presentation.agent_prompt_inputs.remove(pane_id);
                 }
                 ReadlineOutcome::Edited => changed = true,
                 ReadlineOutcome::Noop => {}
@@ -447,7 +448,7 @@ impl RuntimeSessionService {
 
     /// Clears any pending idle Ctrl+C exit confirmation for one agent prompt.
     fn clear_agent_prompt_pending_ctrl_c_exit(&mut self, pane_id: &str) {
-        if let Some(state) = self.agent_prompt_inputs.get_mut(pane_id) {
+        if let Some(state) = self.presentation.agent_prompt_inputs.get_mut(pane_id) {
             state.pending_ctrl_c_exit_at_unix_ms = None;
         }
     }
@@ -475,7 +476,7 @@ impl RuntimeSessionService {
             )?,
         }
         if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
-            self.agent_prompt_inputs.remove(pane_id);
+            self.presentation.agent_prompt_inputs.remove(pane_id);
         }
         Ok(true)
     }
@@ -492,7 +493,7 @@ impl RuntimeSessionService {
             return self.apply_agent_prompt_interrupt_or_exit(primary_client_id, pane_id);
         }
 
-        if let Some(state) = self.agent_prompt_inputs.get_mut(pane_id)
+        if let Some(state) = self.presentation.agent_prompt_inputs.get_mut(pane_id)
             && !state.prompt.buffer.line().is_empty()
         {
             state.prompt.buffer.set_line("");
@@ -504,6 +505,7 @@ impl RuntimeSessionService {
         let now = current_unix_millis();
         let confirmed = {
             let state = self
+                .presentation
                 .agent_prompt_inputs
                 .entry(pane_id.to_string())
                 .or_insert_with(default_runtime_agent_prompt_input);
@@ -516,7 +518,7 @@ impl RuntimeSessionService {
             return self.apply_agent_prompt_interrupt_or_exit(primary_client_id, pane_id);
         }
 
-        if let Some(state) = self.agent_prompt_inputs.get_mut(pane_id) {
+        if let Some(state) = self.presentation.agent_prompt_inputs.get_mut(pane_id) {
             state.pending_ctrl_c_exit_at_unix_ms = Some(now);
         }
         self.set_agent_prompt_display_lines(
@@ -708,7 +710,8 @@ impl RuntimeSessionService {
             },
             None => Vec::new(),
         };
-        self.agent_prompt_inputs
+        self.presentation
+            .agent_prompt_inputs
             .entry(pane_id.to_string())
             .or_insert_with(default_runtime_agent_prompt_input)
             .prompt
@@ -739,6 +742,7 @@ impl RuntimeSessionService {
             self.append_agent_terminal_lines_to_buffer(pane_id, &display_lines, style)?;
         }
         let state = self
+            .presentation
             .agent_prompt_inputs
             .entry(pane_id.to_string())
             .or_insert_with(default_runtime_agent_prompt_input);
@@ -755,6 +759,7 @@ impl RuntimeSessionService {
         match display_output {
             RuntimeAgentShellDisplayOutput::Suppressed => {
                 let state = self
+                    .presentation
                     .agent_prompt_inputs
                     .entry(pane_id.to_string())
                     .or_insert_with(default_runtime_agent_prompt_input);
@@ -763,6 +768,7 @@ impl RuntimeSessionService {
             RuntimeAgentShellDisplayOutput::TransientStatus(display_lines) => {
                 self.show_primary_notice_overlay(display_lines)?;
                 let state = self
+                    .presentation
                     .agent_prompt_inputs
                     .entry(pane_id.to_string())
                     .or_insert_with(default_runtime_agent_prompt_input);
@@ -811,6 +817,7 @@ impl RuntimeSessionService {
                     self.set_agent_prompt_display_lines(pane_id, content.lines)?;
                 }
                 let state = self
+                    .presentation
                     .agent_prompt_inputs
                     .entry(pane_id.to_string())
                     .or_insert_with(default_runtime_agent_prompt_input);

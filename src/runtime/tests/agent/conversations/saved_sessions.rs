@@ -165,7 +165,7 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
     );
     assert_eq!(
         service
-            .agent_prompt_inputs
+            .agent_prompt_inputs_for_tests()
             .get("%1")
             .unwrap()
             .prompt
@@ -231,7 +231,7 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
     );
     assert_eq!(
         service
-            .agent_prompt_inputs
+            .agent_prompt_inputs_for_tests()
             .get(&forked_pane)
             .unwrap()
             .prompt

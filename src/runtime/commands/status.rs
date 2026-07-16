@@ -407,7 +407,7 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> Result<bool> {
-        self.active_copy_modes.remove(pane_id);
+        self.active_copy_modes_mut().remove(pane_id);
         let Some(screen) = self.pane_screens.get_mut(pane_id) else {
             return Ok(false);
         };

@@ -231,7 +231,6 @@ impl RuntimeSessionService {
         let presentation_settings =
             RuntimePresentationSettings::from_config(&structured, &effective)?;
         let terminal_emoji_width = runtime_terminal_emoji_width_from_config(&structured)?;
-        let terminal_clipboard = runtime_terminal_clipboard_from_config(&structured)?;
         let host_clipboard = runtime_host_clipboard_from_config(&structured)?;
         let audit_log = if runtime_audit_config_present(&structured) {
             Some(runtime_audit_log_from_config(
@@ -252,8 +251,7 @@ impl RuntimeSessionService {
         self.terminal_shell_output_preview_lines =
             runtime_terminal_shell_output_preview_lines_from_config(&structured)?;
         self.presentation.apply_settings(presentation_settings);
-        self.terminal_clipboard = terminal_clipboard;
-        self.host_clipboard = host_clipboard;
+        self.set_host_clipboard(host_clipboard);
         match audit_log {
             Some(Some(audit_log)) => self.set_audit_log(audit_log),
             Some(None) => self.clear_audit_log(),

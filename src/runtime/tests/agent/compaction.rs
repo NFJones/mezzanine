@@ -65,7 +65,7 @@ fn runtime_agent_prompt_displays_large_paste_as_compact_block() {
 
     assert_eq!(report.forwarded_bytes, 0);
     assert_eq!(report.agent_prompt_inputs_applied, 1);
-    let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
+    let prompt_state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
     assert_eq!(
         prompt_state.prompt.buffer.history(),
         &[format!("prefix {payload} suffix")]

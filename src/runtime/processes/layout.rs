@@ -737,10 +737,10 @@ impl RuntimeSessionService {
 
     /// Refreshes retained copy-mode viewport heights after pane geometry changes.
     fn refresh_active_copy_mode_viewports(&mut self) -> Result<()> {
-        let pane_ids = self.active_copy_modes.keys().cloned().collect::<Vec<_>>();
+        let pane_ids = self.active_copy_modes().keys().cloned().collect::<Vec<_>>();
         for pane_id in pane_ids {
             let viewport_rows = self.copy_mode_viewport_rows_for_pane(&pane_id);
-            if let Some(copy_mode) = self.active_copy_modes.get_mut(&pane_id) {
+            if let Some(copy_mode) = self.active_copy_modes_mut().get_mut(&pane_id) {
                 copy_mode.resize_viewport_rows(viewport_rows)?;
             }
         }

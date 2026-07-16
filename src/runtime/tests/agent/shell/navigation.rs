@@ -272,7 +272,7 @@ fn runtime_agent_shell_ctrl_d_after_agent_output_restores_live_parent_cursor() {
         1024,
     )
     .unwrap();
-    service.host_clipboard = HostClipboard::disabled();
+    *service.host_clipboard_mut_for_tests() = HostClipboard::disabled();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();

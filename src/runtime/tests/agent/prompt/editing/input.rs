@@ -47,7 +47,7 @@ fn runtime_attached_input_submits_visible_agent_prompt_non_modally() {
             .collect::<Vec<_>>(),
         vec!["turn-1"]
     );
-    let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
+    let prompt_state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
     assert_eq!(prompt_state.prompt.buffer.line(), "");
     assert_eq!(
         prompt_state.prompt.buffer.history(),
@@ -130,7 +130,7 @@ fn runtime_agent_prompt_preserves_large_split_paste_beyond_visible_area() {
             .unwrap();
     }
 
-    let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
+    let prompt_state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
     assert_eq!(
         prompt_state.prompt.buffer.history(),
         &[format!("prefix {payload} suffix")]
@@ -169,7 +169,10 @@ fn runtime_agent_prompt_accepts_encoded_ctrl_r_history_search() {
         .unwrap();
     service.reload_agent_prompt_history_for_pane("%1").unwrap();
     {
-        let prompt_state = service.agent_prompt_inputs.get_mut("%1").unwrap();
+        let prompt_state = service
+            .agent_prompt_inputs_mut_for_tests()
+            .get_mut("%1")
+            .unwrap();
         prompt_state
             .prompt
             .buffer
@@ -195,7 +198,7 @@ fn runtime_agent_prompt_accepts_encoded_ctrl_r_history_search() {
 
     assert_eq!(report.forwarded_bytes, 0);
     assert_eq!(report.agent_prompt_inputs_applied, 1);
-    let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
+    let prompt_state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
     assert_eq!(prompt_state.prompt.buffer.line(), "/status");
 }
 
@@ -217,7 +220,10 @@ fn runtime_agent_prompt_escape_clears_input_without_hiding_shell() {
         .unwrap();
     service.reload_agent_prompt_history_for_pane("%1").unwrap();
     {
-        let prompt_state = service.agent_prompt_inputs.get_mut("%1").unwrap();
+        let prompt_state = service
+            .agent_prompt_inputs_mut_for_tests()
+            .get_mut("%1")
+            .unwrap();
         prompt_state.prompt.buffer.set_line("draft text");
     }
     let report = service
@@ -257,7 +263,7 @@ fn runtime_agent_prompt_escape_clears_input_without_hiding_shell() {
         .unwrap();
     assert_eq!(followup.forwarded_bytes, 0);
     assert_eq!(followup.agent_prompt_inputs_applied, 1);
-    let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
+    let prompt_state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
     assert_eq!(prompt_state.prompt.buffer.line(), "next");
 }
 
@@ -279,7 +285,10 @@ fn runtime_agent_prompt_escape_cancels_reverse_search() {
         .unwrap();
     service.reload_agent_prompt_history_for_pane("%1").unwrap();
     {
-        let prompt_state = service.agent_prompt_inputs.get_mut("%1").unwrap();
+        let prompt_state = service
+            .agent_prompt_inputs_mut_for_tests()
+            .get_mut("%1")
+            .unwrap();
         prompt_state
             .prompt
             .buffer
@@ -302,7 +311,7 @@ fn runtime_agent_prompt_escape_cancels_reverse_search() {
         .unwrap();
     assert!(
         service
-            .agent_prompt_inputs
+            .agent_prompt_inputs_for_tests()
             .get("%1")
             .unwrap()
             .prompt
@@ -325,7 +334,7 @@ fn runtime_agent_prompt_escape_cancels_reverse_search() {
 
     assert_eq!(escape.forwarded_bytes, 0);
     assert_eq!(escape.agent_prompt_inputs_applied, 1);
-    let prompt_state = service.agent_prompt_inputs.get("%1").unwrap();
+    let prompt_state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
     assert!(!prompt_state.prompt.reverse_search_active());
     assert_eq!(prompt_state.prompt.buffer.line(), "/s");
     assert!(service.agent_shell_store().get("%1").is_some());

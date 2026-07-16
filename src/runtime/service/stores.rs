@@ -139,15 +139,6 @@ impl RuntimeSessionService {
         &self.terminal_term
     }
 
-    /// Runs the paste buffers operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn paste_buffers(&self) -> &PasteBuffers {
-        &self.paste_buffers
-    }
-
     /// Runs the record pane transcript ref operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

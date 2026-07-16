@@ -270,7 +270,7 @@ fn runtime_applies_default_prefix_mux_actions() {
 
     assert_eq!(report.mux_actions_applied, 7);
     assert!(report.unsupported_actions.is_empty());
-    assert!(!service.active_copy_modes.is_empty());
+    assert!(!service.active_copy_modes().is_empty());
     assert_eq!(service.session().active_window().unwrap().panes().len(), 3);
     let events = service
         .event_log()

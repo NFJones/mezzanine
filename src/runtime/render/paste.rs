@@ -121,6 +121,8 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn clipboard_or_most_recent_paste_source(&self) -> Option<RuntimePasteSource> {
         if let Some(content) = self
+            .presentation
+            .copy
             .host_clipboard
             .read()
             .filter(|content| !content.is_empty())
@@ -140,8 +142,18 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn most_recent_paste_buffer_source(&self) -> Option<RuntimePasteSource> {
-        let buffer_name = self.paste_buffers.most_recent_name()?.to_string();
-        let content = self.paste_buffers.get(&buffer_name)?.to_string();
+        let buffer_name = self
+            .presentation
+            .copy
+            .paste_buffers
+            .most_recent_name()?
+            .to_string();
+        let content = self
+            .presentation
+            .copy
+            .paste_buffers
+            .get(&buffer_name)?
+            .to_string();
         Some(RuntimePasteSource {
             label: "paste-buffer".to_string(),
             buffer_name: Some(buffer_name),

@@ -595,7 +595,7 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
     );
     assert_eq!(
         restored
-            .agent_prompt_inputs
+            .agent_prompt_inputs_for_tests()
             .get("%1")
             .unwrap()
             .prompt

@@ -909,14 +909,14 @@ impl RuntimeSessionService {
         self.agent_shell_store.remove_session(pane_id);
         self.agent_subshell_panes.remove(pane_id);
         self.agent_subshell_command_exit_panes.remove(pane_id);
-        self.agent_prompt_inputs.remove(pane_id);
+        self.remove_agent_prompt_input(pane_id);
         self.agent_planning_modes.remove(pane_id);
         self.agent_personality_selections.remove(pane_id);
         self.agent_response_styles.remove(pane_id);
         self.agent_routing_overrides.remove(pane_id);
         self.agent_copy_outputs.remove(pane_id);
         self.agent_modified_files.remove(pane_id);
-        self.active_copy_modes.remove(pane_id);
+        self.active_copy_modes_mut().remove(pane_id);
         self.pane_current_working_directories.remove(pane_id);
         self.pane_foreground_process_groups.remove(pane_id);
         self.program_owned_pane_titles.remove(pane_id);

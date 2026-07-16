@@ -254,7 +254,7 @@ impl RuntimeSessionService {
         for pane_id in &replaced_pane_ids {
             self.cleanup_removed_pane_runtime_state(pane_id);
         }
-        self.active_copy_modes.clear();
+        self.active_copy_modes_mut().clear();
         self.pane_screens.clear();
         self.pane_transaction_osc_screens.clear();
         self.pane_transaction_osc_pending.clear();
@@ -271,7 +271,7 @@ impl RuntimeSessionService {
         self.agent_turn_network_action_history.clear();
         self.agent_copy_outputs.clear();
         self.agent_modified_files.clear();
-        self.agent_prompt_inputs.clear();
+        self.clear_agent_prompt_inputs();
         self.agent_turn_model_profiles.clear();
         self.pending_agent_provider_tasks.clear();
         self.claimed_agent_provider_tasks.clear();

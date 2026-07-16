@@ -298,7 +298,7 @@ fn runtime_agent_prompt_list_mcp_autocompletes_configured_server_id() {
     assert_eq!(report.forwarded_bytes, 0);
     assert_eq!(
         service
-            .agent_prompt_inputs
+            .agent_prompt_inputs_for_tests()
             .get("%1")
             .unwrap()
             .prompt
@@ -351,7 +351,7 @@ fn runtime_agent_prompt_at_mcp_autocompletes_configured_server_id() {
     assert_eq!(report.forwarded_bytes, 0);
     assert_eq!(
         service
-            .agent_prompt_inputs
+            .agent_prompt_inputs_for_tests()
             .get("%1")
             .unwrap()
             .prompt

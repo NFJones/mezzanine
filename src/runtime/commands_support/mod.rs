@@ -160,7 +160,7 @@ pub(super) fn execute_runtime_live_terminal_command(
         })),
         "list-buffers" => Ok(Some(CommandOutcome::Display {
             command: invocation.name.clone(),
-            body: runtime_list_buffers_display(service.paste_buffers.list()),
+            body: runtime_list_buffers_display(service.paste_buffers().list()),
         })),
         "choose-buffer" => Ok(Some(CommandOutcome::Display {
             command: invocation.name.clone(),
@@ -401,13 +401,13 @@ pub(super) fn execute_runtime_live_terminal_command(
         "delete-buffer" => {
             let requested = runtime_buffer_name(invocation);
             let deleted = if let Some(name) = requested {
-                if service.paste_buffers.delete(name) {
+                if service.paste_buffers_mut().delete(name) {
                     Some(name.to_string())
                 } else {
                     None
                 }
             } else {
-                service.paste_buffers.delete_most_recent()
+                service.paste_buffers_mut().delete_most_recent()
             };
             let Some(name) = deleted else {
                 return Err(MezError::new(
@@ -415,8 +415,8 @@ pub(super) fn execute_runtime_live_terminal_command(
                     "paste buffer not found",
                 ));
             };
-            if service.active_paste_buffer.as_deref() == Some(name.as_str()) {
-                service.active_paste_buffer = None;
+            if service.active_paste_buffer() == Some(name.as_str()) {
+                service.set_active_paste_buffer(None);
             }
             Ok(Some(CommandOutcome::Mutated {
                 command: format!("{} {name}", invocation.name),
@@ -427,12 +427,15 @@ pub(super) fn execute_runtime_live_terminal_command(
             let requested = runtime_buffer_name(invocation)
                 .map(str::to_string)
                 .or_else(|| {
-                    service.active_paste_buffer.clone().or_else(|| {
-                        service
-                            .paste_buffers
-                            .most_recent_name()
-                            .map(ToOwned::to_owned)
-                    })
+                    service
+                        .active_paste_buffer()
+                        .map(ToOwned::to_owned)
+                        .or_else(|| {
+                            service
+                                .paste_buffers()
+                                .most_recent_name()
+                                .map(ToOwned::to_owned)
+                        })
                 });
             let Some(buffer_name) = requested else {
                 return Err(MezError::new(
@@ -441,7 +444,7 @@ pub(super) fn execute_runtime_live_terminal_command(
                 ));
             };
             let Some(content) = service
-                .paste_buffers
+                .paste_buffers()
                 .get(&buffer_name)
                 .map(ToOwned::to_owned)
             else {
@@ -514,7 +517,7 @@ pub(super) fn execute_runtime_live_terminal_command(
                 }));
             }
             let buffer_name = runtime_buffer_name(invocation).unwrap_or("capture");
-            service.paste_buffers.set_with_origin(
+            service.paste_buffers_mut().set_with_origin(
                 buffer_name,
                 content.as_str(),
                 Some(format!("pane:{}:capture", descriptor.pane_id)),
@@ -534,12 +537,12 @@ pub(super) fn execute_runtime_live_terminal_command(
                 .map(str::to_string)
                 .or_else(|| {
                     service
-                        .paste_buffers
+                        .paste_buffers()
                         .most_recent_name()
                         .map(ToOwned::to_owned)
                 })
                 .unwrap_or_else(|| "most-recent".to_string());
-            let Some(content) = service.paste_buffers.get(&buffer_name) else {
+            let Some(content) = service.paste_buffers().get(&buffer_name) else {
                 return Err(MezError::new(
                     crate::error::MezErrorKind::NotFound,
                     "paste buffer not found",
@@ -618,7 +621,7 @@ pub(super) fn execute_runtime_live_terminal_command(
                 let mut copy_mode = CopyMode::from_screen(screen, viewport_rows)?;
                 let position = copy_mode.search(query.as_str(), SearchDirection::Forward)?;
                 service
-                    .active_copy_modes
+                    .active_copy_modes_mut()
                     .insert(descriptor.pane_id.to_string(), copy_mode);
                 return Ok(Some(CommandOutcome::Display {
                     command: invocation.name.clone(),
