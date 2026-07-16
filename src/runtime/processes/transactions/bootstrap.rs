@@ -1,6 +1,11 @@
 //! Pane bootstrap dispatch and completion.
 
-use super::*;
+use super::{
+    AgentTurnState, DEFAULT_BOOTSTRAP_TIMEOUT_MS, EventKind, MezError, PaneReadinessState, Result,
+    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeSessionService,
+    ShellTransaction, bootstrap_script_for_classification, current_unix_millis,
+    current_unix_seconds, json_escape, parse_bootstrap_env_output, runtime_random_marker_token,
+};
 
 impl RuntimeSessionService {
     /// Runs the dispatch bootstrap to pane operation for this subsystem.

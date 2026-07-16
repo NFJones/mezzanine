@@ -33,7 +33,6 @@ use crate::runtime::{
     RuntimeTransition,
 };
 use mez_agent::AgentAction;
-use std::collections::{BTreeMap, HashSet};
 
 /// Defines the RUNTIME SHELL TRANSACTION OBSERVATION LIMIT BYTES const used by this subsystem.
 ///

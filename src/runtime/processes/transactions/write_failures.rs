@@ -1,6 +1,11 @@
 //! Protocol violations and pane input write-failure settlement.
 
-use super::*;
+use super::{
+    ActionStatus, EventKind, PaneReadinessState, Result, RunningShellTransactionKind,
+    RunningShellTransactionRef, RuntimeSessionService, RuntimeShellTransactionActionFailure,
+    json_escape, pane_write_failure_terminal_observation, runtime_pane_readiness_state_name,
+    shell_transaction_protocol_violation_observation,
+};
 
 impl RuntimeSessionService {
     /// Fails one live shell transaction because its wrapper marker protocol

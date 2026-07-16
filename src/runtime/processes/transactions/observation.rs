@@ -1,6 +1,9 @@
 //! Shell transaction event observation and foreground-shell state.
 
-use super::*;
+use super::{
+    AgentTurnState, Result, RuntimeSessionService, TerminalOscEvent,
+    runtime_execution_ready_for_provider_continuation,
+};
 
 impl RuntimeSessionService {
     /// Reports whether host process metadata can determine if the pane primary

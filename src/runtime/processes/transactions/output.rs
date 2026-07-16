@@ -1,6 +1,11 @@
 //! Running shell transaction output retention.
 
-use super::*;
+use super::{
+    ApplyPatchTransactionPhase, RunningShellTransactionKind, RuntimeSessionService,
+    agent_shell_transaction_bytes_before_end_marker, agent_shell_transaction_observation_bytes,
+    apply_patch_transaction_phase, latest_agent_shell_transaction_output_lines,
+    runtime_shell_transaction_observation_limit,
+};
 
 impl RuntimeSessionService {
     pub(in crate::runtime) fn record_running_shell_transaction_output(
