@@ -525,16 +525,16 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn registry_update_plan(&self) -> RuntimeRegistryUpdatePlan {
-        if self.lifecycle_state == RuntimeLifecycleState::Killed {
+        if self.session.lifecycle_state() == RuntimeLifecycleState::Killed {
             RuntimeRegistryUpdatePlan::Remove {
                 session_id: self.session.id.to_string(),
             }
         } else {
             RuntimeRegistryUpdatePlan::Upsert(SessionRecord::from_session(
                 &self.session,
-                self.socket_path.clone(),
-                self.created_at_unix_seconds,
-                self.last_attach_at_unix_seconds,
+                self.session.socket_path().to_path_buf(),
+                self.session.created_at_unix_seconds(),
+                self.session.last_attach_at_unix_seconds(),
             ))
         }
     }

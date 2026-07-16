@@ -3,7 +3,7 @@
 use super::*;
 use crate::runtime::{
     RuntimeAgentComponent, RuntimeControlComponent, RuntimePersistenceComponent,
-    RuntimePresentationComponent, RuntimeProcessComponent,
+    RuntimePresentationComponent, RuntimeProcessComponent, RuntimeSessionComponent,
 };
 
 /// Carries Runtime Session Service state for this subsystem.
@@ -22,16 +22,8 @@ pub struct RuntimeSessionService {
     pub(in crate::runtime) persistence: RuntimePersistenceComponent,
     /// Private state owner for control replay, messaging, and event fanout.
     pub(in crate::runtime) control: RuntimeControlComponent,
-    /// Stores the session value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) session: Session,
-    /// Stores the window created at unix seconds value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) window_created_at_unix_seconds: BTreeMap<String, u64>,
+    /// Private owner for the mux session and application lifecycle metadata.
+    pub(in crate::runtime) session: RuntimeSessionComponent,
     /// Stores the config layers value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -186,24 +178,4 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) focused_shell_hook_results: Vec<HookExecutionResult>,
-    /// Stores the lifecycle state value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) lifecycle_state: RuntimeLifecycleState,
-    /// Stores the socket path value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) socket_path: PathBuf,
-    /// Stores the created at unix seconds value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) created_at_unix_seconds: u64,
-    /// Stores the last attach at unix seconds value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) last_attach_at_unix_seconds: Option<u64>,
 }

@@ -1058,7 +1058,10 @@ impl RuntimeSessionService {
                 .pane_processes
                 .remove_exited(&process.pane_id)?;
         }
-        self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
+        self.session
+            .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
+                self.session.state,
+            ));
 
         let closed_window = self.session.windows().len() < previous_window_count;
         let update = PaneExitUpdate {
@@ -1198,7 +1201,7 @@ impl RuntimeSessionService {
         start_directory: Option<&Path>,
     ) -> Result<PaneProcessStart> {
         let environment = pane_environment_with_term(
-            &self.socket_path,
+            self.session.socket_path(),
             &self.session.id,
             &descriptor.window_id,
             &descriptor.pane_id,

@@ -54,9 +54,9 @@ impl RuntimeSessionService {
             validate_new_window_requested_pane_size(self.session.authoritative_size, spec)?;
         }
         let previous_session = self.session.clone();
-        let previous_window_created_at_unix_seconds = self.window_created_at_unix_seconds.clone();
         let window_id = self.session.new_window(primary_client_id, name, select)?;
-        self.window_created_at_unix_seconds
+        self.session
+            .window_created_at_unix_seconds_mut()
             .insert(window_id.to_string(), current_unix_seconds());
         if let Some(spec) = requested_size {
             let pane_id = self
@@ -108,7 +108,6 @@ impl RuntimeSessionService {
             Ok(started) => started,
             Err(error) => {
                 self.session = previous_session;
-                self.window_created_at_unix_seconds = previous_window_created_at_unix_seconds;
                 return Err(error);
             }
         };
@@ -179,7 +178,6 @@ impl RuntimeSessionService {
     ) -> Result<PaneProcessStart> {
         validate_runtime_start_directory(start_directory)?;
         let previous_session = self.session.clone();
-        let previous_window_created_at_unix_seconds = self.window_created_at_unix_seconds.clone();
         let window_id = if let Some(primary_client_id) = primary_client_id {
             self.session
                 .new_window_in_group(primary_client_id, group_id, name, false)?
@@ -187,7 +185,8 @@ impl RuntimeSessionService {
             self.session
                 .new_window_in_group_session_owned(group_id, name, false)?
         };
-        self.window_created_at_unix_seconds
+        self.session
+            .window_created_at_unix_seconds_mut()
             .insert(window_id.to_string(), current_unix_seconds());
         if let Some(primary_client_id) = primary_client_id {
             self.session
@@ -221,7 +220,6 @@ impl RuntimeSessionService {
                 Ok(started) => started,
                 Err(error) => {
                     self.session = previous_session;
-                    self.window_created_at_unix_seconds = previous_window_created_at_unix_seconds;
                     return Err(error);
                 }
             };
@@ -256,9 +254,9 @@ impl RuntimeSessionService {
         }
         validate_runtime_start_directory(start_directory)?;
         let previous_session = self.session.clone();
-        let previous_window_created_at_unix_seconds = self.window_created_at_unix_seconds.clone();
         let (group_id, window_id) = self.session.new_group(primary_client_id, name, select)?;
-        self.window_created_at_unix_seconds
+        self.session
+            .window_created_at_unix_seconds_mut()
             .insert(window_id.to_string(), current_unix_seconds());
         let window = self
             .session
@@ -288,7 +286,6 @@ impl RuntimeSessionService {
             Ok(started) => started,
             Err(error) => {
                 self.session = previous_session;
-                self.window_created_at_unix_seconds = previous_window_created_at_unix_seconds;
                 return Err(error);
             }
         };
@@ -345,7 +342,6 @@ impl RuntimeSessionService {
         }
         validate_runtime_start_directory(start_directory)?;
         let previous_session = self.session.clone();
-        let previous_window_created_at_unix_seconds = self.window_created_at_unix_seconds.clone();
         let pane_id = match requested_size {
             Some(spec) => self.session.split_active_pane_with_size_spec_select(
                 primary_client_id,
@@ -360,7 +356,6 @@ impl RuntimeSessionService {
         };
         if let Err(error) = self.sync_tracked_pty_sizes() {
             self.session = previous_session;
-            self.window_created_at_unix_seconds = previous_window_created_at_unix_seconds;
             let _ = self.sync_tracked_pty_sizes();
             return Err(error);
         }
@@ -368,7 +363,6 @@ impl RuntimeSessionService {
             Some(descriptor) => descriptor,
             None => {
                 self.session = previous_session;
-                self.window_created_at_unix_seconds = previous_window_created_at_unix_seconds;
                 let _ = self.sync_tracked_pty_sizes();
                 return Err(MezError::new(
                     crate::error::MezErrorKind::NotFound,
@@ -384,7 +378,6 @@ impl RuntimeSessionService {
             Ok(started) => Ok(started),
             Err(error) => {
                 self.session = previous_session;
-                self.window_created_at_unix_seconds = previous_window_created_at_unix_seconds;
                 let _ = self.sync_tracked_pty_sizes();
                 Err(error)
             }
@@ -451,7 +444,6 @@ impl RuntimeSessionService {
     ) -> Result<PaneProcessStart> {
         validate_runtime_start_directory(start_directory)?;
         let previous_session = self.session.clone();
-        let previous_window_created_at_unix_seconds = self.window_created_at_unix_seconds.clone();
         let pane_id = if let Some(primary_client_id) = primary_client_id {
             self.session.split_pane_in_window_select(
                 primary_client_id,
@@ -465,7 +457,6 @@ impl RuntimeSessionService {
         };
         if let Err(error) = self.sync_tracked_pty_sizes() {
             self.session = previous_session;
-            self.window_created_at_unix_seconds = previous_window_created_at_unix_seconds;
             let _ = self.sync_tracked_pty_sizes();
             return Err(error);
         }
@@ -473,7 +464,6 @@ impl RuntimeSessionService {
             Some(descriptor) => descriptor,
             None => {
                 self.session = previous_session;
-                self.window_created_at_unix_seconds = previous_window_created_at_unix_seconds;
                 let _ = self.sync_tracked_pty_sizes();
                 return Err(MezError::new(
                     crate::error::MezErrorKind::NotFound,
@@ -489,7 +479,6 @@ impl RuntimeSessionService {
             Ok(started) => Ok(started),
             Err(error) => {
                 self.session = previous_session;
-                self.window_created_at_unix_seconds = previous_window_created_at_unix_seconds;
                 let _ = self.sync_tracked_pty_sizes();
                 Err(error)
             }
@@ -599,7 +588,8 @@ impl RuntimeSessionService {
             select_new_window,
         )?;
         let window_id = transition.window_id;
-        self.window_created_at_unix_seconds
+        self.session
+            .window_created_at_unix_seconds_mut()
             .insert(window_id.to_string(), current_unix_seconds());
         let updates = self.sync_pane_resize_effects(&transition.effects)?;
         Ok((window_id, updates))

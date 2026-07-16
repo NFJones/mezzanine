@@ -21,18 +21,30 @@ impl RuntimeSessionService {
         observer_count_before: usize,
     ) -> Result<()> {
         if runtime_initialize_requested_observer(request) {
-            self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
+            self.session
+                .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
+                    self.session.state,
+                ));
             return self.apply_runtime_observer_initialize_side_effects(observer_count_before);
         }
         if !runtime_initialize_requested_primary(request) {
-            self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
+            self.session
+                .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
+                    self.session.state,
+                ));
             return Ok(());
         }
         let Some(primary_after) = self.session.primary_client_id().cloned() else {
-            self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
+            self.session
+                .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
+                    self.session.state,
+                ));
             return Ok(());
         };
-        self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
+        self.session
+            .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
+                self.session.state,
+            ));
         if let Some(size) = runtime_initialize_terminal_size(request) {
             self.session
                 .resize_authoritative_terminal(&primary_after, size)?;
@@ -41,7 +53,8 @@ impl RuntimeSessionService {
         if primary_before == Some(&primary_after) {
             return Ok(());
         }
-        self.last_attach_at_unix_seconds = Some(current_unix_seconds());
+        self.session
+            .set_last_attach_at_unix_seconds(Some(current_unix_seconds()));
         self.append_lifecycle_event(
             EventKind::ClientAttached,
             format!(
@@ -234,7 +247,8 @@ impl RuntimeSessionService {
         caller_client_id: &mez_core::ids::ClientId,
     ) -> Result<String> {
         let previous_session = self.session.clone();
-        let previous_window_created_at_unix_seconds = self.window_created_at_unix_seconds.clone();
+        let previous_window_created_at_unix_seconds =
+            self.session.window_created_at_unix_seconds().clone();
         let mut prepared_session = self.session.clone();
         prepared_session
             .replace_layout_from_restore_input(crate::snapshot::session_restore_input(&payload)?)?;
@@ -282,7 +296,7 @@ impl RuntimeSessionService {
         self.session = prepared_session;
         self.session.state = mez_mux::session::SessionState::Running;
         let restored_at = current_unix_seconds();
-        self.window_created_at_unix_seconds = self
+        let restored_window_created_at_unix_seconds = self
             .session
             .windows()
             .iter()
@@ -293,7 +307,12 @@ impl RuntimeSessionService {
                 )
             })
             .collect();
-        self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
+        self.session
+            .replace_window_created_at_unix_seconds(restored_window_created_at_unix_seconds);
+        self.session
+            .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
+                self.session.state,
+            ));
         let restarted_panes = match self.restart_restored_pane_processes(None) {
             Ok(starts) => {
                 self.sync_tracked_pty_sizes()?;
@@ -311,12 +330,16 @@ impl RuntimeSessionService {
                     self.cleanup_removed_pane_runtime_state(pane_id);
                 }
                 self.session = previous_session;
-                self.window_created_at_unix_seconds = previous_window_created_at_unix_seconds;
+                self.session.replace_window_created_at_unix_seconds(
+                    previous_window_created_at_unix_seconds,
+                );
                 for pane_id in &replaced_pane_ids {
                     let _ = self.session.set_pane_live_state(pane_id, false);
                 }
-                self.lifecycle_state =
-                    RuntimeLifecycleState::from_session_state(self.session.state);
+                self.session
+                    .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
+                        self.session.state,
+                    ));
                 let _ = self.restart_restored_pane_processes(None);
                 return Err(MezError::invalid_state(format!(
                     "load-layout failed to start restored pane shells and rolled back to the previous layout: {error}"

@@ -31,7 +31,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn lifecycle_state(&self) -> RuntimeLifecycleState {
-        self.lifecycle_state
+        self.session.lifecycle_state()
     }
 
     /// Runs the socket path operation for this subsystem.
@@ -40,7 +40,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn socket_path(&self) -> &Path {
-        &self.socket_path
+        self.session.socket_path()
     }
 
     /// Runs the last attach at unix seconds operation for this subsystem.
@@ -49,7 +49,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn last_attach_at_unix_seconds(&self) -> Option<u64> {
-        self.last_attach_at_unix_seconds
+        self.session.last_attach_at_unix_seconds()
     }
 
     /// Runs the attach primary operation for this subsystem.
@@ -75,12 +75,14 @@ impl RuntimeSessionService {
             self.session
                 .attach_primary_with_terminal(name, interactive, Some(terminal))?;
         self.session.state = mez_mux::session::SessionState::Running;
-        self.lifecycle_state = RuntimeLifecycleState::Running;
+        self.session
+            .set_lifecycle_state(RuntimeLifecycleState::Running);
         self.session
             .resize_authoritative_terminal(&client_id, terminal_size)?;
         self.sync_tracked_pty_sizes()?;
         self.resume_detached_config_change_actions()?;
-        self.last_attach_at_unix_seconds = Some(now_unix_seconds);
+        self.session
+            .set_last_attach_at_unix_seconds(Some(now_unix_seconds));
         self.append_lifecycle_event(
             EventKind::ClientAttached,
             format!(
@@ -107,7 +109,8 @@ impl RuntimeSessionService {
         self.require_live()?;
         self.session.authoritative_size = terminal_size;
         self.session.detach_primary(primary_client_id)?;
-        self.lifecycle_state = RuntimeLifecycleState::Detached;
+        self.session
+            .set_lifecycle_state(RuntimeLifecycleState::Detached);
         self.run_configured_completed_hooks(
             HookEvent::SessionDetach,
             &format!(
@@ -237,7 +240,7 @@ impl RuntimeSessionService {
         force: bool,
     ) -> Result<()> {
         self.require_live()?;
-        let previous_state = self.lifecycle_state;
+        let previous_state = self.session.lifecycle_state();
         if self.session.primary_client_id() != Some(primary_client_id) {
             return Err(crate::error::MezError::forbidden(
                 "operation requires the primary client",
@@ -259,9 +262,10 @@ impl RuntimeSessionService {
         if force || !panes_have_live_process {
             self.fail_agent_turns_for_pane_shutdown(&pane_ids, "session killed")?;
         }
-        self.lifecycle_state = RuntimeLifecycleState::Stopping;
+        self.session
+            .set_lifecycle_state(RuntimeLifecycleState::Stopping);
         if let Err(error) = self.session.kill_session(primary_client_id, force) {
-            self.lifecycle_state = previous_state;
+            self.session.set_lifecycle_state(previous_state);
             return Err(error.into());
         }
         self.stop_all_active_pane_pipes();
@@ -269,7 +273,8 @@ impl RuntimeSessionService {
         let terminated_mcp_servers = self.clear_runtime_mcp_transports();
         self.persist_session_memory_to_disk();
         let cleared_memory = self.session_memory.clear_all();
-        self.lifecycle_state = RuntimeLifecycleState::Killed;
+        self.session
+            .set_lifecycle_state(RuntimeLifecycleState::Killed);
         self.run_configured_completed_hooks(
             HookEvent::SessionStop,
             &format!(
@@ -343,7 +348,7 @@ impl RuntimeSessionService {
         reason: impl Into<String>,
         force: bool,
     ) -> Result<bool> {
-        match self.lifecycle_state {
+        match self.session.lifecycle_state() {
             RuntimeLifecycleState::Killed | RuntimeLifecycleState::Failed => return Ok(false),
             RuntimeLifecycleState::Stopping if !force => return Ok(false),
             RuntimeLifecycleState::Stopping
@@ -361,7 +366,8 @@ impl RuntimeSessionService {
         if force {
             self.fail_agent_turns_for_pane_shutdown(&pane_ids, "runtime supervisor shutdown")?;
         }
-        self.lifecycle_state = RuntimeLifecycleState::Stopping;
+        self.session
+            .set_lifecycle_state(RuntimeLifecycleState::Stopping);
         self.session.state = mez_mux::session::SessionState::Stopping;
 
         if !force {
@@ -382,7 +388,8 @@ impl RuntimeSessionService {
         self.persist_session_memory_to_disk();
         let cleared_memory = self.session_memory.clear_all();
         self.session.force_supervisor_shutdown();
-        self.lifecycle_state = RuntimeLifecycleState::Killed;
+        self.session
+            .set_lifecycle_state(RuntimeLifecycleState::Killed);
         self.run_configured_completed_hooks(
             HookEvent::SessionStop,
             &format!(
@@ -419,7 +426,7 @@ impl RuntimeSessionService {
         reason: impl Into<String>,
         force: bool,
     ) -> Result<bool> {
-        match self.lifecycle_state {
+        match self.session.lifecycle_state() {
             RuntimeLifecycleState::Killed | RuntimeLifecycleState::Failed => return Ok(false),
             RuntimeLifecycleState::Stopping
             | RuntimeLifecycleState::Running
@@ -441,7 +448,8 @@ impl RuntimeSessionService {
             0
         };
         let terminated_mcp_servers = self.clear_runtime_mcp_transports();
-        self.lifecycle_state = RuntimeLifecycleState::Failed;
+        self.session
+            .set_lifecycle_state(RuntimeLifecycleState::Failed);
         self.session.state = mez_mux::session::SessionState::Failed;
         self.append_lifecycle_event(
             EventKind::Diagnostic,

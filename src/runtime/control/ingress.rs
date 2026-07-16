@@ -39,7 +39,10 @@ impl RuntimeSessionService {
             output.extend_from_slice(&encode_control_body(&response));
             offset += consumed;
         }
-        self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
+        self.session
+            .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
+                self.session.state,
+            ));
         self.persist_registry_update()?;
         Ok((output, offset))
     }
@@ -64,7 +67,10 @@ impl RuntimeSessionService {
             output.extend_from_slice(&encode_control_body(&response));
             offset += consumed;
         }
-        self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
+        self.session
+            .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
+                self.session.state,
+            ));
         self.persist_or_defer_registry_update()?;
         Ok((output, offset))
     }
@@ -105,7 +111,10 @@ impl RuntimeSessionService {
             output.extend_from_slice(&encode_control_body(&response));
             offset += consumed;
         }
-        self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
+        self.session
+            .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
+                self.session.state,
+            ));
         self.persist_or_defer_registry_update()?;
         Ok((output, offset))
     }
@@ -135,7 +144,10 @@ impl RuntimeSessionService {
             output.extend_from_slice(&encode_control_body(&response));
             offset += consumed;
         }
-        self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
+        self.session
+            .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
+                self.session.state,
+            ));
         self.persist_or_defer_registry_update()?;
         Ok((output, offset))
     }
@@ -216,7 +228,7 @@ impl RuntimeSessionService {
             }
         } else {
             RuntimeSnapshotControlAsyncWorkKind::Dispatch {
-                session: Box::new(self.session.clone()),
+                session: Box::new((*self.session).clone()),
                 context: Box::new(RuntimeSnapshotOwnedCreationContext {
                     pane_captures: self.live_snapshot_pane_captures(),
                     active_config_layers: self.live_snapshot_config_layers(),
@@ -289,7 +301,10 @@ impl RuntimeSessionService {
             ),
             Err(error) => runtime_json_rpc_error(&work.request.id, error.kind(), error.message()),
         };
-        self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
+        self.session
+            .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
+                self.session.state,
+            ));
         body
     }
 

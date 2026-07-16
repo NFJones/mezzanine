@@ -297,6 +297,9 @@ pub(crate) use service::coalesce_config_persistence_effects;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod service_state;
+/// Exposes mux-session and runtime lifecycle metadata ownership.
+mod session;
+pub(in crate::runtime) use session::RuntimeSessionComponent;
 /// Exposes the sockets module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

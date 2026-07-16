@@ -154,8 +154,8 @@ impl RuntimeSessionService {
             json_escape(session.id.as_str()),
             json_escape(&session.name),
             session_state_name(session.state),
-            runtime_timestamp_json(self.created_at_unix_seconds),
-            runtime_optional_timestamp_json(self.last_attach_at_unix_seconds),
+            runtime_timestamp_json(self.session.created_at_unix_seconds()),
+            runtime_optional_timestamp_json(self.session.last_attach_at_unix_seconds()),
             session.windows().len(),
             attached_client_count,
             session.primary_client_id().is_some(),
@@ -175,15 +175,16 @@ impl RuntimeSessionService {
             .map(|client_id| client_id.to_string());
         let active_window_id = session.active_window().map(|window| window.id.to_string());
         let updated_at = self
-            .last_attach_at_unix_seconds
-            .unwrap_or(self.created_at_unix_seconds);
+            .session
+            .last_attach_at_unix_seconds()
+            .unwrap_or(self.session.created_at_unix_seconds());
         format!(
             r#"{{"id":"{}","version":1,"session_id":"{}","name":"{}","state":"{}","created_at":{},"updated_at":{},"primary_client_id":{},"authoritative_size":{{"columns":{},"rows":{}}},"active_window_id":{},"windows":{},"window_count":{},"clients":{},"observers":{},"config_generation":{},"permission_summary":{}}}"#,
             json_escape(session.id.as_str()),
             json_escape(session.id.as_str()),
             json_escape(&session.name),
             session_state_name(session.state),
-            runtime_timestamp_json(self.created_at_unix_seconds),
+            runtime_timestamp_json(self.session.created_at_unix_seconds()),
             runtime_timestamp_json(updated_at),
             runtime_optional_string(primary_client_id.as_deref()),
             session.authoritative_size.columns,
@@ -256,13 +257,15 @@ impl RuntimeSessionService {
             .primary_client_id()
             .is_some_and(|primary| primary == &client.id);
         let attached_at = if is_primary {
-            self.last_attach_at_unix_seconds
+            self.session
+                .last_attach_at_unix_seconds()
                 .or(client.attached_at_unix_seconds)
         } else {
             client.attached_at_unix_seconds
         };
         let last_seen_at = if is_primary {
-            self.last_attach_at_unix_seconds
+            self.session
+                .last_attach_at_unix_seconds()
                 .or(client.last_seen_at_unix_seconds)
         } else {
             client.last_seen_at_unix_seconds
@@ -362,10 +365,11 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn runtime_window_state_json(&self, window: &mez_mux::layout::Window) -> String {
         let created_at = self
-            .window_created_at_unix_seconds
+            .session
+            .window_created_at_unix_seconds()
             .get(window.id.as_str())
             .copied()
-            .unwrap_or(self.created_at_unix_seconds);
+            .unwrap_or(self.session.created_at_unix_seconds());
         let panes = window
             .panes()
             .iter()

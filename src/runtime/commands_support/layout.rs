@@ -458,7 +458,11 @@ pub(super) fn runtime_kill_pane_command(
     };
     service.sync_pane_resize_effects(&transition.effects)?;
     let synced = transition.effects.len();
-    service.lifecycle_state = RuntimeLifecycleState::from_session_state(service.session.state);
+    service
+        .session
+        .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
+            service.session.state,
+        ));
     service.append_pane_close_event(
         descriptor.pane_id.as_str(),
         descriptor.window_id.as_str(),
@@ -514,7 +518,11 @@ pub(super) fn runtime_kill_window_command(
     }
     service.sync_pane_resize_effects(&transition.effects)?;
     let synced = transition.effects.len();
-    service.lifecycle_state = RuntimeLifecycleState::from_session_state(service.session.state);
+    service
+        .session
+        .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
+            service.session.state,
+        ));
     service.append_window_close_event(
         window_id.as_str(),
         terminated,
@@ -577,7 +585,11 @@ pub(super) fn runtime_kill_group_command(
     }
     service.sync_pane_resize_effects(&transition.effects)?;
     let synced = transition.effects.len();
-    service.lifecycle_state = RuntimeLifecycleState::from_session_state(service.session.state);
+    service
+        .session
+        .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
+            service.session.state,
+        ));
     service.append_lifecycle_event(
         super::super::EventKind::WindowChanged,
         format!(

@@ -340,7 +340,10 @@ impl RuntimeSessionService {
         } else {
             0
         };
-        self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
+        self.session
+            .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
+                self.session.state,
+            ));
         self.append_pane_close_event(
             descriptor.pane_id.as_str(),
             descriptor.window_id.as_str(),
@@ -408,7 +411,10 @@ impl RuntimeSessionService {
             self.cleanup_removed_pane_runtime_state(pane_id);
         }
         self.sync_pane_resize_effects(&transition.effects)?;
-        self.lifecycle_state = RuntimeLifecycleState::from_session_state(self.session.state);
+        self.session
+            .set_lifecycle_state(RuntimeLifecycleState::from_session_state(
+                self.session.state,
+            ));
         self.append_window_close_event(
             transition.window.id.as_str(),
             terminated,
@@ -853,7 +859,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(in crate::runtime) fn require_attachable(&self) -> Result<()> {
-        match self.lifecycle_state {
+        match self.session.lifecycle_state() {
             RuntimeLifecycleState::Running | RuntimeLifecycleState::Detached => Ok(()),
             RuntimeLifecycleState::Stopping => {
                 Err(MezError::invalid_state("runtime service is stopping"))
@@ -873,7 +879,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(in crate::runtime) fn require_live(&self) -> Result<()> {
-        match self.lifecycle_state {
+        match self.session.lifecycle_state() {
             RuntimeLifecycleState::Running | RuntimeLifecycleState::Detached => Ok(()),
             RuntimeLifecycleState::Stopping => {
                 Err(MezError::invalid_state("runtime service is stopping"))

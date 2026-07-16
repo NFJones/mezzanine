@@ -553,7 +553,7 @@ impl RuntimeSessionService {
         &mut self,
         actor_progress_turn_ids: &BTreeSet<String>,
     ) -> Result<usize> {
-        match self.lifecycle_state {
+        match self.session.lifecycle_state() {
             RuntimeLifecycleState::Killed | RuntimeLifecycleState::Failed => Ok(0),
             RuntimeLifecycleState::Running
             | RuntimeLifecycleState::Detached
@@ -578,7 +578,7 @@ impl RuntimeSessionService {
         actor_progress_turn_ids: &BTreeSet<String>,
     ) -> Result<usize> {
         if matches!(
-            self.lifecycle_state,
+            self.session.lifecycle_state(),
             RuntimeLifecycleState::Killed | RuntimeLifecycleState::Failed
         ) {
             return Ok(0);
