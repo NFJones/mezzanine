@@ -470,7 +470,7 @@ impl RuntimeSessionService {
     /// The child shell's prompt and setup repaint are implementation traffic
     /// unless shell-view diagnostics are enabled.
     fn pane_agent_subshell_active(&self, pane_id: &str) -> bool {
-        self.agent_subshell_panes.contains(pane_id)
+        self.agent_subshell_is_active(pane_id)
     }
 
     /// Retains short-lived shell-output suppression after a hidden agent shell

@@ -1451,8 +1451,7 @@ impl RuntimeSessionService {
         pane_id: &str,
         force: bool,
     ) -> Result<bool> {
-        self.agent_subshell_panes.remove(pane_id);
-        self.agent_subshell_command_exit_panes.remove(pane_id);
+        self.clear_agent_subshell_state(pane_id);
         if self.process.pane_processes.contains_pane(pane_id) {
             return Ok(self
                 .process
@@ -1509,8 +1508,7 @@ impl RuntimeSessionService {
     /// closed pane appear partially alive to later agent/session surfaces.
     pub(super) fn cleanup_removed_pane_runtime_state(&mut self, pane_id: &str) {
         self.agent_shell_store.remove_session(pane_id);
-        self.agent_subshell_panes.remove(pane_id);
-        self.agent_subshell_command_exit_panes.remove(pane_id);
+        self.clear_agent_subshell_state(pane_id);
         self.remove_agent_prompt_input(pane_id);
         self.agent_planning_modes.remove(pane_id);
         self.agent_personality_selections.remove(pane_id);

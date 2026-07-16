@@ -1,7 +1,9 @@
 //! Runtime session-service construction and initial aggregate assembly.
 
 use super::*;
-use crate::runtime::{RuntimePresentationComponent, RuntimeProcessComponent};
+use crate::runtime::{
+    RuntimeAgentComponent, RuntimePresentationComponent, RuntimeProcessComponent,
+};
 #[cfg(test)]
 use crate::terminal::HostClipboard;
 
@@ -112,6 +114,7 @@ impl RuntimeSessionService {
         Ok(Self {
             presentation: RuntimePresentationComponent::default(),
             process: RuntimeProcessComponent::with_pane_processes(pane_processes),
+            agent: RuntimeAgentComponent::default(),
             session,
             window_created_at_unix_seconds,
             config_layers: Vec::new(),
@@ -162,8 +165,6 @@ impl RuntimeSessionService {
             agent_shell_store: AgentShellStore::default(),
             agent_pane_trace_logs: BTreeMap::new(),
             agent_session_patch_records: BTreeMap::new(),
-            agent_subshell_panes: BTreeSet::new(),
-            agent_subshell_command_exit_panes: BTreeSet::new(),
             agent_turn_ledger: AgentTurnLedger::new(false),
             agent_turn_contexts: BTreeMap::new(),
             agent_turn_executions: BTreeMap::new(),

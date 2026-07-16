@@ -951,7 +951,7 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> Result<bool> {
-        if self.agent_subshell_panes.contains(pane_id)
+        if self.agent_subshell_is_active(pane_id)
             || self.primary_pid_for_live_pane_process(pane_id).is_none()
         {
             return Ok(false);
@@ -962,8 +962,8 @@ impl RuntimeSessionService {
         )?;
         match self.write_runtime_pane_input(pane_id, shell_command.as_bytes()) {
             Ok(()) => {
-                self.agent_subshell_panes.insert(pane_id.to_string());
-                self.agent_subshell_command_exit_panes.remove(pane_id);
+                self.enter_agent_subshell(pane_id);
+                self.take_agent_subshell_command_exit(pane_id);
                 self.remember_hidden_shell_render_suppression(pane_id);
                 Ok(true)
             }
@@ -989,7 +989,7 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> Result<bool> {
-        if !self.agent_subshell_panes.contains(pane_id) {
+        if !self.agent_subshell_is_active(pane_id) {
             return Ok(false);
         }
         if self
@@ -1002,20 +1002,19 @@ impl RuntimeSessionService {
             return Ok(false);
         }
         if self.primary_pid_for_live_pane_process(pane_id).is_none() {
-            self.agent_subshell_panes.remove(pane_id);
-            self.agent_subshell_command_exit_panes.remove(pane_id);
+            self.clear_agent_subshell_state(pane_id);
             self.clear_shell_output_filters_for_foreground_input(pane_id);
             return Ok(false);
         }
         self.clear_shell_output_filters_for_foreground_input(pane_id);
-        let input = if self.agent_subshell_command_exit_panes.remove(pane_id) {
+        let input = if self.take_agent_subshell_command_exit(pane_id) {
             b"exit\n".as_slice()
         } else {
             b"\x04".as_slice()
         };
         match self.write_runtime_pane_input(pane_id, input) {
             Ok(()) => {
-                self.agent_subshell_panes.remove(pane_id);
+                self.leave_agent_subshell(pane_id);
                 Ok(true)
             }
             Err(error)
@@ -1025,8 +1024,7 @@ impl RuntimeSessionService {
                         Some(std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::NotConnected)
                     ) =>
             {
-                self.agent_subshell_panes.remove(pane_id);
-                self.agent_subshell_command_exit_panes.remove(pane_id);
+                self.clear_agent_subshell_state(pane_id);
                 self.clear_shell_output_filters_for_foreground_input(pane_id);
                 Ok(false)
             }

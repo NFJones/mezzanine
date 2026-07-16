@@ -428,7 +428,7 @@ fn runtime_agent_shell_exit_after_shell_transaction_uses_command_exit() {
         .agent_shell_store_mut()
         .enter_or_resume(&pane_id)
         .unwrap();
-    service.agent_subshell_panes.insert(pane_id.clone());
+    service.enter_agent_subshell(pane_id.clone());
     let started = service
         .start_agent_prompt_turn(&pane_id, "search the file")
         .unwrap();
@@ -462,8 +462,8 @@ fn runtime_agent_shell_exit_after_shell_transaction_uses_command_exit() {
     assert_eq!(exit_inputs[0].pane_input_parts().1, b"\x03");
     assert_eq!(exit_inputs[1].pane_input_parts().0, pane_id);
     assert_eq!(exit_inputs[1].pane_input_parts().1, b"exit\n");
-    assert!(!service.agent_subshell_panes.contains(&pane_id));
-    assert!(!service.agent_subshell_command_exit_panes.contains(&pane_id));
+    assert!(!service.agent_subshell_is_active(&pane_id));
+    assert!(!service.agent_subshell_command_exit_is_pending_for_tests(&pane_id));
     let _ = process.terminate(Duration::from_millis(10));
 }
 

@@ -209,7 +209,7 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
     );
     assert!(enter_text.contains("HISTFILE=/dev/null"), "{enter_text}");
     assert!(enter_text.contains("'/bin/sh'"), "{enter_text}");
-    assert!(service.agent_subshell_panes.contains(&pane_id));
+    assert!(service.agent_subshell_is_active(&pane_id));
     service.remember_mez_wrapper_filter_command(&pane_id, "MEZ_MARKER_TOKEN='abc'");
 
     let hide = service
@@ -221,7 +221,7 @@ fn runtime_agent_shell_toggle_enters_and_exits_pane_subshell() {
     assert_eq!(exit_inputs.len(), 1);
     assert_eq!(exit_inputs[0].pane_input_parts().0, pane_id);
     assert_eq!(exit_inputs[0].pane_input_parts().1, b"\x04");
-    assert!(!service.agent_subshell_panes.contains(&pane_id));
+    assert!(!service.agent_subshell_is_active(&pane_id));
     assert!(!service.hidden_shell_render_retention_timer_needed());
     let simple_prompt_repaint = service.visible_pane_output_bytes(&pane_id, b"\r$ ");
     assert_eq!(simple_prompt_repaint, b"\r$ ");
@@ -379,7 +379,7 @@ fn runtime_agent_shell_slash_exit_exits_pane_subshell() {
     assert!(show.contains("visibility=visible"), "{show}");
     let enter_effects = service.drain_pane_io_transition().side_effects;
     assert_eq!(pane_input_effects(&enter_effects).len(), 1);
-    assert!(service.agent_subshell_panes.contains(&pane_id));
+    assert!(service.agent_subshell_is_active(&pane_id));
     service
         .pane_screen_mut(&pane_id)
         .unwrap()
@@ -403,7 +403,7 @@ fn runtime_agent_shell_slash_exit_exits_pane_subshell() {
     assert_eq!(exit_inputs.len(), 1);
     assert_eq!(exit_inputs[0].pane_input_parts().0, pane_id);
     assert_eq!(exit_inputs[0].pane_input_parts().1, b"\x04");
-    assert!(!service.agent_subshell_panes.contains(&pane_id));
+    assert!(!service.agent_subshell_is_active(&pane_id));
     let after_exit_screen = service.pane_screen(&pane_id).unwrap();
     assert!(
         !after_exit_screen

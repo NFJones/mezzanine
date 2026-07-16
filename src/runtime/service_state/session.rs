@@ -1,7 +1,9 @@
 //! Long-lived runtime session-service aggregate and owned subsystem stores.
 
 use super::*;
-use crate::runtime::{RuntimePresentationComponent, RuntimeProcessComponent};
+use crate::runtime::{
+    RuntimeAgentComponent, RuntimePresentationComponent, RuntimeProcessComponent,
+};
 
 /// Carries Runtime Session Service state for this subsystem.
 ///
@@ -13,6 +15,8 @@ pub struct RuntimeSessionService {
     pub(in crate::runtime) presentation: RuntimePresentationComponent,
     /// Private state owner for pane process metadata and lifecycle invariants.
     pub(in crate::runtime) process: RuntimeProcessComponent,
+    /// Private state owner for application-side agent execution.
+    pub(in crate::runtime) agent: RuntimeAgentComponent,
     /// Stores the session value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -244,19 +248,6 @@ pub struct RuntimeSessionService {
     /// transcript summaries.
     pub(in crate::runtime) agent_session_patch_records:
         BTreeMap<String, Vec<RuntimeAgentPatchRecord>>,
-    /// Tracks panes whose visible agent shell is scoped to a child shell.
-    ///
-    /// The runtime uses this ephemeral set to exit the child shell cleanly when
-    /// agent mode hides, while keeping prompt and environment mutations away
-    /// from the user's original interactive shell.
-    pub(in crate::runtime) agent_subshell_panes: BTreeSet<String>,
-    /// Tracks agent subshells that should exit with a command line after an
-    /// interrupted shell transaction.
-    ///
-    /// EOF can be consumed by a transaction wrapper that is still unwinding
-    /// after Ctrl+C. These panes use a line-oriented `exit` command instead so
-    /// the parent shell is restored when the interrupted wrapper returns.
-    pub(in crate::runtime) agent_subshell_command_exit_panes: BTreeSet<String>,
     /// Stores the agent turn ledger value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

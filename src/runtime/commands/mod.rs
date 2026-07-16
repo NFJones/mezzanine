@@ -627,9 +627,8 @@ impl RuntimeSessionService {
             self.remove_running_shell_transaction(marker);
             self.clear_shell_transaction_protocol_state(marker);
             if interrupted_panes.insert(pane_id.clone()) {
-                if self.agent_subshell_panes.contains(pane_id) {
-                    self.agent_subshell_command_exit_panes
-                        .insert(pane_id.clone());
+                if self.agent_subshell_is_active(pane_id) {
+                    self.mark_agent_subshell_command_exit(pane_id.clone());
                 }
                 match self.write_runtime_pane_input(pane_id, b"\x03") {
                     Ok(_) => {}

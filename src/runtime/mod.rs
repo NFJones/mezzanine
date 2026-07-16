@@ -187,6 +187,7 @@ use mez_terminal::{
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod agent;
+pub(in crate::runtime) use agent::RuntimeAgentComponent;
 /// Exposes runtime agent provider dispatch and loop state records.
 ///
 /// The nested module keeps provider-backed agent worker records out of the

@@ -98,6 +98,70 @@ mod subagents;
 mod trace;
 
 use mez_agent::messaging::task_state_name as runtime_task_state_suffix;
+
+/// Owns application-side agent execution state and lifecycle invariants.
+///
+/// The component begins with visible agent-subshell lifecycle state and grows
+/// by coherent turn, provider, scheduling, and subagent slices. Its fields are
+/// private so neighboring runtime subsystems use typed agent operations.
+#[derive(Debug, Default)]
+pub(in crate::runtime) struct RuntimeAgentComponent {
+    /// Panes whose visible agent session is scoped to a child shell.
+    agent_subshell_panes: BTreeSet<String>,
+    /// Interrupted subshells that must exit with a line-oriented command.
+    agent_subshell_command_exit_panes: BTreeSet<String>,
+}
+
+impl RuntimeSessionService {
+    /// Reports whether one pane currently owns an agent child shell.
+    pub(in crate::runtime) fn agent_subshell_is_active(&self, pane_id: &str) -> bool {
+        self.agent.agent_subshell_panes.contains(pane_id)
+    }
+
+    /// Marks one pane as owning an agent child shell.
+    pub(in crate::runtime) fn enter_agent_subshell(&mut self, pane_id: impl Into<String>) {
+        self.agent.agent_subshell_panes.insert(pane_id.into());
+    }
+
+    /// Removes one pane from active agent child-shell ownership.
+    pub(in crate::runtime) fn leave_agent_subshell(&mut self, pane_id: &str) -> bool {
+        self.agent.agent_subshell_panes.remove(pane_id)
+    }
+
+    /// Marks an interrupted child shell for line-oriented exit.
+    pub(in crate::runtime) fn mark_agent_subshell_command_exit(
+        &mut self,
+        pane_id: impl Into<String>,
+    ) {
+        self.agent
+            .agent_subshell_command_exit_panes
+            .insert(pane_id.into());
+    }
+
+    /// Consumes a line-oriented child-shell exit marker.
+    pub(in crate::runtime) fn take_agent_subshell_command_exit(&mut self, pane_id: &str) -> bool {
+        self.agent.agent_subshell_command_exit_panes.remove(pane_id)
+    }
+
+    /// Clears all agent child-shell state for a removed pane.
+    pub(in crate::runtime) fn clear_agent_subshell_state(&mut self, pane_id: &str) {
+        self.agent.agent_subshell_panes.remove(pane_id);
+        self.agent.agent_subshell_command_exit_panes.remove(pane_id);
+    }
+}
+
+#[cfg(test)]
+impl RuntimeSessionService {
+    /// Reports whether a process fixture still has a command-exit marker.
+    pub(in crate::runtime) fn agent_subshell_command_exit_is_pending_for_tests(
+        &self,
+        pane_id: &str,
+    ) -> bool {
+        self.agent
+            .agent_subshell_command_exit_panes
+            .contains(pane_id)
+    }
+}
 use mez_agent::outcome::{
     ActionPresentationInput, action_error_suffix as runtime_agent_action_error_suffix,
     action_has_runtime_visible_effect as runtime_agent_action_has_runtime_visible_effect,
