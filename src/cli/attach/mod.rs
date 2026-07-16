@@ -15,8 +15,6 @@ use super::{
     records_to_json, registry_root, resolve_session_record_target, selected_socket_path,
     terminal_size_from_fd_or_environment, write_control_response, write_json_or_plain,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
 // Attach clients and interactive control-socket attachment helpers.
 
 /// Maximum JSON-RPC event notification body accepted from the auxiliary event

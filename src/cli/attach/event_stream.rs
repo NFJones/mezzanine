@@ -1,6 +1,12 @@
 //! Attached terminal polling and auxiliary runtime event-stream handling.
 
-use super::*;
+use super::{
+    ATTACH_EVENT_STREAM_MAX_CONTENT_LENGTH, ATTACH_EVENT_STREAM_READ_BUFFER_BYTES,
+    AsyncAttachedTerminalIo, AuxiliarySocketKind, MezError, Result, UnixStream,
+    attached_terminal_output_disconnected, auxiliary_socket_path_for_control_socket,
+    decode_control_frame,
+};
+use tokio::io::AsyncReadExt;
 
 /// Carries Attached Client Input Poll state for this subsystem.
 ///

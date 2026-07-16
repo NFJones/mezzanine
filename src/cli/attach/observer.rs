@@ -12,7 +12,11 @@ use super::responses::{
     terminal_step_response_line_style_spans, terminal_step_response_lines,
     terminal_step_response_output_modes,
 };
-use super::*;
+use super::{
+    AsRawFd, AsyncAttachedTerminalIo, AsyncAttachedTerminalPresentationGuard,
+    AttachTerminalSizeRefresh, AttachedTerminalOutputModes, Result, Size, UnixStream,
+    decode_control_frame, io,
+};
 
 /// Runs the run control socket attached observer client operation for this subsystem.
 ///

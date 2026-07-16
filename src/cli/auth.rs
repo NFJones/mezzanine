@@ -463,7 +463,7 @@ pub(super) fn auth_status_json(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::run_auth_store_operation;
 
     /// Verifies auth store operations run on a blocking thread rather than a
     /// Tokio runtime worker. Native secret-store adapters may start and drive

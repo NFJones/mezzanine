@@ -1127,7 +1127,12 @@ fn mcp_inspect_json(server: ConfiguredMcpServerJson) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        AuthCredentialState, ConfigFormat, ConfigLayer, ConfigScope, McpAuthBinding,
+        McpAuthMetadata, McpAuthStatus, McpRegistry, compose_effective_config,
+        configured_mcp_server_json, mcp_inspect_json, mcp_list_json, mcp_login_json,
+        mcp_status_json,
+    };
     use crate::auth::{CredentialStoreKind, McpCredentialKind};
 
     /// Verifies typed MCP status JSON preserves the existing secret-safe field
