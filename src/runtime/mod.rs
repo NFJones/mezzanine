@@ -36,7 +36,7 @@ use crate::agent::provider::{
     AsyncModelProvider, DeepSeekChatCompletionsProvider, OpenAiCompatibleChatCompletionsProvider,
     OpenAiResponsesProvider, ReqwestProviderHttpTransport,
 };
-use crate::agent::semantic::{local_action_plan, local_action_summary};
+use crate::agent::semantic::local_action_plan;
 use crate::agent::slash::{
     AgentShellCommandOutcome, AgentShellRuntimeContext, execute_agent_shell_command_with_context,
 };
@@ -143,8 +143,8 @@ use mez_agent::{
     ModelTokenUsage, ModelTokenUsageKey, PaneReadinessOverrideStore, PaneReadinessState,
     ProviderQuotaUsage, ReadinessOverrideRevocation, action_result_context_content,
     compact_model_context_for_budget_with_retained_tail_percent,
-    decode_shell_output_transport_with_diagnostics, network_action_plan, network_action_summary,
-    select_model_profile, transcript_entries_for_execution,
+    decode_shell_output_transport_with_diagnostics, network_action_plan, select_model_profile,
+    transcript_entries_for_execution,
 };
 use mez_agent::{AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ScheduledWork, ScheduledWorkKind};
 use mez_agent::{ApprovalPolicy, PermissionPreset, RuleDecision};

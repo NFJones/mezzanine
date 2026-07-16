@@ -247,7 +247,13 @@ impl RuntimeSessionService {
                     ),
                     RuleDecision::Allow
                 ) || (permission_policy.approval_policy == mez_agent::ApprovalPolicy::AutoAllow
-                    && runtime_action_supports_auto_allow(action)))
+                    && mez_agent::action_supports_auto_allow(
+                        action,
+                        mez_agent::ActionPlanningInput {
+                            local_plan: Some(&plan),
+                            ..mez_agent::ActionPlanningInput::default()
+                        },
+                    )))
             }
             _ if network_action_plan(action).is_some() => {
                 let Some(plan) = network_action_plan(action) else {
@@ -261,14 +267,26 @@ impl RuntimeSessionService {
                     ),
                     RuleDecision::Allow
                 ) || (permission_policy.approval_policy == mez_agent::ApprovalPolicy::AutoAllow
-                    && runtime_action_supports_auto_allow(action)))
+                    && mez_agent::action_supports_auto_allow(
+                        action,
+                        mez_agent::ActionPlanningInput {
+                            network_plan: Some(&plan),
+                            ..mez_agent::ActionPlanningInput::default()
+                        },
+                    )))
             }
             AgentActionPayload::McpCall { .. } => Ok(permission_policy.approval_policy
                 == mez_agent::ApprovalPolicy::AutoAllow
-                && runtime_action_supports_auto_allow(action)),
+                && mez_agent::action_supports_auto_allow(
+                    action,
+                    mez_agent::ActionPlanningInput::default(),
+                )),
             AgentActionPayload::ConfigChange { .. } => Ok(permission_policy.approval_policy
                 == mez_agent::ApprovalPolicy::AutoAllow
-                && runtime_action_supports_auto_allow(action)),
+                && mez_agent::action_supports_auto_allow(
+                    action,
+                    mez_agent::ActionPlanningInput::default(),
+                )),
             _ => Ok(false),
         }
     }

@@ -30,11 +30,10 @@ use super::{
     current_unix_millis, current_unix_seconds, decode_shell_output_transport_with_diagnostics,
     discover_project_root, exact_command_sha256, execute_mcp_action_through_runtime,
     execute_mcp_action_through_runtime_async, execute_network_action_with_transport_async,
-    json_escape, local_action_plan, local_action_summary, network_action_plan,
-    network_action_summary, next_transcript_sequence, runtime_agent_turn_duration_display,
-    runtime_agent_turn_start_hook_payload, runtime_agent_turn_state_from_action_results,
-    runtime_agent_turn_state_name, runtime_apply_auto_sizing_execution_profile,
-    runtime_apply_persisted_config_mutation_batch,
+    json_escape, local_action_plan, network_action_plan, next_transcript_sequence,
+    runtime_agent_turn_duration_display, runtime_agent_turn_start_hook_payload,
+    runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
+    runtime_apply_auto_sizing_execution_profile, runtime_apply_persisted_config_mutation_batch,
     runtime_auto_sizing_reasoning_levels_for_profile, runtime_blocked_approval_request,
     runtime_cooperation_mode, runtime_cooperation_mode_name,
     runtime_execution_ready_for_provider_continuation, runtime_hook_event_name,
@@ -102,8 +101,20 @@ mod subagents;
 mod trace;
 
 use mez_agent::outcome::{
-    RuntimeSkillActionContext, runtime_action_result_error_code,
-    runtime_action_result_has_error_code, runtime_action_result_is_aggregated_loop_guard_failure,
+    ActionPresentationInput, RuntimeSkillActionContext,
+    action_error_suffix as runtime_agent_action_error_suffix,
+    action_has_runtime_visible_effect as runtime_agent_action_has_runtime_visible_effect,
+    action_outcome_line,
+    action_rationale_repeats_visible_batch_text as runtime_agent_action_rationale_repeats_visible_batch_text,
+    action_rationale_repeats_visible_summary,
+    action_rejects_duplicate_success as runtime_agent_action_rejects_duplicate_success,
+    action_result_is_suppressed_duplicate_file_mutation as runtime_action_result_is_suppressed_duplicate_file_mutation,
+    action_summary, action_terminal_preview as runtime_agent_terminal_preview,
+    batch_rationale_repeats_visible_text as runtime_agent_batch_rationale_repeats_visible_batch_text,
+    batch_visible_action_texts as runtime_agent_batch_visible_action_texts,
+    normalize_user_visible_text as normalize_agent_user_visible_text,
+    runtime_action_result_error_code, runtime_action_result_has_error_code,
+    runtime_action_result_is_aggregated_loop_guard_failure,
     runtime_action_result_is_feedback_candidate, runtime_action_result_is_terminal_failure,
     runtime_action_status_name, runtime_action_type_is_shell_backed,
     runtime_execution_can_feed_failure_to_model,
@@ -132,17 +143,11 @@ use mez_agent::progress::{
 };
 use mez_agent::subagent_task_output_for_execution;
 use outcome::{
-    normalize_agent_user_visible_text, runtime_action_result_is_suppressed_duplicate_file_mutation,
-    runtime_action_supports_auto_allow, runtime_agent_action_error_suffix,
-    runtime_agent_action_has_runtime_visible_effect, runtime_agent_action_outcome_line,
-    runtime_agent_action_rationale_repeats_visible_batch_text,
-    runtime_agent_action_rationale_repeats_visible_summary,
-    runtime_agent_action_rejects_duplicate_success, runtime_agent_action_summary,
-    runtime_agent_batch_rationale_repeats_visible_batch_text,
-    runtime_agent_batch_visible_action_texts, runtime_agent_context_command,
+    runtime_agent_action_outcome_line, runtime_agent_action_rationale_repeats_visible_summary,
+    runtime_agent_action_summary, runtime_agent_context_command,
     runtime_agent_execution_failure_error, runtime_agent_finished_footer_line,
     runtime_agent_pending_approval_log_line, runtime_agent_shell_status,
-    runtime_agent_terminal_preview, runtime_agent_turn_steering_context_content,
+    runtime_agent_turn_steering_context_content,
 };
 use provider_events::{runtime_provider_event_error, runtime_task_state_suffix};
 use subagents::runtime_agent_pane_id;

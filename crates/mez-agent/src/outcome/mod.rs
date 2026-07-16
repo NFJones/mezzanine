@@ -43,6 +43,10 @@ impl Error for OutcomeError {}
 /// Result returned by completion consistency validation.
 pub type OutcomeResult<T> = Result<T, OutcomeError>;
 
+mod presentation;
+
+pub use presentation::*;
+
 /// Returns the stable state name used by neutral recovery diagnostics.
 fn outcome_turn_state_name(state: AgentTurnState) -> &'static str {
     match state {
@@ -1575,6 +1579,35 @@ mod tests {
         }
     }
 
+    /// Builds one shell action used to exercise neutral presentation policy.
+    fn shell_action() -> AgentAction {
+        AgentAction {
+            id: "shell-1".to_string(),
+            rationale: "Inspect repository".to_string(),
+            payload: AgentActionPayload::ShellCommand {
+                summary: "Inspect repository".to_string(),
+                command: "git status --short".to_string(),
+                interactive: false,
+                stateful: false,
+                timeout_ms: None,
+            },
+        }
+    }
+
+    /// Builds the validated local plan supplied by a product shell adapter.
+    fn shell_plan() -> LocalActionPlan {
+        LocalActionPlan {
+            kind: LocalActionKind::ShellCommand,
+            summary: "Inspect repository".to_string(),
+            command: "git status --short".to_string(),
+            policy_command: "git status --short".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+            display_output_after_completion: false,
+        }
+    }
+
     /// Verifies completion identity mismatches fail before runtime mutation.
     #[test]
     fn provider_completion_identity_rejects_mismatched_agent() {
@@ -1617,5 +1650,119 @@ mod tests {
         )
         .unwrap();
         assert!(runtime_action_result_is_feedback_candidate(&result));
+    }
+
+    /// Verifies neutral summary and rationale suppression consume the explicit
+    /// validated plan supplied by the product rather than re-lowering actions.
+    #[test]
+    fn action_presentation_uses_explicit_local_plan() {
+        let action = shell_action();
+        let plan = shell_plan();
+        let input = ActionPresentationInput {
+            local_plan: Some(&plan),
+            ..ActionPresentationInput::default()
+        };
+
+        assert_eq!(
+            action_summary(&action, input).as_deref(),
+            Some("Inspect repository")
+        );
+        assert!(!action_rationale_repeats_visible_summary(&action, input));
+
+        let mut repeated = action;
+        repeated.rationale = "git status --short".to_string();
+        assert!(action_rationale_repeats_visible_summary(&repeated, input));
+    }
+
+    /// Verifies conversational text is normalized once and suppresses a batch
+    /// rationale that would otherwise repeat already-visible assistant output.
+    #[test]
+    fn batch_presentation_suppresses_repeated_conversational_text() {
+        let batch = MaapBatch {
+            protocol: "maap/1".to_string(),
+            rationale: "thinking:  Ready   to continue".to_string(),
+            thought: None,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            actions: vec![AgentAction {
+                id: "say-1".to_string(),
+                rationale: String::new(),
+                payload: AgentActionPayload::Say {
+                    status: SayStatus::Progress,
+                    text: "ready to continue".to_string(),
+                    content_type: "text/plain".to_string(),
+                },
+            }],
+            final_turn: false,
+        };
+
+        let visible = batch_visible_action_texts(&batch);
+        assert_eq!(visible, vec!["ready to continue"]);
+        assert!(batch_rationale_repeats_visible_text(&batch, &visible));
+    }
+
+    /// Verifies duplicate mutation and runtime-visible-effect classifications
+    /// remain intrinsic properties of canonical actions and results.
+    #[test]
+    fn action_presentation_classifies_file_mutation_duplicates() {
+        let action = AgentAction {
+            id: "patch-1".to_string(),
+            rationale: "Update the file".to_string(),
+            payload: AgentActionPayload::ApplyPatch {
+                patch: "*** Begin Patch\n*** End Patch".to_string(),
+                strip: None,
+            },
+        };
+        let result = ActionResult::succeeded(
+            &turn(),
+            &action,
+            Vec::new(),
+            Some(r#"{"guard":"repeated_successful_file_mutation"}"#.to_string()),
+        );
+
+        assert!(action_has_runtime_visible_effect(&action));
+        assert!(action_rejects_duplicate_success(&action));
+        assert!(action_result_is_suppressed_duplicate_file_mutation(&result));
+    }
+
+    /// Verifies outcome selection hides local command targets by default and
+    /// exposes them only when the product explicitly enables detailed output.
+    #[test]
+    fn action_outcome_respects_product_target_visibility() {
+        let action = shell_action();
+        let plan = shell_plan();
+        let result = ActionResult::blocked(
+            &turn(),
+            &action,
+            Vec::new(),
+            r#"{"approval":{"state":"pending"}}"#.to_string(),
+        );
+        let hidden = action_outcome_line(
+            &action,
+            &result,
+            ActionPresentationInput {
+                local_plan: Some(&plan),
+                ..ActionPresentationInput::default()
+            },
+        )
+        .unwrap();
+        let visible = action_outcome_line(
+            &action,
+            &result,
+            ActionPresentationInput {
+                local_plan: Some(&plan),
+                show_runtime_target: true,
+                ..ActionPresentationInput::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(hidden.line, "agent: Inspect repository (awaiting approval)");
+        assert_eq!(
+            visible.line,
+            "agent: shell command awaiting approval: git status --short"
+        );
+        assert!(!hidden.is_error);
+        assert!(!visible.is_error);
     }
 }

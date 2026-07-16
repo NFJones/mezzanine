@@ -4,12 +4,13 @@
 //! responses, MAAP actions, action results, provider errors, and per-pane trace
 //! logs. Runtime state transitions stay in the parent agent service module.
 
-use super::outcome::{runtime_agent_terminal_preview, runtime_humanize_agent_diagnostic};
+use super::outcome::runtime_humanize_agent_diagnostic;
 use super::{runtime_action_status_name, runtime_mezzanine_error_code};
 use crate::agent::context::assemble_model_request;
 use crate::error::{MezError, Result};
 use crate::runtime::{RuntimeSessionService, runtime_agent_turn_state_name};
 use mez_agent::AgentTurnRecord;
+use mez_agent::outcome::action_terminal_preview as runtime_agent_terminal_preview;
 use mez_agent::{
     ActionResult, AgentAction, AgentActionPayload, AgentContext, AgentTurnState, ContextSourceKind,
     MaapBatch, ModelMessageRole, ModelProfile, ModelRequest, ModelResponse,

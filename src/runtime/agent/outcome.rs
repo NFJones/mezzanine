@@ -421,43 +421,18 @@ pub(super) fn runtime_agent_execution_failure_json(
     value
 }
 
-/// Produces a single-line, user-facing preview for action summaries that may
-/// contain multiline commands or large provider payloads.
-pub(super) fn runtime_agent_terminal_preview(value: &str) -> String {
-    /// Defines the MAX AGENT ACTION PREVIEW CHARS const used by this subsystem.
-    ///
-    /// Keeping this value documented makes the contract explicit at the module
-    /// boundary and avoids relying on call-site inference.
-    const MAX_AGENT_ACTION_PREVIEW_CHARS: usize = 240;
-    let trimmed = value.trim();
-    let mut preview = String::new();
-    let mut chars = trimmed.chars();
-    for _ in 0..MAX_AGENT_ACTION_PREVIEW_CHARS {
-        let Some(ch) = chars.next() else {
-            return preview;
-        };
-        preview.push(match ch {
-            '\r' | '\n' => ' ',
-            ch if ch.is_control() => ' ',
-            ch => ch,
-        });
-    }
-    if chars.next().is_some() {
-        preview.push_str("...");
-    }
-    preview
-}
-
-/// Returns whether an action carries enough model-authored context for auto-allow.
-pub(super) fn runtime_action_supports_auto_allow(action: &AgentAction) -> bool {
-    if !action.rationale.trim().is_empty() {
-        return true;
-    }
-    local_action_summary(action)
-        .ok()
-        .flatten()
-        .or_else(|| network_action_summary(action))
-        .is_some_and(|summary| !summary.trim().is_empty())
+/// Returns the validated product action plans supplied to neutral lower-crate
+/// presentation and policy decisions.
+fn runtime_agent_action_plans(
+    action: &AgentAction,
+) -> (
+    Option<mez_agent::LocalActionPlan>,
+    Option<mez_agent::NetworkActionPlan>,
+) {
+    (
+        local_action_plan(action).ok().flatten(),
+        network_action_plan(action),
+    )
 }
 
 /// Returns a command string safe for model context, transcripts, and status
@@ -518,27 +493,15 @@ pub(super) fn runtime_agent_pending_approval_log_line(approval: &BlockedApproval
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn runtime_agent_action_summary(action: &AgentAction) -> Option<String> {
-    match &action.payload {
-        AgentActionPayload::MemorySearch { query, .. } => {
-            return Some(format!(
-                "memory search {}",
-                runtime_agent_terminal_preview(query)
-            ));
-        }
-        AgentActionPayload::MemoryStore { kind, .. } => {
-            return Some(format!(
-                "memory store {}",
-                runtime_agent_terminal_preview(kind)
-            ));
-        }
-        _ => {}
-    }
-    let summary = local_action_summary(action)
-        .ok()
-        .flatten()
-        .or_else(|| network_action_summary(action))?;
-    let summary = runtime_agent_terminal_preview(&summary);
-    (!summary.trim().is_empty()).then_some(summary)
+    let (local_plan, network_plan) = runtime_agent_action_plans(action);
+    action_summary(
+        action,
+        ActionPresentationInput {
+            local_plan: local_plan.as_ref(),
+            network_plan: network_plan.as_ref(),
+            show_runtime_target: false,
+        },
+    )
 }
 
 /// Runs the runtime agent shell status operation for this subsystem.
@@ -575,289 +538,15 @@ pub(super) fn runtime_agent_finished_footer_line(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn runtime_agent_action_rationale_repeats_visible_summary(action: &AgentAction) -> bool {
-    let rationale = normalize_agent_user_visible_text(&action.rationale);
-    if rationale.is_empty() {
-        return false;
-    }
-    if matches!(action.payload, AgentActionPayload::Say { .. }) {
-        return true;
-    }
-    if !matches!(action.payload, AgentActionPayload::ShellCommand { .. })
-        && let Some(summary) = runtime_agent_action_summary(action)
-        && rationale == normalize_agent_user_visible_text(&summary)
-    {
-        return true;
-    }
-    match &action.payload {
-        AgentActionPayload::ShellCommand { command, .. } => {
-            rationale == normalize_agent_user_visible_text(command)
-        }
-        AgentActionPayload::Say { text, .. }
-        | AgentActionPayload::RequestCapability { reason: text, .. } => {
-            rationale == normalize_agent_user_visible_text(text)
-        }
-        AgentActionPayload::Abort { reason } => {
-            rationale == normalize_agent_user_visible_text(reason)
-        }
-        AgentActionPayload::McpCall { .. }
-        | AgentActionPayload::SendMessage { .. }
-        | AgentActionPayload::SpawnAgent { .. }
-        | AgentActionPayload::ConfigChange { .. }
-        | AgentActionPayload::MemorySearch { .. }
-        | AgentActionPayload::MemoryStore { .. }
-        | AgentActionPayload::IssueAdd { .. }
-        | AgentActionPayload::IssueUpdate { .. }
-        | AgentActionPayload::IssueQuery { .. }
-        | AgentActionPayload::IssueDelete { .. }
-        | AgentActionPayload::RequestSkills
-        | AgentActionPayload::CallSkill { .. } => false,
-        AgentActionPayload::ApplyPatch { .. }
-        | AgentActionPayload::WebSearch { .. }
-        | AgentActionPayload::FetchUrl { .. } => false,
-        AgentActionPayload::Complete => false,
-    }
-}
-
-/// Returns normalized user-visible text emitted by conversational actions in a
-/// batch. These values are already rendered as assistant output, so matching
-/// rationales should not be repeated as thinking/comment lines.
-pub(super) fn runtime_agent_batch_visible_action_texts(batch: &MaapBatch) -> Vec<String> {
-    batch
-        .actions
-        .iter()
-        .filter_map(|action| match &action.payload {
-            AgentActionPayload::Say { text, .. } => Some(text),
-            AgentActionPayload::Abort { reason } => Some(reason),
-            _ => None,
-        })
-        .map(|text| normalize_agent_user_visible_text(text))
-        .filter(|text| !text.is_empty())
-        .collect()
-}
-
-/// Returns true when the batch rationale repeats text already rendered by a
-/// conversational action in the same provider response.
-pub(super) fn runtime_agent_batch_rationale_repeats_visible_batch_text(
-    batch: &MaapBatch,
-    visible_texts: &[String],
-) -> bool {
-    let rationale = normalize_agent_user_visible_text(&batch.rationale);
-    !rationale.is_empty() && visible_texts.iter().any(|text| text == &rationale)
-}
-
-/// Returns whether the action will produce runtime-visible output after it is
-/// executed rather than purely conversational assistant text.
-pub(super) fn runtime_agent_action_has_runtime_visible_effect(action: &AgentAction) -> bool {
-    matches!(
-        action.payload,
-        AgentActionPayload::ShellCommand { .. }
-            | AgentActionPayload::ApplyPatch { .. }
-            | AgentActionPayload::WebSearch { .. }
-            | AgentActionPayload::FetchUrl { .. }
-            | AgentActionPayload::McpCall { .. }
-            | AgentActionPayload::RequestSkills
-            | AgentActionPayload::CallSkill { .. }
-            | AgentActionPayload::SendMessage { .. }
-            | AgentActionPayload::SpawnAgent { .. }
-            | AgentActionPayload::ConfigChange { .. }
-            | AgentActionPayload::MemorySearch { .. }
-            | AgentActionPayload::MemoryStore { .. }
+    let (local_plan, network_plan) = runtime_agent_action_plans(action);
+    action_rationale_repeats_visible_summary(
+        action,
+        ActionPresentationInput {
+            local_plan: local_plan.as_ref(),
+            network_plan: network_plan.as_ref(),
+            show_runtime_target: false,
+        },
     )
-}
-
-/// Returns whether a successful duplicate dispatch of this action should be
-/// treated as a loop instead of re-running the same file mutation.
-pub(super) fn runtime_agent_action_rejects_duplicate_success(action: &AgentAction) -> bool {
-    matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
-}
-
-/// Returns whether the guard result represents a duplicate file mutation that
-/// was skipped because the identical mutation already succeeded in this turn.
-pub(super) fn runtime_action_result_is_suppressed_duplicate_file_mutation(
-    result: &ActionResult,
-) -> bool {
-    result.status == ActionStatus::Succeeded
-        && result
-            .structured_content_json
-            .as_deref()
-            .is_some_and(|content| content.contains("repeated_successful_file_mutation"))
-}
-
-/// Returns true when an action rationale repeats text already rendered by a
-/// nearby conversational action in the same provider response.
-pub(super) fn runtime_agent_action_rationale_repeats_visible_batch_text(
-    action: &AgentAction,
-    visible_texts: &[String],
-) -> bool {
-    let rationale = normalize_agent_user_visible_text(&action.rationale);
-    !rationale.is_empty() && visible_texts.iter().any(|text| text == &rationale)
-}
-
-/// Runs the normalize agent user visible text operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn normalize_agent_user_visible_text(value: &str) -> String {
-    let trimmed = value.trim_start();
-    trimmed
-        .strip_prefix("agent thinking:")
-        .or_else(|| trimmed.strip_prefix("thinking:"))
-        .map(str::trim_start)
-        .unwrap_or(value)
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_ascii_lowercase()
-}
-
-/// Returns the short action kind and target that should be visible when runtime
-/// gates prevent an agent-planned action from reaching its normal execution UI.
-pub(super) fn runtime_agent_user_action_phrase(
-    action: &AgentAction,
-) -> Option<(&'static str, String)> {
-    if let Ok(Some(plan)) = local_action_plan(action) {
-        let kind = if matches!(action.payload, AgentActionPayload::ShellCommand { .. }) {
-            "shell command"
-        } else {
-            "local action"
-        };
-        return Some((kind, runtime_agent_terminal_preview(&plan.command)));
-    }
-    if let Some(plan) = network_action_plan(action) {
-        let kind = match action.payload {
-            AgentActionPayload::WebSearch { .. } => "web search",
-            AgentActionPayload::FetchUrl { .. } => "URL fetch",
-            _ => "network action",
-        };
-        return Some((kind, runtime_agent_terminal_preview(&plan.policy_command)));
-    }
-    match &action.payload {
-        AgentActionPayload::McpCall { server, tool, .. } => Some((
-            "MCP call",
-            format!(
-                "{}/{}",
-                runtime_agent_terminal_preview(server),
-                runtime_agent_terminal_preview(tool)
-            ),
-        )),
-        AgentActionPayload::SendMessage { recipient, .. } => {
-            Some(("message", runtime_agent_terminal_preview(recipient)))
-        }
-        AgentActionPayload::SpawnAgent { role, .. } => {
-            Some(("subagent spawn", runtime_agent_terminal_preview(role)))
-        }
-        AgentActionPayload::ConfigChange {
-            setting_path,
-            operation,
-            ..
-        } => Some((
-            "config change",
-            format!(
-                "{} {}",
-                runtime_agent_terminal_preview(operation),
-                runtime_agent_terminal_preview(setting_path)
-            ),
-        )),
-        AgentActionPayload::MemorySearch { query, .. } => {
-            Some(("memory search", runtime_agent_terminal_preview(query)))
-        }
-        AgentActionPayload::MemoryStore { kind, .. } => {
-            Some(("memory store", runtime_agent_terminal_preview(kind)))
-        }
-        AgentActionPayload::IssueAdd { title, .. } => {
-            Some(("issue add", runtime_agent_terminal_preview(title)))
-        }
-        AgentActionPayload::IssueUpdate { id, .. } => {
-            Some(("issue update", runtime_agent_terminal_preview(id)))
-        }
-        AgentActionPayload::IssueQuery { text, .. } => Some((
-            "issue query",
-            text.as_deref()
-                .map(runtime_agent_terminal_preview)
-                .unwrap_or_else(|| "current project".to_string()),
-        )),
-        AgentActionPayload::IssueDelete { id } => {
-            Some(("issue delete", runtime_agent_terminal_preview(id)))
-        }
-        AgentActionPayload::RequestSkills => Some(("skill lookup", "available skills".to_string())),
-        AgentActionPayload::CallSkill { name, .. } => {
-            Some(("skill load", runtime_agent_terminal_preview(name)))
-        }
-        AgentActionPayload::Say { .. }
-        | AgentActionPayload::RequestCapability { .. }
-        | AgentActionPayload::Complete
-        | AgentActionPayload::Abort { .. }
-        | AgentActionPayload::ShellCommand { .. }
-        | AgentActionPayload::ApplyPatch { .. }
-        | AgentActionPayload::WebSearch { .. }
-        | AgentActionPayload::FetchUrl { .. } => None,
-    }
-}
-
-/// Formats the error suffix for a failed action result without exposing
-/// multiline provider payloads directly in the status prefix.
-pub(super) fn runtime_agent_action_error_suffix(result: &ActionResult) -> String {
-    let detail = result
-        .error
-        .as_ref()
-        .map(|error| {
-            if error.code.trim().is_empty() {
-                error.message.clone()
-            } else if error.message.trim().is_empty() {
-                error.code.clone()
-            } else {
-                format!("{}: {}", error.code, error.message)
-            }
-        })
-        .or_else(|| {
-            let content = result.content_text();
-            (!content.trim().is_empty()).then_some(content)
-        })
-        .map(|detail| runtime_agent_terminal_preview(&detail))
-        .unwrap_or_default();
-    if detail.is_empty() {
-        String::new()
-    } else {
-        format!(" ({detail})")
-    }
-}
-
-/// Builds a terse warning for fetch failures that are already being fed back to
-/// the model for bounded correction.
-pub(super) fn runtime_agent_recoverable_network_warning_line(
-    action: &AgentAction,
-    result: &ActionResult,
-) -> Option<String> {
-    if !matches!(action.payload, AgentActionPayload::FetchUrl { .. })
-        || !runtime_action_result_is_feedback_candidate(result)
-    {
-        return None;
-    }
-    let detail = runtime_fetch_url_status_label(result)
-        .or_else(|| {
-            result
-                .error
-                .as_ref()
-                .map(|error| runtime_agent_terminal_preview(&error.message))
-        })
-        .filter(|detail| !detail.trim().is_empty())
-        .map(|detail| format!(" ({detail})"))
-        .unwrap_or_default();
-    Some(format!(
-        "agent warning: URL fetch failed{detail}; model received the response details for recovery"
-    ))
-}
-
-/// Returns a compact HTTP status label from fetch structured content.
-pub(super) fn runtime_fetch_url_status_label(result: &ActionResult) -> Option<String> {
-    let value: serde_json::Value =
-        serde_json::from_str(result.structured_content_json.as_deref()?).ok()?;
-    let status = value
-        .get("response")
-        .and_then(|response| response.get("status_code"))
-        .and_then(serde_json::Value::as_u64)?;
-    Some(format!("HTTP {status}"))
 }
 
 /// Builds the model-facing wrapper for mid-turn user steering input.
@@ -883,64 +572,15 @@ pub(super) fn runtime_agent_action_outcome_line(
     result: &ActionResult,
     show_shell_details: bool,
 ) -> Option<(bool, String)> {
-    let (kind, target) = runtime_agent_user_action_phrase(action)?;
-    let runtime_owned_action =
-        local_action_plan(action).ok().flatten().is_some() || network_action_plan(action).is_some();
-    let target = if runtime_owned_action && !show_shell_details {
-        None
-    } else {
-        Some(target)
-    };
-    match result.status {
-        ActionStatus::Blocked => Some((
-            false,
-            if let Some(summary) = runtime_agent_action_summary(action).filter(|_| target.is_none())
-            {
-                format!("agent: {summary} (awaiting approval)")
-            } else if let Some(target) = target {
-                format!("agent: {kind} awaiting approval: {target}")
-            } else {
-                format!("agent: {kind} awaiting approval")
-            },
-        )),
-        ActionStatus::Rejected
-        | ActionStatus::Denied
-        | ActionStatus::Failed
-        | ActionStatus::Cancelled
-        | ActionStatus::TimedOut
-        | ActionStatus::Interrupted => {
-            if let Some(line) = runtime_agent_recoverable_network_warning_line(action, result) {
-                return Some((false, line));
-            }
-            let detail = runtime_agent_action_error_suffix(result);
-            let failure_phase =
-                if network_action_plan(action).is_some() && result.content.is_empty() {
-                    ""
-                } else {
-                    " before execution"
-                };
-            Some((
-                true,
-                if let Some(summary) =
-                    runtime_agent_action_summary(action).filter(|_| target.is_none())
-                {
-                    format!(
-                        "agent: {summary} ({kind} {}{failure_phase}{detail})",
-                        runtime_action_status_name(result.status)
-                    )
-                } else if let Some(target) = target {
-                    format!(
-                        "agent: {kind} {}{failure_phase}: {target}{detail}",
-                        runtime_action_status_name(result.status),
-                    )
-                } else {
-                    format!(
-                        "agent: {kind} {}{failure_phase}{detail}",
-                        runtime_action_status_name(result.status),
-                    )
-                },
-            ))
-        }
-        ActionStatus::Running | ActionStatus::Succeeded => None,
-    }
+    let (local_plan, network_plan) = runtime_agent_action_plans(action);
+    action_outcome_line(
+        action,
+        result,
+        ActionPresentationInput {
+            local_plan: local_plan.as_ref(),
+            network_plan: network_plan.as_ref(),
+            show_runtime_target: show_shell_details,
+        },
+    )
+    .map(|outcome| (outcome.is_error, outcome.line))
 }

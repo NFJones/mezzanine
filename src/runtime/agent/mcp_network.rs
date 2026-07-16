@@ -56,7 +56,10 @@ impl RuntimeSessionService {
             let permission_policy = self.permission_policy_for_turn(turn);
             let auto_allowed = permission_policy.approval_policy
                 == mez_agent::ApprovalPolicy::AutoAllow
-                && runtime_action_supports_auto_allow(&action);
+                && mez_agent::action_supports_auto_allow(
+                    &action,
+                    mez_agent::ActionPlanningInput::default(),
+                );
             let policy_allowed =
                 permission_policy.approval_policy == mez_agent::ApprovalPolicy::FullAccess;
             execution.action_results[index] =
@@ -137,7 +140,10 @@ impl RuntimeSessionService {
             let permission_policy = self.permission_policy_for_turn(turn);
             let auto_allowed = permission_policy.approval_policy
                 == mez_agent::ApprovalPolicy::AutoAllow
-                && runtime_action_supports_auto_allow(&action);
+                && mez_agent::action_supports_auto_allow(
+                    &action,
+                    mez_agent::ActionPlanningInput::default(),
+                );
             let policy_allowed =
                 permission_policy.approval_policy == mez_agent::ApprovalPolicy::FullAccess;
             execution.action_results[index] = self

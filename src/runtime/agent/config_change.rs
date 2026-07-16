@@ -159,7 +159,7 @@ fn runtime_config_change_approval_state(
     if permission_policy.approval_bypass() {
         "bypassed"
     } else if permission_policy.approval_policy == mez_agent::ApprovalPolicy::AutoAllow
-        && runtime_action_supports_auto_allow(action)
+        && mez_agent::action_supports_auto_allow(action, mez_agent::ActionPlanningInput::default())
     {
         "auto_allowed"
     } else {
