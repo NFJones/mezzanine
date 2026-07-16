@@ -329,7 +329,7 @@ impl RuntimeSessionService {
                 }
             }
         }
-        self.provider_model_catalog_cache.clear();
+        self.clear_provider_model_catalog_cache();
         self.subagent_profiles = runtime_subagent_profiles_from_config(&structured)?;
         self.agent_personality_profiles =
             runtime_agent_personality_profiles_from_config(&structured)?;

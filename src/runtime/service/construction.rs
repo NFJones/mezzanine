@@ -174,7 +174,6 @@ impl RuntimeSessionService {
             agent_turn_contexts: BTreeMap::new(),
             agent_turn_executions: BTreeMap::new(),
             apply_patch_batch_states: BTreeMap::new(),
-            provider_model_catalog_cache: BTreeMap::new(),
             subagent_task_routes: BTreeMap::new(),
             subagent_window_ids: BTreeSet::new(),
             pending_terminal_subagent_pane_closes: BTreeSet::new(),

@@ -68,5 +68,5 @@ async fn runtime_terminal_refresh_provider_info_async_command_refreshes_provider
     );
     assert!(output.contains("openai source=config"), "{output}");
     assert!(output.contains("provider_error=none"), "{output}");
-    assert!(service.provider_model_catalog_cache.contains_key("openai"));
+    assert!(service.has_cached_provider_model_catalog("openai"));
 }

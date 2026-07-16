@@ -250,9 +250,6 @@ pub struct RuntimeSessionService {
     /// The key is `turn_id/action_id`, keeping the accumulator scoped to one
     /// running semantic action while successive read transactions complete.
     pub(in crate::runtime) apply_patch_batch_states: BTreeMap<String, RuntimeApplyPatchBatchState>,
-    /// Latest live provider model catalogs keyed by provider id.
-    pub(in crate::runtime) provider_model_catalog_cache:
-        BTreeMap<String, crate::runtime::commands::RuntimeModelCatalog>,
     /// Stores the subagent task routes value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

@@ -13,8 +13,8 @@ impl RuntimeSessionService {
         &mut self,
         provider_id: &str,
     ) -> Result<RuntimeModelCatalog> {
-        if let Some(catalog) = self.provider_model_catalog_cache.get(provider_id) {
-            return Ok(catalog.clone());
+        if let Some(catalog) = self.cached_provider_model_catalog(provider_id) {
+            return Ok(catalog);
         }
         let provider_config = self
             .provider_registry
@@ -40,8 +40,8 @@ impl RuntimeSessionService {
         &mut self,
         provider_id: &str,
     ) -> Result<RuntimeModelCatalog> {
-        if let Some(catalog) = self.provider_model_catalog_cache.get(provider_id) {
-            return Ok(catalog.clone());
+        if let Some(catalog) = self.cached_provider_model_catalog(provider_id) {
+            return Ok(catalog);
         }
         let provider_config = self
             .provider_registry
@@ -64,8 +64,7 @@ impl RuntimeSessionService {
             {
                 Ok(catalog) => {
                     let catalog = RuntimeModelCatalog::from_provider(catalog);
-                    self.provider_model_catalog_cache
-                        .insert(provider_id.to_string(), catalog.clone());
+                    self.cache_provider_model_catalog(provider_id, catalog.clone());
                     Ok(catalog)
                 }
                 Err(_error) if fallback.models.is_empty() => Ok(fallback),
@@ -96,15 +95,14 @@ impl RuntimeSessionService {
         let mut failed = 0usize;
         let mut lines = Vec::new();
         for provider_id in &provider_ids {
-            self.provider_model_catalog_cache.remove(provider_id);
+            self.remove_cached_provider_model_catalog(provider_id);
             match self
                 .runtime_model_catalog_for_provider_async(provider_id)
                 .await
             {
                 Ok(catalog) => {
                     refreshed = refreshed.saturating_add(1);
-                    self.provider_model_catalog_cache
-                        .insert(provider_id.clone(), catalog.clone());
+                    self.cache_provider_model_catalog(provider_id, catalog.clone());
                     let provider_error = catalog
                         .provider_error
                         .as_deref()
@@ -151,8 +149,8 @@ impl RuntimeSessionService {
         models: Vec<ProviderModelInfo>,
         reasoning_levels: Vec<String>,
     ) {
-        self.provider_model_catalog_cache.insert(
-            provider_id.to_string(),
+        self.cache_provider_model_catalog(
+            provider_id,
             RuntimeModelCatalog {
                 provider: provider_id.to_string(),
                 source: "provider".to_string(),

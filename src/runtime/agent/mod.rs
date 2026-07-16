@@ -5,6 +5,7 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::agent_state::RuntimeAgentProviderClaim;
+use super::commands::RuntimeModelCatalog;
 #[cfg(test)]
 use super::runtime_execute_auto_sizing_with_provider;
 use super::service_state::{RuntimeAgentPatchRecord, RuntimeApplyPatchBatchState};
@@ -191,6 +192,8 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
         BTreeMap<String, mez_agent::AgentContextUsageSnapshot>,
     /// Latest provider quota usage keyed by conversation.
     agent_quota_usage_by_conversation: BTreeMap<String, Vec<ProviderQuotaUsage>>,
+    /// Latest live model catalog keyed by provider id.
+    provider_model_catalog_cache: BTreeMap<String, RuntimeModelCatalog>,
 }
 
 /// State removed when a compaction worker reports failure.
@@ -237,6 +240,46 @@ impl RuntimeAgentComponent {
 }
 
 impl RuntimeSessionService {
+    /// Returns a cached live model catalog for one provider.
+    pub(in crate::runtime) fn cached_provider_model_catalog(
+        &self,
+        provider_id: &str,
+    ) -> Option<RuntimeModelCatalog> {
+        self.agent
+            .provider_model_catalog_cache
+            .get(provider_id)
+            .cloned()
+    }
+
+    /// Replaces the cached live model catalog for one provider.
+    pub(in crate::runtime) fn cache_provider_model_catalog(
+        &mut self,
+        provider_id: impl Into<String>,
+        catalog: RuntimeModelCatalog,
+    ) {
+        self.agent
+            .provider_model_catalog_cache
+            .insert(provider_id.into(), catalog);
+    }
+
+    /// Invalidates one provider's cached live model catalog.
+    pub(in crate::runtime) fn remove_cached_provider_model_catalog(&mut self, provider_id: &str) {
+        self.agent.provider_model_catalog_cache.remove(provider_id);
+    }
+
+    /// Invalidates all live model catalogs after configuration changes.
+    pub(in crate::runtime) fn clear_provider_model_catalog_cache(&mut self) {
+        self.agent.provider_model_catalog_cache.clear();
+    }
+
+    /// Reports whether a catalog is cached in crate-local regression tests.
+    #[cfg(test)]
+    pub(crate) fn has_cached_provider_model_catalog(&self, provider_id: &str) -> bool {
+        self.agent
+            .provider_model_catalog_cache
+            .contains_key(provider_id)
+    }
+
     /// Returns cumulative token usage for one pane.
     pub(in crate::runtime) fn agent_token_usage_for_pane(
         &self,
