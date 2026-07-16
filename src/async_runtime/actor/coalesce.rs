@@ -1,6 +1,9 @@
 //! Side-effect coalescing, classification, and time helpers.
 
-use super::*;
+use super::{
+    ClientId, PaneEvent, RenderInvalidationReason, RuntimeEvent, RuntimeSideEffect,
+    RuntimeTimerKind, VecDeque,
+};
 
 /// Coalesces bursty output effects before they enter the bounded actor queue.
 ///

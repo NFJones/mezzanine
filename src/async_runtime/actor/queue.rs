@@ -5,7 +5,11 @@ use super::coalesce::{
     coalesce_output_side_effects_for_enqueue, pane_io_side_effect_targets_pane,
     runtime_side_effect_kind_summary,
 };
-use super::*;
+use super::{
+    AsyncRuntimeSessionActor, ClientId, DEFAULT_ASYNC_IDLE_CLEANUP_INTERVAL,
+    DEFAULT_PANE_PIPE_HEALTH_DELAY_MS, DEFAULT_SHELL_RECOVERY_INTERVAL_MS, MezError, Result,
+    RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind,
+};
 
 impl AsyncRuntimeSessionActor {
     /// Applies timer scheduling bookkeeping in emitted side-effect order.
