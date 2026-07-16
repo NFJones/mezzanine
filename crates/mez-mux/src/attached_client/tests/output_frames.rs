@@ -1,11 +1,11 @@
 //! Regression tests for terminal client output frames behavior.
 
-use crate::terminal::client_loop::{
+use crate::attached_client::output::{
     encode_attached_terminal_output_frame_with_keypad_transition,
     encode_attached_terminal_output_frame_with_styles,
 };
-use mez_mux::presentation::AttachedTerminalOutputModes;
-use mez_mux::presentation::TerminalCursorStyle;
+use crate::presentation::AttachedTerminalOutputModes;
+use crate::presentation::TerminalCursorStyle;
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 
 /// Verifies that attached-terminal frames suppress the host cursor, reset
@@ -171,7 +171,7 @@ fn attached_terminal_output_frame_honors_cursor_blink_interval_phase() {
 #[test]
 fn attached_terminal_restore_frame_restores_cursor_visibility() {
     let restore = String::from_utf8(
-        crate::terminal::client_loop::attached_terminal_restore_presentation_frame().to_vec(),
+        crate::attached_client::attached_terminal_restore_presentation_frame().to_vec(),
     )
     .unwrap();
 

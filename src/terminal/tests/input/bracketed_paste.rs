@@ -1,11 +1,11 @@
 //! Regression tests for terminal input bracketed paste behavior.
 
 use crate::terminal::client_loop::{
-    encode_attached_terminal_output_frame_with_styles,
     route_client_input_actions_with_host_paste_buffer,
     route_client_input_actions_with_host_paste_state,
 };
 use crate::terminal::{MouseAction, TerminalClientLoopAction, TerminalClientLoopConfig};
+use mez_mux::attached_client::encode_attached_terminal_output_frame_with_styles;
 use mez_mux::host_input::HOST_BRACKETED_PASTE_MAX_BUFFER_BYTES;
 use mez_mux::input::{MuxAction, PasteBufferTarget};
 use mez_mux::presentation::AttachedTerminalOutputModes;
@@ -271,7 +271,7 @@ fn attached_output_frame_sets_host_bracketed_paste_mode() {
     ));
     assert!(
         String::from_utf8(
-            crate::terminal::client_loop::attached_terminal_restore_presentation_frame().to_vec()
+            mez_mux::attached_client::attached_terminal_restore_presentation_frame().to_vec()
         )
         .unwrap()
         .starts_with("\x1b[?2004l"),

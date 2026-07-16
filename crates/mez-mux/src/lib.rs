@@ -5,6 +5,7 @@
 //! behavior. It consumes terminal surfaces and shared identifiers but remains
 //! independent of the agent harness and product composition crate.
 
+pub mod attached_client;
 pub mod command;
 pub mod copy;
 mod error;

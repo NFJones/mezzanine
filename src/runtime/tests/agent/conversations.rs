@@ -1341,25 +1341,27 @@ fn runtime_resume_picker_attached_frame_keeps_selected_link_styling_off_previous
         mez_mux::presentation::compose_client_presentation_with_styles(&previous_view, None);
     let (current_lines, current_spans) =
         mez_mux::presentation::compose_client_presentation_with_styles(&current_view, None);
-    let previous_frame = crate::terminal::encode_attached_terminal_output_update_frame_with_styles(
+    let previous_frame =
+        mez_mux::attached_client::encode_attached_terminal_output_update_frame_with_styles(
+            &previous_lines,
+            &previous_spans,
+            None,
+            modes,
+            None,
+        );
+    let previous_state = mez_mux::attached_client::AttachedTerminalOutputFrameState::new_with_modes(
         &previous_lines,
         &previous_spans,
-        None,
-        modes,
-        None,
-    );
-    let previous_state = crate::terminal::AttachedTerminalOutputFrameState::new_with_modes(
-        &previous_lines,
-        &previous_spans,
         modes,
     );
-    let update_frame = crate::terminal::encode_attached_terminal_output_update_frame_with_styles(
-        &current_lines,
-        &current_spans,
-        None,
-        modes,
-        Some(&previous_state),
-    );
+    let update_frame =
+        mez_mux::attached_client::encode_attached_terminal_output_update_frame_with_styles(
+            &current_lines,
+            &current_spans,
+            None,
+            modes,
+            Some(&previous_state),
+        );
     let mut screen = TerminalScreen::new(Size::new(120, 24).unwrap(), 10).unwrap();
     screen.feed(&previous_frame);
     screen.feed(&update_frame);

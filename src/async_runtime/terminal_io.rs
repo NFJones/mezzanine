@@ -14,10 +14,13 @@ use super::{
 #[cfg(test)]
 use crate::terminal::AttachedTerminalClientLoopIo;
 use crate::terminal::{
-    AttachedTerminalOutputFrameState, TerminalFdInterest, TerminalRawModeGuard,
-    attached_terminal_enter_presentation_frame, attached_terminal_output_disconnected,
+    TerminalFdInterest, TerminalRawModeGuard, attached_terminal_output_disconnected,
+    read_attached_terminal_size,
+};
+use mez_mux::attached_client::{
+    AttachedTerminalOutputFrameState, attached_terminal_enter_presentation_frame,
     attached_terminal_restore_presentation_frame,
-    encode_attached_terminal_output_update_frame_with_styles, read_attached_terminal_size,
+    encode_attached_terminal_output_update_frame_with_styles,
 };
 use mez_terminal::TerminalStyleSpan;
 #[cfg(test)]

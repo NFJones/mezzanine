@@ -18,6 +18,7 @@ use crate::presentation::{
 mod overlay;
 mod prompt;
 mod style;
+mod wrap;
 
 pub use overlay::{
     NormalizedOverlayCanvas, compose_bottom_overlay_lines, compose_modal_overlay_lines,
@@ -35,6 +36,7 @@ pub use style::{
     terminal_color_contrast_ratio, terminal_color_luminance, terminal_color_relative_luminance,
     terminal_color_rgb,
 };
+pub use wrap::{wrap_lines, wrap_text};
 
 /// One display-cell slot in a mux-owned render canvas.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1117,8 +1119,97 @@ pub fn char_count(value: &str) -> usize {
     terminal_text_width(value, terminal_emoji_width())
 }
 
+/// Replaces a fixed-width terminal-cell range in one rendered text row.
+///
+/// The replacement is clipped and padded to `columns`, while graphemes outside
+/// the target range retain their original display-cell positions.
+pub fn overlay_text_cells(row: &mut String, column_start: usize, columns: usize, text: &str) {
+    if columns == 0 {
+        return;
+    }
+    let target_end = column_start.saturating_add(columns);
+    let fitted = fit_width(text, columns);
+    let mut output = String::new();
+    let mut current_column = 0usize;
+    let mut inserted = false;
+
+    for grapheme in terminal_graphemes(row.as_str()) {
+        let grapheme_width = active_grapheme_width(grapheme);
+        let next_column = current_column.saturating_add(grapheme_width);
+        if next_column <= column_start {
+            output.push_str(grapheme);
+        } else if !inserted {
+            let reached = char_count(&output);
+            if reached < column_start {
+                output.push_str(&" ".repeat(column_start.saturating_sub(reached)));
+            }
+            output.push_str(&fitted);
+            inserted = true;
+        }
+        if current_column >= target_end {
+            output.push_str(grapheme);
+        }
+        current_column = next_column;
+    }
+
+    if !inserted {
+        let reached = char_count(&output);
+        if reached < column_start {
+            output.push_str(&" ".repeat(column_start.saturating_sub(reached)));
+        }
+        output.push_str(&fitted);
+    }
+    *row = output;
+}
+
+/// Clips one local style span into a destination overlay range.
+pub fn clipped_overlay_style_span(
+    span: TerminalStyleSpan,
+    column_start: usize,
+    columns: usize,
+) -> Option<TerminalStyleSpan> {
+    let start = span.start.min(columns);
+    let end = span.start.saturating_add(span.length).min(columns);
+    (end > start).then(|| TerminalStyleSpan {
+        start: column_start.saturating_add(start),
+        length: end.saturating_sub(start),
+        rendition: span.rendition,
+    })
+}
+
 fn active_grapheme_width(grapheme: &str) -> usize {
     terminal_grapheme_width(grapheme, terminal_emoji_width())
+}
+
+#[cfg(test)]
+mod overlay_cell_tests {
+    use super::{char_count, overlay_text_cells};
+
+    /// Verifies overlay replacement follows display cells across wide text.
+    #[test]
+    fn overlay_replaces_wide_cell_range() {
+        let mut row = String::from("ＡＢＣ");
+        overlay_text_cells(&mut row, 4, 2, "XY");
+        assert_eq!(row, "ＡＢXY");
+        assert_eq!(char_count(&row), 6);
+    }
+
+    /// Verifies overlay replacement pads ranges beyond existing row content.
+    #[test]
+    fn overlay_after_row_end_pads_to_destination() {
+        let mut row = String::from("Ａ");
+        overlay_text_cells(&mut row, 4, 2, "XY");
+        assert_eq!(char_count(&row), 6);
+        assert!(row.ends_with("  XY"));
+    }
+
+    /// Verifies a zero-width overlay leaves the source row unchanged.
+    #[test]
+    fn zero_width_overlay_is_noop() {
+        let mut row = String::from("ＡＢ");
+        overlay_text_cells(&mut row, 0, 0, "X");
+        assert_eq!(row, "ＡＢ");
+    }
 }
 
 #[cfg(test)]

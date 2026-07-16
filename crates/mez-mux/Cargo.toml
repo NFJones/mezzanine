@@ -15,3 +15,4 @@ rustix = { version = "1.1", features = ["event", "fs", "process", "termios"] }
 shlex = "2"
 thiserror = "2"
 unicode-width = "0.2"
+unicode-segmentation = "1.12"

@@ -17,8 +17,8 @@ use rustix::termios::{OptionalActions, Termios, tcgetattr, tcgetwinsize, tcsetat
 
 use crate::error::{MezError, Result};
 use mez_terminal::{
-    GraphicRendition, MouseButton, MouseEvent, MouseEventKind, TerminalColor, TerminalScreen,
-    TerminalStyleSpan, TerminalStyledLine, parse_sgr_mouse,
+    GraphicRendition, MouseButton, MouseEvent, MouseEventKind, TerminalScreen, TerminalStyleSpan,
+    TerminalStyledLine, parse_sgr_mouse,
 };
 
 /// Exposes the client loop module boundary.
@@ -65,11 +65,6 @@ pub use client_loop::{
     AttachedTerminalClientLoopReport, AttachedTerminalClientStepPlan,
     ReadlinePromptClientPresentation, ReadlinePromptStatusRow, TerminalClientLoopAction,
     attached_terminal_output_disconnected, plan_attached_terminal_client_step, route_client_input,
-};
-pub(crate) use client_loop::{
-    AttachedTerminalOutputFrameState, attached_terminal_enter_presentation_frame,
-    attached_terminal_restore_presentation_frame,
-    encode_attached_terminal_output_update_frame_with_styles,
 };
 pub(crate) use client_loop::{
     HostBracketedPasteBufferState, plan_attached_terminal_client_step_with_host_paste_buffer,

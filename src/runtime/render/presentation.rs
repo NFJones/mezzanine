@@ -9,8 +9,8 @@
 use super::super::{
     MezError, RenderedClientView, ShellClassification, runtime_mezzanine_error_code,
 };
-use super::geometry::overlay_text_cells;
 use super::*;
+use mez_mux::render::overlay_text_cells;
 use std::{str::FromStr, sync::LazyLock};
 
 use crate::agent::semantic::apply_patch_touched_paths;
@@ -1061,20 +1061,6 @@ pub(super) fn markdown_surface_is_light(ui_theme: &UiTheme) -> bool {
         .is_some_and(|luminance| luminance >= 140)
 }
 
-/// Returns a simple perceptual luminance approximation for true-color values.
-pub(super) fn terminal_color_luminance(color: TerminalColor) -> Option<u32> {
-    let (red, green, blue) = terminal_color_rgb(color)?;
-    Some((u32::from(red) * 299 + u32::from(green) * 587 + u32::from(blue) * 114) / 1000)
-}
-
-/// Returns RGB components for true-color values.
-pub(super) fn terminal_color_rgb(color: TerminalColor) -> Option<(u8, u8, u8)> {
-    match color {
-        TerminalColor::Rgb(red, green, blue) => Some((red, green, blue)),
-        TerminalColor::Indexed(_) => None,
-    }
-}
-
 /// Prefixes markdown body lines with the standard agent transcript label.
 pub(super) fn prefix_agent_rendered_markdown_lines(
     lines: Vec<AgentRenderedLine>,
@@ -2090,24 +2076,6 @@ impl MarkdownTableState {
             .copied()
             .unwrap_or(Alignment::None)
     }
-}
-
-/// Pushes a style span, coalescing adjacent runs with the same rendition.
-pub(super) fn push_or_extend_style_span(
-    spans: &mut Vec<TerminalStyleSpan>,
-    span: TerminalStyleSpan,
-) {
-    if span.length == 0 {
-        return;
-    }
-    if let Some(last) = spans.last_mut()
-        && last.start.saturating_add(last.length) == span.start
-        && last.rendition == span.rendition
-    {
-        last.length = last.length.saturating_add(span.length);
-        return;
-    }
-    spans.push(span);
 }
 
 /// Runs the command preview terminal lines operation for this subsystem.

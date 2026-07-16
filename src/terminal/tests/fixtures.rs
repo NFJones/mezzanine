@@ -1,6 +1,6 @@
 //! Shared terminal-test assertions used by multiple behavior modules.
 
-use mez_terminal::{TerminalColor, TerminalStyledLine};
+use mez_terminal::TerminalColor;
 use unicode_width::UnicodeWidthStr;
 
 pub(super) fn display_column_for_fragment(line: &str, needle: &str) -> usize {
@@ -8,23 +8,6 @@ pub(super) fn display_column_for_fragment(line: &str, needle: &str) -> usize {
         .find(needle)
         .unwrap_or_else(|| panic!("{needle:?} missing from {line:?}"));
     UnicodeWidthStr::width(&line[..byte_index])
-}
-
-/// Returns the style active at one displayed terminal column.
-///
-/// # Parameters
-/// - `line`: The styled terminal line to inspect.
-/// - `column`: The zero-based display column within the line.
-pub(super) fn styled_line_rendition_at(
-    line: &TerminalStyledLine,
-    column: usize,
-) -> mez_terminal::GraphicRendition {
-    line.style_spans
-        .iter()
-        .rev()
-        .find(|span| column >= span.start && column < span.start.saturating_add(span.length))
-        .map(|span| span.rendition)
-        .unwrap_or_default()
 }
 
 /// Returns RGB components for true-color test values.

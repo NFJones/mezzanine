@@ -71,7 +71,6 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 mod attached_step;
 mod client_view;
 mod copy_mode;
-mod geometry;
 mod input;
 mod mouse;
 mod mux;
@@ -80,11 +79,13 @@ mod paste;
 mod presentation;
 mod time;
 
-use geometry::clipped_overlay_style_span;
 use input::{
     RuntimeDisplayOverlayInputAction, RuntimeSelectorInputAction,
     runtime_display_overlay_input_action, runtime_selector_input_action,
     runtime_selector_step_index,
+};
+use mez_mux::render::{
+    clipped_overlay_style_span, push_or_extend_style_span, terminal_color_luminance,
 };
 use overlay::*;
 use presentation::*;

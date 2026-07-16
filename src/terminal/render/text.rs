@@ -4,8 +4,6 @@
 //! measurement, style-span clipping, copy-selection coordinate helpers, and
 //! the internal wide-glyph sentinel used by pane/window canvas rendering.
 
-use unicode_segmentation::UnicodeSegmentation;
-
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Default maximum display-cell width for Mezzanine-owned agent log rows.
@@ -59,11 +57,7 @@ pub(crate) fn agent_log_wrap_width(terminal_width: u16) -> usize {
 /// at the nearest whitespace boundary before the display-cell limit, falling
 /// back to hard grapheme boundaries when an unbroken token exceeds the limit.
 pub(crate) fn wrap_agent_log_text(value: &str, terminal_width: u16) -> Vec<String> {
-    let wrap_width = agent_log_wrap_width(terminal_width);
-    value
-        .split('\n')
-        .flat_map(|line| wrap_agent_log_physical_line(line, wrap_width))
-        .collect()
+    mez_mux::render::wrap_text(value, agent_log_wrap_width(terminal_width))
 }
 
 /// Word-wraps Mezzanine-owned agent log rows for terminal display.
@@ -73,64 +67,6 @@ pub(crate) fn wrap_agent_log_lines(lines: &[String], terminal_width: u16) -> Vec
         wrapped.extend(wrap_agent_log_text(line, terminal_width));
     }
     wrapped
-}
-
-/// Wraps one logical agent log row to a display-cell width.
-fn wrap_agent_log_physical_line(line: &str, wrap_width: usize) -> Vec<String> {
-    if line.is_empty() {
-        return vec![String::new()];
-    }
-    let mut rows = Vec::new();
-    let mut remaining = line;
-    while !remaining.is_empty() {
-        let mut used = 0usize;
-        let mut end_byte = 0usize;
-        let mut saw_content = false;
-        let mut last_break = None;
-        for (byte_index, grapheme) in remaining.grapheme_indices(true) {
-            let grapheme_width = terminal_grapheme_width(grapheme);
-            if used.saturating_add(grapheme_width) > wrap_width {
-                break;
-            }
-            if grapheme.chars().all(char::is_whitespace) {
-                if saw_content {
-                    last_break = Some((byte_index, byte_index.saturating_add(grapheme.len())));
-                }
-            } else {
-                saw_content = true;
-            }
-            used = used.saturating_add(grapheme_width);
-            end_byte = byte_index.saturating_add(grapheme.len());
-        }
-        if end_byte >= remaining.len() {
-            rows.push(remaining.to_string());
-            break;
-        }
-        if end_byte == 0
-            && let Some(grapheme) = remaining.graphemes(true).next()
-        {
-            end_byte = grapheme.len();
-        }
-        if remaining[end_byte..]
-            .chars()
-            .next()
-            .is_some_and(char::is_whitespace)
-        {
-            rows.push(remaining[..end_byte].to_string());
-            remaining = remaining[end_byte..].trim_start_matches(char::is_whitespace);
-            continue;
-        }
-        if let Some((break_byte, next_byte)) = last_break
-            && break_byte > 0
-        {
-            rows.push(remaining[..break_byte].to_string());
-            remaining = remaining[next_byte..].trim_start_matches(char::is_whitespace);
-        } else {
-            rows.push(remaining[..end_byte].to_string());
-            remaining = &remaining[end_byte..];
-        }
-    }
-    rows
 }
 
 /// Returns the display width of one Unicode grapheme cluster.
@@ -204,34 +140,6 @@ mod tests {
         assert_eq!(agent_log_wrap_width(200), 96);
 
         set_agent_wrap_column_cap(DEFAULT_AGENT_WRAP_COLUMN_CAP);
-    }
-
-    /// Verifies ordinary agent prose wraps at whitespace and preserves explicit
-    /// newlines, including blank lines that separate rendered log paragraphs.
-    #[test]
-    fn wrap_agent_log_text_preserves_newlines_and_wraps_at_words() {
-        let wrapped = wrap_agent_log_text("alpha beta gamma\n\nbottom", 10);
-
-        assert_eq!(wrapped, vec!["alpha beta", "gamma", "", "bottom"]);
-    }
-
-    /// Verifies long unbroken tokens are hard-split at grapheme boundaries so a
-    /// single generated identifier cannot exceed the transcript row contract.
-    #[test]
-    fn wrap_agent_log_text_hard_splits_unbroken_tokens() {
-        let wrapped = wrap_agent_log_text("abcdefghijkl", 4);
-
-        assert_eq!(wrapped, vec!["abcd", "efgh", "ijkl"]);
-    }
-
-    /// Verifies wide Unicode graphemes count by terminal display width instead
-    /// of bytes or scalar count when rows are split.
-    #[test]
-    fn wrap_agent_log_text_counts_wide_graphemes() {
-        let wrapped = wrap_agent_log_text("✅✅✅", 4);
-
-        assert_eq!(wrapped, vec!["✅✅", "✅"]);
-        assert!(wrapped.iter().all(|line| terminal_text_width(line) <= 4));
     }
 
     /// Verifies multi-scalar terminal emoji grapheme clusters keep their

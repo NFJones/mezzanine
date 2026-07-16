@@ -1,20 +1,41 @@
 //! Regression tests for terminal client incremental output behavior.
 
-use crate::terminal::client_loop::{
+use crate::attached_client::output::{
     AttachedTerminalOutputFrameState, compose_terminal_output_style_spans,
     encode_attached_terminal_output_frame_with_styles,
     encode_attached_terminal_output_update_frame_with_styles,
 };
-use crate::terminal::tests::fixtures::{display_column_for_fragment, styled_line_rendition_at};
-use mez_mux::presentation::{
+use crate::presentation::{
     AttachedTerminalOutputModes, ClientViewRole, RenderedClientView, TerminalCursorStyle,
 };
 
-use mez_mux::copy::CopyPosition;
-use mez_mux::layout::Size;
-use mez_mux::theme::UiTheme;
+use crate::copy::CopyPosition;
+use crate::layout::Size;
+use crate::theme::UiTheme;
 use mez_terminal::TerminalScreen;
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};
+use unicode_width::UnicodeWidthStr;
+
+/// Returns the display column where one text fragment begins.
+fn display_column_for_fragment(line: &str, needle: &str) -> usize {
+    let byte_index = line
+        .find(needle)
+        .unwrap_or_else(|| panic!("{needle:?} missing from {line:?}"));
+    UnicodeWidthStr::width(&line[..byte_index])
+}
+
+/// Returns the rendition active at one displayed terminal column.
+fn styled_line_rendition_at(
+    line: &mez_terminal::TerminalStyledLine,
+    column: usize,
+) -> GraphicRendition {
+    line.style_spans
+        .iter()
+        .rev()
+        .find(|span| column >= span.start && column < span.start.saturating_add(span.length))
+        .map(|span| span.rendition)
+        .unwrap_or_default()
+}
 
 /// Verifies that stable-size attached-terminal redraws are encoded as row
 /// updates instead of clearing the full viewport. This reduces foreground TTY
