@@ -36,7 +36,6 @@ use mez_agent::{
 };
 use mez_mux::copy::CopyPosition;
 use mez_mux::layout::PaneTitleSource;
-use mez_mux::presentation::{TerminalFramePosition, TerminalFrameStyle};
 use mez_mux::theme::UiTheme;
 use mez_terminal::TerminalEmojiWidth;
 use secrecy::ExposeSecret;

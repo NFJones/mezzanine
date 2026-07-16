@@ -390,11 +390,11 @@ impl RuntimeSessionService {
         if rows == 0 {
             return None;
         }
-        if !self.window_frames_enabled {
+        if !self.presentation.settings.window_frames_enabled {
             return Some(rows.saturating_sub(1));
         }
         let group_top_offset = usize::from(self.session.window_groups().len() > 1);
-        Some(match self.window_frame_position {
+        Some(match self.presentation.settings.window_frame_position {
             TerminalFramePosition::Top => group_top_offset.min(rows.saturating_sub(1)),
             TerminalFramePosition::Bottom => rows.saturating_sub(1),
         })
@@ -470,7 +470,7 @@ impl RuntimeSessionService {
         window: &mez_mux::layout::Window,
         pane_index: usize,
     ) -> Option<(usize, usize, Size)> {
-        let window_frame_visible = self.window_frames_enabled;
+        let window_frame_visible = self.presentation.settings.window_frames_enabled;
         let group_top_offset = usize::from(self.session.window_groups().len() > 1);
         let display_size = Size::new(
             window.size.columns,
@@ -501,15 +501,16 @@ impl RuntimeSessionService {
         let full_content_size = pane_content_size_for_geometry(
             geometry,
             &geometries,
-            self.pane_frames_enabled,
-            self.pane_frame_position,
+            self.presentation.settings.pane_frames_enabled,
+            self.presentation.settings.pane_frame_position,
         );
         let window_top_offset = usize::from(
-            window_frame_visible && self.window_frame_position == TerminalFramePosition::Top,
+            window_frame_visible
+                && self.presentation.settings.window_frame_position == TerminalFramePosition::Top,
         );
         let pane_top_offset = usize::from(
-            self.pane_frames_enabled
-                && self.pane_frame_position == TerminalFramePosition::Top
+            self.presentation.settings.pane_frames_enabled
+                && self.presentation.settings.pane_frame_position == TerminalFramePosition::Top
                 && full_content_size.rows < render_region.rows,
         );
         Some((
@@ -682,16 +683,21 @@ impl RuntimeSessionService {
             .map(|(chord, binding)| (*chord, binding.command.clone()))
             .collect();
         config.prefix_key_pending = self.presentation.primary_prefix_key_pending;
-        config.window_frames_enabled = self.window_frames_enabled;
-        config.window_frame_template = self.window_frame_template.clone();
-        config.window_frame_position = self.window_frame_position;
-        config.window_frame_style = self.window_frame_style;
-        config.window_frame_visible_fields = self.window_frame_visible_fields.clone();
-        config.pane_frames_enabled = self.pane_frames_enabled;
-        config.pane_frame_template = self.pane_frame_template.clone();
-        config.pane_frame_position = self.pane_frame_position;
-        config.pane_frame_style = self.pane_frame_style;
-        config.pane_frame_visible_fields = self.pane_frame_visible_fields.clone();
+        config.window_frames_enabled = self.presentation.settings.window_frames_enabled;
+        config.window_frame_template = self.presentation.settings.window_frame_template.clone();
+        config.window_frame_position = self.presentation.settings.window_frame_position;
+        config.window_frame_style = self.presentation.settings.window_frame_style;
+        config.window_frame_visible_fields = self
+            .presentation
+            .settings
+            .window_frame_visible_fields
+            .clone();
+        config.pane_frames_enabled = self.presentation.settings.pane_frames_enabled;
+        config.pane_frame_template = self.presentation.settings.pane_frame_template.clone();
+        config.pane_frame_position = self.presentation.settings.pane_frame_position;
+        config.pane_frame_style = self.presentation.settings.pane_frame_style;
+        config.pane_frame_visible_fields =
+            self.presentation.settings.pane_frame_visible_fields.clone();
         config.cursor_style = self.presentation.settings.terminal_cursor_style;
         config.cursor_blink = self.presentation.settings.terminal_cursor_blink;
         config.cursor_blink_interval_ms =
@@ -802,7 +808,7 @@ impl RuntimeSessionService {
         let Some(window) = self.session.active_window() else {
             return Vec::new();
         };
-        let window_frame_visible = self.window_frames_enabled;
+        let window_frame_visible = self.presentation.settings.window_frames_enabled;
         let group_top_offset = u16::from(self.session.window_groups().len() > 1);
         let mut display_window = window.clone();
         if group_top_offset > 0
@@ -816,7 +822,8 @@ impl RuntimeSessionService {
         let geometries = rendered_pane_geometries(&display_window, window_frame_visible)
             .unwrap_or_else(|_| display_window.pane_geometries());
         let row_offset = group_top_offset.saturating_add(u16::from(
-            window_frame_visible && self.window_frame_position == TerminalFramePosition::Top,
+            window_frame_visible
+                && self.presentation.settings.window_frame_position == TerminalFramePosition::Top,
         ));
         mouse_border_cells_for_geometries(&geometries, row_offset)
     }
@@ -833,14 +840,16 @@ impl RuntimeSessionService {
         let Some(window) = self.session.active_window() else {
             return Vec::new();
         };
-        if !self.window_frames_enabled {
+        if !self.presentation.settings.window_frames_enabled {
             return Vec::new();
         }
-        if self.window_frame_template != crate::terminal::DEFAULT_WINDOW_FRAME_TEMPLATE {
+        if self.presentation.settings.window_frame_template
+            != crate::terminal::DEFAULT_WINDOW_FRAME_TEMPLATE
+        {
             return Vec::new();
         }
         let group_top_offset = u16::from(self.session.window_groups().len() > 1);
-        let row = match self.window_frame_position {
+        let row = match self.presentation.settings.window_frame_position {
             TerminalFramePosition::Top => group_top_offset,
             TerminalFramePosition::Bottom => window.size.rows.saturating_sub(1),
         };
@@ -855,7 +864,7 @@ impl RuntimeSessionService {
         let Some(window) = self.session.active_window() else {
             return Vec::new();
         };
-        if !self.window_frames_enabled {
+        if !self.presentation.settings.window_frames_enabled {
             return Vec::new();
         }
         if self
@@ -868,7 +877,7 @@ impl RuntimeSessionService {
             return Vec::new();
         }
         let group_top_offset = u16::from(self.session.window_groups().len() > 1);
-        let row = match self.window_frame_position {
+        let row = match self.presentation.settings.window_frame_position {
             TerminalFramePosition::Top => group_top_offset,
             TerminalFramePosition::Bottom => window.size.rows.saturating_sub(1),
         };
@@ -894,7 +903,7 @@ impl RuntimeSessionService {
         let Some(window) = self.session.active_window() else {
             return Vec::new();
         };
-        if !self.pane_frames_enabled {
+        if !self.presentation.settings.pane_frames_enabled {
             return Vec::new();
         }
         let group_top_offset = u16::from(self.session.window_groups().len() > 1);
@@ -907,18 +916,21 @@ impl RuntimeSessionService {
         {
             display_window.size = size;
         }
-        let Ok(geometries) = rendered_pane_geometries(&display_window, self.window_frames_enabled)
-        else {
+        let Ok(geometries) = rendered_pane_geometries(
+            &display_window,
+            self.presentation.settings.window_frames_enabled,
+        ) else {
             return Vec::new();
         };
         let row_offset = group_top_offset.saturating_add(u16::from(
-            self.window_frames_enabled && self.window_frame_position == TerminalFramePosition::Top,
+            self.presentation.settings.window_frames_enabled
+                && self.presentation.settings.window_frame_position == TerminalFramePosition::Top,
         ));
         pane_frame_agent_status_pillbox_cells(
             &display_window,
             frame_context,
-            &self.pane_frame_template,
-            self.pane_frame_position,
+            &self.presentation.settings.pane_frame_template,
+            self.presentation.settings.pane_frame_position,
             row_offset,
             &geometries,
         )

@@ -387,8 +387,7 @@ fn runtime_frame_context_uses_cached_catalog_context_window_for_named_compatible
 #[test]
 fn runtime_mouse_drag_copies_visible_alternate_screen_content() {
     let mut service = test_runtime_service_with_size(Size::new(20, 4).unwrap());
-    service.window_frames_enabled = false;
-    service.pane_frames_enabled = false;
+    service.set_frame_visibility_for_tests(false, false);
     let primary = service
         .attach_primary("primary", true, Size::new(20, 4).unwrap(), 120)
         .unwrap();
@@ -441,9 +440,8 @@ fn runtime_mouse_drag_copies_visible_alternate_screen_content() {
 #[test]
 fn runtime_mouse_focus_targets_content_below_merged_top_pane_frame() {
     let mut service = test_runtime_service_with_size(Size::new(20, 8).unwrap());
-    service.window_frames_enabled = false;
-    service.pane_frames_enabled = true;
-    service.pane_frame_position = mez_mux::presentation::TerminalFramePosition::Top;
+    service.set_frame_visibility_for_tests(false, true);
+    service.set_pane_frame_position_for_tests(mez_mux::presentation::TerminalFramePosition::Top);
     let primary = service
         .attach_primary("primary", true, Size::new(20, 8).unwrap(), 120)
         .unwrap();

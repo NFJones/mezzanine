@@ -154,22 +154,6 @@ impl RuntimeSessionService {
             terminal_history_limit: DEFAULT_HISTORY_LIMIT,
             terminal_history_rotate_lines: DEFAULT_HISTORY_ROTATE_LINES,
             terminal_term: DEFAULT_PANE_TERM.to_string(),
-            window_frames_enabled: true,
-            window_frame_template: crate::terminal::DEFAULT_WINDOW_FRAME_TEMPLATE.to_string(),
-            window_frame_position: TerminalFramePosition::Bottom,
-            window_frame_style: TerminalFrameStyle::Default,
-            window_frame_visible_fields: crate::terminal::DEFAULT_WINDOW_FRAME_VISIBLE_FIELDS
-                .iter()
-                .map(|field| (*field).to_string())
-                .collect(),
-            pane_frames_enabled: true,
-            pane_frame_template: crate::terminal::DEFAULT_PANE_FRAME_TEMPLATE.to_string(),
-            pane_frame_position: TerminalFramePosition::Top,
-            pane_frame_style: TerminalFrameStyle::Default,
-            pane_frame_visible_fields: crate::terminal::DEFAULT_PANE_FRAME_VISIBLE_FIELDS
-                .iter()
-                .map(|field| (*field).to_string())
-                .collect(),
             terminal_emoji_width,
             terminal_shell_output_preview_lines: 5,
             terminal_clipboard: "external".to_string(),

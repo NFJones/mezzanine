@@ -9,8 +9,7 @@ use super::*;
 #[test]
 fn runtime_mouse_history_scroll_requests_diff_refresh() {
     let mut service = test_runtime_service_with_size(Size::new(20, 4).unwrap());
-    service.window_frames_enabled = false;
-    service.pane_frames_enabled = false;
+    service.set_frame_visibility_for_tests(false, false);
     let primary = service
         .attach_primary("primary", true, Size::new(20, 4).unwrap(), 120)
         .unwrap();

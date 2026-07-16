@@ -62,10 +62,30 @@ const DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS: u64 = 500;
 /// partially updated.
 #[derive(Debug)]
 pub(in crate::runtime) struct RuntimePresentationSettings {
+    /// Whether window frame rows are rendered.
+    window_frames_enabled: bool,
+    /// Window frame template rendered around each visible window.
+    window_frame_template: String,
     /// Template rendered at the right side of a window frame.
     window_frame_right_status_template: String,
     /// Command-backed window status pill definitions keyed by pill name.
     window_status_pill_definitions: std::collections::BTreeMap<String, RuntimeStatusPillDefinition>,
+    /// Placement of the window frame row.
+    window_frame_position: TerminalFramePosition,
+    /// Visual treatment of the window frame row.
+    window_frame_style: TerminalFrameStyle,
+    /// Window fields eligible for template expansion.
+    window_frame_visible_fields: Vec<String>,
+    /// Whether pane frame rows are rendered.
+    pane_frames_enabled: bool,
+    /// Pane frame template rendered around each visible pane.
+    pane_frame_template: String,
+    /// Placement of pane frame rows.
+    pane_frame_position: TerminalFramePosition,
+    /// Visual treatment of pane frame rows.
+    pane_frame_style: TerminalFrameStyle,
+    /// Pane fields eligible for template expansion.
+    pane_frame_visible_fields: Vec<String>,
     /// Cursor shape used for the focused terminal client.
     terminal_cursor_style: mez_mux::presentation::TerminalCursorStyle,
     /// Whether the focused terminal cursor blinks.
@@ -85,9 +105,25 @@ pub(in crate::runtime) struct RuntimePresentationSettings {
 impl Default for RuntimePresentationSettings {
     fn default() -> Self {
         Self {
+            window_frames_enabled: true,
+            window_frame_template: crate::terminal::DEFAULT_WINDOW_FRAME_TEMPLATE.to_string(),
             window_frame_right_status_template:
                 crate::terminal::DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE.to_string(),
             window_status_pill_definitions: std::collections::BTreeMap::new(),
+            window_frame_position: TerminalFramePosition::Bottom,
+            window_frame_style: TerminalFrameStyle::Default,
+            window_frame_visible_fields: crate::terminal::DEFAULT_WINDOW_FRAME_VISIBLE_FIELDS
+                .iter()
+                .map(|field| (*field).to_string())
+                .collect(),
+            pane_frames_enabled: true,
+            pane_frame_template: crate::terminal::DEFAULT_PANE_FRAME_TEMPLATE.to_string(),
+            pane_frame_position: TerminalFramePosition::Top,
+            pane_frame_style: TerminalFrameStyle::Default,
+            pane_frame_visible_fields: crate::terminal::DEFAULT_PANE_FRAME_VISIBLE_FIELDS
+                .iter()
+                .map(|field| (*field).to_string())
+                .collect(),
             terminal_cursor_style: mez_mux::presentation::TerminalCursorStyle::Block,
             terminal_cursor_blink: false,
             terminal_cursor_blink_interval_ms: 500,
@@ -103,10 +139,22 @@ impl RuntimePresentationSettings {
     /// Parses one complete presentation settings replacement.
     pub(in crate::runtime) fn from_config(root: &serde_json::Value) -> Result<Self> {
         Ok(Self {
+            window_frames_enabled: crate::runtime::runtime_window_frames_enabled_from_config(root)?,
+            window_frame_template: crate::runtime::runtime_window_frame_template_from_config(root)?,
             window_frame_right_status_template:
                 crate::runtime::runtime_window_frame_right_status_template_from_config(root)?,
             window_status_pill_definitions:
                 crate::runtime::runtime_status_pill_definitions_from_config(root)?,
+            window_frame_position: crate::runtime::runtime_window_frame_position_from_config(root)?,
+            window_frame_style: crate::runtime::runtime_window_frame_style_from_config(root)?,
+            window_frame_visible_fields:
+                crate::runtime::runtime_window_frame_visible_fields_from_config(root)?,
+            pane_frames_enabled: crate::runtime::runtime_pane_frames_enabled_from_config(root)?,
+            pane_frame_template: crate::runtime::runtime_pane_frame_template_from_config(root)?,
+            pane_frame_position: crate::runtime::runtime_pane_frame_position_from_config(root)?,
+            pane_frame_style: crate::runtime::runtime_pane_frame_style_from_config(root)?,
+            pane_frame_visible_fields:
+                crate::runtime::runtime_pane_frame_visible_fields_from_config(root)?,
             terminal_cursor_style: crate::runtime::runtime_terminal_cursor_style_from_config(root)?,
             terminal_cursor_blink: crate::runtime::runtime_terminal_cursor_blink_from_config(root)?,
             terminal_cursor_blink_interval_ms:
@@ -175,6 +223,26 @@ impl RuntimePresentationComponent {
 }
 
 impl RuntimeSessionService {
+    /// Replaces frame visibility for a presentation integration fixture.
+    #[cfg(test)]
+    pub(in crate::runtime) fn set_frame_visibility_for_tests(
+        &mut self,
+        window_frames_enabled: bool,
+        pane_frames_enabled: bool,
+    ) {
+        self.presentation.settings.window_frames_enabled = window_frames_enabled;
+        self.presentation.settings.pane_frames_enabled = pane_frames_enabled;
+    }
+
+    /// Replaces pane frame placement for a presentation integration fixture.
+    #[cfg(test)]
+    pub(in crate::runtime) fn set_pane_frame_position_for_tests(
+        &mut self,
+        position: TerminalFramePosition,
+    ) {
+        self.presentation.settings.pane_frame_position = position;
+    }
+
     /// Registers typed browser state for a later agent-shell display response.
     pub(in crate::runtime) fn register_pending_record_browser_overlay(
         &mut self,
@@ -192,6 +260,67 @@ impl RuntimeSessionService {
         self.presentation
             .pending_record_browser_overlays
             .insert(key, browser);
+    }
+
+    /// Reports whether product window frames are enabled.
+    pub(in crate::runtime) fn window_frames_enabled(&self) -> bool {
+        self.presentation.settings.window_frames_enabled
+    }
+
+    /// Returns the configured window frame template.
+    pub(in crate::runtime) fn window_frame_template(&self) -> &str {
+        &self.presentation.settings.window_frame_template
+    }
+
+    /// Returns the configured window frame placement.
+    pub(in crate::runtime) fn window_frame_position(&self) -> TerminalFramePosition {
+        self.presentation.settings.window_frame_position
+    }
+
+    /// Returns the configured window frame style.
+    pub(in crate::runtime) fn window_frame_style(&self) -> TerminalFrameStyle {
+        self.presentation.settings.window_frame_style
+    }
+
+    /// Returns window fields eligible for frame template expansion.
+    pub(in crate::runtime) fn window_frame_visible_fields(&self) -> &[String] {
+        &self.presentation.settings.window_frame_visible_fields
+    }
+
+    /// Reports whether product pane frames are enabled.
+    pub(in crate::runtime) fn pane_frames_enabled(&self) -> bool {
+        self.presentation.settings.pane_frames_enabled
+    }
+
+    /// Returns the configured pane frame template.
+    pub(in crate::runtime) fn pane_frame_template(&self) -> &str {
+        &self.presentation.settings.pane_frame_template
+    }
+
+    /// Returns the configured pane frame placement.
+    pub(in crate::runtime) fn pane_frame_position(&self) -> TerminalFramePosition {
+        self.presentation.settings.pane_frame_position
+    }
+
+    /// Returns the configured pane frame style.
+    pub(in crate::runtime) fn pane_frame_style(&self) -> TerminalFrameStyle {
+        self.presentation.settings.pane_frame_style
+    }
+
+    /// Returns pane fields eligible for frame template expansion.
+    pub(in crate::runtime) fn pane_frame_visible_fields(&self) -> &[String] {
+        &self.presentation.settings.pane_frame_visible_fields
+    }
+
+    /// Replaces pane statusline presentation selected by the agent command.
+    pub(in crate::runtime) fn configure_pane_statusline(
+        &mut self,
+        fields: Vec<String>,
+        template: String,
+    ) {
+        self.presentation.settings.pane_frames_enabled = true;
+        self.presentation.settings.pane_frame_visible_fields = fields;
+        self.presentation.settings.pane_frame_template = template;
     }
 }
 
@@ -297,8 +426,8 @@ use mez_agent::{
 use mez_mux::attached_client::mouse_border_cells_for_geometries;
 use mez_mux::copy::CopyPosition;
 use mez_mux::presentation::{
-    TerminalFramePosition, TerminalPaneFrameContext, TerminalWindowFrameContext,
-    TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
+    TerminalFramePosition, TerminalFrameStyle, TerminalPaneFrameContext,
+    TerminalWindowFrameContext, TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
 };
 use mez_mux::readline::DEFAULT_READLINE_HISTORY_LIMIT;
 use mez_mux::selector::{SelectorCandidate, SelectorCandidateKind};

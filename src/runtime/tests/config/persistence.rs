@@ -121,7 +121,7 @@ fn runtime_applies_frame_display_options_from_config_layers() {
         .terminal_client_loop_config(TerminalClientLoopConfig::default())
         .unwrap();
 
-    assert!(service.window_frames_enabled);
+    assert!(service.window_frames_enabled());
     assert!(config.window_frames_enabled);
     assert_eq!(
         config.window_frame_position,

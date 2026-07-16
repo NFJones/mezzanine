@@ -190,20 +190,20 @@ impl RuntimeSessionService {
     pub(super) fn live_snapshot_frame_state(&self) -> SnapshotFrameState {
         SnapshotFrameState {
             window: SnapshotFrameSettings {
-                enabled: self.window_frames_enabled,
-                position: runtime_snapshot_frame_position_name(self.window_frame_position)
+                enabled: self.window_frames_enabled(),
+                position: runtime_snapshot_frame_position_name(self.window_frame_position())
                     .to_string(),
-                style: runtime_snapshot_frame_style_name(self.window_frame_style).to_string(),
-                template: self.window_frame_template.clone(),
-                visible_fields: self.window_frame_visible_fields.clone(),
+                style: runtime_snapshot_frame_style_name(self.window_frame_style()).to_string(),
+                template: self.window_frame_template().to_string(),
+                visible_fields: self.window_frame_visible_fields().to_vec(),
             },
             pane: SnapshotFrameSettings {
-                enabled: self.pane_frames_enabled,
-                position: runtime_snapshot_frame_position_name(self.pane_frame_position)
+                enabled: self.pane_frames_enabled(),
+                position: runtime_snapshot_frame_position_name(self.pane_frame_position())
                     .to_string(),
-                style: runtime_snapshot_frame_style_name(self.pane_frame_style).to_string(),
-                template: self.pane_frame_template.clone(),
-                visible_fields: self.pane_frame_visible_fields.clone(),
+                style: runtime_snapshot_frame_style_name(self.pane_frame_style()).to_string(),
+                template: self.pane_frame_template().to_string(),
+                visible_fields: self.pane_frame_visible_fields().to_vec(),
             },
         }
     }

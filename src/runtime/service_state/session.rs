@@ -247,56 +247,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) terminal_term: String,
-    /// Stores the window frames enabled value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) window_frames_enabled: bool,
-    /// Stores the window frame template value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) window_frame_template: String,
-    /// Stores the window frame position value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) window_frame_position: TerminalFramePosition,
-    /// Stores the window frame style value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) window_frame_style: TerminalFrameStyle,
-    /// Stores the window frame visible fields value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) window_frame_visible_fields: Vec<String>,
-    /// Stores the pane frames enabled value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_frames_enabled: bool,
-    /// Stores the pane frame template value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_frame_template: String,
-    /// Stores the pane frame position value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_frame_position: TerminalFramePosition,
-    /// Stores the pane frame style value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_frame_style: TerminalFrameStyle,
-    /// Stores the pane frame visible fields value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_frame_visible_fields: Vec<String>,
     /// Stores the terminal emoji status-glyph width policy value.
     ///
     /// The field is part of the structured state exchanged across this module

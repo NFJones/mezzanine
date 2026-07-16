@@ -147,7 +147,10 @@ impl RuntimeSessionService {
             .panes()
             .iter()
             .find(|pane| pane.id.as_str() == pane_id)?;
-        let body_size = rendered_window_body_size(window.size, self.window_frames_enabled);
+        let body_size = rendered_window_body_size(
+            window.size,
+            self.presentation.settings.window_frames_enabled,
+        );
         let geometries = if window.zoomed_pane_id() == Some(&pane.id) {
             vec![PaneGeometry {
                 index: pane.index,
@@ -166,8 +169,8 @@ impl RuntimeSessionService {
             pane_content_size_for_geometry(
                 geometry,
                 &geometries,
-                self.pane_frames_enabled,
-                self.pane_frame_position,
+                self.presentation.settings.pane_frames_enabled,
+                self.presentation.settings.pane_frame_position,
             )
             .columns,
         ))

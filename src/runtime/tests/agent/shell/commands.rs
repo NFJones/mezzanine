@@ -591,9 +591,9 @@ fn runtime_agent_shell_statusline_configures_pane_frame_fields() {
     assert!(response.contains("changed=true"), "{response}");
     assert!(response.contains("source=runtime-statusline"), "{response}");
     assert!(!response.contains("requires_runtime"), "{response}");
-    assert!(service.pane_frames_enabled);
+    assert!(service.pane_frames_enabled());
     assert_eq!(
-        service.pane_frame_visible_fields,
+        service.pane_frame_visible_fields(),
         vec![
             "agent.status".to_string(),
             "agent.model".to_string(),
@@ -601,7 +601,7 @@ fn runtime_agent_shell_statusline_configures_pane_frame_fields() {
         ]
     );
     assert_eq!(
-        service.pane_frame_template,
+        service.pane_frame_template(),
         "#{agent.status} #{agent.model} #{pane.mode}"
     );
 }

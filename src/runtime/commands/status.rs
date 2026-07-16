@@ -34,9 +34,7 @@ impl RuntimeSessionService {
             });
         }
         let fields = runtime_statusline_fields(&invocation.args)?;
-        self.pane_frames_enabled = true;
-        self.pane_frame_visible_fields = fields.clone();
-        self.pane_frame_template = runtime_statusline_template(&fields);
+        self.configure_pane_statusline(fields.clone(), runtime_statusline_template(&fields));
         Ok(AgentShellCommandOutcome::Mutated {
             command: "statusline".to_string(),
             body: format!("{} changed=true", self.runtime_agent_statusline_display()),
@@ -48,9 +46,9 @@ impl RuntimeSessionService {
     pub(super) fn runtime_agent_statusline_display(&self) -> String {
         format!(
             "enabled={} fields={} template={} source=runtime-statusline",
-            self.pane_frames_enabled,
-            runtime_string_array_json(&self.pane_frame_visible_fields),
-            json_escape(&self.pane_frame_template)
+            self.pane_frames_enabled(),
+            runtime_string_array_json(self.pane_frame_visible_fields()),
+            json_escape(self.pane_frame_template())
         )
     }
 

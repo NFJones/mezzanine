@@ -1171,7 +1171,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     fn mouse_resize_drag_state_at(&self, column: u16, row: u16) -> Option<MouseResizeDragState> {
         let window = self.session.active_window()?;
-        let window_frame_visible = self.window_frames_enabled;
+        let window_frame_visible = self.presentation.settings.window_frames_enabled;
         let group_top_offset = u16::from(self.session.window_groups().len() > 1);
         if group_top_offset > 0 && row == 0 {
             return None;
@@ -1184,7 +1184,7 @@ impl RuntimeSessionService {
         .ok()?;
         let local_row = row.checked_sub(group_top_offset)?;
         if window_frame_visible {
-            match self.window_frame_position {
+            match self.presentation.settings.window_frame_position {
                 TerminalFramePosition::Top if local_row == 0 => return None,
                 TerminalFramePosition::Bottom
                     if local_row == display_window.size.rows.saturating_sub(1) =>
@@ -1195,7 +1195,8 @@ impl RuntimeSessionService {
             }
         }
         let row_offset = group_top_offset.saturating_add(u16::from(
-            window_frame_visible && self.window_frame_position == TerminalFramePosition::Top,
+            window_frame_visible
+                && self.presentation.settings.window_frame_position == TerminalFramePosition::Top,
         ));
         let body_row = row.checked_sub(row_offset)?;
         let geometries = rendered_pane_geometries(&display_window, window_frame_visible).ok()?;
@@ -1211,7 +1212,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     fn mouse_pane_target_at(&self, position: CopyPosition) -> Option<MousePaneTarget> {
         let window = self.session.active_window()?;
-        let window_frame_visible = self.window_frames_enabled;
+        let window_frame_visible = self.presentation.settings.window_frames_enabled;
         let column = u16::try_from(position.column).ok()?;
         let row = u16::try_from(position.line).ok()?;
         let group_top_offset = u16::from(self.session.window_groups().len() > 1);
@@ -1226,10 +1227,11 @@ impl RuntimeSessionService {
         .ok()?;
         let local_row = row.checked_sub(group_top_offset)?;
         let window_frame_top_offset = group_top_offset.saturating_add(u16::from(
-            window_frame_visible && self.window_frame_position == TerminalFramePosition::Top,
+            window_frame_visible
+                && self.presentation.settings.window_frame_position == TerminalFramePosition::Top,
         ));
         if window_frame_visible {
-            match self.window_frame_position {
+            match self.presentation.settings.window_frame_position {
                 TerminalFramePosition::Top if local_row == 0 => return None,
                 TerminalFramePosition::Bottom
                     if local_row == display_window.size.rows.saturating_sub(1) =>
@@ -1257,12 +1259,12 @@ impl RuntimeSessionService {
                 .iter()
                 .find(|pane| pane.index == geometry.index)?;
             let pane_frame_top_offset = u16::from(
-                self.pane_frames_enabled
-                    && self.pane_frame_position == TerminalFramePosition::Top
+                self.presentation.settings.pane_frames_enabled
+                    && self.presentation.settings.pane_frame_position == TerminalFramePosition::Top
                     && !pane_frame_merges_into_divider(
                         geometry,
                         &geometries,
-                        self.pane_frame_position,
+                        self.presentation.settings.pane_frame_position,
                     ),
             );
             if pane_frame_top_offset > 0 && body_row == geometry.row {

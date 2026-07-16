@@ -228,18 +228,7 @@ impl RuntimeSessionService {
         let terminal_history_rotate_lines = runtime_history_rotate_lines_from_config(&structured)?;
         let saved_agent_session_limit = runtime_saved_agent_session_limit_from_config(&structured)?;
         let terminal_term = runtime_terminal_term_from_config(&structured)?;
-        let window_frames_enabled = runtime_window_frames_enabled_from_config(&structured)?;
-        let window_frame_template = runtime_window_frame_template_from_config(&structured)?;
         let presentation_settings = RuntimePresentationSettings::from_config(&structured)?;
-        let window_frame_position = runtime_window_frame_position_from_config(&structured)?;
-        let window_frame_style = runtime_window_frame_style_from_config(&structured)?;
-        let window_frame_visible_fields =
-            runtime_window_frame_visible_fields_from_config(&structured)?;
-        let pane_frames_enabled = runtime_pane_frames_enabled_from_config(&structured)?;
-        let pane_frame_template = runtime_pane_frame_template_from_config(&structured)?;
-        let pane_frame_position = runtime_pane_frame_position_from_config(&structured)?;
-        let pane_frame_style = runtime_pane_frame_style_from_config(&structured)?;
-        let pane_frame_visible_fields = runtime_pane_frame_visible_fields_from_config(&structured)?;
         let terminal_emoji_width = runtime_terminal_emoji_width_from_config(&structured)?;
         let terminal_clipboard = runtime_terminal_clipboard_from_config(&structured)?;
         let host_clipboard = runtime_host_clipboard_from_config(&structured)?;
@@ -260,16 +249,6 @@ impl RuntimeSessionService {
             store.set_saved_sessions_limit(saved_agent_session_limit)?;
         }
         self.terminal_term = terminal_term;
-        self.window_frames_enabled = window_frames_enabled;
-        self.window_frame_template = window_frame_template;
-        self.window_frame_position = window_frame_position;
-        self.window_frame_style = window_frame_style;
-        self.window_frame_visible_fields = window_frame_visible_fields;
-        self.pane_frames_enabled = pane_frames_enabled;
-        self.pane_frame_template = pane_frame_template;
-        self.pane_frame_position = pane_frame_position;
-        self.pane_frame_style = pane_frame_style;
-        self.pane_frame_visible_fields = pane_frame_visible_fields;
         self.terminal_emoji_width = terminal_emoji_width;
         mez_terminal::set_terminal_emoji_width(terminal_emoji_width);
         self.terminal_shell_output_preview_lines =
@@ -391,8 +370,8 @@ impl RuntimeSessionService {
             terminal_history_limit: self.terminal_history_limit,
             terminal_history_rotate_lines: self.terminal_history_rotate_lines,
             terminal_term: self.terminal_term.clone(),
-            window_frames_enabled: self.window_frames_enabled,
-            pane_frames_enabled: self.pane_frames_enabled,
+            window_frames_enabled: self.window_frames_enabled(),
+            pane_frames_enabled: self.pane_frames_enabled(),
             max_concurrent_agents,
             permission_policy_applied: true,
             mcp_servers_configured: configured,

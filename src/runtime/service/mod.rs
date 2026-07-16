@@ -4,8 +4,6 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use mez_mux::presentation::{TerminalFramePosition, TerminalFrameStyle};
-
 use crate::terminal::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
 
 use super::{
@@ -50,19 +48,13 @@ use super::{
     runtime_max_concurrent_agents_from_config, runtime_max_root_subagents_from_config,
     runtime_max_subagent_depth_from_config, runtime_max_subagent_panes_per_window_from_config,
     runtime_max_subagents_per_subagent_from_config, runtime_mcp_registry_from_config,
-    runtime_pane_by_id, runtime_pane_frame_position_from_config,
-    runtime_pane_frame_style_from_config, runtime_pane_frame_template_from_config,
-    runtime_pane_frame_visible_fields_from_config, runtime_pane_frames_enabled_from_config,
-    runtime_parse_approval_policy, runtime_permission_policy_from_config,
+    runtime_pane_by_id, runtime_parse_approval_policy, runtime_permission_policy_from_config,
     runtime_preset_registry_from_config, runtime_provider_auth_refresh_leeway_seconds_from_config,
     runtime_provider_registry_from_config, runtime_saved_agent_session_limit_from_config,
     runtime_subagent_profiles_from_config, runtime_subagent_wait_policy_from_config,
     runtime_terminal_clipboard_from_config, runtime_terminal_emoji_width_from_config,
     runtime_terminal_shell_output_preview_lines_from_config, runtime_terminal_term_from_config,
-    runtime_ui_theme_from_config, runtime_window_frame_position_from_config,
-    runtime_window_frame_style_from_config, runtime_window_frame_template_from_config,
-    runtime_window_frame_visible_fields_from_config, runtime_window_frames_enabled_from_config,
-    spawn_stdio_mcp_connection,
+    runtime_ui_theme_from_config, spawn_stdio_mcp_connection,
 };
 
 // RuntimeSessionService construction, accessors, and live config application.
