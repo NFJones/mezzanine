@@ -5,7 +5,15 @@
 //! directory restoration, transcript display fallback formatting, and the
 //! related markdown list rendering used by the agent shell.
 
-use super::*;
+use super::{
+    AgentShellCommandOutcome, MezError, PathBuf, Result, RuntimeSessionService, SplitDirection,
+    TranscriptEntry, TranscriptRole, current_unix_seconds, json_escape, parse_slash_command,
+    runtime_fit_status_line, runtime_markdown_table, session_state_name, shell_command_from_argv,
+    unix_seconds_to_rfc3339,
+};
+use base64::Engine;
+use mez_agent::transcript::ConversationSummary;
+use mez_mux::readline::ReadlineEdit;
 
 /// Maximum saved transcript entries to render when `/resume` has no presentation log.
 const AGENT_RESUME_TRANSCRIPT_REPLAY_ENTRIES: usize = 64;

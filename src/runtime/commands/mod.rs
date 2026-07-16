@@ -50,10 +50,8 @@ use crate::error::MezErrorKind;
 use crate::runtime::config::{
     runtime_default_models_for_provider, runtime_recommended_model_for_provider,
 };
-use base64::Engine;
 use mez_agent::ModelResponse;
 use mez_agent::model_context_text_word_count;
-use mez_agent::transcript::ConversationSummary;
 use mez_agent::{
     AgentActionPayload, AgentTurnSteering, AllowedActionSet, DEFAULT_PROVIDER_TIMEOUT_MS,
     ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest, ModelTokenUsage,
@@ -61,8 +59,6 @@ use mez_agent::{
     ProviderModelInfo, ProviderQuotaUsage, append_mcp_context,
     openai_default_reasoning_levels_for_model, resolve_provider_api,
 };
-use mez_mux::readline::ReadlineEdit;
-use std::fs;
 
 mod approval;
 mod artifacts;
