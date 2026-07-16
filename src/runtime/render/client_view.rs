@@ -1318,10 +1318,8 @@ impl RuntimeSessionService {
                 });
                 let agent_routing = agent_session.map(|_| {
                     if self
-                        .agent_routing_overrides
-                        .get(&pane_id)
-                        .copied()
-                        .unwrap_or(self.agent_routing)
+                        .agent_routing_override(&pane_id)
+                        .unwrap_or(self.agent_default_routing())
                     {
                         "auto:on".to_string()
                     } else {

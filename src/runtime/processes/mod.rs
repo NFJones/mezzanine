@@ -1512,7 +1512,7 @@ impl RuntimeSessionService {
         self.remove_agent_prompt_input(pane_id);
         self.clear_agent_pane_presentation_preferences(pane_id);
         self.agent_personality_selections.remove(pane_id);
-        self.agent_routing_overrides.remove(pane_id);
+        self.clear_agent_routing_override(pane_id);
         self.clear_agent_pane_artifacts(pane_id);
         self.active_copy_modes_mut().remove(pane_id);
         self.process

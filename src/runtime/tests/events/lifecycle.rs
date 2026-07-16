@@ -574,10 +574,7 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
             .copied(),
         Some(saved_token_usage)
     );
-    assert_eq!(
-        restored.agent_routing_overrides.get("%1").copied(),
-        Some(true)
-    );
+    assert_eq!(restored.agent_routing_override("%1"), Some(true));
     assert_eq!(
         restored.permission_policy().approval_policy,
         ApprovalPolicy::FullAccess

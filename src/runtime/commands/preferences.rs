@@ -17,11 +17,9 @@ impl RuntimeSessionService {
         let invocation = parse_slash_command(input)?
             .ok_or_else(|| MezError::invalid_args("routing command must be a slash command"))?;
         let mode = runtime_single_mode_arg(&invocation.args, "routing", "toggle")?;
-        let default_enabled = self.agent_routing;
+        let default_enabled = self.agent_default_routing();
         let enabled_before = self
-            .agent_routing_overrides
-            .get(pane_id)
-            .copied()
+            .agent_routing_override(pane_id)
             .unwrap_or(default_enabled);
         if matches!(mode.as_str(), "status" | "show") {
             return Ok(AgentShellCommandOutcome::Display {
@@ -31,7 +29,7 @@ impl RuntimeSessionService {
                     json_escape(pane_id),
                     enabled_before,
                     default_enabled,
-                    self.agent_routing_overrides.contains_key(pane_id)
+                    self.agent_routing_override(pane_id).is_some()
                 ),
             });
         }
@@ -46,8 +44,7 @@ impl RuntimeSessionService {
                 ));
             }
         };
-        self.agent_routing_overrides
-            .insert(pane_id.to_string(), enabled);
+        self.set_agent_routing_override(pane_id, Some(enabled));
         Ok(AgentShellCommandOutcome::Mutated {
             command: "routing".to_string(),
             body: format!(
@@ -191,8 +188,7 @@ impl RuntimeSessionService {
             self.set_agent_planning_enabled(pane_id, planning_enabled);
         }
         if let Some(routing_enabled) = profile.routing_enabled {
-            self.agent_routing_overrides
-                .insert(pane_id.to_string(), routing_enabled);
+            self.set_agent_routing_override(pane_id, Some(routing_enabled));
         }
         Ok(())
     }

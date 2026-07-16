@@ -739,7 +739,7 @@ fn runtime_pane_agent_status_selector_toggles_auto_and_selects_approval() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service.agent_routing = false;
+    service.set_agent_default_routing(false);
 
     let open_report = service
         .apply_attached_terminal_step_plan(
@@ -762,10 +762,7 @@ fn runtime_pane_agent_status_selector_toggles_auto_and_selects_approval() {
     assert!(open_report.view_refresh_required);
     assert!(!open_report.full_redraw_required);
     assert!(service.pane_agent_status_selector().is_none());
-    assert_eq!(
-        service.agent_routing_overrides.get("%1").copied(),
-        Some(true)
-    );
+    assert_eq!(service.agent_routing_override("%1"), Some(true));
 
     service
         .apply_attached_terminal_step_plan(

@@ -84,10 +84,7 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
         resumed.contains("conversation_id=saved-tokens"),
         "{resumed}"
     );
-    assert_eq!(
-        service.agent_routing_overrides.get("%1").copied(),
-        Some(true)
-    );
+    assert_eq!(service.agent_routing_override("%1"), Some(true));
     assert_eq!(
         service.permission_policy().approval_policy,
         ApprovalPolicy::FullAccess

@@ -168,12 +168,7 @@ impl RuntimeSessionService {
             }
             self.set_agent_planning_enabled(&metadata.pane_id, metadata.planning_enabled);
             self.set_agent_response_style(&metadata.pane_id, metadata.response_style.clone());
-            if let Some(enabled) = metadata.routing_enabled {
-                self.agent_routing_overrides
-                    .insert(metadata.pane_id.clone(), enabled);
-            } else {
-                self.agent_routing_overrides.remove(&metadata.pane_id);
-            }
+            self.set_agent_routing_override(&metadata.pane_id, metadata.routing_enabled);
             self.restore_agent_approval_policy_from_metadata(
                 metadata.approval_policy.as_deref(),
                 "agent-session-restore",
@@ -312,7 +307,7 @@ impl RuntimeSessionService {
                         .agent_response_style(&session.pane_id)
                         .map(ToOwned::to_owned),
                     directive: session.directive.clone(),
-                    routing_enabled: self.agent_routing_overrides.get(&session.pane_id).copied(),
+                    routing_enabled: self.agent_routing_override(&session.pane_id),
                     approval_policy: self
                         .live_approval_policy_override
                         .map(runtime_approval_policy_name)
@@ -367,12 +362,7 @@ impl RuntimeSessionService {
             }
             self.set_agent_planning_enabled(pane_id, metadata.planning_enabled);
             self.set_agent_response_style(pane_id, metadata.response_style.clone());
-            if let Some(enabled) = metadata.routing_enabled {
-                self.agent_routing_overrides
-                    .insert(pane_id.to_string(), enabled);
-            } else {
-                self.agent_routing_overrides.remove(pane_id);
-            }
+            self.set_agent_routing_override(pane_id, metadata.routing_enabled);
             self.restore_agent_approval_policy_from_metadata(
                 metadata.approval_policy.as_deref(),
                 "agent-session-resume",

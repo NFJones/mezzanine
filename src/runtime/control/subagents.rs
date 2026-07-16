@@ -477,8 +477,7 @@ impl RuntimeSessionService {
             return Err(error);
         }
         if let Some(enabled) = self.inherited_routing_for_child_agent(&spawn.parent_agent_id) {
-            self.agent_routing_overrides
-                .insert(started.pane_id.clone(), enabled);
+            self.set_agent_routing_override(&started.pane_id, Some(enabled));
         }
         if let Some(auto_sizing) =
             self.inherited_auto_sizing_for_child_agent(&spawn.parent_agent_id)

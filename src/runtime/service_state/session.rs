@@ -327,11 +327,6 @@ pub struct RuntimeSessionService {
     pub(in crate::runtime) pending_agent_remember_tasks: BTreeMap<String, RuntimeAgentRememberTask>,
     /// Model-backed memory-generation tasks claimed by async provider workers.
     pub(in crate::runtime) claimed_agent_remember_tasks: BTreeMap<String, RuntimeAgentRememberTask>,
-    /// Whether new agent turns use routing model and reasoning sizing by default.
-    pub(in crate::runtime) agent_routing: bool,
-    /// Pane-local routing overrides. Missing entries inherit the
-    /// configured default.
-    pub(in crate::runtime) agent_routing_overrides: BTreeMap<String, bool>,
     /// Automatic sizing profile and fallback configuration.
     pub(in crate::runtime) agent_auto_sizing: RuntimeAutoSizingConfig,
     /// Pane-local automatic sizing profile overrides selected through model

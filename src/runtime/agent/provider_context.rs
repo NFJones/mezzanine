@@ -347,14 +347,12 @@ impl RuntimeSessionService {
     /// Returns the pane-local routing preference, falling back to
     /// the configured default when the pane has no explicit override.
     pub(in crate::runtime) fn agent_routing_enabled_for_pane(&self, pane_id: &str) -> bool {
-        self.agent_routing_overrides
-            .get(pane_id)
-            .copied()
+        self.agent_routing_override(pane_id)
             .or_else(|| {
                 self.agent_selected_personality_profile(pane_id)
                     .and_then(|profile| profile.routing_enabled)
             })
-            .unwrap_or(self.agent_routing)
+            .unwrap_or(self.agent_default_routing())
     }
 
     /// Builds an automatic sizing dispatch for the first provider request of a

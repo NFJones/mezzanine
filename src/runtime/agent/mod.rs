@@ -123,9 +123,58 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     agent_planning_modes: BTreeSet<String>,
     /// Pane-local response style selections.
     agent_response_styles: BTreeMap<String, String>,
+    /// Configured default provider-routing state.
+    agent_routing: bool,
+    /// Explicit pane-local provider-routing overrides.
+    agent_routing_overrides: BTreeMap<String, bool>,
+}
+
+impl RuntimeAgentComponent {
+    /// Builds agent ownership with the configured routing default.
+    pub(in crate::runtime) fn with_default_routing(agent_routing: bool) -> Self {
+        Self {
+            agent_routing,
+            ..Self::default()
+        }
+    }
 }
 
 impl RuntimeSessionService {
+    /// Returns the configured default provider-routing state.
+    pub(in crate::runtime) fn agent_default_routing(&self) -> bool {
+        self.agent.agent_routing
+    }
+
+    /// Replaces the configured default provider-routing state.
+    pub(in crate::runtime) fn set_agent_default_routing(&mut self, enabled: bool) {
+        self.agent.agent_routing = enabled;
+    }
+
+    /// Returns an explicit pane-local routing override.
+    pub(in crate::runtime) fn agent_routing_override(&self, pane_id: &str) -> Option<bool> {
+        self.agent.agent_routing_overrides.get(pane_id).copied()
+    }
+
+    /// Replaces or clears one pane-local routing override.
+    pub(in crate::runtime) fn set_agent_routing_override(
+        &mut self,
+        pane_id: &str,
+        enabled: Option<bool>,
+    ) {
+        if let Some(enabled) = enabled {
+            self.agent
+                .agent_routing_overrides
+                .insert(pane_id.to_string(), enabled);
+        } else {
+            self.agent.agent_routing_overrides.remove(pane_id);
+        }
+    }
+
+    /// Clears one pane-local routing override during pane teardown.
+    pub(in crate::runtime) fn clear_agent_routing_override(&mut self, pane_id: &str) {
+        self.agent.agent_routing_overrides.remove(pane_id);
+    }
+
     /// Reports whether planning presentation is enabled for one pane.
     pub(in crate::runtime) fn agent_planning_enabled(&self, pane_id: &str) -> bool {
         self.agent.agent_planning_modes.contains(pane_id)

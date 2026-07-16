@@ -10,18 +10,16 @@ use super::*;
 #[test]
 fn runtime_subagent_routing_inherits_parent_pane_setting() {
     let mut service = test_runtime_service();
-    service.agent_routing = false;
-    service
-        .agent_routing_overrides
-        .insert("%1".to_string(), true);
+    service.set_agent_default_routing(false);
+    service.set_agent_routing_override("%1", Some(true));
 
     assert_eq!(
         service.inherited_routing_for_child_agent("agent-%1"),
         Some(true)
     );
 
-    service.agent_routing_overrides.remove("%1");
-    service.agent_routing = true;
+    service.set_agent_routing_override("%1", None);
+    service.set_agent_default_routing(true);
     assert_eq!(
         service.inherited_routing_for_child_agent("agent-%1"),
         Some(true)
@@ -313,10 +311,7 @@ fn runtime_agent_shell_routing_command_sets_pane_override() {
     assert!(enabled.contains("enabled=true"), "{enabled}");
     assert!(enabled.contains("default=false"), "{enabled}");
     assert!(enabled.contains("changed=true"), "{enabled}");
-    assert_eq!(
-        service.agent_routing_overrides.get("%1").copied(),
-        Some(true)
-    );
+    assert_eq!(service.agent_routing_override("%1"), Some(true));
 
     let status = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"routing-status","method":"agent/shell/command","params":{"idempotency_key":"routing-status","input":"/routing status"}}"#,
@@ -333,10 +328,7 @@ fn runtime_agent_shell_routing_command_sets_pane_override() {
     assert!(toggled.contains(r#""kind":"mutated""#), "{toggled}");
     assert!(toggled.contains("enabled=false"), "{toggled}");
     assert!(toggled.contains("changed=true"), "{toggled}");
-    assert_eq!(
-        service.agent_routing_overrides.get("%1").copied(),
-        Some(false)
-    );
+    assert_eq!(service.agent_routing_override("%1"), Some(false));
 }
 
 /// Verifies that routing runs an internal router request before

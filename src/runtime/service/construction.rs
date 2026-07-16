@@ -114,7 +114,7 @@ impl RuntimeSessionService {
         Ok(Self {
             presentation: RuntimePresentationComponent::default(),
             process: RuntimeProcessComponent::with_pane_processes(pane_processes),
-            agent: RuntimeAgentComponent::default(),
+            agent: RuntimeAgentComponent::with_default_routing(DEFAULT_AGENT_ROUTING),
             session,
             window_created_at_unix_seconds,
             config_layers: Vec::new(),
@@ -186,8 +186,6 @@ impl RuntimeSessionService {
             agent_remembering_panes: BTreeMap::new(),
             pending_agent_remember_tasks: BTreeMap::new(),
             claimed_agent_remember_tasks: BTreeMap::new(),
-            agent_routing: DEFAULT_AGENT_ROUTING,
-            agent_routing_overrides: BTreeMap::new(),
             agent_auto_sizing: Default::default(),
             agent_auto_sizing_overrides: BTreeMap::new(),
             agent_token_usage_by_conversation: BTreeMap::new(),
