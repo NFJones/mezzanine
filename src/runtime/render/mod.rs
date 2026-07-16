@@ -29,7 +29,8 @@ use mez_mux::render::{modal_overlay_max_scroll, modal_overlay_page_rows};
 
 use super::service_state::{
     RunningShellTransactionKind, RuntimeDisplayOverlay, RuntimeMouseClickState,
-    RuntimePaneAgentStatusSelector, RuntimePrimaryPromptInput,
+    RuntimePaneAgentStatusSelector, RuntimePrimaryPromptInput, RuntimeRecordBrowserOverlayFrame,
+    RuntimeRecordBrowserOverlaySource,
 };
 use super::{
     AgentShellVisibility, AgentTurnRecord, AgentTurnState, AttachedClientStepApplication,
@@ -69,6 +70,15 @@ pub(in crate::runtime) struct RuntimePresentationComponent {
     primary_prefix_key_pending: bool,
     /// Active primary-client modal display overlay.
     primary_display_overlay: Option<RuntimeDisplayOverlay>,
+    /// Typed record browsers waiting for display-response presentation.
+    pending_record_browser_overlays:
+        std::collections::BTreeMap<(String, String), mez_mux::record_browser::RecordBrowser>,
+    /// Query sources waiting to accompany pending record browsers.
+    pending_record_browser_overlay_sources:
+        std::collections::BTreeMap<(String, String), RuntimeRecordBrowserOverlaySource>,
+    /// Parent browser views waiting to accompany pending child views.
+    pending_record_browser_overlay_stacks:
+        std::collections::BTreeMap<(String, String), Vec<RuntimeRecordBrowserOverlayFrame>>,
     mouse_resize_drag_state: Option<MouseResizeDragState>,
     mouse_selection_drag_state: Option<MouseSelectionDragState>,
     last_mouse_click_state: Option<RuntimeMouseClickState>,
@@ -82,6 +92,27 @@ impl RuntimePresentationComponent {
     /// Clears an in-progress pane-resize gesture after layout mutation.
     pub(in crate::runtime) fn clear_mouse_resize_drag_state(&mut self) {
         self.mouse_resize_drag_state = None;
+    }
+}
+
+impl RuntimeSessionService {
+    /// Registers typed browser state for a later agent-shell display response.
+    pub(in crate::runtime) fn register_pending_record_browser_overlay(
+        &mut self,
+        pane_id: &str,
+        command: &str,
+        browser: mez_mux::record_browser::RecordBrowser,
+        source: Option<RuntimeRecordBrowserOverlaySource>,
+    ) {
+        let key = (pane_id.to_string(), command.to_string());
+        if let Some(source) = source {
+            self.presentation
+                .pending_record_browser_overlay_sources
+                .insert(key.clone(), source);
+        }
+        self.presentation
+            .pending_record_browser_overlays
+            .insert(key, browser);
     }
 }
 
@@ -123,6 +154,23 @@ impl RuntimeSessionService {
     /// Returns the active primary display overlay for product integration tests.
     pub(in crate::runtime) fn primary_display_overlay(&self) -> Option<&RuntimeDisplayOverlay> {
         self.presentation.primary_display_overlay.as_ref()
+    }
+
+    /// Replaces a pending record browser's parent stack for a test fixture.
+    pub(in crate::runtime) fn set_pending_record_browser_overlay_stack_for_tests(
+        &mut self,
+        pane_id: &str,
+        command: &str,
+        stack: Vec<RuntimeRecordBrowserOverlayFrame>,
+    ) {
+        self.presentation
+            .pending_record_browser_overlay_stacks
+            .insert((pane_id.to_string(), command.to_string()), stack);
+    }
+
+    /// Reports whether any typed record browser still awaits presentation.
+    pub(in crate::runtime) fn pending_record_browser_overlays_is_empty(&self) -> bool {
+        self.presentation.pending_record_browser_overlays.is_empty()
     }
 
     /// Returns the transient primary error status for product integration tests.

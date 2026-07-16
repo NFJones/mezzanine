@@ -29,9 +29,7 @@ fn runtime_agent_shell_record_browser_display_retains_overlay_state() {
         Vec::new(),
     )
     .unwrap();
-    service
-        .pending_record_browser_overlays
-        .insert((pane_id.clone(), "show-issues".to_string()), browser);
+    service.register_pending_record_browser_overlay(&pane_id, "show-issues", browser, None);
     let response = crate::runtime::runtime_agent_shell_command_response_json(
         &pane_id,
         "/show-issues",
@@ -54,7 +52,7 @@ fn runtime_agent_shell_record_browser_display_retains_overlay_state() {
     assert_eq!(record_browser.pane_id, pane_id);
     assert_eq!(record_browser.command, "show-issues");
     assert_eq!(record_browser.browser.render_page().title, "Issues");
-    assert!(service.pending_record_browser_overlays.is_empty());
+    assert!(service.pending_record_browser_overlays_is_empty());
 }
 
 /// Verifies `/show-issues` overlays expose record-browser footer help and keep
@@ -216,11 +214,10 @@ fn runtime_agent_shell_record_browser_escape_restores_parent_view_stack() {
     .unwrap();
     child_browser.show_first_record_detail();
     let child_page = child_browser.render_page();
-    service
-        .pending_record_browser_overlays
-        .insert((pane_id.clone(), "show-issues".to_string()), child_browser);
-    service.pending_record_browser_overlay_stacks.insert(
-        (pane_id.clone(), "show-issues".to_string()),
+    service.register_pending_record_browser_overlay(&pane_id, "show-issues", child_browser, None);
+    service.set_pending_record_browser_overlay_stack_for_tests(
+        &pane_id,
+        "show-issues",
         vec![
             crate::runtime::service_state::RuntimeRecordBrowserOverlayFrame {
                 command: "show-issues".to_string(),

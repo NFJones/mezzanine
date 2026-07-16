@@ -89,12 +89,7 @@ impl RuntimeSessionService {
         if let Some(path) = args.save_path {
             return self.save_record_browser_page(pane_id, "show-issues", path, page.raw_markdown);
         }
-        let key = (pane_id.to_string(), "show-issues".to_string());
-        if let Some(source) = source {
-            self.pending_record_browser_overlay_sources
-                .insert(key.clone(), source);
-        }
-        self.pending_record_browser_overlays.insert(key, browser);
+        self.register_pending_record_browser_overlay(pane_id, "show-issues", browser, source);
         Ok(AgentShellCommandOutcome::Display {
             command: "show-issues".to_string(),
             body: page.raw_markdown,
@@ -178,12 +173,7 @@ impl RuntimeSessionService {
                 page.raw_markdown,
             );
         }
-        let key = (pane_id.to_string(), "show-memories".to_string());
-        if let Some(source) = source {
-            self.pending_record_browser_overlay_sources
-                .insert(key.clone(), source);
-        }
-        self.pending_record_browser_overlays.insert(key, browser);
+        self.register_pending_record_browser_overlay(pane_id, "show-memories", browser, source);
         Ok(AgentShellCommandOutcome::Display {
             command: "show-memories".to_string(),
             body: page.raw_markdown,

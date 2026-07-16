@@ -589,22 +589,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) agent_prompt_inputs: BTreeMap<String, RuntimeAgentPromptInput>,
-    /// Record-browser states waiting for the display-output presentation path
-    /// to attach them to the primary overlay.
-    ///
-    /// Agent-shell command execution returns JSON before the TUI presentation
-    /// code decides whether to open a modal overlay. This pending map bridges
-    /// that serialization boundary without changing the public command response
-    /// format: record-browser commands register their typed state here, and the
-    /// display path consumes it when rendering the matching pane/command.
-    pub(in crate::runtime) pending_record_browser_overlays:
-        BTreeMap<(String, String), RecordBrowser>,
-    /// Query context waiting to be attached to pending record-browser overlays.
-    pub(in crate::runtime) pending_record_browser_overlay_sources:
-        BTreeMap<(String, String), RuntimeRecordBrowserOverlaySource>,
-    /// Parent view stacks waiting to be attached to pending record-browser overlays.
-    pub(in crate::runtime) pending_record_browser_overlay_stacks:
-        BTreeMap<(String, String), Vec<RuntimeRecordBrowserOverlayFrame>>,
     /// Stores the agent turn model profiles value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

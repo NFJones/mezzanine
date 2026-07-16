@@ -36,7 +36,8 @@ impl RuntimeSessionService {
             self.presentation.primary_display_overlay = None;
             let body = self.execute_agent_shell_command(primary_client_id, command)?;
             if let Some((target_command, stack)) = record_browser_stack {
-                self.pending_record_browser_overlay_stacks
+                self.presentation
+                    .pending_record_browser_overlay_stacks
                     .insert((pane_id.clone(), target_command), stack);
             }
             let display_output = runtime_agent_shell_display_output(&body, &self.ui_theme)?;
