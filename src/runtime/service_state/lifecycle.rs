@@ -82,27 +82,29 @@ pub enum RuntimeRegistryUpdatePlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeSnapshotOwnedCreationContext {
     /// Live pane terminal/process captures.
-    pub pane_captures: Vec<crate::snapshot::SnapshotPaneCapture>,
+    pub pane_captures: Vec<crate::storage::snapshot::SnapshotPaneCapture>,
     /// Active config layers at capture time.
-    pub active_config_layers: Vec<crate::snapshot::SnapshotConfigLayerMetadata>,
+    pub active_config_layers: Vec<crate::storage::snapshot::SnapshotConfigLayerMetadata>,
     /// Live terminal frame state at capture time.
-    pub frame_state: crate::snapshot::SnapshotFrameState,
+    pub frame_state: crate::storage::snapshot::SnapshotFrameState,
     /// Agent sessions to include in the snapshot payload.
-    pub agent_sessions: Vec<crate::snapshot::SnapshotAgentSession>,
+    pub agent_sessions: Vec<crate::storage::snapshot::SnapshotAgentSession>,
     /// Approval grants to include in the snapshot payload.
-    pub approval_grants: Vec<crate::snapshot::SnapshotApprovalGrantMetadata>,
+    pub approval_grants: Vec<crate::storage::snapshot::SnapshotApprovalGrantMetadata>,
     /// Approval requests to include in the snapshot payload.
-    pub approval_requests: Vec<crate::snapshot::SnapshotApprovalRequestMetadata>,
+    pub approval_requests: Vec<crate::storage::snapshot::SnapshotApprovalRequestMetadata>,
     /// Message-service state to include in the snapshot payload.
     pub message_state: mez_agent::messaging::MessageServiceSnapshot,
     /// MCP server state to include in the snapshot payload.
-    pub mcp_servers: Vec<crate::snapshot::SnapshotMcpServerState>,
+    pub mcp_servers: Vec<crate::storage::snapshot::SnapshotMcpServerState>,
 }
 
 impl RuntimeSnapshotOwnedCreationContext {
     /// Borrows the owned context as the snapshot repository creation context.
-    pub(crate) fn as_creation_context(&self) -> crate::snapshot::SnapshotCreationContext<'_> {
-        crate::snapshot::SnapshotCreationContext::new(
+    pub(crate) fn as_creation_context(
+        &self,
+    ) -> crate::storage::snapshot::SnapshotCreationContext<'_> {
+        crate::storage::snapshot::SnapshotCreationContext::new(
             &self.pane_captures,
             &self.active_config_layers,
             &self.frame_state,
@@ -138,7 +140,7 @@ pub(crate) enum RuntimeSnapshotControlAsyncWorkKind {
     /// Live snapshot resume that must return payload metadata for actor apply.
     Resume {
         /// Shell to seed restored panes with.
-        shell: crate::shell::ResolvedShell,
+        shell: crate::host::shell::ResolvedShell,
     },
 }
 
@@ -151,8 +153,8 @@ pub(crate) enum RuntimeSnapshotControlAsyncOutcome {
     Resume(
         Box<
             Result<(
-                crate::snapshot::SessionSnapshotPayload,
-                crate::snapshot::SnapshotRestoreResult,
+                crate::storage::snapshot::SessionSnapshotPayload,
+                crate::storage::snapshot::SnapshotRestoreResult,
             )>,
         >,
     ),

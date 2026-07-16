@@ -249,16 +249,17 @@ impl RuntimeSessionService {
     pub(super) fn apply_runtime_snapshot_resume_for_connection(
         &mut self,
         snapshot_id: &str,
-        payload: crate::snapshot::SessionSnapshotPayload,
-        resume_plan: crate::snapshot::LayoutLoadPlan,
+        payload: crate::storage::snapshot::SessionSnapshotPayload,
+        resume_plan: crate::storage::snapshot::LayoutLoadPlan,
         caller_client_id: &mez_core::ids::ClientId,
     ) -> Result<String> {
         let previous_session = self.session.clone();
         let previous_window_created_at_unix_seconds =
             self.session.window_created_at_unix_seconds().clone();
         let mut prepared_session = self.session.clone();
-        prepared_session
-            .replace_layout_from_restore_input(crate::snapshot::session_restore_input(&payload)?)?;
+        prepared_session.replace_layout_from_restore_input(
+            crate::storage::snapshot::session_restore_input(&payload)?,
+        )?;
         let replaced_pane_ids = self
             .session
             .windows()

@@ -12,7 +12,7 @@ use super::{
     runtime_pane_agent_selector_rendition, wrap_agent_terminal_text, wrap_rich_text_line_to_width,
     wrapped_prefixed_agent_terminal_lines,
 };
-use crate::terminal::PaneAgentStatusField;
+use crate::host::terminal::PaneAgentStatusField;
 use mez_agent::{AgentAction, AgentActionPayload};
 use mez_mux::layout::Size;
 use mez_mux::overlay::{

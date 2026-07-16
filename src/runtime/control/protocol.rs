@@ -55,7 +55,7 @@ pub(super) fn runtime_mmp_message_type(body: &str) -> Option<String> {
 
 /// Returns whether an MMP response frame represents a successful response.
 pub(super) fn runtime_mmp_response_succeeded(output: &[u8], max_content_length: usize) -> bool {
-    crate::message::decode_mmp_frame(output, max_content_length)
+    crate::protocol::message::decode_mmp_frame(output, max_content_length)
         .map(|(body, _)| !body.contains(r#""type":"error""#))
         .unwrap_or(false)
 }
@@ -75,7 +75,9 @@ pub(super) fn pane_id_from_runtime_agent_id(agent_id: &str) -> Option<PaneId> {
 }
 
 /// Formats a snapshot resume plan as a runtime control JSON object.
-pub(super) fn runtime_snapshot_resume_plan_json(plan: &crate::snapshot::LayoutLoadPlan) -> String {
+pub(super) fn runtime_snapshot_resume_plan_json(
+    plan: &crate::storage::snapshot::LayoutLoadPlan,
+) -> String {
     format!(
         r#"{{"session_id":"{}","window_count":{},"pane_count":{},"restart_required_panes":{},"limitations":{}}}"#,
         json_escape(&plan.session_id),

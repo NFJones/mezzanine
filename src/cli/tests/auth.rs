@@ -140,27 +140,27 @@ fn auth_login_noninteractive_default_requires_browser_interaction() {
 fn auth_login_method_selection_is_browser_first() {
     assert_eq!(
         super::super::auth::auth_login_method(&["login".to_string()]).unwrap(),
-        crate::auth::AuthMethod::Browser
+        crate::security::auth::AuthMethod::Browser
     );
     assert_eq!(
         super::super::auth::auth_login_method(&["login".to_string(), "--browser".to_string()])
             .unwrap(),
-        crate::auth::AuthMethod::Browser
+        crate::security::auth::AuthMethod::Browser
     );
     assert_eq!(
         super::super::auth::auth_login_method(&["login".to_string(), "--device-code".to_string(),])
             .unwrap(),
-        crate::auth::AuthMethod::DeviceCode
+        crate::security::auth::AuthMethod::DeviceCode
     );
     assert_eq!(
         super::super::auth::auth_login_method(&["login".to_string(), "--device-auth".to_string(),])
             .unwrap(),
-        crate::auth::AuthMethod::DeviceCode
+        crate::security::auth::AuthMethod::DeviceCode
     );
     assert_eq!(
         super::super::auth::auth_login_method(&["login".to_string(), "--api-key".to_string(),])
             .unwrap(),
-        crate::auth::AuthMethod::ApiKey
+        crate::security::auth::AuthMethod::ApiKey
     );
 }
 

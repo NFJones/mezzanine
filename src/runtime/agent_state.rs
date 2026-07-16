@@ -11,7 +11,7 @@ use super::{
     PermissionPolicy, ReqwestProviderHttpTransport, RuntimeAutoSizingDispatch,
     SessionApprovalStore, SubagentScopeDeclaration,
 };
-use crate::agent::provider::{AnthropicMessagesProvider, ClaudeCodeProvider};
+use crate::integrations::agent::provider::{AnthropicMessagesProvider, ClaudeCodeProvider};
 use mez_agent::McpPromptTool;
 
 /// Carries Runtime Agent Provider Task state for this subsystem.

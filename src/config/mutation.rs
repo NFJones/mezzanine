@@ -9,7 +9,7 @@ use super::{
     clean_key_segment, extract_config_values, extract_json_paths, extract_toml_paths,
     extract_yaml_paths, line_indent,
 };
-use crate::identifiers::is_ascii_identifier_segment;
+use crate::protocol::identifiers::is_ascii_identifier_segment;
 
 const MUTABLE_MCP_EXTERNAL_CAPABILITY_KEYS: &[&str] = &[
     "purpose",

@@ -120,7 +120,7 @@ pub(crate) fn runtime_show_messages_display(service: &RuntimeSessionService) -> 
 /// Formats one runtime histogram summary and bucket listing for pager output.
 fn runtime_metrics_histogram_lines(
     name: &str,
-    histogram: &crate::async_runtime::RuntimeHistogram,
+    histogram: &crate::host::async_runtime::RuntimeHistogram,
 ) -> Vec<String> {
     let average = if histogram.observations == 0 {
         0.0

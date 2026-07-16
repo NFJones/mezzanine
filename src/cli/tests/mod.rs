@@ -20,18 +20,20 @@ use super::{
     AuthPaths, AuthStore, CliEnv, CliInvocation, OpenAiProviderCredential, OsString, PathBuf,
     SocketSelection, UnixStream, read_control_response_frames, selected_socket_path,
 };
-use crate::async_runtime::AsyncFakeAttachedTerminalIo;
 use crate::config::{DEFAULT_CONFIG_TOML, compose_effective_config};
 use crate::control::{decode_control_frame, encode_control_body};
-use crate::project::{ProjectTrustStore, TrustDecision};
-use crate::registry::SessionRegistry;
-use crate::registry::{RegistrySessionState, SessionRecord};
+use crate::host::async_runtime::AsyncFakeAttachedTerminalIo;
+use crate::host::shell::resolve_shell;
+use crate::host::terminal::{
+    AttachedTerminalFdReadiness, AttachedTerminalFdRole, TerminalFdInterest,
+};
 use crate::runtime::{MEZ_ENV_FIELD_SEPARATOR, RuntimeEnv, default_socket_directory};
 use crate::runtime::{bind_control_socket, effective_uid_for_tests};
-use crate::shell::resolve_shell;
-use crate::snapshot::{SnapshotKind, SnapshotRepository};
-use crate::snapshot::{SnapshotManifest, SnapshotPaneCapture, SnapshotState};
-use crate::terminal::{AttachedTerminalFdReadiness, AttachedTerminalFdRole, TerminalFdInterest};
+use crate::security::project::{ProjectTrustStore, TrustDecision};
+use crate::storage::registry::SessionRegistry;
+use crate::storage::registry::{RegistrySessionState, SessionRecord};
+use crate::storage::snapshot::{SnapshotKind, SnapshotRepository};
+use crate::storage::snapshot::{SnapshotManifest, SnapshotPaneCapture, SnapshotState};
 use mez_mux::layout::Size;
 use mez_mux::session::Session;
 use std::fs;

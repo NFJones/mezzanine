@@ -48,12 +48,13 @@ impl RuntimeSessionService {
         let working_directory = self
             .pane_current_working_directory(pane_id)
             .unwrap_or_else(|| config_root.clone());
-        let current_project = crate::issues::project_key_for_working_directory(working_directory);
+        let current_project =
+            crate::storage::issues::project_key_for_working_directory(working_directory);
         let project_glob = args
             .project_glob
             .clone()
             .or_else(|| (!args.all_projects).then_some(current_project.clone()));
-        let store = crate::issues::IssueStore::from_database_path(
+        let store = crate::storage::issues::IssueStore::from_database_path(
             issues::runtime_issue_database_path(self, &config_root),
         );
         let issue_state = args.state.or(Some(mez_agent::issues::IssueState::Open));
@@ -129,7 +130,7 @@ impl RuntimeSessionService {
             ));
         };
         let args = parse_show_memories_args(&slash.args)?;
-        let store = crate::memory::PersistentMemoryStore::under_config_root(&config_root);
+        let store = crate::storage::memory::PersistentMemoryStore::under_config_root(&config_root);
         let scope = if args.all_scopes {
             None
         } else {
@@ -236,7 +237,7 @@ impl RuntimeSessionService {
                         "show-issues requires a configured config root",
                     ));
                 };
-                let store = crate::issues::IssueStore::from_database_path(
+                let store = crate::storage::issues::IssueStore::from_database_path(
                     issues::runtime_issue_database_path(self, &config_root),
                 );
                 let query = mez_agent::issues::IssueBrowserQuery::new(
@@ -272,7 +273,8 @@ impl RuntimeSessionService {
                         "show-memories requires a configured Mezzanine config root",
                     ));
                 };
-                let store = crate::memory::PersistentMemoryStore::under_config_root(&config_root);
+                let store =
+                    crate::storage::memory::PersistentMemoryStore::under_config_root(&config_root);
                 Ok(RecordBrowser::new(
                     "Memories",
                     store

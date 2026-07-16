@@ -51,11 +51,11 @@ fn runtime_mouse_history_scroll_requests_diff_refresh() {
         .unwrap();
     assert!(config.scrollback_copy_mode_active);
     assert_eq!(
-        crate::terminal::route_client_input(b"\x1b[5~", &config).unwrap(),
+        crate::host::terminal::route_client_input(b"\x1b[5~", &config).unwrap(),
         TerminalClientLoopAction::HandleCopyMode(mez_mux::copy::CopyModeKeyAction::PageUp)
     );
     assert_eq!(
-        crate::terminal::route_client_input(b"q", &config).unwrap(),
+        crate::host::terminal::route_client_input(b"q", &config).unwrap(),
         TerminalClientLoopAction::ForwardToPane(b"q".to_vec())
     );
 }

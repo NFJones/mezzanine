@@ -31,7 +31,7 @@ fn runtime_control_approval_methods_use_runtime_owned_queue() {
     let mut service = test_runtime_service();
     let audit_root = temp_root("runtime-approval-audit");
     let audit_path = audit_root.join("audit.jsonl");
-    service.set_audit_log(AuditLog::new(crate::audit::AuditConfig {
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
         enabled: true,
         path: audit_path.clone(),
         hash_chain: false,
@@ -447,7 +447,7 @@ fn runtime_project_trust_decision_applies_and_removes_project_overlays() {
     let root = temp_root("runtime-project-trust");
     let audit_root = temp_root("runtime-project-trust-audit");
     let audit_path = audit_root.join("audit.jsonl");
-    service.set_audit_log(AuditLog::new(crate::audit::AuditConfig {
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
         enabled: true,
         path: audit_path.clone(),
         hash_chain: false,

@@ -21,7 +21,7 @@ use super::{
     openai_responses_provider_from_auth_store_with_provider_options, parse_slash_command,
     resolve_provider_api, runtime_mezzanine_error_code,
 };
-use crate::agent::provider::anthropic_provider_from_auth_store_with_provider_options;
+use crate::integrations::agent::provider::anthropic_provider_from_auth_store_with_provider_options;
 use crate::runtime::{AgentCompactionEvent, RenderInvalidationReason, RuntimeTransition};
 
 impl RuntimeSessionService {

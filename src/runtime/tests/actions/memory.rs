@@ -78,7 +78,7 @@ context_window_tokens = 4500
         .unwrap();
     let config_root = temp_root("runtime-agent-compact-prune-memory");
     service.set_config_root(config_root.clone());
-    let store = crate::memory::PersistentMemoryStore::under_config_root(&config_root);
+    let store = crate::storage::memory::PersistentMemoryStore::under_config_root(&config_root);
     let mut expired = mez_agent::memory::MemoryRecord::new_with_defaults(
         "expired-compact-memory".to_string(),
         mez_agent::memory::MemoryScope::Global,
@@ -201,7 +201,7 @@ context_window_tokens = 4500
         .unwrap();
     let config_root = temp_root("runtime-agent-remember-prune-memory");
     service.set_config_root(config_root.clone());
-    let store = crate::memory::PersistentMemoryStore::under_config_root(&config_root);
+    let store = crate::storage::memory::PersistentMemoryStore::under_config_root(&config_root);
     let mut expired = mez_agent::memory::MemoryRecord::new_with_defaults(
         "expired-remember-memory".to_string(),
         mez_agent::memory::MemoryScope::Global,
@@ -624,7 +624,7 @@ fn runtime_executes_memory_actions_and_audits_action_arguments() {
     let audit_root = temp_root("runtime-memory-audit");
     let audit_path = audit_root.join("audit.jsonl");
     let config_root = temp_root("runtime-memory-action-config");
-    service.set_audit_log(AuditLog::new(crate::audit::AuditConfig {
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
         enabled: true,
         path: audit_path.clone(),
         hash_chain: false,
@@ -641,14 +641,16 @@ fn runtime_executes_memory_actions_and_audits_action_arguments() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    let store = crate::memory::PersistentMemoryStore::under_config_root(&config_root);
+    let store = crate::storage::memory::PersistentMemoryStore::under_config_root(&config_root);
     store
         .upsert(mez_agent::memory::MemoryRecord::new_with_defaults(
             "seed-memory".to_string(),
             mez_agent::memory::MemoryScope::Project {
-                root: crate::project::discover_project_root(&std::env::current_dir().unwrap())
-                    .to_string_lossy()
-                    .into_owned(),
+                root: crate::security::project::discover_project_root(
+                    &std::env::current_dir().unwrap(),
+                )
+                .to_string_lossy()
+                .into_owned(),
             },
             1,
             1,
@@ -887,7 +889,8 @@ fn runtime_memory_store_rejects_episode_and_scratch_kinds() {
             "{result:?}"
         );
     }
-    let store = crate::memory::PersistentMemoryStore::under_config_root(config_root.clone());
+    let store =
+        crate::storage::memory::PersistentMemoryStore::under_config_root(config_root.clone());
     let records = store
         .search(&MemorySearchRequest {
             query: Some("temporary".to_string()),

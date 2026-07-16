@@ -39,16 +39,16 @@ use super::{
     runtime_write_agent_trace_log_for_pane, select_model_profile, session_state_name,
     shell_command_from_argv, unix_seconds_to_rfc3339,
 };
-use crate::agent::provider::{
+use crate::integrations::agent::provider::{
     AsyncModelProvider, ClaudeCodeProvider, ReqwestProviderHttpTransport,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     openai_compatible_provider_from_auth_store_with_provider_options,
     openai_responses_provider_from_auth_store_with_provider_options,
 };
-use crate::auth::AuthCredentialKind;
 use crate::runtime::config::{
     runtime_default_models_for_provider, runtime_recommended_model_for_provider,
 };
+use crate::security::auth::AuthCredentialKind;
 use mez_agent::ModelResponse;
 use mez_agent::model_context_text_word_count;
 use mez_agent::{

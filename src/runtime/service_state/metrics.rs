@@ -111,46 +111,48 @@ pub(crate) struct RuntimeMetricsSnapshot {
     /// Number of shell transaction marker protocol violations.
     pub(crate) shell_transaction_protocol_violations: u64,
     /// Histogram of provider request message counts.
-    pub(crate) provider_request_message_counts: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_request_message_counts: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of total provider request message bytes.
-    pub(crate) provider_request_message_bytes: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_request_message_bytes: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of OpenAI instruction bytes in cache diagnostics.
-    pub(crate) provider_prompt_instructions_bytes: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_prompt_instructions_bytes: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of OpenAI response-format bytes in cache diagnostics.
-    pub(crate) provider_prompt_response_format_bytes: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_prompt_response_format_bytes: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of OpenAI tool schema bytes in cache diagnostics.
-    pub(crate) provider_prompt_tools_bytes: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_prompt_tools_bytes: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of OpenAI tool-choice bytes in cache diagnostics.
-    pub(crate) provider_prompt_tool_choice_bytes: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_prompt_tool_choice_bytes: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of stable input bytes in cache diagnostics.
-    pub(crate) provider_prompt_stable_input_bytes: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_prompt_stable_input_bytes: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of volatile input bytes in cache diagnostics.
-    pub(crate) provider_prompt_volatile_input_bytes: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_prompt_volatile_input_bytes: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of stable prompt-prefix bytes in cache diagnostics.
-    pub(crate) provider_prompt_stable_prefix_bytes: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_prompt_stable_prefix_bytes: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of provider request-shape bytes tracked outside the prompt prefix.
-    pub(crate) provider_request_shape_bytes: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_request_shape_bytes: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of stable observable cacheable prefix bytes.
-    pub(crate) provider_prompt_cacheable_prefix_bytes: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_prompt_cacheable_prefix_bytes: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of latest response input tokens.
-    pub(crate) provider_input_tokens_per_response: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_input_tokens_per_response: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of latest response output tokens.
-    pub(crate) provider_output_tokens_per_response: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_output_tokens_per_response: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of latest response cached input tokens.
-    pub(crate) provider_cached_input_tokens_per_response: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_cached_input_tokens_per_response:
+        crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of latest response cache-write input tokens.
     pub(crate) provider_cache_write_input_tokens_per_response:
-        crate::async_runtime::RuntimeHistogram,
+        crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of latest response cache-hit ratios in basis points.
-    pub(crate) provider_cached_input_hit_ratio_basis_points: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_cached_input_hit_ratio_basis_points:
+        crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of MAAP action counts per provider response.
-    pub(crate) provider_response_action_counts: crate::async_runtime::RuntimeHistogram,
+    pub(crate) provider_response_action_counts: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of shell actions dispatched per dispatch pass.
-    pub(crate) shell_actions_dispatched_per_batch: crate::async_runtime::RuntimeHistogram,
+    pub(crate) shell_actions_dispatched_per_batch: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of shell transaction elapsed milliseconds.
-    pub(crate) shell_transaction_duration_ms: crate::async_runtime::RuntimeHistogram,
+    pub(crate) shell_transaction_duration_ms: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of shell transaction model-visible output bytes.
-    pub(crate) shell_transaction_output_bytes: crate::async_runtime::RuntimeHistogram,
+    pub(crate) shell_transaction_output_bytes: crate::host::async_runtime::RuntimeHistogram,
     /// Most recent provider identifier observed by runtime metrics.
     pub(crate) last_provider: Option<String>,
     /// Most recent provider model observed by runtime metrics.

@@ -10,19 +10,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rustix::process::geteuid;
 
-use crate::audit::{AuditActor, AuditLog, AuditRecord};
 use crate::config::{
     ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,
     ConfigMutationPlan, ConfigMutationValue, ConfigScope, ConfigValidation,
     compose_effective_config, persist_config_mutation, validate_config_file,
 };
 use crate::error::{MezError, Result};
-use crate::event::{EventAudience, EventKind, EventLog, VisibleEvent};
-use crate::framing::{
+use crate::protocol::event::{EventAudience, EventKind, EventLog, VisibleEvent};
+use crate::protocol::framing::{
     FrameContext, FrameOverflow, ProtocolFrame, decode_frame, encode_frame, render_frame_template,
 };
-use crate::project::{ProjectTrustRecord, ProjectTrustStore, TrustDecision};
-use crate::snapshot::{LayoutLoadPlan, SnapshotKind, SnapshotRepository, SnapshotState};
+use crate::security::audit::{AuditActor, AuditLog, AuditRecord};
+use crate::security::project::{ProjectTrustRecord, ProjectTrustStore, TrustDecision};
+use crate::storage::snapshot::{LayoutLoadPlan, SnapshotKind, SnapshotRepository, SnapshotState};
 use mez_agent::mcp::{McpRegistry, McpServerKind, McpServerStatus};
 use mez_agent::permissions::{
     ApprovalDecision, BlockedApprovalQueue, BlockedApprovalRequest, BlockedApprovalState,
@@ -101,33 +101,39 @@ mod targets;
 mod types;
 
 pub use authz::authorize_control_request;
+#[cfg(test)]
 pub use config::{
     dispatch_config_request, dispatch_config_request_cached, dispatch_project_trust_request,
     dispatch_session_attach_request,
 };
 pub(crate) use dispatch::validate_control_method_params_schema;
 pub use dispatch::{
-    ControlConnectionState, dispatch_control_request, dispatch_control_request_cached,
-    dispatch_control_request_for_client, dispatch_control_request_for_client_with_agent_state,
+    ControlConnectionState, dispatch_control_request_cached,
+    dispatch_control_request_for_client_with_agent_state,
     dispatch_control_request_for_client_with_agent_state_and_model_profiles,
     dispatch_control_request_for_client_with_config,
     dispatch_control_request_for_client_with_config_and_audit,
+    dispatch_control_request_for_client_with_snapshot_context,
+    dispatch_control_request_for_connection, dispatch_control_request_with_approvals,
+    dispatch_control_request_with_approvals_and_audit, dispatch_control_request_with_captures,
+    dispatch_control_request_with_mcp,
+};
+#[cfg(test)]
+pub use dispatch::{
+    dispatch_control_request, dispatch_control_request_for_client,
     dispatch_control_request_for_client_with_events,
     dispatch_control_request_for_client_with_snapshot_captures,
     dispatch_control_request_for_client_with_snapshot_captures_and_config_layers,
     dispatch_control_request_for_client_with_snapshot_captures_config_layers_and_frame_state,
-    dispatch_control_request_for_client_with_snapshot_context,
-    dispatch_control_request_for_client_with_snapshots, dispatch_control_request_for_connection,
-    dispatch_control_request_with_approvals, dispatch_control_request_with_approvals_and_audit,
-    dispatch_control_request_with_captures, dispatch_control_request_with_mcp,
-    dispatch_control_request_with_snapshots, handle_control_frames_for_connection,
+    dispatch_control_request_for_client_with_snapshots, dispatch_control_request_with_snapshots,
+    handle_control_frames_for_connection,
 };
-pub use framing::{
-    decode_control_frame, encode_control_body, handle_control_frame, handle_control_frames,
-};
-pub use idempotency::{
-    CachedControlResponse, ControlIdempotencyCache, JsonRpcRequest, parse_json_rpc_request,
-};
+pub use framing::{decode_control_frame, encode_control_body};
+#[cfg(test)]
+pub use framing::{handle_control_frame, handle_control_frames};
+#[cfg(test)]
+pub use idempotency::CachedControlResponse;
+pub use idempotency::{ControlIdempotencyCache, JsonRpcRequest, parse_json_rpc_request};
 pub use initialize::initialize;
 pub(crate) use snapshot::dispatch_snapshot_request_with_context_async;
 pub(crate) use targets::{
@@ -141,10 +147,12 @@ pub(crate) use types::{
 };
 pub use types::{
     AuthenticationMaterial, AuthenticationMechanism, CONTROL_CONTENT_TYPE, Capabilities,
-    CapabilityFeatures, CapabilityLimits, ClientDescriptor, ClientStdioDescriptor, GrantedRole,
-    InitializeContext, InitializeParams, InitializeResult, MAX_EVENT_REPLAY_RETENTION,
-    ObserverRequestSummary, PaneCaptureSource, RequestedRole, ServerIdentity, TerminalDescriptor,
+    ClientDescriptor, ClientStdioDescriptor, GrantedRole, InitializeContext, InitializeParams,
+    InitializeResult, MAX_EVENT_REPLAY_RETENTION, ObserverRequestSummary, PaneCaptureSource,
+    RequestedRole, ServerIdentity, TerminalDescriptor,
 };
+#[cfg(test)]
+pub use types::{CapabilityFeatures, CapabilityLimits};
 
 use authz::require_idempotency_key;
 use capture::dispatch_pane_capture_request;

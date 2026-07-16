@@ -540,7 +540,7 @@ async fn runtime_executes_accepted_stdio_mcp_action_and_audits_call() {
     let mut service = test_runtime_service();
     let audit_root = temp_root("runtime-mcp-audit");
     let audit_path = audit_root.join("audit.jsonl");
-    service.set_audit_log(AuditLog::new(crate::audit::AuditConfig {
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
         enabled: true,
         path: audit_path.clone(),
         hash_chain: false,

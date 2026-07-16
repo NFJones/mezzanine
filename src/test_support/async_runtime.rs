@@ -5,7 +5,7 @@
 //! setup in one place so tests can override the service or configuration only
 //! when the behavior under test requires it.
 
-use crate::async_runtime::{
+use crate::host::async_runtime::{
     AsyncRuntimeActorConfig, AsyncRuntimeSessionActor, AsyncRuntimeSessionHandle,
 };
 use crate::runtime::RuntimeSessionService;

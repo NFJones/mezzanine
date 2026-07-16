@@ -358,7 +358,7 @@ fn serve_skips_background_auth_refresh_when_openai_token_is_still_fresh() {
 
     assert!(!super::super::serve::spawn_openai_auth_refresh_if_needed(
         auth_store,
-        crate::auth::DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS,
+        crate::security::auth::DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS,
     ));
 
     let _ = fs::remove_dir_all(home);
@@ -458,7 +458,7 @@ fn serve_can_start_message_protocol_socket() {
 
     let mut message_stream = UnixStream::connect(&message_socket).unwrap();
     message_stream
-        .write_all(&crate::message::encode_mmp_body(
+        .write_all(&crate::protocol::message::encode_mmp_body(
             r#"{"protocol":"mmp/1","type":"hello","role":"default"}"#,
         ))
         .unwrap();
@@ -466,7 +466,8 @@ fn serve_can_start_message_protocol_socket() {
     let mut message_response = vec![0; 4096];
     let read = message_stream.read(&mut message_response).unwrap();
     message_response.truncate(read);
-    let (message_body, _) = crate::message::decode_mmp_frame(&message_response, 4096).unwrap();
+    let (message_body, _) =
+        crate::protocol::message::decode_mmp_frame(&message_response, 4096).unwrap();
     assert!(message_body.contains(r#""type":"welcome""#));
     drop(message_stream);
 
@@ -614,7 +615,7 @@ fn serve_derives_default_auxiliary_sockets() {
     let mut message_stream =
         connect_when_ready(&message_socket).expect("message socket did not accept connections");
     message_stream
-        .write_all(&crate::message::encode_mmp_body(
+        .write_all(&crate::protocol::message::encode_mmp_body(
             r#"{"protocol":"mmp/1","type":"hello","role":"default"}"#,
         ))
         .unwrap();
@@ -622,7 +623,8 @@ fn serve_derives_default_auxiliary_sockets() {
     let mut message_response = vec![0; 4096];
     let read = message_stream.read(&mut message_response).unwrap();
     message_response.truncate(read);
-    let (message_body, _) = crate::message::decode_mmp_frame(&message_response, 4096).unwrap();
+    let (message_body, _) =
+        crate::protocol::message::decode_mmp_frame(&message_response, 4096).unwrap();
     assert!(message_body.contains(r#""type":"welcome""#));
     drop(message_stream);
 

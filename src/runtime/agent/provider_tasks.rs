@@ -6,7 +6,7 @@
 //! dispatch while preserving the runtime service method surface used by the
 //! async actor and tests.
 
-use crate::agent::provider::{
+use crate::integrations::agent::provider::{
     ClaudeCodeProvider, anthropic_provider_from_auth_store_with_provider_options,
 };
 use crate::runtime::{RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition};
@@ -27,7 +27,7 @@ use super::{
     runtime_provider_event_error,
 };
 #[cfg(test)]
-use crate::agent::provider::ModelProvider;
+use crate::integrations::agent::provider::ModelProvider;
 
 impl RuntimeSessionService {
     /// Returns whether one provider failure remains eligible for retry.

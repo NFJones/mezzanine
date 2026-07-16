@@ -191,7 +191,7 @@ fn runtime_control_config_live_persist_target_mutates_live_override() {
         .unwrap();
     let audit_root = temp_root("runtime-live-config-audit");
     let audit_path = audit_root.join("audit.jsonl");
-    service.set_audit_log(AuditLog::new(crate::audit::AuditConfig {
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
         enabled: true,
         path: audit_path.clone(),
         hash_chain: false,

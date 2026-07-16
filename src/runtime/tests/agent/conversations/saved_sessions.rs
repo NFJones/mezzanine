@@ -63,7 +63,7 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         })
         .unwrap();
     transcript_store
-        .append_presentation(&crate::transcript::AgentPresentationEntry {
+        .append_presentation(&crate::storage::transcript::AgentPresentationEntry {
             conversation_id: "saved".to_string(),
             sequence: 1,
             created_at_unix_seconds: 3,

@@ -741,20 +741,20 @@ fn runtime_event_fanout_batches_frames_per_connection() {
         }
     }
 
-    let mut event_log = crate::event::EventLog::new(8, 1024).unwrap();
+    let mut event_log = crate::protocol::event::EventLog::new(8, 1024).unwrap();
     event_log
         .append(
-            crate::event::EventKind::Diagnostic,
+            crate::protocol::event::EventKind::Diagnostic,
             Some("session".to_string()),
-            crate::event::EventVisibility::SessionView,
+            crate::protocol::event::EventVisibility::SessionView,
             r#"{"message":"first"}"#,
         )
         .unwrap();
     event_log
         .append(
-            crate::event::EventKind::Diagnostic,
+            crate::protocol::event::EventKind::Diagnostic,
             Some("session".to_string()),
-            crate::event::EventVisibility::SessionView,
+            crate::protocol::event::EventVisibility::SessionView,
             r#"{"message":"second"}"#,
         )
         .unwrap();
@@ -763,7 +763,7 @@ fn runtime_event_fanout_batches_frames_per_connection() {
     connections
         .attach(
             "event-connection",
-            crate::event::EventAudience::Primary,
+            crate::protocol::event::EventAudience::Primary,
             true,
             0,
         )

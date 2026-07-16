@@ -47,7 +47,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn set_config_root(&mut self, root: PathBuf) {
-        let _ = crate::skills::sync_managed_builtin_skills(&root);
+        let _ = crate::integrations::skills::sync_managed_builtin_skills(&root);
         self.integration.set_config_root(Some(root));
     }
 
@@ -527,7 +527,7 @@ impl RuntimeSessionService {
         let Some(config_root) = self.integration.config_root() else {
             return Ok(());
         };
-        let store = crate::memory::PersistentMemoryStore::under_config_root(config_root);
+        let store = crate::storage::memory::PersistentMemoryStore::under_config_root(config_root);
         let Ok(records) = store.list() else {
             return Ok(());
         };
@@ -551,7 +551,7 @@ impl RuntimeSessionService {
         let Some(config_root) = self.integration.config_root() else {
             return;
         };
-        let store = crate::memory::PersistentMemoryStore::under_config_root(config_root);
+        let store = crate::storage::memory::PersistentMemoryStore::under_config_root(config_root);
         for record in self.integration.session_memory().export() {
             match &record.scope {
                 mez_agent::memory::MemoryScope::Global

@@ -4,7 +4,7 @@
 //! lifecycle-event services used by control clients and observer fanout.
 
 use crate::control::ControlIdempotencyCache;
-use crate::event::EventLog;
+use crate::protocol::event::EventLog;
 use mez_agent::messaging::MessageService;
 
 /// Owns control replay, messaging, and event-fanout state.

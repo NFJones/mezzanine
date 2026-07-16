@@ -1,7 +1,7 @@
 //! Runtime agent test modules.
 
 use super::*;
-use crate::agent::slash::AgentShellCommandOutcome;
+use crate::integrations::agent::slash::AgentShellCommandOutcome;
 use crate::runtime::commands_support;
 
 mod commands;

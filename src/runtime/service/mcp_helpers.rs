@@ -127,7 +127,7 @@ pub(super) fn runtime_mcp_server_needs_live_auth_rediscovery(
 /// Returns whether a server has stored OAuth state that can recover live discovery.
 pub(super) fn runtime_mcp_server_has_live_auth_recovery(
     server: &mez_agent::mcp::McpServerState,
-    auth_store: Option<&crate::auth::AuthStore>,
+    auth_store: Option<&crate::security::auth::AuthStore>,
 ) -> bool {
     auth_store.is_some_and(|store| {
         store.mcp_access_token(&server.configured.id).is_ok()

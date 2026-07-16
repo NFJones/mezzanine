@@ -11,8 +11,8 @@ use super::*;
 #[test]
 fn runtime_service_restarts_restored_panes_drain_initial_prompt_output() {
     let original = test_session();
-    let payload = crate::snapshot::SessionSnapshotPayload::from_session(&original);
-    let restore_input = crate::snapshot::session_restore_input(&payload).unwrap();
+    let payload = crate::storage::snapshot::SessionSnapshotPayload::from_session(&original);
+    let restore_input = crate::storage::snapshot::session_restore_input(&payload).unwrap();
     let restored = Session::from_restore_input(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         restore_input,
@@ -67,12 +67,12 @@ fn runtime_service_restarts_restored_panes_drain_initial_prompt_output_for_each_
     original
         .split_active_pane(&primary, SplitDirection::Vertical)
         .unwrap();
-    let mut payload = crate::snapshot::SessionSnapshotPayload::from_session(&original);
+    let mut payload = crate::storage::snapshot::SessionSnapshotPayload::from_session(&original);
     payload.windows[0].panes[0].current_working_directory =
         Some(fast_cwd.to_string_lossy().into_owned());
     payload.windows[0].panes[1].current_working_directory =
         Some(slow_cwd.to_string_lossy().into_owned());
-    let restore_input = crate::snapshot::session_restore_input(&payload).unwrap();
+    let restore_input = crate::storage::snapshot::session_restore_input(&payload).unwrap();
     let restored = Session::from_restore_input(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         restore_input,
@@ -192,7 +192,7 @@ fn runtime_provider_execution_completes_running_prompt_turn() {
     service.set_agent_transcript_store(transcript_store.clone());
     let audit_root = temp_root("runtime-provider-audit");
     let audit_path = audit_root.join("audit.jsonl");
-    service.set_audit_log(AuditLog::new(crate::audit::AuditConfig {
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
         enabled: true,
         required: true,
         path: audit_path.clone(),

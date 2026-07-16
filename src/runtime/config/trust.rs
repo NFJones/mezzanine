@@ -15,7 +15,7 @@ use crate::config::{
 };
 use crate::control::unix_seconds_to_rfc3339;
 use crate::error::{MezError, Result};
-use crate::project::{ProjectTrustRecord, TrustDecision};
+use crate::security::project::{ProjectTrustRecord, TrustDecision};
 
 use super::{
     ensure_absolute, json_escape, optional_path_json, optional_string_json,

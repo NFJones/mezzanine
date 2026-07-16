@@ -10,9 +10,9 @@ use super::super::{
     RuntimeSessionService, current_unix_seconds, json_escape,
 };
 use super::runtime_expand_user_path;
-use crate::command::LayoutLoadSelector;
 use crate::control::ControlConnectionState;
-use crate::snapshot::{SnapshotRepository, SnapshotState};
+use crate::storage::snapshot::{SnapshotRepository, SnapshotState};
+use crate::ui::command::LayoutLoadSelector;
 use mez_mux::command::plans::{
     RuntimePaneLayoutPlan, SwapPaneNeighbor, SwapPanePlan, new_window_name,
     new_window_shell_command, resize_spec_from_invocation,

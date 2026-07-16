@@ -3,8 +3,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use crate::auth::{AuthStore, DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS};
-use crate::project::ProjectTrustStore;
+use crate::security::auth::{AuthStore, DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS};
+use crate::security::project::ProjectTrustStore;
 
 /// Owns credential and trust-store bindings used by product integrations.
 #[derive(Debug)]

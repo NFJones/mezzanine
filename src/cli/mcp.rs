@@ -11,13 +11,13 @@ use super::{
     compose_effective_config, default_trust_database_path, discover_existing_overlays,
     discover_project_root, fs, migrate_config_file, serialize_json, write_json_or_plain,
 };
-use crate::auth::{
-    AuthCredentialState, McpAuthMetadata, McpAuthStatus, McpCredentialKind, McpOAuthCredential,
-    run_mcp_oauth_login_async,
-};
-use crate::mcp::{
+use crate::integrations::mcp::{
     McpConfigCommand, McpConfigTransport, mcp_config_command_report, mcp_config_setting_from_user,
     persist_mcp_config_command,
+};
+use crate::security::auth::{
+    AuthCredentialState, McpAuthMetadata, McpAuthStatus, McpCredentialKind, McpOAuthCredential,
+    run_mcp_oauth_login_async,
 };
 use sha2::Digest;
 
@@ -1133,7 +1133,7 @@ mod tests {
         configured_mcp_server_json, mcp_inspect_json, mcp_list_json, mcp_login_json,
         mcp_status_json,
     };
-    use crate::auth::{CredentialStoreKind, McpCredentialKind};
+    use crate::security::auth::{CredentialStoreKind, McpCredentialKind};
 
     /// Verifies typed MCP status JSON preserves the existing secret-safe field
     /// order and null-handling expected by CLI scripts.

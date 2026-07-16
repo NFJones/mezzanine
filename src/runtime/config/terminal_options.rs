@@ -9,9 +9,9 @@
 use serde_json::Value;
 
 use crate::error::{MezError, Result};
-use crate::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP;
-use crate::terminal::{HostClipboard, HostClipboardCommand};
-use crate::transcript::DEFAULT_SAVED_AGENT_SESSION_LIMIT;
+use crate::host::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP;
+use crate::host::terminal::{HostClipboard, HostClipboardCommand};
+use crate::storage::transcript::DEFAULT_SAVED_AGENT_SESSION_LIMIT;
 use mez_mux::presentation::TerminalCursorStyle;
 use mez_terminal::{
     DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, DEFAULT_PANE_TERM, TerminalEmojiWidth,

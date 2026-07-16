@@ -57,19 +57,19 @@ fn runtime_config_parses_hook_matcher_groups() {
         }])
         .unwrap();
 
-    let matching = crate::hooks::plan_event(
+    let matching = crate::integrations::hooks::plan_event(
         service.integration.hook_definitions(),
         HookEvent::UserPromptSubmit,
         r#"{"pane_id":"pane-2"}"#,
     )
     .unwrap();
-    let fallback = crate::hooks::plan_event(
+    let fallback = crate::integrations::hooks::plan_event(
         service.integration.hook_definitions(),
         HookEvent::UserPromptSubmit,
         r#"{"agent_id":"agent-1"}"#,
     )
     .unwrap();
-    let filtered = crate::hooks::plan_event(
+    let filtered = crate::integrations::hooks::plan_event(
         service.integration.hook_definitions(),
         HookEvent::UserPromptSubmit,
         r#"{"pane_id":"other","agent_id":"agent-2"}"#,

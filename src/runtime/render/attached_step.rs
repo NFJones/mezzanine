@@ -13,11 +13,11 @@ use super::{
     TerminalClientLoopConfig, json_escape, mouse_action_name, mux_action_command_prompt_prefill,
     mux_action_name, runtime_primary_prompt_input,
 };
-use crate::runtime::{RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition};
-use crate::terminal::{
+use crate::host::terminal::{
     AttachedTerminalFdReadiness, AttachedTerminalFdRole, TerminalFdInterest,
     plan_attached_terminal_client_step,
 };
+use crate::runtime::{RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition};
 
 impl RuntimeSessionService {
     /// Returns the compact approval label shown in the pane agent status area.

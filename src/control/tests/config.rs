@@ -348,7 +348,7 @@ fn config_control_mutations_can_emit_required_audit_records() {
     let config_path = root.join("config.toml");
     fs::write(&config_path, "[history]\nlines = 10000\n").unwrap();
     let audit_path = root.join("audit.jsonl");
-    let mut audit_log = AuditLog::new(crate::audit::AuditConfig {
+    let mut audit_log = AuditLog::new(crate::security::audit::AuditConfig {
         enabled: true,
         path: audit_path.clone(),
         hash_chain: false,

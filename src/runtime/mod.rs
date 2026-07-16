@@ -25,25 +25,6 @@ use rustix::net::sockopt::socket_peercred;
 use rustix::process::geteuid;
 use serde_json::Value;
 
-use crate::agent::actions::{
-    execute_mcp_action_through_runtime, execute_mcp_action_through_runtime_async,
-    next_transcript_sequence,
-};
-use crate::agent::context::assemble_model_request;
-use crate::agent::network::execute_network_action_with_transport_async;
-use crate::agent::provider::{
-    AsyncModelProvider, DeepSeekChatCompletionsProvider, OpenAiCompatibleChatCompletionsProvider,
-    OpenAiResponsesProvider, ReqwestProviderHttpTransport,
-};
-use crate::agent::slash::{
-    AgentShellCommandOutcome, AgentShellRuntimeContext, execute_agent_shell_command_with_context,
-};
-use crate::audit::{AuditActor, AuditDeferredWrite, AuditLog, AuditRecord};
-use crate::auth::AuthStore;
-use crate::command::{
-    CommandOutcome, bind_key_args, binding_config_key, execute_auth_command, execute_command,
-    execute_mark_pane_ready_command, key_chord_notation,
-};
 use crate::config::{
     ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
     ConfigPaths, ConfigScope, EffectiveConfig, compose_effective_config, persist_config_text,
@@ -71,44 +52,63 @@ use crate::control::{
     unix_seconds_to_rfc3339, window_target_checked_resolved,
 };
 use crate::error::{MezError, Result};
-use crate::event::{
-    EventAudience, EventKind, EventLog, EventVisibility, VisibleEvent, encode_event_notification,
-    event_type_name,
-};
-use crate::hooks::{
-    FocusedShellExecutor, FocusedShellHookDispatch, FocusedShellHookDispatchStatus,
-    FocusedShellHookOutput, HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult,
-    HookExecutionStatus, HookFailure, HookFailureDecision, HookFailureKind, HookOnFailure,
-    decide_hook_failure, execute_focused_shell_hook, execute_program_hook,
-    hook_execution_audit_record, plan_event,
-};
-use crate::mcp::{
-    McpStdioConnection, discover_streamable_http_mcp_server_with_auth_token,
-    execute_streamable_http_exchange, spawn_stdio_mcp_connection,
-};
-use crate::message::{decode_mmp_frame, encode_mmp_body, handle_mmp_frame};
-use crate::project::{
-    ProjectTrustStore, TrustDecision, default_trust_database_path, discover_existing_overlays,
-    discover_project_root,
-};
-use crate::readline::{ReadlineInputDecoder, ReadlinePrompt, ReadlinePromptKind};
-use crate::registry::{SessionRecord, SessionRegistry};
-use crate::snapshot::{
-    SessionSnapshotPayload, SnapshotAgentSession, SnapshotApprovalGrantMetadata,
-    SnapshotApprovalRequestMetadata, SnapshotConfigDiagnostic, SnapshotConfigLayerMetadata,
-    SnapshotCreationContext, SnapshotFrameSettings, SnapshotFrameState,
-    SnapshotMcpExternalCapability, SnapshotMcpServerState, SnapshotMcpToolEffects,
-    SnapshotMcpToolState, SnapshotPaneCapture, SnapshotRepository, SnapshotState,
-};
-use crate::subagent::SUBAGENT_FRIENDLY_NAMES;
-use crate::terminal::{
+use crate::host::terminal::{
     AttachedTerminalClientStepPlan, CopyMode, HostClipboard, MouseAction,
     MouseWindowActionFrameCell, TerminalClientLoopAction, TerminalClientLoopConfig,
     TerminalFrameContext, WindowFrameAction, agent_prompt_reserved_line_count,
     render_attached_client_view, rendered_pane_geometries, route_client_input_actions,
     window_frame_action_pillbox_cells, window_frame_pillbox_cells,
 };
-use crate::transcript::AgentTranscriptStore;
+use crate::integrations::agent::actions::{
+    execute_mcp_action_through_runtime, execute_mcp_action_through_runtime_async,
+    next_transcript_sequence,
+};
+use crate::integrations::agent::context::assemble_model_request;
+use crate::integrations::agent::network::execute_network_action_with_transport_async;
+use crate::integrations::agent::provider::{
+    AsyncModelProvider, DeepSeekChatCompletionsProvider, OpenAiCompatibleChatCompletionsProvider,
+    OpenAiResponsesProvider, ReqwestProviderHttpTransport,
+};
+use crate::integrations::agent::slash::{
+    AgentShellCommandOutcome, AgentShellRuntimeContext, execute_agent_shell_command_with_context,
+};
+use crate::integrations::agent::subagent::SUBAGENT_FRIENDLY_NAMES;
+use crate::integrations::hooks::{
+    FocusedShellExecutor, FocusedShellHookDispatch, FocusedShellHookDispatchStatus,
+    FocusedShellHookOutput, HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult,
+    HookExecutionStatus, HookFailure, HookFailureDecision, HookFailureKind, HookOnFailure,
+    decide_hook_failure, execute_focused_shell_hook, execute_program_hook,
+    hook_execution_audit_record, plan_event,
+};
+use crate::integrations::mcp::{
+    McpStdioConnection, discover_streamable_http_mcp_server_with_auth_token,
+    execute_streamable_http_exchange, spawn_stdio_mcp_connection,
+};
+use crate::protocol::event::{
+    EventAudience, EventKind, EventLog, EventVisibility, VisibleEvent, encode_event_notification,
+    event_type_name,
+};
+use crate::protocol::message::{decode_mmp_frame, encode_mmp_body, handle_mmp_frame};
+use crate::security::audit::{AuditActor, AuditDeferredWrite, AuditLog, AuditRecord};
+use crate::security::auth::AuthStore;
+use crate::security::project::{
+    ProjectTrustStore, TrustDecision, default_trust_database_path, discover_existing_overlays,
+    discover_project_root,
+};
+use crate::storage::registry::{SessionRecord, SessionRegistry};
+use crate::storage::snapshot::{
+    SessionSnapshotPayload, SnapshotAgentSession, SnapshotApprovalGrantMetadata,
+    SnapshotApprovalRequestMetadata, SnapshotConfigDiagnostic, SnapshotConfigLayerMetadata,
+    SnapshotCreationContext, SnapshotFrameSettings, SnapshotFrameState,
+    SnapshotMcpExternalCapability, SnapshotMcpServerState, SnapshotMcpToolEffects,
+    SnapshotMcpToolState, SnapshotPaneCapture, SnapshotRepository, SnapshotState,
+};
+use crate::storage::transcript::AgentTranscriptStore;
+use crate::ui::command::{
+    CommandOutcome, bind_key_args, binding_config_key, execute_auth_command, execute_command,
+    execute_mark_pane_ready_command, key_chord_notation,
+};
+use crate::ui::readline::{ReadlineInputDecoder, ReadlinePrompt, ReadlinePromptKind};
 use mez_agent::mcp::{
     McpApprovalSetting, McpExternalCapability, McpRegistry, McpServerKind, McpServerStatus,
     McpStartupPlan, McpStartupTransportPlan, McpToolCallPlan, McpToolCallRequest,
@@ -345,13 +345,14 @@ pub use env::{
     AuxiliarySocketKind, DEFAULT_SOCKET_NAME, MEZ_ENV_FIELD_SEPARATOR, RuntimeEnv, SocketDirectory,
     SocketDirectorySource,
 };
+#[cfg(test)]
 pub use fanout::{
-    RuntimeEventConnection, RuntimeEventConnectionTable, RuntimeEventFanoutSink,
-    RuntimeEventWakeup, RuntimeFocusedShellHookRun, RuntimeMessageConnection,
+    RuntimeEventConnection, RuntimeEventFanoutSink, RuntimeMessageConnection,
     RuntimeMessageConnectionTable, RuntimeMessageFanoutSink, RuntimeMessageWakeup,
     flush_runtime_event_wakeup, flush_runtime_event_wakeups, flush_runtime_message_wakeup,
     flush_runtime_message_wakeups,
 };
+pub use fanout::{RuntimeEventConnectionTable, RuntimeEventWakeup, RuntimeFocusedShellHookRun};
 #[cfg(test)]
 use mez_agent::AutoSizingDecision as RuntimeAutoSizingDecision;
 use mez_agent::{
@@ -381,17 +382,16 @@ use service_state::{
     RuntimeAgentPromptInput, RuntimeCommandBinding, RuntimeSubagentLineage,
 };
 pub use sockets::{
-    apply_registry_update, apply_registry_update_async, authorize_unix_peer,
-    authorize_unix_peer_raw_fd, authorize_unix_peer_uid, auxiliary_socket_path_for_control_socket,
-    bind_control_socket, current_effective_uid, default_socket_directory,
-    ensure_private_socket_directory, pane_environment, pane_environment_with_term,
-    prune_stale_socket_files_in_directory, remove_stale_socket_file_if_unserved,
-    socket_path_for_name,
+    apply_registry_update, apply_registry_update_async, authorize_unix_peer_raw_fd,
+    auxiliary_socket_path_for_control_socket, bind_control_socket, current_effective_uid,
+    default_socket_directory, ensure_private_socket_directory, pane_environment_with_term,
+    prune_stale_socket_files_in_directory, socket_path_for_name,
 };
 #[cfg(test)]
 pub use sockets::{
-    serve_control_connection, serve_runtime_control_connection,
-    serve_runtime_control_connection_with_state,
+    authorize_unix_peer, authorize_unix_peer_uid, pane_environment,
+    remove_stale_socket_file_if_unserved, serve_control_connection,
+    serve_runtime_control_connection, serve_runtime_control_connection_with_state,
 };
 use status_pills::{
     RuntimeStatusPillCache, RuntimeStatusPillDefinition,

@@ -29,15 +29,15 @@ use super::{
     socket_path_for_name,
 };
 use crate::MezError;
-use crate::agent::provider::ModelProvider;
-use crate::agent::slash::AgentShellCommandOutcome;
-use crate::snapshot::SnapshotRepository;
-use crate::terminal::{
+use crate::host::terminal::{
     AttachedTerminalClientStepPlan, HostClipboard, MouseAction, PaneAgentStatusField,
     TerminalClientLoopAction, TerminalClientLoopConfig,
 };
+use crate::integrations::agent::provider::ModelProvider;
+use crate::integrations::agent::slash::AgentShellCommandOutcome;
+use crate::storage::snapshot::SnapshotRepository;
+use crate::storage::transcript::AgentTranscriptStore;
 use crate::test_support::runtime::{RuntimeServiceFixture, SessionFixture};
-use crate::transcript::AgentTranscriptStore;
 use base64::Engine;
 use mez_agent::AgentLogLevel;
 use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
@@ -109,8 +109,8 @@ pub(crate) fn effective_uid_for_tests() -> u32 {
 }
 
 use crate::control::{decode_control_frame, encode_control_body};
-use crate::registry::{RegistrySessionState, SessionRegistry};
-use crate::shell::{ResolvedShell, ShellSource};
+use crate::host::shell::{ResolvedShell, ShellSource};
+use crate::storage::registry::{RegistrySessionState, SessionRegistry};
 use mez_core::ids::IdFactory;
 use mez_mux::layout::Size;
 use std::sync::Mutex;

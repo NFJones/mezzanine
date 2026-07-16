@@ -26,10 +26,10 @@ use super::{
     handle_control_frames, handle_control_frames_for_connection, initialize,
     initialize_result_json, json_escape, parse_json_rpc_request,
 };
-use crate::event::{EventKind, EventLog, EventVisibility};
-use crate::project::ProjectTrustStore;
-use crate::shell::{ResolvedShell, ShellSource};
-use crate::snapshot::{
+use crate::host::shell::{ResolvedShell, ShellSource};
+use crate::protocol::event::{EventKind, EventLog, EventVisibility};
+use crate::security::project::ProjectTrustStore;
+use crate::storage::snapshot::{
     PaneSnapshotPayload, SessionSnapshotPayload, SnapshotFrameState, SnapshotPaneGeometry,
     SnapshotRepository, SnapshotSessionState, SnapshotShellMetadata, WindowSnapshotPayload,
 };

@@ -6,11 +6,11 @@
 //! request transport prevents ad hoc command channels and gives tests a stable
 //! shape for event ordering across synchronous and asynchronous adapters.
 
-use crate::audit::AuditRetentionPolicy;
-use crate::hooks::{HookExecutionPlan, HookExecutionResult};
-use crate::registry::SessionRegistry;
+use crate::integrations::hooks::{HookExecutionPlan, HookExecutionResult};
 use crate::runtime::RuntimeRegistryUpdatePlan;
-use crate::transcript::AgentTranscriptStore;
+use crate::security::audit::AuditRetentionPolicy;
+use crate::storage::registry::SessionRegistry;
+use crate::storage::transcript::AgentTranscriptStore;
 use mez_agent::transcript::TranscriptEntry;
 use mez_agent::{AgentTurnExecution, ModelResponse};
 use mez_core::ids::{AgentId, ClientId};

@@ -11,7 +11,7 @@ use super::{
     macro_judge_decision_from_text, macro_judge_model_request,
 };
 #[cfg(test)]
-use crate::agent::provider::ModelProvider;
+use crate::integrations::agent::provider::ModelProvider;
 
 impl RuntimeSessionService {
     /// Returns whether one parent turn is waiting for a structured macro judge

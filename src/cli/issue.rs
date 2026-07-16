@@ -7,7 +7,9 @@
 use super::{
     Args, CliEnv, CliOutputFormat, Result, Serialize, Subcommand, Write, load_runtime_config_layers,
 };
-use crate::issues::{IssueStore, issue_database_location, project_key_for_working_directory};
+use crate::storage::issues::{
+    IssueStore, issue_database_location, project_key_for_working_directory,
+};
 use mez_agent::issues::{
     IssueKind, IssueQuery, IssueRecord, IssueState, IssueUpdate, NewIssueRecord, issue_record_json,
 };

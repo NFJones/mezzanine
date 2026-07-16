@@ -25,7 +25,7 @@ use super::{
     runtime_config_apply_event_payload, runtime_hook_event_name,
     runtime_hook_execution_status_name, runtime_pane_readiness_state_name,
 };
-use crate::terminal::wrap_agent_log_lines;
+use crate::host::terminal::wrap_agent_log_lines;
 use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
 use std::collections::BTreeMap;
 

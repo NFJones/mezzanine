@@ -62,12 +62,12 @@ pub(crate) fn runtime_command_outcome_json(outcome: &CommandOutcome) -> String {
 }
 
 /// Renders a layout load selector for runtime command JSON diagnostics.
-fn runtime_layout_load_selector_json(selector: &crate::command::LayoutLoadSelector) -> String {
+fn runtime_layout_load_selector_json(selector: &crate::ui::command::LayoutLoadSelector) -> String {
     match selector {
-        crate::command::LayoutLoadSelector::Name(name) => {
+        crate::ui::command::LayoutLoadSelector::Name(name) => {
             format!(r#"{{"kind":"name","name":"{}"}}"#, json_escape(name))
         }
-        crate::command::LayoutLoadSelector::Latest => r#"{"kind":"latest"}"#.to_string(),
+        crate::ui::command::LayoutLoadSelector::Latest => r#"{"kind":"latest"}"#.to_string(),
     }
 }
 

@@ -74,7 +74,7 @@ pub(crate) async fn runtime_execute_auto_sizing_with_async_provider<P: AsyncMode
 /// Executes an internal auto-sizing request with a synchronous test provider.
 #[cfg(test)]
 pub(crate) fn runtime_execute_auto_sizing_with_provider<
-    P: crate::agent::provider::ModelProvider,
+    P: crate::integrations::agent::provider::ModelProvider,
 >(
     provider: &P,
     auto_sizing: &RuntimeAutoSizingDispatch,

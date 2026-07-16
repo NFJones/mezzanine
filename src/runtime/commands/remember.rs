@@ -21,7 +21,7 @@ use super::{
     resolve_provider_api, runtime_apply_persisted_config_mutation_batch,
     runtime_effective_config_value, runtime_single_mode_arg, runtime_string_array_json,
 };
-use crate::agent::provider::anthropic_provider_from_auth_store_with_provider_options;
+use crate::integrations::agent::provider::anthropic_provider_from_auth_store_with_provider_options;
 use crate::runtime::{AgentRememberEvent, RenderInvalidationReason, RuntimeTransition};
 use mez_agent::memory::{MemoryKind, MemoryState};
 use std::{fs, path::PathBuf, process::Command};
@@ -631,7 +631,7 @@ impl RuntimeSessionService {
                 "remember requires a configured Mezzanine config root",
             ));
         };
-        let store = crate::memory::PersistentMemoryStore::under_config_root(&config_root);
+        let store = crate::storage::memory::PersistentMemoryStore::under_config_root(&config_root);
         let now = current_unix_seconds().max(1);
         let mut stored = Vec::new();
         for (index, candidate) in candidates.into_iter().take(6).enumerate() {
@@ -868,7 +868,7 @@ impl RuntimeSessionService {
         else {
             return 0;
         };
-        let store = crate::memory::PersistentMemoryStore::under_config_root(&config_root);
+        let store = crate::storage::memory::PersistentMemoryStore::under_config_root(&config_root);
         let now = current_unix_seconds().max(1);
         let Ok(pruned) = store.prune_expired(now, false) else {
             return 0;

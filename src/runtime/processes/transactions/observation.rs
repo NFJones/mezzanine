@@ -45,7 +45,7 @@ impl RuntimeSessionService {
             let decoded_event;
             let event = if let TerminalOscEvent::ShellIntegration { payload } = event {
                 let encoded = format!("133;{payload}");
-                decoded_event = crate::terminal::parse_mez_shell_transaction_osc(&encoded);
+                decoded_event = crate::host::terminal::parse_mez_shell_transaction_osc(&encoded);
                 let Some(event) = decoded_event.as_ref() else {
                     continue;
                 };

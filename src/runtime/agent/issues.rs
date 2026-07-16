@@ -125,10 +125,9 @@ impl RuntimeSessionService {
                 "issue actions require a configured config root".to_string(),
             )?);
         };
-        let store = crate::issues::IssueStore::from_database_path(runtime_issue_database_path(
-            self,
-            &config_root,
-        ));
+        let store = crate::storage::issues::IssueStore::from_database_path(
+            runtime_issue_database_path(self, &config_root),
+        );
         let project = issue_action_project(self, turn, &config_root);
         match &action.payload {
             AgentActionPayload::IssueAdd {
@@ -270,7 +269,7 @@ pub(super) fn runtime_issues_enabled(service: &RuntimeSessionService) -> bool {
 fn runtime_issue_database_path(
     service: &RuntimeSessionService,
     config_root: &PathBuf,
-) -> crate::issues::IssueDatabasePath {
+) -> crate::storage::issues::IssueDatabasePath {
     let configured = runtime_effective_config_value(service.integration.config_layers())
         .ok()
         .and_then(|root| {
@@ -279,7 +278,7 @@ fn runtime_issue_database_path(
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string)
         });
-    crate::issues::issue_database_location(config_root, configured.as_deref())
+    crate::storage::issues::issue_database_location(config_root, configured.as_deref())
 }
 
 fn issue_action_project(
@@ -290,7 +289,7 @@ fn issue_action_project(
     service
         .pane_current_working_directory(&turn.pane_id)
         .unwrap_or_else(|| config_root.to_path_buf())
-        .pipe(crate::issues::project_key_for_working_directory)
+        .pipe(crate::storage::issues::project_key_for_working_directory)
 }
 
 trait Pipe: Sized {

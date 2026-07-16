@@ -127,7 +127,7 @@ pub fn dispatch_control_request_for_client_with_snapshot_captures(
     session: &mut Session,
     caller_client_id: &ClientId,
     snapshots: &SnapshotRepository,
-    pane_captures: &[crate::snapshot::SnapshotPaneCapture],
+    pane_captures: &[crate::storage::snapshot::SnapshotPaneCapture],
 ) -> String {
     dispatch_control_request_for_client_with_snapshot_captures_and_config_layers(
         body,
@@ -149,8 +149,8 @@ pub fn dispatch_control_request_for_client_with_snapshot_captures_and_config_lay
     session: &mut Session,
     caller_client_id: &ClientId,
     snapshots: &SnapshotRepository,
-    pane_captures: &[crate::snapshot::SnapshotPaneCapture],
-    active_config_layers: &[crate::snapshot::SnapshotConfigLayerMetadata],
+    pane_captures: &[crate::storage::snapshot::SnapshotPaneCapture],
+    active_config_layers: &[crate::storage::snapshot::SnapshotConfigLayerMetadata],
 ) -> String {
     dispatch_control_request_for_client_with_snapshot_captures_config_layers_and_frame_state(
         body,
@@ -159,7 +159,7 @@ pub fn dispatch_control_request_for_client_with_snapshot_captures_and_config_lay
         snapshots,
         pane_captures,
         active_config_layers,
-        &crate::snapshot::SnapshotFrameState::default(),
+        &crate::storage::snapshot::SnapshotFrameState::default(),
     )
 }
 
@@ -173,16 +173,16 @@ pub fn dispatch_control_request_for_client_with_snapshot_captures_config_layers_
     session: &mut Session,
     caller_client_id: &ClientId,
     snapshots: &SnapshotRepository,
-    pane_captures: &[crate::snapshot::SnapshotPaneCapture],
-    active_config_layers: &[crate::snapshot::SnapshotConfigLayerMetadata],
-    frame_state: &crate::snapshot::SnapshotFrameState,
+    pane_captures: &[crate::storage::snapshot::SnapshotPaneCapture],
+    active_config_layers: &[crate::storage::snapshot::SnapshotConfigLayerMetadata],
+    frame_state: &crate::storage::snapshot::SnapshotFrameState,
 ) -> String {
     dispatch_control_request_for_client_with_snapshot_context(
         body,
         session,
         caller_client_id,
         snapshots,
-        crate::snapshot::SnapshotCreationContext::new(
+        crate::storage::snapshot::SnapshotCreationContext::new(
             pane_captures,
             active_config_layers,
             frame_state,
@@ -201,7 +201,7 @@ pub fn dispatch_control_request_for_client_with_snapshot_context(
     session: &mut Session,
     caller_client_id: &ClientId,
     snapshots: &SnapshotRepository,
-    snapshot_context: crate::snapshot::SnapshotCreationContext<'_>,
+    snapshot_context: crate::storage::snapshot::SnapshotCreationContext<'_>,
 ) -> String {
     let request = match parse_json_rpc_request(body) {
         Ok(request) => request,

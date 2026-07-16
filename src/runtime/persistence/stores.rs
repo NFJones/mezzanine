@@ -1,9 +1,9 @@
 //! Repository handles, transcript sequences, and durable pane references.
 
-use crate::audit::AuditLog;
-use crate::registry::SessionRegistry;
-use crate::snapshot::SnapshotRepository;
-use crate::transcript::AgentTranscriptStore;
+use crate::security::audit::AuditLog;
+use crate::storage::registry::SessionRegistry;
+use crate::storage::snapshot::SnapshotRepository;
+use crate::storage::transcript::AgentTranscriptStore;
 
 use super::RuntimePersistenceComponent;
 

@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::audit::{AuditConfig, AuditLog, AuditRetentionPolicy};
 use crate::error::{MezError, Result};
+use crate::security::audit::{AuditConfig, AuditLog, AuditRetentionPolicy};
 
 use super::{runtime_json_bool, runtime_json_object, runtime_json_string};
 

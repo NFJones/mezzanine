@@ -1,7 +1,7 @@
 //! Subagent, macro, shell transaction, hook, profile, and overlay state records.
 
 use super::{ActionStatus, HookExecutionPlan, PaneId, RuntimeHookPipelineBlock, Size, WindowId};
-use crate::terminal::PaneAgentStatusField;
+use crate::host::terminal::PaneAgentStatusField;
 use std::collections::BTreeMap;
 
 /// Describes whether a parent turn waits for spawned subagents before it can

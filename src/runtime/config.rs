@@ -275,7 +275,7 @@ pub(super) fn runtime_json_u64(value: Option<&Value>) -> Option<u64> {
 pub(super) fn runtime_provider_auth_refresh_leeway_seconds_from_config(root: &Value) -> u64 {
     runtime_json_object(root, "auth")
         .and_then(|auth| runtime_json_u64(auth.get("provider_refresh_leeway_seconds")))
-        .unwrap_or(crate::auth::DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS)
+        .unwrap_or(crate::security::auth::DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS)
 }
 
 /// Runs the runtime json string array operation for this subsystem.
@@ -341,7 +341,7 @@ pub(super) fn optional_i32_json(value: Option<i32>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP;
+    use crate::host::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP;
     use mez_terminal::{TerminalEmojiWidth, active_terminal_text_width};
 
     use super::{

@@ -17,19 +17,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 
-use crate::async_runtime::{
-    AsyncAttachedTerminalClientServiceConfig, AsyncAttachedTerminalIo,
-    AsyncAttachedTerminalLoopRequest, AsyncAttachedTerminalPresentationGuard,
-    AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeDaemonConfig,
-    AsyncRuntimeDaemonListeners, AsyncRuntimeService, AsyncRuntimeServiceExit,
-    AsyncRuntimeSessionActor, ClientEvent, DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,
-    RuntimeEvent, RuntimeEventBatch, build_async_runtime_daemon_services,
-    run_async_attached_terminal_client_service, supervise_async_runtime_services,
-};
-use crate::auth::{
-    AuthMethod, AuthPaths, AuthStore, OpenAiProviderCredential,
-    run_openai_browser_login_with_theme_async, run_openai_device_code_login_async,
-};
 use crate::config::{
     ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,
     ConfigMutationPlan, ConfigMutationValue, ConfigPaths, ConfigScope, DEFAULT_CONFIG_TOML,
@@ -38,13 +25,19 @@ use crate::config::{
 };
 use crate::control::{decode_control_frame, encode_control_body};
 use crate::error::{MezError, Result};
-use crate::memory::PersistentMemoryStore;
-use crate::project::{
-    ProjectTrustRecord, ProjectTrustStore, TrustDecision, default_trust_database_path,
-    discover_existing_overlays, discover_project_root,
+use crate::host::async_runtime::{
+    AsyncAttachedTerminalClientServiceConfig, AsyncAttachedTerminalIo,
+    AsyncAttachedTerminalLoopRequest, AsyncAttachedTerminalPresentationGuard,
+    AsyncRuntimeActorConfig, AsyncRuntimeControlConnectionConfig, AsyncRuntimeDaemonConfig,
+    AsyncRuntimeDaemonListeners, AsyncRuntimeService, AsyncRuntimeServiceExit,
+    AsyncRuntimeSessionActor, ClientEvent, DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,
+    RuntimeEvent, RuntimeEventBatch, build_async_runtime_daemon_services,
+    run_async_attached_terminal_client_service, supervise_async_runtime_services,
 };
-use crate::registry::{
-    SessionRecord, SessionRegistry, records_to_json, resolve_session_record_target,
+use crate::host::shell::resolve_shell;
+use crate::host::terminal::{
+    AttachedTerminalClientLoopConfig, TerminalClientLoopConfig,
+    attached_terminal_output_disconnected,
 };
 use crate::runtime::{
     AuxiliarySocketKind, DEFAULT_SOCKET_NAME, MEZ_ENV_FIELD_SEPARATOR, RuntimeEnv,
@@ -52,16 +45,23 @@ use crate::runtime::{
     bind_control_socket, default_socket_directory, prune_stale_socket_files_in_directory,
     runtime_effective_config_value, runtime_ui_theme_from_config, socket_path_for_name,
 };
-use crate::shell::resolve_shell;
-use crate::snapshot::{
+use crate::security::auth::{
+    AuthMethod, AuthPaths, AuthStore, OpenAiProviderCredential,
+    run_openai_browser_login_with_theme_async, run_openai_device_code_login_async,
+};
+use crate::security::project::{
+    ProjectTrustRecord, ProjectTrustStore, TrustDecision, default_trust_database_path,
+    discover_existing_overlays, discover_project_root,
+};
+use crate::storage::memory::PersistentMemoryStore;
+use crate::storage::registry::{
+    SessionRecord, SessionRegistry, records_to_json, resolve_session_record_target,
+};
+use crate::storage::snapshot::{
     LayoutLoadPlan, SessionSnapshotPayload, SnapshotKind, SnapshotRepository,
     SnapshotRestoreResult, SnapshotRollbackPlan, SnapshotState,
 };
-use crate::terminal::{
-    AttachedTerminalClientLoopConfig, TerminalClientLoopConfig,
-    attached_terminal_output_disconnected,
-};
-use crate::transcript::AgentTranscriptStore;
+use crate::storage::transcript::AgentTranscriptStore;
 use mez_agent::mcp::McpRegistry;
 use mez_agent::memory::{MemoryKind, MemoryRecord, MemoryScope, MemorySource, MemoryState};
 use mez_core::ids::ClientId;
@@ -137,7 +137,9 @@ mod serve;
 /// declaration makes the boundary available to the crate.
 mod snapshot;
 
-pub use dispatch::{CliEnv, run, run_with};
+#[cfg(test)]
+pub use dispatch::run_with;
+pub use dispatch::{CliEnv, run};
 
 #[cfg(test)]
 use args::parse_cli_arg_group;

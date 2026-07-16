@@ -428,8 +428,8 @@ fn runtime_service_restarts_restored_panes_with_fresh_primary_pids() {
     original
         .split_active_pane(&primary, SplitDirection::Vertical)
         .unwrap();
-    let payload = crate::snapshot::SessionSnapshotPayload::from_session(&original);
-    let restore_input = crate::snapshot::session_restore_input(&payload).unwrap();
+    let payload = crate::storage::snapshot::SessionSnapshotPayload::from_session(&original);
+    let restore_input = crate::storage::snapshot::session_restore_input(&payload).unwrap();
     let restored = Session::from_restore_input(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         restore_input,
@@ -495,8 +495,8 @@ fn runtime_service_restarts_restored_panes_with_rendered_process_sizes() {
     original
         .split_active_pane(&primary, SplitDirection::Vertical)
         .unwrap();
-    let payload = crate::snapshot::SessionSnapshotPayload::from_session(&original);
-    let restore_input = crate::snapshot::session_restore_input(&payload).unwrap();
+    let payload = crate::storage::snapshot::SessionSnapshotPayload::from_session(&original);
+    let restore_input = crate::storage::snapshot::session_restore_input(&payload).unwrap();
     let restored = Session::from_restore_input(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         restore_input,
@@ -551,13 +551,13 @@ fn runtime_service_restarts_restored_panes_from_home_when_saved_cwd_fails() {
     assert!(home.is_dir());
 
     let original = test_session();
-    let mut payload = crate::snapshot::SessionSnapshotPayload::from_session(&original);
+    let mut payload = crate::storage::snapshot::SessionSnapshotPayload::from_session(&original);
     payload.name = "restored-name".to_string();
     payload.windows[0].name = "saved-window".to_string();
     payload.windows[0].panes[0].title = "saved-pane".to_string();
     payload.windows[0].panes[0].current_working_directory =
         Some(inaccessible_cwd.to_string_lossy().into_owned());
-    let restore_input = crate::snapshot::session_restore_input(&payload).unwrap();
+    let restore_input = crate::storage::snapshot::session_restore_input(&payload).unwrap();
     let restored = Session::from_restore_input(
         ResolvedShell::new(PathBuf::from("/bin/sh"), ShellSource::FallbackBinSh),
         restore_input,

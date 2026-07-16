@@ -124,7 +124,7 @@ impl RuntimeSessionService {
             )?;
             if let Some(continuation) = pending.continuation.as_ref() {
                 let decision = self.record_hook_result(&pending.plan, &result, false)?;
-                if decision == crate::hooks::HookFailureDecision::Block {
+                if decision == crate::integrations::hooks::HookFailureDecision::Block {
                     let block = RuntimeHookPipelineBlock::from_result(&result);
                     let _ = self.fail_pending_shell_action_for_hook_block(continuation, &block)?;
                 } else {

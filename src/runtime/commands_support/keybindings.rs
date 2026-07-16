@@ -13,7 +13,7 @@ use super::{
     runtime_config_apply_event_payload, runtime_plan_live_override_mutation,
     runtime_positional_args, runtime_store_live_override_plan,
 };
-use crate::command::command_help_display_with_key_bindings;
+use crate::ui::command::command_help_display_with_key_bindings;
 
 /// Runs the runtime help display operation for this subsystem.
 ///

@@ -6,7 +6,7 @@
 //! specification and workflow guidance. Keeping the scenarios documented
 //! makes failures easier to map back to the user-visible contract.
 
-use mezzanine::control::{decode_control_frame, encode_control_body};
+use mezzanine::control_client::{decode_control_frame, encode_control_body};
 use portable_pty::{Child as PtyChild, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::fs;
 use std::io::{Read, Write};

@@ -28,7 +28,7 @@ fn runtime_config_reload_reloads_layers_and_applies_live_policy() {
         .unwrap();
     let audit_root = temp_root("runtime-config-audit");
     let audit_path = audit_root.join("audit.jsonl");
-    service.set_audit_log(AuditLog::new(crate::audit::AuditConfig {
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
         enabled: true,
         path: audit_path.clone(),
         hash_chain: false,

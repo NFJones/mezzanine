@@ -4,13 +4,13 @@
 //! discovery helpers. It also owns the narrow bridge that lets macro-managed
 //! step traffic become ordinary agent-shell turns in a persistent child
 //! subagent session.
-use crate::macros::{discover_macro_catalog, load_macro_definition};
-use crate::project::TrustDecision;
+use crate::integrations::macros::{discover_macro_catalog, load_macro_definition};
 use crate::runtime::agent_state::RuntimeAgentLoopCompletion;
 use crate::runtime::{
     AgentShellCommandOutcome, AgentShellRuntimeContext, RuntimeAgentPromptTurnStart,
     execute_agent_shell_command_with_context,
 };
+use crate::security::project::TrustDecision;
 use mez_agent::ScheduledWorkKind;
 use mez_agent::{
     MacroCatalog, MacroDefinition, MacroJudgeDecision, MacroJudgeOutcome, MacroRunPhase,

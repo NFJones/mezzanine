@@ -89,12 +89,12 @@ enabled = true
         .agent_shell_store_mut()
         .enter_or_resume(&pane_id)
         .unwrap();
-    let project = crate::issues::project_key_for_working_directory(
+    let project = crate::storage::issues::project_key_for_working_directory(
         service
             .pane_current_working_directory(&pane_id)
             .unwrap_or_else(|| config_root.clone()),
     );
-    let store = crate::issues::IssueStore::under_config_root(config_root.clone());
+    let store = crate::storage::issues::IssueStore::under_config_root(config_root.clone());
     store
         .add_issue(
             project.clone(),

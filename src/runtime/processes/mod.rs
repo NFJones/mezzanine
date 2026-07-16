@@ -35,11 +35,11 @@ use super::{
     runtime_pane_readiness_state_name, runtime_post_shell_hook_payload,
     runtime_random_marker_token, shell_command_result_content, validate_pane_size_for_resize,
 };
+use crate::host::terminal::parse_mez_shell_transaction_osc;
 use crate::runtime::service_state::ProgramOwnedPaneTitle;
 use crate::runtime::{
     PaneEvent, ProcessEvent, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition,
 };
-use crate::terminal::parse_mez_shell_transaction_osc;
 use mez_agent::AgentActionPayload;
 use mez_agent::semantic_patch_planning::{
     ApplyPatchTransactionPhase, apply_patch_transaction_phase,

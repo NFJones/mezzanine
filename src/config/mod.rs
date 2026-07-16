@@ -60,14 +60,13 @@ mod types;
 mod validation;
 
 pub use defaults::{DEFAULT_CONFIG_TOML, DEFAULT_PROJECT_CONFIG_TOML};
-pub use migration::{
-    CURRENT_CONFIG_SCHEMA_VERSION, ConfigMigrationPlan, migrate_config_file, migrate_config_text,
-};
+pub use migration::{CURRENT_CONFIG_SCHEMA_VERSION, migrate_config_file};
+#[cfg(test)]
+pub use migration::{ConfigMigrationPlan, migrate_config_text};
 pub use paths::ConfigPaths;
 pub use schema::{
-    BASELINE_TOP_LEVEL_KEYS, ConfigChangePathAnnotation, PRIMARY_CONFIG_FILENAMES,
-    config_change_setting_path_annotations, config_change_setting_path_annotations_markdown,
-    config_change_setting_path_annotations_text, config_change_setting_path_description,
+    BASELINE_TOP_LEVEL_KEYS, PRIMARY_CONFIG_FILENAMES,
+    config_change_setting_path_annotations_markdown, config_change_setting_path_description,
 };
 pub use types::{
     ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,
@@ -75,10 +74,11 @@ pub use types::{
     EffectiveConfig,
 };
 pub use validation::{
-    compose_effective_config, persist_config_mutation, persist_config_mutation_async,
-    persist_config_text, plan_config_mutation, validate_config_file, validate_config_file_async,
-    validate_config_text,
+    compose_effective_config, persist_config_mutation, persist_config_text, plan_config_mutation,
+    validate_config_file, validate_config_text,
 };
+#[cfg(test)]
+pub use validation::{persist_config_mutation_async, validate_config_file_async};
 
 use extract::{
     clean_key_segment, clean_value, contains_secret_material, extract_config_values,

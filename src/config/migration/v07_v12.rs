@@ -60,7 +60,9 @@ pub(super) fn migrate_toml_v8_to_v9(text: &str) -> Result<String> {
     set_toml_path_item(
         &mut document,
         "auth.provider_refresh_leeway_seconds",
-        toml_edit::value(crate::auth::DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS as i64),
+        toml_edit::value(
+            crate::security::auth::DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS as i64,
+        ),
     )?;
     set_toml_path_item(&mut document, "version", toml_edit::value(9))?;
 
@@ -78,7 +80,7 @@ pub(super) fn migrate_json_compatible_v8_to_v9(format: ConfigFormat, text: &str)
     set_json_path_value(
         &mut document,
         "auth.provider_refresh_leeway_seconds",
-        serde_json::json!(crate::auth::DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS),
+        serde_json::json!(crate::security::auth::DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS),
     )?;
     set_json_path_value(&mut document, "version", serde_json::json!(9))?;
 

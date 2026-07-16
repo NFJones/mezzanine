@@ -67,7 +67,7 @@ use crate::control::{
     config_response_advances_generation, persist_target_from_json,
     validate_control_method_params_schema,
 };
-use crate::skills::{BUILTIN_MEZ_REFERENCE_SKILL_NAME, load_skill_document};
+use crate::integrations::skills::{BUILTIN_MEZ_REFERENCE_SKILL_NAME, load_skill_document};
 pub(crate) use component::RuntimeControlComponent;
 use context::{
     AGENT_TRANSCRIPT_CONTEXT_READ_BYTES, runtime_agent_transcript_context_blocks,

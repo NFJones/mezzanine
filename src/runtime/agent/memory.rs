@@ -126,7 +126,7 @@ impl RuntimeSessionService {
                 "persistent memory actions require a configured config root; continue with direct artifacts, current action results, MCP, shell, web, or a bounded report instead of retrying memory actions".to_string(),
             )?);
         };
-        let store = crate::memory::PersistentMemoryStore::under_config_root(config_root);
+        let store = crate::storage::memory::PersistentMemoryStore::under_config_root(config_root);
         match &action.payload {
             AgentActionPayload::MemorySearch { query, limit } => {
                 let limit = memory_action_limit(*limit);
@@ -225,7 +225,7 @@ impl RuntimeSessionService {
     fn memory_action_project_scope(&self, pane_id: &str) -> Option<mez_agent::memory::MemoryScope> {
         self.pane_current_working_directory(pane_id).map(|root| {
             mez_agent::memory::MemoryScope::Project {
-                root: crate::project::discover_project_root(&root)
+                root: crate::security::project::discover_project_root(&root)
                     .to_string_lossy()
                     .into_owned(),
             }
@@ -250,7 +250,7 @@ impl RuntimeSessionService {
 
 /// Searches all runtime-visible scopes and applies the final bounded limit.
 fn search_runtime_memory_scopes(
-    store: &crate::memory::PersistentMemoryStore,
+    store: &crate::storage::memory::PersistentMemoryStore,
     query: &str,
     scopes: &[mez_agent::memory::MemoryScope],
     limit: usize,

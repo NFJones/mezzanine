@@ -8,13 +8,13 @@ use super::{
     RuntimeLifecycleState, RuntimeSessionService, Session, Value, builtin_subagent_profiles,
     ensure_absolute, ensure_no_mez_separator, runtime_provider_registry_from_config,
 };
+#[cfg(test)]
+use crate::host::terminal::HostClipboard;
 use crate::runtime::{
     RuntimeAgentComponent, RuntimeAutoSizingConfig, RuntimeControlComponent,
     RuntimeIntegrationComponent, RuntimePersistenceComponent, RuntimePresentationComponent,
     RuntimeProcessComponent, RuntimeSessionComponent,
 };
-#[cfg(test)]
-use crate::terminal::HostClipboard;
 
 impl RuntimeSessionService {
     /// Runs the new operation for this subsystem.
@@ -119,7 +119,9 @@ impl RuntimeSessionService {
             .collect::<BTreeMap<_, _>>();
         let terminal_emoji_width = mez_terminal::TerminalEmojiWidth::Wide;
         mez_terminal::set_terminal_emoji_width(terminal_emoji_width);
-        crate::terminal::set_agent_wrap_column_cap(crate::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP);
+        crate::host::terminal::set_agent_wrap_column_cap(
+            crate::host::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP,
+        );
         Ok(Self {
             presentation: RuntimePresentationComponent::default(),
             process: RuntimeProcessComponent::with_pane_processes(pane_processes),

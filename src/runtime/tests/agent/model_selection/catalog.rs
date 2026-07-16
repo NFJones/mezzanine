@@ -277,12 +277,12 @@ async fn runtime_agent_shell_model_list_skips_browser_auth_catalog_request() {
         }])
         .unwrap();
     let root = temp_root("runtime-model-list-chatgpt");
-    let auth_store = AuthStore::new(crate::auth::AuthPaths::under_config_root(&root));
+    let auth_store = AuthStore::new(crate::security::auth::AuthPaths::under_config_root(&root));
     let credential_store = auth_store.file_credential_store("openai").unwrap();
     auth_store
         .login_openai_provider_credential(
             "default",
-            crate::auth::OpenAiProviderCredential {
+            crate::security::auth::OpenAiProviderCredential {
                 api_key: "chatgpt-access-token".to_string(),
                 refresh_token: Some("refresh-token".to_string()),
                 account_id: Some("acct_123".to_string()),

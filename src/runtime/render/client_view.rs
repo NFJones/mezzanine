@@ -900,7 +900,7 @@ impl RuntimeSessionService {
             return Vec::new();
         }
         if self.presentation.settings.window_frame_template
-            != crate::terminal::DEFAULT_WINDOW_FRAME_TEMPLATE
+            != crate::host::terminal::DEFAULT_WINDOW_FRAME_TEMPLATE
         {
             return Vec::new();
         }

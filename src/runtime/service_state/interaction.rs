@@ -1,7 +1,7 @@
 //! Mouse, command binding, config report, prompt, history, and placement records.
 
 use super::{AgentShellVisibility, AgentTurnState, PaneGeometry, SplitDirection};
-use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
+use crate::ui::readline::{ReadlineInputDecoder, ReadlinePrompt};
 use mez_mux::copy::CopyPosition;
 
 /// Carries Mouse Selection Drag State state for this subsystem.

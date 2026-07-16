@@ -117,7 +117,7 @@ pub async fn run_with<W: Write, E: Write>(
     match command {
         None => {
             let uid = env.runtime.uid;
-            let registry = crate::registry::SessionRegistry::new(
+            let registry = crate::storage::registry::SessionRegistry::new(
                 super::registry_root(&socket_selection)?,
                 uid,
             );

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::hooks::{FocusedShellHookQueue, HookDefinition, HookExecutionResult};
+use crate::integrations::hooks::{FocusedShellHookQueue, HookDefinition, HookExecutionResult};
 use crate::runtime::service_state::PendingFocusedShellHookTransaction;
 
 /// Owns configured hooks and focused-shell hook execution state.

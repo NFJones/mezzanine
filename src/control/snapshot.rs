@@ -35,7 +35,7 @@ pub(super) fn dispatch_snapshot_request_with_captures(
     request: &JsonRpcRequest,
     session: &Session,
     snapshots: &SnapshotRepository,
-    pane_captures: &[crate::snapshot::SnapshotPaneCapture],
+    pane_captures: &[crate::storage::snapshot::SnapshotPaneCapture],
 ) -> Result<String> {
     dispatch_snapshot_request_with_captures_and_config_layers(
         request,
@@ -55,8 +55,8 @@ pub(super) fn dispatch_snapshot_request_with_captures_and_config_layers(
     request: &JsonRpcRequest,
     session: &Session,
     snapshots: &SnapshotRepository,
-    pane_captures: &[crate::snapshot::SnapshotPaneCapture],
-    active_config_layers: &[crate::snapshot::SnapshotConfigLayerMetadata],
+    pane_captures: &[crate::storage::snapshot::SnapshotPaneCapture],
+    active_config_layers: &[crate::storage::snapshot::SnapshotConfigLayerMetadata],
 ) -> Result<String> {
     dispatch_snapshot_request_with_captures_and_config_layers_and_frame_state(
         request,
@@ -64,7 +64,7 @@ pub(super) fn dispatch_snapshot_request_with_captures_and_config_layers(
         snapshots,
         pane_captures,
         active_config_layers,
-        &crate::snapshot::SnapshotFrameState::default(),
+        &crate::storage::snapshot::SnapshotFrameState::default(),
     )
 }
 
@@ -77,15 +77,15 @@ pub(super) fn dispatch_snapshot_request_with_captures_and_config_layers_and_fram
     request: &JsonRpcRequest,
     session: &Session,
     snapshots: &SnapshotRepository,
-    pane_captures: &[crate::snapshot::SnapshotPaneCapture],
-    active_config_layers: &[crate::snapshot::SnapshotConfigLayerMetadata],
-    frame_state: &crate::snapshot::SnapshotFrameState,
+    pane_captures: &[crate::storage::snapshot::SnapshotPaneCapture],
+    active_config_layers: &[crate::storage::snapshot::SnapshotConfigLayerMetadata],
+    frame_state: &crate::storage::snapshot::SnapshotFrameState,
 ) -> Result<String> {
     dispatch_snapshot_request_with_context(
         request,
         session,
         snapshots,
-        crate::snapshot::SnapshotCreationContext::new(
+        crate::storage::snapshot::SnapshotCreationContext::new(
             pane_captures,
             active_config_layers,
             frame_state,
@@ -103,7 +103,7 @@ pub(super) fn dispatch_snapshot_request_with_context(
     request: &JsonRpcRequest,
     session: &Session,
     snapshots: &SnapshotRepository,
-    context: crate::snapshot::SnapshotCreationContext<'_>,
+    context: crate::storage::snapshot::SnapshotCreationContext<'_>,
 ) -> Result<String> {
     validate_control_method_params_schema(request)?;
     match request.method.as_str() {
@@ -183,7 +183,7 @@ pub async fn dispatch_snapshot_request_with_context_async(
     request: &JsonRpcRequest,
     session: &Session,
     snapshots: &SnapshotRepository,
-    context: crate::snapshot::SnapshotCreationContext<'_>,
+    context: crate::storage::snapshot::SnapshotCreationContext<'_>,
 ) -> Result<String> {
     validate_control_method_params_schema(request)?;
     match request.method.as_str() {

@@ -4,7 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use crate::terminal::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
+use crate::host::terminal::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
 
 use super::{
     AgentLogLevel, AgentSessionMetadata, AgentShellVisibility, AgentTranscriptStore,

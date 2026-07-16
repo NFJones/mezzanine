@@ -390,7 +390,7 @@ fn runtime_agent_shell_logout_uses_attached_auth_store() {
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
     let root = temp_root("runtime-agent-logout");
-    let auth_store = AuthStore::new(crate::auth::AuthPaths::under_config_root(&root));
+    let auth_store = AuthStore::new(crate::security::auth::AuthPaths::under_config_root(&root));
     auth_store
         .login_provider_api_key_with_selected_store(
             "openai",

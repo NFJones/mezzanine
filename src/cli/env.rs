@@ -11,7 +11,7 @@ use super::{
     Parser, PathBuf, Result, RuntimeEnv, Subcommand, default_socket_directory,
     socket_path_for_name,
 };
-use crate::terminal::read_attached_terminal_size;
+use crate::host::terminal::read_attached_terminal_size;
 
 // Socket selection, invocation parsing, and CLI option helpers.
 

@@ -13,7 +13,7 @@ use super::{
     runtime_parse_approval_policy, runtime_plan_live_override_mutation, runtime_positional_args,
     runtime_store_live_override_plan,
 };
-use crate::mcp::{
+use crate::integrations::mcp::{
     McpConfigCommandReport, mcp_config_command_display, mcp_config_command_from_words,
     mcp_config_command_mutations,
 };

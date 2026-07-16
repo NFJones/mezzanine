@@ -12,5 +12,5 @@ use std::process::ExitCode;
 /// on duplicated control-flow logic.
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
-    ExitCode::from(mezzanine::cli::run().await)
+    ExitCode::from(mezzanine::run_cli().await)
 }

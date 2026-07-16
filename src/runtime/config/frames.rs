@@ -11,10 +11,10 @@ use mez_mux::presentation::{TerminalFramePosition, TerminalFrameStyle};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
-use crate::command::key_chord_notation;
 use crate::config::EffectiveConfig;
 use crate::error::{MezError, Result};
 use crate::runtime::service_state::RuntimeCommandBinding;
+use crate::ui::command::key_chord_notation;
 
 use super::{runtime_json_object, runtime_json_string, runtime_json_string_array};
 
@@ -67,8 +67,8 @@ pub(crate) fn runtime_window_frame_template_from_config(root: &Value) -> Result<
     runtime_frame_template_from_config(
         root,
         "window",
-        crate::terminal::DEFAULT_WINDOW_FRAME_TEMPLATE,
-        crate::terminal::DEFAULT_WINDOW_FRAME_VISIBLE_FIELDS,
+        crate::host::terminal::DEFAULT_WINDOW_FRAME_TEMPLATE,
+        crate::host::terminal::DEFAULT_WINDOW_FRAME_VISIBLE_FIELDS,
     )
 }
 
@@ -81,13 +81,13 @@ pub(crate) fn runtime_window_frame_right_status_template_from_config(
     root: &Value,
 ) -> Result<String> {
     let Some(frames) = runtime_json_object(root, "frames") else {
-        return Ok(crate::terminal::DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE.to_string());
+        return Ok(crate::host::terminal::DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE.to_string());
     };
     let Some(window) = frames.get("window").and_then(Value::as_object) else {
-        return Ok(crate::terminal::DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE.to_string());
+        return Ok(crate::host::terminal::DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE.to_string());
     };
     let Some(value) = window.get("right_status") else {
-        return Ok(crate::terminal::DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE.to_string());
+        return Ok(crate::host::terminal::DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE.to_string());
     };
     value
         .as_str()
@@ -104,8 +104,8 @@ pub(crate) fn runtime_pane_frame_template_from_config(root: &Value) -> Result<St
     runtime_frame_template_from_config(
         root,
         "pane",
-        crate::terminal::DEFAULT_PANE_FRAME_TEMPLATE,
-        crate::terminal::DEFAULT_PANE_FRAME_VISIBLE_FIELDS,
+        crate::host::terminal::DEFAULT_PANE_FRAME_TEMPLATE,
+        crate::host::terminal::DEFAULT_PANE_FRAME_VISIBLE_FIELDS,
     )
 }
 
@@ -158,7 +158,7 @@ pub(crate) fn runtime_window_frame_visible_fields_from_config(root: &Value) -> R
     runtime_frame_visible_fields_from_config(
         root,
         "window",
-        crate::terminal::DEFAULT_WINDOW_FRAME_VISIBLE_FIELDS,
+        crate::host::terminal::DEFAULT_WINDOW_FRAME_VISIBLE_FIELDS,
     )
 }
 
@@ -171,7 +171,7 @@ pub(crate) fn runtime_pane_frame_visible_fields_from_config(root: &Value) -> Res
     runtime_frame_visible_fields_from_config(
         root,
         "pane",
-        crate::terminal::DEFAULT_PANE_FRAME_VISIBLE_FIELDS,
+        crate::host::terminal::DEFAULT_PANE_FRAME_VISIBLE_FIELDS,
     )
 }
 

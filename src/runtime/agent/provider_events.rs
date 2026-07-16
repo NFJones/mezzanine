@@ -6,7 +6,7 @@
 //! orchestration code.
 
 use super::MezError;
-use crate::agent::provider::provider_event_error_from_parts;
+use crate::integrations::agent::provider::provider_event_error_from_parts;
 
 /// Builds a typed provider event error from serialized async-provider fields.
 ///

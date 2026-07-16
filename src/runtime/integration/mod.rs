@@ -9,11 +9,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::async_runtime::AsyncRuntimeActorMetrics;
-use crate::auth::AuthStore;
 use crate::config::ConfigLayer;
-use crate::hooks::{FocusedShellHookQueue, HookDefinition, HookExecutionResult};
-use crate::project::ProjectTrustStore;
+use crate::host::async_runtime::AsyncRuntimeActorMetrics;
+use crate::integrations::hooks::{FocusedShellHookQueue, HookDefinition, HookExecutionResult};
+use crate::security::auth::AuthStore;
+use crate::security::project::ProjectTrustStore;
 use mez_agent::ApprovalPolicy;
 use mez_agent::mcp::McpRegistry;
 use mez_agent::memory::SessionMemoryStore;

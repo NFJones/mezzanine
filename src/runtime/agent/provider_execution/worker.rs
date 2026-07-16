@@ -10,9 +10,9 @@ use super::super::{
     runtime_mezzanine_error_code,
 };
 #[cfg(test)]
-use crate::agent::actions::AgentTurnRunner;
+use crate::integrations::agent::actions::AgentTurnRunner;
 #[cfg(test)]
-use crate::agent::provider::{ModelProvider, provider_error_retry_class};
+use crate::integrations::agent::provider::{ModelProvider, provider_error_retry_class};
 
 #[cfg(test)]
 use mez_agent::ProviderErrorRetryClass;
@@ -235,7 +235,7 @@ impl RuntimeSessionService {
             let runner = AgentTurnRunner {
                 provider,
                 model_profile: model_profile.clone(),
-                permissions: &crate::permissions::ProductPermissionPlanning::new(
+                permissions: &crate::security::permissions::ProductPermissionPlanning::new(
                     &permission_policy,
                     self.session_approvals(),
                     path_scopes.as_ref(),
@@ -523,7 +523,7 @@ impl RuntimeSessionService {
             let runner = AgentTurnRunner {
                 provider,
                 model_profile: model_profile.clone(),
-                permissions: &crate::permissions::ProductPermissionPlanning::new(
+                permissions: &crate::security::permissions::ProductPermissionPlanning::new(
                     &permission_policy,
                     self.session_approvals(),
                     path_scopes.as_ref(),

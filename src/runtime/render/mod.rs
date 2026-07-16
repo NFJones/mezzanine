@@ -114,21 +114,21 @@ impl Default for RuntimePresentationSettings {
     fn default() -> Self {
         Self {
             window_frames_enabled: true,
-            window_frame_template: crate::terminal::DEFAULT_WINDOW_FRAME_TEMPLATE.to_string(),
+            window_frame_template: crate::host::terminal::DEFAULT_WINDOW_FRAME_TEMPLATE.to_string(),
             window_frame_right_status_template:
-                crate::terminal::DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE.to_string(),
+                crate::host::terminal::DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE.to_string(),
             window_status_pill_definitions: std::collections::BTreeMap::new(),
             window_frame_position: TerminalFramePosition::Bottom,
             window_frame_style: TerminalFrameStyle::Default,
-            window_frame_visible_fields: crate::terminal::DEFAULT_WINDOW_FRAME_VISIBLE_FIELDS
+            window_frame_visible_fields: crate::host::terminal::DEFAULT_WINDOW_FRAME_VISIBLE_FIELDS
                 .iter()
                 .map(|field| (*field).to_string())
                 .collect(),
             pane_frames_enabled: true,
-            pane_frame_template: crate::terminal::DEFAULT_PANE_FRAME_TEMPLATE.to_string(),
+            pane_frame_template: crate::host::terminal::DEFAULT_PANE_FRAME_TEMPLATE.to_string(),
             pane_frame_position: TerminalFramePosition::Top,
             pane_frame_style: TerminalFrameStyle::Default,
-            pane_frame_visible_fields: crate::terminal::DEFAULT_PANE_FRAME_VISIBLE_FIELDS
+            pane_frame_visible_fields: crate::host::terminal::DEFAULT_PANE_FRAME_VISIBLE_FIELDS
                 .iter()
                 .map(|field| (*field).to_string())
                 .collect(),
@@ -137,7 +137,7 @@ impl Default for RuntimePresentationSettings {
             terminal_cursor_blink_interval_ms: 500,
             terminal_resize_debounce_ms: 200,
             terminal_render_rate_limit_fps: 5,
-            terminal_agent_wrap_column_cap: crate::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP,
+            terminal_agent_wrap_column_cap: crate::host::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP,
             terminal_reduced_motion: false,
             ui_theme: UiTheme::default(),
             key_bindings: KeyBindings::default(),
@@ -273,7 +273,7 @@ pub(crate) struct RuntimePresentationComponent {
 impl RuntimePresentationComponent {
     /// Replaces validated presentation settings and synchronizes global width policy.
     pub(crate) fn apply_settings(&mut self, settings: RuntimePresentationSettings) {
-        crate::terminal::set_agent_wrap_column_cap(settings.terminal_agent_wrap_column_cap);
+        crate::host::terminal::set_agent_wrap_column_cap(settings.terminal_agent_wrap_column_cap);
         self.settings = settings;
     }
 
@@ -576,15 +576,15 @@ impl RuntimeSessionService {
     }
 }
 
-use crate::command::baseline_commands;
-use crate::selector::{SelectorExtraCandidate, SelectorSurface};
-use crate::terminal::{
+use crate::host::terminal::{
     MousePaneAgentSelectorCell, MousePaneAgentStatusCell, PaneAgentStatusField,
     WindowFrameCommandKind, compose_modal_display_overlay_lines,
     compose_prompt_overlay_presentation_with_styles, pane_frame_agent_status_pillbox_cells,
     window_group_frame_pillbox_cells,
 };
-use crate::transcript::AgentPresentationEntry;
+use crate::storage::transcript::AgentPresentationEntry;
+use crate::ui::command::baseline_commands;
+use crate::ui::selector::{SelectorExtraCandidate, SelectorSurface};
 use mez_agent::mcp::McpServerStatus;
 use mez_agent::{ActionResult, agent_output_content_type_is_markdown};
 use mez_mux::attached_client::mouse_border_cells_for_geometries;

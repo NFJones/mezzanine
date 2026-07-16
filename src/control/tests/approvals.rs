@@ -189,7 +189,7 @@ fn approval_decision_control_can_emit_required_audit_records() {
         .unwrap();
     let root = temp_root("approval-audit");
     let path = root.join("audit.jsonl");
-    let mut audit_log = AuditLog::new(crate::audit::AuditConfig {
+    let mut audit_log = AuditLog::new(crate::security::audit::AuditConfig {
         enabled: true,
         path: path.clone(),
         hash_chain: false,

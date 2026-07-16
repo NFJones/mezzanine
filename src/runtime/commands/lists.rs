@@ -81,7 +81,7 @@ impl RuntimeSessionService {
                 "sync-builtin-skills requires a configured config root",
             ));
         };
-        let report = crate::skills::sync_managed_builtin_skills(config_root)?;
+        let report = crate::integrations::skills::sync_managed_builtin_skills(config_root)?;
         Ok(AgentShellCommandOutcome::Mutated {
             command: "sync-builtin-skills".to_string(),
             body: Self::runtime_agent_builtin_skill_sync_display(&report),
@@ -91,9 +91,9 @@ impl RuntimeSessionService {
 
     /// Builds the user-facing sync report for managed built-in skill copies.
     fn runtime_agent_builtin_skill_sync_display(
-        report: &crate::skills::ManagedBuiltinSkillSyncReport,
+        report: &crate::integrations::skills::ManagedBuiltinSkillSyncReport,
     ) -> String {
-        use crate::skills::ManagedBuiltinSkillSyncStatus;
+        use crate::integrations::skills::ManagedBuiltinSkillSyncStatus;
 
         let changed = report.count(ManagedBuiltinSkillSyncStatus::Created)
             + report.count(ManagedBuiltinSkillSyncStatus::ReplacedStale)

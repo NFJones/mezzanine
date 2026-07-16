@@ -278,7 +278,7 @@ fn runtime_provider_failure_persists_and_finishes_turn() {
     service.set_agent_transcript_store(transcript_store.clone());
     let audit_root = temp_root("runtime-provider-failure-audit");
     let audit_path = audit_root.join("audit.jsonl");
-    service.set_audit_log(AuditLog::new(crate::audit::AuditConfig {
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
         enabled: true,
         required: true,
         path: audit_path.clone(),
@@ -402,7 +402,7 @@ fn runtime_provider_parse_failure_persists_raw_provider_text() {
     service.set_agent_transcript_store(transcript_store.clone());
     let audit_root = temp_root("runtime-provider-parse-failure-audit");
     let audit_path = audit_root.join("audit.jsonl");
-    service.set_audit_log(AuditLog::new(crate::audit::AuditConfig {
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
         enabled: true,
         required: true,
         path: audit_path.clone(),
@@ -483,7 +483,7 @@ fn runtime_maap_validation_failure_persists_provider_response_detail() {
     service.set_agent_transcript_store(transcript_store.clone());
     let audit_root = temp_root("runtime-maap-validation-audit");
     let audit_path = audit_root.join("audit.jsonl");
-    service.set_audit_log(AuditLog::new(crate::audit::AuditConfig {
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
         enabled: true,
         required: true,
         path: audit_path.clone(),
@@ -736,7 +736,7 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
     let mut service = test_runtime_service();
     let audit_root = temp_root("runtime-preexecuted-network-audit");
     let audit_path = audit_root.join("audit.jsonl");
-    service.set_audit_log(AuditLog::new(crate::audit::AuditConfig {
+    service.set_audit_log(AuditLog::new(crate::security::audit::AuditConfig {
         enabled: true,
         required: true,
         path: audit_path.clone(),

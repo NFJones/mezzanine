@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::fs;
 
 use crate::error::{MezError, Result};
-use crate::hooks::{
+use crate::integrations::hooks::{
     HookDefinition, HookEvent, HookInvocation, HookMatcherGroup, HookMatcherOperator,
     HookMatcherPredicate,
 };
@@ -573,11 +573,11 @@ pub(super) fn runtime_hook_event_from_config(value: &str) -> Result<HookEvent> {
 /// on duplicated control-flow logic.
 pub(super) fn runtime_hook_on_failure_from_config(
     value: &str,
-) -> Result<crate::hooks::HookOnFailure> {
+) -> Result<crate::integrations::hooks::HookOnFailure> {
     match value {
-        "block" => Ok(crate::hooks::HookOnFailure::Block),
-        "warn" => Ok(crate::hooks::HookOnFailure::Warn),
-        "ignore" => Ok(crate::hooks::HookOnFailure::Ignore),
+        "block" => Ok(crate::integrations::hooks::HookOnFailure::Block),
+        "warn" => Ok(crate::integrations::hooks::HookOnFailure::Warn),
+        "ignore" => Ok(crate::integrations::hooks::HookOnFailure::Ignore),
         _ => Err(MezError::config(format!(
             "hook on_failure must be block, warn, or ignore; got {value}"
         ))),

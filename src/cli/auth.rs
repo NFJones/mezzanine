@@ -11,7 +11,7 @@ use super::{
     run_openai_device_code_login_async, runtime_effective_config_value,
     runtime_ui_theme_from_config, serialize_json, write_json_or_plain,
 };
-use crate::auth::selected_auth_method_from_flags;
+use crate::security::auth::selected_auth_method_from_flags;
 use mez_mux::theme::UiTheme;
 
 // Authentication subcommands and output formatting.
@@ -323,7 +323,7 @@ pub(super) fn login_provider_api_key_for_cli(
     selected_profile: &str,
     secret: &str,
     credential_store: Option<&str>,
-) -> Result<crate::auth::AuthMetadata> {
+) -> Result<crate::security::auth::AuthMetadata> {
     store.login_provider_api_key_with_selected_store(
         provider,
         selected_profile,
@@ -342,7 +342,7 @@ fn login_openai_provider_credential_for_cli(
     selected_profile: &str,
     credential_store: Option<&str>,
     credential: OpenAiProviderCredential,
-) -> Result<crate::auth::AuthMetadata> {
+) -> Result<crate::security::auth::AuthMetadata> {
     store.login_openai_provider_credential_with_selected_store(
         selected_profile,
         credential,
@@ -358,7 +358,7 @@ fn login_openai_provider_credential_for_cli(
 pub(super) fn write_auth_login<W: Write>(
     stdout: &mut W,
     output_format: CliOutputFormat,
-    metadata: &crate::auth::AuthMetadata,
+    metadata: &crate::security::auth::AuthMetadata,
 ) -> Result<()> {
     let output = format!(
         r#"{{"provider":"{}","authenticated":true,"credential_kind":"{}","selected_model_profile":"{}","credential_store":"{}"}}"#,
@@ -444,7 +444,7 @@ pub(super) struct AuthStatusWithoutMetadataJson {
 /// on duplicated control-flow logic.
 pub(super) fn auth_status_json(
     authenticated: bool,
-    metadata: &Option<crate::auth::AuthMetadata>,
+    metadata: &Option<crate::security::auth::AuthMetadata>,
 ) -> Result<String> {
     match metadata {
         Some(metadata) => serialize_json(&AuthStatusWithMetadataJson {

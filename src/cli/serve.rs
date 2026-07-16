@@ -20,10 +20,10 @@ use super::{
     run_async_attached_terminal_client_service, selected_socket_path,
     supervise_async_runtime_services, terminal_size_from_fd_or_environment, write_json_or_plain,
 };
-use crate::snapshot::SnapshotRepository;
+use crate::storage::snapshot::SnapshotRepository;
 use crate::{
     control::{CONTROL_CONTENT_TYPE, encode_control_body},
-    framing::ProtocolFrameCodec,
+    protocol::framing::ProtocolFrameCodec,
 };
 use futures_util::StreamExt;
 use mez_core::ids::SessionId;
@@ -1040,7 +1040,7 @@ pub(super) fn spawn_openai_auth_refresh_if_needed(
 /// metadata refreshes. Refresh failures are intentionally ignored because the
 /// previous startup path also treated provider metadata refresh as best-effort.
 pub(super) fn build_startup_provider_info_refresh_service(
-    handle: crate::async_runtime::AsyncRuntimeSessionHandle,
+    handle: crate::host::async_runtime::AsyncRuntimeSessionHandle,
 ) -> AsyncRuntimeService {
     AsyncRuntimeService::new_auxiliary("startup-provider-info-refresh", async move {
         let _ = handle.refresh_provider_info().await;
@@ -1054,7 +1054,7 @@ pub(super) fn build_startup_provider_info_refresh_service(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn build_foreground_attached_primary_client_service(
-    handle: crate::async_runtime::AsyncRuntimeSessionHandle,
+    handle: crate::host::async_runtime::AsyncRuntimeSessionHandle,
     primary_client_id: ClientId,
     client_size: Size,
 ) -> Result<AsyncRuntimeService> {
@@ -1114,7 +1114,7 @@ pub(super) fn build_foreground_attached_primary_client_service(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn build_foreground_terminal_resize_signal_service(
-    handle: crate::async_runtime::AsyncRuntimeSessionHandle,
+    handle: crate::host::async_runtime::AsyncRuntimeSessionHandle,
     primary_client_id: ClientId,
 ) -> Result<AsyncRuntimeService> {
     Ok(AsyncRuntimeService::new_auxiliary(

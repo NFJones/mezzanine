@@ -50,14 +50,14 @@ use super::{
     runtime_subagent_placement_mode, runtime_subagent_spawn_request,
     transcript_entries_for_execution, validate_mmp_payload_metadata,
 };
-use crate::agent::provider::{
-    deepseek_chat_completions_provider_from_auth_store_with_provider_options,
-    openai_compatible_provider_from_auth_store_with_provider_options,
-    openai_responses_provider_from_auth_store_with_provider_options,
-};
 use crate::config::{
     ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
     ConfigPaths, ConfigScope,
+};
+use crate::integrations::agent::provider::{
+    deepseek_chat_completions_provider_from_auth_store_with_provider_options,
+    openai_compatible_provider_from_auth_store_with_provider_options,
+    openai_responses_provider_from_auth_store_with_provider_options,
 };
 #[cfg(test)]
 use mez_agent::CooperationMode;

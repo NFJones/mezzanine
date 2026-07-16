@@ -13,8 +13,8 @@ use super::{
     runtime_execution_ready_for_provider_continuation, runtime_mezzanine_error_code,
     runtime_path_under_project_root,
 };
-use crate::project::TrustDecision;
-use crate::skills::{discover_skill_catalog, load_skill_document};
+use crate::integrations::skills::{discover_skill_catalog, load_skill_document};
+use crate::security::project::TrustDecision;
 use mez_agent::{
     SkillActionContext, SkillActionPlan, SkillCatalog, plan_skill_action,
     skill_action_context_from_blocks, skill_load_action_result,
