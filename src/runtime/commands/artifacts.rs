@@ -6,7 +6,14 @@
 //! effects. Keeping them separate from the command facade leaves live dispatch
 //! and policy commands easier to navigate.
 
-use super::*;
+use super::{
+    AgentShellCommandOutcome, MezError, PathBuf, Result, RuntimeSessionService, RuntimeSideEffect,
+    json_escape, parse_slash_command, runtime_agent_init_scaffold,
+    runtime_append_auth_logout_audit, runtime_git_repository_root, runtime_git_text,
+    runtime_git_untracked_diff, runtime_git_untracked_files, runtime_write_agent_context_for_pane,
+    runtime_write_agent_copy_output_for_pane, runtime_write_agent_patches_for_pane,
+    runtime_write_agent_trace_log_for_pane,
+};
 
 impl RuntimeSessionService {
     /// Executes `/copy-context` against the active pane's model request context.

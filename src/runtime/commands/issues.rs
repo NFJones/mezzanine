@@ -4,7 +4,10 @@
 //! active pane project, opens the configured local issue store, and formats
 //! compact command responses for add, query, and delete operations.
 
-use super::*;
+use super::{
+    AgentShellCommandOutcome, MezError, PathBuf, Result, RuntimeSessionService,
+    current_unix_seconds, json_escape, parse_slash_command, runtime_effective_config_value,
+};
 
 /// Executes one `/issue` slash command for the active pane project.
 pub(super) fn execute_agent_shell_issue_command(

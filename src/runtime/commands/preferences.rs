@@ -5,7 +5,10 @@
 //! selection, and visibility lookup helpers together so the command facade does
 //! not mix preference state with unrelated command families.
 
-use super::*;
+use super::{
+    AgentShellCommandOutcome, AgentShellVisibility, MezError, Result, RuntimeSessionService,
+    json_escape, parse_slash_command, runtime_single_mode_arg, validate_agent_personality,
+};
 
 impl RuntimeSessionService {
     /// Executes `/routing` against pane-scoped auto-sizing state.

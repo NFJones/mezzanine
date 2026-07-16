@@ -5,7 +5,10 @@
 //! displays plus the pane-local modified-file summary used by `/list-skills`,
 //! `/list-macros`, and `/list-modified-files`.
 
-use super::*;
+use super::{
+    AgentShellCommandOutcome, AgentShellVisibility, MezError, Result, RuntimeSessionService,
+    runtime_markdown_table,
+};
 
 impl RuntimeSessionService {
     /// Executes `/list-skills` and returns the effective skill catalog.
