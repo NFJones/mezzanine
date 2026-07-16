@@ -10,8 +10,9 @@ mod output;
 
 pub use input::{earliest_sequence_start, input_sequence_start, prefix_sequence_len};
 pub use mouse::{
-    application_cursor_forwarding_bytes, application_mouse_forwarding_bytes,
-    malformed_sgr_mouse_prefix_len, sgr_mouse_sequence_len, sgr_mouse_sequence_start,
+    AttachedMouseAction, application_cursor_forwarding_bytes, application_mouse_forwarding_bytes,
+    classify_attached_mouse_event, malformed_sgr_mouse_prefix_len,
+    mouse_border_cells_for_geometries, sgr_mouse_sequence_len, sgr_mouse_sequence_start,
 };
 pub use output::{
     AttachedTerminalOutputFrameState, attached_terminal_enter_presentation_frame,

@@ -8,7 +8,7 @@ use super::{
     AuthStatus, CommandInvocation, ConfigFormat, ConfigMutation, ConfigMutationOperation,
     ConfigMutationPlan, ConfigMutationValue, ConfigPaths, ConfigScope, KeyValueLine, MezError,
     Result, credential_store_kind_name, fs, persist_config_mutation, persist_config_text,
-    plan_config_mutation, positional_args, validate_command_identifier,
+    plan_config_mutation, validate_command_identifier,
 };
 use crate::config::parse_config_json_value;
 use mez_mux::theme::{
@@ -236,7 +236,8 @@ pub(super) fn mcp_server_id<'a>(
     invocation: &'a CommandInvocation,
     missing: &str,
 ) -> Result<&'a str> {
-    let server_id = positional_args(invocation)
+    let server_id = invocation
+        .positional_args()
         .first()
         .copied()
         .ok_or_else(|| MezError::invalid_args(missing))?;

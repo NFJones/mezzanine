@@ -9,19 +9,6 @@ use super::*;
 
 use mez_mux::render::{normalize_overlay_style_spans, overlay_text_style_width};
 
-/// Runs the compose display overlay lines operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub fn compose_display_overlay_lines(
-    base_lines: &[String],
-    display_lines: &[String],
-    client_size: Size,
-) -> Vec<String> {
-    mez_mux::render::compose_bottom_overlay_lines(base_lines, display_lines, client_size)
-}
-
 /// Runs the compose display overlay line style spans operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -58,24 +45,6 @@ pub fn compose_display_overlay_line_style_spans(
         }
     }
     line_style_spans
-}
-
-/// Runs the modal display overlay page rows operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub fn modal_display_overlay_page_rows(client_size: Size) -> usize {
-    mez_mux::render::modal_overlay_page_rows(client_size)
-}
-
-/// Runs the modal display overlay max scroll operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub fn modal_display_overlay_max_scroll(display_lines: &[String], client_size: Size) -> usize {
-    mez_mux::render::modal_overlay_max_scroll(display_lines.len(), client_size)
 }
 
 /// Runs the compose modal display overlay lines operation for this subsystem.

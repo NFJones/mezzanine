@@ -69,6 +69,24 @@ pub fn terminal_text_width(value: &str, emoji_width: TerminalEmojiWidth) -> usiz
         .sum()
 }
 
+/// Returns the display width of one grapheme under the active process policy.
+///
+/// This is the canonical convenience entry point for callers that participate
+/// in the process-wide attached-terminal compatibility policy. Deterministic
+/// callers that need to compare policies should use [`terminal_grapheme_width`]
+/// with an explicit [`TerminalEmojiWidth`] instead.
+pub fn active_terminal_grapheme_width(grapheme: &str) -> usize {
+    terminal_grapheme_width(grapheme, terminal_emoji_width())
+}
+
+/// Returns the display width of terminal text under the active process policy.
+///
+/// This keeps process-policy lookup beside the one-terminal width engine so
+/// product and multiplexer callers do not need local forwarding helpers.
+pub fn active_terminal_text_width(value: &str) -> usize {
+    terminal_text_width(value, terminal_emoji_width())
+}
+
 /// Returns an iterator over extended grapheme clusters in terminal text.
 pub fn terminal_graphemes(value: &str) -> impl Iterator<Item = &str> {
     UnicodeSegmentation::graphemes(value, true)
@@ -115,8 +133,8 @@ fn narrow_text_fallback_grapheme_width(grapheme: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        TerminalEmojiWidth, terminal_char_width, terminal_grapheme_width, terminal_graphemes,
-        terminal_text_width,
+        TerminalEmojiWidth, active_terminal_grapheme_width, active_terminal_text_width,
+        terminal_char_width, terminal_grapheme_width, terminal_graphemes, terminal_text_width,
     };
 
     /// Verifies segmentation preserves multi-scalar terminal glyphs as one
@@ -148,5 +166,15 @@ mod tests {
         assert_eq!(terminal_char_width('✅', TerminalEmojiWidth::Narrow), 1);
         assert_eq!(terminal_grapheme_width("⚠️", TerminalEmojiWidth::Narrow), 1);
         assert_eq!(terminal_grapheme_width("👨‍💻", TerminalEmojiWidth::Narrow), 2);
+    }
+
+    /// Verifies active-policy convenience functions use the same process-wide
+    /// width contract as the explicit-policy measurement functions.
+    #[test]
+    fn measures_text_with_active_process_policy() {
+        super::set_terminal_emoji_width(TerminalEmojiWidth::Wide);
+
+        assert_eq!(active_terminal_grapheme_width("⚠️"), 2);
+        assert_eq!(active_terminal_text_width("ｓ 👍🏻"), 5);
     }
 }

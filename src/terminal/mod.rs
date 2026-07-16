@@ -80,23 +80,21 @@ pub use fd::{
 pub use host_clipboard::{HostClipboard, HostClipboardCommand};
 pub use mouse::{
     MouseAction, MousePaneAgentSelectorCell, MousePaneAgentStatusCell, MouseWindowActionFrameCell,
-    PaneAgentStatusField, WindowFrameAction, WindowFrameCommandKind, classify_mouse_event,
+    PaneAgentStatusField, WindowFrameAction, WindowFrameCommandKind,
 };
 pub use render::{
     DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_PANE_FRAME_VISIBLE_FIELDS,
     DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE, DEFAULT_WINDOW_FRAME_TEMPLATE,
     DEFAULT_WINDOW_FRAME_VISIBLE_FIELDS, TerminalFrameRenderOptions,
     agent_prompt_reserved_line_count, compose_display_overlay_line_style_spans,
-    compose_display_overlay_lines, compose_display_region_overlay_line_style_spans,
-    compose_display_region_overlay_lines, compose_modal_display_overlay_line_style_spans,
-    compose_modal_display_overlay_lines, compose_prompt_overlay_lines,
-    compose_prompt_overlay_presentation, compose_prompt_overlay_presentation_with_styles,
+    compose_display_region_overlay_line_style_spans, compose_display_region_overlay_lines,
+    compose_modal_display_overlay_line_style_spans, compose_modal_display_overlay_lines,
+    compose_prompt_overlay_lines, compose_prompt_overlay_presentation,
+    compose_prompt_overlay_presentation_with_styles,
     compose_prompt_region_presentation_with_styles, compose_readline_prompt_client_presentation,
-    draw_window_from_screens, modal_display_overlay_max_scroll, modal_display_overlay_page_rows,
-    pane_border_cells_for_geometries, pane_frame_agent_status_pillbox_cells,
-    render_attached_client_view, render_readline_prompt_status_row, render_window,
-    render_window_with_pane_frame_template, rendered_pane_geometries,
-    window_frame_action_pillbox_cells, window_frame_pillbox_cells,
+    draw_window_from_screens, pane_frame_agent_status_pillbox_cells, render_attached_client_view,
+    render_readline_prompt_status_row, render_window, render_window_with_pane_frame_template,
+    rendered_pane_geometries, window_frame_action_pillbox_cells, window_frame_pillbox_cells,
     window_group_frame_pillbox_cells,
 };
 pub(crate) use screen::parse_mez_shell_transaction_osc;
@@ -104,8 +102,7 @@ pub(crate) use screen::parse_mez_shell_transaction_osc;
 use client_loop::borrow_raw_fd;
 pub(crate) use render::{
     DEFAULT_AGENT_WRAP_COLUMN_CAP, agent_log_wrap_width, agent_wrap_column_cap,
-    set_agent_wrap_column_cap, set_terminal_emoji_width, terminal_grapheme_width,
-    terminal_graphemes, terminal_text_width, wrap_agent_log_lines,
+    set_agent_wrap_column_cap, wrap_agent_log_lines,
 };
 
 /// Exposes the tests module boundary.

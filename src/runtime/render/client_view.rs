@@ -295,7 +295,7 @@ impl RuntimeSessionService {
                 usize::from(view.authoritative_size.columns),
             );
         }
-        let page_rows = modal_display_overlay_page_rows(view.authoritative_size);
+        let page_rows = modal_overlay_page_rows(view.authoritative_size);
         let max_columns = usize::from(view.authoritative_size.columns);
         for (selection_index, selection) in overlay.selections.iter().enumerate() {
             if selection.line_index < overlay.scroll_offset {
@@ -815,7 +815,7 @@ impl RuntimeSessionService {
         let row_offset = group_top_offset.saturating_add(u16::from(
             window_frame_visible && self.window_frame_position == TerminalFramePosition::Top,
         ));
-        pane_border_cells_for_geometries(&geometries, row_offset)
+        mouse_border_cells_for_geometries(&geometries, row_offset)
     }
 
     /// Runs the active window mouse frame cells operation for this subsystem.

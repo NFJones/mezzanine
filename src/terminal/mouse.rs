@@ -6,8 +6,8 @@
 
 use mez_mux::copy::CopyPosition;
 
-use mez_mux::input::MousePolicy;
-use mez_terminal::{MouseButton, MouseEvent, MouseEventKind};
+use mez_mux::attached_client::AttachedMouseAction;
+use mez_terminal::MouseEvent;
 
 // Mouse event parsing and policy classification.
 
@@ -400,88 +400,30 @@ pub enum MouseAction {
     },
 }
 
-/// Runs the classify mouse event operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub fn classify_mouse_event(event: MouseEvent, policy: MousePolicy) -> MouseAction {
-    if !policy.enabled {
-        return MouseAction::Ignore;
-    }
-    if matches!(
-        (event.kind, event.button),
-        (MouseEventKind::Press, MouseButton::Left)
-    ) && policy.over_window_frame
-    {
-        return MouseAction::ShowWindowChooser {
-            column: event.column,
-            row: event.row,
-        };
-    }
-    if policy.pane_resize_active {
-        return match (event.kind, event.button) {
-            (MouseEventKind::Press | MouseEventKind::Drag, MouseButton::Left) => {
-                MouseAction::ResizePane {
-                    column: event.column,
-                    row: event.row,
-                }
+impl From<AttachedMouseAction> for MouseAction {
+    /// Projects neutral mux mouse policy into product runtime actions.
+    fn from(action: AttachedMouseAction) -> Self {
+        match action {
+            AttachedMouseAction::Ignore => Self::Ignore,
+            AttachedMouseAction::ForwardToPane => Self::ForwardToPane,
+            AttachedMouseAction::ShowWindowChooser { column, row } => {
+                Self::ShowWindowChooser { column, row }
             }
-            (MouseEventKind::Release, MouseButton::Left) => MouseAction::FinishResizePane,
-            _ => MouseAction::Ignore,
-        };
-    }
-    match (event.kind, event.button) {
-        (MouseEventKind::Press, MouseButton::Left) if policy.copy_mode_active => {
-            MouseAction::CopySelectionStart(mouse_copy_position(event))
-        }
-        (MouseEventKind::Drag, MouseButton::Left) if policy.copy_mode_active => {
-            MouseAction::CopySelectionUpdate(mouse_copy_position(event))
-        }
-        (MouseEventKind::Release, MouseButton::Left) if policy.copy_mode_active => {
-            MouseAction::CopySelectionFinish(mouse_copy_position(event))
-        }
-        (MouseEventKind::Scroll, MouseButton::WheelUp) if policy.copy_mode_active => {
-            MouseAction::ScrollHistory {
-                lines: -3,
-                position: mouse_copy_position(event),
+            AttachedMouseAction::ResizePane { column, row } => Self::ResizePane { column, row },
+            AttachedMouseAction::FinishResizePane => Self::FinishResizePane,
+            AttachedMouseAction::CopySelectionStart(position) => Self::CopySelectionStart(position),
+            AttachedMouseAction::CopySelectionUpdate(position) => {
+                Self::CopySelectionUpdate(position)
             }
-        }
-        (MouseEventKind::Scroll, MouseButton::WheelDown) if policy.copy_mode_active => {
-            MouseAction::ScrollHistory {
-                lines: 3,
-                position: mouse_copy_position(event),
+            AttachedMouseAction::CopySelectionFinish(position) => {
+                Self::CopySelectionFinish(position)
             }
-        }
-        (MouseEventKind::Press | MouseEventKind::Drag, MouseButton::Left)
-            if policy.over_pane_border =>
-        {
-            MouseAction::ResizePane {
-                column: event.column,
-                row: event.row,
+            AttachedMouseAction::ScrollHistory { lines, position } => {
+                Self::ScrollHistory { lines, position }
             }
+            AttachedMouseAction::PasteClipboard(position) => Self::PasteClipboard(position),
+            AttachedMouseAction::FocusPane(position) => Self::FocusPane(position),
         }
-        _ if policy.over_window_frame || policy.over_pane_border => MouseAction::Ignore,
-        _ if policy.pane_application_mouse_mode => MouseAction::ForwardToPane,
-        (MouseEventKind::Scroll, MouseButton::WheelUp) => MouseAction::ScrollHistory {
-            lines: -3,
-            position: mouse_copy_position(event),
-        },
-        (MouseEventKind::Scroll, MouseButton::WheelDown) => MouseAction::ScrollHistory {
-            lines: 3,
-            position: mouse_copy_position(event),
-        },
-        (MouseEventKind::Press, MouseButton::Right) => {
-            MouseAction::PasteClipboard(mouse_copy_position(event))
-        }
-        (MouseEventKind::Release | MouseEventKind::Drag, MouseButton::Right) => MouseAction::Ignore,
-        (MouseEventKind::Press, MouseButton::Left) => {
-            MouseAction::FocusPane(mouse_copy_position(event))
-        }
-        (MouseEventKind::Drag, MouseButton::Left) => {
-            MouseAction::CopySelectionUpdate(mouse_copy_position(event))
-        }
-        _ => MouseAction::Ignore,
     }
 }
 

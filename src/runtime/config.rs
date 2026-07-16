@@ -145,8 +145,8 @@ pub(super) fn runtime_fit_status_line(value: &str, width: usize) -> String {
     }
     let mut output = String::new();
     let mut used = 0usize;
-    for grapheme in crate::terminal::terminal_graphemes(value) {
-        let grapheme_width = crate::terminal::terminal_grapheme_width(grapheme);
+    for grapheme in mez_terminal::terminal_graphemes(value) {
+        let grapheme_width = mez_terminal::active_terminal_grapheme_width(grapheme);
         if used.saturating_add(grapheme_width) > width {
             break;
         }
@@ -358,8 +358,8 @@ pub(super) fn optional_i32_json(value: Option<i32>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::terminal::{DEFAULT_AGENT_WRAP_COLUMN_CAP, terminal_text_width};
-    use mez_terminal::TerminalEmojiWidth;
+    use crate::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP;
+    use mez_terminal::{TerminalEmojiWidth, active_terminal_text_width};
 
     use super::{
         runtime_fit_status_line, runtime_terminal_agent_wrap_column_cap_from_config,
@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn fits_fullwidth_text_by_display_width() {
         let result = runtime_fit_status_line("ＡＢＣＤＥＦ", 6);
-        assert_eq!(terminal_text_width(&result), 6);
+        assert_eq!(active_terminal_text_width(&result), 6);
         assert_eq!(result.chars().count(), 3);
     }
 
@@ -389,7 +389,7 @@ mod tests {
         let result = runtime_fit_status_line("ＡbcＤ", 4);
         // Ａ = 2, b = 1, c = 1 → fits in 4 cols
         // Ｄ would be another 2 → 6 > 4, dropped
-        assert_eq!(terminal_text_width(&result), 4);
+        assert_eq!(active_terminal_text_width(&result), 4);
         assert!(result.starts_with('Ａ'));
     }
 
@@ -464,11 +464,11 @@ mod tests {
     #[test]
     fn fits_narrow_pads_and_wide_truncates_cleanly() {
         let narrow = runtime_fit_status_line("x", 4);
-        assert_eq!(terminal_text_width(&narrow), 4);
+        assert_eq!(active_terminal_text_width(&narrow), 4);
 
         let wide = runtime_fit_status_line("Ａ", 1);
         // 'Ａ' is 2 cols wide, 2 > 1, so it is dropped entirely
-        assert_eq!(terminal_text_width(&wide), 1);
+        assert_eq!(active_terminal_text_width(&wide), 1);
         assert_eq!(wide, " ");
     }
 }

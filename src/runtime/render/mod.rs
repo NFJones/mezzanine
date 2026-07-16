@@ -25,6 +25,7 @@ use mez_mux::presentation::{
     pane_content_size_for_geometry, pane_frame_merges_into_divider,
     pane_render_region_size_for_geometry, rendered_window_body_size,
 };
+use mez_mux::render::{modal_overlay_max_scroll, modal_overlay_page_rows};
 
 use super::service_state::{
     RunningShellTransactionKind, RuntimeDisplayOverlay, RuntimeMouseClickState,
@@ -41,12 +42,11 @@ use super::{
     TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFrameContext, TerminalScreen,
     WindowFrameAction, agent_prompt_reserved_line_count, current_unix_millis, current_unix_seconds,
     json_escape, mouse_action_name, mux_action_command_prompt_prefill, mux_action_name,
-    pane_border_cells_for_geometries, pane_navigation_direction, parse_command_sequence,
-    render_attached_client_view, rendered_pane_geometries,
-    runtime_agent_shell_command_response_json, runtime_agent_turn_duration_display,
-    runtime_agent_turn_state_name, runtime_approval_policy_name, runtime_copy_position_for_view,
-    runtime_fit_status_line, runtime_paste_bytes, window_frame_action_pillbox_cells,
-    window_frame_pillbox_cells,
+    pane_navigation_direction, parse_command_sequence, render_attached_client_view,
+    rendered_pane_geometries, runtime_agent_shell_command_response_json,
+    runtime_agent_turn_duration_display, runtime_agent_turn_state_name,
+    runtime_approval_policy_name, runtime_copy_position_for_view, runtime_fit_status_line,
+    runtime_paste_bytes, window_frame_action_pillbox_cells, window_frame_pillbox_cells,
 };
 /// Maximum elapsed time between two pane-content clicks recognized as a double click.
 const DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS: u64 = 500;
@@ -58,8 +58,7 @@ use crate::selector::{SelectorExtraCandidate, SelectorSurface};
 use crate::terminal::{
     MousePaneAgentSelectorCell, MousePaneAgentStatusCell, PaneAgentStatusField,
     WindowFrameCommandKind, compose_modal_display_overlay_lines,
-    compose_prompt_overlay_presentation_with_styles, modal_display_overlay_max_scroll,
-    modal_display_overlay_page_rows, pane_frame_agent_status_pillbox_cells, terminal_text_width,
+    compose_prompt_overlay_presentation_with_styles, pane_frame_agent_status_pillbox_cells,
     window_group_frame_pillbox_cells,
 };
 use crate::transcript::AgentPresentationEntry;
@@ -68,6 +67,7 @@ use mez_agent::{
     AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, ActionResult, agent_output_content_type_is_diff,
     agent_output_content_type_is_markdown,
 };
+use mez_mux::attached_client::mouse_border_cells_for_geometries;
 use mez_mux::copy::CopyPosition;
 use mez_mux::presentation::{
     TerminalFramePosition, TerminalPaneFrameContext, TerminalWindowFrameContext,
@@ -76,7 +76,10 @@ use mez_mux::presentation::{
 use mez_mux::readline::DEFAULT_READLINE_HISTORY_LIMIT;
 use mez_mux::selector::{SelectorCandidate, SelectorCandidateKind};
 use mez_mux::theme::UiTheme;
-use mez_terminal::{GraphicRendition, TerminalStyleSpan, TerminalStyledLine};
+use mez_terminal::{
+    GraphicRendition, TerminalStyleSpan, TerminalStyledLine,
+    active_terminal_text_width as terminal_text_width,
+};
 
 mod attached_step;
 mod client_view;

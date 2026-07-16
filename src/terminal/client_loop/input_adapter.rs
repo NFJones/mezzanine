@@ -284,7 +284,7 @@ fn route_mouse_event(
             }),
         ));
     }
-    let action = classify_mouse_event(event, policy);
+    let action = MouseAction::from(classify_attached_mouse_event(event, policy));
     if action == MouseAction::ForwardToPane {
         if let Some(region) = pane_region {
             if let Some(input) = application_mouse_forwarding_bytes(event, region) {

@@ -5,7 +5,8 @@
 //! carriage returns, and backslashes.
 
 use crate::error::{MezError, Result};
-use crate::terminal::{agent_log_wrap_width, terminal_text_width, wrap_agent_log_lines};
+use crate::terminal::{agent_log_wrap_width, wrap_agent_log_lines};
+use mez_terminal::active_terminal_text_width;
 
 use super::types::AgentPresentationEntry;
 use mez_agent::transcript::{
@@ -206,7 +207,7 @@ impl AgentPresentationEntry {
 
 /// Validates one persisted presentation row against the effective wrap width.
 fn validate_presentation_line_width(field: &str, line: &str, wrap_width: usize) -> Result<()> {
-    if terminal_text_width(line) > wrap_width {
+    if active_terminal_text_width(line) > wrap_width {
         return Err(MezError::invalid_args(format!(
             "presentation {field} line exceeds {wrap_width} display columns"
         )));

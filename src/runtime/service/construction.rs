@@ -104,7 +104,7 @@ impl RuntimeSessionService {
             .map(|window| (window.id.to_string(), created_at_unix_seconds))
             .collect::<BTreeMap<_, _>>();
         let terminal_emoji_width = mez_terminal::TerminalEmojiWidth::Wide;
-        crate::terminal::set_terminal_emoji_width(terminal_emoji_width);
+        mez_terminal::set_terminal_emoji_width(terminal_emoji_width);
         crate::terminal::set_agent_wrap_column_cap(crate::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP);
         Ok(Self {
             session,

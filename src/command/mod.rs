@@ -77,11 +77,6 @@ mod display;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod permissions;
-/// Exposes the shell module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-mod shell;
 /// Exposes the stores module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -119,7 +114,6 @@ use permissions::{
     command_target_pane_id, credential_store_kind_name, mark_pane_ready_audit_record,
     mark_pane_ready_warning_display, pane_readiness_state_name, validate_command_identifier,
 };
-use shell::{flag_value, positional_args};
 use stores::{
     auth_status_store_display, config_set_string, config_unset, mcp_server_id,
     mcp_status_store_display, persist_command_config_mutation, persist_command_theme_config,

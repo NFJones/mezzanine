@@ -7,7 +7,7 @@ use crate::terminal::{
     BTreeMap, TerminalClientLoopConfig, TerminalFrameContext, TerminalPaneFrameContext,
     compose_prompt_overlay_presentation, compose_prompt_overlay_presentation_with_styles,
     compose_prompt_region_presentation_with_styles, compose_readline_prompt_client_presentation,
-    render_attached_client_view, render_readline_prompt_status_row, terminal_text_width,
+    render_attached_client_view, render_readline_prompt_status_row,
 };
 use mez_core::ids::IdFactory;
 use mez_mux::layout::{Size, SplitDirection, Window};
@@ -16,8 +16,8 @@ use mez_mux::presentation::{
     TerminalCursorStyle,
 };
 use mez_mux::theme::{UiTheme, builtin_ui_theme_definition, resolve_ui_theme};
-use mez_terminal::TerminalColor;
 use mez_terminal::TerminalScreen;
+use mez_terminal::{TerminalColor, active_terminal_text_width};
 use unicode_width::UnicodeWidthStr;
 
 /// Verifies pane-local agent prompt rendering preserves the right divider when
@@ -216,7 +216,7 @@ fn readline_prompt_client_presentation_styles_agent_prompt_by_display_width() {
     let presentation = compose_readline_prompt_client_presentation(&view, &prompt);
 
     assert_eq!(presentation.lines.len(), 3);
-    assert_eq!(terminal_text_width(&presentation.lines[2]), 12);
+    assert_eq!(active_terminal_text_width(&presentation.lines[2]), 12);
     assert!(presentation.lines[2].contains('界'));
     assert!(presentation.lines[2].chars().count() < 12);
     assert_eq!(presentation.line_style_spans[2].len(), 1);

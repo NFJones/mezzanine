@@ -1,10 +1,9 @@
 //! Regression tests for terminal presentation overlays behavior.
 
 use crate::terminal::{
-    compose_display_overlay_line_style_spans, compose_display_overlay_lines,
-    compose_display_region_overlay_line_style_spans, compose_display_region_overlay_lines,
-    compose_modal_display_overlay_line_style_spans, compose_modal_display_overlay_lines,
-    modal_display_overlay_max_scroll,
+    compose_display_overlay_line_style_spans, compose_display_region_overlay_line_style_spans,
+    compose_display_region_overlay_lines, compose_modal_display_overlay_line_style_spans,
+    compose_modal_display_overlay_lines,
 };
 use mez_mux::copy::CopyPosition;
 use mez_mux::layout::Size;
@@ -12,6 +11,7 @@ use mez_mux::presentation::{
     ClientViewRole, ReadlinePromptRegion, RenderedClientView, TerminalCursorStyle,
     compose_client_presentation_with_styles,
 };
+use mez_mux::render::{compose_bottom_overlay_lines, modal_overlay_max_scroll};
 use mez_mux::theme::UiTheme;
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan};
 
@@ -81,7 +81,7 @@ fn client_presentation_highlights_current_pager_search_match() {
 /// size. This prevents stale pre-resize frames from leaving long rows behind
 /// when the attached terminal shrinks during a prompt or command display.
 fn display_overlay_refits_base_lines_to_current_size() {
-    let lines = compose_display_overlay_lines(
+    let lines = compose_bottom_overlay_lines(
         &["abcdefghijklmnopqrstuvwxyz".to_string()],
         &["ok".to_string()],
         Size::new(10, 3).unwrap(),
@@ -197,7 +197,7 @@ fn modal_display_overlay_covers_terminal_and_pages_output() {
     );
 
     assert_eq!(
-        modal_display_overlay_max_scroll(&display, Size::new(24, 4).unwrap()),
+        modal_overlay_max_scroll(display.len(), Size::new(24, 4).unwrap()),
         2
     );
     assert_eq!(lines.len(), 4);

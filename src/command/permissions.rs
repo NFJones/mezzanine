@@ -6,7 +6,7 @@
 
 use super::{
     AuditActor, AuditRecord, ClientId, CommandInvocation, CredentialStoreKind, MezError,
-    PaneReadinessState, Result, Session, positional_args,
+    PaneReadinessState, Result, Session,
 };
 use crate::identifiers::is_ascii_identifier_segment;
 
@@ -23,7 +23,7 @@ pub(super) fn command_target_pane_id(
 ) -> Result<String> {
     let target = invocation
         .target_arg()
-        .or_else(|| positional_args(invocation).first().copied());
+        .or_else(|| invocation.positional_args().first().copied());
     match target {
         None => session
             .active_window()

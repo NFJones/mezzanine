@@ -158,7 +158,7 @@ fn runtime_primary_display_overlay_wraps_plain_content_to_terminal_width() {
         overlay
             .lines
             .iter()
-            .all(|line| crate::terminal::terminal_text_width(line) <= 12)
+            .all(|line| mez_terminal::active_terminal_text_width(line) <= 12)
     );
 }
 

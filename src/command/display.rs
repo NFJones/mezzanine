@@ -6,8 +6,7 @@
 
 use super::{
     CommandInvocation, CommandOutcome, ConfigMutationValue, KeyBindings, KeyChord, KeyCode,
-    KeyValueLine, LayoutLoadSelector, MezError, Result, baseline_commands, flag_value,
-    mcp_server_id, positional_args,
+    KeyValueLine, LayoutLoadSelector, MezError, Result, baseline_commands, mcp_server_id,
 };
 
 /// Returns the user-facing command guide rendered by the in-pane `help`
@@ -290,9 +289,10 @@ pub(super) fn paste_clipboard_display(invocation: &CommandInvocation) -> String 
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn paste_buffer_display(invocation: &CommandInvocation) -> String {
-    let buffer = flag_value(&invocation.args, "-b")
-        .or_else(|| flag_value(&invocation.args, "--buffer"))
-        .or_else(|| positional_args(invocation).first().copied())
+    let buffer = invocation
+        .flag_value("-b")
+        .or_else(|| invocation.flag_value("--buffer"))
+        .or_else(|| invocation.positional_args().first().copied())
         .unwrap_or("most-recent");
     format!("buffer={buffer}:paste=not-sent:reason=live-terminal-state-unavailable")
 }
@@ -303,9 +303,10 @@ pub(super) fn paste_buffer_display(invocation: &CommandInvocation) -> String {
 /// this fallback reports the missing runtime requirement without pretending a
 /// buffer was created.
 pub(super) fn create_buffer_display(invocation: &CommandInvocation) -> String {
-    let buffer = flag_value(&invocation.args, "-b")
-        .or_else(|| flag_value(&invocation.args, "--buffer"))
-        .or_else(|| positional_args(invocation).first().copied())
+    let buffer = invocation
+        .flag_value("-b")
+        .or_else(|| invocation.flag_value("--buffer"))
+        .or_else(|| invocation.positional_args().first().copied())
         .unwrap_or("missing");
     format!("buffer={buffer}:created=false:reason=live-paste-buffer-unavailable")
 }
@@ -353,13 +354,15 @@ pub(super) fn capture_pane_display(invocation: &CommandInvocation) -> String {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn save_buffer_display(invocation: &CommandInvocation) -> String {
-    let buffer = flag_value(&invocation.args, "-b")
-        .or_else(|| flag_value(&invocation.args, "--buffer"))
-        .or_else(|| positional_args(invocation).first().copied())
+    let buffer = invocation
+        .flag_value("-b")
+        .or_else(|| invocation.flag_value("--buffer"))
+        .or_else(|| invocation.positional_args().first().copied())
         .unwrap_or("most-recent");
-    let output = flag_value(&invocation.args, "-o")
-        .or_else(|| flag_value(&invocation.args, "--output"))
-        .or_else(|| positional_args(invocation).get(1).copied())
+    let output = invocation
+        .flag_value("-o")
+        .or_else(|| invocation.flag_value("--output"))
+        .or_else(|| invocation.positional_args().get(1).copied())
         .unwrap_or("stdout");
     format!("buffer={buffer}:save=not-written:output={output}:reason=live-paste-buffer-unavailable")
 }
@@ -381,7 +384,7 @@ pub(super) fn clear_history_display(invocation: &CommandInvocation) -> String {
 /// on duplicated control-flow logic.
 pub(super) fn search_history_display(invocation: &CommandInvocation) -> String {
     let target = invocation.target_arg().unwrap_or("active-pane");
-    let query = positional_args(invocation).join(" ");
+    let query = invocation.positional_args().join(" ");
     format!(
         "target={target}:matches=0:query={}:source=not-connected",
         if query.is_empty() {
@@ -399,8 +402,9 @@ pub(super) fn search_history_display(invocation: &CommandInvocation) -> String {
 /// on duplicated control-flow logic.
 pub(super) fn export_history_display(invocation: &CommandInvocation) -> String {
     let target = invocation.target_arg().unwrap_or("active-pane");
-    let output = flag_value(&invocation.args, "-o")
-        .or_else(|| flag_value(&invocation.args, "--output"))
+    let output = invocation
+        .flag_value("-o")
+        .or_else(|| invocation.flag_value("--output"))
         .unwrap_or("stdout");
     format!(
         "target={target}:export=not-written:output={output}:reason=live-terminal-state-unavailable"
@@ -414,7 +418,7 @@ pub(super) fn export_history_display(invocation: &CommandInvocation) -> String {
 /// on duplicated control-flow logic.
 pub(super) fn pipe_pane_display(invocation: &CommandInvocation) -> String {
     let target = invocation.target_arg().unwrap_or("active-pane");
-    let command = positional_args(invocation).join(" ");
+    let command = invocation.positional_args().join(" ");
     let command = if command.is_empty() {
         "none".to_string()
     } else {
@@ -431,9 +435,10 @@ pub(super) fn pipe_pane_display(invocation: &CommandInvocation) -> String {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn save_layout_name(invocation: &CommandInvocation) -> Option<String> {
-    flag_value(&invocation.args, "-n")
-        .or_else(|| flag_value(&invocation.args, "--name"))
-        .or_else(|| positional_args(invocation).first().copied())
+    invocation
+        .flag_value("-n")
+        .or_else(|| invocation.flag_value("--name"))
+        .or_else(|| invocation.positional_args().first().copied())
         .map(str::to_string)
 }
 
@@ -443,9 +448,10 @@ pub(super) fn save_layout_name(invocation: &CommandInvocation) -> Option<String>
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn load_layout_selector(invocation: &CommandInvocation) -> LayoutLoadSelector {
-    flag_value(&invocation.args, "--name")
-        .or_else(|| flag_value(&invocation.args, "-n"))
-        .or_else(|| positional_args(invocation).first().copied())
+    invocation
+        .flag_value("--name")
+        .or_else(|| invocation.flag_value("-n"))
+        .or_else(|| invocation.positional_args().first().copied())
         .map(|name| LayoutLoadSelector::Name(name.to_string()))
         .unwrap_or(LayoutLoadSelector::Latest)
 }
@@ -720,7 +726,7 @@ pub(super) fn show_default_options() -> String {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn set_option_args(invocation: &CommandInvocation) -> Result<(&str, &str)> {
-    let args = positional_args(invocation);
+    let args = invocation.positional_args();
     let path = args
         .first()
         .copied()
@@ -738,7 +744,7 @@ pub(super) fn set_option_args(invocation: &CommandInvocation) -> Result<(&str, &
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn set_theme_arg(invocation: &CommandInvocation) -> Result<&str> {
-    let args = positional_args(invocation);
+    let args = invocation.positional_args();
     let theme = args
         .first()
         .copied()

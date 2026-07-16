@@ -43,8 +43,9 @@ pub use history::{
 pub use style::{GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalStyledLine};
 
 pub use width::{
-    TerminalEmojiWidth, set_terminal_emoji_width, terminal_char_width, terminal_emoji_width,
-    terminal_grapheme_width, terminal_graphemes, terminal_text_width,
+    TerminalEmojiWidth, active_terminal_grapheme_width, active_terminal_text_width,
+    set_terminal_emoji_width, terminal_char_width, terminal_emoji_width, terminal_grapheme_width,
+    terminal_graphemes, terminal_text_width,
 };
 
 pub use state::{

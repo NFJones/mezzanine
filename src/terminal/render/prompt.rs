@@ -20,10 +20,13 @@ use mez_mux::render::{
     offset_style_span, write_line_segment,
 };
 use mez_mux::theme::{UiColorPair, UiTheme};
-use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalStyledLine};
+use mez_terminal::{
+    GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalStyledLine,
+    active_terminal_grapheme_width as terminal_grapheme_width,
+    active_terminal_text_width as terminal_text_width, terminal_graphemes,
+};
 
 use super::super::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
-use super::text::{terminal_grapheme_width, terminal_graphemes, terminal_text_width};
 use super::{
     AGENT_STATUS_SCAN_BAND_WIDTH, compose_client_presentation_with_styles,
     normalize_overlay_canvas, normalize_overlay_style_spans, overlay_text_style_width,

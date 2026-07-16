@@ -25,6 +25,11 @@ impl CommandInvocation {
         positional_args_from_slice(&self.args)
     }
 
+    /// Returns the value immediately following an arbitrary flag spelling.
+    pub fn flag_value(&self, flag: &str) -> Option<&str> {
+        flag_value(&self.args, flag)
+    }
+
     /// Returns the value following `-t`, when present.
     pub fn target_arg(&self) -> Option<&str> {
         flag_value(&self.args, "-t")

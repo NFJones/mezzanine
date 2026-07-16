@@ -9,7 +9,7 @@
 use super::super::{RenderedClientView, ShellClassification, runtime_mezzanine_error_code};
 use mez_mux::render::overlay_text_cells;
 
-use crate::terminal::{agent_wrap_column_cap, terminal_grapheme_width};
+use crate::terminal::agent_wrap_column_cap;
 use mez_agent::semantic_patch_planning::apply_patch_touched_paths;
 use mez_agent::{AgentAction, AgentActionPayload};
 use mez_mux::copy::COPY_SKIP_LINE as AGENT_COPY_SKIP_LINE;
@@ -30,6 +30,7 @@ use mez_mux::render::{
     syntax_theme,
 };
 use mez_mux::theme::{UiColorPair, UiTheme};
+use mez_terminal::active_terminal_grapheme_width as terminal_grapheme_width;
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalStyledLine};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;

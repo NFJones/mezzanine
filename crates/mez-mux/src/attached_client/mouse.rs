@@ -4,8 +4,164 @@
 //! legacy xterm packets and recognizes packet boundaries in batched host input.
 //! Product routing decides whether a packet should be forwarded.
 
-use crate::input::{MousePaneRegion, MousePolicy};
+use crate::copy::CopyPosition;
+use crate::input::{MouseBorderCell, MousePaneRegion, MousePolicy};
+use crate::layout::PaneGeometry;
+use crate::presentation::pane_divider_cells;
 use mez_terminal::{MouseButton, MouseEvent, MouseEventKind};
+
+/// Neutral mux action selected from one host mouse event and routing policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachedMouseAction {
+    /// Consume the event without changing mux state.
+    Ignore,
+    /// Forward the event to the pane application.
+    ForwardToPane,
+    /// Open the window chooser at the frame coordinate.
+    ShowWindowChooser {
+        /// Zero-based host terminal column.
+        column: u16,
+        /// Zero-based host terminal row.
+        row: u16,
+    },
+    /// Resize the pane border under the pointer.
+    ResizePane {
+        /// Zero-based host terminal column.
+        column: u16,
+        /// Zero-based host terminal row.
+        row: u16,
+    },
+    /// Finish an active pane resize gesture.
+    FinishResizePane,
+    /// Begin a copy-mode selection.
+    CopySelectionStart(CopyPosition),
+    /// Update a copy-mode or drag selection.
+    CopySelectionUpdate(CopyPosition),
+    /// Finish a copy-mode selection.
+    CopySelectionFinish(CopyPosition),
+    /// Scroll terminal history around the pointer position.
+    ScrollHistory {
+        /// Signed history-row delta.
+        lines: isize,
+        /// Pointer position used to select the target pane.
+        position: CopyPosition,
+    },
+    /// Paste the clipboard at the pointer position.
+    PasteClipboard(CopyPosition),
+    /// Focus the pane under the pointer.
+    FocusPane(CopyPosition),
+}
+
+/// Classifies one host mouse event using dependency-neutral mux policy.
+pub fn classify_attached_mouse_event(
+    event: MouseEvent,
+    policy: MousePolicy,
+) -> AttachedMouseAction {
+    if !policy.enabled {
+        return AttachedMouseAction::Ignore;
+    }
+    if matches!(
+        (event.kind, event.button),
+        (MouseEventKind::Press, MouseButton::Left)
+    ) && policy.over_window_frame
+    {
+        return AttachedMouseAction::ShowWindowChooser {
+            column: event.column,
+            row: event.row,
+        };
+    }
+    if policy.pane_resize_active {
+        return match (event.kind, event.button) {
+            (MouseEventKind::Press | MouseEventKind::Drag, MouseButton::Left) => {
+                AttachedMouseAction::ResizePane {
+                    column: event.column,
+                    row: event.row,
+                }
+            }
+            (MouseEventKind::Release, MouseButton::Left) => AttachedMouseAction::FinishResizePane,
+            _ => AttachedMouseAction::Ignore,
+        };
+    }
+    match (event.kind, event.button) {
+        (MouseEventKind::Press, MouseButton::Left) if policy.copy_mode_active => {
+            AttachedMouseAction::CopySelectionStart(mouse_copy_position(event))
+        }
+        (MouseEventKind::Drag, MouseButton::Left) if policy.copy_mode_active => {
+            AttachedMouseAction::CopySelectionUpdate(mouse_copy_position(event))
+        }
+        (MouseEventKind::Release, MouseButton::Left) if policy.copy_mode_active => {
+            AttachedMouseAction::CopySelectionFinish(mouse_copy_position(event))
+        }
+        (MouseEventKind::Scroll, MouseButton::WheelUp) if policy.copy_mode_active => {
+            AttachedMouseAction::ScrollHistory {
+                lines: -3,
+                position: mouse_copy_position(event),
+            }
+        }
+        (MouseEventKind::Scroll, MouseButton::WheelDown) if policy.copy_mode_active => {
+            AttachedMouseAction::ScrollHistory {
+                lines: 3,
+                position: mouse_copy_position(event),
+            }
+        }
+        (MouseEventKind::Press | MouseEventKind::Drag, MouseButton::Left)
+            if policy.over_pane_border =>
+        {
+            AttachedMouseAction::ResizePane {
+                column: event.column,
+                row: event.row,
+            }
+        }
+        _ if policy.over_window_frame || policy.over_pane_border => AttachedMouseAction::Ignore,
+        _ if policy.pane_application_mouse_mode => AttachedMouseAction::ForwardToPane,
+        (MouseEventKind::Scroll, MouseButton::WheelUp) => AttachedMouseAction::ScrollHistory {
+            lines: -3,
+            position: mouse_copy_position(event),
+        },
+        (MouseEventKind::Scroll, MouseButton::WheelDown) => AttachedMouseAction::ScrollHistory {
+            lines: 3,
+            position: mouse_copy_position(event),
+        },
+        (MouseEventKind::Press, MouseButton::Right) => {
+            AttachedMouseAction::PasteClipboard(mouse_copy_position(event))
+        }
+        (MouseEventKind::Release | MouseEventKind::Drag, MouseButton::Right) => {
+            AttachedMouseAction::Ignore
+        }
+        (MouseEventKind::Press, MouseButton::Left) => {
+            AttachedMouseAction::FocusPane(mouse_copy_position(event))
+        }
+        (MouseEventKind::Drag, MouseButton::Left) => {
+            AttachedMouseAction::CopySelectionUpdate(mouse_copy_position(event))
+        }
+        _ => AttachedMouseAction::Ignore,
+    }
+}
+
+/// Converts a terminal coordinate into a mux copy-buffer position.
+fn mouse_copy_position(event: MouseEvent) -> CopyPosition {
+    CopyPosition {
+        line: usize::from(event.row),
+        column: usize::from(event.column),
+    }
+}
+
+/// Returns mouse hit cells for every mux-managed pane divider.
+///
+/// `row_offset` places window-local divider geometry into attached-client
+/// coordinates when product frames reserve rows above the window body.
+pub fn mouse_border_cells_for_geometries(
+    geometries: &[PaneGeometry],
+    row_offset: u16,
+) -> Vec<MouseBorderCell> {
+    pane_divider_cells(geometries, true)
+        .into_iter()
+        .map(|cell| MouseBorderCell {
+            column: cell.column,
+            row: cell.row.saturating_add(row_offset),
+        })
+        .collect()
+}
 
 /// Encodes one host mouse event in pane-local coordinates and negotiated mode.
 pub fn application_mouse_forwarding_bytes(
@@ -128,6 +284,70 @@ mod tests {
     use super::*;
     use crate::input::MousePaneRegion;
     use mez_terminal::parse_sgr_mouse;
+
+    /// Verifies resize, copy, scroll, and pane-forwarding precedence is owned
+    /// by the neutral attached-client classifier.
+    #[test]
+    fn classifies_attached_mouse_policy_precedence() {
+        let drag = parse_sgr_mouse(b"\x1b[<32;5;3M").unwrap();
+        let border_policy = MousePolicy {
+            enabled: true,
+            over_pane_border: true,
+            ..MousePolicy::default()
+        };
+        assert_eq!(
+            classify_attached_mouse_event(drag, border_policy),
+            AttachedMouseAction::ResizePane { column: 4, row: 2 }
+        );
+
+        let copy_policy = MousePolicy {
+            pane_application_mouse_mode: true,
+            copy_mode_active: true,
+            ..border_policy
+        };
+        assert_eq!(
+            classify_attached_mouse_event(drag, copy_policy),
+            AttachedMouseAction::CopySelectionUpdate(CopyPosition { line: 2, column: 4 })
+        );
+
+        let pane_policy = MousePolicy {
+            over_pane_border: false,
+            copy_mode_active: false,
+            ..copy_policy
+        };
+        assert_eq!(
+            classify_attached_mouse_event(drag, pane_policy),
+            AttachedMouseAction::ForwardToPane
+        );
+    }
+
+    /// Verifies divider hit cells preserve mux geometry while applying the
+    /// attached-client row offset reserved by product frames.
+    #[test]
+    fn pane_divider_mouse_cells_apply_client_row_offset() {
+        let geometries = [
+            PaneGeometry {
+                index: 0,
+                column: 0,
+                row: 0,
+                columns: 10,
+                rows: 5,
+            },
+            PaneGeometry {
+                index: 1,
+                column: 10,
+                row: 0,
+                columns: 10,
+                rows: 5,
+            },
+        ];
+
+        assert!(
+            mouse_border_cells_for_geometries(&geometries, 2)
+                .iter()
+                .all(|cell| cell.column == 9 && (2..7).contains(&cell.row))
+        );
+    }
 
     /// Verifies pane-local SGR forwarding preserves button and coordinates.
     #[test]

@@ -43,7 +43,6 @@ mod prompt;
 
 mod text;
 
-pub use dividers::pane_border_cells_for_geometries;
 use dividers::{merged_pane_frame_boundary_style_spans, pane_divider_rendition};
 use frame::{
     AGENT_STATUS_SCAN_BAND_WIDTH, group_frame_text, pane_agent_prompt_space_reserved,
@@ -69,9 +68,8 @@ use mez_mux::render::{
 };
 use mez_mux::render::{clipped_prompt_region, write_line_segment};
 pub use overlay::{
-    compose_display_overlay_line_style_spans, compose_display_overlay_lines,
-    compose_modal_display_overlay_line_style_spans, compose_modal_display_overlay_lines,
-    modal_display_overlay_max_scroll, modal_display_overlay_page_rows,
+    compose_display_overlay_line_style_spans, compose_modal_display_overlay_line_style_spans,
+    compose_modal_display_overlay_lines,
 };
 pub use panes::{
     draw_styled_window_from_screens, draw_window_from_screens, render_window,
@@ -91,8 +89,7 @@ pub use prompt::{
 };
 pub(crate) use text::{
     DEFAULT_AGENT_WRAP_COLUMN_CAP, agent_log_wrap_width, agent_wrap_column_cap,
-    set_agent_wrap_column_cap, set_terminal_emoji_width, terminal_grapheme_width,
-    terminal_graphemes, terminal_text_width, wrap_agent_log_lines,
+    set_agent_wrap_column_cap, wrap_agent_log_lines,
 };
 
 /// Defines the DEFAULT PANE FRAME TEMPLATE const used by this subsystem.

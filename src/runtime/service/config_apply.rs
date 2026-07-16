@@ -290,7 +290,7 @@ impl RuntimeSessionService {
         self.terminal_cursor_blink = terminal_cursor_blink;
         self.terminal_cursor_blink_interval_ms = terminal_cursor_blink_interval_ms;
         self.terminal_emoji_width = terminal_emoji_width;
-        crate::terminal::set_terminal_emoji_width(terminal_emoji_width);
+        mez_terminal::set_terminal_emoji_width(terminal_emoji_width);
         self.terminal_resize_debounce_ms = terminal_resize_debounce_ms;
         self.terminal_render_rate_limit_fps = terminal_render_rate_limit_fps;
         self.terminal_shell_output_preview_lines =

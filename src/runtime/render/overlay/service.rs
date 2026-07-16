@@ -115,8 +115,8 @@ impl RuntimeSessionService {
                     let scroll_offset = frame.scroll_offset;
                     let active_selection_index = frame.active_selection_index;
                     let changed = render_record_browser_overlay(overlay, &self.ui_theme);
-                    overlay.scroll_offset = scroll_offset.min(modal_display_overlay_max_scroll(
-                        &overlay.lines,
+                    overlay.scroll_offset = scroll_offset.min(modal_overlay_max_scroll(
+                        overlay.lines.len(),
                         self.session.authoritative_size,
                     ));
                     overlay.active_selection_index = active_selection_index
@@ -498,7 +498,7 @@ impl RuntimeSessionService {
             let next = if index == 0 {
                 0
             } else {
-                modal_display_overlay_max_scroll(&overlay.lines, self.session.authoritative_size)
+                modal_overlay_max_scroll(overlay.lines.len(), self.session.authoritative_size)
             };
             let changed = next != overlay.scroll_offset;
             overlay.scroll_offset = next;

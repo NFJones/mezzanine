@@ -11,12 +11,13 @@ use super::mouse::mouse_copy_position;
 use super::{
     AttachedTerminalFdReadiness, AttachedTerminalFdRole, BorrowedFd, MezError, MouseAction,
     MouseButton, MouseEvent, MouseEventKind, RawFd, Result, TerminalClientLoopConfig,
-    TerminalStyleSpan, classify_mouse_event, parse_sgr_mouse,
+    TerminalStyleSpan, parse_sgr_mouse,
 };
 use mez_mux::attached_client::{
     application_cursor_forwarding_bytes, application_mouse_forwarding_bytes,
-    earliest_sequence_start, input_sequence_start, malformed_sgr_mouse_prefix_len,
-    prefix_sequence_len, sgr_mouse_sequence_len, sgr_mouse_sequence_start,
+    classify_attached_mouse_event, earliest_sequence_start, input_sequence_start,
+    malformed_sgr_mouse_prefix_len, prefix_sequence_len, sgr_mouse_sequence_len,
+    sgr_mouse_sequence_start,
 };
 use mez_mux::copy::{CopyModeKeyAction, classify_copy_mode_key_action};
 use mez_mux::input::{

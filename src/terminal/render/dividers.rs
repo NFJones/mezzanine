@@ -4,26 +4,9 @@
 //! lower divider cells to product mouse-hit records and applies configured
 //! Mezzanine theme renditions to merged frame boundaries.
 
-use mez_mux::input::MouseBorderCell;
 use mez_mux::layout::PaneGeometry;
 use mez_mux::theme::UiTheme;
 use mez_terminal::{GraphicRendition, TerminalStyleSpan};
-
-use mez_mux::presentation::pane_divider_cells;
-
-/// Returns the rendered cells occupied by mux-managed pane dividers.
-pub fn pane_border_cells_for_geometries(
-    geometries: &[PaneGeometry],
-    row_offset: u16,
-) -> Vec<MouseBorderCell> {
-    pane_divider_cells(geometries, true)
-        .into_iter()
-        .map(|cell| MouseBorderCell {
-            column: cell.column,
-            row: cell.row.saturating_add(row_offset),
-        })
-        .collect()
-}
 
 /// Builds style spans for divider junctions that bound a merged pane status row.
 pub(super) fn merged_pane_frame_boundary_style_spans(
