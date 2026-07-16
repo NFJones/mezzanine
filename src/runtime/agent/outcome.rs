@@ -252,131 +252,28 @@ impl RuntimeSessionService {
     }
 }
 
-/// Carries Runtime Agent Execution Failure state for this subsystem.
-///
-/// The type keeps related data explicit so callers can inspect and move
-/// structured runtime state without parsing display text.
-pub(super) struct RuntimeAgentExecutionFailure {
-    /// Stores the kind value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    kind: crate::error::MezErrorKind,
-    /// Stores the stage value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    stage: &'static str,
-    /// Stores the message value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    message: String,
-    /// Stores the action value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    action: Option<serde_json::Value>,
-}
-
 /// Runs the runtime agent execution failure error operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(super) fn runtime_agent_execution_failure_error(execution: &AgentTurnExecution) -> MezError {
-    let failure = runtime_agent_execution_failure(execution);
+    let failure = mez_agent::outcome::classify_agent_execution_failure(execution);
     let failure_json = runtime_agent_execution_failure_json(execution, &failure);
-    let mut error = MezError::new(failure.kind, failure.message)
-        .with_provider_failure_json(failure_json.to_string());
+    let kind = match failure.kind() {
+        mez_agent::outcome::AgentExecutionFailureKind::InvalidState => {
+            crate::error::MezErrorKind::InvalidState
+        }
+        mez_agent::outcome::AgentExecutionFailureKind::InvalidArguments => {
+            crate::error::MezErrorKind::InvalidArgs
+        }
+    };
+    let mut error =
+        MezError::new(kind, failure.message()).with_provider_failure_json(failure_json.to_string());
     if !execution.response.raw_text.trim().is_empty() {
         error = error.with_provider_raw_text(execution.response.raw_text.clone());
     }
     error
-}
-
-/// Runs the runtime agent execution failure operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn runtime_agent_execution_failure(
-    execution: &AgentTurnExecution,
-) -> RuntimeAgentExecutionFailure {
-    if execution.response.action_batch.is_none() {
-        if let Some(provider_error) = runtime_embedded_provider_error(&execution.response.raw_text)
-        {
-            return RuntimeAgentExecutionFailure {
-                kind: crate::error::MezErrorKind::InvalidState,
-                stage: "provider_error",
-                message: provider_error.to_string(),
-                action: None,
-            };
-        }
-        return RuntimeAgentExecutionFailure {
-            kind: crate::error::MezErrorKind::InvalidState,
-            stage: "missing_action_batch",
-            message: "model response did not contain a MAAP action batch".to_string(),
-            action: None,
-        };
-    }
-    if let Some(validation_error) = execution
-        .response
-        .raw_text
-        .split_once("maap_validation_error:")
-        .map(|(_, diagnostic)| diagnostic.trim())
-        .filter(|diagnostic| !diagnostic.is_empty())
-    {
-        return RuntimeAgentExecutionFailure {
-            kind: crate::error::MezErrorKind::InvalidArgs,
-            stage: "maap_validation",
-            message: format!("MAAP validation failed: {validation_error}"),
-            action: None,
-        };
-    }
-    if let Some(result) = execution
-        .action_results
-        .iter()
-        .find(|result| result.is_error)
-    {
-        let (code, message) = result
-            .error
-            .as_ref()
-            .map(|error| (error.code.as_str(), error.message.as_str()))
-            .unwrap_or((
-                "action_failed",
-                "agent action failed without an error object",
-            ));
-        return RuntimeAgentExecutionFailure {
-            kind: crate::error::MezErrorKind::InvalidState,
-            stage: "action_result",
-            message: format!("agent action {code}: {message}"),
-            action: Some(serde_json::json!({
-                "action_id": &result.action_id,
-                "action_type": result.action_type,
-                "status": runtime_action_status_name(result.status),
-                "error_code": code,
-                "error_message": message
-            })),
-        };
-    }
-    RuntimeAgentExecutionFailure {
-        kind: crate::error::MezErrorKind::InvalidState,
-        stage: "agent_turn_failed",
-        message: "agent turn failed without a specific diagnostic".to_string(),
-        action: None,
-    }
-}
-
-/// Returns the runtime provider error diagnostic embedded in a failed response.
-fn runtime_embedded_provider_error(raw_text: &str) -> Option<&str> {
-    raw_text
-        .lines()
-        .rev()
-        .map(str::trim)
-        .find_map(|line| line.strip_prefix("provider_error: "))
-        .map(str::trim)
-        .filter(|message| !message.is_empty())
 }
 
 /// Runs the runtime agent execution failure json operation for this subsystem.
@@ -386,15 +283,23 @@ fn runtime_embedded_provider_error(raw_text: &str) -> Option<&str> {
 /// on duplicated control-flow logic.
 pub(super) fn runtime_agent_execution_failure_json(
     execution: &AgentTurnExecution,
-    failure: &RuntimeAgentExecutionFailure,
+    failure: &mez_agent::outcome::AgentExecutionFailure,
 ) -> serde_json::Value {
+    let kind = match failure.kind() {
+        mez_agent::outcome::AgentExecutionFailureKind::InvalidState => {
+            crate::error::MezErrorKind::InvalidState
+        }
+        mez_agent::outcome::AgentExecutionFailureKind::InvalidArguments => {
+            crate::error::MezErrorKind::InvalidArgs
+        }
+    };
     let mut value = serde_json::json!({
         "type": "agent_turn_execution_failure",
-        "stage": failure.stage,
+        "stage": failure.stage(),
         "terminal_state": runtime_agent_turn_state_name(execution.terminal_state),
         "error": {
-            "kind": runtime_mezzanine_error_code(failure.kind),
-            "message": runtime_provider_audit_error_message(&failure.message)
+            "kind": runtime_mezzanine_error_code(kind),
+            "message": runtime_provider_audit_error_message(failure.message())
         },
         "response": {
             "raw_text_bytes": execution.response.raw_text.len(),
@@ -415,8 +320,14 @@ pub(super) fn runtime_agent_execution_failure_json(
                 .count()
         }
     });
-    if let Some(action) = &failure.action {
-        value["action"] = action.clone();
+    if let Some(action) = failure.action() {
+        value["action"] = serde_json::json!({
+            "action_id": action.action_id(),
+            "action_type": action.action_type(),
+            "status": action.status(),
+            "error_code": action.error_code(),
+            "error_message": action.error_message()
+        });
     }
     value
 }

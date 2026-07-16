@@ -820,8 +820,9 @@ impl RuntimeSessionService {
                 RuntimeHookPipelineDecision::Continue => {}
                 RuntimeHookPipelineDecision::Pending => {
                     execution.action_results[index].structured_content_json =
-                        Some(shell_command_structured_content_json(
+                        Some(mez_agent::shell_action_structured_content_json(
                             action,
+                            &plan,
                             Some("pane_shell"),
                             false,
                             serde_json::json!({
@@ -832,7 +833,7 @@ impl RuntimeSessionService {
                             }),
                             &[],
                             serde_json::json!({"state":"pre_shell_hook_pending"}),
-                        )?);
+                        ));
                     self.append_agent_status_text_to_terminal_buffer(
                         &turn.pane_id,
                         "agent: shell command waiting for pre-action hook",
@@ -1064,8 +1065,12 @@ impl RuntimeSessionService {
             error_message.clone(),
         )?;
         let execution_transport = "pane_shell";
-        result.structured_content_json = Some(shell_command_structured_content_json(
+        let plan = local_action_plan(action)?.ok_or_else(|| {
+            MezError::invalid_state("shell dispatch failure requires a shell-backed action")
+        })?;
+        result.structured_content_json = Some(mez_agent::shell_action_structured_content_json(
             action,
+            &plan,
             Some(execution_transport),
             false,
             serde_json::Value::Null,
@@ -1079,7 +1084,7 @@ impl RuntimeSessionService {
                     "message": error.message()
                 }
             }),
-        )?);
+        ));
         let _ = self.append_agent_error_text_to_terminal_buffer(
             &turn.pane_id,
             &format!(

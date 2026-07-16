@@ -27,8 +27,7 @@ use serde_json::Value;
 
 use crate::agent::actions::{
     execute_mcp_action_through_runtime, execute_mcp_action_through_runtime_async,
-    next_transcript_sequence, postprocess_shell_action_success_output,
-    shell_command_result_content, shell_command_structured_content_json,
+    next_transcript_sequence,
 };
 use crate::agent::context::assemble_model_request;
 use crate::agent::network::execute_network_action_with_transport_async;
@@ -143,7 +142,8 @@ use mez_agent::{
     ProviderQuotaUsage, ReadinessOverrideRevocation, action_result_context_content,
     compact_model_context_for_budget_with_retained_tail_percent,
     decode_shell_output_transport_with_diagnostics, local_action_plan, network_action_plan,
-    select_model_profile, transcript_entries_for_execution,
+    postprocess_shell_action_success_output, select_model_profile, shell_command_result_content,
+    transcript_entries_for_execution,
 };
 use mez_agent::{AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ScheduledWork, ScheduledWorkKind};
 use mez_agent::{ApprovalPolicy, PermissionPreset, RuleDecision};

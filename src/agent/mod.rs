@@ -46,15 +46,14 @@ pub mod provider;
 /// declaration makes the boundary available to the crate.
 pub mod slash;
 use context::assemble_model_request;
-use mez_agent::action_text_content_blocks;
 use mez_agent::local_action_plan;
 use mez_agent::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentLogLevel,
     AgentShellStore, AgentShellVisibility, AgentTurnLedger, AgentTurnRecord, AgentTurnState,
     AllowedActionSet, ContextSourceKind, MaapBatch, McpExecutionRequest, ModelInteractionKind,
     ModelMessage, ModelMessageRole, ModelRequest, ProviderHttpRequest, ProviderHttpResponse,
-    SayStatus, TranscriptEntry, TranscriptPersistence, agent_shell_help_display,
-    agent_shell_mcp_display, agent_shell_permissions_display, agent_shell_status_display,
+    TranscriptEntry, TranscriptPersistence, agent_shell_help_display, agent_shell_mcp_display,
+    agent_shell_permissions_display, agent_shell_status_display,
 };
 use mez_agent::{
     DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MarkerToken, ShellTransaction,

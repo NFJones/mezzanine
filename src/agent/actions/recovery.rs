@@ -5,10 +5,9 @@
 //! and final failure-summary execution shaping.
 
 use super::super::{
-    ActionResult, AgentActionPayload, AgentTurnRecord, AgentTurnState, AllowedActionSet,
-    AsyncModelProvider, ContextSourceKind, McpPromptTool, MezError, ModelInteractionKind,
-    ModelMessage, ModelMessageRole, ModelRequest, ModelResponse, Result, SayStatus,
-    provider_error_retry_class,
+    AgentTurnRecord, AgentTurnState, AllowedActionSet, AsyncModelProvider, ContextSourceKind,
+    McpPromptTool, MezError, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest,
+    ModelResponse, provider_error_retry_class,
 };
 use super::FAILURE_SUMMARY_RAW_TEXT_LIMIT_BYTES;
 #[cfg(test)]
@@ -16,7 +15,6 @@ use crate::agent::provider::ModelProvider;
 use mez_agent::{
     AgentFailureSummaryNegotiation, AgentFailureSummaryProviderDecision,
     AgentFailureSummaryResponseDecision, AgentTurnExecution, maap_repair_request,
-    validate_batch_allowed_actions,
 };
 
 /// Reports whether a provider error came from malformed model MAAP output that
@@ -139,82 +137,6 @@ pub(super) struct FailureSummaryInput<'a> {
     pub(super) scope: FailureSummaryScope<'a>,
 }
 
-/// Converts a valid summary response into a terminal failed execution.
-fn failure_summary_execution_from_response(
-    turn: &AgentTurnRecord,
-    request: ModelRequest,
-    failed_response_raw_text: &str,
-    mut response: ModelResponse,
-    scope: FailureSummaryScope<'_>,
-) -> Result<AgentTurnExecution> {
-    let batch = response.action_batch.as_ref().ok_or_else(|| {
-        MezError::invalid_args("failure summary response must include a say action batch")
-    })?;
-    validate_batch_allowed_actions(batch, &request)
-        .map_err(|error| MezError::invalid_args(error.message()))?;
-    batch.validate_harness_contract(
-        &turn.turn_id,
-        &turn.agent_id,
-        scope.available_mcp_servers,
-        scope.available_mcp_tools,
-    )?;
-    if batch.actions.is_empty()
-        || batch
-            .actions
-            .iter()
-            .any(|action| !matches!(action.payload, AgentActionPayload::Say { .. }))
-    {
-        return Err(MezError::invalid_args(
-            "failure summary response must contain only say actions",
-        ));
-    }
-    let mut terminal_batch = batch.clone();
-    terminal_batch.final_turn = true;
-    for action in &mut terminal_batch.actions {
-        if let AgentActionPayload::Say { status, .. } = &mut action.payload {
-            *status = SayStatus::Final;
-        }
-    }
-    let action_results = terminal_batch
-        .actions
-        .iter()
-        .map(|action| match &action.payload {
-            AgentActionPayload::Say {
-                status,
-                text,
-                content_type,
-            } => Ok(ActionResult::succeeded(
-                turn,
-                action,
-                vec![text.clone()],
-                Some(mez_agent::say_action_structured_content_json(
-                    *status,
-                    content_type,
-                    text,
-                )),
-            )),
-            _ => Err(MezError::invalid_args(
-                "failure summary response must contain only say actions",
-            )),
-        })
-        .collect::<Result<Vec<_>>>()?;
-    response.raw_text = format!(
-        "{}\ncontroller_failure_summary:\n{}",
-        failed_response_raw_text, response.raw_text
-    );
-    response.action_batch = Some(terminal_batch);
-    let latest_response_usage = response.latest_request_usage.unwrap_or(response.usage);
-    Ok(AgentTurnExecution {
-        request,
-        response,
-        latest_response_usage,
-        routing_token_usage_by_model: std::collections::BTreeMap::new(),
-        action_results,
-        final_turn: true,
-        terminal_state: AgentTurnState::Failed,
-    })
-}
-
 /// Advances a failed summary provider call and installs a repair request when needed.
 fn advance_failure_summary_provider_failure(
     negotiation: &mut AgentFailureSummaryNegotiation<ModelRequest>,
@@ -260,12 +182,13 @@ fn advance_failure_summary_response(
 ) -> FailureSummaryResponsePlan {
     let actual_provider = response.provider.clone();
     let response_raw_text = response.raw_text.clone();
-    let execution = failure_summary_execution_from_response(
+    let execution = mez_agent::failure_summary_execution_from_response(
         turn,
         negotiation.request().clone(),
         failed_response_raw_text,
         response,
-        scope,
+        scope.available_mcp_servers,
+        scope.available_mcp_tools,
     );
     let decision = negotiation.advance_provider_response(
         expected_provider,

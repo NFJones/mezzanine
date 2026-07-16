@@ -128,7 +128,11 @@ impl RuntimeSessionService {
                 pane_id: turn.pane_id.clone(),
                 command: command.to_string(),
                 started_at_unix_ms: current_unix_millis(),
-                timeout_ms: Some(runtime_shell_action_timeout_ms(turn, timeout_ms)),
+                timeout_ms: Some(mez_agent::agent_shell_timeout_ms(
+                    turn.started_at_unix_seconds,
+                    current_unix_millis(),
+                    timeout_ms,
+                )),
                 pending_input_payload: transaction_input.and_then(|input| {
                     (!input.payload.is_empty()).then(|| input.payload.into_bytes())
                 }),

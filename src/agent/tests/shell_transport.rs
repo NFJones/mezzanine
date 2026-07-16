@@ -29,7 +29,7 @@ fn posix_wrapper_can_encode_child_output_for_model_transport() {
         },
     };
 
-    let decoded = postprocess_shell_action_success_output(&action, stdout.to_string()).unwrap();
+    let decoded = postprocess_shell_action_success_output(&action, stdout.to_string());
 
     assert!(
         output.status.success(),

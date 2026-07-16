@@ -128,6 +128,31 @@ pub struct AutoSizingDispatch {
     pub fallback_policy: AutoSizingFallbackPolicy,
 }
 
+/// Returns the most restrictive possible main-provider context profile.
+///
+/// Before a router decision is applied, any configured size bucket may serve
+/// the first normal request. Context-pressure policy therefore uses the
+/// smallest resolved target window rather than only the default profile.
+pub fn auto_sizing_minimum_context_profile(
+    default_profile: &ModelProfile,
+    auto_sizing: Option<&AutoSizingDispatch>,
+) -> ModelProfile {
+    let mut selected = default_profile;
+    if let Some(auto_sizing) = auto_sizing {
+        for candidate in [
+            &auto_sizing.default_profile,
+            &auto_sizing.small.profile,
+            &auto_sizing.medium.profile,
+            &auto_sizing.large.profile,
+        ] {
+            if candidate.context_window_tokens() < selected.context_window_tokens() {
+                selected = candidate;
+            }
+        }
+    }
+    selected.clone()
+}
+
 /// Parsed automatic sizing decision returned by the router model.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AutoSizingDecision {
@@ -735,6 +760,38 @@ mod tests {
             action_batch: None,
             provider_transcript_events: Vec::new(),
         }
+    }
+
+    /// Verifies context-pressure policy selects the smallest possible target
+    /// window before a router decision and otherwise preserves the default.
+    #[test]
+    fn minimum_context_profile_uses_most_restrictive_target() {
+        let with_window = |model: &str, tokens: usize| {
+            let mut profile = ModelProfile {
+                provider: "custom".to_string(),
+                model: model.to_string(),
+                ..ModelProfile::default()
+            };
+            profile
+                .provider_options
+                .insert("context_window_tokens".to_string(), tokens.to_string());
+            profile
+        };
+        let default = with_window("default", 200_000);
+        let mut dispatch = dispatch();
+        dispatch.default_profile = with_window("configured-default", 160_000);
+        dispatch.small.profile = with_window("small", 64_000);
+        dispatch.medium.profile = with_window("medium", 128_000);
+        dispatch.large.profile = with_window("large", 256_000);
+
+        assert_eq!(
+            auto_sizing_minimum_context_profile(&default, Some(&dispatch)).model,
+            "small"
+        );
+        assert_eq!(
+            auto_sizing_minimum_context_profile(&default, None).model,
+            "default"
+        );
     }
 
     /// Verifies DeepSeek provider-native `max` reasoning is converted to the

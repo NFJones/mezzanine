@@ -415,6 +415,58 @@ pub struct MacroRunState {
     pub phase: MacroRunPhase,
 }
 
+/// Product-supplied identities and invocation facts for a new macro run.
+#[derive(Debug, Clone, Copy)]
+pub struct MacroRunRegistration<'a> {
+    /// Parent turn used as both the run and orchestration identifier.
+    pub parent_turn_id: &'a str,
+    /// Parent agent that owns the run.
+    pub parent_agent_id: &'a str,
+    /// Parent pane where the macro was invoked.
+    pub parent_pane_id: &'a str,
+    /// Persistent child agent allocated by product spawning.
+    pub child_agent_id: &'a str,
+    /// Original user prompt that invoked the macro.
+    pub invocation_prompt: &'a str,
+    /// Optional user context after the macro token.
+    pub invocation_context: Option<&'a str>,
+}
+
+/// Builds stable provider-independent state for one newly started macro run.
+pub fn macro_run_state(
+    definition: &MacroDefinition,
+    registration: MacroRunRegistration<'_>,
+) -> MacroRunState {
+    let steps = definition
+        .steps
+        .iter()
+        .enumerate()
+        .map(|(index, step)| MacroRunStep {
+            index,
+            attempts: 0,
+            scripted_prompt: step.prompt.clone(),
+            submitted_prompt: None,
+            child_turn_id: None,
+            task_result: None,
+            judgment: None,
+        })
+        .collect();
+    MacroRunState {
+        run_id: registration.parent_turn_id.to_string(),
+        parent_turn_id: registration.parent_turn_id.to_string(),
+        parent_agent_id: registration.parent_agent_id.to_string(),
+        parent_pane_id: registration.parent_pane_id.to_string(),
+        child_agent_id: registration.child_agent_id.to_string(),
+        macro_name: definition.summary.name.clone(),
+        macro_description: definition.summary.description.clone(),
+        invocation_prompt: registration.invocation_prompt.to_string(),
+        invocation_context: registration.invocation_context.map(ToOwned::to_owned),
+        steps,
+        current_step: 0,
+        phase: MacroRunPhase::DispatchingStep { step_index: 0 },
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct MacroFrontMatter {
     name: String,
@@ -616,6 +668,59 @@ pub fn macro_judge_task(
         "Judge whether the completed step satisfies the macro intent and select the next runtime action, including retry_current_step for incomplete but recoverable output."
     );
     value.to_string()
+}
+
+/// Builds the structured provider request for one completed macro-step judge.
+///
+/// Returns a contract error when the requested step does not exist or has no
+/// child task result to judge.
+pub fn macro_judge_model_request(
+    turn: &AgentTurnRecord,
+    model_profile: &crate::ModelProfile,
+    run: &MacroRunState,
+    step_index: usize,
+) -> Result<ModelRequest, MacroContractError> {
+    let step = run
+        .steps
+        .get(step_index)
+        .ok_or_else(|| MacroContractError::new("macro judge step index is out of range"))?;
+    let result = step
+        .task_result
+        .as_ref()
+        .ok_or_else(|| MacroContractError::new("macro judge requested before child result"))?;
+    let next_step = run.steps.get(step_index.saturating_add(1));
+    Ok(ModelRequest {
+        provider: model_profile.provider.clone(),
+        model: model_profile.model.clone(),
+        reasoning_effort: model_profile.reasoning_profile.clone(),
+        thinking_enabled: model_profile.thinking_enabled(),
+        latency_preference: model_profile.latency_preference.clone(),
+        prompt_cache_retention: None,
+        max_output_tokens: model_profile.max_output_tokens(),
+        temperature: None,
+        prompt_cache_session_id: None,
+        prompt_cache_lineage_id: None,
+        turn_id: turn.turn_id.clone(),
+        agent_id: turn.agent_id.clone(),
+        available_mcp_tools: Vec::new(),
+        memory_actions_enabled: false,
+        issue_actions_enabled: false,
+        interaction_kind: ModelInteractionKind::MacroJudge,
+        allowed_actions: AllowedActionSet::for_capability(AgentCapability::RespondOnly),
+        stop: None,
+        messages: vec![
+            ModelMessage {
+                role: ModelMessageRole::System,
+                source: ContextSourceKind::RuntimeHint,
+                content: macro_judge_policy(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::User,
+                source: ContextSourceKind::RuntimeHint,
+                content: macro_judge_task(run, step, result, next_step),
+            },
+        ],
+    })
 }
 
 /// Parses and validates one structured macro judge response.
@@ -864,6 +969,7 @@ fn leading_ascii_whitespace_len(line: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AgentTurnState, AgentTurnTrigger};
 
     fn summary(name: &str, source: MacroSource, description: &str) -> MacroSummary {
         MacroSummary {
@@ -872,6 +978,41 @@ mod tests {
             source,
             path: PathBuf::from(format!("/{}/{name}/{MACRO_FILE_NAME}", source.as_str())),
             step_count: 2,
+        }
+    }
+
+    /// Builds one complete macro definition for run-state tests.
+    fn definition() -> MacroDefinition {
+        MacroDefinition {
+            summary: summary("release-check", MacroSource::Project, "Check release"),
+            text: "macro source".to_string(),
+            steps: vec![
+                MacroStep {
+                    index: 1,
+                    prompt: "Run checks".to_string(),
+                },
+                MacroStep {
+                    index: 2,
+                    prompt: "Review diff".to_string(),
+                },
+            ],
+        }
+    }
+
+    /// Builds one running parent turn for judge-request tests.
+    fn turn() -> AgentTurnRecord {
+        AgentTurnRecord {
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            pane_id: "%1".to_string(),
+            trigger: AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 1,
+            policy_profile: "default".to_string(),
+            model_profile: "default".to_string(),
+            parent_turn_id: None,
+            state: AgentTurnState::Running,
+            cooperation_mode: Some("macro-orchestration".to_string()),
+            initial_capability: None,
         }
     }
 
@@ -893,6 +1034,71 @@ mod tests {
                 .iter()
                 .all(|diagnostic| diagnostic.message.contains("overrides existing"))
         );
+    }
+
+    /// Verifies run construction snapshots definition steps and product-owned
+    /// identities before any child result or judge mutation occurs.
+    #[test]
+    fn macro_run_state_snapshots_definition_and_registration() {
+        let run = macro_run_state(
+            &definition(),
+            MacroRunRegistration {
+                parent_turn_id: "turn-1",
+                parent_agent_id: "agent-1",
+                parent_pane_id: "%1",
+                child_agent_id: "agent-%2",
+                invocation_prompt: "#release-check v1",
+                invocation_context: Some("v1"),
+            },
+        );
+
+        assert_eq!(run.run_id, "turn-1");
+        assert_eq!(run.child_agent_id, "agent-%2");
+        assert_eq!(run.steps.len(), 2);
+        assert_eq!(run.steps[0].index, 0);
+        assert_eq!(run.steps[0].scripted_prompt, "Run checks");
+        assert_eq!(run.phase, MacroRunPhase::DispatchingStep { step_index: 0 });
+    }
+
+    /// Verifies judge request construction requires a completed child result
+    /// and preserves parent model identity and constrained interaction policy.
+    #[test]
+    fn macro_judge_request_requires_result_and_uses_parent_profile() {
+        let mut run = macro_run_state(
+            &definition(),
+            MacroRunRegistration {
+                parent_turn_id: "turn-1",
+                parent_agent_id: "agent-1",
+                parent_pane_id: "%1",
+                child_agent_id: "agent-%2",
+                invocation_prompt: "#release-check",
+                invocation_context: None,
+            },
+        );
+        let profile = crate::ModelProfile {
+            provider: "openai".to_string(),
+            model: "gpt-5".to_string(),
+            reasoning_profile: Some("high".to_string()),
+            ..crate::ModelProfile::default()
+        };
+        assert_eq!(
+            macro_judge_model_request(&turn(), &profile, &run, 0)
+                .unwrap_err()
+                .message(),
+            "macro judge requested before child result"
+        );
+        run.steps[0].task_result = Some(MacroStepTaskResult {
+            success: true,
+            summary: "checks passed".to_string(),
+            output: "all green".to_string(),
+        });
+        let request = macro_judge_model_request(&turn(), &profile, &run, 0).unwrap();
+
+        assert_eq!(request.provider, "openai");
+        assert_eq!(request.model, "gpt-5");
+        assert_eq!(request.interaction_kind, ModelInteractionKind::MacroJudge);
+        assert!(request.allowed_actions.contains(crate::AllowedAction::Say));
+        assert_eq!(request.messages.len(), 2);
     }
 
     #[test]

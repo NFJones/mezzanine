@@ -116,7 +116,7 @@ impl RuntimeSessionService {
         };
         let auto_sizing =
             self.runtime_auto_sizing_dispatch_for_turn(&turn, &stored_model_profile)?;
-        let model_profile = runtime_auto_sizing_minimum_context_profile(
+        let model_profile = mez_agent::auto_sizing_minimum_context_profile(
             &stored_model_profile,
             auto_sizing.as_ref(),
         );

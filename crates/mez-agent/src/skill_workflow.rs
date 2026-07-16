@@ -7,10 +7,12 @@
 //! product error projection remain in the composition crate.
 
 use serde::Deserialize;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::path::PathBuf;
 
-use crate::maap::is_valid_skill_name;
+use crate::maap::{AgentAction, AgentActionPayload, is_valid_skill_name};
+use crate::{ActionResult, ActionStatus, AgentTurnResultIdentity, ContextBlock, ContextSourceKind};
 
 /// File name that carries one skill's metadata and markdown instructions.
 pub const SKILL_FILE_NAME: &str = "SKILL.md";
@@ -112,6 +114,191 @@ pub struct SkillCatalog {
     pub skills: Vec<SkillSummary>,
     /// Non-fatal discovery diagnostics.
     pub diagnostics: Vec<SkillDiagnostic>,
+}
+
+/// Skill discovery and load state already visible in one active turn.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SkillActionContext {
+    /// Whether a successful catalog result is already present.
+    pub catalog_requested: bool,
+    /// Skill names whose full documents are already in context.
+    pub loaded_skills: BTreeSet<String>,
+}
+
+/// Extracts canonical skill action state from active model-context blocks.
+///
+/// Only explicit runtime-owned labels and action-result text are authoritative;
+/// arbitrary repository or shell content cannot claim a loaded skill.
+pub fn skill_action_context_from_blocks(blocks: &[ContextBlock]) -> SkillActionContext {
+    let mut context = SkillActionContext::default();
+    for block in blocks {
+        if block.source == ContextSourceKind::ActionResult
+            && block.content.lines().next().is_some_and(|line| {
+                line.starts_with("[action_result ")
+                    && line.contains(" request_skills ")
+                    && line.ends_with(" succeeded]")
+            })
+        {
+            context.catalog_requested = true;
+        }
+        if let Some(name) = block.label.strip_prefix("explicit skill ")
+            && is_valid_skill_name(name)
+        {
+            context.loaded_skills.insert(name.to_string());
+        }
+        for line in block.content.lines() {
+            let Some(name) = line.strip_prefix("# Skill: ") else {
+                continue;
+            };
+            let name = name.trim();
+            if is_valid_skill_name(name) {
+                context.loaded_skills.insert(name.to_string());
+            }
+        }
+    }
+    context
+}
+
+/// Deterministic outcome of planning one non-effecting skill action.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SkillActionPlan {
+    /// The lower crate produced the complete action result without I/O.
+    Result(ActionResult),
+    /// The product must load the selected document before result completion.
+    Load {
+        /// Catalog summary identifying the concrete document to load.
+        summary: SkillSummary,
+        /// Optional model-authored semantic argument for the skill.
+        additional_context: Option<String>,
+    },
+}
+
+/// Plans one skill action using the effective catalog and turn-visible state.
+///
+/// Catalog requests complete immediately. Valid skill calls return a load plan
+/// so the product can perform filesystem I/O; invalid, missing, and redundant
+/// requests become model-correctable action failures without I/O.
+pub fn plan_skill_action(
+    turn: &(impl AgentTurnResultIdentity + ?Sized),
+    action: &AgentAction,
+    catalog: &SkillCatalog,
+    context: &mut SkillActionContext,
+) -> Result<SkillActionPlan, SkillContractError> {
+    match &action.payload {
+        AgentActionPayload::RequestSkills => {
+            if !context.loaded_skills.is_empty() {
+                return skill_action_failure(
+                    turn,
+                    action,
+                    "skill_context_already_loaded",
+                    format!(
+                        "skill context is already loaded for this turn: {}; use the loaded skill guidance or request the missing action capability instead of discovering skills again",
+                        context
+                            .loaded_skills
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    ),
+                );
+            }
+            if context.catalog_requested {
+                return skill_action_failure(
+                    turn,
+                    action,
+                    "skill_catalog_already_requested",
+                    "the effective skill catalog has already been returned for this turn; use an available skill or request the missing action capability instead of requesting the catalog again",
+                );
+            }
+            context.catalog_requested = true;
+            Ok(SkillActionPlan::Result(ActionResult::succeeded(
+                turn,
+                action,
+                vec![catalog.model_catalog_text()],
+                Some(catalog.structured_json()),
+            )))
+        }
+        AgentActionPayload::CallSkill {
+            name,
+            additional_context,
+        } => {
+            if !is_valid_skill_name(name) {
+                return skill_action_failure(
+                    turn,
+                    action,
+                    "invalid_skill_name",
+                    "skill name must contain only lowercase letters, digits, and hyphens",
+                );
+            }
+            let Some(summary) = catalog.get(name) else {
+                let available = if catalog.skills.is_empty() {
+                    "none".to_string()
+                } else {
+                    catalog.names().join(",")
+                };
+                return skill_action_failure(
+                    turn,
+                    action,
+                    "skill_not_found",
+                    format!("skill {name:?} is not available; available skills: {available}"),
+                );
+            };
+            if context.loaded_skills.contains(name) {
+                return skill_action_failure(
+                    turn,
+                    action,
+                    "skill_context_already_loaded",
+                    format!(
+                        "skill {name:?} is already loaded for this turn; use the loaded skill guidance or request the missing action capability instead of loading it again"
+                    ),
+                );
+            }
+            Ok(SkillActionPlan::Load {
+                summary: summary.clone(),
+                additional_context: additional_context.clone(),
+            })
+        }
+        _ => Err(SkillContractError::new(
+            "skill execution requires request_skills or call_skill action",
+        )),
+    }
+}
+
+/// Completes a successful skill load after the product supplies document text.
+pub fn skill_load_action_result(
+    turn: &(impl AgentTurnResultIdentity + ?Sized),
+    action: &AgentAction,
+    document: &SkillDocument,
+    additional_context: Option<&str>,
+    content: String,
+) -> ActionResult {
+    ActionResult::succeeded(
+        turn,
+        action,
+        vec![content],
+        Some(
+            serde_json::json!({
+                "name": &document.summary.name,
+                "source": document.summary.source.as_str(),
+                "path": document.summary.path.to_string_lossy(),
+                "skill_bytes": document.text.len(),
+                "additional_context_bytes": additional_context.map(str::len).unwrap_or(0),
+            })
+            .to_string(),
+        ),
+    )
+}
+
+/// Builds one model-correctable deterministic skill action failure.
+fn skill_action_failure(
+    turn: &(impl AgentTurnResultIdentity + ?Sized),
+    action: &AgentAction,
+    code: &'static str,
+    message: impl Into<String>,
+) -> Result<SkillActionPlan, SkillContractError> {
+    ActionResult::failed(turn, action, ActionStatus::Failed, code, message.into())
+        .map(SkillActionPlan::Result)
+        .map_err(|error| SkillContractError::new(error.to_string()))
 }
 
 impl SkillCatalog {
@@ -332,6 +519,7 @@ pub fn split_skill_front_matter(text: &str) -> Result<(&str, &str), SkillContrac
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AgentTurnRecord, AgentTurnState, AgentTurnTrigger};
 
     /// Builds one valid summary fixture for catalog and context tests.
     fn summary(name: &str, source: SkillSource) -> SkillSummary {
@@ -340,6 +528,32 @@ mod tests {
             description: format!("{name} workflow"),
             source,
             path: PathBuf::from(format!("/{name}/SKILL.md")),
+        }
+    }
+
+    /// Builds one running turn fixture for skill action planning.
+    fn turn() -> AgentTurnRecord {
+        AgentTurnRecord {
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            pane_id: "%1".to_string(),
+            trigger: AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 1,
+            policy_profile: "default".to_string(),
+            model_profile: "default".to_string(),
+            parent_turn_id: None,
+            state: AgentTurnState::Running,
+            cooperation_mode: None,
+            initial_capability: None,
+        }
+    }
+
+    /// Builds one skill action with stable identity.
+    fn action(payload: AgentActionPayload) -> AgentAction {
+        AgentAction {
+            id: "skill-1".to_string(),
+            rationale: "load guidance".to_string(),
+            payload,
         }
     }
 
@@ -356,6 +570,102 @@ mod tests {
         assert_eq!(catalog.get("review").unwrap().source, SkillSource::Project);
         assert_eq!(catalog.diagnostics.len(), 1);
         assert!(catalog.diagnostics[0].message.contains("overrides"));
+    }
+
+    /// Verifies catalog requests complete deterministically and a repeated
+    /// request becomes a model-correctable failure without product I/O.
+    #[test]
+    fn skill_action_planning_suppresses_redundant_catalog_requests() {
+        let mut catalog = SkillCatalog::default();
+        catalog.insert(summary("review", SkillSource::User));
+        let action = action(AgentActionPayload::RequestSkills);
+        let mut context = SkillActionContext::default();
+
+        let SkillActionPlan::Result(first) =
+            plan_skill_action(&turn(), &action, &catalog, &mut context).unwrap()
+        else {
+            panic!("catalog request must complete without I/O");
+        };
+        assert!(!first.is_error);
+        assert!(context.catalog_requested);
+
+        let SkillActionPlan::Result(repeated) =
+            plan_skill_action(&turn(), &action, &catalog, &mut context).unwrap()
+        else {
+            panic!("repeated catalog request must fail without I/O");
+        };
+        assert_eq!(
+            repeated.error.unwrap().code,
+            "skill_catalog_already_requested"
+        );
+    }
+
+    /// Verifies valid skill calls yield an explicit product load plan and the
+    /// lower completion preserves canonical document metadata.
+    #[test]
+    fn skill_action_planning_and_completion_bound_product_loading() {
+        let mut catalog = SkillCatalog::default();
+        catalog.insert(summary("review", SkillSource::Project));
+        let action = action(AgentActionPayload::CallSkill {
+            name: "review".to_string(),
+            additional_context: Some("focus tests".to_string()),
+        });
+        let mut context = SkillActionContext::default();
+
+        let SkillActionPlan::Load {
+            summary,
+            additional_context,
+        } = plan_skill_action(&turn(), &action, &catalog, &mut context).unwrap()
+        else {
+            panic!("valid call must request product document loading");
+        };
+        let document = SkillDocument {
+            summary,
+            text: "Review workflow".to_string(),
+        };
+        let result = skill_load_action_result(
+            &turn(),
+            &action,
+            &document,
+            additional_context.as_deref(),
+            skill_context_text(&document, additional_context.as_deref()),
+        );
+        let structured: serde_json::Value =
+            serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();
+
+        assert!(!result.is_error);
+        assert_eq!(structured["name"], "review");
+        assert_eq!(structured["source"], "project");
+        assert_eq!(structured["additional_context_bytes"], 11);
+    }
+
+    /// Verifies only explicit lower-owned labels and skill headings restore
+    /// catalog and loaded-skill state from active turn context.
+    #[test]
+    fn skill_action_context_extracts_runtime_owned_state() {
+        let context = skill_action_context_from_blocks(&[
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                label: "action result catalog".to_string(),
+                content: "[action_result catalog request_skills succeeded]".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::SkillInstruction,
+                label: "explicit skill review".to_string(),
+                content: "# Skill: review\n\nWorkflow".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::Transcript,
+                label: "untrusted".to_string(),
+                content: "# Skill: ../escape".to_string(),
+            },
+        ]);
+
+        assert!(context.catalog_requested);
+        assert_eq!(
+            context.loaded_skills.into_iter().collect::<Vec<_>>(),
+            ["review"]
+        );
     }
 
     /// Verifies skill metadata parsing accepts quoted YAML descriptions and

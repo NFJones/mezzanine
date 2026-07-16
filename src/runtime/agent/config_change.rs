@@ -8,51 +8,6 @@
 use super::*;
 use crate::runtime::fs;
 
-/// Runs the runtime config change value json operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_config_change_value_json(value: Option<&str>) -> Result<String> {
-    let Some(value) = value else {
-        return Err(MezError::invalid_args(
-            "approved config_change set operation requires a value",
-        ));
-    };
-    match serde_json::from_str::<serde_json::Value>(value) {
-        Ok(value) => Ok(value.to_string()),
-        Err(_) => Ok(format!("\"{}\"", json_escape(value))),
-    }
-}
-
-/// Returns a config-change value as one string suitable for command reuse.
-///
-/// Model-authored config changes usually arrive as raw strings, but recovery
-/// turns can also echo a JSON string literal. Accept both forms while rejecting
-/// non-string JSON values for command paths that require names.
-fn runtime_config_change_string_value(setting_path: &str, value: Option<&str>) -> Result<String> {
-    let Some(value) = value else {
-        return Err(MezError::invalid_args(format!(
-            "approved config_change set operation for {setting_path} requires a value"
-        )));
-    };
-    match serde_json::from_str::<serde_json::Value>(value) {
-        Ok(serde_json::Value::String(value)) => Ok(value),
-        Ok(_) => Err(MezError::invalid_args(format!(
-            "config_change {setting_path} requires a string value"
-        ))),
-        Err(_) => Ok(value.to_string()),
-    }
-}
-
-/// Returns whether a config-change operation sets a scalar value.
-fn runtime_config_change_operation_sets_value(operation: &str) -> bool {
-    matches!(
-        operation.trim().to_ascii_lowercase().as_str(),
-        "set" | "replace" | "update"
-    )
-}
-
 /// Runs the runtime config change control request operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -67,9 +22,9 @@ fn runtime_config_change_control_request(
     persist_target_json: &str,
     idempotency_suffix: &str,
 ) -> Result<String> {
-    match operation.trim().to_ascii_lowercase().as_str() {
-        "set" | "replace" | "update" => {
-            let value = runtime_config_change_value_json(value)?;
+    match mez_agent::normalize_config_change_operation(operation)? {
+        mez_agent::ConfigChangeOperation::Set => {
+            let value = mez_agent::parse_config_change_value(value)?.canonical_json();
             let idempotency_key = runtime_config_change_idempotency_key(
                 turn,
                 action,
@@ -90,7 +45,7 @@ fn runtime_config_change_control_request(
                 json_escape(&idempotency_key)
             ))
         }
-        "unset" | "remove" | "delete" | "reset" => {
+        mez_agent::ConfigChangeOperation::Unset => {
             let idempotency_key = runtime_config_change_idempotency_key(
                 turn,
                 action,
@@ -110,9 +65,6 @@ fn runtime_config_change_control_request(
                 json_escape(&idempotency_key)
             ))
         }
-        _ => Err(MezError::invalid_args(
-            "config_change operation must be set, replace, update, unset, remove, delete, or reset",
-        )),
     }
 }
 
@@ -142,12 +94,7 @@ fn runtime_config_change_action_is_theme_scalar_batchable(action: &AgentAction) 
     else {
         return false;
     };
-    let operation = operation.trim().to_ascii_lowercase();
-    let supported_operation = matches!(
-        operation.as_str(),
-        "set" | "replace" | "update" | "unset" | "remove" | "delete" | "reset"
-    );
-    supported_operation
+    mez_agent::normalize_config_change_operation(operation).is_ok()
         && (setting_path.starts_with("theme.aliases.") || setting_path.starts_with("theme.colors."))
 }
 
@@ -179,16 +126,11 @@ fn runtime_config_change_mutation_from_action(action: &AgentAction) -> Result<Co
             "config_change batch requires config_change actions",
         ));
     };
-    let operation = match operation.trim().to_ascii_lowercase().as_str() {
-        "set" | "replace" | "update" => {
+    let operation = match mez_agent::normalize_config_change_operation(operation)? {
+        mez_agent::ConfigChangeOperation::Set => {
             ConfigMutationOperation::Set(runtime_config_change_mutation_value(value.as_deref())?)
         }
-        "unset" | "remove" | "delete" | "reset" => ConfigMutationOperation::Unset,
-        _ => {
-            return Err(MezError::invalid_args(format!(
-                "unsupported config_change operation `{operation}`"
-            )));
-        }
+        mez_agent::ConfigChangeOperation::Unset => ConfigMutationOperation::Unset,
     };
     Ok(ConfigMutation {
         path: setting_path.clone(),
@@ -198,32 +140,13 @@ fn runtime_config_change_mutation_from_action(action: &AgentAction) -> Result<Co
 
 /// Converts one model-authored config-change value into a scalar config value.
 fn runtime_config_change_mutation_value(value: Option<&str>) -> Result<ConfigMutationValue> {
-    let value_json = runtime_config_change_value_json(value)?;
-    match serde_json::from_str::<serde_json::Value>(&value_json) {
-        Ok(serde_json::Value::String(value)) => Ok(ConfigMutationValue::String(value)),
-        Ok(serde_json::Value::Bool(value)) => Ok(ConfigMutationValue::Boolean(value)),
-        Ok(serde_json::Value::Number(value)) => value
-            .as_i64()
-            .map(ConfigMutationValue::Integer)
-            .ok_or_else(|| MezError::invalid_args("config_change integer value is invalid")),
-        Ok(serde_json::Value::Array(values)) => {
-            let mut strings = Vec::with_capacity(values.len());
-            for value in values {
-                let serde_json::Value::String(value) = value else {
-                    return Err(MezError::invalid_args(
-                        "config_change string arrays must contain only strings",
-                    ));
-                };
-                strings.push(value);
-            }
-            Ok(ConfigMutationValue::StringArray(strings))
+    match mez_agent::parse_config_change_value(value)? {
+        mez_agent::ConfigChangeValue::String(value) => Ok(ConfigMutationValue::String(value)),
+        mez_agent::ConfigChangeValue::Integer(value) => Ok(ConfigMutationValue::Integer(value)),
+        mez_agent::ConfigChangeValue::Boolean(value) => Ok(ConfigMutationValue::Boolean(value)),
+        mez_agent::ConfigChangeValue::StringArray(values) => {
+            Ok(ConfigMutationValue::StringArray(values))
         }
-        Ok(serde_json::Value::Object(_) | serde_json::Value::Null) => Err(MezError::invalid_args(
-            "config_change supports only string, integer, boolean, or string-array values",
-        )),
-        Err(error) => Err(MezError::invalid_args(format!(
-            "config_change value is invalid JSON: {error}"
-        ))),
     }
 }
 
@@ -301,7 +224,9 @@ impl RuntimeSessionService {
                 "config_change execution requires a config_change action",
             ));
         };
-        if setting_path == "theme.active" && runtime_config_change_operation_sets_value(operation) {
+        if setting_path == "theme.active"
+            && mez_agent::normalize_config_change_operation(operation)?.sets_value()
+        {
             return self.execute_theme_config_change_action_for_turn(
                 turn,
                 action,
@@ -386,9 +311,10 @@ impl RuntimeSessionService {
         value: Option<&str>,
         approval_state: &str,
     ) -> Result<ActionResult> {
-        let theme = match runtime_config_change_string_value(setting_path, value) {
+        let theme = match mez_agent::config_change_string_value(setting_path, value) {
             Ok(theme) => theme,
             Err(error) => {
+                let error = MezError::from(error);
                 return Ok(ActionResult::failed(
                     turn,
                     action,

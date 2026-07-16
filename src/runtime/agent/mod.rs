@@ -41,8 +41,7 @@ use super::{
     runtime_permission_request_hook_payload, runtime_post_mcp_hook_payload,
     runtime_pre_mcp_hook_payload, runtime_pre_shell_hook_payload, runtime_set_theme_command,
     runtime_subagent_placement_mode, runtime_subagent_spawn_request,
-    shell_command_structured_content_json, transcript_entries_for_execution,
-    validate_mmp_payload_metadata,
+    transcript_entries_for_execution, validate_mmp_payload_metadata,
 };
 #[cfg(test)]
 use crate::agent::actions::AgentTurnRunner;
@@ -100,8 +99,7 @@ mod trace;
 
 use mez_agent::messaging::task_state_name as runtime_task_state_suffix;
 use mez_agent::outcome::{
-    ActionPresentationInput, RuntimeSkillActionContext,
-    action_error_suffix as runtime_agent_action_error_suffix,
+    ActionPresentationInput, action_error_suffix as runtime_agent_action_error_suffix,
     action_has_runtime_visible_effect as runtime_agent_action_has_runtime_visible_effect,
     action_outcome_line,
     action_rationale_repeats_visible_batch_text as runtime_agent_action_rationale_repeats_visible_batch_text,
@@ -122,23 +120,23 @@ use mez_agent::outcome::{
     runtime_failure_feedback_repeat_guidance, runtime_failure_feedback_specific_guidance,
     runtime_failure_feedback_status_line, runtime_loop_guard_failure_label,
     runtime_loop_guard_failure_summary_line, runtime_provider_audit_error_message,
-    runtime_skill_action_context_from_blocks, runtime_unrecovered_action_failure_output,
-    runtime_unrecovered_failure_output_lines, runtime_unrecovered_failure_reason,
-    runtime_validate_provider_completion_execution, runtime_validate_provider_completion_identity,
+    runtime_unrecovered_action_failure_output, runtime_unrecovered_failure_output_lines,
+    runtime_unrecovered_failure_reason, runtime_validate_provider_completion_execution,
+    runtime_validate_provider_completion_identity,
 };
 use mez_agent::progress::{
     PROGRESS_SAY_LEDGER_LABEL as RUNTIME_PROGRESS_SAY_LEDGER_LABEL,
     RATIONALE_LEDGER_LABEL as RUNTIME_RATIONALE_LEDGER_LABEL,
     merge_progress_say_entries as runtime_merge_progress_say_entries,
     merge_rationale_entries as runtime_merge_rationale_entries,
-    normalize_rationale_entry as runtime_normalize_rationale_entry,
     progress_say_entries_for_execution as runtime_progress_say_entries_for_execution,
     progress_say_entries_from_ledger as runtime_progress_say_entries_from_ledger,
     progress_say_ledger_content as runtime_progress_say_ledger_content,
     rationale_entries_for_execution as runtime_rationale_entries_for_execution,
+    rationale_entries_from_context_blocks as runtime_rationale_entries_from_context_blocks,
     rationale_entries_from_ledger as runtime_rationale_entries_from_ledger,
-    rationale_entry_repeats_existing as runtime_rationale_entry_repeats_existing,
     rationale_ledger_content as runtime_rationale_ledger_content,
+    suppress_redundant_batch_rationale as runtime_suppress_redundant_batch_rationale,
 };
 use mez_agent::subagent_task_output_for_execution;
 use outcome::{
@@ -156,11 +154,6 @@ use trace::{
 
 // Agent turn execution, provider polling, action dispatch, and approvals.
 
-/// Defines the RUNTIME AGENT DEFAULT SHELL ACTION TIMEOUT MS const used by this subsystem.
-///
-/// Keeping this value documented makes the contract explicit at the module
-/// boundary and avoids relying on call-site inference.
-const RUNTIME_AGENT_TURN_TIMEOUT_MS: u64 = 30 * 60 * 1000;
 /// Maximum in-process provider context-limit retries for test providers.
 #[cfg(test)]
 const RUNTIME_PROVIDER_CONTEXT_LIMIT_RETRY_LIMIT: u32 = 3;
@@ -169,50 +162,6 @@ const RUNTIME_PROVIDER_CONTEXT_LIMIT_RETRY_LIMIT: u32 = 3;
 const RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LIMIT: u32 = 2;
 /// Label for ephemeral active-turn context that guides output-limit retries.
 const RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LABEL: &str = "provider output-limit retry guidance";
-/// Returns the remaining turn-wide shell execution budget.
-///
-/// Individual model actions do not choose their own timeout. Shell-backed
-/// transactions inherit the active turn's remaining default budget so a chain
-/// of actions cannot outlive the enclosing turn indefinitely.
-fn runtime_agent_turn_remaining_timeout_ms(turn: &AgentTurnRecord) -> u64 {
-    let started_at_ms = turn.started_at_unix_seconds.saturating_mul(1000);
-    let elapsed_ms = current_unix_millis().saturating_sub(started_at_ms);
-    RUNTIME_AGENT_TURN_TIMEOUT_MS
-        .saturating_sub(elapsed_ms)
-        .max(1)
-}
-
-/// Returns the bounded timeout for one shell action.
-///
-/// The action-level timeout is an inner bound. The turn-wide budget remains the
-/// outer cap so no command can outlive the enclosing agent turn.
-fn runtime_shell_action_timeout_ms(turn: &AgentTurnRecord, timeout_ms: Option<u64>) -> u64 {
-    let remaining = runtime_agent_turn_remaining_timeout_ms(turn);
-    timeout_ms
-        .map(|timeout_ms| timeout_ms.min(remaining))
-        .unwrap_or(remaining)
-        .max(1)
-}
-
-/// Returns a last-request context snapshot when the denominator is known.
-fn runtime_agent_provider_context_usage_snapshot(
-    profile: &ModelProfile,
-    usage: ModelTokenUsage,
-) -> Option<mez_agent::AgentContextUsageSnapshot> {
-    let context_window_tokens = profile
-        .known_context_window_tokens()
-        .and_then(|tokens| u64::try_from(tokens).ok())
-        .filter(|tokens| *tokens > 0)?;
-    if usage.input_tokens == 0 {
-        return None;
-    }
-    Some(mez_agent::AgentContextUsageSnapshot {
-        input_tokens: usage.input_tokens,
-        context_window_tokens,
-        cached_input_tokens: usage.cached_input_tokens,
-    })
-}
-
 /// Formats one last-request context snapshot for pane status.
 ///
 /// The display is a bounded status indicator, so accepted provider responses
@@ -231,33 +180,6 @@ pub(crate) fn runtime_agent_provider_context_usage_display(
         .saturating_add(budget_tokens / 2)
         / budget_tokens;
     Some(format!("{}%", percentage.min(100)))
-}
-
-/// Returns the most restrictive main-provider context profile for an
-/// auto-sizing dispatch.
-///
-/// Before the router decision has been applied, any configured target bucket
-/// may become the actual model for the first normal provider request. Context
-/// pressure checks therefore need the smallest target window rather than the
-/// default profile's potentially larger window.
-fn runtime_auto_sizing_minimum_context_profile(
-    default_profile: &ModelProfile,
-    auto_sizing: Option<&RuntimeAutoSizingDispatch>,
-) -> ModelProfile {
-    let mut selected = default_profile;
-    if let Some(auto_sizing) = auto_sizing {
-        for candidate in [
-            &auto_sizing.default_profile,
-            &auto_sizing.small.profile,
-            &auto_sizing.medium.profile,
-            &auto_sizing.large.profile,
-        ] {
-            if candidate.context_window_tokens() < selected.context_window_tokens() {
-                selected = candidate;
-            }
-        }
-    }
-    selected.clone()
 }
 
 /// Runs the runtime agent execution prompt display lines operation for this subsystem.

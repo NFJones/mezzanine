@@ -222,7 +222,7 @@ impl RuntimeSessionService {
                 let processed_output = postprocess_shell_action_success_output(
                     &action,
                     transaction_ref.observed_output_preview.clone(),
-                )?;
+                );
                 transaction_ref.observed_output_preview = processed_output;
                 transaction_ref.observed_output_bytes =
                     transaction_ref.observed_output_preview.len();
@@ -232,8 +232,9 @@ impl RuntimeSessionService {
             } else {
                 None
             };
-            let structured_content = shell_command_structured_content_json(
+            let structured_content = mez_agent::shell_action_structured_content_json(
                 &action,
+                &local_plan,
                 Some("pane_shell"),
                 true,
                 serde_json::Value::Null,
@@ -252,7 +253,7 @@ impl RuntimeSessionService {
                     "transport_incomplete": transport_diagnostics.transport_incomplete(),
                     "transport_diagnostics": transport_diagnostics.to_json()
                 }),
-            )?;
+            );
             let plain_shell_command =
                 matches!(action.payload, AgentActionPayload::ShellCommand { .. });
             execution.action_results[result_index] = if exit_code == 0 || plain_shell_command {
@@ -319,8 +320,14 @@ impl RuntimeSessionService {
                     else {
                         continue;
                     };
-                    let structured_content = shell_command_structured_content_json(
+                    let skipped_plan = local_action_plan(skipped_action)?.ok_or_else(|| {
+                        MezError::invalid_state(
+                            "pending shell result does not match shell-backed action payload",
+                        )
+                    })?;
+                    let structured_content = mez_agent::shell_action_structured_content_json(
                         skipped_action,
+                        &skipped_plan,
                         Some("pane_shell"),
                         false,
                         serde_json::Value::Null,
@@ -340,7 +347,7 @@ impl RuntimeSessionService {
                             "previous_action_id": action_id,
                             "previous_exit_code": exit_code
                         }),
-                    )?;
+                    );
                     *result = ActionResult::succeeded(
                         &turn,
                         skipped_action,

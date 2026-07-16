@@ -32,8 +32,7 @@ use super::{
     runtime_execution_ready_for_provider_continuation, runtime_hook_event_name,
     runtime_hook_execution_status_name, runtime_marker_for_action,
     runtime_pane_readiness_state_name, runtime_post_shell_hook_payload,
-    runtime_random_marker_token, shell_command_result_content,
-    shell_command_structured_content_json, validate_pane_size_for_resize,
+    runtime_random_marker_token, shell_command_result_content, validate_pane_size_for_resize,
 };
 use crate::runtime::{
     PaneEvent, ProcessEvent, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition,

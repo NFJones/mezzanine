@@ -43,6 +43,166 @@ impl Error for OutcomeError {}
 /// Result returned by completion consistency validation.
 pub type OutcomeResult<T> = Result<T, OutcomeError>;
 
+/// Product error category selected for one failed agent execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentExecutionFailureKind {
+    /// The provider or action lifecycle ended in an invalid runtime state.
+    InvalidState,
+    /// The provider returned a MAAP batch that failed protocol validation.
+    InvalidArguments,
+}
+
+/// Canonical failed-action detail attached to an execution failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentExecutionActionFailure {
+    action_id: String,
+    action_type: String,
+    status: &'static str,
+    error_code: String,
+    error_message: String,
+}
+
+impl AgentExecutionActionFailure {
+    /// Returns the model-authored action identifier.
+    pub fn action_id(&self) -> &str {
+        &self.action_id
+    }
+
+    /// Returns the canonical MAAP action type.
+    pub fn action_type(&self) -> &str {
+        &self.action_type
+    }
+
+    /// Returns the stable terminal action-status name.
+    pub fn status(&self) -> &'static str {
+        self.status
+    }
+
+    /// Returns the stable action failure code.
+    pub fn error_code(&self) -> &str {
+        &self.error_code
+    }
+
+    /// Returns the action failure diagnostic.
+    pub fn error_message(&self) -> &str {
+        &self.error_message
+    }
+}
+
+/// Provider-independent classification of one failed agent execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentExecutionFailure {
+    kind: AgentExecutionFailureKind,
+    stage: &'static str,
+    message: String,
+    action: Option<AgentExecutionActionFailure>,
+}
+
+impl AgentExecutionFailure {
+    /// Returns the product error category selected for this failure.
+    pub fn kind(&self) -> AgentExecutionFailureKind {
+        self.kind
+    }
+
+    /// Returns the stable execution stage at which the failure was observed.
+    pub fn stage(&self) -> &'static str {
+        self.stage
+    }
+
+    /// Returns the canonical provider- or action-facing diagnostic.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Returns failed-action detail when a concrete action result caused the
+    /// execution failure.
+    pub fn action(&self) -> Option<&AgentExecutionActionFailure> {
+        self.action.as_ref()
+    }
+}
+
+/// Classifies one terminal failed execution without product error or audit
+/// dependencies.
+///
+/// The priority order is intentional: provider boundary diagnostics precede a
+/// generic missing-batch failure, controller MAAP validation precedes action
+/// results, and the first failed action is the canonical concrete cause.
+pub fn classify_agent_execution_failure(execution: &AgentTurnExecution) -> AgentExecutionFailure {
+    if execution.response.action_batch.is_none() {
+        if let Some(provider_error) = embedded_provider_error(&execution.response.raw_text) {
+            return AgentExecutionFailure {
+                kind: AgentExecutionFailureKind::InvalidState,
+                stage: "provider_error",
+                message: provider_error.to_string(),
+                action: None,
+            };
+        }
+        return AgentExecutionFailure {
+            kind: AgentExecutionFailureKind::InvalidState,
+            stage: "missing_action_batch",
+            message: "model response did not contain a MAAP action batch".to_string(),
+            action: None,
+        };
+    }
+    if let Some(validation_error) = execution
+        .response
+        .raw_text
+        .split_once("maap_validation_error:")
+        .map(|(_, diagnostic)| diagnostic.trim())
+        .filter(|diagnostic| !diagnostic.is_empty())
+    {
+        return AgentExecutionFailure {
+            kind: AgentExecutionFailureKind::InvalidArguments,
+            stage: "maap_validation",
+            message: format!("MAAP validation failed: {validation_error}"),
+            action: None,
+        };
+    }
+    if let Some(result) = execution
+        .action_results
+        .iter()
+        .find(|result| result.is_error)
+    {
+        let (code, message) = result
+            .error
+            .as_ref()
+            .map(|error| (error.code.as_str(), error.message.as_str()))
+            .unwrap_or((
+                "action_failed",
+                "agent action failed without an error object",
+            ));
+        return AgentExecutionFailure {
+            kind: AgentExecutionFailureKind::InvalidState,
+            stage: "action_result",
+            message: format!("agent action {code}: {message}"),
+            action: Some(AgentExecutionActionFailure {
+                action_id: result.action_id.clone(),
+                action_type: result.action_type.to_string(),
+                status: runtime_action_status_name(result.status),
+                error_code: code.to_string(),
+                error_message: message.to_string(),
+            }),
+        };
+    }
+    AgentExecutionFailure {
+        kind: AgentExecutionFailureKind::InvalidState,
+        stage: "agent_turn_failed",
+        message: "agent turn failed without a specific diagnostic".to_string(),
+        action: None,
+    }
+}
+
+/// Returns the final provider error diagnostic embedded in a failed response.
+fn embedded_provider_error(raw_text: &str) -> Option<&str> {
+    raw_text
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("provider_error: "))
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+}
+
 mod presentation;
 
 pub use presentation::*;
@@ -425,52 +585,6 @@ pub fn runtime_error_code_is_non_correctable(error_code: &str) -> bool {
 /// policy outcomes have separate statuses or error codes and are not included.
 pub fn runtime_invalid_params_is_feedback_candidate(result: &ActionResult) -> bool {
     runtime_action_type_is_model_correctable(result.action_type)
-}
-
-/// Runtime-visible skill context already loaded into one active turn.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RuntimeSkillActionContext {
-    /// Whether a successful skill catalog result is already present.
-    pub catalog_requested: bool,
-    /// Skill names whose full `SKILL.md` text is already in context.
-    pub loaded_skills: BTreeSet<String>,
-}
-
-/// Extracts loaded skill state from active model-context blocks.
-///
-/// This intentionally inspects only explicit context labels and action-result
-/// text that the runtime itself produced. It does not parse arbitrary repository
-/// files or shell output as authoritative skill state.
-pub fn runtime_skill_action_context_from_blocks(
-    blocks: &[ContextBlock],
-) -> RuntimeSkillActionContext {
-    let mut context = RuntimeSkillActionContext::default();
-    for block in blocks {
-        if block.source == ContextSourceKind::ActionResult
-            && block.content.lines().next().is_some_and(|line| {
-                line.starts_with("[action_result ")
-                    && line.contains(" request_skills ")
-                    && line.ends_with(" succeeded]")
-            })
-        {
-            context.catalog_requested = true;
-        }
-        if let Some(name) = block.label.strip_prefix("explicit skill ")
-            && is_valid_skill_name(name)
-        {
-            context.loaded_skills.insert(name.to_string());
-        }
-        for line in block.content.lines() {
-            let Some(name) = line.strip_prefix("# Skill: ") else {
-                continue;
-            };
-            let name = name.trim();
-            if is_valid_skill_name(name) {
-                context.loaded_skills.insert(name.to_string());
-            }
-        }
-    }
-    context
 }
 
 /// Returns true when a failed execution can continue by feeding action failure
@@ -1643,6 +1757,52 @@ mod tests {
         runtime_validate_provider_completion_execution(&turn(), &mut execution).unwrap();
         assert_eq!(execution.terminal_state, AgentTurnState::Failed);
         assert!(execution.final_turn);
+    }
+
+    /// Verifies failed executions are classified from provider, validation,
+    /// and concrete action evidence before product error projection.
+    #[test]
+    fn execution_failure_classification_preserves_cause_priority() {
+        let mut provider_failure = execution();
+        provider_failure.response.raw_text =
+            "request failed\nprovider_error: upstream unavailable".to_string();
+        let failure = classify_agent_execution_failure(&provider_failure);
+        assert_eq!(failure.stage(), "provider_error");
+        assert_eq!(failure.message(), "upstream unavailable");
+
+        let mut validation_failure = execution();
+        validation_failure.response.action_batch = Some(MaapBatch {
+            protocol: "maap/1".to_string(),
+            rationale: "invalid call".to_string(),
+            thought: None,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            actions: vec![shell_action()],
+            final_turn: true,
+        });
+        validation_failure.response.raw_text =
+            "bad action\nmaap_validation_error: invalid target".to_string();
+        let failure = classify_agent_execution_failure(&validation_failure);
+        assert_eq!(failure.kind(), AgentExecutionFailureKind::InvalidArguments);
+        assert_eq!(failure.stage(), "maap_validation");
+
+        let mut action_failure = validation_failure;
+        action_failure.response.raw_text.clear();
+        action_failure.action_results.push(
+            ActionResult::failed(
+                &turn(),
+                &shell_action(),
+                ActionStatus::Failed,
+                "shell_failed",
+                "exit status 2",
+            )
+            .unwrap(),
+        );
+        let failure = classify_agent_execution_failure(&action_failure);
+        assert_eq!(failure.stage(), "action_result");
+        let action = failure.action().unwrap();
+        assert_eq!(action.action_id(), "shell-1");
+        assert_eq!(action.error_code(), "shell_failed");
     }
 
     /// Verifies model-authored network failures remain eligible for feedback.

@@ -233,14 +233,20 @@ impl RuntimeSessionService {
             if execution.action_results[result_index].status != ActionStatus::Running {
                 None
             } else {
-                let structured_content = shell_command_structured_content_json(
+                let plan = local_action_plan(&action)?.ok_or_else(|| {
+                    MezError::invalid_state(
+                        "shell transaction failure does not match shell-backed action payload",
+                    )
+                })?;
+                let structured_content = mez_agent::shell_action_structured_content_json(
                     &action,
+                    &plan,
                     Some("pane_shell"),
                     failure.sent_to_pane,
                     serde_json::Value::Null,
                     &[],
                     failure.terminal_observation.clone(),
-                )?;
+                );
                 let mut result = ActionResult::failed(
                     &turn,
                     &action,

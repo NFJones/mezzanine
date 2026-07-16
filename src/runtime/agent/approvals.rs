@@ -426,8 +426,9 @@ impl RuntimeSessionService {
                     &turn,
                     &action,
                     vec!["approved local action accepted for local dispatch".to_string()],
-                    Some(shell_command_structured_content_json(
+                    Some(mez_agent::shell_action_structured_content_json(
                         &action,
+                        &plan,
                         Some("pending_local_dispatch"),
                         false,
                         serde_json::json!({
@@ -438,7 +439,7 @@ impl RuntimeSessionService {
                         }),
                         &[],
                         serde_json::json!({"state":"pending_dispatch"}),
-                    )?),
+                    )),
                 );
                 execution.terminal_state = AgentTurnState::Running;
                 self.append_agent_trace_turn_event(

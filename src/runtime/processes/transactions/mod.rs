@@ -26,7 +26,7 @@ use super::{
     runtime_hook_execution_status_name, runtime_marker_for_action,
     runtime_pane_readiness_state_name, runtime_post_shell_hook_payload,
     runtime_random_marker_token, shell_command_result_content,
-    shell_command_structured_content_json, terminal_clipboard_policy_accepts_osc52,
+    terminal_clipboard_policy_accepts_osc52,
 };
 use crate::runtime::{
     RenderInvalidationReason, RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind,

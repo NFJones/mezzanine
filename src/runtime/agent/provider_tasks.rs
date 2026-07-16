@@ -24,16 +24,6 @@ impl RuntimeSessionService {
             .should_retry(self.agent_provider_retry_attempt(turn_id), retry_class)
     }
 
-    /// Returns the bounded exponential delay for one provider retry attempt.
-    pub(crate) fn agent_provider_retry_delay_ms(attempt: u32) -> u64 {
-        DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(attempt)
-    }
-
-    /// Returns the maximum provider retry attempts recorded in diagnostics.
-    pub(crate) const fn agent_provider_retry_max_attempts() -> u32 {
-        DEFAULT_PROVIDER_RETRY_POLICY.max_attempts
-    }
-
     /// Returns the recorded retry attempt for one provider turn.
     pub(crate) fn agent_provider_retry_attempt(&self, turn_id: &str) -> u32 {
         self.agent_provider_retry_attempts
@@ -98,7 +88,7 @@ impl RuntimeSessionService {
             return Ok(None);
         }
         let attempt = self.agent_provider_retry_attempt(turn_id).saturating_add(1);
-        let delay_ms = Self::agent_provider_retry_delay_ms(attempt);
+        let delay_ms = DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(attempt);
         let recovered = match retry_class {
             ProviderErrorRetryClass::ContextLimit => self
                 .recover_agent_provider_context_limit_failure(agent_id, turn_id, error, attempt)?,
@@ -117,7 +107,7 @@ impl RuntimeSessionService {
             turn_id,
             error,
             attempt,
-            Self::agent_provider_retry_max_attempts(),
+            DEFAULT_PROVIDER_RETRY_POLICY.max_attempts,
             delay_ms,
         )?;
         if !applied {
@@ -328,7 +318,7 @@ impl RuntimeSessionService {
         )?;
         let macro_judge_step_index = self.macro_judge_step_index_for_turn(turn_id);
         let macro_judge_request = macro_judge_step_index
-            .map(|step_index| self.macro_judge_model_request(&turn, &model_profile, step_index))
+            .map(|step_index| self.macro_judge_request_for_turn(&turn, &model_profile, step_index))
             .transpose()?;
 
         self.agent_turn_model_profiles

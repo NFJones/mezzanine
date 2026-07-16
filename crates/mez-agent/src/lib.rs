@@ -154,7 +154,9 @@ pub mod turn_ledger;
 /// Canonical provider-independent production turn orchestration.
 pub mod turn_runner;
 
-pub use accounting::{AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsageKey};
+pub use accounting::{
+    AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsageKey, agent_context_usage_snapshot,
+};
 pub use action_gates::apply_default_action_gates;
 pub use action_planning::{
     ActionPlanningError, ActionPlanningInput, ActionPlanningResult, PlannedBatchActionResults,
@@ -199,7 +201,8 @@ pub use auto_sizing::{
     DEFAULT_AUTO_SIZING_FALLBACK_POLICY, DEFAULT_AUTO_SIZING_LARGE_PROFILE,
     DEFAULT_AUTO_SIZING_MEDIUM_PROFILE, DEFAULT_AUTO_SIZING_ROUTER_PROFILE,
     DEFAULT_AUTO_SIZING_SMALL_PROFILE, apply_auto_sizing_execution_profile,
-    auto_sizing_fallback_selection, auto_sizing_reasoning_levels_for_profile, auto_sizing_request,
+    auto_sizing_fallback_selection, auto_sizing_minimum_context_profile,
+    auto_sizing_reasoning_levels_for_profile, auto_sizing_request,
     auto_sizing_selection_from_response,
 };
 pub use claude_code::{
@@ -215,7 +218,8 @@ pub use claude_code::{
 };
 pub use config_change::{
     CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_SETTING_PATH_DESCRIPTION,
-    CONFIG_CHANGE_VALUE_DESCRIPTION,
+    CONFIG_CHANGE_VALUE_DESCRIPTION, ConfigChangeError, ConfigChangeOperation, ConfigChangeValue,
+    config_change_string_value, normalize_config_change_operation, parse_config_change_value,
 };
 pub use context::{
     AgentContext, AgentContextError, AgentContextResult, AgentRequestAssemblyError,
@@ -255,16 +259,22 @@ pub use deepseek_response::{
     deepseek_request_requires_maap, parse_deepseek_chat_completions_provider_body,
 };
 pub use execution::{
-    AsyncMcpActionExecutor, LocalActionExecutor, LocalExecutionOutput, LocalExecutionRequest,
-    LocalExecutionTransport, McpActionExecutor, PaneShellExecutor, ShellExecutionOutput,
-    ShellExecutionRequest, action_content_blocks_from_json_or_text, mcp_response_to_action_result,
+    AsyncMcpActionExecutor, DEFAULT_AGENT_TURN_TIMEOUT_MS, LocalActionExecutor,
+    LocalExecutionOutput, LocalExecutionProjectionError, LocalExecutionRequest,
+    LocalExecutionTransport, McpActionExecutor, McpExecutionValidationError, PaneShellExecutor,
+    ShellExecutionOutput, ShellExecutionRequest, action_content_blocks_from_json_or_text,
+    agent_shell_timeout_ms, agent_turn_remaining_timeout_ms,
+    local_execution_output_to_action_result, mcp_response_to_action_result,
+    postprocess_local_shell_output, postprocess_shell_action_success_output,
+    shell_command_result_content, validate_mcp_execution_request,
 };
 pub use execution_transcript::{
     AgentTurnExecution, assistant_context_content_for_execution, transcript_entries_for_execution,
 };
 pub use failure_summary::{
     AgentFailureSummaryNegotiation, AgentFailureSummaryProviderDecision,
-    AgentFailureSummaryResponseDecision,
+    AgentFailureSummaryResponseDecision, FailureSummaryExecutionError,
+    failure_summary_execution_from_response,
 };
 pub use harness::{
     AgentTurnNegotiation, AgentTurnProviderFailureDecision, AgentTurnRecoveryBudget,
@@ -291,12 +301,13 @@ pub use maap::{
 pub use macro_workflow::{
     MACRO_FILE_NAME, MACRO_STEPS_HEADING, MAX_MACRO_FILE_BYTES, MAX_MACRO_STEPS, MacroCatalog,
     MacroContractError, MacroDefinition, MacroDiagnostic, MacroJudgeDecision, MacroJudgeOutcome,
-    MacroManagedSubagent, MacroPromptInvocation, MacroRunPhase, MacroRunState, MacroRunStep,
-    MacroSource, MacroStep, MacroStepTaskResult, MacroSummary, ParsedMacroDocument,
-    is_valid_macro_name, macro_initial_step_prompt, macro_judge_decision_from_text,
-    macro_judge_policy, macro_judge_task, macro_message_recipient_agent_id,
-    macro_parent_orchestration_prompt, macro_step_model_request, parse_macro_document,
-    parse_macro_prompt_invocation, parse_macro_steps,
+    MacroManagedSubagent, MacroPromptInvocation, MacroRunPhase, MacroRunRegistration,
+    MacroRunState, MacroRunStep, MacroSource, MacroStep, MacroStepTaskResult, MacroSummary,
+    ParsedMacroDocument, is_valid_macro_name, macro_initial_step_prompt,
+    macro_judge_decision_from_text, macro_judge_model_request, macro_judge_policy,
+    macro_judge_task, macro_message_recipient_agent_id, macro_parent_orchestration_prompt,
+    macro_run_state, macro_step_model_request, parse_macro_document, parse_macro_prompt_invocation,
+    parse_macro_steps,
 };
 pub use mcp::{
     AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellMcpToolSummary,
@@ -339,13 +350,14 @@ pub use progress::{
     PROGRESS_SAY_LEDGER_ENTRY_CHAR_LIMIT, PROGRESS_SAY_LEDGER_ENTRY_LIMIT,
     PROGRESS_SAY_LEDGER_LABEL, PROGRESS_SAY_REDUNDANT_SHARED_TOKEN_FLOOR,
     RATIONALE_LEDGER_ENTRY_CHAR_LIMIT, RATIONALE_LEDGER_ENTRY_LIMIT, RATIONALE_LEDGER_LABEL,
-    merge_progress_say_entries, merge_rationale_entries, normalize_progress_say_entry,
-    normalize_rationale_entry, progress_say_entries_are_redundant,
+    RationaleSuppression, merge_progress_say_entries, merge_rationale_entries,
+    normalize_progress_say_entry, normalize_rationale_entry, progress_say_entries_are_redundant,
     progress_say_entries_for_execution, progress_say_entries_from_ledger,
     progress_say_ledger_content, progress_say_significant_tokens, progress_say_stem_token,
     progress_say_token_is_stopword, push_progress_say_token, rationale_entries_are_redundant,
-    rationale_entries_for_execution, rationale_entries_from_ledger,
-    rationale_entry_repeats_existing, rationale_ledger_content, truncate_context_entry,
+    rationale_entries_for_execution, rationale_entries_from_context_blocks,
+    rationale_entries_from_ledger, rationale_entry_repeats_existing, rationale_ledger_content,
+    suppress_redundant_batch_rationale, truncate_context_entry,
 };
 pub use prompt::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptAssetSource,
@@ -429,10 +441,11 @@ pub use shell_transport::{
     decode_shell_output_transport, decode_shell_output_transport_with_diagnostics,
 };
 pub use skill_workflow::{
-    ParsedSkillDocument, SKILL_ADDITIONAL_CONTEXT_HEADING, SKILL_FILE_NAME, SkillCatalog,
-    SkillContractError, SkillDiagnostic, SkillDocument, SkillPromptInvocation, SkillSource,
-    SkillSummary, parse_skill_document, parse_skill_prompt_invocation, skill_context_text,
-    split_skill_front_matter,
+    ParsedSkillDocument, SKILL_ADDITIONAL_CONTEXT_HEADING, SKILL_FILE_NAME, SkillActionContext,
+    SkillActionPlan, SkillCatalog, SkillContractError, SkillDiagnostic, SkillDocument,
+    SkillPromptInvocation, SkillSource, SkillSummary, parse_skill_document,
+    parse_skill_prompt_invocation, plan_skill_action, skill_action_context_from_blocks,
+    skill_context_text, skill_load_action_result, split_skill_front_matter,
 };
 pub use slash::{
     SlashCommandEffect, SlashCommandInvocation, SlashCommandParseError, SlashCommandSpec,

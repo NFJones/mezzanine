@@ -43,7 +43,7 @@ impl RuntimeSessionService {
         model_profile: &ModelProfile,
         step_index: usize,
     ) -> Result<AgentTurnExecution> {
-        let request = self.macro_judge_model_request(turn, model_profile, step_index)?;
+        let request = self.macro_judge_request_for_turn(turn, model_profile, step_index)?;
         self.append_provider_request_audit(turn, model_profile, provider.provider_id(), "started")?;
         self.append_agent_trace_turn_event(
             &turn.pane_id,
@@ -89,7 +89,7 @@ impl RuntimeSessionService {
 
     /// Builds the structured provider request used to judge one completed
     /// macro step.
-    pub(in crate::runtime) fn macro_judge_model_request(
+    pub(in crate::runtime) fn macro_judge_request_for_turn(
         &self,
         turn: &AgentTurnRecord,
         model_profile: &ModelProfile,
@@ -101,49 +101,8 @@ impl RuntimeSessionService {
             .ok_or_else(|| {
                 MezError::invalid_state("macro judge requested for unknown macro run")
             })?;
-        let step = run
-            .steps
-            .get(step_index)
-            .ok_or_else(|| MezError::invalid_state("macro judge step index is out of range"))?;
-        let result = step
-            .task_result
-            .as_ref()
-            .ok_or_else(|| MezError::invalid_state("macro judge requested before child result"))?;
-        let next_step = run.steps.get(step_index.saturating_add(1));
-        Ok(ModelRequest {
-            provider: model_profile.provider.clone(),
-            model: model_profile.model.clone(),
-            reasoning_effort: model_profile.reasoning_profile.clone(),
-            thinking_enabled: model_profile.thinking_enabled(),
-            latency_preference: model_profile.latency_preference.clone(),
-            prompt_cache_retention: None,
-            max_output_tokens: model_profile.max_output_tokens(),
-            temperature: None,
-            prompt_cache_session_id: None,
-            prompt_cache_lineage_id: None,
-            turn_id: turn.turn_id.clone(),
-            agent_id: turn.agent_id.clone(),
-            available_mcp_tools: Vec::new(),
-            memory_actions_enabled: false,
-            issue_actions_enabled: false,
-            interaction_kind: ModelInteractionKind::MacroJudge,
-            allowed_actions: AllowedActionSet::for_capability(
-                mez_agent::AgentCapability::RespondOnly,
-            ),
-            stop: None,
-            messages: vec![
-                ModelMessage {
-                    role: ModelMessageRole::System,
-                    source: ContextSourceKind::RuntimeHint,
-                    content: macro_judge_policy(),
-                },
-                ModelMessage {
-                    role: ModelMessageRole::User,
-                    source: ContextSourceKind::RuntimeHint,
-                    content: macro_judge_task(run, step, result, next_step),
-                },
-            ],
-        })
+        macro_judge_model_request(turn, model_profile, run, step_index)
+            .map_err(|error| MezError::invalid_state(error.message()))
     }
 
     /// Parses and validates the structured JSON decision returned by the judge

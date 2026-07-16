@@ -7,7 +7,9 @@
 
 use std::collections::BTreeSet;
 
-use crate::{AgentActionPayload, AgentTurnExecution, SayStatus};
+use crate::{
+    AgentActionPayload, AgentTurnExecution, ContextBlock, ContextSourceKind, MaapBatch, SayStatus,
+};
 
 /// Label for ephemeral active-turn context that tracks visible progress output.
 pub const PROGRESS_SAY_LEDGER_LABEL: &str = "current-turn progress say ledger";
@@ -25,6 +27,22 @@ pub const RATIONALE_LEDGER_ENTRY_CHAR_LIMIT: usize = 256;
 /// Minimum shared significant tokens for treating two progress updates as the
 /// same sequence point.
 pub const PROGRESS_SAY_REDUNDANT_SHARED_TOKEN_FLOOR: usize = 5;
+
+/// Rationale entries removed from one provider action batch.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RationaleSuppression {
+    /// Whether the batch-level rationale was cleared.
+    pub batch_suppressed: bool,
+    /// Action identifiers whose rationale was cleared.
+    pub action_ids: Vec<String>,
+}
+
+impl RationaleSuppression {
+    /// Returns the total number of rationale fields cleared.
+    pub fn count(&self) -> usize {
+        usize::from(self.batch_suppressed).saturating_add(self.action_ids.len())
+    }
+}
 
 /// Extracts normalized progress `say` text from one provider execution.
 ///
@@ -140,6 +158,50 @@ pub fn rationale_entries_from_ledger(content: &str) -> Vec<String> {
         .filter_map(|line| line.strip_prefix("rationale: "))
         .filter_map(normalize_rationale_entry)
         .collect()
+}
+
+/// Extracts already-visible rationale entries from active context ledgers.
+pub fn rationale_entries_from_context_blocks(blocks: &[ContextBlock]) -> Vec<String> {
+    blocks
+        .iter()
+        .filter(|block| {
+            block.source == ContextSourceKind::RuntimeHint && block.label == RATIONALE_LEDGER_LABEL
+        })
+        .flat_map(|block| rationale_entries_from_ledger(&block.content))
+        .collect()
+}
+
+/// Clears batch and action rationale that repeats already-visible turn intent.
+///
+/// New rationale in the same batch becomes visible to later action rationale,
+/// preserving the original deterministic suppression order. The returned
+/// record lets product runtimes trace each mutation without owning the policy.
+pub fn suppress_redundant_batch_rationale(
+    batch: &mut MaapBatch,
+    visible_entries: &[String],
+) -> RationaleSuppression {
+    let mut visible_entries = visible_entries.to_vec();
+    let mut suppression = RationaleSuppression::default();
+    if let Some(entry) = normalize_rationale_entry(&batch.rationale)
+        && rationale_entry_repeats_existing(&entry, &visible_entries)
+    {
+        batch.rationale.clear();
+        suppression.batch_suppressed = true;
+    } else if let Some(entry) = normalize_rationale_entry(&batch.rationale) {
+        visible_entries.push(entry);
+    }
+    for action in &mut batch.actions {
+        let Some(entry) = normalize_rationale_entry(&action.rationale) else {
+            continue;
+        };
+        if rationale_entry_repeats_existing(&entry, &visible_entries) {
+            action.rationale.clear();
+            suppression.action_ids.push(action.id.clone());
+            continue;
+        }
+        visible_entries.push(entry);
+    }
+    suppression
 }
 
 /// Merges previous and newly emitted progress entries under the active-turn cap.
@@ -436,5 +498,33 @@ mod tests {
         ];
         let content = rationale_ledger_content(&entries);
         assert_eq!(rationale_entries_from_ledger(&content), entries);
+    }
+
+    /// Verifies canonical suppression clears rationale repeated from prior
+    /// context and from earlier fields in the same action batch.
+    #[test]
+    fn rationale_suppression_mutates_batch_and_reports_trace_facts() {
+        let mut batch = crate::parse_fenced_maap_action_batch(
+            r#"```mezzanine-action-json
+{"protocol":"maap/1","turn_id":"turn-1","agent_id":"agent-1","rationale":"Inspect the provider retry owner","actions":[{"id":"a1","type":"say","rationale":"Inspect the provider retry owner","status":"progress","content_type":"text/plain","text":"Checking ownership"},{"id":"a2","type":"say","rationale":"Validate the moved retry policy","status":"final","content_type":"text/plain","text":"Done"}],"final":true}
+```"#,
+        )
+        .unwrap()
+        .unwrap();
+        let first_action_id = batch.actions[0].id.clone();
+        let suppression = suppress_redundant_batch_rationale(
+            &mut batch,
+            &["Inspect the provider retry owner".to_string()],
+        );
+
+        assert!(batch.rationale.is_empty());
+        assert!(batch.actions[0].rationale.is_empty());
+        assert_eq!(
+            batch.actions[1].rationale,
+            "Validate the moved retry policy"
+        );
+        assert!(suppression.batch_suppressed);
+        assert_eq!(suppression.action_ids, [first_action_id]);
+        assert_eq!(suppression.count(), 2);
     }
 }

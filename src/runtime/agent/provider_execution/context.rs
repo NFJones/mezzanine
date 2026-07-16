@@ -79,25 +79,6 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Returns rationale entries already emitted during an active turn.
-    ///
-    /// # Parameters
-    /// - `turn_id`: Active turn whose current rationale ledger should be read.
-    pub(super) fn current_turn_rationale_entries(&self, turn_id: &str) -> Vec<String> {
-        let Some(context) = self.agent_turn_contexts.get(turn_id) else {
-            return Vec::new();
-        };
-        context
-            .blocks
-            .iter()
-            .filter(|block| {
-                block.source == ContextSourceKind::RuntimeHint
-                    && block.label == RUNTIME_RATIONALE_LEDGER_LABEL
-            })
-            .flat_map(|block| runtime_rationale_entries_from_ledger(&block.content))
-            .collect()
-    }
-
     /// Suppresses batch/action rationale that repeats already-emitted same-turn intent.
     ///
     /// Repeated investigative rationale is visible to the user in verbose
@@ -109,44 +90,32 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         execution: &mut AgentTurnExecution,
     ) -> Result<usize> {
-        let mut visible_entries = self.current_turn_rationale_entries(&turn.turn_id);
+        let visible_entries = self
+            .agent_turn_contexts
+            .get(&turn.turn_id)
+            .map(|context| runtime_rationale_entries_from_context_blocks(&context.blocks))
+            .unwrap_or_default();
         let Some(batch) = execution.response.action_batch.as_mut() else {
             return Ok(0);
         };
-        let mut suppressed = 0usize;
-        if let Some(entry) = runtime_normalize_rationale_entry(&batch.rationale)
-            && runtime_rationale_entry_repeats_existing(&entry, &visible_entries)
-        {
-            batch.rationale.clear();
-            suppressed += 1;
+        let suppression = runtime_suppress_redundant_batch_rationale(batch, &visible_entries);
+        if suppression.batch_suppressed {
             self.append_agent_trace_turn_event(
                 &turn.pane_id,
                 &turn.turn_id,
                 "batch rationale suppressed reason=repeated_current_turn_rationale",
             )?;
-        } else if let Some(entry) = runtime_normalize_rationale_entry(&batch.rationale) {
-            visible_entries.push(entry);
         }
-        for action in &mut batch.actions {
-            let Some(entry) = runtime_normalize_rationale_entry(&action.rationale) else {
-                continue;
-            };
-            if runtime_rationale_entry_repeats_existing(&entry, &visible_entries) {
-                action.rationale.clear();
-                suppressed += 1;
-                self.append_agent_trace_turn_event(
-                    &turn.pane_id,
-                    &turn.turn_id,
-                    &format!(
-                        "action {} rationale suppressed reason=repeated_current_turn_rationale",
-                        action.id
-                    ),
-                )?;
-                continue;
-            }
-            visible_entries.push(entry);
+        for action_id in &suppression.action_ids {
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                &turn.turn_id,
+                &format!(
+                    "action {action_id} rationale suppressed reason=repeated_current_turn_rationale"
+                ),
+            )?;
         }
-        Ok(suppressed)
+        Ok(suppression.count())
     }
 
     /// Appends or updates the active-turn rationale ledger.

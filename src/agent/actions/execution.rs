@@ -6,21 +6,18 @@
 //! I/O details out of turn negotiation.
 
 use super::super::{
-    ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnRecord,
-    DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MarkerToken, McpExecutionRequest,
-    MezError, Path, Result, ShellTransaction, ShellTransactionOutputTransport, ToolDiscoveryCache,
-    ToolInventory, action_text_content_blocks, local_action_plan, tool_discovery_script,
+    ActionResult, AgentAction, AgentTurnRecord, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS,
+    EnvironmentSignature, MarkerToken, McpExecutionRequest, MezError, Path, Result,
+    ShellTransaction, ShellTransactionOutputTransport, ToolDiscoveryCache, ToolInventory,
+    local_action_plan, tool_discovery_script,
 };
-use super::shell_command_structured_content_json;
 use mez_agent::{
     AsyncMcpActionExecutor, LocalActionExecutor, LocalExecutionOutput, LocalExecutionRequest,
-    LocalExecutionTransport, McpActionExecutor, PaneShellExecutor, ShellExecutionOutput,
-    ShellExecutionRequest, decode_shell_output_transport_with_diagnostics,
-    mcp_response_to_action_result,
+    LocalExecutionTransport, McpActionExecutor, PaneShellExecutor, ShellExecutionRequest,
+    local_execution_output_to_action_result, mcp_response_to_action_result,
+    postprocess_local_shell_output,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
-/// Default turn-wide shell action timeout used by transport-neutral execution.
-const LOCAL_EXECUTION_DEFAULT_TIMEOUT_MS: u64 = 30 * 60 * 1000;
 
 /// Adapts the existing pane shell executor to the transport-neutral executor
 /// contract.
@@ -105,7 +102,15 @@ pub fn execute_local_action(
             "local execution requires a local action",
         ));
     };
-    let effective_timeout_ms = local_execution_shell_timeout_ms(turn, plan.timeout_ms);
+    let now_unix_millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0);
+    let effective_timeout_ms = mez_agent::agent_shell_timeout_ms(
+        turn.started_at_unix_seconds,
+        now_unix_millis,
+        plan.timeout_ms,
+    );
     let transport = executor.transport();
     let request = LocalExecutionRequest {
         action_id: action.id.clone(),
@@ -119,114 +124,10 @@ pub fn execute_local_action(
         marker: marker.clone(),
     };
     let mut output = executor.execute_local_action(&request)?;
-    output.shell_output = postprocess_semantic_shell_output(action, output.shell_output)?;
-    local_output_to_action_result(turn, action, output, marker)
-}
-
-/// Returns the remaining turn-wide timeout budget for transport-neutral local execution.
-fn local_execution_turn_remaining_timeout_ms(turn: &AgentTurnRecord) -> u64 {
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
-        .unwrap_or(0);
-    if turn.started_at_unix_seconds < 946_684_800 {
-        return LOCAL_EXECUTION_DEFAULT_TIMEOUT_MS;
-    }
-    let started_at_ms = turn.started_at_unix_seconds.saturating_mul(1000);
-    let elapsed_ms = now_ms.saturating_sub(started_at_ms);
-    LOCAL_EXECUTION_DEFAULT_TIMEOUT_MS
-        .saturating_sub(elapsed_ms)
-        .max(1)
-}
-
-/// Returns the finite shell timeout for one local execution request.
-fn local_execution_shell_timeout_ms(turn: &AgentTurnRecord, timeout_ms: Option<u64>) -> u64 {
-    let remaining = local_execution_turn_remaining_timeout_ms(turn);
-    timeout_ms
-        .map(|timeout_ms| timeout_ms.min(remaining))
-        .unwrap_or(remaining)
-        .max(1)
-}
-
-/// Applies native success-output shaping for shell-backed semantic actions.
-///
-/// Pane-side semantic commands stay limited to small shell primitives. Line
-/// slicing, truncation notices, and generated change previews are applied here
-/// after the pane shell returns its bounded output.
-pub fn postprocess_shell_action_success_output(
-    action: &AgentAction,
-    stdout: String,
-) -> Result<String> {
-    let output = ShellExecutionOutput::new(Some(0), stdout, String::new(), false, false);
-    postprocess_semantic_shell_output(action, output).map(|output| output.stdout)
-}
-
-/// Builds compact action-result content for a plain model-authored shell command.
-///
-/// # Parameters
-/// - `output`: The command stdout/stderr already decoded for model context.
-/// - `exit_code`: The observed process exit code, when one was observed.
-/// - `timed_out`: Whether the command timed out before a process exit.
-/// - `interrupted`: Whether the command was interrupted by the runtime.
-pub fn shell_command_result_content(
-    output: &str,
-    exit_code: Option<i32>,
-    timed_out: bool,
-    interrupted: bool,
-) -> Vec<String> {
-    if !output.trim().is_empty() {
-        return vec![output.to_string()];
-    }
-    let status = if timed_out {
-        "shell command timed out".to_string()
-    } else if interrupted {
-        "shell command was interrupted".to_string()
-    } else if let Some(exit_code) = exit_code {
-        format!("shell command exited with status {exit_code}")
-    } else {
-        "shell command finished without an exit status".to_string()
-    };
-    vec![status]
-}
-
-fn postprocess_semantic_shell_output(
-    action: &AgentAction,
-    mut output: ShellExecutionOutput,
-) -> Result<ShellExecutionOutput> {
-    let decoded = decode_shell_output_transport_with_diagnostics(&output.stdout);
-    if decoded.diagnostics.saw_begin_marker {
-        output.stdout = decoded.output;
-        output.transport_diagnostics = decoded.diagnostics;
-    }
-    if output.exit_code != Some(0) || output.timed_out || output.interrupted {
-        return Ok(output);
-    }
-    if let AgentActionPayload::ApplyPatch { patch, .. } = &action.payload {
-        ensure_success_preview(&mut output, patch_change_preview(patch));
-    }
-    Ok(output)
-}
-
-fn ensure_success_preview(output: &mut ShellExecutionOutput, preview: String) {
-    if output.stdout.trim().is_empty() {
-        output.stdout = preview;
-    }
-}
-
-fn patch_change_preview(patch: &str) -> String {
-    const MAX_PREVIEW_LINES: usize = 160;
-    let mut lines = vec!["diff -- apply patch".to_string()];
-    for line in patch.lines().take(MAX_PREVIEW_LINES) {
-        lines.push(line.to_string());
-    }
-    let total_lines = patch.lines().count();
-    if total_lines > MAX_PREVIEW_LINES {
-        lines.push(format!(
-            "[mez: diff truncated; {} lines omitted]",
-            total_lines - MAX_PREVIEW_LINES
-        ));
-    }
-    lines.join("\n") + "\n"
+    output.shell_output = postprocess_local_shell_output(action, output.shell_output);
+    Ok(local_execution_output_to_action_result(
+        turn, action, output, &marker,
+    )?)
 }
 
 /// Executes the `execute_mcp_action_through_runtime` operation for the owning subsystem.
@@ -239,24 +140,7 @@ pub fn execute_mcp_action_through_runtime(
     plan: &McpExecutionRequest,
     executor: &mut impl McpActionExecutor<Error = MezError>,
 ) -> Result<ActionResult> {
-    let AgentActionPayload::McpCall {
-        server,
-        tool,
-        arguments_json,
-    } = &action.payload
-    else {
-        return Err(MezError::invalid_args(
-            "MCP execution requires an mcp_call action",
-        ));
-    };
-    if plan.server_id != *server
-        || plan.tool_name != *tool
-        || plan.arguments_json.trim() != arguments_json.trim()
-    {
-        return Err(MezError::invalid_args(
-            "MCP execution plan does not match the action payload",
-        ));
-    }
+    mez_agent::validate_mcp_execution_request(action, plan)?;
 
     let response = executor.execute_mcp_call(plan)?;
     Ok(mcp_response_to_action_result(turn, action, plan, response)?)
@@ -272,24 +156,7 @@ pub async fn execute_mcp_action_through_runtime_async(
     plan: &McpExecutionRequest,
     executor: &mut impl AsyncMcpActionExecutor<Error = MezError>,
 ) -> Result<ActionResult> {
-    let AgentActionPayload::McpCall {
-        server,
-        tool,
-        arguments_json,
-    } = &action.payload
-    else {
-        return Err(MezError::invalid_args(
-            "MCP execution requires an mcp_call action",
-        ));
-    };
-    if plan.server_id != *server
-        || plan.tool_name != *tool
-        || plan.arguments_json.trim() != arguments_json.trim()
-    {
-        return Err(MezError::invalid_args(
-            "MCP execution plan does not match the action payload",
-        ));
-    }
+    mez_agent::validate_mcp_execution_request(action, plan)?;
 
     let response = executor.execute_mcp_call_async(plan).await?;
     Ok(mcp_response_to_action_result(turn, action, plan, response)?)
@@ -343,145 +210,4 @@ pub fn discover_tools_through_pane_shell(
     let inventory = ToolInventory::parse_bootstrap_output(&output.stdout);
     cache.record(signature, inventory.clone());
     Ok(inventory)
-}
-
-/// Executes the `shell_output_to_action_result` operation for the owning subsystem.
-///
-/// Callers receive a typed result or error with context from the underlying
-/// runtime operation.
-pub(super) fn local_output_to_action_result(
-    turn: &AgentTurnRecord,
-    action: &AgentAction,
-    output: LocalExecutionOutput,
-    marker: MarkerToken,
-) -> Result<ActionResult> {
-    local_output_to_action_result_with_transport(
-        turn,
-        action,
-        output.transport,
-        output.sent_to_pane,
-        output.shell_output,
-        marker,
-    )
-}
-
-fn local_output_to_action_result_with_transport(
-    turn: &AgentTurnRecord,
-    action: &AgentAction,
-    transport: LocalExecutionTransport,
-    sent_to_pane: bool,
-    output: ShellExecutionOutput,
-    marker: MarkerToken,
-) -> Result<ActionResult> {
-    if local_action_plan(action)?.is_none() {
-        return Err(MezError::invalid_args(
-            "shell output requires a shell-backed action",
-        ));
-    }
-    let combined_output_bytes = output.stdout.len().saturating_add(output.stderr.len());
-    let transport_incomplete = output.transport_diagnostics.transport_incomplete();
-    let output_truncated = output.transport_diagnostics.output_truncated();
-    let signal: Option<i32> = if let Some(signal) = output.signal {
-        Some(signal)
-    } else if output.interrupted {
-        Some(2) // SIGINT
-    } else if let Some(ec) = output.exit_code {
-        if ec > 128 && ec < 256 {
-            Some(ec - 128)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-    let mut combined_output = String::new();
-    if !output.stdout.is_empty() {
-        combined_output.push_str(&output.stdout);
-    }
-    if !output.stderr.is_empty() {
-        combined_output.push_str(&output.stderr);
-    }
-    let structured = shell_command_structured_content_json(
-        action,
-        Some(transport.as_str()),
-        sent_to_pane,
-        serde_json::Value::Null,
-        &[],
-        serde_json::json!({
-            "source": "executor",
-            "stream": "pty_combined",
-            "marker": marker.as_str(),
-            "exit_code": output.exit_code,
-            "signal": signal,
-            "timed_out": output.timed_out,
-            "interrupted": output.interrupted,
-            "combined_output_bytes": combined_output_bytes,
-            "combined_output_preview": combined_output,
-            "output_truncated": output_truncated,
-            "transport_incomplete": transport_incomplete,
-            "transport_diagnostics": output.transport_diagnostics.to_json()
-        }),
-    )?;
-    if output.timed_out {
-        let mut result = ActionResult::failed(
-            turn,
-            action,
-            ActionStatus::TimedOut,
-            "shell_timeout",
-            "shell command timed out",
-        )?;
-        result.structured_content_json = Some(structured);
-        return Ok(result);
-    }
-    if output.interrupted {
-        let mut result = ActionResult::failed(
-            turn,
-            action,
-            ActionStatus::Interrupted,
-            "shell_interrupted",
-            "shell command was interrupted",
-        )?;
-        result.structured_content_json = Some(structured);
-        return Ok(result);
-    }
-    let mut content = Vec::new();
-    if !combined_output.is_empty() {
-        content.push(combined_output);
-    }
-    if matches!(action.payload, AgentActionPayload::ShellCommand { .. }) {
-        return Ok(ActionResult::succeeded(
-            turn,
-            action,
-            shell_command_result_content(
-                content.first().map(String::as_str).unwrap_or_default(),
-                output.exit_code,
-                output.timed_out,
-                output.interrupted,
-            ),
-            Some(structured),
-        ));
-    }
-    if output.exit_code == Some(0) {
-        Ok(ActionResult::succeeded(
-            turn,
-            action,
-            content,
-            Some(structured),
-        ))
-    } else {
-        let exit_message = match output.exit_code {
-            Some(exit_code) => format!("shell command exited with status {exit_code}"),
-            None => "shell command finished without an exit status".to_string(),
-        };
-        let mut result = ActionResult::failed(
-            turn,
-            action,
-            ActionStatus::Failed,
-            "shell_command_failed",
-            exit_message,
-        )?;
-        result.content = action_text_content_blocks(content);
-        result.structured_content_json = Some(structured);
-        Ok(result)
-    }
 }

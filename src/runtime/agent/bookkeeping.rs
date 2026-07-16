@@ -339,7 +339,7 @@ impl RuntimeSessionService {
             .add_assign(usage);
         if let Some(profile) = profile {
             if let Some(snapshot) =
-                runtime_agent_provider_context_usage_snapshot(profile, latest_context_usage)
+                mez_agent::agent_context_usage_snapshot(profile, latest_context_usage)
             {
                 if let Some(display) = runtime_agent_provider_context_usage_display(snapshot) {
                     self.agent_context_usage_by_conversation

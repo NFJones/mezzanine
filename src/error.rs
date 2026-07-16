@@ -354,6 +354,36 @@ impl From<mez_agent::memory::MemoryRecordError> for MezError {
     }
 }
 
+impl From<mez_agent::SkillContractError> for MezError {
+    fn from(error: mez_agent::SkillContractError) -> Self {
+        Self::invalid_args(error.message())
+    }
+}
+
+impl From<mez_agent::ConfigChangeError> for MezError {
+    /// Converts a provider-independent configuration action contract failure
+    /// into one product invalid-argument error at the adapter boundary.
+    fn from(error: mez_agent::ConfigChangeError) -> Self {
+        Self::invalid_args(error.to_string())
+    }
+}
+
+impl From<mez_agent::LocalExecutionProjectionError> for MezError {
+    /// Converts canonical local-execution projection failures once at the
+    /// product action adapter boundary.
+    fn from(error: mez_agent::LocalExecutionProjectionError) -> Self {
+        Self::invalid_state(error.to_string())
+    }
+}
+
+impl From<mez_agent::McpExecutionValidationError> for MezError {
+    /// Converts a stale or mismatched MCP execution plan into one product
+    /// invalid-argument error before concrete transport dispatch.
+    fn from(error: mez_agent::McpExecutionValidationError) -> Self {
+        Self::invalid_args(error.to_string())
+    }
+}
+
 impl From<mez_agent::issues::IssueError> for MezError {
     fn from(error: mez_agent::issues::IssueError) -> Self {
         Self::invalid_args(error.to_string())

@@ -4,6 +4,8 @@
 //! provider/model identities without depending on product runtime or storage
 //! implementations.
 
+use crate::ModelProfile;
+
 /// Stable provider/model identity for token-cost accounting.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ModelTokenUsageKey {
@@ -160,9 +162,72 @@ pub struct AgentContextUsageSnapshot {
     pub cached_input_tokens: Option<u64>,
 }
 
+/// Builds a last-request context snapshot when the profile denominator and
+/// provider-reported input usage are both known and nonzero.
+pub fn agent_context_usage_snapshot(
+    profile: &ModelProfile,
+    usage: ModelTokenUsage,
+) -> Option<AgentContextUsageSnapshot> {
+    let context_window_tokens = profile
+        .known_context_window_tokens()
+        .and_then(|tokens| u64::try_from(tokens).ok())
+        .filter(|tokens| *tokens > 0)?;
+    if usage.input_tokens == 0 {
+        return None;
+    }
+    Some(AgentContextUsageSnapshot {
+        input_tokens: usage.input_tokens,
+        context_window_tokens,
+        cached_input_tokens: usage.cached_input_tokens,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ModelTokenUsage, ModelTokenUsageKey};
+    use super::{ModelTokenUsage, ModelTokenUsageKey, agent_context_usage_snapshot};
+    use crate::ModelProfile;
+
+    /// Verifies context snapshots require both provider input usage and a
+    /// positive known model context denominator.
+    #[test]
+    fn context_usage_snapshot_requires_known_nonzero_usage() {
+        let mut profile = ModelProfile {
+            provider: "custom".to_string(),
+            model: "model".to_string(),
+            ..ModelProfile::default()
+        };
+        profile
+            .provider_options
+            .insert("context_window_tokens".to_string(), "128000".to_string());
+        assert_eq!(
+            agent_context_usage_snapshot(
+                &profile,
+                ModelTokenUsage {
+                    input_tokens: 32_000,
+                    cached_input_tokens: Some(20_000),
+                    ..ModelTokenUsage::default()
+                },
+            )
+            .unwrap()
+            .context_window_tokens,
+            128_000
+        );
+        assert!(agent_context_usage_snapshot(&profile, ModelTokenUsage::default()).is_none());
+        assert!(
+            agent_context_usage_snapshot(
+                &ModelProfile {
+                    provider: "custom".to_string(),
+                    model: "unknown".to_string(),
+                    ..ModelProfile::default()
+                },
+                ModelTokenUsage {
+                    input_tokens: 10,
+                    ..ModelTokenUsage::default()
+                },
+            )
+            .is_none()
+        );
+    }
 
     #[test]
     /// Verifies stable accounting keys normalize absent identity fields while

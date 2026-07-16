@@ -92,36 +92,19 @@ impl RuntimeSessionService {
         started: &RuntimeAgentPromptTurnStart,
         child_agent_id: &str,
     ) {
-        let steps = definition
-            .steps
-            .iter()
-            .enumerate()
-            .map(|(index, step)| MacroRunStep {
-                index,
-                attempts: 0,
-                scripted_prompt: step.prompt.clone(),
-                submitted_prompt: None,
-                child_turn_id: None,
-                task_result: None,
-                judgment: None,
-            })
-            .collect();
         self.macro_runs_by_parent_turn.insert(
             started.turn_id.clone(),
-            MacroRunState {
-                run_id: started.turn_id.clone(),
-                parent_turn_id: started.turn_id.clone(),
-                parent_agent_id: started.agent_id.clone(),
-                parent_pane_id: pane_id.to_string(),
-                child_agent_id: child_agent_id.to_string(),
-                macro_name: definition.summary.name.clone(),
-                macro_description: definition.summary.description.clone(),
-                invocation_prompt: prompt.to_string(),
-                invocation_context: additional_context.map(ToOwned::to_owned),
-                steps,
-                current_step: 0,
-                phase: MacroRunPhase::DispatchingStep { step_index: 0 },
-            },
+            macro_run_state(
+                definition,
+                MacroRunRegistration {
+                    parent_turn_id: &started.turn_id,
+                    parent_agent_id: &started.agent_id,
+                    parent_pane_id: pane_id,
+                    child_agent_id,
+                    invocation_prompt: prompt,
+                    invocation_context: additional_context,
+                },
+            ),
         );
     }
 
