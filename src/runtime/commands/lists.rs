@@ -195,7 +195,7 @@ impl RuntimeSessionService {
 
     /// Builds the pane-local modified-file summary used by the agent shell.
     fn runtime_agent_modified_files_display(&self, pane_id: &str) -> String {
-        let Some(files) = self.agent_modified_files.get(pane_id) else {
+        let Some(files) = self.retained_agent_modified_files(pane_id) else {
             return "## modified files\n\nno modified files tracked for this agent conversation."
                 .to_string();
         };

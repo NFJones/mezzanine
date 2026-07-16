@@ -235,19 +235,6 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) agent_shell_store: AgentShellStore,
-    /// Retains bounded per-pane agent trace lines independent of visible log level.
-    ///
-    /// The runtime uses this ring as a diagnostics escape hatch so normal-mode
-    /// sessions can later dump recent trace context without enabling noisy
-    /// trace logging up front.
-    pub(in crate::runtime) agent_pane_trace_logs: BTreeMap<String, Vec<String>>,
-    /// Retained patch payloads keyed by pane-local agent session id.
-    ///
-    /// This lets `/copy-patches` export exact patch attempts and outcomes from
-    /// the current session without depending on rendered pane text or compact
-    /// transcript summaries.
-    pub(in crate::runtime) agent_session_patch_records:
-        BTreeMap<String, Vec<RuntimeAgentPatchRecord>>,
     /// Stores the agent turn ledger value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -317,18 +304,6 @@ pub struct RuntimeSessionService {
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) agent_pre_shell_hook_completions:
         BTreeSet<RuntimeAgentPreShellHookCompletion>,
-    /// Stores the latest agent say output retained for copy commands.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) agent_copy_outputs: BTreeMap<String, RuntimeAgentCopyOutput>,
-    /// File modifications observed from successful agent patch actions.
-    ///
-    /// The outer key is the pane id, and the inner map is keyed by repository
-    /// relative display path so `/list-modified-files` can summarize the
-    /// current conversation without re-reading the working tree.
-    pub(in crate::runtime) agent_modified_files:
-        BTreeMap<String, BTreeMap<String, RuntimeAgentModifiedFileSummary>>,
     /// Stores the agent turn model profiles value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

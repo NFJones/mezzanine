@@ -267,8 +267,7 @@ impl RuntimeSessionService {
         self.agent_turn_failure_feedback_attempts.clear();
         self.agent_turn_shell_dispatch_history.clear();
         self.agent_turn_network_action_history.clear();
-        self.agent_copy_outputs.clear();
-        self.agent_modified_files.clear();
+        self.clear_agent_session_artifacts();
         self.clear_agent_prompt_inputs();
         self.agent_turn_model_profiles.clear();
         self.pending_agent_provider_tasks.clear();

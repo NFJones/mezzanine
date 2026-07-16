@@ -899,18 +899,7 @@ impl RuntimeSessionService {
                 .iter()
                 .filter(|line| line.marker == '-')
                 .count();
-            let entry = self
-                .agent_modified_files
-                .entry(pane_id.to_string())
-                .or_default()
-                .entry(path.clone())
-                .or_insert_with(|| RuntimeAgentModifiedFileSummary {
-                    path,
-                    added: 0,
-                    removed: 0,
-                });
-            entry.added = entry.added.saturating_add(added);
-            entry.removed = entry.removed.saturating_add(removed);
+            self.record_agent_modified_file_delta(pane_id, path, added, removed);
         }
     }
 

@@ -17,16 +17,17 @@ use super::{
     PaneReadinessState, PathBuf, PathScopes, PendingFocusedShellHookContinuation, PermissionPolicy,
     ReadinessOverrideRevocation, Recipient, ReqwestProviderHttpTransport, Result, RuleDecision,
     RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentCopyOutput,
-    RuntimeAgentLoopTurnKind, RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider,
-    RuntimeAgentProviderTask, RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile,
-    RuntimeHookPipelineBlock, RuntimeHookPipelineDecision, RuntimeMcpActionExecutor,
-    RuntimeProviderConfig, RuntimeSessionService, RuntimeShellTransactionActionFailure,
-    RuntimeSideEffect, SenderIdentity, ShellTransaction, ShellTransactionOutputTransport,
-    SubagentScopeDeclaration, SubagentSpawnRequest, SubagentWaitPolicy, TaskResultPayload,
-    TaskState, TaskStatusPayload, TranscriptEntry, TranscriptRole, action_result_context_content,
-    assemble_model_request, compact_model_context_for_budget_with_retained_tail_percent,
-    current_unix_millis, current_unix_seconds, decode_shell_output_transport_with_diagnostics,
-    discover_project_root, exact_command_sha256, execute_mcp_action_through_runtime,
+    RuntimeAgentLoopTurnKind, RuntimeAgentModifiedFileSummary, RuntimeAgentProviderDispatch,
+    RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAutoSizingDispatch,
+    RuntimeAutoSizingTargetProfile, RuntimeHookPipelineBlock, RuntimeHookPipelineDecision,
+    RuntimeMcpActionExecutor, RuntimeProviderConfig, RuntimeSessionService,
+    RuntimeShellTransactionActionFailure, RuntimeSideEffect, SenderIdentity, ShellTransaction,
+    ShellTransactionOutputTransport, SubagentScopeDeclaration, SubagentSpawnRequest,
+    SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload, TranscriptEntry,
+    TranscriptRole, action_result_context_content, assemble_model_request,
+    compact_model_context_for_budget_with_retained_tail_percent, current_unix_millis,
+    current_unix_seconds, decode_shell_output_transport_with_diagnostics, discover_project_root,
+    exact_command_sha256, execute_mcp_action_through_runtime,
     execute_mcp_action_through_runtime_async, execute_network_action_with_transport_async,
     json_escape, local_action_plan, network_action_plan, next_transcript_sequence,
     runtime_agent_turn_duration_display, runtime_agent_turn_start_hook_payload,
@@ -110,9 +111,84 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     agent_subshell_panes: BTreeSet<String>,
     /// Interrupted subshells that must exit with a line-oriented command.
     agent_subshell_command_exit_panes: BTreeSet<String>,
+    /// Bounded hidden diagnostic lines retained by pane.
+    agent_pane_trace_logs: BTreeMap<String, Vec<String>>,
+    /// Exact apply-patch attempts retained by agent session id.
+    agent_session_patch_records: BTreeMap<String, Vec<RuntimeAgentPatchRecord>>,
+    /// Latest model-authored copy output retained by pane.
+    agent_copy_outputs: BTreeMap<String, RuntimeAgentCopyOutput>,
+    /// File modification summaries retained by pane and display path.
+    agent_modified_files: BTreeMap<String, BTreeMap<String, RuntimeAgentModifiedFileSummary>>,
 }
 
 impl RuntimeSessionService {
+    /// Returns retained patch attempts for one agent session.
+    pub(in crate::runtime) fn retained_agent_patch_records(
+        &self,
+        session_id: &str,
+    ) -> Option<&[RuntimeAgentPatchRecord]> {
+        self.agent
+            .agent_session_patch_records
+            .get(session_id)
+            .map(Vec::as_slice)
+    }
+
+    /// Returns the latest retained copy output for one pane.
+    pub(in crate::runtime) fn retained_agent_copy_output(
+        &self,
+        pane_id: &str,
+    ) -> Option<&RuntimeAgentCopyOutput> {
+        self.agent.agent_copy_outputs.get(pane_id)
+    }
+
+    /// Returns modified-file summaries retained for one pane.
+    pub(in crate::runtime) fn retained_agent_modified_files(
+        &self,
+        pane_id: &str,
+    ) -> Option<&BTreeMap<String, RuntimeAgentModifiedFileSummary>> {
+        self.agent.agent_modified_files.get(pane_id)
+    }
+
+    /// Adds one observed modification delta to a pane-local file summary.
+    pub(in crate::runtime) fn record_agent_modified_file_delta(
+        &mut self,
+        pane_id: &str,
+        path: String,
+        added: usize,
+        removed: usize,
+    ) {
+        let entry = self
+            .agent
+            .agent_modified_files
+            .entry(pane_id.to_string())
+            .or_default()
+            .entry(path.clone())
+            .or_insert_with(|| RuntimeAgentModifiedFileSummary {
+                path,
+                added: 0,
+                removed: 0,
+            });
+        entry.added = entry.added.saturating_add(added);
+        entry.removed = entry.removed.saturating_add(removed);
+    }
+
+    /// Clears session-scoped copy and modified-file artifacts.
+    pub(in crate::runtime) fn clear_agent_session_artifacts(&mut self) {
+        self.agent.agent_copy_outputs.clear();
+        self.agent.agent_modified_files.clear();
+    }
+
+    /// Clears pane-scoped copy and modified-file artifacts.
+    pub(in crate::runtime) fn clear_agent_pane_artifacts(&mut self, pane_id: &str) {
+        self.agent.agent_copy_outputs.remove(pane_id);
+        self.agent.agent_modified_files.remove(pane_id);
+    }
+
+    /// Clears modified-file summaries when a pane starts a fresh conversation.
+    pub(in crate::runtime) fn clear_agent_modified_files(&mut self, pane_id: &str) {
+        self.agent.agent_modified_files.remove(pane_id);
+    }
+
     /// Reports whether one pane currently owns an agent child shell.
     pub(in crate::runtime) fn agent_subshell_is_active(&self, pane_id: &str) -> bool {
         self.agent.agent_subshell_panes.contains(pane_id)

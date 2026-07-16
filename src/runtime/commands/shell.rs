@@ -649,7 +649,7 @@ impl RuntimeSessionService {
         if let Some(AgentShellCommandOutcome::Mutated { command, .. }) = outcome.as_ref()
             && matches!(command.as_str(), "new" | "clear")
         {
-            self.agent_modified_files.remove(&pane_id);
+            self.clear_agent_modified_files(&pane_id);
             self.reload_agent_prompt_history_for_pane(&pane_id)?;
         }
         if exit_requires_runtime

@@ -123,6 +123,7 @@ impl RuntimeSessionService {
                 error_message: Self::runtime_agent_patch_record_error_message(result),
             };
             let records = self
+                .agent
                 .agent_session_patch_records
                 .entry(conversation_id.to_string())
                 .or_default();
@@ -276,7 +277,7 @@ impl RuntimeSessionService {
         }) else {
             return;
         };
-        self.agent_copy_outputs.insert(
+        self.agent.agent_copy_outputs.insert(
             turn.pane_id.clone(),
             RuntimeAgentCopyOutput {
                 turn_id: turn.turn_id.clone(),

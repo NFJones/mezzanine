@@ -22,7 +22,8 @@ impl RuntimeSessionService {
     /// Records text in the bounded hidden per-pane trace log.
     fn record_agent_pane_trace_log_text(&mut self, pane_id: &str, text: &str) {
         let Some(log) = (!text.trim().is_empty()).then(|| {
-            self.agent_pane_trace_logs
+            self.agent
+                .agent_pane_trace_logs
                 .entry(pane_id.to_string())
                 .or_default()
         }) else {
@@ -38,7 +39,7 @@ impl RuntimeSessionService {
 
     /// Returns the retained trace log text for one pane.
     pub(in crate::runtime) fn agent_pane_trace_log_text(&self, pane_id: &str) -> Option<String> {
-        let log = self.agent_pane_trace_logs.get(pane_id)?;
+        let log = self.agent.agent_pane_trace_logs.get(pane_id)?;
         (!log.is_empty()).then(|| log.join("\n"))
     }
 

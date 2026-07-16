@@ -168,18 +168,7 @@ fn runtime_agent_shell_list_modified_files_reports_compact_rows() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service
-        .agent_modified_files
-        .entry("%1".to_string())
-        .or_default()
-        .insert(
-            "src/lib.rs".to_string(),
-            RuntimeAgentModifiedFileSummary {
-                path: "src/lib.rs".to_string(),
-                added: 12,
-                removed: 3,
-            },
-        );
+    service.record_agent_modified_file_delta("%1", "src/lib.rs".to_string(), 12, 3);
 
     let response = service
         .execute_agent_shell_command(&primary, "/list-modified-files")

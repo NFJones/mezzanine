@@ -1514,8 +1514,7 @@ impl RuntimeSessionService {
         self.agent_personality_selections.remove(pane_id);
         self.agent_response_styles.remove(pane_id);
         self.agent_routing_overrides.remove(pane_id);
-        self.agent_copy_outputs.remove(pane_id);
-        self.agent_modified_files.remove(pane_id);
+        self.clear_agent_pane_artifacts(pane_id);
         self.active_copy_modes_mut().remove(pane_id);
         self.process
             .pane_current_working_directories

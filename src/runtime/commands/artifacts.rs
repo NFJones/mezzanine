@@ -240,7 +240,7 @@ impl RuntimeSessionService {
         &self,
         pane_id: &str,
     ) -> Option<(String, String, String)> {
-        self.agent_copy_outputs.get(pane_id).map(|output| {
+        self.retained_agent_copy_output(pane_id).map(|output| {
             (
                 output.turn_id.clone(),
                 output.output.clone(),

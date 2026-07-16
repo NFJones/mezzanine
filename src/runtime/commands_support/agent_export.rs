@@ -380,8 +380,7 @@ pub(in crate::runtime) fn runtime_write_agent_patches_for_pane(
         .map(|session| session.session_id.clone())
         .ok_or_else(|| MezError::invalid_state("agent shell session missing for copy-patches"))?;
     let Some(records) = service
-        .agent_session_patch_records
-        .get(&session_id)
+        .retained_agent_patch_records(&session_id)
         .filter(|records| !records.is_empty())
     else {
         if matches!(target, RuntimeAgentExportTarget::Pane) {
