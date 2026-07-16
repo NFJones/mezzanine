@@ -5,18 +5,12 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    ActionStatus, AgentShellVisibility, AgentTurnState, AuthStore, BTreeMap, HookEvent,
-    HookExecutionPlan, HookFailureKind, McpServerStatus, McpStartupPlan, McpStdioConnection,
-    McpToolCallPlan, McpToolCallResponse, MezError, ModelRequest, ModelResponse, ModelTokenUsage,
+    ActionStatus, AgentShellVisibility, AgentTurnState, AuthStore, HookEvent, HookExecutionPlan,
+    HookFailureKind, McpServerStatus, McpStartupPlan, McpStdioConnection, McpToolCallPlan,
+    McpToolCallResponse, MezError, ModelRequest, ModelResponse, ModelTokenUsage,
     ModelTokenUsageKey, PaneGeometry, PaneId, Result, SessionRecord, Size, SplitDirection,
     WindowId, execute_streamable_http_exchange, mcp_tools_call_operation,
 };
-use crate::error::MezErrorKind;
-use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
-use crate::terminal::PaneAgentStatusField;
-use mez_mux::copy::CopyPosition;
-use mez_mux::layout::PaneTitleSource;
-use secrecy::ExposeSecret;
 
 // Runtime data types, connection tables, and provider/MCP registries.
 

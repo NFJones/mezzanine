@@ -1,6 +1,6 @@
 //! Runtime lifecycle, registry-update, and snapshot work contracts.
 
-use super::*;
+use super::{Result, SessionRecord};
 
 /// One retained `apply_patch` attempt emitted by the current pane agent session.
 #[derive(Debug, Clone, PartialEq, Eq)]
