@@ -6011,6 +6011,7 @@ not mean that any particular configured MCP server is required to be available,
 usable, trusted, or presented to the model in a given session.
 
 MCP servers MUST be configured under the `mcp_servers` configuration table.
+Explicit `@<server-id>` invocations MUST resolve against canonical configured MCP server identifiers. Exact identifier casing MUST take precedence; an ASCII case-insensitive fallback MAY resolve only when it identifies exactly one configured server. Unresolved or case-ambiguous mentions MUST fail closed, expose no arbitrarily selected server tools, and provide a bounded model-visible diagnostic.
 
 Mezzanine MUST support stdio MCP servers with `command`, optional `args`,
 optional `env`, optional `env_vars`, and optional `cwd`.

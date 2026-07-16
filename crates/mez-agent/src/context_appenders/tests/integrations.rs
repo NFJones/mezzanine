@@ -4,6 +4,123 @@
 
 use super::*;
 
+/// Builds a prompt summary with one callable tool per configured server id.
+fn mcp_summary_for_server_ids(server_ids: &[&str]) -> McpPromptSummary {
+    McpPromptSummary {
+        available_servers: server_ids
+            .iter()
+            .map(|server_id| McpPromptServer {
+                server_id: (*server_id).to_string(),
+                display_name: (*server_id).to_string(),
+                purpose: "Test MCP server".to_string(),
+                usage_instructions: "Use the matching tool.".to_string(),
+                tool_count: 1,
+                approval_required_tool_count: 0,
+            })
+            .collect(),
+        available_tools: server_ids
+            .iter()
+            .map(|server_id| McpPromptTool {
+                server_id: (*server_id).to_string(),
+                tool_name: "lookup".to_string(),
+                description: "Look up a test record".to_string(),
+                approval_required: false,
+                input_schema_json: r#"{"type":"object"}"#.to_string(),
+            })
+            .collect(),
+        unavailable_servers: Vec::new(),
+    }
+}
+
+#[test]
+/// Verifies explicit mentions preserve exact configured identifier casing and
+/// expose the matching server tools to both prompt context and action schemas.
+fn mcp_context_resolves_exact_mixed_case_configured_server_id() {
+    let context = AgentContext::new(vec![ContextBlock {
+        source: ContextSourceKind::UserInstruction,
+        label: "user".to_string(),
+        content: "use @GitHub_2 to inspect the issue".to_string(),
+    }])
+    .unwrap();
+    let summary = mcp_summary_for_server_ids(&["GitHub_2"]);
+
+    let tools = invoked_mcp_tools_for_context(&context, &summary);
+    let context = append_mcp_context(context, &summary).unwrap();
+
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].server_id, "GitHub_2");
+    assert!(
+        context.blocks[0]
+            .content
+            .contains("server=GitHub_2 status=available route=mcp_call"),
+        "{}",
+        context.blocks[0].content
+    );
+}
+
+#[test]
+/// Verifies a case-insensitive mention resolves only when one configured
+/// server has that spelling, while preserving the canonical configured id.
+fn mcp_context_resolves_unambiguous_case_insensitive_server_id() {
+    let context = AgentContext::new(vec![ContextBlock {
+        source: ContextSourceKind::UserInstruction,
+        label: "user".to_string(),
+        content: "use @github_2 to inspect the issue".to_string(),
+    }])
+    .unwrap();
+    let summary = mcp_summary_for_server_ids(&["GitHub_2"]);
+
+    let tools = invoked_mcp_tools_for_context(&context, &summary);
+
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].server_id, "GitHub_2");
+}
+
+#[test]
+/// Verifies unresolved and case-ambiguous mentions produce bounded model
+/// diagnostics without exposing tools from an arbitrarily selected server.
+fn mcp_context_reports_unresolved_and_ambiguous_server_mentions() {
+    let context = AgentContext::new(vec![ContextBlock {
+        source: ContextSourceKind::UserInstruction,
+        label: "user".to_string(),
+        content: "compare @missing with @GITHUB".to_string(),
+    }])
+    .unwrap();
+    let summary = mcp_summary_for_server_ids(&["GitHub", "github"]);
+
+    let tools = invoked_mcp_tools_for_context(&context, &summary);
+    let context = append_mcp_context(context, &summary).unwrap();
+    let content = &context.blocks[0].content;
+
+    assert!(tools.is_empty());
+    assert!(content.contains("unavailable_server=missing"), "{content}");
+    assert!(
+        content.contains("did not match a configured server"),
+        "{content}"
+    );
+    assert!(content.contains("unavailable_server=GITHUB"), "{content}");
+    assert!(content.contains("mention is ambiguous"), "{content}");
+    assert!(!content.contains("available_tool="), "{content}");
+}
+
+#[test]
+/// Verifies exact casing wins even when another configured id differs only by
+/// case, so canonical selection never rejects an unambiguous exact mention.
+fn mcp_context_prefers_exact_server_id_over_case_ambiguous_matches() {
+    let context = AgentContext::new(vec![ContextBlock {
+        source: ContextSourceKind::UserInstruction,
+        label: "user".to_string(),
+        content: "use @GitHub now".to_string(),
+    }])
+    .unwrap();
+    let summary = mcp_summary_for_server_ids(&["GitHub", "github"]);
+
+    let tools = invoked_mcp_tools_for_context(&context, &summary);
+
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].server_id, "GitHub");
+}
+
 #[test]
 /// Verifies MCP context does not add routing hints even when the current user
 /// request matches available server metadata.

@@ -8,8 +8,8 @@
 use crate::instructions::DiscoveredInstructionFile;
 use crate::{
     AgentContext, AgentContextResult, AgentScheduler, ContextBlock, ContextSourceKind,
-    McpPromptServer, McpPromptSummary, McpPromptTool, MemoryContextRecord, runnable_agent_ids,
-    validate_context_required,
+    McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer,
+    MemoryContextRecord, runnable_agent_ids, validate_context_required,
 };
 
 /// Appends selected memory records to provider-bound context.
@@ -187,24 +187,27 @@ fn explicit_mcp_invocation_summary(
         };
     }
 
+    let (resolved, mut resolution_failures) = resolve_explicit_mcp_invocations(&requested, summary);
+
     let mut available_servers = summary
         .available_servers
         .iter()
-        .filter(|server| requested.iter().any(|name| name == &server.server_id))
+        .filter(|server| resolved.iter().any(|name| name == &server.server_id))
         .cloned()
         .collect::<Vec<_>>();
     let mut available_tools = summary
         .available_tools
         .iter()
-        .filter(|tool| requested.iter().any(|name| name == &tool.server_id))
+        .filter(|tool| resolved.iter().any(|name| name == &tool.server_id))
         .cloned()
         .collect::<Vec<_>>();
     let mut unavailable_servers = summary
         .unavailable_servers
         .iter()
-        .filter(|server| requested.iter().any(|name| name == &server.server_id))
+        .filter(|server| resolved.iter().any(|name| name == &server.server_id))
         .cloned()
         .collect::<Vec<_>>();
+    unavailable_servers.append(&mut resolution_failures);
     available_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
     available_tools.sort_by(|left, right| {
         left.server_id
@@ -217,6 +220,67 @@ fn explicit_mcp_invocation_summary(
         available_tools,
         unavailable_servers,
     }
+}
+
+/// Resolves requested names to canonical configured MCP server identifiers.
+fn resolve_explicit_mcp_invocations(
+    requested: &[String],
+    summary: &McpPromptSummary,
+) -> (Vec<String>, Vec<McpPromptUnavailableServer>) {
+    let mut configured = summary
+        .available_servers
+        .iter()
+        .map(|server| server.server_id.as_str())
+        .chain(
+            summary
+                .available_tools
+                .iter()
+                .map(|tool| tool.server_id.as_str()),
+        )
+        .chain(
+            summary
+                .unavailable_servers
+                .iter()
+                .map(|server| server.server_id.as_str()),
+        )
+        .collect::<Vec<_>>();
+    configured.sort_unstable();
+    configured.dedup();
+
+    let mut resolved = Vec::new();
+    let mut failures = Vec::new();
+    for requested_name in requested {
+        let exact = configured
+            .iter()
+            .copied()
+            .find(|configured_name| *configured_name == requested_name);
+        let case_matches = configured
+            .iter()
+            .copied()
+            .filter(|configured_name| configured_name.eq_ignore_ascii_case(requested_name))
+            .collect::<Vec<_>>();
+        let canonical = exact.or_else(|| (case_matches.len() == 1).then(|| case_matches[0]));
+        if let Some(canonical) = canonical {
+            if !resolved.iter().any(|existing| existing == canonical) {
+                resolved.push(canonical.to_string());
+            }
+            continue;
+        }
+
+        let reason = if case_matches.is_empty() {
+            "explicit MCP server mention did not match a configured server"
+        } else {
+            "explicit MCP server mention is ambiguous; use the exact configured identifier casing"
+        };
+        failures.push(McpPromptUnavailableServer {
+            server_id: requested_name.clone(),
+            purpose: String::new(),
+            usage_instructions: String::new(),
+            reason: reason.to_string(),
+            retryable: false,
+        });
+    }
+    (resolved, failures)
 }
 
 /// Extracts ordered unique `@<server-id>` MCP invocations from turn-local text.
@@ -265,12 +329,7 @@ fn push_mcp_invocation_candidate(text: &str, start: usize, end: usize, names: &m
     let Some(candidate) = text.get(start..end) else {
         return;
     };
-    if candidate.is_empty()
-        || !candidate.chars().all(is_mcp_invocation_character)
-        || !candidate
-            .chars()
-            .any(|character| character.is_ascii_alphabetic())
-    {
+    if candidate.is_empty() || !candidate.chars().all(is_mcp_invocation_character) {
         return;
     }
     if !names.iter().any(|existing| existing == candidate) {
@@ -280,9 +339,7 @@ fn push_mcp_invocation_candidate(text: &str, start: usize, end: usize, names: &m
 
 /// Returns whether one character can appear in an MCP invocation token.
 fn is_mcp_invocation_character(character: char) -> bool {
-    character.is_ascii_lowercase()
-        || character.is_ascii_digit()
-        || matches!(character, '-' | '_' | '.')
+    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
 }
 
 /// Returns whether an `@` starts a standalone invocation instead of an email or handle.
