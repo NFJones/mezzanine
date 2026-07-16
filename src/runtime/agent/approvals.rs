@@ -82,7 +82,7 @@ impl RuntimeSessionService {
                 result,
                 subagent_scope.as_ref(),
             ))?;
-            self.blocked_agent_approval_refs.insert(
+            self.agent.blocked_agent_approval_refs.insert(
                 approval_id.clone(),
                 BlockedAgentApprovalRef {
                     turn_id: turn.turn_id.clone(),
@@ -186,7 +186,7 @@ impl RuntimeSessionService {
         if approval.state != mez_agent::permissions::BlockedApprovalState::Pending {
             return Ok(false);
         }
-        let Some(approval_ref) = self.blocked_agent_approval_refs.get(approval_id) else {
+        let Some(approval_ref) = self.agent.blocked_agent_approval_refs.get(approval_id) else {
             return Ok(false);
         };
         let execution = self
@@ -313,7 +313,12 @@ impl RuntimeSessionService {
         ) {
             return Ok(None);
         }
-        let Some(approval_ref) = self.blocked_agent_approval_refs.get(approval_id).cloned() else {
+        let Some(approval_ref) = self
+            .agent
+            .blocked_agent_approval_refs
+            .get(approval_id)
+            .cloned()
+        else {
             return Ok(None);
         };
         let mut execution = self
@@ -540,7 +545,7 @@ impl RuntimeSessionService {
             }
             _ => return Ok(None),
         }
-        self.blocked_agent_approval_refs.remove(approval_id);
+        self.agent.blocked_agent_approval_refs.remove(approval_id);
         execution.terminal_state = runtime_agent_turn_state_from_action_results(
             &execution.action_results,
             execution.final_turn,
@@ -622,7 +627,12 @@ impl RuntimeSessionService {
         ) {
             return Ok(None);
         }
-        let Some(approval_ref) = self.blocked_agent_approval_refs.get(approval_id).cloned() else {
+        let Some(approval_ref) = self
+            .agent
+            .blocked_agent_approval_refs
+            .get(approval_id)
+            .cloned()
+        else {
             return Ok(None);
         };
         let mut execution = self
@@ -697,7 +707,7 @@ impl RuntimeSessionService {
                     self.persist_runtime_agent_turn_execution_transcript(&turn, &execution)?;
                 self.emit_subagent_task_result_for_execution(&turn, &execution)?;
                 let _ = self.agent.agent_scheduler.cancel(&turn.turn_id);
-                self.blocked_agent_approval_refs.remove(approval_id);
+                self.agent.blocked_agent_approval_refs.remove(approval_id);
                 self.append_agent_error_text_to_terminal_buffer(
                     &turn.pane_id,
                     &format!(
@@ -772,7 +782,7 @@ impl RuntimeSessionService {
                     &execution.action_results,
                     execution.final_turn,
                 );
-                self.blocked_agent_approval_refs.remove(approval_id);
+                self.agent.blocked_agent_approval_refs.remove(approval_id);
                 self.append_agent_status_text_to_terminal_buffer(
                     &turn.pane_id,
                     &format!(

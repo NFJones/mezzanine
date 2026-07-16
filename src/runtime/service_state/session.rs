@@ -265,11 +265,6 @@ pub struct RuntimeSessionService {
     /// Entries are keyed by child agent id. Root pane agents are inferred when
     /// absent from this map, which keeps limits scoped to active child work.
     pub(in crate::runtime) subagent_lineage: BTreeMap<String, RuntimeSubagentLineage>,
-    /// Stores the blocked agent approval refs value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) blocked_agent_approval_refs: BTreeMap<String, BlockedAgentApprovalRef>,
     /// Stores the tool discovery cache value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

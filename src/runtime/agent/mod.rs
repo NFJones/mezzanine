@@ -218,6 +218,8 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     macro_runs_by_parent_turn: BTreeMap<String, MacroRunState>,
     /// Parent macro run keyed by child step turn id.
     macro_run_by_child_turn: BTreeMap<String, String>,
+    /// Approval continuation metadata keyed by blocked approval id.
+    blocked_agent_approval_refs: BTreeMap<String, BlockedAgentApprovalRef>,
 }
 
 /// State removed when a compaction worker reports failure.
@@ -269,6 +271,26 @@ impl RuntimeAgentComponent {
 }
 
 impl RuntimeSessionService {
+    /// Reports whether one turn is waiting for an approval decision.
+    pub(in crate::runtime) fn agent_turn_has_blocked_approval(&self, turn_id: &str) -> bool {
+        self.agent
+            .blocked_agent_approval_refs
+            .values()
+            .any(|approval_ref| approval_ref.turn_id == turn_id)
+    }
+
+    /// Removes every blocked approval continuation owned by one turn.
+    pub(in crate::runtime) fn clear_blocked_agent_approvals_for_turn(&mut self, turn_id: &str) {
+        self.agent
+            .blocked_agent_approval_refs
+            .retain(|_, approval_ref| approval_ref.turn_id != turn_id);
+    }
+
+    /// Clears all blocked approval continuations on session replacement.
+    pub(in crate::runtime) fn clear_all_blocked_agent_approval_refs(&mut self) {
+        self.agent.blocked_agent_approval_refs.clear();
+    }
+
     /// Reports whether one managed macro child is registered.
     #[cfg(test)]
     pub(crate) fn has_macro_managed_subagent(&self, agent_id: &str) -> bool {

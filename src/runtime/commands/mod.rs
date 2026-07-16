@@ -566,8 +566,7 @@ impl RuntimeSessionService {
             self.remove_agent_turn_model_profile(&turn_id);
             self.remove_pending_agent_provider_task(&turn_id);
             self.remove_claimed_agent_provider_task(&turn_id);
-            self.blocked_agent_approval_refs
-                .retain(|_, approval_ref| approval_ref.turn_id != turn_id);
+            self.clear_blocked_agent_approvals_for_turn(&turn_id);
             self.start_ready_agent_turns()?;
             self.checkpoint_agent_session_metadata()?;
             session

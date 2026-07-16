@@ -177,7 +177,6 @@ impl RuntimeSessionService {
             joined_subagent_dependencies: BTreeMap::new(),
             subagent_scope_declarations: BTreeMap::new(),
             subagent_lineage: BTreeMap::new(),
-            blocked_agent_approval_refs: BTreeMap::new(),
             tool_discovery_cache: ToolDiscoveryCache::default(),
             pane_instruction_files: BTreeMap::new(),
             agent_transcript_store: None,

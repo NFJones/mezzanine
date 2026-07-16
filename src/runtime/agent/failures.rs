@@ -103,8 +103,7 @@ impl RuntimeSessionService {
         self.agent
             .claimed_agent_provider_tasks
             .remove(&turn.turn_id);
-        self.blocked_agent_approval_refs
-            .retain(|_, approval_ref| approval_ref.turn_id != turn.turn_id);
+        self.clear_blocked_agent_approvals_for_turn(&turn.turn_id);
         let _ = self.start_ready_agent_turns();
     }
 

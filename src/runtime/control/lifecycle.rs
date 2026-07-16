@@ -275,7 +275,7 @@ impl RuntimeSessionService {
         self.subagent_lineage.clear();
         self.subagent_scope_declarations.clear();
         self.subagent_scopes = ScopeRegistry::default();
-        self.blocked_agent_approval_refs.clear();
+        self.clear_all_blocked_agent_approval_refs();
         self.clear_all_shell_transaction_state();
         self.clear_pane_readiness_state_and_overrides();
         self.blocked_approvals = Default::default();

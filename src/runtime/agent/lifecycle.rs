@@ -132,8 +132,7 @@ impl RuntimeSessionService {
         self.agent.agent_turn_model_profiles.remove(turn_id);
         self.agent.pending_agent_provider_tasks.remove(turn_id);
         self.agent.claimed_agent_provider_tasks.remove(turn_id);
-        self.blocked_agent_approval_refs
-            .retain(|_, approval_ref| approval_ref.turn_id != turn_id);
+        self.clear_blocked_agent_approvals_for_turn(turn_id);
         let finished = self
             .agent_shell_store
             .finish_turn(pane_id, turn_id)?
@@ -216,8 +215,7 @@ impl RuntimeSessionService {
         self.agent
             .claimed_agent_provider_tasks
             .remove(&turn.turn_id);
-        self.blocked_agent_approval_refs
-            .retain(|_, approval_ref| approval_ref.turn_id != turn.turn_id);
+        self.clear_blocked_agent_approvals_for_turn(&turn.turn_id);
         let session = self
             .agent_shell_store
             .ensure_session(&turn.pane_id)?
@@ -406,8 +404,7 @@ impl RuntimeSessionService {
                 self.agent
                     .pending_agent_provider_tasks
                     .remove(&turn.turn_id);
-                self.blocked_agent_approval_refs
-                    .retain(|_, approval_ref| approval_ref.turn_id != turn.turn_id);
+                self.clear_blocked_agent_approvals_for_turn(&turn.turn_id);
             }
             self.append_lifecycle_event(
                 EventKind::AgentStatus,

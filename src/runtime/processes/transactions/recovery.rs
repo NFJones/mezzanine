@@ -229,10 +229,7 @@ impl RuntimeSessionService {
                 .is_some_and(|dependency| {
                     self.joined_subagent_dependency_has_live_child(dependency)
                 })
-            || self
-                .blocked_agent_approval_refs
-                .values()
-                .any(|approval_ref| approval_ref.turn_id == turn_id)
+            || self.agent_turn_has_blocked_approval(turn_id)
             || self
                 .agent_turn_executions
                 .get(turn_id)
