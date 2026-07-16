@@ -278,7 +278,7 @@ impl RuntimeSessionService {
         };
 
         if !step.actions.is_empty()
-            && let Some(message) = self.primary_error_status_overlay.take()
+            && let Some(message) = self.presentation.primary_error_status_overlay.take()
         {
             let consume_action = message.starts_with("mez error:") || message.starts_with("error:");
             report.view_refresh_required = true;
@@ -310,14 +310,14 @@ impl RuntimeSessionService {
                     continue;
                 }
             }
-            if self.pane_agent_status_selector.is_some()
+            if self.presentation.pane_agent_status_selector.is_some()
                 && self
                     .apply_pane_agent_status_selector_terminal_action(primary_client_id, action)?
             {
                 report.view_refresh_required = true;
                 continue;
             }
-            if self.pane_agent_status_selector.is_some()
+            if self.presentation.pane_agent_status_selector.is_some()
                 && !matches!(
                     action,
                     TerminalClientLoopAction::HandleMouse(
@@ -329,7 +329,7 @@ impl RuntimeSessionService {
                     )
                 )
             {
-                self.pane_agent_status_selector = None;
+                self.presentation.pane_agent_status_selector = None;
                 report.view_refresh_required = true;
             }
             if self.primary_prompt_input.is_some()

@@ -487,11 +487,10 @@ fn runtime_agent_shell_single_line_display_uses_transient_status_without_overlay
     assert!(service.primary_display_overlay.is_none());
     assert!(
         service
-            .primary_error_status_overlay
-            .as_deref()
+            .primary_error_status_overlay()
             .is_some_and(|message| message.contains("approval policy: ask")),
         "{:?}",
-        service.primary_error_status_overlay
+        service.primary_error_status_overlay()
     );
     let pane_text = service
         .pane_screen("%1")

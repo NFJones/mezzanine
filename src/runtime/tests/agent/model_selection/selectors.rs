@@ -134,8 +134,7 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
         .apply_attached_terminal_step_plan(&primary, &open_model)
         .unwrap();
     let model_index = service
-        .pane_agent_status_selector
-        .as_ref()
+        .pane_agent_status_selector()
         .and_then(|selector| {
             selector
                 .items
@@ -187,8 +186,7 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
         .apply_attached_terminal_step_plan(&primary, &open_reasoning)
         .unwrap();
     let reasoning_items = service
-        .pane_agent_status_selector
-        .as_ref()
+        .pane_agent_status_selector()
         .map(|selector| selector.items.clone())
         .unwrap_or_default();
     let reasoning_index = reasoning_items
@@ -221,7 +219,7 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
         .unwrap();
     assert_eq!(reasoning_profile.model, "gpt-provider-only");
     assert_eq!(reasoning_profile.reasoning_profile.as_deref(), Some("high"));
-    assert!(service.pane_agent_status_selector.is_none());
+    assert!(service.pane_agent_status_selector().is_none());
 
     let open_report = service
         .apply_attached_terminal_step_plan(
@@ -244,8 +242,7 @@ fn runtime_pane_agent_status_selector_applies_model_and_reasoning() {
     assert!(open_report.view_refresh_required);
     assert!(!open_report.full_redraw_required);
     let full_access_index = service
-        .pane_agent_status_selector
-        .as_ref()
+        .pane_agent_status_selector()
         .and_then(|selector| selector.items.iter().position(|item| item == "full-access"))
         .expect("approval selector should include full-access");
     service
@@ -418,8 +415,7 @@ allowed_reasoning_efforts = ["high", "xhigh"]
         )
         .unwrap();
     let selector = service
-        .pane_agent_status_selector
-        .as_ref()
+        .pane_agent_status_selector()
         .expect("model selector should open from the pane status field");
     assert_eq!(selector.field, PaneAgentStatusField::Model);
     assert_eq!(
@@ -459,7 +455,7 @@ allowed_reasoning_efforts = ["high", "xhigh"]
         )
         .unwrap();
 
-    assert!(service.pane_agent_status_selector.is_none());
+    assert!(service.pane_agent_status_selector().is_none());
     let (_name, active_profile) = service
         .active_model_profile_for_pane("%1", "agent-%1", None)
         .unwrap();

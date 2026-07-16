@@ -321,19 +321,19 @@ impl RuntimeSessionService {
                 Ok(true)
             }
             MouseAction::PressWindowAction { action } => {
-                self.pressed_window_action = Some(action);
+                self.presentation.pressed_window_action = Some(action);
                 Ok(true)
             }
             MouseAction::ReleaseWindowAction { action } => {
-                let should_run = self.pressed_window_action.as_ref() == Some(&action);
-                self.pressed_window_action = None;
+                let should_run = self.presentation.pressed_window_action.as_ref() == Some(&action);
+                self.presentation.pressed_window_action = None;
                 if should_run {
                     self.apply_window_frame_action(primary_client_id, action)?;
                 }
                 Ok(true)
             }
             MouseAction::CancelWindowAction => {
-                self.pressed_window_action = None;
+                self.presentation.pressed_window_action = None;
                 Ok(true)
             }
             MouseAction::OpenPaneAgentStatusSelector { pane_index, field } => {
@@ -370,7 +370,7 @@ impl RuntimeSessionService {
                 Ok(true)
             }
             MouseAction::ClosePaneAgentStatusSelector => {
-                self.pane_agent_status_selector = None;
+                self.presentation.pane_agent_status_selector = None;
                 Ok(true)
             }
             MouseAction::BeginDisplayOverlaySelection { .. }
@@ -398,19 +398,24 @@ impl RuntimeSessionService {
                     pane_id.as_str(),
                     target.position,
                 )? {
-                    self.mouse_selection_drag_state = None;
-                    self.last_mouse_click_state = None;
+                    self.presentation.mouse_selection_drag_state = None;
+                    self.presentation.last_mouse_click_state = None;
                     return Ok(true);
                 }
                 let now = current_unix_millis();
-                if self.last_mouse_click_state.as_ref().is_some_and(|click| {
-                    click.pane_id == pane_id
-                        && click.position == target.position
-                        && now.saturating_sub(click.clicked_at_unix_ms)
-                            <= DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS
-                }) {
-                    self.mouse_selection_drag_state = None;
-                    self.last_mouse_click_state = None;
+                if self
+                    .presentation
+                    .last_mouse_click_state
+                    .as_ref()
+                    .is_some_and(|click| {
+                        click.pane_id == pane_id
+                            && click.position == target.position
+                            && now.saturating_sub(click.clicked_at_unix_ms)
+                                <= DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS
+                    })
+                {
+                    self.presentation.mouse_selection_drag_state = None;
+                    self.presentation.last_mouse_click_state = None;
                     self.copy_word_at_pane_position(
                         primary_client_id,
                         pane_id.as_str(),
@@ -418,12 +423,12 @@ impl RuntimeSessionService {
                     )?;
                     return Ok(true);
                 }
-                self.last_mouse_click_state = Some(RuntimeMouseClickState {
+                self.presentation.last_mouse_click_state = Some(RuntimeMouseClickState {
                     pane_id: pane_id.clone(),
                     position: target.position,
                     clicked_at_unix_ms: now,
                 });
-                self.mouse_selection_drag_state = Some(MouseSelectionDragState {
+                self.presentation.mouse_selection_drag_state = Some(MouseSelectionDragState {
                     pane_id,
                     position: target.position,
                     origin_position: position,
@@ -453,11 +458,11 @@ impl RuntimeSessionService {
                     });
                 self.session
                     .select_pane_global(primary_client_id, target.pane_id.as_str())?;
-                self.mouse_selection_drag_state = None;
+                self.presentation.mouse_selection_drag_state = None;
                 Ok(true)
             }
             MouseAction::PasteClipboard(position) => {
-                self.mouse_selection_drag_state = None;
+                self.presentation.mouse_selection_drag_state = None;
                 let target = self
                     .mouse_pane_target_at(position)
                     .unwrap_or(MousePaneTarget {
@@ -480,7 +485,7 @@ impl RuntimeSessionService {
                 }
             }
             MouseAction::ResizePane { column, row } => {
-                self.mouse_selection_drag_state = None;
+                self.presentation.mouse_selection_drag_state = None;
                 let Some(update) = self.mouse_resize_drag_update(column, row)? else {
                     let pane_id = self.active_pane_id()?;
                     let size = Size {
@@ -500,11 +505,11 @@ impl RuntimeSessionService {
                 Ok(true)
             }
             MouseAction::FinishResizePane => {
-                self.mouse_resize_drag_state = None;
+                self.presentation.mouse_resize_drag_state = None;
                 Ok(true)
             }
             MouseAction::ScrollHistory { lines, position } => {
-                self.mouse_selection_drag_state = None;
+                self.presentation.mouse_selection_drag_state = None;
                 let target = self
                     .mouse_pane_target_at(position)
                     .unwrap_or(MousePaneTarget {
@@ -531,7 +536,7 @@ impl RuntimeSessionService {
                 self.session
                     .select_pane_global(primary_client_id, target.pane_id.as_str())?;
                 let pane_id = target.pane_id;
-                self.mouse_selection_drag_state = Some(MouseSelectionDragState {
+                self.presentation.mouse_selection_drag_state = Some(MouseSelectionDragState {
                     pane_id: pane_id.clone(),
                     position: target.position,
                     origin_position: position,
@@ -637,7 +642,7 @@ impl RuntimeSessionService {
         };
         match runtime_selector_input_action(input) {
             RuntimeSelectorInputAction::Exit => {
-                self.pane_agent_status_selector = None;
+                self.presentation.pane_agent_status_selector = None;
                 Ok(true)
             }
             RuntimeSelectorInputAction::Previous => {
@@ -653,7 +658,7 @@ impl RuntimeSessionService {
                 Ok(true)
             }
             RuntimeSelectorInputAction::Last => {
-                if let Some(selector) = self.pane_agent_status_selector.as_ref() {
+                if let Some(selector) = self.presentation.pane_agent_status_selector.as_ref() {
                     self.set_pane_agent_status_selector_index(
                         selector.items.len().saturating_sub(1),
                     );
@@ -661,7 +666,7 @@ impl RuntimeSessionService {
                 Ok(true)
             }
             RuntimeSelectorInputAction::Select => {
-                let Some(selector) = self.pane_agent_status_selector.as_ref() else {
+                let Some(selector) = self.presentation.pane_agent_status_selector.as_ref() else {
                     return Ok(false);
                 };
                 self.select_pane_agent_status_selector(
@@ -679,7 +684,7 @@ impl RuntimeSessionService {
     /// Moves the open pane-frame selector highlight by one row.
     fn move_pane_agent_status_selector(&mut self, delta: isize) {
         let visible_rows = self.pane_agent_status_selector_visible_rows();
-        let Some(selector) = self.pane_agent_status_selector.as_mut() else {
+        let Some(selector) = self.presentation.pane_agent_status_selector.as_mut() else {
             return;
         };
         selector.active_index =
@@ -690,7 +695,7 @@ impl RuntimeSessionService {
     /// Sets the open pane-frame selector highlight to a bounded item index.
     fn set_pane_agent_status_selector_index(&mut self, item_index: usize) {
         let visible_rows = self.pane_agent_status_selector_visible_rows();
-        let Some(selector) = self.pane_agent_status_selector.as_mut() else {
+        let Some(selector) = self.presentation.pane_agent_status_selector.as_mut() else {
             return;
         };
         selector.active_index = item_index.min(selector.items.len().saturating_sub(1));
@@ -705,7 +710,7 @@ impl RuntimeSessionService {
         lines: isize,
     ) {
         let visible_rows = self.pane_agent_status_selector_visible_rows();
-        let Some(selector) = self.pane_agent_status_selector.as_mut() else {
+        let Some(selector) = self.presentation.pane_agent_status_selector.as_mut() else {
             return;
         };
         if selector.pane_index != pane_index || selector.field != field {
@@ -724,7 +729,7 @@ impl RuntimeSessionService {
 
     /// Returns the current selector's visible row count for the active window.
     fn pane_agent_status_selector_visible_rows(&self) -> usize {
-        let Some(selector) = self.pane_agent_status_selector.as_ref() else {
+        let Some(selector) = self.presentation.pane_agent_status_selector.as_ref() else {
             return 1;
         };
         let Some(size) = self.session.active_window().map(|window| window.size) else {
@@ -744,16 +749,16 @@ impl RuntimeSessionService {
         field: PaneAgentStatusField,
     ) -> Result<()> {
         let Some(window) = self.session.active_window() else {
-            self.pane_agent_status_selector = None;
+            self.presentation.pane_agent_status_selector = None;
             return Ok(());
         };
         let Some(pane) = window.panes().iter().find(|pane| pane.index == pane_index) else {
-            self.pane_agent_status_selector = None;
+            self.presentation.pane_agent_status_selector = None;
             return Ok(());
         };
         let pane_id = pane.id.to_string();
         if field == PaneAgentStatusField::Routing {
-            self.pane_agent_status_selector = None;
+            self.presentation.pane_agent_status_selector = None;
             let outcome = self.execute_agent_shell_routing_command(&pane_id, "/routing toggle")?;
             let response =
                 runtime_agent_shell_command_response_json(&pane_id, "/routing", Some(&outcome));
@@ -765,7 +770,7 @@ impl RuntimeSessionService {
             return Ok(());
         }
         if field == PaneAgentStatusField::Thinking {
-            self.pane_agent_status_selector = None;
+            self.presentation.pane_agent_status_selector = None;
             let outcome =
                 self.execute_agent_shell_thinking_command(&pane_id, "/thinking toggle")?;
             let response =
@@ -785,7 +790,7 @@ impl RuntimeSessionService {
             .copied()
             .collect::<Vec<_>>();
         let Some(anchor_column) = field_cells.iter().map(|cell| cell.column).min() else {
-            self.pane_agent_status_selector = None;
+            self.presentation.pane_agent_status_selector = None;
             return Ok(());
         };
         let anchor_row = field_cells.iter().map(|cell| cell.row).min().unwrap_or(0);
@@ -831,7 +836,7 @@ impl RuntimeSessionService {
             PaneAgentStatusField::Routing => Vec::new(),
         };
         if items.is_empty() {
-            self.pane_agent_status_selector = None;
+            self.presentation.pane_agent_status_selector = None;
             return Ok(());
         }
         let active_value = self.active_pane_agent_status_selector_value(&pane_id, field);
@@ -839,7 +844,7 @@ impl RuntimeSessionService {
             .as_deref()
             .and_then(|value| items.iter().position(|item| item == value))
             .unwrap_or(0);
-        self.pane_agent_status_selector = Some(RuntimePaneAgentStatusSelector {
+        self.presentation.pane_agent_status_selector = Some(RuntimePaneAgentStatusSelector {
             pane_id,
             pane_index,
             field,
@@ -851,7 +856,7 @@ impl RuntimeSessionService {
             anchor_width,
         });
         let visible_rows = self.pane_agent_status_selector_visible_rows();
-        if let Some(selector) = self.pane_agent_status_selector.as_mut() {
+        if let Some(selector) = self.presentation.pane_agent_status_selector.as_mut() {
             runtime_pane_agent_status_selector_keep_active_visible(selector, visible_rows);
         }
         Ok(())
@@ -864,7 +869,7 @@ impl RuntimeSessionService {
         field: PaneAgentStatusField,
         item_index: usize,
     ) {
-        let Some(selector) = self.pane_agent_status_selector.as_mut() else {
+        let Some(selector) = self.presentation.pane_agent_status_selector.as_mut() else {
             return;
         };
         if selector.pane_index == pane_index && selector.field == field {
@@ -883,7 +888,7 @@ impl RuntimeSessionService {
         if self.session.primary_client_id() != Some(primary_client_id) {
             return Err(MezError::forbidden("operation requires the primary client"));
         }
-        let Some(selector) = self.pane_agent_status_selector.take() else {
+        let Some(selector) = self.presentation.pane_agent_status_selector.take() else {
             return Ok(());
         };
         if selector.pane_index != pane_index || selector.field != field {
@@ -1016,19 +1021,21 @@ impl RuntimeSessionService {
             .select_pane_global(primary_client_id, target.pane_id.as_str())?;
         let pane_id = target.pane_id;
         let anchor = self
+            .presentation
             .mouse_selection_drag_state
             .as_ref()
             .filter(|state| state.pane_id == pane_id)
             .map(|state| state.position)
             .unwrap_or(target.position);
         let origin = self
+            .presentation
             .mouse_selection_drag_state
             .as_ref()
             .filter(|state| state.pane_id == pane_id)
             .map(|state| state.origin_position)
             .unwrap_or(position);
         if finish && !self.active_copy_modes.contains_key(pane_id.as_str()) {
-            self.mouse_selection_drag_state = None;
+            self.presentation.mouse_selection_drag_state = None;
             return Ok(true);
         }
         let copied = {
@@ -1045,7 +1052,7 @@ impl RuntimeSessionService {
             finish.then(|| copy_mode.copy_selection()).transpose()?
         };
         if finish {
-            self.mouse_selection_drag_state = None;
+            self.presentation.mouse_selection_drag_state = None;
             self.active_copy_modes.remove(pane_id.as_str());
             self.scrollback_copy_mode_panes.remove(pane_id.as_str());
             if let Some(copied) = copied {
@@ -1056,7 +1063,7 @@ impl RuntimeSessionService {
                 )?;
             }
         } else {
-            self.mouse_selection_drag_state = Some(MouseSelectionDragState {
+            self.presentation.mouse_selection_drag_state = Some(MouseSelectionDragState {
                 pane_id,
                 position: anchor,
                 origin_position: origin,
@@ -1121,9 +1128,9 @@ impl RuntimeSessionService {
             copy_mode.select_word_at(position)?;
             copy_mode.copy_selection()?
         };
-        self.mouse_selection_drag_state = None;
+        self.presentation.mouse_selection_drag_state = None;
         self.scrollback_copy_mode_panes.remove(pane_id);
-        self.deferred_word_copy_cleanup.replace(Some((
+        self.presentation.deferred_word_copy_cleanup.replace(Some((
             pane_id.to_string(),
             copy_mode,
             current_unix_millis().saturating_add(DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS),
@@ -1146,14 +1153,14 @@ impl RuntimeSessionService {
         column: u16,
         row: u16,
     ) -> Result<Option<MouseResizeDragUpdate>> {
-        if let Some(state) = self.mouse_resize_drag_state.clone() {
+        if let Some(state) = self.presentation.mouse_resize_drag_state.clone() {
             return Ok(Some(mouse_resize_update_from_state(state, column, row)));
         }
         let Some(state) = self.mouse_resize_drag_state_at(column, row) else {
             return Ok(None);
         };
         let update = mouse_resize_update_from_state(state.clone(), column, row);
-        self.mouse_resize_drag_state = Some(state);
+        self.presentation.mouse_resize_drag_state = Some(state);
         Ok(Some(update))
     }
 
@@ -1282,7 +1289,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn mouse_selection_target_at(&self, position: CopyPosition) -> Result<MouseSelectionTarget> {
-        if let Some(state) = self.mouse_selection_drag_state.as_ref()
+        if let Some(state) = self.presentation.mouse_selection_drag_state.as_ref()
             && let Some(target) =
                 self.mouse_pane_selection_target_at(state.pane_id.as_str(), position)
         {

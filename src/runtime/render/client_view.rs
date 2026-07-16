@@ -151,7 +151,7 @@ impl RuntimeSessionService {
         }
         if role == ClientViewRole::Primary
             && let Some(view) = view.as_mut()
-            && let Some(selector) = self.pane_agent_status_selector.as_ref()
+            && let Some(selector) = self.presentation.pane_agent_status_selector.as_ref()
         {
             self.overlay_pane_agent_status_selector(view, selector);
         }
@@ -169,7 +169,7 @@ impl RuntimeSessionService {
         }
         if role == ClientViewRole::Primary
             && let Some(view) = view.as_mut()
-            && let Some(message) = self.primary_error_status_overlay.as_ref()
+            && let Some(message) = self.presentation.primary_error_status_overlay.as_ref()
         {
             self.overlay_primary_error_status(view, message);
         }
@@ -410,7 +410,7 @@ impl RuntimeSessionService {
         window: &mez_mux::layout::Window,
         view: &mut RenderedClientView,
     ) -> Result<()> {
-        let mut deferred_cleanup = self.deferred_word_copy_cleanup.borrow_mut();
+        let mut deferred_cleanup = self.presentation.deferred_word_copy_cleanup.borrow_mut();
         let mut clear_deferred_cleanup = false;
         if let Some((pane_id, copy_mode, cleanup_at_unix_ms)) = deferred_cleanup.as_ref()
             && let Some(pane_index) = window
@@ -711,10 +711,12 @@ impl RuntimeSessionService {
         config.mouse_pane_agent_selector_cells = self.mouse_pane_agent_selector_cells();
         config.mouse_pane_regions = self.active_window_mouse_pane_regions();
         config.frame_context = frame_context;
-        config.mouse_policy.pane_resize_active = self.mouse_resize_drag_state.is_some();
+        config.mouse_policy.pane_resize_active =
+            self.presentation.mouse_resize_drag_state.is_some();
         let active_pane_id = self.active_pane_id().ok();
         let active_mouse_selection_state = active_pane_id.as_deref().and_then(|pane_id| {
-            self.mouse_selection_drag_state
+            self.presentation
+                .mouse_selection_drag_state
                 .as_ref()
                 .filter(|state| state.pane_id.as_str() == pane_id)
         });
@@ -917,7 +919,7 @@ impl RuntimeSessionService {
 
     /// Returns mouse hit cells for the currently open pane agent selector.
     fn mouse_pane_agent_selector_cells(&self) -> Vec<MousePaneAgentSelectorCell> {
-        let Some(selector) = self.pane_agent_status_selector.as_ref() else {
+        let Some(selector) = self.presentation.pane_agent_status_selector.as_ref() else {
             return Vec::new();
         };
         let Some(window) = self.session.active_window() else {
@@ -1070,7 +1072,7 @@ impl RuntimeSessionService {
             session_id: Some(self.session.id.to_string()),
             policy_mode: Some(policy_mode),
             pending_observer_count,
-            pressed_window_action: self.pressed_window_action.clone(),
+            pressed_window_action: self.presentation.pressed_window_action.clone(),
             animation_tick_ms: self.runtime_frame_animation_tick_ms(),
             reduced_motion: self.terminal_reduced_motion,
             window_status: self.runtime_window_status_context(),

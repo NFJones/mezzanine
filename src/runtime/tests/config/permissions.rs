@@ -761,7 +761,7 @@ fn runtime_pane_agent_status_selector_toggles_auto_and_selects_approval() {
         .unwrap();
     assert!(open_report.view_refresh_required);
     assert!(!open_report.full_redraw_required);
-    assert!(service.pane_agent_status_selector.is_none());
+    assert!(service.pane_agent_status_selector().is_none());
     assert_eq!(
         service.agent_routing_overrides.get("%1").copied(),
         Some(true)
@@ -786,8 +786,7 @@ fn runtime_pane_agent_status_selector_toggles_auto_and_selects_approval() {
         )
         .unwrap();
     let full_access_index = service
-        .pane_agent_status_selector
-        .as_ref()
+        .pane_agent_status_selector()
         .and_then(|selector| {
             assert_eq!(selector.field, PaneAgentStatusField::ApprovalPolicy);
             selector.items.iter().position(|item| item == "full-access")
@@ -813,7 +812,7 @@ fn runtime_pane_agent_status_selector_toggles_auto_and_selects_approval() {
         )
         .unwrap();
 
-    assert!(service.pane_agent_status_selector.is_none());
+    assert!(service.pane_agent_status_selector().is_none());
     assert_eq!(
         service.permission_policy().approval_policy,
         ApprovalPolicy::FullAccess

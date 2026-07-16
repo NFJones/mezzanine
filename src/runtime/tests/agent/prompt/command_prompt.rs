@@ -206,11 +206,10 @@ fn runtime_primary_command_prompt_immediate_command_does_not_open_overlay() {
     assert_eq!(service.paste_buffers.get("ack"), Some("hello"));
     assert!(
         service
-            .primary_error_status_overlay
-            .as_deref()
+            .primary_error_status_overlay()
             .is_some_and(|message| message.contains("buffer: ack")),
         "{:?}",
-        service.primary_error_status_overlay
+        service.primary_error_status_overlay()
     );
     let pane_text = service
         .pane_screen("%1")

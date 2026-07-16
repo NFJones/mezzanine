@@ -226,8 +226,7 @@ fn runtime_pane_agent_status_reasoning_preserves_latency_preference() {
         )
         .unwrap();
     let reasoning_items = service
-        .pane_agent_status_selector
-        .as_ref()
+        .pane_agent_status_selector()
         .map(|selector| selector.items.clone())
         .unwrap_or_default();
     let high_index = reasoning_items
@@ -284,7 +283,7 @@ fn runtime_pane_agent_status_reasoning_preserves_latency_preference() {
         )
         .unwrap();
     assert!(
-        service.pane_agent_status_selector.is_some(),
+        service.pane_agent_status_selector().is_some(),
         "latency selector should remain available after reasoning changes"
     );
 }

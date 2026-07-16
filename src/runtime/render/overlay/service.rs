@@ -571,7 +571,7 @@ impl RuntimeSessionService {
     /// errors visible without turning them into modal state.
     pub fn show_primary_error_overlay(&mut self, lines: Vec<String>) -> Result<()> {
         self.require_live()?;
-        self.primary_error_status_overlay = lines
+        self.presentation.primary_error_status_overlay = lines
             .into_iter()
             .find(|line| !line.trim().is_empty())
             .map(|line| runtime_primary_error_status_text(&line));
@@ -585,7 +585,7 @@ impl RuntimeSessionService {
     /// of pane transcripts.
     pub fn show_primary_notice_overlay(&mut self, lines: Vec<String>) -> Result<()> {
         self.require_live()?;
-        self.primary_error_status_overlay = lines
+        self.presentation.primary_error_status_overlay = lines
             .into_iter()
             .find(|line| !line.trim().is_empty())
             .map(|line| runtime_primary_notice_status_text(&line));

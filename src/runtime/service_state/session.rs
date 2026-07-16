@@ -1,6 +1,7 @@
 //! Long-lived runtime session-service aggregate and owned subsystem stores.
 
 use super::*;
+use crate::runtime::RuntimePresentationComponent;
 
 /// Carries Runtime Session Service state for this subsystem.
 ///
@@ -8,6 +9,8 @@ use super::*;
 /// structured runtime state without parsing display text.
 #[derive(Debug)]
 pub struct RuntimeSessionService {
+    /// Private state owner for terminal presentation and client interaction.
+    pub(in crate::runtime) presentation: RuntimePresentationComponent,
     /// Stores the session value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -223,28 +226,6 @@ pub struct RuntimeSessionService {
     /// scrollback is only a temporary viewport offset and should return to the
     /// live pane on the next key press.
     pub(in crate::runtime) scrollback_copy_mode_panes: BTreeSet<String>,
-    /// Stores the mouse resize drag state value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) mouse_resize_drag_state: Option<MouseResizeDragState>,
-    /// Stores the mouse selection drag state value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) mouse_selection_drag_state: Option<MouseSelectionDragState>,
-    /// Last pane content click observed for double-click word selection.
-    pub(in crate::runtime) last_mouse_click_state: Option<RuntimeMouseClickState>,
-    /// Deferred double-click word copy cleanup: (pane_id, copy_mode,
-    /// cleanup_at_unix_ms) retained until the copied-word highlight has been
-    /// visible for its full lifetime.
-    pub(in crate::runtime) deferred_word_copy_cleanup:
-        std::cell::RefCell<Option<(String, CopyMode, u64)>>,
-    /// Stores the pressed window status-bar action value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pressed_window_action: Option<WindowFrameAction>,
     /// Stores the pane transcript refs value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -644,17 +625,6 @@ pub struct RuntimeSessionService {
     /// Parent view stacks waiting to be attached to pending record-browser overlays.
     pub(in crate::runtime) pending_record_browser_overlay_stacks:
         BTreeMap<(String, String), Vec<RuntimeRecordBrowserOverlayFrame>>,
-    /// Stores the transient primary error status overlay value.
-    ///
-    /// Recoverable foreground errors use this one-line notice instead of the
-    /// modal display overlay so the user's next input can both dismiss the
-    /// notice and continue to the active pane or mux action.
-    pub(in crate::runtime) primary_error_status_overlay: Option<String>,
-    /// Stores the open pane agent status selector value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_agent_status_selector: Option<RuntimePaneAgentStatusSelector>,
     /// Stores the agent turn model profiles value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

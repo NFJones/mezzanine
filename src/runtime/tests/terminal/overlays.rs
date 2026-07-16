@@ -777,7 +777,7 @@ fn runtime_primary_error_overlay_dismisses_on_any_input() {
     assert_eq!(report.forwarded_bytes, 0);
     assert!(report.view_refresh_required);
     assert!(report.full_redraw_required);
-    assert!(service.primary_error_status_overlay.is_none());
+    assert!(service.primary_error_status_overlay().is_none());
     assert!(service.primary_display_overlay.is_none());
     service.pane_processes_mut().terminate_all().unwrap();
 }

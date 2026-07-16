@@ -720,7 +720,7 @@ impl RuntimeSessionService {
         let effects = self
             .session
             .resize_authoritative_terminal_transition(primary_client_id, size)?;
-        self.mouse_resize_drag_state = None;
+        self.presentation.clear_mouse_resize_drag_state();
         self.refresh_active_copy_mode_viewports()?;
         let updates = self.sync_pane_resize_effects(&effects)?;
         self.append_lifecycle_event(

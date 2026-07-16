@@ -540,8 +540,7 @@ fn runtime_pane_agent_status_selector_applies_latency_preference() {
     assert!(open_report.view_refresh_required);
     assert!(!open_report.full_redraw_required);
     let latency_items = service
-        .pane_agent_status_selector
-        .as_ref()
+        .pane_agent_status_selector()
         .map(|selector| selector.items.clone())
         .unwrap_or_default();
     assert_eq!(
@@ -576,7 +575,7 @@ fn runtime_pane_agent_status_selector_applies_latency_preference() {
         )
         .unwrap();
     assert!(select_report.view_refresh_required);
-    assert!(service.pane_agent_status_selector.is_none());
+    assert!(service.pane_agent_status_selector().is_none());
     let (_name, latency_profile) = service
         .active_model_profile_for_pane("%1", "agent-%1", None)
         .unwrap();
@@ -667,7 +666,7 @@ reasoning_effort = "high"
         )
         .unwrap();
     assert!(
-        service.pane_agent_status_selector.is_none(),
+        service.pane_agent_status_selector().is_none(),
         "unsupported providers should not expose a latency dropdown"
     );
 }
@@ -721,7 +720,7 @@ fn runtime_pane_agent_status_thinking_pill_toggles_deepseek_profile() {
         .unwrap();
     assert!(first_toggle.view_refresh_required);
     assert!(!first_toggle.full_redraw_required);
-    assert!(service.pane_agent_status_selector.is_none());
+    assert!(service.pane_agent_status_selector().is_none());
     let (_off_name, off_profile) = service
         .active_model_profile_for_pane("%1", "agent-%1", None)
         .unwrap();
@@ -757,7 +756,7 @@ fn runtime_pane_agent_status_thinking_pill_toggles_deepseek_profile() {
         )
         .unwrap();
     assert!(second_toggle.view_refresh_required);
-    assert!(service.pane_agent_status_selector.is_none());
+    assert!(service.pane_agent_status_selector().is_none());
     let (_on_name, on_profile) = service
         .active_model_profile_for_pane("%1", "agent-%1", None)
         .unwrap();
@@ -808,7 +807,7 @@ fn runtime_pane_agent_status_selector_esc_closes_without_forwarding() {
         .unwrap();
     assert!(open_report.view_refresh_required);
     assert!(!open_report.full_redraw_required);
-    assert!(service.pane_agent_status_selector.is_some());
+    assert!(service.pane_agent_status_selector().is_some());
 
     let report = service
         .apply_attached_terminal_step_plan(
@@ -827,7 +826,7 @@ fn runtime_pane_agent_status_selector_esc_closes_without_forwarding() {
     assert_eq!(report.forwarded_bytes, 0);
     assert!(report.view_refresh_required);
     assert!(!report.full_redraw_required);
-    assert!(service.pane_agent_status_selector.is_none());
+    assert!(service.pane_agent_status_selector().is_none());
 }
 
 /// Verifies pane-frame model and reasoning dropdowns support keyboard
@@ -873,8 +872,7 @@ fn runtime_pane_agent_status_selector_accepts_keyboard_navigation() {
         )
         .unwrap();
     let (active_index, target_index) = service
-        .pane_agent_status_selector
-        .as_ref()
+        .pane_agent_status_selector()
         .map(|selector| {
             (
                 selector.active_index,
@@ -912,7 +910,7 @@ fn runtime_pane_agent_status_selector_accepts_keyboard_navigation() {
     assert_eq!(report.forwarded_bytes, 0);
     assert!(report.view_refresh_required);
     assert!(!report.full_redraw_required);
-    assert!(service.pane_agent_status_selector.is_none());
+    assert!(service.pane_agent_status_selector().is_none());
     let (_name, model_profile) = service
         .active_model_profile_for_pane("%1", "agent-%1", None)
         .unwrap();
@@ -967,8 +965,7 @@ fn runtime_pane_agent_status_selector_scrolls_only_dropdown_contents() {
         .unwrap();
     assert_eq!(
         service
-            .pane_agent_status_selector
-            .as_ref()
+            .pane_agent_status_selector()
             .map(|selector| selector.scroll_offset),
         Some(0)
     );
@@ -998,8 +995,7 @@ fn runtime_pane_agent_status_selector_scrolls_only_dropdown_contents() {
     assert!(!report.full_redraw_required);
     assert_eq!(
         service
-            .pane_agent_status_selector
-            .as_ref()
+            .pane_agent_status_selector()
             .map(|selector| selector.scroll_offset),
         Some(3)
     );
@@ -1025,8 +1021,7 @@ fn runtime_pane_agent_status_selector_scrolls_only_dropdown_contents() {
         .unwrap();
     assert_eq!(
         service
-            .pane_agent_status_selector
-            .as_ref()
+            .pane_agent_status_selector()
             .map(|selector| selector.scroll_offset),
         Some(0)
     );

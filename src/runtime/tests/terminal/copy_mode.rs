@@ -94,17 +94,17 @@ fn runtime_double_click_highlight_persists_until_cleanup_deadline() {
             .unwrap();
     }
 
-    assert!(service.deferred_word_copy_cleanup.borrow().is_some());
+    assert!(service.deferred_word_copy_cleanup().borrow().is_some());
     let config = TerminalClientLoopConfig::default();
     let view = service
         .render_client_view(ClientViewRole::Primary, Size::new(20, 4).unwrap(), &config)
         .unwrap()
         .unwrap();
     assert!(!view.line_style_spans.iter().all(|spans| spans.is_empty()));
-    assert!(service.deferred_word_copy_cleanup.borrow().is_some());
+    assert!(service.deferred_word_copy_cleanup().borrow().is_some());
 
     if let Some((pane_id, copy_mode, cleanup_at_unix_ms)) =
-        service.deferred_word_copy_cleanup.borrow_mut().as_mut()
+        service.deferred_word_copy_cleanup().borrow_mut().as_mut()
     {
         *pane_id = "%1".to_string();
         *copy_mode = copy_mode.clone();
@@ -115,5 +115,5 @@ fn runtime_double_click_highlight_persists_until_cleanup_deadline() {
         .render_client_view(ClientViewRole::Primary, Size::new(20, 4).unwrap(), &config)
         .unwrap()
         .unwrap();
-    assert!(service.deferred_word_copy_cleanup.borrow().is_none());
+    assert!(service.deferred_word_copy_cleanup().borrow().is_none());
 }

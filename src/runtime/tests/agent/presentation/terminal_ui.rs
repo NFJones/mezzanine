@@ -68,11 +68,10 @@ fn runtime_attached_split_error_is_presentational_and_not_replayed_on_dismiss() 
     assert!(service.pane_processes().is_empty());
     assert!(
         service
-            .primary_error_status_overlay
-            .as_deref()
+            .primary_error_status_overlay()
             .is_some_and(|message| message.contains("cannot split vertically")),
         "{:?}",
-        service.primary_error_status_overlay
+        service.primary_error_status_overlay()
     );
 
     let dismiss = service
@@ -84,14 +83,14 @@ fn runtime_attached_split_error_is_presentational_and_not_replayed_on_dismiss() 
     assert!(dismiss.full_redraw_required);
     assert_eq!(service.session().windows()[0].panes().len(), 1);
     assert!(service.pane_processes().is_empty());
-    assert!(service.primary_error_status_overlay.is_none());
+    assert!(service.primary_error_status_overlay().is_none());
 
     let retried = service
         .apply_attached_terminal_step_plan(&primary, &step)
         .unwrap();
 
     assert_eq!(retried.mux_actions_applied, 0);
-    assert!(service.primary_error_status_overlay.is_some());
+    assert!(service.primary_error_status_overlay().is_some());
     assert_eq!(service.session().windows()[0].panes().len(), 1);
     assert!(service.pane_processes().is_empty());
 }

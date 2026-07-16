@@ -34,24 +34,70 @@ use super::service_state::{
 use super::{
     AgentShellVisibility, AgentTurnRecord, AgentTurnState, AttachedClientStepApplication,
     AttachedTerminalClientStepPlan, ClientViewRole, CopyMode, CopyModeKeyAction, EventKind,
-    MezError, MouseAction, MouseSelectionDragState, MouseWindowActionFrameCell,
-    ObserverDecisionState, PaneDescriptor, PaneGeometry, PaneInputDispatch,
-    PaneNavigationDirection, ReadlineInputDecoder, ReadlineOutcome, ReadlinePrompt,
-    ReadlinePromptKind, RenderedClientView, Result, RuntimeAgentModifiedFileSummary,
-    RuntimeAgentPromptInput, RuntimeSessionService, RuntimeSideEffect, Size, SplitDirection,
-    TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFrameContext, TerminalScreen,
-    WindowFrameAction, agent_prompt_reserved_line_count, current_unix_millis, current_unix_seconds,
-    json_escape, mouse_action_name, mux_action_command_prompt_prefill, mux_action_name,
-    pane_navigation_direction, parse_command_sequence, render_attached_client_view,
-    rendered_pane_geometries, runtime_agent_shell_command_response_json,
-    runtime_agent_turn_duration_display, runtime_agent_turn_state_name,
-    runtime_approval_policy_name, runtime_copy_position_for_view, runtime_fit_status_line,
-    runtime_paste_bytes, window_frame_action_pillbox_cells, window_frame_pillbox_cells,
+    MezError, MouseAction, MouseResizeDragState, MouseSelectionDragState,
+    MouseWindowActionFrameCell, ObserverDecisionState, PaneDescriptor, PaneGeometry,
+    PaneInputDispatch, PaneNavigationDirection, ReadlineInputDecoder, ReadlineOutcome,
+    ReadlinePrompt, ReadlinePromptKind, RenderedClientView, Result,
+    RuntimeAgentModifiedFileSummary, RuntimeAgentPromptInput, RuntimeSessionService,
+    RuntimeSideEffect, Size, SplitDirection, TerminalClientLoopAction, TerminalClientLoopConfig,
+    TerminalFrameContext, TerminalScreen, WindowFrameAction, agent_prompt_reserved_line_count,
+    current_unix_millis, current_unix_seconds, json_escape, mouse_action_name,
+    mux_action_command_prompt_prefill, mux_action_name, pane_navigation_direction,
+    parse_command_sequence, render_attached_client_view, rendered_pane_geometries,
+    runtime_agent_shell_command_response_json, runtime_agent_turn_duration_display,
+    runtime_agent_turn_state_name, runtime_approval_policy_name, runtime_copy_position_for_view,
+    runtime_fit_status_line, runtime_paste_bytes, window_frame_action_pillbox_cells,
+    window_frame_pillbox_cells,
 };
 /// Maximum elapsed time between two pane-content clicks recognized as a double click.
 const DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS: u64 = 500;
 /// How long the copied-word highlight remains visible after a double click.
 const DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS: u64 = 500;
+
+/// Owns transient client interaction state used by product presentation.
+///
+/// Fields are private to the render component and its descendants. Other
+/// runtime components cross this boundary through narrow methods instead of
+/// reaching into the session coordinator's former shared field bag.
+#[derive(Debug, Default)]
+pub(in crate::runtime) struct RuntimePresentationComponent {
+    mouse_resize_drag_state: Option<MouseResizeDragState>,
+    mouse_selection_drag_state: Option<MouseSelectionDragState>,
+    last_mouse_click_state: Option<RuntimeMouseClickState>,
+    deferred_word_copy_cleanup: std::cell::RefCell<Option<(String, CopyMode, u64)>>,
+    pressed_window_action: Option<WindowFrameAction>,
+    primary_error_status_overlay: Option<String>,
+    pane_agent_status_selector: Option<RuntimePaneAgentStatusSelector>,
+}
+
+impl RuntimePresentationComponent {
+    /// Clears an in-progress pane-resize gesture after layout mutation.
+    pub(in crate::runtime) fn clear_mouse_resize_drag_state(&mut self) {
+        self.mouse_resize_drag_state = None;
+    }
+}
+
+#[cfg(test)]
+impl RuntimeSessionService {
+    /// Returns the transient primary error status for product integration tests.
+    pub(in crate::runtime) fn primary_error_status_overlay(&self) -> Option<&str> {
+        self.presentation.primary_error_status_overlay.as_deref()
+    }
+
+    /// Returns the active pane-agent selector for product integration tests.
+    pub(in crate::runtime) fn pane_agent_status_selector(
+        &self,
+    ) -> Option<&RuntimePaneAgentStatusSelector> {
+        self.presentation.pane_agent_status_selector.as_ref()
+    }
+
+    /// Returns deferred copied-word cleanup state for product integration tests.
+    pub(in crate::runtime) fn deferred_word_copy_cleanup(
+        &self,
+    ) -> &std::cell::RefCell<Option<(String, CopyMode, u64)>> {
+        &self.presentation.deferred_word_copy_cleanup
+    }
+}
 
 use crate::command::baseline_commands;
 use crate::selector::{SelectorExtraCandidate, SelectorSurface};

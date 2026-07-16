@@ -1,6 +1,7 @@
 //! Runtime session-service construction and initial aggregate assembly.
 
 use super::*;
+use crate::runtime::RuntimePresentationComponent;
 
 impl RuntimeSessionService {
     /// Runs the new operation for this subsystem.
@@ -107,6 +108,7 @@ impl RuntimeSessionService {
         mez_terminal::set_terminal_emoji_width(terminal_emoji_width);
         crate::terminal::set_agent_wrap_column_cap(crate::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP);
         Ok(Self {
+            presentation: RuntimePresentationComponent::default(),
             session,
             window_created_at_unix_seconds,
             config_layers: Vec::new(),
@@ -148,11 +150,6 @@ impl RuntimeSessionService {
             host_clipboard: HostClipboard::system(),
             active_copy_modes: BTreeMap::new(),
             scrollback_copy_mode_panes: BTreeSet::new(),
-            mouse_resize_drag_state: None,
-            mouse_selection_drag_state: None,
-            last_mouse_click_state: None,
-            deferred_word_copy_cleanup: std::cell::RefCell::new(None),
-            pressed_window_action: None,
             pane_transcript_refs: BTreeMap::new(),
             terminal_history_limit: DEFAULT_HISTORY_LIMIT,
             terminal_history_rotate_lines: DEFAULT_HISTORY_ROTATE_LINES,
@@ -243,8 +240,6 @@ impl RuntimeSessionService {
             pending_record_browser_overlays: BTreeMap::new(),
             pending_record_browser_overlay_sources: BTreeMap::new(),
             pending_record_browser_overlay_stacks: BTreeMap::new(),
-            primary_error_status_overlay: None,
-            pane_agent_status_selector: None,
             agent_turn_model_profiles: BTreeMap::new(),
             agent_planning_modes: BTreeSet::new(),
             agent_response_styles: BTreeMap::new(),
