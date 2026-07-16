@@ -33,7 +33,7 @@ impl RuntimeSessionService {
     fn active_agent_shell_visible(&self) -> Result<bool> {
         let pane_id = self.active_pane_id()?;
         Ok(self
-            .agent_shell_store
+            .agent_shell_store()
             .get(&pane_id)
             .is_some_and(|session| session.visibility == AgentShellVisibility::Visible))
     }
@@ -41,9 +41,12 @@ impl RuntimeSessionService {
     /// Reports whether the focused pane is waiting for an agent turn to stop before exit.
     fn active_agent_shell_exit_pending(&self) -> Result<bool> {
         let pane_id = self.active_pane_id()?;
-        Ok(self.agent_shell_store.get(&pane_id).is_some_and(|session| {
-            session.visibility == AgentShellVisibility::HidePendingTaskCompletion
-        }))
+        Ok(self
+            .agent_shell_store()
+            .get(&pane_id)
+            .is_some_and(|session| {
+                session.visibility == AgentShellVisibility::HidePendingTaskCompletion
+            }))
     }
 
     /// Runs the write input to pane operation for this subsystem.

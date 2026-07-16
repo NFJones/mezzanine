@@ -82,7 +82,7 @@ impl RuntimeSessionService {
             } else {
                 self.record_agent_pre_shell_hook_completed(continuation, &pending.plan.hook_id);
                 let continuation_pane_id = self
-                    .agent_turn_ledger
+                    .agent_turn_ledger()
                     .turns()
                     .iter()
                     .find(|turn| turn.turn_id == continuation.turn_id)

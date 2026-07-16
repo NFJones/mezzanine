@@ -179,7 +179,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
     assert_eq!(start.state, AgentTurnState::Running);
     service.remove_pending_agent_provider_task("turn-1");
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == "turn-1")
@@ -196,7 +196,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
             timeout_ms: None,
         },
     };
-    service.agent_turn_executions.insert(
+    service.agent_turn_executions_mut().insert(
         "turn-1".to_string(),
         mez_agent::AgentTurnExecution {
             request: mez_agent::ModelRequest {
@@ -546,7 +546,7 @@ fn runtime_agent_shell_command_output_keeps_decoded_context() {
     for _ in 0..900 {
         let _ = service.poll_pane_outputs(8192).unwrap();
         context_text = service
-            .agent_turn_contexts
+            .agent_turn_contexts()
             .get("turn-1")
             .unwrap()
             .blocks
@@ -591,7 +591,7 @@ fn runtime_agent_shell_command_output_keeps_decoded_context() {
     assert!(!pane_text.contains("MEZ_MARKER_TOKEN"), "{pane_text}");
     assert!(!pane_text.contains("unset MEZ_MARKER_TOKEN"), "{pane_text}");
     let context_text = service
-        .agent_turn_contexts
+        .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
         .blocks
@@ -698,7 +698,7 @@ fn runtime_agent_shell_command_without_output_keeps_mez_framing_out_of_logs() {
     assert!(!pane_text.contains("MEZ_COMMAND_"), "{pane_text}");
     assert!(!pane_text.contains("unset MEZ_MARKER_TOKEN"), "{pane_text}");
     let context_text = service
-        .agent_turn_contexts
+        .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
         .blocks
@@ -1042,18 +1042,18 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
     );
     assert!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .any(|turn| turn.turn_id == "turn-1" && turn.state == AgentTurnState::Running)
     );
-    assert!(service.agent_turn_executions.contains_key("turn-1"));
+    assert!(service.agent_turn_executions().contains_key("turn-1"));
     assert!(
         service
             .agent_failure_feedback_attempts_for_tests()
             .is_empty()
     );
-    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
     assert!(context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::TranscriptAssistant
             && block.content.contains("failing shell")
@@ -1143,7 +1143,7 @@ fn runtime_shell_action_timeout_queues_model_self_correction() {
         .start_agent_prompt_turn("%1", "write a file")
         .unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -1210,7 +1210,7 @@ fn runtime_shell_action_timeout_queues_model_self_correction() {
             .iter()
             .any(|task| task.turn_id == turn.turn_id)
     );
-    let context = service.agent_turn_contexts.get(&turn.turn_id).unwrap();
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     assert!(context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block

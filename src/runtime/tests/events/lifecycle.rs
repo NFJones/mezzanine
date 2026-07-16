@@ -710,7 +710,7 @@ fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
 
     let restored_session = restored.agent_shell_store().get("%1").unwrap();
     let restored_turn = restored
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == "turn-running-restore")

@@ -852,7 +852,7 @@ fn runtime_shell_transaction_metadata_mismatch_fails_live_action() {
     assert!(!service.shell_transaction_started_for_tests(&marker));
     assert!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .any(|turn| turn.turn_id == "turn-1" && turn.state == AgentTurnState::Failed)
@@ -904,7 +904,7 @@ fn runtime_shell_transaction_duplicate_start_marker_fails_live_action() {
     assert!(!service.shell_transaction_started_for_tests(&marker));
     assert!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .any(|turn| turn.turn_id == "turn-1" && turn.state == AgentTurnState::Failed)
@@ -950,7 +950,7 @@ fn runtime_shell_transaction_end_before_start_marker_fails_live_action() {
     assert!(!service.shell_transaction_started_for_tests(&marker));
     assert!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .any(|turn| turn.turn_id == "turn-1" && turn.state == AgentTurnState::Failed)

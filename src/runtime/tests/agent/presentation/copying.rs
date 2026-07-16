@@ -536,7 +536,7 @@ fn runtime_agent_copy_patches_writes_retained_patches_to_destinations() {
         .start_agent_prompt_turn("%1", "create a note")
         .unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -667,7 +667,7 @@ fn runtime_agent_copy_patches_retains_reused_action_id_attempts() {
         .start_agent_prompt_turn("%1", "patch the file")
         .unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)

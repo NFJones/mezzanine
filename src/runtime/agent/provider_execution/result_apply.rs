@@ -106,12 +106,12 @@ impl RuntimeSessionService {
         self.present_deferred_agent_say_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         let mut persisted_transcript_entries = 0usize;
         if failure_feedback_queued {
-            self.agent_turn_executions.remove(turn_id);
+            self.agent_turn_executions_mut().remove(turn_id);
         } else if execution.terminal_state == AgentTurnState::Blocked {
             persisted_transcript_entries =
                 self.persist_runtime_agent_turn_execution_transcript(turn, &execution)?;
             self.queue_blocked_approvals_for_execution(turn, &execution)?;
-            self.agent_turn_executions
+            self.agent_turn_executions_mut()
                 .insert(turn_id.to_string(), execution.clone());
             let _ = self.agent.agent_scheduler.block_running(turn_id);
             self.append_agent_trace_turn_event(
@@ -125,7 +125,7 @@ impl RuntimeSessionService {
                 turn_id,
                 "provider_task removed reason=blocked_waiting_approval",
             )?;
-            self.agent_turn_ledger
+            self.agent_turn_ledger_mut()
                 .finish_turn(turn_id, AgentTurnState::Blocked)?;
             self.append_agent_trace_turn_transition(
                 turn,
@@ -162,7 +162,7 @@ impl RuntimeSessionService {
             let waiting_for_joined_subagents =
                 self.execution_waiting_for_live_joined_subagents(turn_id, &execution);
             if waiting_for_joined_subagents {
-                self.agent_turn_executions
+                self.agent_turn_executions_mut()
                     .insert(turn_id.to_string(), execution.clone());
                 self.agent.agent_scheduler.block_running(turn_id)?;
                 self.append_agent_trace_turn_event(
@@ -176,7 +176,7 @@ impl RuntimeSessionService {
                     turn_id,
                     "provider_task removed reason=waiting_for_subagents",
                 )?;
-                self.agent_turn_ledger
+                self.agent_turn_ledger_mut()
                     .finish_turn(turn_id, AgentTurnState::Blocked)?;
                 self.append_agent_trace_turn_transition(
                     turn,
@@ -206,7 +206,7 @@ impl RuntimeSessionService {
                 )?;
             }
             if !waiting_for_joined_subagents {
-                self.agent_turn_executions
+                self.agent_turn_executions_mut()
                     .insert(turn_id.to_string(), execution.clone());
             }
             self.append_agent_trace_turn_event(

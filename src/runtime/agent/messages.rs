@@ -55,7 +55,7 @@ impl RuntimeSessionService {
                 .iter()
                 .filter(|result| result.action_type == "send_message")
             {
-                self.agent_turn_contexts
+                self.agent_turn_contexts_mut()
                     .get_mut(&turn.turn_id)
                     .ok_or_else(|| {
                         MezError::invalid_state("running agent turn context is unavailable")

@@ -66,12 +66,12 @@ fn runtime_attached_input_submits_visible_agent_prompt_non_modally() {
         "{pane_text}"
     );
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == "turn-1")
         .unwrap();
-    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
     assert_eq!(turn.state, AgentTurnState::Running);
     assert!(
         context
@@ -142,7 +142,7 @@ fn runtime_agent_prompt_preserves_large_split_paste_beyond_visible_area() {
         .join("\n");
     assert!(pane_text.contains("user> prefix [Pasted"), "{pane_text}");
     assert!(!pane_text.contains("line-79"), "{pane_text}");
-    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
     assert!(
         context
             .blocks

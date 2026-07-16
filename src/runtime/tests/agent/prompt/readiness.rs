@@ -256,7 +256,7 @@ fn runtime_provider_execution_completes_running_prompt_turn() {
     );
     assert_eq!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == "turn-1")

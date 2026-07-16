@@ -18,14 +18,14 @@ impl RuntimeSessionService {
         execution: &AgentTurnExecution,
     ) -> Result<usize> {
         let conversation_id = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(&turn.pane_id)
             .map(|session| session.session_id.clone());
         if let Some(conversation_id) = conversation_id.as_deref() {
             self.record_runtime_agent_patch_results(conversation_id, execution);
         }
         if self
-            .agent_shell_store
+            .agent_shell_store()
             .get(&turn.pane_id)
             .is_some_and(|session| session.ephemeral)
         {
@@ -76,7 +76,7 @@ impl RuntimeSessionService {
             store.append_many(&entries)?;
             entries
         };
-        self.agent_shell_store
+        self.agent_shell_store_mut()
             .record_transcript_entries(&turn.pane_id, entries.len())?;
         self.record_pane_transcript_ref(
             &turn.pane_id,
@@ -155,7 +155,7 @@ impl RuntimeSessionService {
         execution: &AgentTurnExecution,
     ) {
         let Some(conversation_id) = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(&turn.pane_id)
             .map(|session| session.session_id.clone())
         else {
@@ -319,7 +319,7 @@ impl RuntimeSessionService {
             return;
         }
         let conversation_id = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .map(|session| session.session_id.clone())
             .unwrap_or_else(|| format!("pane:{pane_id}"));
@@ -379,7 +379,7 @@ impl RuntimeSessionService {
             return;
         }
         let conversation_id = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .map(|session| session.session_id.clone())
             .unwrap_or_else(|| format!("pane:{pane_id}"));
@@ -423,7 +423,7 @@ impl RuntimeSessionService {
             return;
         }
         let conversation_id = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .map(|session| session.session_id.clone())
             .unwrap_or_else(|| format!("pane:{pane_id}"));

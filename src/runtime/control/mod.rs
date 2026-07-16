@@ -117,7 +117,7 @@ impl RuntimeSessionService {
             ),
         });
         if let Some(lineage_id) = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .map(|session| session.prompt_cache_lineage_id.clone())
             .filter(|lineage_id| !lineage_id.trim().is_empty())
@@ -146,7 +146,7 @@ impl RuntimeSessionService {
             blocks.push(readiness_hint);
         }
 
-        if let Some(session) = self.agent_shell_store.get(pane_id)
+        if let Some(session) = self.agent_shell_store().get(pane_id)
             && let Some(store) = self.agent_transcript_store.as_ref()
         {
             let transcript_conversation_id = session
@@ -382,7 +382,7 @@ impl RuntimeSessionService {
     /// # Parameters
     /// - `pane_id`: The pane whose active agent conversation is being prepared.
     fn model_context_memory_records_for_pane(&self, pane_id: &str) -> Vec<MemoryRecord> {
-        let Some(session) = self.agent_shell_store.get(pane_id) else {
+        let Some(session) = self.agent_shell_store().get(pane_id) else {
             return Vec::new();
         };
         let compact_memory_id = format!("compact-{}", session.session_id);
@@ -424,7 +424,7 @@ impl RuntimeSessionService {
         turn_id: &str,
     ) -> Result<bool> {
         let Some(turn) = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)
@@ -435,7 +435,7 @@ impl RuntimeSessionService {
         if turn.state != AgentTurnState::Running {
             return Ok(false);
         }
-        let Some(session) = self.agent_shell_store.get(&turn.pane_id).cloned() else {
+        let Some(session) = self.agent_shell_store().get(&turn.pane_id).cloned() else {
             return Ok(false);
         };
         if session.running_turn_id.as_deref() != Some(turn_id) {
@@ -489,7 +489,7 @@ impl RuntimeSessionService {
         )?;
         let refreshed_blocks = refreshed_context.blocks;
 
-        let Some(existing_context) = self.agent_turn_contexts.get(turn_id).cloned() else {
+        let Some(existing_context) = self.agent_turn_contexts().get(turn_id).cloned() else {
             return Ok(false);
         };
         let mut blocks = existing_context.blocks;
@@ -504,7 +504,7 @@ impl RuntimeSessionService {
             blocks.insert(insert_at + offset, block);
         }
         let refreshed_block_count = blocks.len();
-        self.agent_turn_contexts
+        self.agent_turn_contexts_mut()
             .insert(turn_id.to_string(), AgentContext::new(blocks)?);
         self.append_agent_trace_turn_event(
             &turn.pane_id,
@@ -598,13 +598,14 @@ impl RuntimeSessionService {
             }
             if request.method == "agent/list" {
                 let model_profiles_by_pane = self.runtime_agent_model_profiles_by_pane();
+                let (agent_shell_store, agent_turn_ledger) = self.agent.control_turn_state();
                 return dispatch_control_request_for_client_with_agent_state_and_model_profiles(
                     body,
                     &mut self.session,
                     primary_client_id,
                     None,
-                    &mut self.agent_shell_store,
-                    &self.agent_turn_ledger,
+                    agent_shell_store,
+                    agent_turn_ledger,
                     Some(&model_profiles_by_pane),
                 );
             }
@@ -619,13 +620,14 @@ impl RuntimeSessionService {
                 );
             }
             if agent_state_control_method(&request.method) {
+                let (agent_shell_store, agent_turn_ledger) = self.agent.control_turn_state();
                 return dispatch_control_request_for_client_with_agent_state(
                     body,
                     &mut self.session,
                     primary_client_id,
                     None,
-                    &mut self.agent_shell_store,
-                    &self.agent_turn_ledger,
+                    agent_shell_store,
+                    agent_turn_ledger,
                 );
             }
             if request.method.starts_with("config/") {
@@ -1029,13 +1031,14 @@ impl RuntimeSessionService {
             if agent_state_control_method(&request.method) {
                 if request.method == "agent/list" {
                     let model_profiles_by_pane = self.runtime_agent_model_profiles_by_pane();
+                    let (agent_shell_store, agent_turn_ledger) = self.agent.control_turn_state();
                     return dispatch_control_request_for_client_with_agent_state_and_model_profiles(
                         body,
                         &mut self.session,
                         &caller_client_id,
                         None,
-                        &mut self.agent_shell_store,
-                        &self.agent_turn_ledger,
+                        agent_shell_store,
+                        agent_turn_ledger,
                         Some(&model_profiles_by_pane),
                     );
                 }
@@ -1049,13 +1052,14 @@ impl RuntimeSessionService {
                         &caller_client_id,
                     );
                 }
+                let (agent_shell_store, agent_turn_ledger) = self.agent.control_turn_state();
                 return dispatch_control_request_for_client_with_agent_state(
                     body,
                     &mut self.session,
                     &caller_client_id,
                     None,
-                    &mut self.agent_shell_store,
-                    &self.agent_turn_ledger,
+                    agent_shell_store,
+                    agent_turn_ledger,
                 );
             }
             if request.method.starts_with("config/") {

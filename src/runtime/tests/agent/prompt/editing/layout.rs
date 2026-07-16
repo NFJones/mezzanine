@@ -148,7 +148,7 @@ fn runtime_config_reload_applies_agent_prompt_and_personality_profiles() {
         .start_agent_prompt_turn("%1", "summarize the change")
         .unwrap();
     let context = service
-        .agent_turn_contexts
+        .agent_turn_contexts()
         .get(&started.turn_id)
         .expect("started turn should retain provider context");
     assert!(context.blocks.iter().any(|block| {
@@ -240,7 +240,7 @@ fn runtime_prompt_submission_starts_ready_work_behind_blocked_queue_head() {
     );
     assert_eq!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == "turn-2")
@@ -249,7 +249,7 @@ fn runtime_prompt_submission_starts_ready_work_behind_blocked_queue_head() {
     );
     assert_eq!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == "turn-3")

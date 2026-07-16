@@ -48,7 +48,7 @@ impl RuntimeSessionService {
     ) -> Result<AgentTurnExecution> {
         self.require_live()?;
         let turn = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)
@@ -73,14 +73,14 @@ impl RuntimeSessionService {
         self.refresh_agent_turn_project_guidance_context(&turn)?;
         self.drain_pending_agent_turn_steering_context(&turn)?;
         let context = self
-            .agent_turn_contexts
+            .agent_turn_contexts()
             .get(turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let mcp_summary = self.mcp_registry.prompt_summary();
         let context = append_mcp_context(context, &mcp_summary)?;
         let available_mcp_tools = invoked_mcp_tools_for_context(&context, &mcp_summary);
-        self.agent_turn_contexts
+        self.agent_turn_contexts_mut()
             .insert(turn_id.to_string(), context.clone());
         let mut routing_token_usage_by_model = std::collections::BTreeMap::new();
         if let Some(auto_sizing) =
@@ -269,14 +269,15 @@ impl RuntimeSessionService {
                             &error,
                             context_limit_recovery_attempts,
                         )? {
-                            provider_context =
-                                self.agent_turn_contexts.get(turn_id).cloned().ok_or_else(
-                                    || {
-                                        MezError::invalid_state(
-                                            "runtime agent turn context is unavailable",
-                                        )
-                                    },
-                                )?;
+                            provider_context = self
+                                .agent_turn_contexts()
+                                .get(turn_id)
+                                .cloned()
+                                .ok_or_else(|| {
+                                    MezError::invalid_state(
+                                        "runtime agent turn context is unavailable",
+                                    )
+                                })?;
                             self.append_agent_trace_turn_event(
                                 &turn.pane_id,
                                 &turn.turn_id,
@@ -304,14 +305,15 @@ impl RuntimeSessionService {
                             &error,
                             output_limit_recovery_attempts,
                         )? {
-                            provider_context =
-                                self.agent_turn_contexts.get(turn_id).cloned().ok_or_else(
-                                    || {
-                                        MezError::invalid_state(
-                                            "runtime agent turn context is unavailable",
-                                        )
-                                    },
-                                )?;
+                            provider_context = self
+                                .agent_turn_contexts()
+                                .get(turn_id)
+                                .cloned()
+                                .ok_or_else(|| {
+                                    MezError::invalid_state(
+                                        "runtime agent turn context is unavailable",
+                                    )
+                                })?;
                             model_profile = self
                                 .agent
                                 .agent_turn_model_profiles
@@ -366,7 +368,7 @@ impl RuntimeSessionService {
     ) -> Result<AgentTurnExecution> {
         self.require_live()?;
         let turn = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)
@@ -389,14 +391,14 @@ impl RuntimeSessionService {
             );
         }
         let context = self
-            .agent_turn_contexts
+            .agent_turn_contexts()
             .get(turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let mcp_summary = self.mcp_registry.prompt_summary();
         let context = append_mcp_context(context, &mcp_summary)?;
         let available_mcp_tools = invoked_mcp_tools_for_context(&context, &mcp_summary);
-        self.agent_turn_contexts
+        self.agent_turn_contexts_mut()
             .insert(turn_id.to_string(), context.clone());
         let mut routing_token_usage_by_model = std::collections::BTreeMap::new();
         if let Some(auto_sizing) =
@@ -551,14 +553,15 @@ impl RuntimeSessionService {
                             &error,
                             context_limit_recovery_attempts,
                         )? {
-                            provider_context =
-                                self.agent_turn_contexts.get(turn_id).cloned().ok_or_else(
-                                    || {
-                                        MezError::invalid_state(
-                                            "runtime agent turn context is unavailable",
-                                        )
-                                    },
-                                )?;
+                            provider_context = self
+                                .agent_turn_contexts()
+                                .get(turn_id)
+                                .cloned()
+                                .ok_or_else(|| {
+                                    MezError::invalid_state(
+                                        "runtime agent turn context is unavailable",
+                                    )
+                                })?;
                             self.append_agent_trace_turn_event(
                                 &turn.pane_id,
                                 &turn.turn_id,
@@ -586,14 +589,15 @@ impl RuntimeSessionService {
                             &error,
                             output_limit_recovery_attempts,
                         )? {
-                            provider_context =
-                                self.agent_turn_contexts.get(turn_id).cloned().ok_or_else(
-                                    || {
-                                        MezError::invalid_state(
-                                            "runtime agent turn context is unavailable",
-                                        )
-                                    },
-                                )?;
+                            provider_context = self
+                                .agent_turn_contexts()
+                                .get(turn_id)
+                                .cloned()
+                                .ok_or_else(|| {
+                                    MezError::invalid_state(
+                                        "runtime agent turn context is unavailable",
+                                    )
+                                })?;
                             model_profile = self
                                 .agent
                                 .agent_turn_model_profiles

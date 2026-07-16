@@ -268,7 +268,7 @@ impl RuntimeSessionService {
     ) -> Result<Option<RuntimeAgentProviderDispatch>> {
         self.require_live()?;
         let Some(turn) = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)
@@ -283,7 +283,7 @@ impl RuntimeSessionService {
             ));
         }
         if self
-            .agent_turn_executions
+            .agent_turn_executions()
             .get(turn_id)
             .is_some_and(|execution| self.execution_has_pending_shell_dispatch(turn_id, execution))
         {
@@ -330,7 +330,7 @@ impl RuntimeSessionService {
             .insert(turn_id.to_string(), model_profile.clone());
         let (context, available_mcp_tools) = if macro_judge_step_index.is_some() {
             (
-                self.agent_turn_contexts
+                self.agent_turn_contexts()
                     .get(turn_id)
                     .cloned()
                     .ok_or_else(|| {
@@ -342,7 +342,7 @@ impl RuntimeSessionService {
             self.refresh_agent_turn_project_guidance_context(&turn)?;
             self.drain_pending_agent_turn_steering_context(&turn)?;
             let context = self
-                .agent_turn_contexts
+                .agent_turn_contexts()
                 .get(turn_id)
                 .cloned()
                 .ok_or_else(|| {
@@ -351,7 +351,7 @@ impl RuntimeSessionService {
             let mcp_summary = self.mcp_registry.prompt_summary();
             let context = append_mcp_context(context, &mcp_summary)?;
             let available_mcp_tools = invoked_mcp_tools_for_context(&context, &mcp_summary);
-            self.agent_turn_contexts
+            self.agent_turn_contexts_mut()
                 .insert(turn_id.to_string(), context.clone());
             (context, available_mcp_tools)
         };
@@ -576,7 +576,7 @@ impl RuntimeSessionService {
         error: &MezError,
     ) -> Result<()> {
         let Some(turn) = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)
@@ -648,7 +648,7 @@ impl RuntimeSessionService {
         delay_ms: u64,
     ) -> Result<bool> {
         let Some(turn) = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)
@@ -731,7 +731,7 @@ impl RuntimeSessionService {
         attempt: u64,
     ) -> Result<bool> {
         let Some(turn) = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)
@@ -805,7 +805,7 @@ impl RuntimeSessionService {
         turn_id: &str,
     ) -> Result<bool> {
         let Some(turn) = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)
@@ -859,7 +859,7 @@ impl RuntimeSessionService {
         provider_raw_text: Option<&str>,
     ) -> Result<bool> {
         let Some(turn) = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)
@@ -988,7 +988,7 @@ impl RuntimeSessionService {
             return Ok(false);
         }
         let Some(turn) = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)
@@ -1039,7 +1039,7 @@ impl RuntimeSessionService {
     /// polls this predicate while waiting so cancelled turns do not keep
     /// holding memory or network work after the user has stopped them.
     pub fn agent_turn_is_running(&self, turn_id: &str) -> bool {
-        self.agent_turn_ledger
+        self.agent_turn_ledger()
             .turns()
             .iter()
             .any(|turn| turn.turn_id == turn_id && turn.state == AgentTurnState::Running)
@@ -1058,7 +1058,7 @@ impl RuntimeSessionService {
                 .iter()
                 .filter(|turn_id| {
                     let turn_id = turn_id.as_str();
-                    !self.agent_turn_ledger.turns().iter().any(|turn| {
+                    !self.agent_turn_ledger().turns().iter().any(|turn| {
                         turn.turn_id == turn_id && turn.state == AgentTurnState::Running
                     }) || !self.agent.agent_turn_model_profiles.contains_key(turn_id)
                 })
@@ -1104,7 +1104,7 @@ impl RuntimeSessionService {
         let mut executions = Vec::with_capacity(task_ids.len());
         for turn_id in task_ids {
             if self
-                .agent_turn_executions
+                .agent_turn_executions()
                 .get(&turn_id)
                 .is_some_and(|execution| {
                     self.execution_has_pending_shell_dispatch(&turn_id, execution)
@@ -1123,7 +1123,7 @@ impl RuntimeSessionService {
             };
             self.agent.pending_agent_provider_tasks.remove(&turn_id);
             if let Some(turn) = self
-                .agent_turn_ledger
+                .agent_turn_ledger()
                 .turns()
                 .iter()
                 .find(|turn| turn.turn_id == turn_id)
@@ -1157,7 +1157,7 @@ impl RuntimeSessionService {
         turn_id: &str,
     ) -> Option<RuntimeAgentProviderTask> {
         let turn = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id && turn.state == AgentTurnState::Running)?;

@@ -130,7 +130,7 @@ impl RuntimeSessionService {
         let resume_directory = runtime_resume_directory_from_summary(&summary)
             .or_else(|| runtime_resume_directory_from_entries(&entries));
         let (session_id, transcript_entries, visibility) = {
-            let session = self.agent_shell_store.bind_conversation(
+            let session = self.agent_shell_store_mut().bind_conversation(
                 pane_id,
                 &conversation_id,
                 summary.entries as u64,
@@ -524,7 +524,7 @@ impl RuntimeSessionService {
         let invocation = parse_slash_command(input)?
             .ok_or_else(|| MezError::invalid_args("fork command must be a slash command"))?;
         let source = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .ok_or_else(|| {
                 MezError::new(
@@ -553,7 +553,7 @@ impl RuntimeSessionService {
         let prompt_seed =
             Self::runtime_agent_fork_prompt_seed(&store.prompt_history(&source)?, input);
         let source_lineage = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .map(|session| session.prompt_cache_lineage_id.clone());
         let target = invocation
@@ -571,14 +571,17 @@ impl RuntimeSessionService {
             None,
             source_start_directory.as_deref(),
         )?;
-        self.agent_shell_store.enter_or_resume(&started.pane_id)?;
+        self.agent_shell_store_mut()
+            .enter_or_resume(&started.pane_id)?;
         let (session_id, transcript_entries, visibility) = {
-            let session = self.agent_shell_store.bind_conversation_with_lineage(
-                &started.pane_id,
-                &summary.conversation_id,
-                summary.entries as u64,
-                source_lineage,
-            )?;
+            let session = self
+                .agent_shell_store_mut()
+                .bind_conversation_with_lineage(
+                    &started.pane_id,
+                    &summary.conversation_id,
+                    summary.entries as u64,
+                    source_lineage,
+                )?;
             (
                 session.session_id.clone(),
                 session.transcript_entries,

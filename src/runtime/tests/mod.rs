@@ -939,7 +939,7 @@ fn poll_until_turn_state(
     let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
         let state = service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)

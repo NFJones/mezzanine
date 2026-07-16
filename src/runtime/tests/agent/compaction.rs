@@ -80,7 +80,7 @@ fn runtime_agent_prompt_displays_large_paste_as_compact_block() {
         "{pane_text}"
     );
     assert!(!pane_text.contains(&payload), "{pane_text}");
-    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
     assert!(
         context
             .blocks
@@ -144,7 +144,7 @@ fn runtime_agent_prompt_displays_over_height_paste_as_compact_block() {
     assert!(pane_text.contains("user> prefix [Pasted "), "{pane_text}");
     assert!(pane_text.contains(" suffix"), "{pane_text}");
     assert!(!pane_text.contains("tiny-line-7"), "{pane_text}");
-    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
     assert!(
         context
             .blocks
@@ -258,7 +258,7 @@ context_window_tokens = 1024
         !response.contains(r#""kind":"requires_runtime""#),
         "{response}"
     );
-    assert_eq!(service.agent_turn_ledger.turns().len(), 1);
+    assert_eq!(service.agent_turn_ledger().turns().len(), 1);
     assert_eq!(
         transcript_store.prompt_history("as-preflight").unwrap(),
         vec!["continue with the next item".to_string()]
@@ -320,7 +320,7 @@ context_window_tokens = 40000
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     service
-        .agent_turn_contexts
+        .agent_turn_contexts_mut()
         .get_mut("turn-1")
         .unwrap()
         .blocks
@@ -438,7 +438,7 @@ context_window_tokens = 40000
         .saturating_div(4)
         .max(1);
     service
-        .agent_turn_contexts
+        .agent_turn_contexts_mut()
         .get_mut("turn-1")
         .unwrap()
         .blocks = vec![
@@ -467,7 +467,7 @@ context_window_tokens = 40000
         },
     ];
     let before_context = service
-        .agent_turn_contexts
+        .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
         .blocks
@@ -493,7 +493,7 @@ context_window_tokens = 40000
 
     assert!(recovered);
     let after_context = service
-        .agent_turn_contexts
+        .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
         .blocks
@@ -581,7 +581,7 @@ context_window_tokens = 40000
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     service
-        .agent_turn_contexts
+        .agent_turn_contexts_mut()
         .get_mut("turn-1")
         .unwrap()
         .blocks = vec![
@@ -622,7 +622,7 @@ context_window_tokens = 40000
 
     assert!(recovered);
     let after_context = service
-        .agent_turn_contexts
+        .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
         .blocks
@@ -695,7 +695,7 @@ max_output_tokens = 4096
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     service
-        .agent_turn_contexts
+        .agent_turn_contexts_mut()
         .get_mut("turn-1")
         .unwrap()
         .blocks
@@ -857,7 +857,7 @@ context_window_tokens = 128000
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     service
-        .agent_turn_contexts
+        .agent_turn_contexts_mut()
         .get_mut("turn-1")
         .unwrap()
         .blocks
@@ -906,7 +906,7 @@ context_window_tokens = 128000
         3
     );
     let stored_context = service
-        .agent_turn_contexts
+        .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
         .blocks
@@ -1024,7 +1024,7 @@ context_window_tokens = 100000
         .unwrap();
     service.set_agent_turn_model_profile("turn-1", default_profile);
     service
-        .agent_turn_contexts
+        .agent_turn_contexts_mut()
         .get_mut("turn-1")
         .unwrap()
         .blocks
@@ -1054,7 +1054,7 @@ context_window_tokens = 100000
 
     assert!(recovered);
     let stored_context = service
-        .agent_turn_contexts
+        .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
         .blocks
@@ -1063,7 +1063,7 @@ context_window_tokens = 100000
         .collect::<Vec<_>>()
         .join("\n");
     assert!(stored_context.contains("[context compacted]"));
-    let stored_blocks = &service.agent_turn_contexts.get("turn-1").unwrap().blocks;
+    let stored_blocks = &service.agent_turn_contexts().get("turn-1").unwrap().blocks;
     assert!(stored_blocks.iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block.label == "synthetic routing action result"
@@ -1214,7 +1214,7 @@ context_window_tokens = 5000
         &primary,
     );
     assert!(prompt.contains(r#""state":"running""#), "{prompt}");
-    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
     let compaction_notice = context
         .blocks
         .iter()

@@ -25,7 +25,7 @@ pub(super) fn runtime_list_panes_display(service: &RuntimeSessionService) -> Res
                 .map(|pid| pid.to_string())
                 .unwrap_or_else(|| "none".to_string());
             let agent_id = service
-                .agent_shell_store
+                .agent_shell_store()
                 .get(pane.id.as_str())
                 .map(|_| format!("agent-{}", pane.id))
                 .unwrap_or_else(|| "none".to_string());

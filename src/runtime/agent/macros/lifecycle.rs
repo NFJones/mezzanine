@@ -234,7 +234,7 @@ impl RuntimeSessionService {
         child_agent_id: &str,
     ) -> Result<()> {
         let parent_turn = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == started.turn_id)
@@ -271,7 +271,7 @@ impl RuntimeSessionService {
             actions: vec![action],
             final_turn: false,
         };
-        self.agent_turn_executions.insert(
+        self.agent_turn_executions_mut().insert(
             parent_turn.turn_id.clone(),
             AgentTurnExecution {
                 request: macro_step_model_request(&parent_turn),
@@ -298,7 +298,7 @@ impl RuntimeSessionService {
         self.agent
             .claimed_agent_provider_tasks
             .remove(&parent_turn.turn_id);
-        self.agent_turn_ledger
+        self.agent_turn_ledger_mut()
             .finish_turn(&parent_turn.turn_id, AgentTurnState::Blocked)?;
         self.append_agent_trace_turn_transition(
             &parent_turn,

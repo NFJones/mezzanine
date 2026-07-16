@@ -69,7 +69,7 @@ fn runtime_agent_shell_unknown_macro_prompt_reports_list_macros_guidance() {
         "{response}"
     );
     assert!(response.contains("/list-macros"), "{response}");
-    assert!(service.agent_turn_ledger.turns().is_empty());
+    assert!(service.agent_turn_ledger().turns().is_empty());
 }
 
 /// Verifies a known `#macro` prompt starts runtime orchestration instead of
@@ -148,7 +148,7 @@ fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
     assert_eq!(completion.child_agent_id, *child_agent_id);
     assert!(!service.has_joined_subagent_dependency(loop_turn_id));
     let parent_turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.agent_id == "agent-%1")
@@ -179,7 +179,7 @@ fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
         "Summarize release blockers."
     );
     let orchestration_context = service
-        .agent_turn_contexts
+        .agent_turn_contexts()
         .values()
         .map(|context| {
             context
@@ -254,14 +254,14 @@ fn runtime_agent_macro_judge_dispatches_next_step_after_child_result() {
         .unwrap();
     assert!(response.contains(r#""kind":"turn_started""#), "{response}");
     let parent_turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.agent_id == "agent-%1")
         .cloned()
         .expect("parent macro orchestration turn should exist");
     let first_child_turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.cooperation_mode.as_deref() == Some("macro-step"))
@@ -269,7 +269,7 @@ fn runtime_agent_macro_judge_dispatches_next_step_after_child_result() {
         .expect("first runtime-owned macro step should create a child turn");
 
     service
-        .agent_turn_ledger
+        .agent_turn_ledger_mut()
         .finish_turn(&first_child_turn.turn_id, AgentTurnState::Completed)
         .unwrap();
     service
@@ -314,7 +314,7 @@ fn runtime_agent_macro_judge_dispatches_next_step_after_child_result() {
         Some("Summarize release blockers.")
     );
     let second_child_turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| {
@@ -380,14 +380,14 @@ fn runtime_agent_macro_judge_retries_current_step_after_child_result() {
         .unwrap();
     assert!(response.contains(r#""kind":"turn_started""#), "{response}");
     let parent_turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.agent_id == "agent-%1")
         .cloned()
         .expect("parent macro orchestration turn should exist");
     let first_child_turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.cooperation_mode.as_deref() == Some("macro-step"))
@@ -395,7 +395,7 @@ fn runtime_agent_macro_judge_retries_current_step_after_child_result() {
         .expect("first runtime-owned macro step should create a child turn");
 
     service
-        .agent_turn_ledger
+        .agent_turn_ledger_mut()
         .finish_turn(&first_child_turn.turn_id, AgentTurnState::Completed)
         .unwrap();
     service
@@ -439,7 +439,7 @@ fn runtime_agent_macro_judge_retries_current_step_after_child_result() {
     assert!(macro_run.steps[0].judgment.is_none());
     assert!(macro_run.steps[1].submitted_prompt.is_none());
     let retry_child_turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| {
@@ -501,14 +501,14 @@ fn runtime_agent_macro_judge_stop_failure_closes_successful_child_subagent() {
         .unwrap();
     assert!(response.contains(r#""kind":"turn_started""#), "{response}");
     let parent_turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.agent_id == "agent-%1")
         .cloned()
         .expect("parent macro orchestration turn should exist");
     let first_child_turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.cooperation_mode.as_deref() == Some("macro-step"))
@@ -518,7 +518,7 @@ fn runtime_agent_macro_judge_stop_failure_closes_successful_child_subagent() {
     let child_pane_id = first_child_turn.pane_id.clone();
 
     service
-        .agent_turn_ledger
+        .agent_turn_ledger_mut()
         .finish_turn(&first_child_turn.turn_id, AgentTurnState::Completed)
         .unwrap();
     service
@@ -552,7 +552,7 @@ fn runtime_agent_macro_judge_stop_failure_closes_successful_child_subagent() {
 
     assert_eq!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == parent_turn.turn_id)
@@ -624,14 +624,14 @@ fn runtime_agent_macro_judge_finish_success_closes_child_subagent_and_completes_
         .unwrap();
     assert!(response.contains(r#""kind":"turn_started""#), "{response}");
     let parent_turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.agent_id == "agent-%1")
         .cloned()
         .expect("parent macro orchestration turn should exist");
     let child_turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.cooperation_mode.as_deref() == Some("macro-step"))
@@ -641,7 +641,7 @@ fn runtime_agent_macro_judge_finish_success_closes_child_subagent_and_completes_
     let child_pane_id = child_turn.pane_id.clone();
 
     service
-        .agent_turn_ledger
+        .agent_turn_ledger_mut()
         .finish_turn(&child_turn.turn_id, AgentTurnState::Completed)
         .unwrap();
     service
@@ -675,7 +675,7 @@ fn runtime_agent_macro_judge_finish_success_closes_child_subagent_and_completes_
 
     assert_eq!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == parent_turn.turn_id)
@@ -751,7 +751,7 @@ fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
         .start_agent_prompt_turn(child_pane.as_str(), "macro step")
         .unwrap();
     let parent_turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == parent.turn_id)
@@ -766,7 +766,7 @@ fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
             payload: "step one".to_string(),
         },
     };
-    service.agent_turn_executions.insert(
+    service.agent_turn_executions_mut().insert(
         parent.turn_id.clone(),
         mez_agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&parent.turn_id, &parent.agent_id),
@@ -816,12 +816,12 @@ fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
         .complete(&parent.turn_id)
         .unwrap();
     service
-        .agent_turn_ledger
+        .agent_turn_ledger_mut()
         .finish_turn(&parent.turn_id, AgentTurnState::Blocked)
         .unwrap();
 
     let child_record = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == child.turn_id)
@@ -833,7 +833,10 @@ fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
 
     assert!(!service.has_joined_subagent_dependency(&child.turn_id));
     assert!(!service.agent_provider_task_is_pending(&parent.turn_id));
-    let execution = service.agent_turn_executions.get(&parent.turn_id).unwrap();
+    let execution = service
+        .agent_turn_executions()
+        .get(&parent.turn_id)
+        .unwrap();
     assert_eq!(execution.action_results[0].status, ActionStatus::Failed);
     assert_eq!(execution.terminal_state, AgentTurnState::Failed);
     let structured = execution.action_results[0]

@@ -64,7 +64,7 @@ impl RuntimeSessionService {
             .pane_current_working_directory(&turn.pane_id)
             .map(|path| path.to_string_lossy().into_owned());
         let context = self
-            .agent_turn_contexts
+            .agent_turn_contexts_mut()
             .get_mut(&turn.turn_id)
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let mut aggregated_loop_guard_codes = BTreeSet::new();
@@ -228,7 +228,7 @@ impl RuntimeSessionService {
         result: &ActionResult,
     ) -> Result<()> {
         let context = self
-            .agent_turn_contexts
+            .agent_turn_contexts_mut()
             .get_mut(turn_id)
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let label = format!("action result {}", result.action_id);

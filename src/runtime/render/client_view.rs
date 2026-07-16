@@ -595,7 +595,7 @@ impl RuntimeSessionService {
         if width == 0 || body_rows == 0 {
             return 0;
         }
-        let Some(agent_session) = self.agent_shell_store.get(pane_id) else {
+        let Some(agent_session) = self.agent_shell_store().get(pane_id) else {
             return 0;
         };
         if !matches!(agent_session.visibility, AgentShellVisibility::Visible) {
@@ -646,12 +646,12 @@ impl RuntimeSessionService {
             ));
         }
         let running_turn_id = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)?
             .running_turn_id
             .as_deref()?;
         let turn = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == running_turn_id)?;
@@ -1014,13 +1014,13 @@ impl RuntimeSessionService {
             return true;
         }
         let Some(running_turn_id) = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .and_then(|session| session.running_turn_id.as_deref())
         else {
             return false;
         };
-        self.agent_turn_ledger
+        self.agent_turn_ledger()
             .turns()
             .iter()
             .any(|turn| turn.turn_id == running_turn_id)
@@ -1031,7 +1031,7 @@ impl RuntimeSessionService {
         if self.agent_is_compacting(pane_id) || self.agent_is_remembering(pane_id) {
             return true;
         }
-        self.agent_turn_ledger
+        self.agent_turn_ledger()
             .turns()
             .iter()
             .rev()
@@ -1182,7 +1182,7 @@ impl RuntimeSessionService {
                 .map(|pane| pane.id.to_string())
                 .collect::<Vec<_>>();
             let active_count = self
-                .agent_turn_ledger
+                .agent_turn_ledger()
                 .turns()
                 .iter()
                 .filter(|turn| {
@@ -1202,12 +1202,12 @@ impl RuntimeSessionService {
             for pane in window.panes() {
                 let pane_id = pane.id.to_string();
                 let latest_turn = self
-                    .agent_turn_ledger
+                    .agent_turn_ledger()
                     .turns()
                     .iter()
                     .rev()
                     .find(|turn| turn.pane_id == pane_id);
-                let agent_session = self.agent_shell_store.get(&pane_id);
+                let agent_session = self.agent_shell_store().get(&pane_id);
                 let mode = if self
                     .presentation
                     .copy
@@ -1418,7 +1418,7 @@ impl RuntimeSessionService {
             return "waiting";
         }
         if self
-            .agent_turn_executions
+            .agent_turn_executions()
             .get(&turn.turn_id)
             .is_some_and(|execution| {
                 self.execution_has_pending_shell_dispatch(&turn.turn_id, execution)
@@ -1439,7 +1439,7 @@ impl RuntimeSessionService {
         if !self.agent_routing_enabled_for_pane(&turn.pane_id) {
             return false;
         }
-        if self.agent_turn_executions.contains_key(&turn.turn_id) {
+        if self.agent_turn_executions().contains_key(&turn.turn_id) {
             return false;
         }
         if !self.agent_provider_task_is_owned(&turn.turn_id) {

@@ -526,7 +526,7 @@ fn runtime_project_trust_decision_applies_and_removes_project_overlays() {
         blocked_prompt.contains("project trust decision pending"),
         "{blocked_prompt}"
     );
-    assert!(service.agent_turn_ledger.turns().is_empty());
+    assert!(service.agent_turn_ledger().turns().is_empty());
 
     let trust = service.dispatch_runtime_control_body(
         &format!(

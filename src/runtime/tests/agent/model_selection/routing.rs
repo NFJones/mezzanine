@@ -133,7 +133,7 @@ fn runtime_provider_failure_reports_only_safe_model_fallbacks() {
     assert!(start.contains(r#""state":"running""#), "{start}");
     assert_eq!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == "turn-1")
@@ -421,7 +421,7 @@ reasoning_profile = "high"
         "{pane_context:?}"
     );
     service
-        .agent_turn_contexts
+        .agent_turn_contexts_mut()
         .get_mut("turn-1")
         .unwrap()
         .blocks
@@ -678,7 +678,7 @@ reasoning_profile = "low"
     );
     assert_eq!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == "turn-1")
@@ -773,7 +773,7 @@ fn runtime_shell_pane_not_ready_queues_model_self_correction() {
         .start_agent_prompt_turn("%1", "inspect the pager styling")
         .unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -846,7 +846,7 @@ fn runtime_shell_pane_not_ready_queues_model_self_correction() {
 
     assert!(queued);
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
-    let context = service.agent_turn_contexts.get(&turn.turn_id).unwrap();
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     assert!(context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block

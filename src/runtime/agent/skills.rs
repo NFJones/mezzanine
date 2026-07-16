@@ -53,7 +53,7 @@ impl RuntimeSessionService {
     /// skill actions before they become unbounded provider continuations.
     fn runtime_skill_action_context_for_turn(&self, turn_id: &str) -> Result<SkillActionContext> {
         let context = self
-            .agent_turn_contexts
+            .agent_turn_contexts()
             .get(turn_id)
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         Ok(skill_action_context_from_blocks(&context.blocks))
@@ -170,7 +170,7 @@ impl RuntimeSessionService {
                 .iter()
                 .filter(|result| matches!(result.action_type, "request_skills" | "call_skill"))
             {
-                self.agent_turn_contexts
+                self.agent_turn_contexts_mut()
                     .get_mut(&turn.turn_id)
                     .ok_or_else(|| {
                         MezError::invalid_state("running agent turn context is unavailable")

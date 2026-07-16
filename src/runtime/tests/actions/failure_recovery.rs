@@ -32,7 +32,7 @@ fn runtime_action_pressure_context_reaches_provider_continuation() {
     service.record_shell_dispatch_history("turn-1", "sed -n '1,80p' src/runtime/mod.rs");
     assert!(
         !service
-            .agent_turn_contexts
+            .agent_turn_contexts()
             .get("turn-1")
             .unwrap()
             .blocks
@@ -43,7 +43,7 @@ fn runtime_action_pressure_context_reaches_provider_continuation() {
     service.record_shell_dispatch_history("turn-1", "sed -n '80,160p' src/runtime/mod.rs");
     assert!(
         !service
-            .agent_turn_contexts
+            .agent_turn_contexts()
             .get("turn-1")
             .unwrap()
             .blocks
@@ -53,7 +53,7 @@ fn runtime_action_pressure_context_reaches_provider_continuation() {
 
     service.record_shell_dispatch_history("turn-1", "sed -n '160,240p' src/runtime/mod.rs");
     let pressure_block = service
-        .agent_turn_contexts
+        .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
         .blocks
@@ -155,7 +155,7 @@ fn runtime_action_pressure_escalates_through_stages() {
         );
     }
     let medium_block = service
-        .agent_turn_contexts
+        .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
         .blocks
@@ -182,7 +182,7 @@ fn runtime_action_pressure_escalates_through_stages() {
         );
     }
     let strong_block = service
-        .agent_turn_contexts
+        .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
         .blocks
@@ -224,14 +224,14 @@ fn runtime_stale_joined_spawn_result_is_unreachable_progress() {
     service.set_pane_screen("%1".to_string(), screen);
     let parent = service.start_agent_prompt_turn("%1", "parent").unwrap();
     let parent_turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == parent.turn_id)
         .cloned()
         .unwrap();
     let spawn = runtime_spawn_agent_action("spawn-stale", "missing child");
-    service.agent_turn_executions.insert(
+    service.agent_turn_executions_mut().insert(
         parent.turn_id.clone(),
         mez_agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&parent.turn_id, &parent.agent_id),
@@ -282,14 +282,18 @@ fn runtime_stale_joined_spawn_result_is_unreachable_progress() {
     );
     assert_eq!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == parent.turn_id)
             .map(|turn| turn.state),
         Some(AgentTurnState::Failed)
     );
-    assert!(!service.agent_turn_executions.contains_key(&parent.turn_id));
+    assert!(
+        !service
+            .agent_turn_executions()
+            .contains_key(&parent.turn_id)
+    );
 }
 
 /// Verifies unrecovered failures explain when recovery is unavailable because
@@ -315,7 +319,7 @@ fn runtime_unrecovered_failure_with_pending_sibling_explains_blocker() {
         .start_agent_prompt_turn("%1", "patch and inspect")
         .unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -395,7 +399,7 @@ fn runtime_unrecovered_failure_with_pending_sibling_explains_blocker() {
         terminal_state: AgentTurnState::Failed,
     };
     service
-        .agent_turn_executions
+        .agent_turn_executions_mut()
         .insert(turn.turn_id.clone(), execution);
 
     service
@@ -440,7 +444,7 @@ fn runtime_unrecovered_non_correctable_failure_explains_boundary() {
         .start_agent_prompt_turn("%1", "write the file")
         .unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -492,7 +496,7 @@ fn runtime_unrecovered_non_correctable_failure_explains_boundary() {
         terminal_state: AgentTurnState::Failed,
     };
     service
-        .agent_turn_executions
+        .agent_turn_executions_mut()
         .insert(turn.turn_id.clone(), execution);
 
     service
@@ -538,7 +542,7 @@ fn runtime_spawn_agent_action_succeeds_while_primary_is_detached() {
         .start_agent_prompt_turn("%1", "delegate while detached")
         .unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -585,7 +589,7 @@ fn runtime_spawn_limit_denial_queues_model_recovery() {
     assert!(start.contains(r#""state":"running""#), "{start}");
     service.remove_pending_agent_provider_task("turn-1");
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == "turn-1")
@@ -638,7 +642,7 @@ fn runtime_spawn_limit_denial_queues_model_recovery() {
     assert!(queued);
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
     assert!(service.agent_provider_task_is_pending("turn-1"));
-    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
     assert!(context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block

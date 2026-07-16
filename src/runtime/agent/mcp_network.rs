@@ -78,7 +78,7 @@ impl RuntimeSessionService {
                 .iter()
                 .filter(|result| result.action_type == "mcp_call")
             {
-                self.agent_turn_contexts
+                self.agent_turn_contexts_mut()
                     .get_mut(&turn.turn_id)
                     .ok_or_else(|| {
                         MezError::invalid_state("running agent turn context is unavailable")
@@ -163,7 +163,7 @@ impl RuntimeSessionService {
                 .iter()
                 .filter(|result| result.action_type == "mcp_call")
             {
-                self.agent_turn_contexts
+                self.agent_turn_contexts_mut()
                     .get_mut(&turn.turn_id)
                     .ok_or_else(|| {
                         MezError::invalid_state("running agent turn context is unavailable")
@@ -314,7 +314,7 @@ impl RuntimeSessionService {
                 .iter()
                 .filter(|result| matches!(result.action_type, "web_search" | "fetch_url"))
             {
-                self.agent_turn_contexts
+                self.agent_turn_contexts_mut()
                     .get_mut(&turn.turn_id)
                     .ok_or_else(|| {
                         MezError::invalid_state("running agent turn context is unavailable")

@@ -20,7 +20,7 @@ fn runtime_control_agent_shell_state_persists_in_service() {
     );
     assert!(show.contains(r#""visible":true"#), "{show}");
     let conversation_id = service
-        .agent_shell_store
+        .agent_shell_store()
         .get("%1")
         .unwrap()
         .session_id

@@ -101,7 +101,7 @@ impl RuntimeSessionService {
             );
         }
         if self
-            .agent_shell_store
+            .agent_shell_store()
             .get(descriptor.pane_id.as_str())
             .is_some_and(|session| session.visibility == AgentShellVisibility::Visible)
         {

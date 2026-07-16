@@ -131,7 +131,7 @@ fn runtime_agent_context_dump_for_pane(
 ) -> Result<RuntimeAgentContextDumpResult> {
     let pane_id = pane_id.to_string();
     let running_turn_id = service
-        .agent_shell_store
+        .agent_shell_store()
         .get(&pane_id)
         .and_then(|session| session.running_turn_id.as_deref())
         .map(ToOwned::to_owned);
@@ -139,7 +139,7 @@ fn runtime_agent_context_dump_for_pane(
         return runtime_idle_agent_context_dump_for_pane(service, &pane_id)
             .map(RuntimeAgentContextDumpResult::Written);
     };
-    if !service.agent_turn_contexts.contains_key(&turn_id) {
+    if !service.agent_turn_contexts().contains_key(&turn_id) {
         let message = format!("agent context dump: running turn {turn_id} has no stored context");
         return Ok(RuntimeAgentContextDumpResult::NotWritten {
             turn_id: Some(turn_id),
@@ -148,7 +148,7 @@ fn runtime_agent_context_dump_for_pane(
         });
     }
     let Some(turn) = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == turn_id)
@@ -171,7 +171,7 @@ fn runtime_agent_context_dump_for_pane(
     };
     service.refresh_agent_turn_project_guidance_context(&turn)?;
     let context = service
-        .agent_turn_contexts
+        .agent_turn_contexts()
         .get(&turn_id)
         .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
     let mcp_summary = service.mcp_registry.prompt_summary();
@@ -375,7 +375,7 @@ pub(in crate::runtime) fn runtime_write_agent_patches_for_pane(
 ) -> Result<(String, bool)> {
     let target = runtime_agent_export_target(args, "copy-patches", "agent-patches")?;
     let session_id = service
-        .agent_shell_store
+        .agent_shell_store()
         .get(pane_id)
         .map(|session| session.session_id.clone())
         .ok_or_else(|| MezError::invalid_state("agent shell session missing for copy-patches"))?;

@@ -52,7 +52,7 @@ impl RuntimeSessionService {
     ) -> Result<(String, String, AgentShellVisibility)> {
         let pane_id = self.active_pane_id()?;
         let visible = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(&pane_id)
             .is_some_and(|session| session.visibility == AgentShellVisibility::Visible);
         let (conversation_id, visibility) = if visible {
@@ -91,12 +91,12 @@ impl RuntimeSessionService {
             "parent agent shell exited",
         )?;
         let conversation_id = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .map(|session| session.session_id.clone())
             .ok_or_else(|| MezError::invalid_state("agent shell session not found for pane"))?;
         let running_turn_id = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .and_then(|session| session.running_turn_id.clone());
         if running_turn_id.is_some() {
@@ -104,7 +104,7 @@ impl RuntimeSessionService {
                 pane_id,
                 "agent: stopping active turn before exiting agent shell; pane input is blocked until stop completes",
             )?;
-            self.agent_shell_store
+            self.agent_shell_store_mut()
                 .request_hide_pending_task_completion(pane_id)?;
             let stopped = self.stop_agent_turn_for_pane(pane_id)?;
             return Ok(RuntimeAgentShellExit {
@@ -114,7 +114,7 @@ impl RuntimeSessionService {
             });
         }
 
-        let session = self.agent_shell_store.request_exit(pane_id)?;
+        let session = self.agent_shell_store_mut().request_exit(pane_id)?;
         let conversation_id = session.session_id.clone();
         self.advance_pane_shell_prompt_after_agent_exit(pane_id)?;
         self.sync_tracked_pty_sizes()?;
@@ -136,7 +136,7 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Result<String> {
         let conversation_id = self
-            .agent_shell_store
+            .agent_shell_store_mut()
             .enter_or_resume(pane_id)?
             .session_id
             .clone();
@@ -192,7 +192,7 @@ impl RuntimeSessionService {
         }
         let pane_id = self.active_pane_id()?;
         let visible = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(&pane_id)
             .is_some_and(|session| session.visibility == AgentShellVisibility::Visible);
         if !visible {
@@ -237,7 +237,7 @@ impl RuntimeSessionService {
         let mcp_summary = self.mcp_registry.agent_shell_summary();
         let permission_summary = self.permission_policy.agent_shell_summary();
         let outcome = match execute_agent_shell_command_with_context(
-            &mut self.agent_shell_store,
+            self.agent_shell_store_mut(),
             &pane_id,
             input,
             AgentShellRuntimeContext {
@@ -654,7 +654,7 @@ impl RuntimeSessionService {
         }
         if exit_requires_runtime
             && self
-                .agent_shell_store
+                .agent_shell_store()
                 .get(&pane_id)
                 .is_some_and(|session| session.visibility == AgentShellVisibility::Hidden)
         {
@@ -755,7 +755,7 @@ impl RuntimeSessionService {
             }
             let pane_id = self.active_pane_id()?;
             let visible = self
-                .agent_shell_store
+                .agent_shell_store()
                 .get(&pane_id)
                 .is_some_and(|session| session.visibility == AgentShellVisibility::Visible);
             if !visible {
@@ -777,7 +777,7 @@ impl RuntimeSessionService {
         }
         let pane_id = self.active_pane_id()?;
         let visible = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(&pane_id)
             .is_some_and(|session| session.visibility == AgentShellVisibility::Visible);
         if !visible {
@@ -794,7 +794,7 @@ impl RuntimeSessionService {
         let mcp_summary = self.mcp_registry.agent_shell_summary();
         let permission_summary = self.permission_policy.agent_shell_summary();
         let outcome = match execute_agent_shell_command_with_context(
-            &mut self.agent_shell_store,
+            self.agent_shell_store_mut(),
             &pane_id,
             input,
             AgentShellRuntimeContext {
@@ -993,7 +993,7 @@ impl RuntimeSessionService {
             return Ok(false);
         }
         if self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .and_then(|session| session.running_turn_id.as_deref())
             .is_some()
@@ -1063,7 +1063,7 @@ impl RuntimeSessionService {
         let Some(store) = self.agent_transcript_store.clone() else {
             return Ok(());
         };
-        let Some(session) = self.agent_shell_store.get(pane_id) else {
+        let Some(session) = self.agent_shell_store().get(pane_id) else {
             return Ok(());
         };
         if queue_for_adapter {

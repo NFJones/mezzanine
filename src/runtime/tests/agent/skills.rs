@@ -190,7 +190,7 @@ fn runtime_agent_prompt_refreshes_project_overlay_and_project_skills_from_pane_c
         blocked_prompt.contains("project trust decision pending"),
         "{blocked_prompt}"
     );
-    assert!(service.agent_turn_ledger.turns().is_empty());
+    assert!(service.agent_turn_ledger().turns().is_empty());
     assert_eq!(service.terminal_history_limit(), 3);
     assert!(
         service

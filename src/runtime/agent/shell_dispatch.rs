@@ -247,7 +247,7 @@ impl RuntimeSessionService {
             .agent_turn_shell_dispatch_history
             .get(turn_id)
             .and_then(|history| action_pressure_phase(history, threshold));
-        let Some(context) = self.agent_turn_contexts.get_mut(turn_id) else {
+        let Some(context) = self.agent_turn_contexts_mut().get_mut(turn_id) else {
             return;
         };
         context.blocks.retain(|block| {
@@ -292,14 +292,14 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: &str,
     ) -> Result<Option<AgentTurnExecution>> {
-        let Some(mut execution) = self.agent_turn_executions.get(turn_id).cloned() else {
+        let Some(mut execution) = self.agent_turn_executions().get(turn_id).cloned() else {
             return Ok(None);
         };
         if !self.execution_has_pending_shell_dispatch(turn_id, &execution) {
             return Ok(None);
         }
         let turn = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)
@@ -329,7 +329,7 @@ impl RuntimeSessionService {
                 false
             };
             if failure_feedback_queued {
-                self.agent_turn_executions.remove(turn_id);
+                self.agent_turn_executions_mut().remove(turn_id);
                 terminal_state = AgentTurnState::Running;
             } else {
                 transcript_entries =
@@ -342,7 +342,7 @@ impl RuntimeSessionService {
                 )?;
             }
         } else {
-            self.agent_turn_executions
+            self.agent_turn_executions_mut()
                 .insert(turn_id.to_string(), execution.clone());
             self.append_agent_trace_turn_event(
                 &turn.pane_id,
@@ -390,7 +390,7 @@ impl RuntimeSessionService {
         block: &RuntimeHookPipelineBlock,
     ) -> Result<usize> {
         let Some(turn) = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == continuation.turn_id)
@@ -399,7 +399,7 @@ impl RuntimeSessionService {
             return Ok(0);
         };
         let Some(mut execution) = self
-            .agent_turn_executions
+            .agent_turn_executions()
             .get(&continuation.turn_id)
             .cloned()
         else {
@@ -435,7 +435,7 @@ impl RuntimeSessionService {
             &execution.action_results,
             execution.final_turn,
         );
-        self.agent_turn_executions
+        self.agent_turn_executions_mut()
             .insert(continuation.turn_id.clone(), execution.clone());
         self.append_agent_error_text_to_terminal_buffer(
             &turn.pane_id,
@@ -952,7 +952,7 @@ impl RuntimeSessionService {
             return Ok(false);
         }
         let execution = self
-            .agent_turn_executions
+            .agent_turn_executions()
             .get(&turn.turn_id)
             .ok_or_else(|| MezError::invalid_state("running agent execution is unavailable"))?;
         let batch = execution.response.action_batch.as_ref().ok_or_else(|| {

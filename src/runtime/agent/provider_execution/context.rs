@@ -20,7 +20,7 @@ impl RuntimeSessionService {
             return Ok(());
         }
         let context = self
-            .agent_turn_contexts
+            .agent_turn_contexts_mut()
             .get_mut(&turn.turn_id)
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let label = format!("assistant response for {}", turn.turn_id);
@@ -55,7 +55,7 @@ impl RuntimeSessionService {
             return Ok(());
         }
         let context = self
-            .agent_turn_contexts
+            .agent_turn_contexts_mut()
             .get_mut(&turn.turn_id)
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let mut previous_entries = Vec::new();
@@ -91,7 +91,7 @@ impl RuntimeSessionService {
         execution: &mut AgentTurnExecution,
     ) -> Result<usize> {
         let visible_entries = self
-            .agent_turn_contexts
+            .agent_turn_contexts()
             .get(&turn.turn_id)
             .map(|context| runtime_rationale_entries_from_context_blocks(&context.blocks))
             .unwrap_or_default();
@@ -134,7 +134,7 @@ impl RuntimeSessionService {
             return Ok(());
         }
         let context = self
-            .agent_turn_contexts
+            .agent_turn_contexts_mut()
             .get_mut(&turn.turn_id)
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let mut previous_entries = Vec::new();

@@ -151,7 +151,7 @@ impl RuntimeSessionService {
             ));
         };
         let turn = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)
@@ -183,7 +183,7 @@ impl RuntimeSessionService {
             display_output_after_completion,
         ) = {
             let execution = self
-                .agent_turn_executions
+                .agent_turn_executions_mut()
                 .get_mut(turn_id)
                 .ok_or_else(|| MezError::invalid_state("running agent execution is unavailable"))?;
             let batch = execution.response.action_batch.as_ref().ok_or_else(|| {
@@ -433,7 +433,7 @@ impl RuntimeSessionService {
             "shell_transaction_action_result",
             &observed_results,
         )?;
-        if let Some(execution) = self.agent_turn_executions.get(turn_id).cloned() {
+        if let Some(execution) = self.agent_turn_executions().get(turn_id).cloned() {
             self.record_runtime_agent_patch_results_for_turn(&turn, &execution);
         }
         if exit_code == 0
@@ -460,7 +460,7 @@ impl RuntimeSessionService {
         ) {
             self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
             let mut execution = self
-                .agent_turn_executions
+                .agent_turn_executions()
                 .get(turn_id)
                 .cloned()
                 .ok_or_else(|| {
@@ -477,7 +477,7 @@ impl RuntimeSessionService {
                 false
             };
             if failure_feedback_queued {
-                self.agent_turn_executions.remove(turn_id);
+                self.agent_turn_executions_mut().remove(turn_id);
                 terminal_state = AgentTurnState::Running;
             } else {
                 self.present_deferred_agent_say_actions_to_terminal_buffer(pane_id, &execution)?;
@@ -492,7 +492,7 @@ impl RuntimeSessionService {
                 self.follow_up_agent_loop_after_terminal_execution(&turn, &execution)?;
             }
         } else if terminal_state == AgentTurnState::Running {
-            self.agent_turn_contexts
+            self.agent_turn_contexts_mut()
                 .get_mut(turn_id)
                 .ok_or_else(|| {
                     MezError::invalid_state("running agent turn context is unavailable")
@@ -509,7 +509,7 @@ impl RuntimeSessionService {
                 )?;
             } else {
                 let should_dispatch_stored_shell = self
-                    .agent_turn_executions
+                    .agent_turn_executions()
                     .get(turn_id)
                     .is_some_and(|execution| {
                         self.execution_has_pending_shell_dispatch(turn_id, execution)

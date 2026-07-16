@@ -19,7 +19,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
         .unwrap();
     let started = service.start_agent_prompt_turn("%1", "inspect").unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -36,7 +36,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
             timeout_ms: None,
         },
     };
-    service.agent_turn_executions.insert(
+    service.agent_turn_executions_mut().insert(
         turn.turn_id.clone(),
         mez_agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
@@ -88,7 +88,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
             .values()
             .any(|transaction| transaction.kind == RunningShellTransactionKind::ReadinessProbe)
     );
-    let execution = service.agent_turn_executions.get(&turn.turn_id).unwrap();
+    let execution = service.agent_turn_executions().get(&turn.turn_id).unwrap();
     assert_eq!(execution.action_results[0].status, ActionStatus::Running);
     assert!(execution.action_results[0].error.is_none());
     service.terminate_all_pane_processes().unwrap();
@@ -111,7 +111,7 @@ fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_block
         .unwrap();
     let started = service.start_agent_prompt_turn("%1", "inspect").unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -128,7 +128,7 @@ fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_block
             timeout_ms: None,
         },
     };
-    service.agent_turn_executions.insert(
+    service.agent_turn_executions_mut().insert(
         turn.turn_id.clone(),
         mez_agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
@@ -225,7 +225,7 @@ fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_block
         pane_text.contains("STALE_INTERACTIVE_BLOCKED_RECOVERED"),
         "{pane_text}"
     );
-    let execution = service.agent_turn_executions.get(&turn.turn_id).unwrap();
+    let execution = service.agent_turn_executions().get(&turn.turn_id).unwrap();
     assert_ne!(execution.action_results[0].status, ActionStatus::Running);
     assert!(execution.action_results[0].error.is_none());
     service.terminate_all_pane_processes().unwrap();
@@ -261,7 +261,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_shell_process_
         .unwrap();
     let started = service.start_agent_prompt_turn("%1", "inspect").unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -278,7 +278,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_shell_process_
             timeout_ms: None,
         },
     };
-    service.agent_turn_executions.insert(
+    service.agent_turn_executions_mut().insert(
         turn.turn_id.clone(),
         mez_agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
@@ -330,7 +330,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_shell_process_
             .values()
             .any(|transaction| transaction.kind == RunningShellTransactionKind::ReadinessProbe)
     );
-    let execution = service.agent_turn_executions.get(&turn.turn_id).unwrap();
+    let execution = service.agent_turn_executions().get(&turn.turn_id).unwrap();
     assert_eq!(execution.action_results[0].status, ActionStatus::Running);
     assert!(execution.action_results[0].error.is_none());
     service.terminate_all_pane_processes().unwrap();
@@ -353,7 +353,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_cached_foregro
         .unwrap();
     let started = service.start_agent_prompt_turn("%1", "inspect").unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -370,7 +370,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_cached_foregro
             timeout_ms: None,
         },
     };
-    service.agent_turn_executions.insert(
+    service.agent_turn_executions_mut().insert(
         turn.turn_id.clone(),
         mez_agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
@@ -422,7 +422,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_cached_foregro
             .values()
             .any(|transaction| transaction.kind == RunningShellTransactionKind::ReadinessProbe)
     );
-    let execution = service.agent_turn_executions.get(&turn.turn_id).unwrap();
+    let execution = service.agent_turn_executions().get(&turn.turn_id).unwrap();
     assert_eq!(execution.action_results[0].status, ActionStatus::Running);
     assert!(execution.action_results[0].error.is_none());
     service.terminate_all_pane_processes().unwrap();

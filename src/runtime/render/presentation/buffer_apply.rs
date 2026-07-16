@@ -206,7 +206,7 @@ impl RuntimeSessionService {
         let Some(store) = self.agent_transcript_store.as_ref() else {
             return;
         };
-        let Some(session) = self.agent_shell_store.get(pane_id) else {
+        let Some(session) = self.agent_shell_store().get(pane_id) else {
             return;
         };
         let Some(terminal_width) = self.agent_presentation_terminal_width(pane_id) else {
@@ -981,7 +981,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(in crate::runtime) fn agent_verbose_enabled(&self, pane_id: &str) -> bool {
-        self.agent_shell_store
+        self.agent_shell_store()
             .get(pane_id)
             .is_some_and(|session| session.log_level.shows_verbose_status())
     }
@@ -992,7 +992,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(in crate::runtime) fn agent_thinking_enabled(&self, pane_id: &str) -> bool {
-        self.agent_shell_store
+        self.agent_shell_store()
             .get(pane_id)
             .is_some_and(|session| session.log_level.shows_thinking())
     }
@@ -1003,7 +1003,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(in crate::runtime) fn agent_debug_enabled(&self, pane_id: &str) -> bool {
-        self.agent_shell_store
+        self.agent_shell_store()
             .get(pane_id)
             .is_some_and(|session| session.log_level.shows_debug())
     }
@@ -1014,7 +1014,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(in crate::runtime) fn agent_trace_enabled(&self, pane_id: &str) -> bool {
-        self.agent_shell_store
+        self.agent_shell_store()
             .get(pane_id)
             .is_some_and(|session| session.log_level.shows_trace())
     }
@@ -1025,7 +1025,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(in crate::runtime) fn agent_shell_view_enabled(&self, pane_id: &str) -> bool {
-        self.agent_shell_store
+        self.agent_shell_store()
             .get(pane_id)
             .is_some_and(|session| session.log_level.shows_shell_view())
     }

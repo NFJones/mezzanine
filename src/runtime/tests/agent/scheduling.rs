@@ -367,7 +367,7 @@ fn runtime_stop_agent_turn_cleans_up_queued_turn_without_shell_running_marker() 
     assert_eq!(service.agent_scheduler().snapshot().queued, 0);
     assert_eq!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == "turn-2")
@@ -481,7 +481,7 @@ context_window_tokens = 64000
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     service
-        .agent_turn_contexts
+        .agent_turn_contexts_mut()
         .get_mut("turn-1")
         .unwrap()
         .blocks
@@ -582,7 +582,7 @@ fn runtime_prompt_during_running_turn_becomes_steering_context() {
     assert!(second.contains(r#""kind":"mutated""#), "{second}");
     assert!(second.contains(r#""command":"prompt""#), "{second}");
     assert!(second.contains("injected_user_input=true"), "{second}");
-    assert_eq!(service.agent_turn_ledger.turns().len(), 1);
+    assert_eq!(service.agent_turn_ledger().turns().len(), 1);
     assert_eq!(service.agent_scheduler().snapshot().queued, 0);
     assert_eq!(service.agent_scheduler().snapshot().running, 1);
     let provider = RuntimeRecordingProvider {
@@ -616,7 +616,7 @@ fn runtime_prompt_during_running_turn_becomes_steering_context() {
     );
     assert!(
         !service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .any(|turn| turn.turn_id == "turn-2")
@@ -724,7 +724,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
         .start_agent_prompt_turn(child_two_pane.as_str(), "child two")
         .unwrap();
     let parent_turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == parent.turn_id)
@@ -732,7 +732,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
         .unwrap();
     let spawn_one = runtime_spawn_agent_action("spawn-one", "child one");
     let spawn_two = runtime_spawn_agent_action("spawn-two", "child two");
-    service.agent_turn_executions.insert(
+    service.agent_turn_executions_mut().insert(
         parent.turn_id.clone(),
         mez_agent::AgentTurnExecution {
             request: runtime_model_request_fixture_for_agent(&parent.turn_id, &parent.agent_id),
@@ -800,7 +800,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
         .complete(&parent.turn_id)
         .unwrap();
     service
-        .agent_turn_ledger
+        .agent_turn_ledger_mut()
         .finish_turn(&parent.turn_id, AgentTurnState::Blocked)
         .unwrap();
     service.start_ready_agent_turns().unwrap();
@@ -850,7 +850,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
     assert!(service.has_joined_subagent_dependency(&child_two.turn_id));
     assert_eq!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == parent.turn_id)

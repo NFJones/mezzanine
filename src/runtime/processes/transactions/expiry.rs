@@ -312,7 +312,7 @@ impl RuntimeSessionService {
         &self,
         turn_id: &str,
     ) -> Option<String> {
-        let execution = self.agent_turn_executions.get(turn_id)?;
+        let execution = self.agent_turn_executions().get(turn_id)?;
         let batch = execution.response.action_batch.as_ref()?;
         execution
             .action_results

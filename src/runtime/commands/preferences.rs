@@ -226,7 +226,7 @@ impl RuntimeSessionService {
         &self,
         pane_id: &str,
     ) -> Result<AgentShellVisibility> {
-        self.agent_shell_store
+        self.agent_shell_store()
             .get(pane_id)
             .map(|session| session.visibility)
             .ok_or_else(|| {

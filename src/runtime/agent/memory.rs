@@ -73,7 +73,7 @@ impl RuntimeSessionService {
                 .iter()
                 .filter(|result| matches!(result.action_type, "memory_search" | "memory_store"))
             {
-                self.agent_turn_contexts
+                self.agent_turn_contexts_mut()
                     .get_mut(&turn.turn_id)
                     .ok_or_else(|| {
                         MezError::invalid_state("running agent turn context is unavailable")

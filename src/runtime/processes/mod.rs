@@ -1507,7 +1507,7 @@ impl RuntimeSessionService {
     /// deferred I/O, and subagent bookkeeping that would otherwise make a
     /// closed pane appear partially alive to later agent/session surfaces.
     pub(super) fn cleanup_removed_pane_runtime_state(&mut self, pane_id: &str) {
-        self.agent_shell_store.remove_session(pane_id);
+        self.agent_shell_store_mut().remove_session(pane_id);
         self.clear_agent_subshell_state(pane_id);
         self.remove_agent_prompt_input(pane_id);
         self.clear_agent_pane_presentation_preferences(pane_id);
@@ -1566,7 +1566,7 @@ impl RuntimeSessionService {
         self.model_profile_overrides.pane_profiles.remove(pane_id);
         self.set_agent_auto_sizing_override(pane_id, None);
         let pane_turn_ids = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .filter(|turn| turn.pane_id == pane_id)

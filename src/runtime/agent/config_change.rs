@@ -449,7 +449,7 @@ impl RuntimeSessionService {
                 .iter()
                 .filter(|result| result.action_type == "config_change")
             {
-                self.agent_turn_contexts
+                self.agent_turn_contexts_mut()
                     .get_mut(&turn.turn_id)
                     .ok_or_else(|| {
                         MezError::invalid_state("running agent turn context is unavailable")
@@ -612,7 +612,7 @@ impl RuntimeSessionService {
                 .iter()
                 .filter(|result| result.action_type == "config_change")
             {
-                self.agent_turn_contexts
+                self.agent_turn_contexts_mut()
                     .get_mut(&turn.turn_id)
                     .ok_or_else(|| {
                         MezError::invalid_state("running agent turn context is unavailable")
@@ -639,14 +639,15 @@ impl RuntimeSessionService {
     /// supplies the primary identity required to finish that work.
     pub(in crate::runtime) fn resume_detached_config_change_actions(&mut self) -> Result<()> {
         let turns = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .filter(|turn| turn.state == AgentTurnState::Running)
             .cloned()
             .collect::<Vec<_>>();
         for turn in turns {
-            let Some(mut execution) = self.agent_turn_executions.get(&turn.turn_id).cloned() else {
+            let Some(mut execution) = self.agent_turn_executions().get(&turn.turn_id).cloned()
+            else {
                 continue;
             };
             if !execution.action_results.iter().any(|result| {
@@ -655,7 +656,7 @@ impl RuntimeSessionService {
                 continue;
             }
             if self.execute_running_config_change_actions_for_turn(&turn, &mut execution)? > 0 {
-                self.agent_turn_executions
+                self.agent_turn_executions_mut()
                     .insert(turn.turn_id.clone(), execution);
             }
         }

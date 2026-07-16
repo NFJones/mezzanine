@@ -83,24 +83,6 @@ impl RuntimeSessionService {
         }
     }
 
-    /// Runs the agent shell store operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn agent_shell_store(&self) -> &AgentShellStore {
-        &self.agent_shell_store
-    }
-
-    /// Runs the agent shell store mut operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn agent_shell_store_mut(&mut self) -> &mut AgentShellStore {
-        &mut self.agent_shell_store
-    }
-
     /// Runs the agent transcript store operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -145,7 +127,7 @@ impl RuntimeSessionService {
             })?;
             let running_turn_id = metadata.running_turn_id.clone();
             let session = self
-                .agent_shell_store
+                .agent_shell_store_mut()
                 .ensure_session(metadata.pane_id.clone())?;
             session.session_id = metadata.conversation_id.clone();
             session.prompt_cache_lineage_id = metadata.prompt_cache_lineage_id.clone();
@@ -194,7 +176,7 @@ impl RuntimeSessionService {
             )?;
             self.reload_agent_prompt_history_for_pane(&metadata.pane_id)?;
             if let Some(turn_id) = running_turn_id {
-                self.agent_turn_ledger.start_turn(AgentTurnRecord {
+                self.agent_turn_ledger_mut().start_turn(AgentTurnRecord {
                     turn_id: turn_id.clone(),
                     agent_id: format!("agent-{}", metadata.pane_id),
                     pane_id: metadata.pane_id.clone(),
@@ -207,7 +189,7 @@ impl RuntimeSessionService {
                     cooperation_mode: None,
                     initial_capability: None,
                 })?;
-                self.agent_turn_ledger
+                self.agent_turn_ledger_mut()
                     .finish_turn(&turn_id, AgentTurnState::Interrupted)?;
                 interrupted = interrupted.saturating_add(1);
             }
@@ -242,7 +224,7 @@ impl RuntimeSessionService {
         };
         let mezzanine_session_id = self.session.id.as_str().to_string();
         let records = self
-            .agent_shell_store
+            .agent_shell_store()
             .sessions()
             .filter(|session| runtime_pane_by_id(&self.session, &session.pane_id).is_ok())
             .filter(|session| {
@@ -334,7 +316,9 @@ impl RuntimeSessionService {
             if metadata.conversation_id != conversation_id {
                 continue;
             }
-            let session = self.agent_shell_store.ensure_session(pane_id.to_string())?;
+            let session = self
+                .agent_shell_store_mut()
+                .ensure_session(pane_id.to_string())?;
             session.prompt_cache_lineage_id = metadata.prompt_cache_lineage_id.clone();
             session.directive = metadata.directive.clone();
             if let Some(profile) = metadata.pane_model_profile.as_ref() {

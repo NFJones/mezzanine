@@ -48,7 +48,7 @@ impl RuntimeSessionService {
                     active_profile.model
                 ),
                 visibility: self
-                    .agent_shell_store
+                    .agent_shell_store()
                     .get(pane_id)
                     .map(|session| session.visibility)
                     .unwrap_or(AgentShellVisibility::Hidden),
@@ -103,7 +103,7 @@ impl RuntimeSessionService {
                 profile.reasoning_profile.as_deref().unwrap_or("none")
             ),
             visibility: self
-                .agent_shell_store
+                .agent_shell_store()
                 .get(pane_id)
                 .map(|session| session.visibility)
                 .unwrap_or(AgentShellVisibility::Hidden),
@@ -156,7 +156,7 @@ impl RuntimeSessionService {
                     active_profile.model
                 ),
                 visibility: self
-                    .agent_shell_store
+                    .agent_shell_store()
                     .get(pane_id)
                     .map(|session| session.visibility)
                     .unwrap_or(AgentShellVisibility::Hidden),
@@ -211,7 +211,7 @@ impl RuntimeSessionService {
                 profile.reasoning_profile.as_deref().unwrap_or("none")
             ),
             visibility: self
-                .agent_shell_store
+                .agent_shell_store()
                 .get(pane_id)
                 .map(|session| session.visibility)
                 .unwrap_or(AgentShellVisibility::Hidden),
@@ -279,7 +279,7 @@ impl RuntimeSessionService {
                 profile.latency_preference.as_deref().unwrap_or("default")
             ),
             visibility: self
-                .agent_shell_store
+                .agent_shell_store()
                 .get(pane_id)
                 .map(|session| session.visibility)
                 .unwrap_or(AgentShellVisibility::Hidden),
@@ -364,7 +364,7 @@ impl RuntimeSessionService {
                 enabled != enabled_before
             ),
             visibility: self
-                .agent_shell_store
+                .agent_shell_store()
                 .get(pane_id)
                 .map(|session| session.visibility)
                 .unwrap_or(AgentShellVisibility::Hidden),
@@ -565,7 +565,7 @@ impl RuntimeSessionService {
                 json_escape(source)
             ),
             visibility: self
-                .agent_shell_store
+                .agent_shell_store()
                 .get(pane_id)
                 .map(|session| session.visibility)
                 .unwrap_or(AgentShellVisibility::Hidden),
@@ -797,7 +797,7 @@ impl RuntimeSessionService {
                 router,
             ),
             visibility: self
-                .agent_shell_store
+                .agent_shell_store()
                 .get(pane_id)
                 .map(|session| session.visibility)
                 .unwrap_or(AgentShellVisibility::Hidden),
@@ -886,7 +886,7 @@ impl RuntimeSessionService {
                 profile.latency_preference.as_deref().unwrap_or("default")
             ),
             visibility: self
-                .agent_shell_store
+                .agent_shell_store()
                 .get(pane_id)
                 .map(|session| session.visibility)
                 .unwrap_or(AgentShellVisibility::Hidden),
@@ -947,7 +947,7 @@ impl RuntimeSessionService {
                 profile.reasoning_profile.as_deref().unwrap_or("none")
             ),
             visibility: self
-                .agent_shell_store
+                .agent_shell_store()
                 .get(pane_id)
                 .map(|session| session.visibility)
                 .unwrap_or(AgentShellVisibility::Hidden),

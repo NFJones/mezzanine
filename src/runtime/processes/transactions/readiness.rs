@@ -266,7 +266,7 @@ impl RuntimeSessionService {
         exit_code: i32,
     ) -> Result<usize> {
         let turn = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)
@@ -310,12 +310,12 @@ impl RuntimeSessionService {
                     json_escape(marker)
                 ),
             )?;
-            let should_dispatch_stored_shell =
-                self.agent_turn_executions
-                    .get(turn_id)
-                    .is_some_and(|execution| {
-                        self.execution_has_pending_shell_dispatch(turn_id, execution)
-                    });
+            let should_dispatch_stored_shell = self
+                .agent_turn_executions()
+                .get(turn_id)
+                .is_some_and(|execution| {
+                    self.execution_has_pending_shell_dispatch(turn_id, execution)
+                });
             if should_dispatch_stored_shell {
                 self.append_agent_trace_turn_event(
                     pane_id,
@@ -324,12 +324,12 @@ impl RuntimeSessionService {
                 )?;
                 let _ = self.dispatch_stored_running_shell_actions(turn_id)?;
             } else if self
-                .agent_turn_ledger
+                .agent_turn_ledger()
                 .turns()
                 .iter()
                 .any(|turn| turn.turn_id == turn_id && turn.state == AgentTurnState::Running)
                 && self
-                    .agent_turn_executions
+                    .agent_turn_executions()
                     .get(turn_id)
                     .is_some_and(runtime_execution_ready_for_provider_continuation)
             {

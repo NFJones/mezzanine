@@ -27,12 +27,12 @@ impl RuntimeSessionService {
             return Ok(());
         };
         let context = self
-            .agent_turn_contexts
+            .agent_turn_contexts()
             .get(&turn.turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let context = set_project_guidance_context(context, &instruction_files, 2)?;
-        self.agent_turn_contexts
+        self.agent_turn_contexts_mut()
             .insert(turn.turn_id.clone(), context);
         Ok(())
     }
@@ -52,7 +52,7 @@ impl RuntimeSessionService {
         };
         let count = steering.len();
         let context = self
-            .agent_turn_contexts
+            .agent_turn_contexts_mut()
             .get_mut(&turn.turn_id)
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         for (index, steering) in steering.into_iter().enumerate() {
@@ -88,7 +88,7 @@ impl RuntimeSessionService {
         attempt: u32,
     ) -> Result<bool> {
         let Some(turn) = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)
@@ -120,7 +120,7 @@ impl RuntimeSessionService {
             auto_sizing.as_ref(),
         );
         let context = self
-            .agent_turn_contexts
+            .agent_turn_contexts()
             .get(turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
@@ -163,7 +163,7 @@ impl RuntimeSessionService {
             )?;
             return Ok(false);
         }
-        self.agent_turn_contexts
+        self.agent_turn_contexts_mut()
             .insert(turn_id.to_string(), compacted_context);
         self.append_agent_status_text_to_terminal_buffer(
             &turn.pane_id,
@@ -209,7 +209,7 @@ impl RuntimeSessionService {
         attempt: u32,
     ) -> Result<bool> {
         let Some(turn) = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)
@@ -245,7 +245,7 @@ impl RuntimeSessionService {
         }
 
         let context = self
-            .agent_turn_contexts
+            .agent_turn_contexts_mut()
             .get_mut(turn_id)
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         context.blocks.retain(|block| {
@@ -364,7 +364,7 @@ impl RuntimeSessionService {
         default_profile: &ModelProfile,
     ) -> Result<Option<RuntimeAutoSizingDispatch>> {
         if !self.agent_routing_enabled_for_pane(&turn.pane_id)
-            || self.agent_turn_executions.contains_key(&turn.turn_id)
+            || self.agent_turn_executions().contains_key(&turn.turn_id)
         {
             return Ok(None);
         }

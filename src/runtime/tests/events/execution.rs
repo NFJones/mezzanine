@@ -183,7 +183,7 @@ fn runtime_agent_loop_stop_clears_interrupted_loop_state() {
     assert!(transcript_store.summary(&loop_session).unwrap().is_none());
     assert_eq!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == "turn-1")
@@ -300,7 +300,7 @@ fn runtime_action_failure_retry_budget_is_per_failed_action() {
     assert!(start.contains(r#""state":"running""#), "{start}");
     service.remove_pending_agent_provider_task("turn-1");
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == "turn-1")
@@ -453,7 +453,7 @@ fn runtime_cancelled_action_does_not_queue_failure_feedback() {
     );
     assert!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .any(|turn| turn.turn_id == "turn-1" && turn.state == AgentTurnState::Failed)

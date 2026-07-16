@@ -102,7 +102,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
     assert!(start.contains(r#""state":"running""#), "{start}");
     service.remove_pending_agent_provider_task("turn-1");
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == "turn-1")
@@ -255,7 +255,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
     attempt_values.sort_unstable();
     assert_eq!(attempt_values, vec![1, 3]);
     assert!(service.agent_provider_task_is_pending("turn-1"));
-    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
     assert!(context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block

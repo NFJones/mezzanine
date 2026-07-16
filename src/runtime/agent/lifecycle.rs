@@ -16,10 +16,10 @@ impl RuntimeSessionService {
     pub fn start_agent_turn(&mut self, turn: AgentTurnRecord) -> Result<AgentShellSession> {
         self.require_live()?;
         runtime_pane_by_id(&self.session, &turn.pane_id)?;
-        self.agent_shell_store
+        self.agent_shell_store_mut()
             .ensure_session(turn.pane_id.as_str())?;
         if self
-            .agent_shell_store
+            .agent_shell_store()
             .get(turn.pane_id.as_str())
             .and_then(|session| session.running_turn_id.as_deref())
             .is_some()
@@ -29,9 +29,9 @@ impl RuntimeSessionService {
             ));
         }
 
-        self.agent_turn_ledger.start_turn(turn.clone())?;
+        self.agent_turn_ledger_mut().start_turn(turn.clone())?;
         self.runtime_metrics.record_agent_turn_started();
-        self.agent_shell_store
+        self.agent_shell_store_mut()
             .start_turn(turn.pane_id.as_str(), turn.turn_id.clone())?;
         self.append_agent_trace_turn_transition(
             &turn,
@@ -40,7 +40,7 @@ impl RuntimeSessionService {
             "runtime_start_agent_turn",
         )?;
         self.checkpoint_agent_session_metadata()?;
-        self.agent_shell_store
+        self.agent_shell_store()
             .get(turn.pane_id.as_str())
             .cloned()
             .ok_or_else(|| MezError::invalid_state("started agent shell session was not retained"))
@@ -77,7 +77,7 @@ impl RuntimeSessionService {
         self.require_live()?;
         runtime_pane_by_id(&self.session, pane_id)?;
         let running_turn = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .and_then(|session| session.running_turn_id.as_deref())
             .ok_or_else(|| MezError::invalid_state("agent shell session has no running turn"))?;
@@ -87,7 +87,7 @@ impl RuntimeSessionService {
             ));
         }
         let turn = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)
@@ -95,7 +95,7 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::new(crate::error::MezErrorKind::NotFound, "turn not found"))?;
 
         if state == AgentTurnState::Failed
-            && let Some(execution) = self.agent_turn_executions.get(turn_id).cloned()
+            && let Some(execution) = self.agent_turn_executions().get(turn_id).cloned()
             && execution.terminal_state == AgentTurnState::Failed
         {
             let reason = runtime_unrecovered_failure_reason(
@@ -119,10 +119,10 @@ impl RuntimeSessionService {
         }
         let previous_state = turn.state;
         self.runtime_metrics.record_agent_turn_finished(state);
-        self.agent_turn_ledger.finish_turn(turn_id, state)?;
+        self.agent_turn_ledger_mut().finish_turn(turn_id, state)?;
         self.append_agent_trace_turn_transition(&turn, previous_state, state, "finish_agent_turn")?;
-        self.agent_turn_contexts.remove(turn_id);
-        self.agent_turn_executions.remove(turn_id);
+        self.agent_turn_contexts_mut().remove(turn_id);
+        self.agent_turn_executions_mut().remove(turn_id);
         self.clear_agent_turn_steering(turn_id);
         self.clear_agent_failure_feedback_attempts_for_turn(turn_id);
         self.agent.agent_turn_shell_dispatch_history.remove(turn_id);
@@ -134,7 +134,7 @@ impl RuntimeSessionService {
         self.agent.claimed_agent_provider_tasks.remove(turn_id);
         self.clear_blocked_agent_approvals_for_turn(turn_id);
         let finished = self
-            .agent_shell_store
+            .agent_shell_store_mut()
             .finish_turn(pane_id, turn_id)?
             .clone();
         if finished.visibility == AgentShellVisibility::Hidden {
@@ -164,7 +164,7 @@ impl RuntimeSessionService {
         state: AgentTurnState,
     ) -> Result<AgentShellSession> {
         if state == AgentTurnState::Failed
-            && let Some(execution) = self.agent_turn_executions.get(&turn.turn_id).cloned()
+            && let Some(execution) = self.agent_turn_executions().get(&turn.turn_id).cloned()
             && execution.terminal_state == AgentTurnState::Failed
         {
             let reason = runtime_unrecovered_failure_reason(
@@ -189,15 +189,16 @@ impl RuntimeSessionService {
             self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &footer)?;
         }
         self.runtime_metrics.record_agent_turn_finished(state);
-        self.agent_turn_ledger.finish_turn(&turn.turn_id, state)?;
+        self.agent_turn_ledger_mut()
+            .finish_turn(&turn.turn_id, state)?;
         self.append_agent_trace_turn_transition(
             turn,
             turn.state,
             state,
             "finish_agent_turn_without_shell_session",
         )?;
-        self.agent_turn_contexts.remove(&turn.turn_id);
-        self.agent_turn_executions.remove(&turn.turn_id);
+        self.agent_turn_contexts_mut().remove(&turn.turn_id);
+        self.agent_turn_executions_mut().remove(&turn.turn_id);
         self.clear_agent_turn_steering(&turn.turn_id);
         self.clear_agent_failure_feedback_attempts_for_turn(&turn.turn_id);
         self.agent
@@ -217,7 +218,7 @@ impl RuntimeSessionService {
             .remove(&turn.turn_id);
         self.clear_blocked_agent_approvals_for_turn(&turn.turn_id);
         let session = self
-            .agent_shell_store
+            .agent_shell_store_mut()
             .ensure_session(&turn.pane_id)?
             .clone();
         if matches!(
@@ -256,7 +257,7 @@ impl RuntimeSessionService {
             ),
         )?;
         if self
-            .agent_shell_store
+            .agent_shell_store()
             .get(&turn.pane_id)
             .and_then(|session| session.running_turn_id.as_deref())
             == Some(turn.turn_id.as_str())
@@ -286,7 +287,7 @@ impl RuntimeSessionService {
         let mut started = 0usize;
         while let Some(running) = self.agent.agent_scheduler.start_ready() {
             let turn = self
-                .agent_turn_ledger
+                .agent_turn_ledger()
                 .turns()
                 .iter()
                 .find(|turn| turn.turn_id == running.turn_id)
@@ -294,8 +295,9 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("scheduled turn is missing from runtime ledger")
                 })?;
-            self.agent_turn_ledger.mark_turn_running(&running.turn_id)?;
-            self.agent_shell_store
+            self.agent_turn_ledger_mut()
+                .mark_turn_running(&running.turn_id)?;
+            self.agent_shell_store_mut()
                 .start_turn(&turn.pane_id, running.turn_id.clone())?;
             self.agent
                 .pending_agent_provider_tasks
@@ -356,7 +358,7 @@ impl RuntimeSessionService {
             self.mark_pane_closing(*pane_id);
         }
         let turns = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .filter(|turn| {
@@ -373,7 +375,7 @@ impl RuntimeSessionService {
             let _ = self.agent.agent_scheduler.cancel(&turn.turn_id);
             self.cancel_live_shell_transactions_for_turn(&turn.turn_id)?;
             let running_in_shell = self
-                .agent_shell_store
+                .agent_shell_store()
                 .get(&turn.pane_id)
                 .and_then(|session| session.running_turn_id.as_deref())
                 == Some(turn.turn_id.as_str());
@@ -381,7 +383,7 @@ impl RuntimeSessionService {
                 self.finish_agent_turn(&turn.pane_id, &turn.turn_id, AgentTurnState::Failed)?;
             } else {
                 self.emit_subagent_task_result_for_state(&turn, AgentTurnState::Failed)?;
-                self.agent_turn_ledger
+                self.agent_turn_ledger_mut()
                     .finish_turn(&turn.turn_id, AgentTurnState::Failed)?;
                 self.append_agent_trace_turn_transition(
                     &turn,
@@ -389,8 +391,8 @@ impl RuntimeSessionService {
                     AgentTurnState::Failed,
                     "pane_shutdown_without_shell_session",
                 )?;
-                self.agent_turn_contexts.remove(&turn.turn_id);
-                self.agent_turn_executions.remove(&turn.turn_id);
+                self.agent_turn_contexts_mut().remove(&turn.turn_id);
+                self.agent_turn_executions_mut().remove(&turn.turn_id);
                 self.clear_agent_turn_steering(&turn.turn_id);
                 self.agent
                     .agent_turn_shell_dispatch_history

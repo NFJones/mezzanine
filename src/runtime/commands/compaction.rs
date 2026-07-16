@@ -40,7 +40,7 @@ impl RuntimeSessionService {
         resume_turn_id: Option<&str>,
     ) -> Result<AgentShellCommandOutcome> {
         let (conversation_id, transcript_entries, visibility, running_turn_id) = {
-            let session = self.agent_shell_store.get(pane_id).ok_or_else(|| {
+            let session = self.agent_shell_store().get(pane_id).ok_or_else(|| {
                 MezError::new(
                     crate::error::MezErrorKind::NotFound,
                     "agent shell session not found for pane",
@@ -231,7 +231,7 @@ impl RuntimeSessionService {
         error: &MezError,
     ) -> Result<bool> {
         let Some(turn) = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)
@@ -470,7 +470,7 @@ impl RuntimeSessionService {
             content,
         ))?;
         let remaining_transcript_entries = self
-            .agent_shell_store
+            .agent_shell_store_mut()
             .retain_recent_transcript_entries(pane_id, task.retained_transcript_entries)?
             .transcript_entries;
         self.append_agent_status_text_to_terminal_buffer(
@@ -521,7 +521,7 @@ impl RuntimeSessionService {
         message: &str,
     ) -> Result<()> {
         let Some(turn) = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)

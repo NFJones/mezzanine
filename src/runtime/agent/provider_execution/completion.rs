@@ -18,7 +18,7 @@ impl RuntimeSessionService {
     ) -> Result<bool> {
         self.require_live()?;
         let Some(turn) = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)

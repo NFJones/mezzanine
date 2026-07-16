@@ -151,11 +151,11 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Option<String> {
         let turn_id = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .and_then(|session| session.running_turn_id.as_deref())?;
         let turn_is_running = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .any(|turn| turn.turn_id == turn_id && turn.state == AgentTurnState::Running);
@@ -168,7 +168,7 @@ impl RuntimeSessionService {
         if self.agent_provider_task_is_claimed(turn_id) {
             return None;
         }
-        let execution = self.agent_turn_executions.get(turn_id)?;
+        let execution = self.agent_turn_executions().get(turn_id)?;
         if runtime_execution_ready_for_provider_continuation(execution)
             || self.execution_has_pending_shell_dispatch(turn_id, execution)
         {

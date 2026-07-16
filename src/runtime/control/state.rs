@@ -422,7 +422,7 @@ impl RuntimeSessionService {
             .pane_current_working_directory(pane.id.as_str())
             .map(|path| path.to_string_lossy().to_string());
         let agent_id = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane.id.as_str())
             .map(|_| format!("agent-{}", pane.id));
         format!(
@@ -520,7 +520,7 @@ impl RuntimeSessionService {
             for pane in window.panes() {
                 let pane_id = pane.id.to_string();
                 let latest_turn_profile = self
-                    .agent_turn_ledger
+                    .agent_turn_ledger()
                     .turns()
                     .iter()
                     .rev()

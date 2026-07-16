@@ -214,7 +214,7 @@ impl RuntimeSessionService {
                     .ok_or_else(|| {
                         MezError::invalid_state("macro judge next step was not accepted")
                     })?;
-                if let Some(execution) = self.agent_turn_executions.get_mut(&turn.turn_id)
+                if let Some(execution) = self.agent_turn_executions_mut().get_mut(&turn.turn_id)
                     && let Some(batch) = execution.response.action_batch.as_mut()
                 {
                     batch.actions.push(action);
@@ -222,7 +222,7 @@ impl RuntimeSessionService {
                     execution.final_turn = false;
                     execution.terminal_state = AgentTurnState::Running;
                 }
-                self.agent_turn_ledger
+                self.agent_turn_ledger_mut()
                     .finish_turn(&turn.turn_id, AgentTurnState::Blocked)?;
                 self.append_agent_trace_turn_transition(
                     turn,
@@ -286,7 +286,7 @@ impl RuntimeSessionService {
                     .ok_or_else(|| {
                         MezError::invalid_state("macro judge retry step was not accepted")
                     })?;
-                if let Some(execution) = self.agent_turn_executions.get_mut(&turn.turn_id)
+                if let Some(execution) = self.agent_turn_executions_mut().get_mut(&turn.turn_id)
                     && let Some(batch) = execution.response.action_batch.as_mut()
                 {
                     batch.actions.push(action);
@@ -294,7 +294,7 @@ impl RuntimeSessionService {
                     execution.final_turn = false;
                     execution.terminal_state = AgentTurnState::Running;
                 }
-                self.agent_turn_ledger
+                self.agent_turn_ledger_mut()
                     .finish_turn(&turn.turn_id, AgentTurnState::Blocked)?;
                 self.append_agent_trace_turn_transition(
                     turn,

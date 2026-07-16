@@ -98,7 +98,7 @@ impl RuntimeSessionService {
             // Child turn already reached a terminal state — return idempotent
             // terminal result.
             let child_state = self
-                .agent_turn_ledger
+                .agent_turn_ledger()
                 .turns()
                 .iter()
                 .find(|t| t.turn_id == existing.child_turn_id)
@@ -170,7 +170,7 @@ impl RuntimeSessionService {
         let mcp_summary = self.mcp_registry.agent_shell_summary();
         let permission_summary = self.permission_policy.agent_shell_summary();
         let parsed_command = execute_agent_shell_command_with_context(
-            &mut self.agent_shell_store,
+            self.agent_shell_store_mut(),
             child_pane_id,
             payload,
             AgentShellRuntimeContext {
@@ -255,8 +255,9 @@ impl RuntimeSessionService {
             state: AgentTurnState::Queued,
             initial_capability: None,
         };
-        self.agent_turn_ledger.queue_turn(turn.clone())?;
-        self.agent_turn_contexts.insert(turn_id.clone(), context);
+        self.agent_turn_ledger_mut().queue_turn(turn.clone())?;
+        self.agent_turn_contexts_mut()
+            .insert(turn_id.clone(), context);
         self.agent
             .agent_turn_model_profiles
             .insert(turn_id.clone(), model_profile);
@@ -290,7 +291,7 @@ impl RuntimeSessionService {
             &turn_id,
             &format!(
                 "context prepared blocks={} model_profile={}",
-                self.agent_turn_contexts
+                self.agent_turn_contexts()
                     .get(&turn_id)
                     .map(|context| context.blocks.len())
                     .unwrap_or_default(),

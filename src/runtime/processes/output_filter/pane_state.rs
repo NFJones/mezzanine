@@ -459,7 +459,7 @@ impl RuntimeSessionService {
     /// Reports whether the pane has a runtime agent turn currently occupying
     /// the pane's agent shell session.
     fn pane_has_running_agent_turn(&self, pane_id: &str) -> bool {
-        self.agent_shell_store
+        self.agent_shell_store()
             .get(pane_id)
             .and_then(|session| session.running_turn_id.as_deref())
             .is_some()

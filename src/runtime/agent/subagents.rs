@@ -40,7 +40,7 @@ impl RuntimeSessionService {
         &self,
         dependency: &JoinedSubagentDependency,
     ) -> bool {
-        let turn_is_live = self.agent_turn_ledger.turns().iter().any(|turn| {
+        let turn_is_live = self.agent_turn_ledger().turns().iter().any(|turn| {
             turn.turn_id == dependency.child_turn_id
                 && matches!(
                     turn.state,
@@ -173,7 +173,7 @@ impl RuntimeSessionService {
                 .iter()
                 .filter(|result| result.action_type == "spawn_agent")
             {
-                self.agent_turn_contexts
+                self.agent_turn_contexts_mut()
                     .get_mut(&turn.turn_id)
                     .ok_or_else(|| {
                         MezError::invalid_state("running agent turn context is unavailable")
@@ -559,7 +559,7 @@ impl RuntimeSessionService {
         let parent_agent_id = dependency
             .as_ref()
             .and_then(|dependency| {
-                self.agent_turn_ledger
+                self.agent_turn_ledger()
                     .turns()
                     .iter()
                     .find(|turn| turn.turn_id == dependency.parent_turn_id)
@@ -656,7 +656,7 @@ impl RuntimeSessionService {
         self.subagent_task_parent(&turn.turn_id)
             .or_else(|| {
                 let dependency = self.agent.joined_subagent_dependencies.get(&turn.turn_id)?;
-                self.agent_turn_ledger
+                self.agent_turn_ledger()
                     .turns()
                     .iter()
                     .find(|turn| turn.turn_id == dependency.parent_turn_id)
@@ -781,7 +781,7 @@ impl RuntimeSessionService {
         output: &str,
     ) -> Result<()> {
         let Some(parent_turn) = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|candidate| candidate.turn_id == dependency.parent_turn_id)
@@ -792,7 +792,7 @@ impl RuntimeSessionService {
         let parent_previous_state = parent_turn.state;
         let (observed_result, ready_for_continuation) = {
             let Some(execution) = self
-                .agent_turn_executions
+                .agent_turn_executions_mut()
                 .get_mut(&dependency.parent_turn_id)
             else {
                 return Ok(());
@@ -865,7 +865,10 @@ impl RuntimeSessionService {
                 runtime_execution_ready_for_provider_continuation(execution);
             (observed_result, ready_for_continuation)
         };
-        if let Some(context) = self.agent_turn_contexts.get_mut(&dependency.parent_turn_id) {
+        if let Some(context) = self
+            .agent_turn_contexts_mut()
+            .get_mut(&dependency.parent_turn_id)
+        {
             context.blocks.push(ContextBlock {
                 source: ContextSourceKind::ActionResult,
                 label: format!("action result {}", observed_result.action_id),
@@ -925,7 +928,7 @@ impl RuntimeSessionService {
         if let Some(parent_turn_id) = failed_macro_parent_turn {
             self.agent.macro_runs_by_parent_turn.remove(&parent_turn_id);
             let _ = self.agent.agent_scheduler.complete(&parent_turn_id);
-            self.agent_turn_ledger
+            self.agent_turn_ledger_mut()
                 .finish_turn(&parent_turn_id, AgentTurnState::Failed)?;
             self.append_agent_trace_turn_transition(
                 &parent_turn,
@@ -957,7 +960,7 @@ impl RuntimeSessionService {
                 "scheduler blocked -> running reason=joined_subagent_result_ready",
             )?;
             if parent_previous_state == AgentTurnState::Blocked {
-                self.agent_turn_ledger
+                self.agent_turn_ledger_mut()
                     .resume_blocked_turn(&parent_turn.turn_id)?;
                 self.append_agent_trace_turn_transition(
                     &parent_turn,

@@ -37,7 +37,7 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
         .next()
         .expect("macro child should be registered");
     let parent_turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.agent_id == "agent-%1")
@@ -45,7 +45,7 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
         .expect("parent macro orchestration turn should exist");
     assert_eq!(parent_turn.state, AgentTurnState::Blocked);
     let parent_execution = service
-        .agent_turn_executions
+        .agent_turn_executions()
         .get(&parent_turn.turn_id)
         .expect(
             "parent macro orchestration execution should be waiting on runtime-owned first step",
@@ -114,7 +114,7 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
         child_pane_text.contains("user> /loop inspect release notes for the requested version."),
         "{child_pane_text}"
     );
-    let child_context = service.agent_turn_contexts.get(&child_turn_id).unwrap();
+    let child_context = service.agent_turn_contexts().get(&child_turn_id).unwrap();
     assert!(child_context.blocks.iter().any(|block| {
         block
             .content
@@ -127,7 +127,7 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
     }));
     assert_eq!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == child_turn_id)
@@ -246,7 +246,7 @@ fn runtime_rejects_send_message_action_with_invalid_mmp_payload_metadata() {
                 .iter()
                 .any(|task| task.turn_id == "turn-1")
         );
-        let context = service.agent_turn_contexts.get("turn-1").unwrap();
+        let context = service.agent_turn_contexts().get("turn-1").unwrap();
         assert!(context.blocks.iter().any(|block| {
             block.source == ContextSourceKind::ActionResult
                 && block

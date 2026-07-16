@@ -38,7 +38,7 @@ impl RuntimeSessionService {
         ),
     );
         let current_state = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|candidate| candidate.turn_id == turn.turn_id)
@@ -66,7 +66,7 @@ impl RuntimeSessionService {
         );
         let _ = self.agent.agent_scheduler.complete(&turn.turn_id);
         let _ = self
-            .agent_turn_ledger
+            .agent_turn_ledger_mut()
             .finish_turn(&turn.turn_id, AgentTurnState::Failed);
         let _ = self.append_agent_trace_turn_transition(
             turn,
@@ -75,17 +75,17 @@ impl RuntimeSessionService {
             "completion_application_error_fallback",
         );
         if self
-            .agent_shell_store
+            .agent_shell_store()
             .get(&turn.pane_id)
             .and_then(|session| session.running_turn_id.as_deref())
             == Some(turn.turn_id.as_str())
         {
             let _ = self
-                .agent_shell_store
+                .agent_shell_store_mut()
                 .finish_turn(&turn.pane_id, &turn.turn_id);
         }
-        self.agent_turn_contexts.remove(&turn.turn_id);
-        self.agent_turn_executions.remove(&turn.turn_id);
+        self.agent_turn_contexts_mut().remove(&turn.turn_id);
+        self.agent_turn_executions_mut().remove(&turn.turn_id);
         self.clear_agent_turn_steering(&turn.turn_id);
         self.clear_agent_failure_feedback_attempts_for_turn(&turn.turn_id);
         self.agent
@@ -121,7 +121,7 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         self.refresh_agent_turn_project_guidance_context(turn)?;
         let context = self
-            .agent_turn_contexts
+            .agent_turn_contexts()
             .get(&turn.turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
@@ -155,7 +155,7 @@ impl RuntimeSessionService {
             final_turn: true,
             terminal_state: AgentTurnState::Failed,
         };
-        self.agent_turn_executions
+        self.agent_turn_executions_mut()
             .insert(turn.turn_id.clone(), execution.clone());
         let transcript_entries =
             self.persist_runtime_agent_turn_execution_transcript(turn, &execution)?;
@@ -204,7 +204,7 @@ impl RuntimeSessionService {
         failure: RuntimeShellTransactionActionFailure,
     ) -> Result<usize> {
         let Some(turn) = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == transaction_ref.turn_id)
@@ -214,7 +214,7 @@ impl RuntimeSessionService {
         };
         let maybe_failure = {
             let execution = self
-                .agent_turn_executions
+                .agent_turn_executions_mut()
                 .get_mut(&turn.turn_id)
                 .ok_or_else(|| MezError::invalid_state("running agent execution is unavailable"))?;
             let batch = execution.response.action_batch.as_ref().ok_or_else(|| {
@@ -309,7 +309,7 @@ impl RuntimeSessionService {
             &mut execution,
             "shell_transaction_runtime_failure",
         )? {
-            self.agent_turn_executions.remove(&turn.turn_id);
+            self.agent_turn_executions_mut().remove(&turn.turn_id);
             terminal_state = AgentTurnState::Running;
             0
         } else {
@@ -381,7 +381,7 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         self.refresh_agent_turn_project_guidance_context(turn)?;
         let context = self
-            .agent_turn_contexts
+            .agent_turn_contexts()
             .get(&turn.turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;

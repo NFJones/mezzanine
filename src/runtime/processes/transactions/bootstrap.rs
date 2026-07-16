@@ -148,11 +148,11 @@ impl RuntimeSessionService {
             self.set_pane_readiness(pane_id, PaneReadinessState::PromptCandidate);
         }
         let pending_shell_turns = self
-            .agent_turn_executions
+            .agent_turn_executions()
             .iter()
             .filter(|(turn_id, execution)| {
                 self.execution_has_pending_shell_dispatch(turn_id, execution)
-                    && self.agent_turn_ledger.turns().iter().any(|turn| {
+                    && self.agent_turn_ledger().turns().iter().any(|turn| {
                         turn.turn_id == **turn_id
                             && turn.pane_id == pane_id
                             && turn.state == AgentTurnState::Running

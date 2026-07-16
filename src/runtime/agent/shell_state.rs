@@ -196,7 +196,7 @@ impl RuntimeSessionService {
         turn_id: &str,
         action_id: &str,
     ) -> bool {
-        self.agent_turn_executions
+        self.agent_turn_executions()
             .get(turn_id)
             .and_then(|execution| execution.response.action_batch.as_ref())
             .and_then(|batch| batch.actions.iter().find(|action| action.id == action_id))
@@ -255,7 +255,7 @@ impl RuntimeSessionService {
             return 0;
         }
         let Some(turn_id) = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .and_then(|session| session.running_turn_id.as_deref())
         else {
@@ -270,14 +270,14 @@ impl RuntimeSessionService {
             return 0;
         }
         let turn_is_running = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .any(|turn| turn.turn_id == turn_id && turn.state == AgentTurnState::Running);
         if !turn_is_running {
             return 0;
         }
-        let Some(execution) = self.agent_turn_executions.get(turn_id) else {
+        let Some(execution) = self.agent_turn_executions().get(turn_id) else {
             return 0;
         };
         if !runtime_execution_ready_for_provider_continuation(execution)

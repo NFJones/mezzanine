@@ -449,7 +449,7 @@ context_window_tokens = 4500
         &primary,
     );
     assert!(prompt.contains(r#""state":"running""#), "{prompt}");
-    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
     assert!(context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::Memory
             && block.label.contains("compact-as1")
@@ -664,7 +664,7 @@ fn runtime_executes_memory_actions_and_audits_action_arguments() {
     assert!(start.contains(r#""state":"running""#), "{start}");
     service.remove_pending_agent_provider_task("turn-1");
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == "turn-1")
@@ -810,7 +810,7 @@ fn runtime_memory_store_rejects_episode_and_scratch_kinds() {
     assert!(start.contains(r#""state":"running""#), "{start}");
     service.remove_pending_agent_provider_task("turn-1");
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == "turn-1")
@@ -940,7 +940,7 @@ fn runtime_memory_disabled_failure_tells_model_to_continue_without_retrying_memo
     assert!(start.contains(r#""state":"running""#), "{start}");
     service.remove_pending_agent_provider_task("turn-1");
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == "turn-1")

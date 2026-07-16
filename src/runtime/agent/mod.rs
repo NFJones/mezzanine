@@ -65,6 +65,8 @@ use crate::config::{
     ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
     ConfigPaths, ConfigScope,
 };
+#[cfg(test)]
+use mez_agent::CooperationMode;
 use mez_agent::resolve_provider_api;
 use mez_agent::semantic_patch_planning::{
     ApplyPatchTransactionPhase, apply_patch_error_plan, apply_patch_read_plan_for_paths,
@@ -72,15 +74,13 @@ use mez_agent::semantic_patch_planning::{
     apply_patch_write_plan_from_read_output, apply_patch_write_plan_from_read_outputs,
 };
 use mez_agent::{
-    ActiveWriteScope, AgentNetworkActionHistory, AgentShellDispatchHistory, AgentTurnSteering,
-    DEFAULT_PROVIDER_TIMEOUT_MS, EnvironmentSignature, MaapBatch, MacroManagedSubagent,
-    MacroRunState, ModelTokenUsage, ModelTokenUsageKey, ProviderApiCompatibility,
-    ProviderQuotaUsage, SayStatus, ToolDiscoveryCache, ToolInventory, append_mcp_context,
-    assistant_context_content_for_execution, invoked_mcp_tools_for_context,
-    set_project_guidance_context,
+    ActiveWriteScope, AgentContext, AgentNetworkActionHistory, AgentShellDispatchHistory,
+    AgentShellStore, AgentTurnLedger, AgentTurnSteering, DEFAULT_PROVIDER_TIMEOUT_MS,
+    EnvironmentSignature, MaapBatch, MacroManagedSubagent, MacroRunState, ModelTokenUsage,
+    ModelTokenUsageKey, ProviderApiCompatibility, ProviderQuotaUsage, SayStatus,
+    ToolDiscoveryCache, ToolInventory, append_mcp_context, assistant_context_content_for_execution,
+    invoked_mcp_tools_for_context, set_project_guidance_context,
 };
-#[cfg(test)]
-use mez_agent::{AgentTurnLedger, CooperationMode};
 use mez_mux::command::CommandInvocation;
 
 mod approvals;
@@ -100,11 +100,13 @@ mod provider_context;
 mod provider_events;
 mod provider_execution;
 mod provider_tasks;
+mod scheduler_state;
 mod shell_dispatch;
 mod shell_state;
 mod skills;
 mod subagents;
 mod trace;
+mod turn_state;
 
 use mez_agent::messaging::task_state_name as runtime_task_state_suffix;
 
@@ -236,6 +238,14 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
         BTreeMap<String, Vec<mez_agent::instructions::DiscoveredInstructionFile>>,
     /// Batched semantic apply-patch read state keyed by turn/action.
     apply_patch_batch_states: BTreeMap<String, RuntimeApplyPatchBatchState>,
+    /// Pane-scoped agent shell sessions and conversation bindings.
+    agent_shell_store: AgentShellStore,
+    /// Canonical queued, running, blocked, and terminal agent turns.
+    agent_turn_ledger: AgentTurnLedger,
+    /// Assembled provider context keyed by turn id.
+    agent_turn_contexts: BTreeMap<String, AgentContext>,
+    /// Action execution state keyed by turn id.
+    agent_turn_executions: BTreeMap<String, AgentTurnExecution>,
 }
 
 /// State removed when a compaction worker reports failure.
@@ -1078,44 +1088,6 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Option<&RuntimeAgentCompactionTask> {
         self.agent.pending_agent_compaction_tasks.get(pane_id)
-    }
-
-    /// Returns the agent scheduler for read-only diagnostics and prompt context.
-    pub(crate) fn agent_scheduler(&self) -> &AgentScheduler {
-        &self.agent.agent_scheduler
-    }
-
-    /// Returns mutable scheduler access to crate-local regression tests.
-    #[cfg(test)]
-    pub(crate) fn agent_scheduler_mut(&mut self) -> &mut AgentScheduler {
-        &mut self.agent.agent_scheduler
-    }
-
-    /// Applies the configured global agent concurrency limit.
-    pub(in crate::runtime) fn configure_agent_scheduler_limit(
-        &mut self,
-        max_concurrent_agents: usize,
-    ) -> Result<()> {
-        self.agent
-            .agent_scheduler
-            .set_max_concurrent_agents(max_concurrent_agents)?;
-        Ok(())
-    }
-
-    /// Enqueues one validated unit of agent work.
-    pub(in crate::runtime) fn enqueue_agent_work(&mut self, work: ScheduledWork) -> Result<()> {
-        self.agent.agent_scheduler.enqueue(work)?;
-        Ok(())
-    }
-
-    /// Cancels queued, running, or blocked scheduler work when it exists.
-    pub(in crate::runtime) fn cancel_agent_work(&mut self, turn_id: &str) -> bool {
-        self.agent.agent_scheduler.cancel(turn_id).is_ok()
-    }
-
-    /// Restores an empty scheduler with the repository default limit.
-    pub(in crate::runtime) fn reset_agent_scheduler(&mut self) {
-        self.agent.agent_scheduler = AgentScheduler::with_default_limit();
     }
 
     /// Appends one steering prompt to an active turn.

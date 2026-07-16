@@ -225,26 +225,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) audit_log: Option<AuditLog>,
-    /// Stores the agent shell store value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) agent_shell_store: AgentShellStore,
-    /// Stores the agent turn ledger value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) agent_turn_ledger: AgentTurnLedger,
-    /// Stores the agent turn contexts value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) agent_turn_contexts: BTreeMap<String, AgentContext>,
-    /// Stores the agent turn executions value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) agent_turn_executions: BTreeMap<String, AgentTurnExecution>,
     /// Stores the agent transcript store value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

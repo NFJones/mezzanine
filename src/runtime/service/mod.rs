@@ -7,12 +7,11 @@
 use crate::terminal::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
 
 use super::{
-    AgentLogLevel, AgentSessionMetadata, AgentShellStore, AgentShellVisibility,
-    AgentTranscriptStore, AgentTurnLedger, AgentTurnRecord, AgentTurnState, AgentTurnTrigger,
-    AuditActor, AuditDeferredWrite, AuditLog, AuditRecord, AuthStore, BTreeMap, BTreeSet,
-    BlockedApprovalQueue, BlockedApprovalRequest, ConfigFormat, ConfigLayer, ConfigScope,
-    ControlIdempotencyCache, DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT,
-    DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
+    AgentLogLevel, AgentSessionMetadata, AgentShellVisibility, AgentTranscriptStore,
+    AgentTurnRecord, AgentTurnState, AgentTurnTrigger, AuditActor, AuditDeferredWrite, AuditLog,
+    AuditRecord, AuthStore, BTreeMap, BTreeSet, BlockedApprovalQueue, BlockedApprovalRequest,
+    ConfigFormat, ConfigLayer, ConfigScope, ControlIdempotencyCache,
+    DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT, DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
     DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS, DEFAULT_AGENT_LOOP_LIMIT,
     DEFAULT_AGENT_ROUTING, EventKind, EventLog, FocusedShellHookQueue, MEZ_ENV_FIELD_SEPARATOR,
     McpRegistry, McpServerStatus, McpStartupTransportPlan, MemoryRecord, MessageService, MezError,

@@ -186,7 +186,7 @@ context_window_tokens = 40000
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     service
-        .agent_turn_contexts
+        .agent_turn_contexts_mut()
         .get_mut("turn-1")
         .unwrap()
         .blocks

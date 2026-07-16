@@ -410,7 +410,10 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
         initial_capability: None,
         state: AgentTurnState::Running,
     };
-    service.agent_turn_ledger.start_turn(turn.clone()).unwrap();
+    service
+        .agent_turn_ledger_mut()
+        .start_turn(turn.clone())
+        .unwrap();
     let first = mez_agent::AgentAction {
         id: "shell-a".to_string(),
         rationale: "inspect owner one".to_string(),
@@ -486,9 +489,9 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
     };
 
     service
-        .agent_turn_executions
+        .agent_turn_executions_mut()
         .insert(turn.turn_id.clone(), execution);
-    service.agent_turn_contexts.insert(
+    service.agent_turn_contexts_mut().insert(
         turn.turn_id.clone(),
         mez_agent::AgentContext::new(vec![mez_agent::ContextBlock {
             source: ContextSourceKind::Configuration,

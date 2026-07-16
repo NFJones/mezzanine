@@ -280,7 +280,7 @@ impl RuntimeSessionService {
         input: &str,
     ) -> Result<AgentShellCommandOutcome> {
         let visibility = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .map(|session| session.visibility)
             .ok_or_else(|| {
@@ -328,7 +328,7 @@ impl RuntimeSessionService {
         input: &str,
     ) -> Result<AgentShellCommandOutcome> {
         let visibility = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .map(|session| session.visibility)
             .ok_or_else(|| {
@@ -367,7 +367,7 @@ impl RuntimeSessionService {
         input: &str,
     ) -> Result<AgentShellCommandOutcome> {
         let visibility = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .map(|session| session.visibility)
             .ok_or_else(|| {
@@ -451,7 +451,7 @@ impl RuntimeSessionService {
         input: &str,
     ) -> Result<AgentShellCommandOutcome> {
         let visibility = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .map(|session| session.visibility)
             .ok_or_else(|| {
@@ -515,7 +515,7 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Result<RuntimeAgentTurnStop> {
         let turn_id = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .and_then(|session| session.running_turn_id.clone())
             .or_else(|| {
@@ -529,7 +529,7 @@ impl RuntimeSessionService {
         let interrupted_shell_transactions =
             self.cancel_live_shell_transactions_for_turn(&turn_id)?;
         let turn = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)
@@ -541,13 +541,13 @@ impl RuntimeSessionService {
         );
         let session = if turn_was_already_terminal {
             let running_in_shell = self
-                .agent_shell_store
+                .agent_shell_store()
                 .get(pane_id)
                 .and_then(|session| session.running_turn_id.as_deref())
                 == Some(turn_id.as_str());
             let session = if running_in_shell {
                 let finished = self
-                    .agent_shell_store
+                    .agent_shell_store_mut()
                     .finish_turn(pane_id, &turn_id)?
                     .clone();
                 if finished.visibility == AgentShellVisibility::Hidden {
@@ -555,10 +555,12 @@ impl RuntimeSessionService {
                 }
                 finished
             } else {
-                self.agent_shell_store.ensure_session(pane_id)?.clone()
+                self.agent_shell_store_mut()
+                    .ensure_session(pane_id)?
+                    .clone()
             };
-            self.agent_turn_contexts.remove(&turn_id);
-            self.agent_turn_executions.remove(&turn_id);
+            self.agent_turn_contexts_mut().remove(&turn_id);
+            self.agent_turn_executions_mut().remove(&turn_id);
             self.clear_agent_turn_steering(&turn_id);
             self.clear_agent_failure_feedback_attempts_for_turn(&turn_id);
             self.clear_agent_action_bookkeeping_for_turn(&turn_id);
@@ -573,7 +575,7 @@ impl RuntimeSessionService {
         } else {
             self.emit_cancelled_subagent_task_result(&turn)?;
             if self
-                .agent_shell_store
+                .agent_shell_store()
                 .get(pane_id)
                 .and_then(|session| session.running_turn_id.as_deref())
                 == Some(turn_id.as_str())
@@ -665,7 +667,7 @@ impl RuntimeSessionService {
             });
         }
         if let Some(directive) = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .and_then(|session| session.directive.as_deref())
         {
@@ -716,7 +718,7 @@ impl RuntimeSessionService {
     /// Returns whether a pane still has a running or queued turn owned by its loop controller.
     fn pane_has_active_agent_loop_turn(&self, pane_id: &str) -> bool {
         let running_loop_turn_active = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .and_then(|session| session.running_turn_id.as_deref())
             .and_then(|turn_id| self.agent_loop_turn(turn_id))
@@ -761,7 +763,7 @@ impl RuntimeSessionService {
             self.clear_stale_agent_loop_state_for_pane(pane_id)?;
         }
         self.append_agent_user_prompt_to_terminal_buffer(pane_id, input)?;
-        let parent_session = self.agent_shell_store.get(pane_id).ok_or_else(|| {
+        let parent_session = self.agent_shell_store().get(pane_id).ok_or_else(|| {
             MezError::new(
                 crate::error::MezErrorKind::NotFound,
                 "agent shell session not found for pane",
@@ -853,7 +855,7 @@ impl RuntimeSessionService {
     ) -> Result<(String, u64)> {
         match state.mode {
             RuntimeAgentLoopMode::ReuseCurrentConversation => {
-                let session = self.agent_shell_store.get(pane_id).ok_or_else(|| {
+                let session = self.agent_shell_store().get(pane_id).ok_or_else(|| {
                     MezError::new(
                         crate::error::MezErrorKind::NotFound,
                         "agent shell session not found for pane",
@@ -864,7 +866,7 @@ impl RuntimeSessionService {
             RuntimeAgentLoopMode::ForkEachIteration => {
                 let target_conversation_id = Self::runtime_new_agent_conversation_id();
                 let session = self
-                    .agent_shell_store
+                    .agent_shell_store_mut()
                     .bind_ephemeral_conversation_with_lineage_and_transcript_source(
                         pane_id,
                         &target_conversation_id,
@@ -878,7 +880,7 @@ impl RuntimeSessionService {
             RuntimeAgentLoopMode::NewEachIteration => {
                 let target_conversation_id = Self::runtime_new_agent_conversation_id();
                 let session = self
-                    .agent_shell_store
+                    .agent_shell_store_mut()
                     .bind_ephemeral_conversation_with_lineage_and_transcript_source(
                         pane_id,
                         &target_conversation_id,
@@ -902,12 +904,13 @@ impl RuntimeSessionService {
         if state.mode == RuntimeAgentLoopMode::ReuseCurrentConversation {
             return Ok(());
         }
-        self.agent_shell_store.bind_conversation_with_lineage(
-            pane_id,
-            &state.parent_conversation_id,
-            state.parent_transcript_entries,
-            state.parent_prompt_cache_lineage_id.clone(),
-        )?;
+        self.agent_shell_store_mut()
+            .bind_conversation_with_lineage(
+                pane_id,
+                &state.parent_conversation_id,
+                state.parent_transcript_entries,
+                state.parent_prompt_cache_lineage_id.clone(),
+            )?;
         Ok(())
     }
 
@@ -923,7 +926,7 @@ impl RuntimeSessionService {
         input: &str,
     ) -> Result<Option<String>> {
         let Some(turn_id) = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .and_then(|session| session.running_turn_id.as_deref())
             .map(str::to_string)
@@ -931,7 +934,7 @@ impl RuntimeSessionService {
             return Ok(None);
         };
         let Some(turn) = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| {
@@ -964,7 +967,7 @@ impl RuntimeSessionService {
         )?;
         if !self.agent_provider_task_is_owned(&turn.turn_id)
             && self
-                .agent_turn_executions
+                .agent_turn_executions()
                 .get(&turn.turn_id)
                 .is_some_and(runtime_execution_ready_for_provider_continuation)
         {
@@ -1051,7 +1054,7 @@ impl RuntimeSessionService {
             state: AgentTurnState::Queued,
             initial_capability,
         };
-        self.agent_turn_ledger.queue_turn(turn.clone())?;
+        self.agent_turn_ledger_mut().queue_turn(turn.clone())?;
         self.append_agent_trace_turn_event(
             pane_id,
             &turn_id,
@@ -1065,7 +1068,8 @@ impl RuntimeSessionService {
                 context_blocks, model_profile_name
             ),
         )?;
-        self.agent_turn_contexts.insert(turn_id.clone(), context);
+        self.agent_turn_contexts_mut()
+            .insert(turn_id.clone(), context);
         self.set_agent_turn_model_profile(turn_id.clone(), model_profile);
         self.enqueue_agent_work(ScheduledWork {
             turn_id: turn_id.clone(),
@@ -1080,7 +1084,7 @@ impl RuntimeSessionService {
         )?;
         self.start_ready_agent_turns_suppressing_status_for(Some(&turn_id))?;
         let state = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)
@@ -1179,11 +1183,11 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn next_agent_turn_id(&self) -> String {
-        let mut index = self.agent_turn_ledger.turns().len().saturating_add(1);
+        let mut index = self.agent_turn_ledger().turns().len().saturating_add(1);
         loop {
             let candidate = format!("turn-{index}");
             if !self
-                .agent_turn_ledger
+                .agent_turn_ledger()
                 .turns()
                 .iter()
                 .any(|turn| turn.turn_id == candidate)

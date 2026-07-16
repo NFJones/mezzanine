@@ -16,7 +16,7 @@ impl RuntimeSessionService {
         input: &str,
     ) -> Result<AgentShellCommandOutcome> {
         let visibility = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .map(|session| session.visibility)
             .ok_or_else(|| {
@@ -60,7 +60,7 @@ impl RuntimeSessionService {
         input: &str,
     ) -> Result<AgentShellCommandOutcome> {
         let visibility = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .map(|session| session.visibility)
             .ok_or_else(|| {
@@ -121,7 +121,7 @@ impl RuntimeSessionService {
 
     /// Builds the live `/status` display from runtime session state.
     pub(super) fn runtime_agent_status_display(&self, pane_id: &str) -> Result<String> {
-        let session = self.agent_shell_store.get(pane_id).ok_or_else(|| {
+        let session = self.agent_shell_store().get(pane_id).ok_or_else(|| {
             MezError::new(
                 crate::error::MezErrorKind::NotFound,
                 "agent shell session not found for pane",
@@ -145,7 +145,7 @@ impl RuntimeSessionService {
             .map(|scope| scope.scope.clone())
             .collect::<Vec<_>>();
         let latest_turn = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .rev()
@@ -157,11 +157,11 @@ impl RuntimeSessionService {
             .map(|turn| runtime_agent_turn_state_name(turn.state))
             .unwrap_or("none");
         let context_blocks = latest_turn
-            .and_then(|turn| self.agent_turn_contexts.get(&turn.turn_id))
+            .and_then(|turn| self.agent_turn_contexts().get(&turn.turn_id))
             .map(|context| context.blocks.len())
             .unwrap_or(0);
         let request_messages = latest_turn
-            .and_then(|turn| self.agent_turn_executions.get(&turn.turn_id))
+            .and_then(|turn| self.agent_turn_executions().get(&turn.turn_id))
             .map(|execution| execution.request.messages.len())
             .unwrap_or(0);
         let token_usage_by_model = self.agent_token_usage_for_pane(pane_id);

@@ -166,7 +166,7 @@ impl RuntimeSessionService {
             ));
         }
         let visibility = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .map(|session| session.visibility)
             .ok_or_else(|| {
@@ -255,7 +255,7 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Result<AgentShellCommandOutcome> {
         let visibility = self
-            .agent_shell_store
+            .agent_shell_store()
             .get(pane_id)
             .map(|session| session.visibility)
             .ok_or_else(|| {

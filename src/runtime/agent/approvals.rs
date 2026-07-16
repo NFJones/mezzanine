@@ -190,11 +190,11 @@ impl RuntimeSessionService {
             return Ok(false);
         };
         let execution = self
-            .agent_turn_executions
+            .agent_turn_executions()
             .get(&approval_ref.turn_id)
             .ok_or_else(|| MezError::invalid_state("blocked agent execution is unavailable"))?;
         let turn = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == approval_ref.turn_id)
@@ -322,12 +322,12 @@ impl RuntimeSessionService {
             return Ok(None);
         };
         let mut execution = self
-            .agent_turn_executions
+            .agent_turn_executions()
             .get(&approval_ref.turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("blocked agent execution is unavailable"))?;
         let turn = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == approval_ref.turn_id)
@@ -371,7 +371,8 @@ impl RuntimeSessionService {
             "scheduler blocked -> running reason=approval_approved",
         )?;
         if turn.state == AgentTurnState::Blocked {
-            self.agent_turn_ledger.resume_blocked_turn(&turn.turn_id)?;
+            self.agent_turn_ledger_mut()
+                .resume_blocked_turn(&turn.turn_id)?;
             self.append_agent_trace_turn_transition(
                 &turn,
                 AgentTurnState::Blocked,
@@ -562,7 +563,7 @@ impl RuntimeSessionService {
             && runtime_execution_ready_for_provider_continuation(&execution)
         {
             let observed_result = execution.action_results[result_index].clone();
-            self.agent_turn_contexts
+            self.agent_turn_contexts_mut()
                 .get_mut(&turn.turn_id)
                 .ok_or_else(|| {
                     MezError::invalid_state("running agent turn context is unavailable")
@@ -597,7 +598,7 @@ impl RuntimeSessionService {
             )?;
             return Ok(Some(1));
         }
-        self.agent_turn_executions
+        self.agent_turn_executions_mut()
             .insert(turn.turn_id.clone(), execution);
         self.append_agent_trace_turn_event(
             &turn.pane_id,
@@ -636,12 +637,12 @@ impl RuntimeSessionService {
             return Ok(None);
         };
         let mut execution = self
-            .agent_turn_executions
+            .agent_turn_executions()
             .get(&approval_ref.turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("blocked agent execution is unavailable"))?;
         let turn = self
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == approval_ref.turn_id)
@@ -718,7 +719,7 @@ impl RuntimeSessionService {
                     ),
                 )?;
                 if self
-                    .agent_shell_store
+                    .agent_shell_store()
                     .get(&turn.pane_id)
                     .and_then(|session| session.running_turn_id.as_deref())
                     == Some(turn.turn_id.as_str())
@@ -758,7 +759,8 @@ impl RuntimeSessionService {
                     "scheduler blocked -> running reason=approval_redirected",
                 )?;
                 if turn.state == AgentTurnState::Blocked {
-                    self.agent_turn_ledger.resume_blocked_turn(&turn.turn_id)?;
+                    self.agent_turn_ledger_mut()
+                        .resume_blocked_turn(&turn.turn_id)?;
                     self.append_agent_trace_turn_transition(
                         &turn,
                         AgentTurnState::Blocked,
@@ -795,7 +797,7 @@ impl RuntimeSessionService {
                     && runtime_execution_ready_for_provider_continuation(&execution)
                 {
                     let observed_result = execution.action_results[result_index].clone();
-                    self.agent_turn_contexts
+                    self.agent_turn_contexts_mut()
                         .get_mut(&turn.turn_id)
                         .ok_or_else(|| {
                             MezError::invalid_state("running agent turn context is unavailable")
@@ -834,7 +836,7 @@ impl RuntimeSessionService {
                     )?;
                     return Ok(Some(1));
                 }
-                self.agent_turn_executions
+                self.agent_turn_executions_mut()
                     .insert(turn.turn_id.clone(), execution);
                 Ok(Some(1))
             }

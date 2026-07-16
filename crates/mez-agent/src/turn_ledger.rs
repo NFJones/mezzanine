@@ -109,6 +109,12 @@ pub struct AgentTurnLedger {
     pub(super) turns: Vec<AgentTurnRecord>,
 }
 
+impl Default for AgentTurnLedger {
+    fn default() -> Self {
+        Self::new(false)
+    }
+}
+
 impl AgentTurnLedger {
     /// Runs the new operation for this subsystem.
     ///

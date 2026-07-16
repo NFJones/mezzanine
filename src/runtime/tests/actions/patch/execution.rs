@@ -128,7 +128,7 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
         .unwrap();
 
     let context = service
-        .agent_turn_contexts
+        .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
         .blocks
@@ -326,8 +326,8 @@ fn runtime_apply_patch_read_phase_truncation_dispatches_specific_error_plan() {
     service
         .observe_agent_shell_transaction_end("%1", &write_marker, "turn-1", "agent-%1", "%1", 1)
         .unwrap();
-    assert!(!service.agent_turn_executions.contains_key("turn-1"));
-    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    assert!(!service.agent_turn_executions().contains_key("turn-1"));
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
     let feedback = context
         .blocks
         .iter()
@@ -602,7 +602,7 @@ fn runtime_agent_loop_continues_after_apply_patch_iteration() {
     assert_eq!(service.agent_loop_turn("turn-2").unwrap().iteration, 2);
     assert_eq!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == "turn-2")
@@ -694,7 +694,7 @@ fn runtime_action_pressure_shifts_after_apply_patch_success() {
     );
     assert!(
         service
-            .agent_turn_contexts
+            .agent_turn_contexts()
             .get("turn-1")
             .unwrap()
             .blocks
@@ -715,7 +715,7 @@ fn runtime_action_pressure_shifts_after_apply_patch_success() {
     service.record_shell_dispatch_success("turn-1", "mez apply-patch write", &patch_action);
 
     let pressure_block = service
-        .agent_turn_contexts
+        .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
         .blocks
@@ -751,7 +751,7 @@ fn runtime_action_pressure_shifts_after_apply_patch_success() {
     service.record_shell_dispatch_success("turn-1", "just test", &validation_action);
 
     let pressure_block = service
-        .agent_turn_contexts
+        .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
         .blocks
@@ -802,7 +802,7 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
         .start_agent_prompt_turn("%1", "write the file")
         .unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -878,7 +878,7 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
             .collect::<Vec<_>>(),
         vec![1]
     );
-    let context = service.agent_turn_contexts.get(&turn.turn_id).unwrap();
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     assert!(context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block

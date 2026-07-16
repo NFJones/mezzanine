@@ -106,7 +106,7 @@ fn runtime_agent_shell_personality_feeds_prompt_context() {
         &primary,
     );
     assert!(prompt.contains(r#""state":"running""#), "{prompt}");
-    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
     assert!(
         context
             .blocks

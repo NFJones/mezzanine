@@ -48,7 +48,7 @@ fn runtime_frame_context_animates_active_agent_status_without_live_footer() {
         .id
         .to_string();
     service
-        .agent_turn_ledger
+        .agent_turn_ledger_mut()
         .start_turn(mez_agent::AgentTurnRecord {
             turn_id: "turn-running".to_string(),
             agent_id: format!("agent-{pane_id}"),
@@ -262,7 +262,7 @@ fn runtime_frame_context_reports_agent_compacting_substate() {
         .enter_or_resume(&pane_id)
         .unwrap();
     service
-        .agent_turn_ledger
+        .agent_turn_ledger_mut()
         .start_turn(mez_agent::AgentTurnRecord {
             turn_id: "turn-completed".to_string(),
             agent_id: format!("agent-{pane_id}"),
@@ -279,7 +279,7 @@ fn runtime_frame_context_reports_agent_compacting_substate() {
         })
         .unwrap();
     service
-        .agent_turn_ledger
+        .agent_turn_ledger_mut()
         .finish_turn("turn-completed", AgentTurnState::Completed)
         .unwrap();
     service.mark_agent_compacting_for_tests(pane_id.clone(), 1);

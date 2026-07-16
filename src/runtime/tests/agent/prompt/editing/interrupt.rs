@@ -264,7 +264,7 @@ fn runtime_agent_prompt_ctrl_c_after_failed_turn_is_idempotent() {
     let turn_id = started.turn_id.clone();
     let _ = service.agent_scheduler_mut().complete(&turn_id);
     service
-        .agent_turn_ledger
+        .agent_turn_ledger_mut()
         .finish_turn(&turn_id, AgentTurnState::Failed)
         .unwrap();
 
@@ -292,7 +292,7 @@ fn runtime_agent_prompt_ctrl_c_after_failed_turn_is_idempotent() {
     );
     assert_eq!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id)

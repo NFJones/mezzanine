@@ -23,7 +23,7 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
         .start_agent_prompt_turn("%1", "patch the file")
         .unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -110,7 +110,7 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
             .collect::<Vec<_>>(),
         vec![1]
     );
-    let context = service.agent_turn_contexts.get(&turn.turn_id).unwrap();
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     assert!(context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block
@@ -181,7 +181,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_guides_context_refresh() {
         .start_agent_prompt_turn("%1", "patch the file")
         .unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -255,7 +255,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_guides_context_refresh() {
         .unwrap();
 
     assert!(queued);
-    let context = service.agent_turn_contexts.get(&turn.turn_id).unwrap();
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     let feedback = context
         .blocks
         .iter()
@@ -378,7 +378,7 @@ fn runtime_apply_patch_replacement_hint_recovery_guides_reconcile_or_skip() {
         .start_agent_prompt_turn("%1", "patch the file")
         .unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -452,7 +452,7 @@ fn runtime_apply_patch_replacement_hint_recovery_guides_reconcile_or_skip() {
             )
             .unwrap()
     );
-    let context = service.agent_turn_contexts.get(&turn.turn_id).unwrap();
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     let feedback = context
         .blocks
         .iter()
@@ -511,7 +511,7 @@ fn runtime_apply_patch_missing_anchor_recovery_guides_anchor_refresh() {
         .start_agent_prompt_turn("%1", "patch the file")
         .unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -585,7 +585,7 @@ fn runtime_apply_patch_missing_anchor_recovery_guides_anchor_refresh() {
             )
             .unwrap()
     );
-    let context = service.agent_turn_contexts.get(&turn.turn_id).unwrap();
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     let feedback = context
         .blocks
         .iter()
@@ -639,7 +639,7 @@ fn runtime_apply_patch_candidate_region_recovery_guides_ambiguous_ranges() {
         .start_agent_prompt_turn("%1", "patch the file")
         .unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -712,7 +712,7 @@ fn runtime_apply_patch_candidate_region_recovery_guides_ambiguous_ranges() {
             )
             .unwrap()
     );
-    let context = service.agent_turn_contexts.get(&turn.turn_id).unwrap();
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     let feedback = context
         .blocks
         .iter()
@@ -837,12 +837,12 @@ fn runtime_apply_patch_write_phase_hunk_mismatch_queues_model_recovery() {
     assert_eq!(service.pending_agent_provider_tasks().len(), 1);
     assert!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .any(|turn| turn.turn_id == "turn-1" && turn.state == AgentTurnState::Running)
     );
-    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
     let feedback = context
         .blocks
         .iter()
@@ -929,7 +929,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_is_unbounded_and_hides_retry_budge
         .start_agent_prompt_turn("%1", "patch the file")
         .unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -1023,7 +1023,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_is_unbounded_and_hides_retry_budge
             .collect::<Vec<_>>(),
         vec![8]
     );
-    let context = service.agent_turn_contexts.get(&turn.turn_id).unwrap();
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     let feedback = context
         .blocks
         .iter()
@@ -1091,7 +1091,7 @@ fn runtime_apply_patch_unsafe_path_recovery_guides_relative_headers() {
         .start_agent_prompt_turn("%1", "patch the file")
         .unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -1173,7 +1173,7 @@ fn runtime_apply_patch_unsafe_path_recovery_guides_relative_headers() {
             .iter()
             .any(|task| task.turn_id == turn.turn_id)
     );
-    let context = service.agent_turn_contexts.get(&turn.turn_id).unwrap();
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     let feedback = context
         .blocks
         .iter()
@@ -1247,7 +1247,7 @@ fn runtime_unrecovered_apply_patch_failure_logs_terminal_observation() {
     assert!(start.contains(r#""state":"running""#), "{start}");
 
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == "turn-1")
@@ -1308,7 +1308,7 @@ fn runtime_unrecovered_apply_patch_failure_logs_terminal_observation() {
         terminal_state: AgentTurnState::Failed,
     };
     service
-        .agent_turn_executions
+        .agent_turn_executions_mut()
         .insert("turn-1".to_string(), execution);
 
     service

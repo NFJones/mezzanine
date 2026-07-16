@@ -674,13 +674,14 @@ impl RuntimeSessionService {
                 return runtime_json_rpc_error(&request.id, error.kind(), error.message());
             }
         };
+        let (agent_shell_store, agent_turn_ledger) = self.agent.control_turn_state();
         let response = dispatch_control_request_for_client_with_agent_state(
             body,
             &mut self.session,
             caller_client_id,
             None,
-            &mut self.agent_shell_store,
-            &self.agent_turn_ledger,
+            agent_shell_store,
+            agent_turn_ledger,
         );
         if response.contains(r#""error""#) {
             return response;

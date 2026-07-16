@@ -10,7 +10,7 @@ impl RuntimeSessionService {
         let mut recovered = 0usize;
         for turn_id in candidates {
             let Some(turn) = self
-                .agent_turn_ledger
+                .agent_turn_ledger()
                 .turns()
                 .iter()
                 .find(|turn| turn.turn_id == turn_id && turn.state == AgentTurnState::Running)
@@ -19,7 +19,7 @@ impl RuntimeSessionService {
                 continue;
             };
             if self
-                .agent_turn_executions
+                .agent_turn_executions()
                 .get(&turn_id)
                 .is_some_and(runtime_execution_ready_for_provider_continuation)
             {
@@ -137,7 +137,7 @@ impl RuntimeSessionService {
     pub(in crate::runtime::processes) fn stranded_agent_shell_dispatch_recovery_candidates(
         &self,
     ) -> Vec<String> {
-        self.agent_turn_executions
+        self.agent_turn_executions()
             .iter()
             .filter(|(turn_id, execution)| {
                 (self.execution_has_pending_shell_dispatch(turn_id, execution)
@@ -166,7 +166,7 @@ impl RuntimeSessionService {
         let mut failed = 0usize;
         for turn_id in candidates {
             let Some(turn) = self
-                .agent_turn_ledger
+                .agent_turn_ledger()
                 .turns()
                 .iter()
                 .find(|turn| turn.turn_id == turn_id && turn.state == AgentTurnState::Running)
@@ -198,7 +198,7 @@ impl RuntimeSessionService {
         &self,
         actor_progress_turn_ids: &BTreeSet<String>,
     ) -> Vec<String> {
-        self.agent_turn_ledger
+        self.agent_turn_ledger()
             .turns()
             .iter()
             .filter(|turn| turn.state == AgentTurnState::Running)
@@ -230,7 +230,7 @@ impl RuntimeSessionService {
                 })
             || self.agent_turn_has_blocked_approval(turn_id)
             || self
-                .agent_turn_executions
+                .agent_turn_executions()
                 .get(turn_id)
                 .is_some_and(|execution| {
                     runtime_execution_ready_for_provider_continuation(execution)

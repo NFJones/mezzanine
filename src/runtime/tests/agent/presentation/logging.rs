@@ -66,7 +66,7 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
         )
         .unwrap();
     assert_eq!(first_execution.terminal_state, AgentTurnState::Running);
-    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
     let ledger_block = context
         .blocks
         .iter()
@@ -124,7 +124,7 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
                 .content
                 .contains("progress_say: The redundant updates are coming")
     }));
-    assert!(!service.agent_turn_contexts.contains_key("turn-1"));
+    assert!(!service.agent_turn_contexts().contains_key("turn-1"));
 }
 
 /// Verifies runtime keeps repeated progress `say` updates visible during a turn.

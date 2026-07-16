@@ -24,7 +24,7 @@ fn runtime_provider_completion_accepts_controller_failure_summary_state() {
         .start_agent_prompt_turn("%1", "determine the next implementation target")
         .unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -100,7 +100,7 @@ fn runtime_provider_completion_accepts_terminal_maap_validation_failure_state() 
         .start_agent_prompt_turn("%1", "call unavailable tool")
         .unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -167,7 +167,7 @@ fn runtime_provider_completion_rejects_nonterminal_missing_batch_state() {
         .unwrap();
     let started = service.start_agent_prompt_turn("%1", "hello").unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -219,7 +219,7 @@ fn runtime_provider_completion_rejects_empty_nonfinal_batch_state() {
         .unwrap();
     let started = service.start_agent_prompt_turn("%1", "hello").unwrap();
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == started.turn_id)
@@ -333,7 +333,7 @@ fn runtime_provider_failure_persists_and_finishes_turn() {
     );
     assert_eq!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .find(|turn| turn.turn_id == "turn-1")
@@ -716,12 +716,12 @@ fn runtime_provider_failure_after_nonzero_shell_result_does_not_report_running_r
     );
     assert!(
         service
-            .agent_turn_ledger
+            .agent_turn_ledger()
             .turns()
             .iter()
             .any(|turn| turn.turn_id == "turn-1" && turn.state == AgentTurnState::Failed)
     );
-    assert!(!service.agent_turn_executions.contains_key("turn-1"));
+    assert!(!service.agent_turn_executions().contains_key("turn-1"));
     service.terminate_all_pane_processes().unwrap();
 }
 
@@ -762,7 +762,7 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
     assert!(start.contains(r#""state":"running""#), "{start}");
     service.remove_pending_agent_provider_task("turn-1");
     let turn = service
-        .agent_turn_ledger
+        .agent_turn_ledger()
         .turns()
         .iter()
         .find(|turn| turn.turn_id == "turn-1")
@@ -882,8 +882,8 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
             .iter()
             .any(|task| task.turn_id == "turn-1")
     );
-    assert!(!service.agent_turn_executions.contains_key("turn-1"));
-    let context = service.agent_turn_contexts.get("turn-1").unwrap();
+    assert!(!service.agent_turn_executions().contains_key("turn-1"));
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
     assert!(context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block

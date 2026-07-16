@@ -98,7 +98,7 @@ impl RuntimeSessionService {
             .get(pane_id)
             .cloned()
             .unwrap_or_default();
-        if let Some(session) = self.agent_shell_store.get(pane_id) {
+        if let Some(session) = self.agent_shell_store().get(pane_id) {
             let transcript_ref = format!("transcript:{pane_id}:{}", session.session_id);
             if !refs.iter().any(|existing| existing == &transcript_ref) {
                 refs.push(transcript_ref);
@@ -140,7 +140,7 @@ impl RuntimeSessionService {
 
     /// Captures agent-shell conversation metadata for a live snapshot.
     pub(super) fn live_snapshot_agent_sessions(&self) -> Vec<SnapshotAgentSession> {
-        self.agent_shell_store
+        self.agent_shell_store()
             .sessions()
             .map(|session| SnapshotAgentSession {
                 pane_id: session.pane_id.clone(),
