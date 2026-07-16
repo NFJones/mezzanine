@@ -6,6 +6,7 @@
 //! credentials, HTTP metadata, transport, quota attachment, and error
 //! projection.
 
+use crate::context::ContextCacheDisposition;
 use crate::{
     MAAP_ACTION_BATCH_TOOL_NAME, MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME,
     MaapBatch, ModelMessageRole, ModelRequest, ModelTokenUsage, ProviderEndpointError,
@@ -150,6 +151,13 @@ fn parse_bool_option(label: &str, value: &str) -> ProviderRequestAssemblyResult<
     }
 }
 
+/// One Anthropic message retained with its cache lifecycle during serialization.
+struct AnthropicRenderedMessage {
+    role: &'static str,
+    content: String,
+    cache_disposition: ContextCacheDisposition,
+}
+
 /// Builds one Anthropic-compliant Messages API JSON body.
 pub fn anthropic_messages_request_body(
     request: &ModelRequest,
@@ -157,12 +165,12 @@ pub fn anthropic_messages_request_body(
     options: &AnthropicMessagesOptions,
 ) -> ProviderRequestAssemblyResult<String> {
     let mut system_parts = Vec::new();
-    let mut messages = Vec::<serde_json::Value>::new();
+    let mut rendered_messages = Vec::<AnthropicRenderedMessage>::new();
     for message in &request.messages {
         let role = match message.role {
             ModelMessageRole::System | ModelMessageRole::Developer => {
                 if !message.content.is_empty() {
-                    system_parts.push(message.content.clone());
+                    system_parts.push((message.content.clone(), message.cache_disposition()));
                 }
                 continue;
             }
@@ -172,27 +180,51 @@ pub fn anthropic_messages_request_body(
         if message.content.is_empty() {
             continue;
         }
-        if let Some(last) = messages.last_mut()
-            && last.get("role").and_then(serde_json::Value::as_str) == Some(role)
+        let cache_disposition = message.cache_disposition();
+        if let Some(last) = rendered_messages.last_mut()
+            && last.role == role
+            && last.cache_disposition == cache_disposition
         {
-            let previous = last
-                .get("content")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            last["content"] = serde_json::json!(format!("{previous}\n\n{}", message.content));
+            last.content.push_str("\n\n");
+            last.content.push_str(&message.content);
             continue;
         }
-        messages.push(serde_json::json!({
-            "role": role,
-            "content": message.content,
-        }));
+        rendered_messages.push(AnthropicRenderedMessage {
+            role,
+            content: message.content.clone(),
+            cache_disposition,
+        });
     }
-    if messages.is_empty() {
+    if rendered_messages.is_empty() {
         return Err(ProviderRequestAssemblyError::invalid_args(
             "Anthropic Messages request requires at least one user or assistant message",
         ));
     }
+    let latest_immutable_message = options.prompt_caching.then(|| {
+        rendered_messages
+            .iter()
+            .rposition(|message| message.cache_disposition == ContextCacheDisposition::Immutable)
+    });
+    let latest_immutable_message = latest_immutable_message.flatten();
+    let messages = rendered_messages
+        .into_iter()
+        .enumerate()
+        .map(|(index, message)| {
+            let content = if Some(index) == latest_immutable_message {
+                serde_json::json!([{
+                    "type": "text",
+                    "text": message.content,
+                    "cache_control": { "type": "ephemeral" },
+                }])
+            } else {
+                serde_json::json!(message.content)
+            };
+            serde_json::json!({
+                "role": message.role,
+                "content": content,
+            })
+        })
+        .collect::<Vec<_>>();
     let max_tokens = request
         .max_output_tokens
         .filter(|tokens| *tokens > 0)
@@ -211,15 +243,38 @@ pub fn anthropic_messages_request_body(
         body["output_config"] = serde_json::json!({ "effort": effort });
     }
     if !system_parts.is_empty() {
-        let system_text = system_parts.join("\n\n");
         body["system"] = if options.prompt_caching {
-            serde_json::json!([{
-                "type": "text",
-                "text": system_text,
-                "cache_control": { "type": "ephemeral" },
-            }])
+            let final_static_part = system_parts
+                .iter()
+                .rposition(|(_, disposition)| *disposition == ContextCacheDisposition::Static);
+            serde_json::Value::Array(
+                system_parts
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, (text, _))| {
+                        if Some(index) == final_static_part {
+                            serde_json::json!({
+                                "type": "text",
+                                "text": text,
+                                "cache_control": { "type": "ephemeral" },
+                            })
+                        } else {
+                            serde_json::json!({
+                                "type": "text",
+                                "text": text,
+                            })
+                        }
+                    })
+                    .collect(),
+            )
         } else {
-            serde_json::json!(system_text)
+            serde_json::json!(
+                system_parts
+                    .into_iter()
+                    .map(|(text, _)| text)
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
+            )
         };
     }
     if anthropic_request_requires_maap(request) {
@@ -968,6 +1023,139 @@ fn anthropic_usage_u64(value: &serde_json::Value, key: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Builds a minimal Anthropic request for cache-segmentation tests.
+    fn anthropic_cache_test_request(messages: Vec<crate::ModelMessage>) -> ModelRequest {
+        ModelRequest {
+            provider: "anthropic".to_string(),
+            model: "claude-3-7-sonnet".to_string(),
+            reasoning_effort: None,
+            thinking_enabled: None,
+            latency_preference: None,
+            prompt_cache_retention: None,
+            max_output_tokens: Some(512),
+            temperature: None,
+            prompt_cache_session_id: None,
+            prompt_cache_lineage_id: None,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            available_mcp_tools: Vec::new(),
+            memory_actions_enabled: false,
+            issue_actions_enabled: false,
+            interaction_kind: crate::ModelInteractionKind::ActionExecution,
+            allowed_actions: crate::AllowedActionSet::say_only(),
+            stop: None,
+            messages,
+        }
+    }
+
+    /// Verifies volatile developer guidance remains after the static Anthropic cache breakpoint.
+    ///
+    /// Continuation ledgers change between provider calls. They must remain
+    /// model-visible without changing the preceding cache-marked system block.
+    #[test]
+    fn anthropic_cache_breakpoint_precedes_volatile_developer_guidance() {
+        let request = |ledger: &str| {
+            anthropic_cache_test_request(vec![
+                crate::ModelMessage {
+                    role: ModelMessageRole::System,
+                    source: crate::ContextSourceKind::System,
+                    content: "stable system prompt".to_string(),
+                },
+                crate::ModelMessage {
+                    role: ModelMessageRole::Developer,
+                    source: crate::ContextSourceKind::RuntimeHint,
+                    content: format!("[progress ledger]\n{ledger}"),
+                },
+                crate::ModelMessage {
+                    role: ModelMessageRole::User,
+                    source: crate::ContextSourceKind::UserInstruction,
+                    content: "continue".to_string(),
+                },
+            ])
+        };
+        let first: serde_json::Value = serde_json::from_str(
+            &anthropic_messages_request_body(
+                &request("first update"),
+                false,
+                &AnthropicMessagesOptions::default(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let second: serde_json::Value = serde_json::from_str(
+            &anthropic_messages_request_body(
+                &request("second update"),
+                false,
+                &AnthropicMessagesOptions::default(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(first["system"][0], second["system"][0]);
+        assert_eq!(first["system"][0]["text"], "stable system prompt");
+        assert_eq!(
+            first["system"][0]["cache_control"],
+            serde_json::json!({ "type": "ephemeral" })
+        );
+        assert_eq!(
+            first["system"][1]["text"],
+            "[progress ledger]\nfirst update"
+        );
+        assert!(first["system"][1].get("cache_control").is_none());
+        assert_eq!(
+            second["system"][1]["text"],
+            "[progress ledger]\nsecond update"
+        );
+    }
+
+    /// Verifies Anthropic marks the latest immutable transcript turn as a second cache boundary.
+    ///
+    /// Historical user and assistant content should remain reusable while the
+    /// current user request stays after the breakpoint as a volatile suffix.
+    #[test]
+    fn anthropic_cache_breakpoint_marks_latest_immutable_transcript_message() {
+        let request = anthropic_cache_test_request(vec![
+            crate::ModelMessage {
+                role: ModelMessageRole::System,
+                source: crate::ContextSourceKind::System,
+                content: "stable system prompt".to_string(),
+            },
+            crate::ModelMessage {
+                role: ModelMessageRole::User,
+                source: crate::ContextSourceKind::TranscriptUser,
+                content: "historical request".to_string(),
+            },
+            crate::ModelMessage {
+                role: ModelMessageRole::Assistant,
+                source: crate::ContextSourceKind::TranscriptAssistant,
+                content: "historical answer".to_string(),
+            },
+            crate::ModelMessage {
+                role: ModelMessageRole::User,
+                source: crate::ContextSourceKind::UserInstruction,
+                content: "current request".to_string(),
+            },
+        ]);
+
+        let value: serde_json::Value = serde_json::from_str(
+            &anthropic_messages_request_body(&request, false, &AnthropicMessagesOptions::default())
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(value["messages"][0]["content"], "historical request");
+        assert_eq!(
+            value["messages"][1]["content"][0]["text"],
+            "historical answer"
+        );
+        assert_eq!(
+            value["messages"][1]["content"][0]["cache_control"],
+            serde_json::json!({ "type": "ephemeral" })
+        );
+        assert_eq!(value["messages"][2]["content"], "current request");
+    }
 
     /// Verifies options from incompatible provider APIs fail at the lower
     /// Anthropic request-policy boundary.
