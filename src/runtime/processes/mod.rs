@@ -1571,11 +1571,12 @@ impl RuntimeSessionService {
         self.deregister_macro_managed_subagent(&agent_id);
         if let Some(agent_id) = AgentId::opaque(agent_id)
             && self
-                .message_service
+                .control
+                .message_service()
                 .registered_identity(&agent_id)
                 .is_some()
         {
-            let _ = self.message_service.update_presence(
+            let _ = self.control.message_service_mut().update_presence(
                 &agent_id,
                 mez_agent::messaging::AgentPresenceStatus::Offline,
                 current_unix_seconds().saturating_mul(1000),

@@ -130,8 +130,8 @@ impl RuntimeSessionService {
         caller_client_id: &mez_core::ids::ClientId,
     ) -> Result<String> {
         let event_log = self
-            .event_log
-            .as_ref()
+            .control
+            .event_log()
             .ok_or_else(|| MezError::invalid_state("runtime event log is not configured"))?;
         dispatch_event_list_request(request, &self.session, caller_client_id, event_log)
     }

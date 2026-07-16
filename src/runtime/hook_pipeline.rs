@@ -29,7 +29,7 @@ impl RuntimeSessionService {
         kind: EventKind,
         payload: String,
     ) -> Result<()> {
-        if let Some(event_log) = &mut self.event_log {
+        if let Some(event_log) = self.control.event_log_mut() {
             event_log.append(
                 kind,
                 Some(self.session.id.to_string()),

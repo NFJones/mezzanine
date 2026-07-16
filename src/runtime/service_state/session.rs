@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::runtime::{
-    RuntimeAgentComponent, RuntimePersistenceComponent, RuntimePresentationComponent,
-    RuntimeProcessComponent,
+    RuntimeAgentComponent, RuntimeControlComponent, RuntimePersistenceComponent,
+    RuntimePresentationComponent, RuntimeProcessComponent,
 };
 
 /// Carries Runtime Session Service state for this subsystem.
@@ -20,6 +20,8 @@ pub struct RuntimeSessionService {
     pub(in crate::runtime) agent: RuntimeAgentComponent,
     /// Private state owner for repositories and deferred external effects.
     pub(in crate::runtime) persistence: RuntimePersistenceComponent,
+    /// Private state owner for control replay, messaging, and event fanout.
+    pub(in crate::runtime) control: RuntimeControlComponent,
     /// Stores the session value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -40,16 +42,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) config_root: Option<PathBuf>,
-    /// Stores the control idempotency value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) control_idempotency: ControlIdempotencyCache,
-    /// Stores the message service value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) message_service: MessageService,
     /// Stores the latest async runtime actor metrics snapshot when available.
     ///
     /// The actor-owned command path updates this snapshot before rendering
@@ -194,11 +186,6 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) focused_shell_hook_results: Vec<HookExecutionResult>,
-    /// Stores the event log value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) event_log: Option<EventLog>,
     /// Stores the lifecycle state value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

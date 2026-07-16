@@ -30,7 +30,7 @@ impl RuntimeSessionService {
                 );
             };
             let cache_key = format!("{caller_client_id}:{idempotency_key}");
-            match self.control_idempotency.cached_response(
+            match self.control.idempotency_mut().cached_response(
                 &cache_key,
                 request.method.as_str(),
                 &request.params,
@@ -180,7 +180,7 @@ impl RuntimeSessionService {
             }
         }
         if let Some(cache_key) = cache_key {
-            self.control_idempotency.remember_response(
+            self.control.idempotency_mut().remember_response(
                 cache_key,
                 request.method.clone(),
                 request.params.clone(),

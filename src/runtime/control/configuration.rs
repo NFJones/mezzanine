@@ -39,7 +39,7 @@ impl RuntimeSessionService {
                 &mut self.session,
                 caller_client_id,
                 &self.config_layers,
-                &mut self.control_idempotency,
+                self.control.idempotency_mut(),
                 audit_log,
             )
         } else {
@@ -48,7 +48,7 @@ impl RuntimeSessionService {
                 &mut self.session,
                 caller_client_id,
                 &self.config_layers,
-                &mut self.control_idempotency,
+                self.control.idempotency_mut(),
             )
         };
         if response.contains(r#""result""#)
@@ -312,10 +312,11 @@ impl RuntimeSessionService {
                 return runtime_json_rpc_error(&request.id, error.kind(), error.message());
             }
         }
-        match self
-            .control_idempotency
-            .cached_response(&cache_key, &request.method, &request.params)
-        {
+        match self.control.idempotency_mut().cached_response(
+            &cache_key,
+            &request.method,
+            &request.params,
+        ) {
             Ok(Some(response)) => {
                 if let Some(mut record) = audit_plan {
                     record.outcome = config_audit_outcome(&response).to_string();
@@ -359,7 +360,7 @@ impl RuntimeSessionService {
         if config_response_advances_generation(&request.method, &response) {
             self.session.advance_config_generation();
         }
-        self.control_idempotency.remember_response(
+        self.control.idempotency_mut().remember_response(
             cache_key,
             request.method.clone(),
             request.params.clone(),
@@ -403,10 +404,11 @@ impl RuntimeSessionService {
                 return runtime_json_rpc_error(&request.id, error.kind(), error.message());
             }
         }
-        match self
-            .control_idempotency
-            .cached_response(&cache_key, &request.method, &request.params)
-        {
+        match self.control.idempotency_mut().cached_response(
+            &cache_key,
+            &request.method,
+            &request.params,
+        ) {
             Ok(Some(response)) => {
                 if let Some(mut record) = audit_plan {
                     record.outcome = config_audit_outcome(&response).to_string();
@@ -450,7 +452,7 @@ impl RuntimeSessionService {
         if config_response_advances_generation(&request.method, &response) {
             self.session.advance_config_generation();
         }
-        self.control_idempotency.remember_response(
+        self.control.idempotency_mut().remember_response(
             cache_key,
             request.method.clone(),
             request.params.clone(),

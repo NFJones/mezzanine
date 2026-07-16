@@ -28,7 +28,7 @@ impl RuntimeSessionService {
         let (output, consumed) = handle_mmp_frame(
             input,
             max_content_length,
-            &mut self.message_service,
+            self.control.message_service_mut(),
             connection,
             now_ms,
         )?;

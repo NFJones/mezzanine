@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::runtime::{
-    RuntimeAgentComponent, RuntimeAutoSizingConfig, RuntimePersistenceComponent,
-    RuntimePresentationComponent, RuntimeProcessComponent,
+    RuntimeAgentComponent, RuntimeAutoSizingConfig, RuntimeControlComponent,
+    RuntimePersistenceComponent, RuntimePresentationComponent, RuntimeProcessComponent,
 };
 #[cfg(test)]
 use crate::terminal::HostClipboard;
@@ -124,12 +124,11 @@ impl RuntimeSessionService {
                 DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS,
             ),
             persistence: RuntimePersistenceComponent::default(),
+            control: RuntimeControlComponent::new(control_idempotency, message_service, event_log),
             session,
             window_created_at_unix_seconds,
             config_layers: Vec::new(),
             config_root: None,
-            control_idempotency,
-            message_service,
             async_runtime_metrics: None,
             runtime_metrics: Default::default(),
             permission_policy: PermissionPolicy::default(),
@@ -161,7 +160,6 @@ impl RuntimeSessionService {
             next_focused_shell_hook_marker: 1,
             focused_shell_hook_transactions: BTreeMap::new(),
             focused_shell_hook_results: Vec::new(),
-            event_log,
             lifecycle_state,
             socket_path,
             created_at_unix_seconds,

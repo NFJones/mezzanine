@@ -96,7 +96,7 @@ impl RuntimeSessionService {
         observer_id: &str,
         payload: String,
     ) -> Result<()> {
-        if let Some(event_log) = &mut self.event_log {
+        if let Some(event_log) = self.control.event_log_mut() {
             event_log.append(
                 EventKind::ObserverRequested,
                 Some(self.session.id.to_string()),

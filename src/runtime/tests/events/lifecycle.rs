@@ -383,8 +383,7 @@ fn runtime_bootstrap_unparsed_output_does_not_retry_forever() {
             .all(|transaction| transaction.kind != RunningShellTransactionKind::Bootstrap)
     );
     let events = service
-        .event_log
-        .as_ref()
+        .event_log()
         .unwrap()
         .replay_for(&EventAudience::Primary);
     assert!(

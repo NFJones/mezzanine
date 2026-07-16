@@ -237,8 +237,8 @@ impl RuntimeSessionService {
         observer_id: &str,
     ) -> Result<()> {
         if let Some(visible_from_event_id) = self
-            .event_log
-            .as_ref()
+            .control
+            .event_log()
             .map(|event_log| event_log.latest_event_id().saturating_add(1))
         {
             Ok(self

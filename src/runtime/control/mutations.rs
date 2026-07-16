@@ -33,7 +33,7 @@ impl RuntimeSessionService {
         let cache_key = format!("{caller_client_id}:{idempotency_key}");
         let cacheable_response = runtime_mutating_response_is_cacheable(&request.method);
         if cacheable_response {
-            match self.control_idempotency.cached_response(
+            match self.control.idempotency_mut().cached_response(
                 &cache_key,
                 &request.method,
                 &request.params,
@@ -59,7 +59,7 @@ impl RuntimeSessionService {
             Err(error) => runtime_json_rpc_error(&request.id, error.kind(), error.message()),
         };
         if cacheable_response {
-            self.control_idempotency.remember_response(
+            self.control.idempotency_mut().remember_response(
                 cache_key,
                 request.method,
                 request.params,
@@ -763,7 +763,7 @@ impl RuntimeSessionService {
             .as_ref()
             .and_then(|pane_id| self.find_pane_descriptor(pane_id.as_str()))
             .map(|descriptor| descriptor.window_id);
-        Ok(self.message_service.ensure_agent_identity(
+        Ok(self.control.message_service_mut().ensure_agent_identity(
             SenderIdentity {
                 agent_id,
                 pane_id,

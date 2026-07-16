@@ -135,10 +135,11 @@ impl RuntimeSessionService {
             payload: payload.clone(),
             extension_fields: Vec::new(),
         };
-        let delivery = match self
-            .message_service
-            .accept_at(&sender.agent_id, envelope, now_ms)
-        {
+        let delivery = match self.control.message_service_mut().accept_at(
+            &sender.agent_id,
+            envelope,
+            now_ms,
+        ) {
             Ok(delivery) => delivery,
             Err(error) => {
                 let error = MezError::from(error);
@@ -190,7 +191,7 @@ impl RuntimeSessionService {
         let window_id = self
             .find_pane_descriptor(&turn.pane_id)
             .map(|descriptor| descriptor.window_id);
-        Ok(self.message_service.ensure_agent_identity(
+        Ok(self.control.message_service_mut().ensure_agent_identity(
             SenderIdentity {
                 agent_id,
                 pane_id,

@@ -22,7 +22,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn event_log(&self) -> Option<&EventLog> {
-        self.event_log.as_ref()
+        self.control.event_log()
     }
 
     /// Runs the lifecycle state operation for this subsystem.

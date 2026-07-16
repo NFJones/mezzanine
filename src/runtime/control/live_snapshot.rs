@@ -167,7 +167,7 @@ impl RuntimeSessionService {
 
     /// Captures runtime message-service state for a live snapshot.
     pub(super) fn live_snapshot_message_state(&self) -> MessageServiceSnapshot {
-        self.message_service.snapshot_state()
+        self.control.message_service().snapshot_state()
     }
 
     /// Captures MCP server state for a live snapshot.

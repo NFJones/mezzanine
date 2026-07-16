@@ -908,11 +908,14 @@ impl RuntimeSessionService {
             now_ms,
         )?;
         if self
-            .message_service
+            .control
+            .message_service()
             .subscription(&parent_identity.agent_id)
             .is_none()
         {
-            self.message_service.subscribe(&parent_identity.agent_id)?;
+            self.control
+                .message_service_mut()
+                .subscribe(&parent_identity.agent_id)?;
         }
         let child_pane_id = pane_id_from_runtime_agent_id(initial_status.child_agent_id)
             .ok_or_else(|| MezError::invalid_args("subagent pane id is invalid for MMP"))?;
@@ -946,7 +949,8 @@ impl RuntimeSessionService {
                 format!(r#""{}""#, json_escape(initial_status.child_display_name)),
             )],
         };
-        self.message_service
+        self.control
+            .message_service_mut()
             .accept_at(&child_identity.agent_id, envelope, now_ms)?;
         self.append_subagent_parent_status_line(
             initial_status.parent_agent_id,

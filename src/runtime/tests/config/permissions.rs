@@ -139,8 +139,7 @@ fn runtime_control_approval_methods_use_runtime_owned_queue() {
     assert_eq!(repeated_body, decide_body);
 
     let primary_events = service
-        .event_log
-        .as_ref()
+        .event_log()
         .unwrap()
         .replay_for(&EventAudience::Primary);
     assert!(
@@ -488,8 +487,7 @@ fn runtime_project_trust_decision_applies_and_removes_project_overlays() {
     assert_eq!(initial_report.project_trust_prompts_announced, 1);
     assert_eq!(service.terminal_history_limit(), 3);
     let primary_events = service
-        .event_log
-        .as_ref()
+        .event_log()
         .unwrap()
         .replay_for(&EventAudience::Primary);
     assert!(primary_events.iter().any(|event| {
@@ -673,8 +671,7 @@ fn runtime_agent_trust_command_logs_and_persists_project_trust_request() {
         .unwrap();
     assert_eq!(initial_report.project_trust_prompts_announced, 1);
     let primary_events = service
-        .event_log
-        .as_ref()
+        .event_log()
         .unwrap()
         .replay_for(&EventAudience::Primary);
     assert!(

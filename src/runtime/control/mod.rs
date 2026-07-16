@@ -4,6 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 mod approval;
+mod component;
 mod configuration;
 mod context;
 mod ingress;
@@ -67,6 +68,7 @@ use crate::control::{
     validate_control_method_params_schema,
 };
 use crate::skills::{BUILTIN_MEZ_REFERENCE_SKILL_NAME, load_skill_document};
+pub(in crate::runtime) use component::RuntimeControlComponent;
 use context::{
     AGENT_TRANSCRIPT_CONTEXT_READ_BYTES, runtime_agent_transcript_context_blocks,
     runtime_context_block_is_compaction_refresh_owned, runtime_local_message_context_content,
@@ -178,7 +180,8 @@ impl RuntimeSessionService {
         let agent_id = mez_core::ids::AgentId::opaque(format!("agent-{pane_id}"))
             .ok_or_else(|| MezError::invalid_args("agent id must be non-empty"))?;
         let pending_messages = self
-            .message_service
+            .control
+            .message_service_mut()
             .receive_for(&agent_id, super::current_unix_seconds());
         if !pending_messages.is_empty() {
             let message_lines: Vec<String> = pending_messages
@@ -648,7 +651,7 @@ impl RuntimeSessionService {
                 body,
                 &mut self.session,
                 primary_client_id,
-                &mut self.control_idempotency,
+                self.control.idempotency_mut(),
             );
         }
 
@@ -666,7 +669,7 @@ impl RuntimeSessionService {
         let cache_key = format!("{primary_client_id}:{idempotency_key}");
         let cacheable_response = runtime_mutating_response_is_cacheable(&request.method);
         if cacheable_response {
-            match self.control_idempotency.cached_response(
+            match self.control.idempotency_mut().cached_response(
                 &cache_key,
                 &request.method,
                 &request.params,
@@ -692,7 +695,7 @@ impl RuntimeSessionService {
             Err(error) => runtime_json_rpc_error(&request.id, error.kind(), error.message()),
         };
         if cacheable_response {
-            self.control_idempotency.remember_response(
+            self.control.idempotency_mut().remember_response(
                 cache_key,
                 request.method,
                 request.params,
@@ -875,7 +878,7 @@ impl RuntimeSessionService {
                 body,
                 &mut self.session,
                 connection,
-                &mut self.control_idempotency,
+                self.control.idempotency_mut(),
             );
             if response.contains(r#""result""#)
                 && let Err(error) = self.apply_runtime_initialize_side_effects(
@@ -1080,7 +1083,7 @@ impl RuntimeSessionService {
                 body,
                 &mut self.session,
                 connection,
-                &mut self.control_idempotency,
+                self.control.idempotency_mut(),
             );
         }
         self.dispatch_runtime_mutating_request(request, &caller_client_id)
@@ -1096,7 +1099,7 @@ impl RuntimeSessionService {
         kind: EventKind,
         payload: String,
     ) -> Result<()> {
-        if let Some(event_log) = &mut self.event_log {
+        if let Some(event_log) = self.control.event_log_mut() {
             event_log.append(
                 kind,
                 Some(self.session.id.to_string()),

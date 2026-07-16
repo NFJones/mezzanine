@@ -1196,7 +1196,9 @@ impl RuntimeSessionService {
                 .insert(window.id.to_string(), active_count);
             context.window_unread_message_counts.insert(
                 window.id.to_string(),
-                self.message_service.queued_window_message_count(&window.id),
+                self.control
+                    .message_service()
+                    .queued_window_message_count(&window.id),
             );
 
             for pane in window.panes() {

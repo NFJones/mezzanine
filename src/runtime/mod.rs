@@ -217,6 +217,7 @@ mod config;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod control;
+pub(in crate::runtime) use control::RuntimeControlComponent;
 /// Exposes deferred runtime side-effect value types.
 ///
 /// The nested module keeps side-effect planning records out of the central

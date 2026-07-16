@@ -462,7 +462,7 @@ impl RuntimeSessionService {
             return Ok(());
         };
         let now_ms = current_unix_seconds().saturating_mul(1000);
-        let parent_identity = self.message_service.ensure_agent_identity(
+        let parent_identity = self.control.message_service_mut().ensure_agent_identity(
             SenderIdentity {
                 agent_id: AgentId::opaque(parent_agent_id.clone()).ok_or_else(|| {
                     MezError::invalid_args("subagent parent agent id is invalid for MMP")
@@ -475,11 +475,14 @@ impl RuntimeSessionService {
             now_ms,
         )?;
         if self
-            .message_service
+            .control
+            .message_service()
             .subscription(&parent_identity.agent_id)
             .is_none()
         {
-            self.message_service.subscribe(&parent_identity.agent_id)?;
+            self.control
+                .message_service_mut()
+                .subscribe(&parent_identity.agent_id)?;
         }
         let child_identity = self.runtime_message_sender_identity(turn)?;
         let payload = TaskStatusPayload {
@@ -516,9 +519,11 @@ impl RuntimeSessionService {
                 })
                 .unwrap_or_default(),
         };
-        let delivery = self
-            .message_service
-            .accept_at(&child_identity.agent_id, envelope, now_ms);
+        let delivery = self.control.message_service_mut().accept_at(
+            &child_identity.agent_id,
+            envelope,
+            now_ms,
+        );
         let child_label =
             runtime_subagent_display_label(&turn.agent_id, child_display_name.as_deref());
         self.append_subagent_parent_status_line(
@@ -683,7 +688,7 @@ impl RuntimeSessionService {
         output: &str,
         now_ms: u64,
     ) -> Result<()> {
-        let parent_identity = self.message_service.ensure_agent_identity(
+        let parent_identity = self.control.message_service_mut().ensure_agent_identity(
             SenderIdentity {
                 agent_id: AgentId::opaque(parent_agent_id.to_string()).ok_or_else(|| {
                     MezError::invalid_args("subagent parent agent id is invalid for MMP")
@@ -696,11 +701,14 @@ impl RuntimeSessionService {
             now_ms,
         )?;
         if self
-            .message_service
+            .control
+            .message_service()
             .subscription(&parent_identity.agent_id)
             .is_none()
         {
-            self.message_service.subscribe(&parent_identity.agent_id)?;
+            self.control
+                .message_service_mut()
+                .subscribe(&parent_identity.agent_id)?;
         }
         let child_identity = self.runtime_message_sender_identity(turn)?;
         let child_display_name = self
@@ -734,7 +742,8 @@ impl RuntimeSessionService {
                 .unwrap_or_default(),
         };
         Ok(self
-            .message_service
+            .control
+            .message_service_mut()
             .accept_at(&child_identity.agent_id, envelope, now_ms)
             .map(|_| ())?)
     }

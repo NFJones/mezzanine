@@ -9,7 +9,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn control_idempotency(&self) -> &ControlIdempotencyCache {
-        &self.control_idempotency
+        self.control.idempotency()
     }
 
     /// Appends a runtime diagnostic event for async worker status that has
@@ -68,7 +68,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn message_service(&self) -> &MessageService {
-        &self.message_service
+        self.control.message_service()
     }
 
     /// Runs the message service mut operation for this subsystem.
@@ -77,7 +77,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn message_service_mut(&mut self) -> &mut MessageService {
-        &mut self.message_service
+        self.control.message_service_mut()
     }
 
     /// Runs the record pane transcript ref operation for this subsystem.
