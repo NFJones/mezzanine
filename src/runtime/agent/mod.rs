@@ -75,9 +75,9 @@ use mez_agent::semantic_patch_planning::{
 };
 use mez_agent::{
     AgentNetworkActionHistory, AgentShellDispatchHistory, AgentTurnSteering,
-    DEFAULT_PROVIDER_TIMEOUT_MS, MaapBatch, ModelTokenUsage, ModelTokenUsageKey,
-    ProviderApiCompatibility, ProviderQuotaUsage, SayStatus, append_mcp_context,
-    assistant_context_content_for_execution, invoked_mcp_tools_for_context,
+    DEFAULT_PROVIDER_TIMEOUT_MS, MaapBatch, MacroManagedSubagent, MacroRunState, ModelTokenUsage,
+    ModelTokenUsageKey, ProviderApiCompatibility, ProviderQuotaUsage, SayStatus,
+    append_mcp_context, assistant_context_content_for_execution, invoked_mcp_tools_for_context,
     set_project_guidance_context,
 };
 use mez_mux::command::CommandInvocation;
@@ -212,6 +212,12 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     subagent_window_ids: BTreeSet<String>,
     /// Subagent panes awaiting close after terminal turn cleanup.
     pending_terminal_subagent_pane_closes: BTreeSet<String>,
+    /// Persistent macro-managed child agents keyed by child agent id.
+    macro_managed_subagent_agents: BTreeMap<String, MacroManagedSubagent>,
+    /// Active macro runs keyed by parent orchestration turn id.
+    macro_runs_by_parent_turn: BTreeMap<String, MacroRunState>,
+    /// Parent macro run keyed by child step turn id.
+    macro_run_by_child_turn: BTreeMap<String, String>,
 }
 
 /// State removed when a compaction worker reports failure.
@@ -263,6 +269,44 @@ impl RuntimeAgentComponent {
 }
 
 impl RuntimeSessionService {
+    /// Reports whether one managed macro child is registered.
+    #[cfg(test)]
+    pub(crate) fn has_macro_managed_subagent(&self, agent_id: &str) -> bool {
+        self.agent
+            .macro_managed_subagent_agents
+            .contains_key(agent_id)
+    }
+
+    /// Returns managed macro child ids to crate-local regression tests.
+    #[cfg(test)]
+    pub(crate) fn macro_managed_subagent_ids(&self) -> Vec<String> {
+        self.agent
+            .macro_managed_subagent_agents
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    /// Returns one active macro run to crate-local regression tests.
+    #[cfg(test)]
+    pub(crate) fn macro_run_for_tests(&self, parent_turn_id: &str) -> Option<&MacroRunState> {
+        self.agent.macro_runs_by_parent_turn.get(parent_turn_id)
+    }
+
+    /// Reports whether one parent macro run remains active.
+    #[cfg(test)]
+    pub(crate) fn has_macro_run(&self, parent_turn_id: &str) -> bool {
+        self.agent
+            .macro_runs_by_parent_turn
+            .contains_key(parent_turn_id)
+    }
+
+    /// Returns the parent macro turn for one child step turn.
+    #[cfg(test)]
+    pub(crate) fn macro_parent_turn_for_child(&self, child_turn_id: &str) -> Option<&String> {
+        self.agent.macro_run_by_child_turn.get(child_turn_id)
+    }
+
     /// Returns the parent-agent route for one spawned child turn.
     pub(in crate::runtime) fn subagent_task_parent(&self, turn_id: &str) -> Option<String> {
         self.agent.subagent_task_routes.get(turn_id).cloned()

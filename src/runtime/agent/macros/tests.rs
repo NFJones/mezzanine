@@ -10,17 +10,17 @@ fn deregister_macro_managed_removes_agent_from_set() {
     let agent_id = "agent-%99";
 
     // Initially empty
-    assert!(!service.macro_managed_subagent_agents.contains_key(agent_id));
+    assert!(!service.has_macro_managed_subagent(agent_id));
 
     // Register
     service.register_macro_managed_subagent(agent_id, "turn-99", "agent-%1", "test-macro");
-    assert!(service.macro_managed_subagent_agents.contains_key(agent_id));
+    assert!(service.has_macro_managed_subagent(agent_id));
 
     // Deregister
     service.deregister_macro_managed_subagent(agent_id);
-    assert!(!service.macro_managed_subagent_agents.contains_key(agent_id));
+    assert!(!service.has_macro_managed_subagent(agent_id));
 
     // Deregistering an already-absent id is a no-op
     service.deregister_macro_managed_subagent(agent_id);
-    assert!(!service.macro_managed_subagent_agents.contains_key(agent_id));
+    assert!(!service.has_macro_managed_subagent(agent_id));
 }

@@ -55,7 +55,7 @@ impl RuntimeSessionService {
         parent_agent_id: &str,
         macro_name: &str,
     ) {
-        self.macro_managed_subagent_agents.insert(
+        self.agent.macro_managed_subagent_agents.insert(
             child_agent_id.to_string(),
             MacroManagedSubagent {
                 parent_turn_id: parent_turn_id.to_string(),
@@ -75,7 +75,9 @@ impl RuntimeSessionService {
     /// # Parameters
     /// - `child_agent_id`: Runtime child agent id, such as `agent-%2`.
     pub fn deregister_macro_managed_subagent(&mut self, child_agent_id: &str) {
-        self.macro_managed_subagent_agents.remove(child_agent_id);
+        self.agent
+            .macro_managed_subagent_agents
+            .remove(child_agent_id);
     }
 
     /// Records a newly started macro run before any step is submitted.
@@ -92,7 +94,7 @@ impl RuntimeSessionService {
         started: &RuntimeAgentPromptTurnStart,
         child_agent_id: &str,
     ) {
-        self.macro_runs_by_parent_turn.insert(
+        self.agent.macro_runs_by_parent_turn.insert(
             started.turn_id.clone(),
             macro_run_state(
                 definition,
@@ -373,6 +375,7 @@ impl RuntimeSessionService {
                 });
             if child_turn_id.is_some() && !already_recorded_step_action {
                 let (macro_name, total_steps) = self
+                    .agent
                     .macro_runs_by_parent_turn
                     .get(parent_turn.turn_id.as_str())
                     .map(|run| (run.macro_name.clone(), run.steps.len()))
@@ -389,6 +392,7 @@ impl RuntimeSessionService {
                 self.append_agent_user_prompt_to_terminal_buffer(&parent_turn.pane_id, payload)?;
             }
             if let Some(run) = self
+                .agent
                 .macro_runs_by_parent_turn
                 .get_mut(parent_turn.turn_id.as_str())
             {
@@ -405,7 +409,8 @@ impl RuntimeSessionService {
                         step_index,
                         child_turn_id: child_turn_id.clone(),
                     };
-                    self.macro_run_by_child_turn
+                    self.agent
+                        .macro_run_by_child_turn
                         .insert(child_turn_id, parent_turn.turn_id.clone());
                 } else {
                     run.phase = MacroRunPhase::DispatchingStep { step_index };

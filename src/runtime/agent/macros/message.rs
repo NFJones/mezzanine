@@ -34,6 +34,7 @@ impl RuntimeSessionService {
             return Ok(None);
         };
         let Some(macro_owner) = self
+            .agent
             .macro_managed_subagent_agents
             .get(child_agent_id.as_str())
         else {

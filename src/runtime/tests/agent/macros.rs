@@ -121,11 +121,7 @@ fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
         pane_text.contains("macro release-check: started; 2 steps; worker agent-%"),
         "{pane_text}"
     );
-    let macro_children = service
-        .macro_managed_subagent_agents
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>();
+    let macro_children = service.macro_managed_subagent_ids();
     assert_eq!(macro_children.len(), 1, "{macro_children:?}");
     let child_agent_id = &macro_children[0];
     assert!(child_agent_id.starts_with("agent-%"), "{child_agent_id}");
@@ -163,8 +159,7 @@ fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
         .cloned()
         .expect("parent macro orchestration turn should exist");
     let macro_run = service
-        .macro_runs_by_parent_turn
-        .get(parent_turn.turn_id.as_str())
+        .macro_run_for_tests(parent_turn.turn_id.as_str())
         .expect("macro run state should be keyed by parent turn");
     assert_eq!(macro_run.run_id, parent_turn.turn_id);
     assert_eq!(macro_run.parent_turn_id, parent_turn.turn_id);
@@ -310,8 +305,7 @@ fn runtime_agent_macro_judge_dispatches_next_step_after_child_result() {
         .unwrap();
 
     let macro_run = service
-        .macro_runs_by_parent_turn
-        .get(parent_turn.turn_id.as_str())
+        .macro_run_for_tests(parent_turn.turn_id.as_str())
         .expect("macro should continue after a valid judge decision");
     assert_eq!(macro_run.current_step, 1);
     assert!(macro_run.steps[0].task_result.as_ref().unwrap().success);
@@ -442,8 +436,7 @@ fn runtime_agent_macro_judge_retries_current_step_after_child_result() {
         .unwrap();
 
     let macro_run = service
-        .macro_runs_by_parent_turn
-        .get(parent_turn.turn_id.as_str())
+        .macro_run_for_tests(parent_turn.turn_id.as_str())
         .expect("macro should remain active after retrying a recoverable step");
     assert_eq!(macro_run.current_step, 0);
     assert_eq!(
@@ -586,16 +579,8 @@ fn runtime_agent_macro_judge_stop_failure_closes_successful_child_subagent() {
                 session.running_turn_id.as_deref() != Some(parent_turn.turn_id.as_str())
             })
     );
-    assert!(
-        !service
-            .macro_runs_by_parent_turn
-            .contains_key(parent_turn.turn_id.as_str())
-    );
-    assert!(
-        !service
-            .macro_managed_subagent_agents
-            .contains_key(&child_agent_id)
-    );
+    assert!(!service.has_macro_run(parent_turn.turn_id.as_str()));
+    assert!(!service.has_macro_managed_subagent(&child_agent_id));
     assert!(!service.subagent_lineage.contains_key(&child_agent_id));
     assert!(
         !service
@@ -721,16 +706,8 @@ fn runtime_agent_macro_judge_finish_success_closes_child_subagent_and_completes_
                 session.running_turn_id.as_deref() != Some(parent_turn.turn_id.as_str())
             })
     );
-    assert!(
-        !service
-            .macro_runs_by_parent_turn
-            .contains_key(parent_turn.turn_id.as_str())
-    );
-    assert!(
-        !service
-            .macro_managed_subagent_agents
-            .contains_key(&child_agent_id)
-    );
+    assert!(!service.has_macro_run(parent_turn.turn_id.as_str()));
+    assert!(!service.has_macro_managed_subagent(&child_agent_id));
     assert!(!service.subagent_lineage.contains_key(&child_agent_id));
     assert!(
         !service

@@ -32,10 +32,9 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
         .unwrap();
     assert!(response.contains(r#""kind":"turn_started""#), "{response}");
     let child_agent_id = service
-        .macro_managed_subagent_agents
-        .keys()
+        .macro_managed_subagent_ids()
+        .into_iter()
         .next()
-        .cloned()
         .expect("macro child should be registered");
     let parent_turn = service
         .agent_turn_ledger
@@ -91,8 +90,7 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
             .contains_key(&child_turn_id)
     );
     let macro_run = service
-        .macro_runs_by_parent_turn
-        .get(parent_turn.turn_id.as_str())
+        .macro_run_for_tests(parent_turn.turn_id.as_str())
         .expect("macro run state should be keyed by parent turn");
     assert_eq!(macro_run.current_step, 0);
     assert_eq!(
@@ -100,7 +98,7 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
         Some(child_turn_id.as_str())
     );
     assert_eq!(
-        service.macro_run_by_child_turn.get(child_turn_id.as_str()),
+        service.macro_parent_turn_for_child(child_turn_id.as_str()),
         Some(&parent_turn.turn_id)
     );
     assert!(

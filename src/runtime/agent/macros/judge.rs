@@ -17,7 +17,7 @@ impl RuntimeSessionService {
         &self,
         turn_id: &str,
     ) -> Option<usize> {
-        match self.macro_runs_by_parent_turn.get(turn_id)?.phase {
+        match self.agent.macro_runs_by_parent_turn.get(turn_id)?.phase {
             MacroRunPhase::WaitingForJudge { step_index } => Some(step_index),
             _ => None,
         }
@@ -100,6 +100,7 @@ impl RuntimeSessionService {
         step_index: usize,
     ) -> Result<ModelRequest> {
         let run = self
+            .agent
             .macro_runs_by_parent_turn
             .get(turn.turn_id.as_str())
             .ok_or_else(|| {
@@ -118,6 +119,7 @@ impl RuntimeSessionService {
         response: &ModelResponse,
     ) -> Result<MacroJudgeDecision> {
         let run = self
+            .agent
             .macro_runs_by_parent_turn
             .get(turn_id)
             .ok_or_else(|| MezError::invalid_state("macro judge response has no macro run"))?;
@@ -146,6 +148,7 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         let next_step_index = step_index.saturating_add(1);
         if let Some(run) = self
+            .agent
             .macro_runs_by_parent_turn
             .get_mut(turn.turn_id.as_str())
         {
@@ -160,6 +163,7 @@ impl RuntimeSessionService {
             MacroJudgeOutcome::Continue | MacroJudgeOutcome::ContinueWithAdaptedPrompt => {
                 let (child_agent_id, prompt, dispatch_status) = {
                     let run = self
+                        .agent
                         .macro_runs_by_parent_turn
                         .get(turn.turn_id.as_str())
                         .ok_or_else(|| {
@@ -230,6 +234,7 @@ impl RuntimeSessionService {
             MacroJudgeOutcome::RetryCurrentStep => {
                 let (child_agent_id, prompt, retry_action_id, dispatch_status) = {
                     let run = self
+                        .agent
                         .macro_runs_by_parent_turn
                         .get(turn.turn_id.as_str())
                         .ok_or_else(|| {
@@ -304,6 +309,7 @@ impl RuntimeSessionService {
                     .as_deref()
                     .unwrap_or(decision.rationale.as_str());
                 let (child_agent_id, macro_name, total_steps) = self
+                    .agent
                     .macro_runs_by_parent_turn
                     .get(turn.turn_id.as_str())
                     .map(|run| {
@@ -314,7 +320,7 @@ impl RuntimeSessionService {
                         )
                     })
                     .unwrap_or_else(|| (None, "unknown".to_string(), step_index.saturating_add(1)));
-                self.macro_runs_by_parent_turn.remove(&turn.turn_id);
+                self.agent.macro_runs_by_parent_turn.remove(&turn.turn_id);
                 if let Some(child_agent_id) = child_agent_id.as_deref() {
                     let reason = "macro judge rejected subagent output";
                     self.close_subagent_descendants_for_parent_agent(child_agent_id, reason)?;
@@ -368,6 +374,7 @@ impl RuntimeSessionService {
             }
             MacroJudgeOutcome::FinishSuccess => {
                 let (child_agent_id, macro_name, total_steps) = self
+                    .agent
                     .macro_runs_by_parent_turn
                     .get(turn.turn_id.as_str())
                     .map(|run| {
@@ -378,7 +385,7 @@ impl RuntimeSessionService {
                         )
                     })
                     .unwrap_or_else(|| (None, "unknown".to_string(), step_index.saturating_add(1)));
-                self.macro_runs_by_parent_turn.remove(&turn.turn_id);
+                self.agent.macro_runs_by_parent_turn.remove(&turn.turn_id);
                 if let Some(child_agent_id) = child_agent_id.as_deref() {
                     let reason = "macro completed successfully";
                     self.close_subagent_descendants_for_parent_agent(child_agent_id, reason)?;

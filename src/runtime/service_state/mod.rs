@@ -22,7 +22,6 @@ use crate::error::MezErrorKind;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
 use crate::terminal::PaneAgentStatusField;
 use mez_agent::instructions::DiscoveredInstructionFile;
-use mez_agent::{MacroManagedSubagent, MacroRunState};
 use mez_mux::copy::CopyPosition;
 use mez_mux::layout::PaneTitleSource;
 use secrecy::ExposeSecret;

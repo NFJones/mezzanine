@@ -884,10 +884,12 @@ impl RuntimeSessionService {
         let mut failed_macro_parent_turn = None;
         let mut macro_result_status = None;
         if let Some(parent_run_id) = self
+            .agent
             .macro_run_by_child_turn
             .remove(&dependency.child_turn_id)
             && parent_run_id == dependency.parent_turn_id
             && let Some(run) = self
+                .agent
                 .macro_runs_by_parent_turn
                 .get_mut(parent_run_id.as_str())
             && let Some(step) = run.steps.iter_mut().find(|step| {
@@ -929,7 +931,7 @@ impl RuntimeSessionService {
             ),
         )?;
         if let Some(parent_turn_id) = failed_macro_parent_turn {
-            self.macro_runs_by_parent_turn.remove(&parent_turn_id);
+            self.agent.macro_runs_by_parent_turn.remove(&parent_turn_id);
             let _ = self.agent.agent_scheduler.complete(&parent_turn_id);
             self.agent_turn_ledger
                 .finish_turn(&parent_turn_id, AgentTurnState::Failed)?;
