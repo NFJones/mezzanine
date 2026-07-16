@@ -154,6 +154,8 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     agent_pre_shell_hook_completions: BTreeSet<RuntimeAgentPreShellHookCompletion>,
     /// Effective provider model profile retained for each active turn.
     agent_turn_model_profiles: BTreeMap<String, ModelProfile>,
+    /// Provider retry attempt number retained by turn id.
+    agent_provider_retry_attempts: BTreeMap<String, u32>,
 }
 
 impl RuntimeAgentComponent {

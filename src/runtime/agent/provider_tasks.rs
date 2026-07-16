@@ -26,7 +26,8 @@ impl RuntimeSessionService {
 
     /// Returns the recorded retry attempt for one provider turn.
     pub(crate) fn agent_provider_retry_attempt(&self, turn_id: &str) -> u32 {
-        self.agent_provider_retry_attempts
+        self.agent
+            .agent_provider_retry_attempts
             .get(turn_id)
             .copied()
             .unwrap_or(0)
@@ -34,17 +35,19 @@ impl RuntimeSessionService {
 
     /// Records the current retry attempt for one provider turn.
     pub(crate) fn set_agent_provider_retry_attempt(&mut self, turn_id: String, attempt: u32) {
-        self.agent_provider_retry_attempts.insert(turn_id, attempt);
+        self.agent
+            .agent_provider_retry_attempts
+            .insert(turn_id, attempt);
     }
 
     /// Clears retry-attempt state for one provider turn.
     pub(crate) fn clear_agent_provider_retry_attempt(&mut self, turn_id: &str) {
-        self.agent_provider_retry_attempts.remove(turn_id);
+        self.agent.agent_provider_retry_attempts.remove(turn_id);
     }
 
     /// Returns provider turns whose progress is represented by retry policy state.
     pub(crate) fn agent_provider_retry_turn_ids(&self) -> impl Iterator<Item = &String> {
-        self.agent_provider_retry_attempts.keys()
+        self.agent.agent_provider_retry_attempts.keys()
     }
 
     /// Builds the desired provider-poll timer transition for an external timer adapter.
