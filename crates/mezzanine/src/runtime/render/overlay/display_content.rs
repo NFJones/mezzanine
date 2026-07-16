@@ -21,6 +21,122 @@ pub(crate) struct RuntimeCommandDisplayOverlayContent {
     pub(crate) selections: Vec<OverlaySelection>,
 }
 
+/// Wraps command-overlay rows while preserving styles and selectable ranges.
+pub(crate) fn wrap_runtime_command_display_overlay_content(
+    content: RuntimeCommandDisplayOverlayContent,
+    display_width: usize,
+) -> RuntimeCommandDisplayOverlayContent {
+    let display_width = display_width.max(1);
+    let mut wrapped_content = RuntimeCommandDisplayOverlayContent {
+        command: content.command,
+        lines: Vec::new(),
+        line_style_spans: Vec::new(),
+        selections: Vec::new(),
+    };
+    for (source_line_index, display) in content.lines.into_iter().enumerate() {
+        let source_selections = content
+            .selections
+            .iter()
+            .filter(|selection| selection.line_index == source_line_index)
+            .collect::<Vec<_>>();
+        let line = RichTextLine {
+            display,
+            style_spans: content
+                .line_style_spans
+                .get(source_line_index)
+                .cloned()
+                .unwrap_or_default(),
+            copy_text: None,
+            kind: RichTextLineKind::Normal,
+        };
+        for wrapped in wrap_rich_text_line_to_width_with_source_ranges(line, display_width) {
+            let line_index = wrapped_content.lines.len();
+            for selection in &source_selections {
+                let selection_end = selection.start_column.saturating_add(selection.width);
+                let start = selection.start_column.max(wrapped.source_start_column);
+                let end = selection_end.min(wrapped.source_end_column);
+                if start < end {
+                    wrapped_content.selections.push(OverlaySelection {
+                        line_index,
+                        start_column: wrapped
+                            .display_prefix_width
+                            .saturating_add(start.saturating_sub(wrapped.source_start_column)),
+                        width: end.saturating_sub(start),
+                        command: selection.command.clone(),
+                        kind: selection.kind,
+                    });
+                }
+            }
+            wrapped_content
+                .line_style_spans
+                .push(wrapped.line.style_spans);
+            wrapped_content.lines.push(wrapped.line.display);
+        }
+    }
+    wrapped_content
+}
+
+/// Verifies command-overlay wrapping bounds every row while translating a
+/// selectable styled range across each resulting physical row.
+#[cfg(test)]
+#[test]
+fn command_overlay_wrapping_preserves_split_selection_and_style_ranges() {
+    let rendition = mez_terminal::GraphicRendition {
+        bold: true,
+        ..mez_terminal::GraphicRendition::default()
+    };
+    let content = RuntimeCommandDisplayOverlayContent {
+        command: Some("show-issues".to_string()),
+        lines: vec!["prefix alpha beta gamma suffix".to_string()],
+        line_style_spans: vec![vec![TerminalStyleSpan {
+            start: 7,
+            length: 16,
+            rendition,
+        }]],
+        selections: vec![OverlaySelection {
+            line_index: 0,
+            start_column: 7,
+            width: 16,
+            command: "/show-issues --id issue-1".to_string(),
+            kind: OverlaySelectionKind::Primary,
+        }],
+    };
+
+    let wrapped = wrap_runtime_command_display_overlay_content(content, 10);
+
+    assert!(wrapped.lines.len() > 1, "{wrapped:?}");
+    assert!(
+        wrapped
+            .lines
+            .iter()
+            .all(|line| UnicodeWidthStr::width(line.as_str()) <= 10),
+        "{wrapped:?}"
+    );
+    assert!(
+        wrapped
+            .selections
+            .windows(2)
+            .any(|selections| selections[0].line_index != selections[1].line_index),
+        "{wrapped:?}"
+    );
+    assert!(
+        wrapped.selections.iter().all(|selection| {
+            selection.command == "/show-issues --id issue-1"
+                && selection.start_column.saturating_add(selection.width) <= 10
+        }),
+        "{wrapped:?}"
+    );
+    assert!(
+        wrapped
+            .line_style_spans
+            .iter()
+            .filter(|spans| !spans.is_empty())
+            .count()
+            > 1,
+        "{wrapped:?}"
+    );
+}
+
 /// One rendered command-overlay display line with selectable choices.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RuntimeDisplayLine {

@@ -73,6 +73,9 @@ impl RuntimeSessionService {
     /// Applies one input chunk to a retained record-browser overlay, when one
     /// is active.
     fn apply_primary_record_browser_overlay_input(&mut self, input: &[u8]) -> Result<Option<bool>> {
+        let display_width = usize::from(self.session.authoritative_size.columns)
+            .min(self.presentation.settings.terminal_agent_wrap_column_cap)
+            .max(1);
         let Some(overlay) = self.presentation.primary_display_overlay.as_ref() else {
             return Ok(Some(false));
         };
@@ -122,6 +125,7 @@ impl RuntimeSessionService {
                     let changed = render_record_browser_overlay(
                         overlay,
                         &self.presentation.settings.ui_theme,
+                        display_width,
                     );
                     overlay.scroll_offset = scroll_offset.min(modal_overlay_max_scroll(
                         overlay.lines.len(),
@@ -142,6 +146,7 @@ impl RuntimeSessionService {
                     return Ok(Some(render_record_browser_overlay(
                         overlay,
                         &self.presentation.settings.ui_theme,
+                        display_width,
                     )));
                 }
                 return Ok(None);
@@ -161,11 +166,15 @@ impl RuntimeSessionService {
         Ok(Some(render_record_browser_overlay(
             overlay,
             &self.presentation.settings.ui_theme,
+            display_width,
         )))
     }
 
     /// Applies editing keys while a retained record-browser modal prompt is open.
     fn apply_primary_record_browser_prompt_input(&mut self, input: &[u8]) -> Result<bool> {
+        let display_width = usize::from(self.session.authoritative_size.columns)
+            .min(self.presentation.settings.terminal_agent_wrap_column_cap)
+            .max(1);
         let prompt_has_selector = self
             .presentation
             .primary_display_overlay
@@ -269,6 +278,7 @@ impl RuntimeSessionService {
                 Ok(render_record_browser_overlay(
                     overlay,
                     &self.presentation.settings.ui_theme,
+                    display_width,
                 ))
             }
             mez_mux::record_browser::RecordBrowserOutcome::SaveSubmitted { path, markdown } => {
@@ -287,6 +297,7 @@ impl RuntimeSessionService {
                 Ok(render_record_browser_overlay(
                     overlay,
                     &self.presentation.settings.ui_theme,
+                    display_width,
                 ))
             }
             _ => {
@@ -296,6 +307,7 @@ impl RuntimeSessionService {
                 Ok(render_record_browser_overlay(
                     overlay,
                     &self.presentation.settings.ui_theme,
+                    display_width,
                 ))
             }
         }
@@ -695,7 +707,12 @@ impl RuntimeSessionService {
         &mut self,
         content: RuntimeCommandDisplayOverlayContent,
     ) -> Result<()> {
-        if runtime_command_display_should_open_overlay(&content) {
+        let should_open_overlay = runtime_command_display_should_open_overlay(&content);
+        if should_open_overlay {
+            let wrap_columns = usize::from(self.session.authoritative_size.columns)
+                .min(self.presentation.settings.terminal_agent_wrap_column_cap)
+                .max(1);
+            let content = wrap_runtime_command_display_overlay_content(content, wrap_columns);
             return self.show_primary_display_overlay_inner(
                 content.lines,
                 content.line_style_spans,

@@ -1,5 +1,6 @@
 //! Pane-agent selector and record-browser layout projection.
 
+use super::display_content::wrap_runtime_command_display_overlay_content;
 use super::product_content::*;
 use crate::runtime::render::*;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -110,21 +111,20 @@ pub(super) fn record_browser_prompt_text(
 pub(super) fn render_record_browser_overlay(
     overlay: &mut RuntimeDisplayOverlay,
     ui_theme: &mez_mux::theme::UiTheme,
+    display_width: usize,
 ) -> bool {
     let Some(record_browser) = overlay.record_browser.as_ref() else {
         return false;
     };
     let page = record_browser.browser.render_page();
     let prompt_selection = record_browser.browser.prompt_selection();
-    let content = runtime_agent_shell_markdown_overlay_content(
+    let mut content = runtime_agent_shell_markdown_overlay_content(
         Some(record_browser.command.clone()),
         &page.markdown,
         ui_theme,
     );
-    overlay.lines = content.lines;
-    overlay.line_style_spans = content.line_style_spans;
-    overlay.selections = if let Some(prompt_selection) = prompt_selection {
-        overlay
+    if let Some(prompt_selection) = prompt_selection {
+        content.selections = content
             .lines
             .iter()
             .enumerate()
@@ -137,10 +137,12 @@ pub(super) fn render_record_browser_overlay(
                 command: String::new(),
                 kind: OverlaySelectionKind::Primary,
             })
-            .collect()
-    } else {
-        content.selections
-    };
+            .collect();
+    }
+    let content = wrap_runtime_command_display_overlay_content(content, display_width);
+    overlay.lines = content.lines;
+    overlay.line_style_spans = content.line_style_spans;
+    overlay.selections = content.selections;
     overlay.active_selection_index = if overlay.selections.is_empty() {
         None
     } else {

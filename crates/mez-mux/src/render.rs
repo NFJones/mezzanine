@@ -41,13 +41,14 @@ pub use prompt::{
 pub use rich_text::{
     MARKDOWN_BLOCK_DIVIDER_GLYPH, MARKDOWN_DARK_MUTED_FOREGROUND, MARKDOWN_DARK_NEUTRAL_FOREGROUND,
     MARKDOWN_LIGHT_NEUTRAL_FOREGROUND, RichTextLine, RichTextLineKind, RichTextTheme,
-    frame_markdown_lines, insert_blank_lines_above_markdown_headings, markdown_blank_line,
-    markdown_block_copy_lines, markdown_link_display_ranges,
+    WrappedRichTextLine, frame_markdown_lines, insert_blank_lines_above_markdown_headings,
+    markdown_blank_line, markdown_block_copy_lines, markdown_link_display_ranges,
     markdown_local_continuation_indent_width, markdown_rendered_line_copy_text,
     markdown_rendered_line_is_heading, markdown_rendered_line_is_table_row, prefix_rich_text_lines,
     render_markdown, rendered_line_continuation_indent, rendered_line_is_numbered_diff_row,
     style_spans_for_rich_text_segment, take_rich_text_display_segment,
-    wrap_rich_text_line_to_width, wrap_rich_text_lines_to_width,
+    wrap_rich_text_line_to_width, wrap_rich_text_line_to_width_with_source_ranges,
+    wrap_rich_text_lines_to_width,
 };
 pub use style::{
     agent_status_running_gradient_palette, animated_scan_background, blend_terminal_color,

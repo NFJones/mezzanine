@@ -131,12 +131,39 @@ pub fn wrap_rich_text_lines_to_width(
         .collect()
 }
 
+/// One physical rich-text row together with its source display-column range.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WrappedRichTextLine {
+    /// Wrapped presentation row.
+    pub line: RichTextLine,
+    /// Inclusive source display column where this row begins.
+    pub source_start_column: usize,
+    /// Exclusive source display column where this row ends.
+    pub source_end_column: usize,
+    /// Display cells prepended to this row for continuation indentation.
+    pub display_prefix_width: usize,
+}
+
 /// Wraps one rendered markdown presentation line to a bounded display width.
 ///
 /// # Parameters
 /// - `line`: The rendered row to split.
 /// - `display_width`: Maximum display cells available after the transcript gutter.
 pub fn wrap_rich_text_line_to_width(line: RichTextLine, display_width: usize) -> Vec<RichTextLine> {
+    wrap_rich_text_line_to_width_with_source_ranges(line, display_width)
+        .into_iter()
+        .map(|wrapped| wrapped.line)
+        .collect()
+}
+
+/// Wraps one rich-text line and reports source columns for each physical row.
+///
+/// The source ranges let callers translate interactive ranges, such as links,
+/// without reproducing the Unicode-aware wrapping algorithm.
+pub fn wrap_rich_text_line_to_width_with_source_ranges(
+    line: RichTextLine,
+    display_width: usize,
+) -> Vec<WrappedRichTextLine> {
     let line = if line.kind == RichTextLineKind::MarkdownRule
         && terminal_text_width(line.display.as_str()) <= display_width
     {
@@ -145,7 +172,13 @@ pub fn wrap_rich_text_line_to_width(line: RichTextLine, display_width: usize) ->
         line
     };
     if terminal_text_width(line.display.as_str()) <= display_width {
-        return vec![line];
+        let source_end_column = terminal_text_width(line.display.as_str());
+        return vec![WrappedRichTextLine {
+            line,
+            source_start_column: 0,
+            source_end_column,
+            display_prefix_width: 0,
+        }];
     }
     let continuation_indent = rendered_line_continuation_indent(&line.display, display_width);
     let continuation_width = terminal_text_width(continuation_indent.as_str());
@@ -199,22 +232,33 @@ pub fn wrap_rich_text_line_to_width(line: RichTextLine, display_width: usize) ->
         } else {
             None
         };
-        wrapped.push(RichTextLine {
-            display: segment_text,
-            style_spans,
-            copy_text,
-            kind: if first {
-                line.kind
-            } else {
-                line.kind.continuation()
+        wrapped.push(WrappedRichTextLine {
+            line: RichTextLine {
+                display: segment_text,
+                style_spans,
+                copy_text,
+                kind: if first {
+                    line.kind
+                } else {
+                    line.kind.continuation()
+                },
             },
+            source_start_column: segment.start_column,
+            source_end_column: segment.end_column,
+            display_prefix_width,
         });
         remaining = &remaining[segment.bytes_consumed..];
         display_start = segment.end_column;
         first = false;
     }
     if wrapped.is_empty() {
-        vec![line]
+        let source_end_column = terminal_text_width(line.display.as_str());
+        vec![WrappedRichTextLine {
+            line,
+            source_start_column: 0,
+            source_end_column,
+            display_prefix_width: 0,
+        }]
     } else {
         wrapped
     }

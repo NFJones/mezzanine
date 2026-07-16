@@ -878,8 +878,8 @@ async fn async_attached_terminal_loop_routes_agent_shell_input_non_modally() {
         );
         let status_output = io.written_batches[2].join("\n");
         assert!(
-            status_output.contains("│ Permissions")
-                && status_output.contains("preset read-only")
+            status_output.contains("Agent Status")
+                && status_output.contains("│ Visibility")
                 && !status_output.contains("Quota Usage"),
             "{status_output}"
         );

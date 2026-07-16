@@ -15,6 +15,7 @@ use super::{
     runtime_agent_shell_visibility, runtime_command_display_overlay_content,
     runtime_command_display_should_open_overlay,
 };
+use crate::runtime::render::overlay::wrap_runtime_command_display_overlay_content;
 use crate::runtime::service_state::RuntimeRecordBrowserOverlayState;
 
 /// Display-overlay navigation action decoded from terminal input.
@@ -786,6 +787,7 @@ impl RuntimeSessionService {
                 self.set_agent_prompt_display_lines(pane_id, display_lines)?;
             }
             RuntimeAgentShellDisplayOutput::Overlay(content) => {
+                let should_open_overlay = runtime_command_display_should_open_overlay(&content);
                 let record_browser = content.command.as_ref().and_then(|command| {
                     let key = (pane_id.to_string(), command.clone());
                     let source = self
@@ -808,7 +810,12 @@ impl RuntimeSessionService {
                             stack,
                         })
                 });
-                if runtime_command_display_should_open_overlay(&content) {
+                if should_open_overlay {
+                    let wrap_columns = usize::from(self.session.authoritative_size.columns)
+                        .min(self.presentation.settings.terminal_agent_wrap_column_cap)
+                        .max(1);
+                    let content =
+                        wrap_runtime_command_display_overlay_content(content, wrap_columns);
                     self.show_primary_display_overlay_inner(
                         content.lines,
                         content.line_style_spans,
