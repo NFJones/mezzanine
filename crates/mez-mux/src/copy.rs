@@ -13,6 +13,18 @@ use mez_terminal::{
 };
 use std::ops::{Deref, DerefMut};
 
+/// Copy-text marker for presentation-only continuation rows.
+pub const COPY_SKIP_LINE: &str = "\u{1e}mez-copy-skip-line";
+/// Prefix carrying one rich-text source-line identity and raw text.
+pub const COPY_SOURCE_LINE_PREFIX: &str = "\u{1e}mez-copy-source-line:";
+/// Copy-text marker for wrapped rich-text continuation rows.
+pub const COPY_WRAP_CONTINUATION: &str = "\u{1e}mez-copy-wrap-continuation";
+
+/// Encodes one rich-text source-line identity with its raw copy text.
+pub fn encode_copy_source_line(source_index: usize, copy_line: &str) -> String {
+    format!("{COPY_SOURCE_LINE_PREFIX}{source_index}:{copy_line}")
+}
+
 /// Identifies one terminal-cell position in a copy-mode buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CopyPosition {

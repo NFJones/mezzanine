@@ -15,8 +15,9 @@ use mez_mux::presentation::{
     ClientStatusKind, ClientStatusLine, ReadlinePromptRegion, RenderedClientView,
 };
 use mez_mux::render::{
-    PromptShadowSpan, WrappedPromptLayout, char_count, clipped_prompt_region, fit_width,
-    layout_wrapped_prompt, offset_style_span, write_line_segment,
+    PromptRegionRenderOptions, PromptShadowSpan, WrappedPromptLayout, char_count,
+    clipped_prompt_region, compose_prompt_region, fit_width, layout_wrapped_prompt,
+    offset_style_span, write_line_segment,
 };
 use mez_mux::theme::{UiColorPair, UiTheme};
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalStyleSpan, TerminalStyledLine};
@@ -200,68 +201,25 @@ pub fn compose_prompt_region_presentation_with_styles(
     region: ReadlinePromptRegion,
     ui_theme: &UiTheme,
 ) -> ReadlinePromptClientPresentation {
-    let canvas = normalize_overlay_canvas(base_lines, base_line_style_spans, client_size);
-    let width = canvas.width;
-    let rows = canvas.rows;
-    let mut lines = canvas.lines;
-    let mut line_style_spans = canvas.line_style_spans;
-
-    let region = clipped_prompt_region(region, width, rows);
-    let Some(region) = region else {
-        return ReadlinePromptClientPresentation {
-            lines,
-            line_style_spans,
-            cursor_row: 0,
-            cursor_column: 0,
-            cursor_visible: false,
-        };
-    };
     let layout = render_wrapped_prompt_layout(prompt, region.columns, region.rows.clamp(1, 6));
-    let prompt_row_start = if prompt.kind == ReadlinePromptKind::Agent && layout.lines.len() > 1 {
-        region.row
-    } else {
-        region
-            .row
-            .saturating_add(region.rows.saturating_sub(layout.lines.len()))
-    };
-    for (offset, prompt_line) in layout.lines.iter().enumerate() {
-        let row = prompt_row_start.saturating_add(offset);
-        if row >= lines.len() {
-            continue;
-        }
-        write_line_segment(&mut lines[row], region.column, region.columns, prompt_line);
-        line_style_spans[row].retain(|span| {
-            span.start.saturating_add(span.length) <= region.column
-                || span.start >= region.column.saturating_add(region.columns)
-        });
-        line_style_spans[row].push(TerminalStyleSpan {
-            start: region.column,
-            length: region.columns,
-            rendition: prompt_region_rendition(prompt, ui_theme),
-        });
-        for shadow_span in layout.shadow_spans.get(offset).into_iter().flatten() {
-            if shadow_span.start >= region.columns {
-                continue;
-            }
-            let length = shadow_span
-                .length
-                .min(region.columns.saturating_sub(shadow_span.start));
-            if length == 0 {
-                continue;
-            }
-            line_style_spans[row].push(TerminalStyleSpan {
-                start: region.column.saturating_add(shadow_span.start),
-                length,
-                rendition: prompt_shadow_hint_rendition(prompt, ui_theme),
-            });
-        }
-    }
+    let presentation = compose_prompt_region(
+        base_lines,
+        base_line_style_spans,
+        client_size,
+        PromptRegionRenderOptions {
+            region,
+            layout: &layout,
+            align_wrapped_top: prompt.kind == ReadlinePromptKind::Agent,
+            region_rendition: prompt_region_rendition(prompt, ui_theme),
+            shadow_rendition: prompt_shadow_hint_rendition(prompt, ui_theme),
+        },
+    );
     ReadlinePromptClientPresentation {
-        lines,
-        line_style_spans,
-        cursor_row: prompt_row_start.saturating_add(layout.cursor_row),
-        cursor_column: region.column.saturating_add(layout.cursor_column),
-        cursor_visible: layout.cursor_visible,
+        lines: presentation.lines,
+        line_style_spans: presentation.line_style_spans,
+        cursor_row: presentation.cursor_row,
+        cursor_column: presentation.cursor_column,
+        cursor_visible: presentation.cursor_visible,
     }
 }
 

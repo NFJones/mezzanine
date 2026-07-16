@@ -735,24 +735,9 @@ pub(super) fn render_pane_frame_template(
     frame_context: &TerminalFrameContext,
     template: &str,
 ) -> String {
-    let mut rendered = String::new();
-    let mut remaining = template;
-    loop {
-        let Some(start) = remaining.find("#{") else {
-            rendered.push_str(remaining);
-            break;
-        };
-        rendered.push_str(&remaining[..start]);
-        let after_start = &remaining[start + 2..];
-        let Some(end) = after_start.find('}') else {
-            rendered.push_str(&remaining[start..]);
-            break;
-        };
-        let field = &after_start[..end];
-        rendered.push_str(&pane_frame_field_value(window, pane, frame_context, field));
-        remaining = &after_start[end + 1..];
-    }
-    sanitize_frame_text(&rendered)
+    mez_mux::render::render_frame_template(template, |field| {
+        pane_frame_field_value(window, pane, frame_context, field)
+    })
 }
 
 /// Runs the render pane frame text operation for this subsystem.
@@ -979,29 +964,7 @@ pub(super) fn pane_frame_right_aligned_segment_value(field: &str, value: &str) -
 /// Compacts a home-relative or absolute pane working-directory display path to
 /// the last three path segments when the displayed depth exceeds that limit.
 pub(super) fn compact_pane_working_directory(value: &str) -> String {
-    let mut prefix = "";
-    let mut path = value;
-    if let Some(rest) = value.strip_prefix("~/") {
-        prefix = "~/";
-        path = rest;
-    } else if value == "~" || value == "/" {
-        return value.to_string();
-    } else if let Some(rest) = value.strip_prefix('/') {
-        prefix = "/";
-        path = rest;
-    }
-
-    let segments = path
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-    if segments.len() <= 3 {
-        return format!("{prefix}{path}");
-    }
-    format!(
-        "…/{}",
-        segments[segments.len().saturating_sub(3)..].join("/")
-    )
+    mez_mux::render::compact_display_path(value, 3)
 }
 
 /// Runs the render window frame template operation for this subsystem.

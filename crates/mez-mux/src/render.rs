@@ -15,19 +15,39 @@ use crate::presentation::{
     PaneDividerCell, TerminalFrameStyle, pane_canvas_placements, pane_divider_cells,
 };
 
+mod diff;
 mod overlay;
 mod prompt;
+mod rich_text;
 mod style;
 mod wrap;
 
+pub use diff::{
+    DiffDisplayLine, DiffDisplaySection, SyntaxHighlighter, SyntaxTheme, SyntaxThemePalette,
+    append_syntax_spans, clean_diff_label, diff_highlighter_for_path, diff_section_path,
+    diff_syntax_for_path, format_diff_display_line, parse_diff_hunk_header, parse_diff_range_start,
+    parse_unified_diff_sections, syntax_highlighter_for_extension, syntax_theme,
+};
 pub use overlay::{
     NormalizedOverlayCanvas, compose_bottom_overlay_lines, compose_modal_overlay_lines,
     modal_overlay_max_scroll, modal_overlay_page_rows, normalize_overlay_canvas,
     normalize_overlay_style_spans, overlay_text_style_width,
 };
 pub use prompt::{
-    PromptShadowSpan, WrappedPromptLayout, clipped_prompt_region, layout_wrapped_prompt,
+    PromptRegionPresentation, PromptRegionRenderOptions, PromptShadowSpan, WrappedPromptLayout,
+    clipped_prompt_region, compose_prompt_region, layout_wrapped_prompt,
     wrap_prompt_line_with_cursor_and_shadow, write_line_segment,
+};
+pub use rich_text::{
+    MARKDOWN_BLOCK_DIVIDER_GLYPH, MARKDOWN_DARK_MUTED_FOREGROUND, MARKDOWN_DARK_NEUTRAL_FOREGROUND,
+    MARKDOWN_LIGHT_NEUTRAL_FOREGROUND, RichTextLine, RichTextLineKind, RichTextTheme,
+    frame_markdown_lines, insert_blank_lines_above_markdown_headings, markdown_blank_line,
+    markdown_block_copy_lines, markdown_link_display_ranges,
+    markdown_local_continuation_indent_width, markdown_rendered_line_copy_text,
+    markdown_rendered_line_is_heading, markdown_rendered_line_is_table_row, prefix_rich_text_lines,
+    render_markdown, rendered_line_continuation_indent, rendered_line_is_numbered_diff_row,
+    style_spans_for_rich_text_segment, take_rich_text_display_segment,
+    wrap_rich_text_line_to_width, wrap_rich_text_lines_to_width,
 };
 pub use style::{
     agent_status_running_gradient_palette, animated_scan_background, blend_terminal_color,
@@ -490,6 +510,34 @@ pub fn pane_frame_left_pill_style_width(text_width: usize, available_width: usiz
 /// Removes terminal control characters from frame and status text.
 pub fn sanitize_frame_text(value: &str) -> String {
     value.chars().filter(|ch| !ch.is_control()).collect()
+}
+
+/// Compacts a home-relative or absolute display path to its final segments.
+///
+/// Root markers (`/`, `~`, and `~/`) are preserved. Relative paths retain no
+/// synthetic prefix, while paths deeper than `max_segments` use an ellipsis.
+pub fn compact_display_path(value: &str, max_segments: usize) -> String {
+    let max_segments = max_segments.max(1);
+    let (prefix, path) = if let Some(rest) = value.strip_prefix("~/") {
+        ("~/", rest)
+    } else if value == "~" || value == "/" {
+        return value.to_string();
+    } else if let Some(rest) = value.strip_prefix('/') {
+        ("/", rest)
+    } else {
+        ("", value)
+    };
+    let segments = path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    if segments.len() <= max_segments {
+        return format!("{prefix}{path}");
+    }
+    format!(
+        "…/{}",
+        segments[segments.len().saturating_sub(max_segments)..].join("/")
+    )
 }
 
 /// One caller-identified pill rendered in a window or group frame.
@@ -1175,6 +1223,23 @@ pub fn clipped_overlay_style_span(
         length: end.saturating_sub(start),
         rendition: span.rendition,
     })
+}
+
+#[cfg(test)]
+mod decomposition_tests {
+    use super::*;
+
+    /// Verifies generic frame path fitting preserves roots and bounds deep
+    /// paths without requiring pane or product context.
+    #[test]
+    fn compact_display_path_preserves_roots_and_bounds_depth() {
+        assert_eq!(compact_display_path("/", 3), "/");
+        assert_eq!(compact_display_path("~/one/two", 3), "~/one/two");
+        assert_eq!(
+            compact_display_path("/one/two/three/four", 3),
+            "…/two/three/four"
+        );
+    }
 }
 
 fn active_grapheme_width(grapheme: &str) -> usize {

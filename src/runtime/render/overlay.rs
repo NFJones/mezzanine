@@ -410,52 +410,11 @@ pub(super) fn agent_command_hidden_link_ranges_for_rendered_line(
     source_line: &str,
     display: &str,
 ) -> Vec<(usize, usize, String)> {
-    let mut links = Vec::new();
-    let mut source_cursor = 0usize;
-    let mut display_cursor = 0usize;
-    let mut active_link: Option<(String, Option<usize>)> = None;
-    for event in Parser::new_ext(source_line, Options::all()) {
-        match event {
-            Event::Start(Tag::Link { dest_url, .. })
-                if agent_command_link_destination(&dest_url).is_some() =>
-            {
-                active_link = Some((dest_url.to_string(), None));
-            }
-            Event::Text(text) | Event::Code(text) => {
-                let text = text.as_ref();
-                let Some(relative_start) = source_line[source_cursor..].find(text) else {
-                    continue;
-                };
-                source_cursor = source_cursor
-                    .saturating_add(relative_start)
-                    .saturating_add(text.len());
-                let Some(relative_display_start) = display[display_cursor..].find(text) else {
-                    continue;
-                };
-                let absolute_display_start = display_cursor.saturating_add(relative_display_start);
-                if let Some((_, display_start)) = active_link.as_mut()
-                    && display_start.is_none()
-                {
-                    *display_start = Some(absolute_display_start);
-                }
-                display_cursor = display_cursor
-                    .saturating_add(relative_display_start)
-                    .saturating_add(text.len());
-            }
-            Event::End(TagEnd::Link) => {
-                if let Some((destination, Some(display_start))) = active_link.take()
-                    && display_cursor > display_start
-                    && let Some(command) = agent_command_link_destination(&destination)
-                {
-                    let start_column = UnicodeWidthStr::width(&display[..display_start]);
-                    let width = UnicodeWidthStr::width(&display[display_start..display_cursor]);
-                    links.push((start_column, width, command));
-                }
-            }
-            _ => {}
-        }
-    }
-    links
+    mez_mux::render::markdown_link_display_ranges(
+        source_line,
+        display,
+        agent_command_link_destination,
+    )
 }
 
 /// Decodes one `mez-agent:` markdown destination into an executable command.

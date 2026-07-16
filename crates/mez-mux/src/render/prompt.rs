@@ -8,10 +8,11 @@
 
 use crate::presentation::ReadlinePromptRegion;
 use mez_terminal::{
-    terminal_emoji_width, terminal_grapheme_width, terminal_graphemes, terminal_text_width,
+    GraphicRendition, TerminalSize, TerminalStyleSpan, terminal_emoji_width,
+    terminal_grapheme_width, terminal_graphemes, terminal_text_width,
 };
 
-use super::fit_width;
+use super::{fit_width, normalize_overlay_canvas};
 
 /// One terminal-cell range occupied by completion shadow text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +36,114 @@ pub struct WrappedPromptLayout {
     pub cursor_column: usize,
     /// Whether the cursor falls inside the visible row window.
     pub cursor_visible: bool,
+}
+
+/// Neutral result of composing a wrapped prompt into a client region.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptRegionPresentation {
+    /// Exact-size client rows after prompt placement.
+    pub lines: Vec<String>,
+    /// Style spans corresponding to each client row.
+    pub line_style_spans: Vec<Vec<TerminalStyleSpan>>,
+    /// Absolute cursor row.
+    pub cursor_row: usize,
+    /// Absolute cursor column.
+    pub cursor_column: usize,
+    /// Whether the prompt cursor is visible.
+    pub cursor_visible: bool,
+}
+
+/// Inputs for composing one neutral prompt layout into a client region.
+#[derive(Debug, Clone, Copy)]
+pub struct PromptRegionRenderOptions<'a> {
+    /// Bounded destination region.
+    pub region: ReadlinePromptRegion,
+    /// Already-wrapped neutral prompt view model.
+    pub layout: &'a WrappedPromptLayout,
+    /// Whether multi-row content starts at the region's top edge.
+    pub align_wrapped_top: bool,
+    /// Rendition applied across occupied prompt rows.
+    pub region_rendition: GraphicRendition,
+    /// Rendition applied to completion-shadow cells.
+    pub shadow_rendition: GraphicRendition,
+}
+
+/// Composes a wrapped prompt view model into a bounded client region.
+///
+/// `align_wrapped_top` lets product policy keep multi-row prompts anchored at
+/// the top of a reserved region. Renditions are caller supplied so the mux does
+/// not need prompt kinds or configured theme-field knowledge.
+pub fn compose_prompt_region(
+    base_lines: &[String],
+    base_line_style_spans: &[Vec<TerminalStyleSpan>],
+    client_size: TerminalSize,
+    options: PromptRegionRenderOptions<'_>,
+) -> PromptRegionPresentation {
+    let canvas = normalize_overlay_canvas(base_lines, base_line_style_spans, client_size);
+    let width = canvas.width;
+    let rows = canvas.rows;
+    let mut lines = canvas.lines;
+    let mut line_style_spans = canvas.line_style_spans;
+    let Some(region) = clipped_prompt_region(options.region, width, rows) else {
+        return PromptRegionPresentation {
+            lines,
+            line_style_spans,
+            cursor_row: 0,
+            cursor_column: 0,
+            cursor_visible: false,
+        };
+    };
+    let prompt_row_start = if options.align_wrapped_top && options.layout.lines.len() > 1 {
+        region.row
+    } else {
+        region
+            .row
+            .saturating_add(region.rows.saturating_sub(options.layout.lines.len()))
+    };
+    for (offset, prompt_line) in options.layout.lines.iter().enumerate() {
+        let row = prompt_row_start.saturating_add(offset);
+        if row >= lines.len() {
+            continue;
+        }
+        write_line_segment(&mut lines[row], region.column, region.columns, prompt_line);
+        line_style_spans[row].retain(|span| {
+            span.start.saturating_add(span.length) <= region.column
+                || span.start >= region.column.saturating_add(region.columns)
+        });
+        line_style_spans[row].push(TerminalStyleSpan {
+            start: region.column,
+            length: region.columns,
+            rendition: options.region_rendition,
+        });
+        for shadow_span in options
+            .layout
+            .shadow_spans
+            .get(offset)
+            .into_iter()
+            .flatten()
+        {
+            if shadow_span.start >= region.columns {
+                continue;
+            }
+            let length = shadow_span
+                .length
+                .min(region.columns.saturating_sub(shadow_span.start));
+            if length > 0 {
+                line_style_spans[row].push(TerminalStyleSpan {
+                    start: region.column.saturating_add(shadow_span.start),
+                    length,
+                    rendition: options.shadow_rendition,
+                });
+            }
+        }
+    }
+    PromptRegionPresentation {
+        lines,
+        line_style_spans,
+        cursor_row: prompt_row_start.saturating_add(options.layout.cursor_row),
+        cursor_column: region.column.saturating_add(options.layout.cursor_column),
+        cursor_visible: options.layout.cursor_visible,
+    }
 }
 
 /// Produces a bounded wrapped prompt layout from already-rendered text.
@@ -277,6 +386,60 @@ fn prompt_shadow_spans_after_consumed(
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod composition_tests {
+    use super::*;
+
+    /// Verifies neutral prompt composition clips the target region, replaces
+    /// prior styles there, and reports absolute cursor coordinates.
+    #[test]
+    fn prompt_region_composition_places_rows_styles_and_cursor() {
+        let layout = WrappedPromptLayout {
+            lines: vec!["one ".to_string(), "two ".to_string()],
+            shadow_spans: vec![
+                Vec::new(),
+                vec![PromptShadowSpan {
+                    start: 1,
+                    length: 2,
+                }],
+            ],
+            cursor_row: 1,
+            cursor_column: 3,
+            cursor_visible: true,
+        };
+        let presentation = compose_prompt_region(
+            &vec!["........".to_string(); 4],
+            &vec![Vec::new(); 4],
+            TerminalSize {
+                columns: 8,
+                rows: 4,
+            },
+            PromptRegionRenderOptions {
+                region: ReadlinePromptRegion {
+                    row: 1,
+                    column: 2,
+                    columns: 4,
+                    rows: 2,
+                },
+                layout: &layout,
+                align_wrapped_top: true,
+                region_rendition: GraphicRendition {
+                    bold: true,
+                    ..GraphicRendition::default()
+                },
+                shadow_rendition: GraphicRendition {
+                    dim: true,
+                    ..GraphicRendition::default()
+                },
+            },
+        );
+        assert_eq!(presentation.cursor_row, 2);
+        assert_eq!(presentation.cursor_column, 5);
+        assert!(presentation.cursor_visible);
+        assert_eq!(presentation.line_style_spans[2].len(), 2);
+    }
 }
 
 fn push_prompt_shadow_cell(spans: &mut Vec<PromptShadowSpan>, start: usize, length: usize) {

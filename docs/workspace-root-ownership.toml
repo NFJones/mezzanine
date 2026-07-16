@@ -124,7 +124,7 @@ role = "Durable live daemon and session registry."
 [[surface]]
 path = "src/runtime"
 state = "temporary"
-role = "Product serialized state and effects still contain lower-owned agent and mux policy."
+role = "Product serialized state, effects, and rendering projection adapters pending Phase 10 cleanup and retained-file decomposition."
 
 [[surface]]
 path = "src/selector.rs"
@@ -154,7 +154,7 @@ role = "Product-friendly pane and status display names over canonical mez-agent 
 [[surface]]
 path = "src/terminal"
 state = "temporary"
-role = "Host terminal adapters still contain lower-owned attached-client and neutral render behavior."
+role = "Host terminal and product presentation adapters pending Phase 10 wrapper cleanup and retained test decomposition."
 
 [[surface]]
 path = "src/test_support"

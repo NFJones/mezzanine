@@ -77,7 +77,6 @@ use mez_mux::readline::DEFAULT_READLINE_HISTORY_LIMIT;
 use mez_mux::selector::{SelectorCandidate, SelectorCandidateKind};
 use mez_mux::theme::UiTheme;
 use mez_terminal::{GraphicRendition, TerminalStyleSpan, TerminalStyledLine};
-use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 mod attached_step;
 mod client_view;

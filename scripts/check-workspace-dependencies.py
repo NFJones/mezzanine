@@ -72,6 +72,9 @@ REQUIRED_OWNER_PATHS = {
     "crates/mez-mux/src/readline/tests/buffer.rs",
     "crates/mez-mux/src/readline/tests/prompt.rs",
     "crates/mez-mux/src/render/wrap.rs",
+    "crates/mez-mux/src/render/rich_text.rs",
+    "crates/mez-mux/src/render/diff.rs",
+    "crates/mez-mux/src/render/prompt.rs",
     "crates/mez-mux/src/selector.rs",
     "crates/mez-mux/src/session/mod.rs",
     "crates/mez-terminal/src/screen.rs",
@@ -177,6 +180,13 @@ ROOT_FORBIDDEN_DECLARATIONS = {
     "fn runtime_display_overlay_next_search_match": "overlay search policy",
     "fn primary_display_overlay_copy_selection": "overlay copy-selection policy",
     "fn runtime_display_overlay_selection_index_at_position": "overlay hit testing",
+    "struct AgentMarkdownRenderer": "CommonMark terminal renderer",
+    "struct AgentDiffDisplayLine": "unified-diff display record",
+    "struct AgentDiffDisplaySection": "unified-diff section record",
+    "fn render_markdown_preserving_source_blank_lines": "CommonMark rendering",
+    "fn parse_agent_unified_diff_sections": "unified-diff parsing",
+    "fn append_agent_syntax_spans": "syntax-highlight span generation",
+    "fn compose_prompt_region(": "neutral prompt-region composition",
 }
 
 LOWER_CRATE_PREFIXES = ("mez_agent::", "mez_core::", "mez_mux::", "mez_terminal::")

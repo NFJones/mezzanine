@@ -7,7 +7,11 @@
 use std::ops::{Deref, DerefMut};
 
 use super::{Result, TerminalScreen};
-use mez_mux::copy::{CopyPosition, StyledCopyMode, normalize_selection, validate_position};
+use mez_mux::copy::{
+    COPY_SKIP_LINE as AGENT_COPY_SKIP_LINE,
+    COPY_SOURCE_LINE_PREFIX as AGENT_COPY_SOURCE_LINE_PREFIX, CopyPosition, StyledCopyMode,
+    normalize_selection, validate_position,
+};
 use mez_mux::paste::PasteBuffers;
 use mez_mux::render::{char_count, line_slice};
 
@@ -17,18 +21,6 @@ use mez_mux::render::{char_count, line_slice};
 const AGENT_COPY_INDICATOR_PREFIX: &str = "▐ ";
 /// Speaker label used by assistant response lines.
 const AGENT_COPY_ASSISTANT_LABEL: &str = "mez> ";
-/// Copy-text marker for presentation-only continuation rows.
-pub(crate) const AGENT_COPY_SKIP_LINE: &str = "\u{1e}mez-copy-skip-line";
-/// Copy-text marker carrying one markdown source-line identity and raw text.
-pub(crate) const AGENT_COPY_SOURCE_LINE_PREFIX: &str = "\u{1e}mez-copy-source-line:";
-/// Copy-text marker for wrapped markdown continuation rows.
-pub(crate) const AGENT_COPY_WRAP_CONTINUATION: &str = "\u{1e}mez-copy-wrap-continuation";
-
-/// Encodes one markdown source-line identity with its raw copy text.
-pub(crate) fn encode_agent_copy_source_line(source_index: usize, copy_line: &str) -> String {
-    format!("{AGENT_COPY_SOURCE_LINE_PREFIX}{source_index}:{copy_line}")
-}
-
 /// Product adapter over mux-owned styled copy-mode state.
 ///
 /// Navigation, viewport, search, selection, terminal-derived styled rows, and
