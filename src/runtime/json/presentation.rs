@@ -1,6 +1,10 @@
 //! Rendered client view, theme, cursor, and terminal-style JSON projection.
 
-use super::*;
+use super::{
+    ClientViewRole, GraphicRendition, RenderedClientView, TerminalColor, TerminalCursorStyle,
+    TerminalStyleSpan, UiColorPair, UiTheme, compose_client_presentation_with_styles, json_escape,
+    max_viewport_column, max_viewport_row,
+};
 
 /// Runs the rendered client view json operation for this subsystem.
 ///

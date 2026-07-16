@@ -1,6 +1,6 @@
 //! Product command outcome JSON projection and optional scalar helpers.
 
-use super::*;
+use super::{CommandOutcome, Path, json_escape};
 
 /// Runs the runtime command outcomes json operation for this subsystem.
 ///
