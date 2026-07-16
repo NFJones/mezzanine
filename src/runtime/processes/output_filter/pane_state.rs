@@ -157,6 +157,7 @@ impl RuntimeSessionService {
         let render_bytes =
             self.renderable_pane_output_bytes(output.pane_id.as_str(), &transaction_bytes);
         let previous_transaction_alternate_active = self
+            .process
             .pane_transaction_osc_screens
             .get(output.pane_id.as_str())
             .is_some_and(TerminalScreen::alternate_screen_active);
@@ -302,6 +303,7 @@ impl RuntimeSessionService {
                 && !mez_wrapper_filter_bytes_may_contain_boilerplate(bytes))
         {
             let mut visible = self
+                .process
                 .pane_mez_wrapper_filter_pending
                 .remove(pane_id)
                 .unwrap_or_default();
@@ -313,6 +315,7 @@ impl RuntimeSessionService {
         }
 
         let mut pending = self
+            .process
             .pane_mez_wrapper_filter_pending
             .remove(pane_id)
             .unwrap_or_default();
@@ -357,13 +360,14 @@ impl RuntimeSessionService {
                 visible.extend_from_slice(tail);
             } else {
                 filtered_wrapper_echo = true;
-                self.pane_mez_wrapper_filter_pending
+                self.process
+                    .pane_mez_wrapper_filter_pending
                     .insert(pane_id.to_string(), tail.to_vec());
             }
         }
         if !active_transaction {
             if filtered_wrapper_echo {
-                self.pane_mez_wrapper_filter_recent_polls.insert(
+                self.process.pane_mez_wrapper_filter_recent_polls.insert(
                     pane_id.to_string(),
                     RUNTIME_SHELL_WRAPPER_FILTER_RETENTION_POLLS,
                 );
@@ -413,6 +417,7 @@ impl RuntimeSessionService {
             PaneOutputRenderMode::HiddenLiveAgentShell
         } else if !shell_view_enabled
             && self
+                .process
                 .pane_hidden_shell_render_recent_polls
                 .contains_key(pane_id)
         {
@@ -466,7 +471,7 @@ impl RuntimeSessionService {
     /// Retains short-lived shell-output suppression after a hidden agent shell
     /// transaction so delayed prompt repaint bytes do not leak into the pane.
     pub(in crate::runtime) fn remember_hidden_shell_render_suppression(&mut self, pane_id: &str) {
-        self.pane_hidden_shell_render_recent_polls.insert(
+        self.process.pane_hidden_shell_render_recent_polls.insert(
             pane_id.to_string(),
             RUNTIME_HIDDEN_SHELL_RENDER_RETENTION_POLLS,
         );
@@ -483,10 +488,16 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) {
-        self.pane_hidden_shell_render_recent_polls.remove(pane_id);
-        self.pane_mez_wrapper_filter_pending.remove(pane_id);
-        self.pane_mez_wrapper_filter_recent_commands.remove(pane_id);
-        self.pane_mez_wrapper_filter_recent_polls.remove(pane_id);
+        self.process
+            .pane_hidden_shell_render_recent_polls
+            .remove(pane_id);
+        self.process.pane_mez_wrapper_filter_pending.remove(pane_id);
+        self.process
+            .pane_mez_wrapper_filter_recent_commands
+            .remove(pane_id);
+        self.process
+            .pane_mez_wrapper_filter_recent_polls
+            .remove(pane_id);
     }
 
     /// Ages out retained shell-output suppression for panes whose agent turn and
@@ -494,6 +505,7 @@ impl RuntimeSessionService {
     pub(in crate::runtime) fn tick_hidden_shell_render_retention(&mut self) -> usize {
         let mut aged = 0usize;
         let retained = self
+            .process
             .pane_hidden_shell_render_recent_polls
             .keys()
             .cloned()
@@ -507,14 +519,19 @@ impl RuntimeSessionService {
             {
                 continue;
             }
-            let Some(remaining) = self.pane_hidden_shell_render_recent_polls.get_mut(&pane_id)
+            let Some(remaining) = self
+                .process
+                .pane_hidden_shell_render_recent_polls
+                .get_mut(&pane_id)
             else {
                 continue;
             };
             *remaining = remaining.saturating_sub(1);
             aged = aged.saturating_add(1);
             if *remaining == 0 {
-                self.pane_hidden_shell_render_recent_polls.remove(&pane_id);
+                self.process
+                    .pane_hidden_shell_render_recent_polls
+                    .remove(&pane_id);
             }
         }
         aged
@@ -613,7 +630,10 @@ impl RuntimeSessionService {
 
     /// Reports whether hidden shell-render suppression still needs to age out.
     pub fn hidden_shell_render_retention_timer_needed(&self) -> bool {
-        !self.pane_hidden_shell_render_recent_polls.is_empty()
+        !self
+            .process
+            .pane_hidden_shell_render_recent_polls
+            .is_empty()
     }
 
     /// Reports whether any pending agent shell dispatch may need recovery.
@@ -662,24 +682,26 @@ impl RuntimeSessionService {
                 false,
             ));
         }
-        let screen = if let Some(screen) = self.pane_transaction_osc_screens.get_mut(pane_id) {
-            screen.resize(size);
-            screen
-        } else {
-            self.pane_transaction_osc_screens.insert(
-                pane_id.to_string(),
-                TerminalScreen::new_with_history_config(
-                    size,
-                    self.terminal_history_limit,
-                    self.terminal_history_rotate_lines,
-                )?,
-            );
-            self.pane_transaction_osc_screens
-                .get_mut(pane_id)
-                .ok_or_else(|| {
-                    MezError::invalid_state("transaction OSC parser was not retained for pane")
-                })?
-        };
+        let screen =
+            if let Some(screen) = self.process.pane_transaction_osc_screens.get_mut(pane_id) {
+                screen.resize(size);
+                screen
+            } else {
+                self.process.pane_transaction_osc_screens.insert(
+                    pane_id.to_string(),
+                    TerminalScreen::new_with_history_config(
+                        size,
+                        self.terminal_history_limit,
+                        self.terminal_history_rotate_lines,
+                    )?,
+                );
+                self.process
+                    .pane_transaction_osc_screens
+                    .get_mut(pane_id)
+                    .ok_or_else(|| {
+                        MezError::invalid_state("transaction OSC parser was not retained for pane")
+                    })?
+            };
         screen.feed(bytes);
         let _ = screen.drain_terminal_response_bytes();
         let events = screen
@@ -709,15 +731,17 @@ impl RuntimeSessionService {
         bytes: &[u8],
     ) -> Vec<TerminalOscEvent> {
         let mut pending = self
+            .process
             .pane_transaction_osc_pending
             .remove(pane_id)
             .unwrap_or_default();
         pending.extend_from_slice(bytes);
         let (events, retained) = scan_mezzanine_osc_transaction_events(&pending);
         if retained.is_empty() {
-            self.pane_transaction_osc_pending.remove(pane_id);
+            self.process.pane_transaction_osc_pending.remove(pane_id);
         } else {
-            self.pane_transaction_osc_pending
+            self.process
+                .pane_transaction_osc_pending
                 .insert(pane_id.to_string(), retained);
         }
         events
@@ -734,6 +758,7 @@ impl RuntimeSessionService {
         command: &str,
     ) {
         let retained = self
+            .process
             .pane_mez_wrapper_filter_recent_commands
             .entry(pane_id.to_string())
             .or_default();
@@ -752,7 +777,7 @@ impl RuntimeSessionService {
         if extra > 0 {
             retained.drain(0..extra);
         }
-        self.pane_mez_wrapper_filter_recent_polls.insert(
+        self.process.pane_mez_wrapper_filter_recent_polls.insert(
             pane_id.to_string(),
             RUNTIME_SHELL_WRAPPER_FILTER_RETENTION_POLLS,
         );
@@ -778,7 +803,11 @@ impl RuntimeSessionService {
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
-        if let Some(retained) = self.pane_mez_wrapper_filter_recent_commands.get(pane_id) {
+        if let Some(retained) = self
+            .process
+            .pane_mez_wrapper_filter_recent_commands
+            .get(pane_id)
+        {
             for command in retained {
                 if !commands.iter().any(|existing| existing == command) {
                     commands.push(command.clone());
@@ -794,14 +823,22 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn tick_mez_wrapper_filter_retention(&mut self, pane_id: &str) {
-        let Some(remaining) = self.pane_mez_wrapper_filter_recent_polls.get_mut(pane_id) else {
+        let Some(remaining) = self
+            .process
+            .pane_mez_wrapper_filter_recent_polls
+            .get_mut(pane_id)
+        else {
             return;
         };
         *remaining = remaining.saturating_sub(1);
         if *remaining == 0 {
-            self.pane_mez_wrapper_filter_recent_polls.remove(pane_id);
-            self.pane_mez_wrapper_filter_recent_commands.remove(pane_id);
-            self.pane_mez_wrapper_filter_pending.remove(pane_id);
+            self.process
+                .pane_mez_wrapper_filter_recent_polls
+                .remove(pane_id);
+            self.process
+                .pane_mez_wrapper_filter_recent_commands
+                .remove(pane_id);
+            self.process.pane_mez_wrapper_filter_pending.remove(pane_id);
         }
     }
 }

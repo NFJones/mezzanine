@@ -122,43 +122,6 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) pane_screens: BTreeMap<String, TerminalScreen>,
-    /// Stores the pane transaction osc screens value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_transaction_osc_screens: BTreeMap<String, TerminalScreen>,
-    /// Stores hidden agent-shell OSC parser fragments for each pane.
-    ///
-    /// Hidden agent-shell output is command data, not user-visible terminal
-    /// traffic. The runtime keeps only bounded fragments that may contain a
-    /// split Mezzanine transaction marker so large file-read bodies never have
-    /// to pass through the full terminal-screen parser.
-    pub(in crate::runtime) pane_transaction_osc_pending: BTreeMap<String, Vec<u8>>,
-    /// Stores the pane mez wrapper filter pending value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_mez_wrapper_filter_pending: BTreeMap<String, Vec<u8>>,
-    /// Stores the pane mez wrapper filter recent commands value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_mez_wrapper_filter_recent_commands: BTreeMap<String, Vec<String>>,
-    /// Stores the pane mez wrapper filter recent polls value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_mez_wrapper_filter_recent_polls: BTreeMap<String, usize>,
-    /// Stores the pane hidden shell render recent polls value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_hidden_shell_render_recent_polls: BTreeMap<String, usize>,
-    /// Stores the foreground title idle sync polls value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) foreground_title_idle_sync_polls: usize,
     /// Stores the pane exit records value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

@@ -689,6 +689,7 @@ impl RuntimeSessionService {
                 screen.resize(process_size);
             }
             if let Some(screen) = self
+                .process
                 .pane_transaction_osc_screens
                 .get_mut(descriptor.pane_id.as_str())
             {

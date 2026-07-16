@@ -77,6 +77,52 @@ pub(in crate::runtime) struct RuntimeProcessComponent {
     pane_foreground_process_groups: std::collections::BTreeMap<String, u32>,
     /// Program-owned pane title state keyed by pane id.
     program_owned_pane_titles: std::collections::BTreeMap<String, ProgramOwnedPaneTitle>,
+    /// Full terminal parsers retained for visible shell transaction streams.
+    pane_transaction_osc_screens: std::collections::BTreeMap<String, TerminalScreen>,
+    /// Bounded hidden-shell OSC marker fragments keyed by pane id.
+    pane_transaction_osc_pending: std::collections::BTreeMap<String, Vec<u8>>,
+    /// Partial wrapper-filter bytes keyed by pane id.
+    pane_mez_wrapper_filter_pending: std::collections::BTreeMap<String, Vec<u8>>,
+    /// Recently hidden wrapper commands keyed by pane id.
+    pane_mez_wrapper_filter_recent_commands: std::collections::BTreeMap<String, Vec<String>>,
+    /// Remaining wrapper-filter retention polls keyed by pane id.
+    pane_mez_wrapper_filter_recent_polls: std::collections::BTreeMap<String, usize>,
+    /// Remaining hidden-shell render retention polls keyed by pane id.
+    pane_hidden_shell_render_recent_polls: std::collections::BTreeMap<String, usize>,
+    /// Consecutive idle polls used to synchronize foreground titles.
+    foreground_title_idle_sync_polls: usize,
+}
+
+impl RuntimeSessionService {
+    /// Clears visible and hidden shell transaction parser state on shutdown.
+    pub(in crate::runtime) fn clear_pane_transaction_parsers(&mut self) {
+        self.process.pane_transaction_osc_screens.clear();
+        self.process.pane_transaction_osc_pending.clear();
+    }
+}
+
+#[cfg(test)]
+impl RuntimeSessionService {
+    /// Returns mutable visible transaction parsers for a process fixture.
+    pub(in crate::runtime) fn pane_transaction_osc_screens_mut_for_tests(
+        &mut self,
+    ) -> &mut std::collections::BTreeMap<String, TerminalScreen> {
+        &mut self.process.pane_transaction_osc_screens
+    }
+
+    /// Returns visible transaction parsers for process integration tests.
+    pub(in crate::runtime) fn pane_transaction_osc_screens_for_tests(
+        &self,
+    ) -> &std::collections::BTreeMap<String, TerminalScreen> {
+        &self.process.pane_transaction_osc_screens
+    }
+
+    /// Returns hidden transaction fragments for process integration tests.
+    pub(in crate::runtime) fn pane_transaction_osc_pending_for_tests(
+        &self,
+    ) -> &std::collections::BTreeMap<String, Vec<u8>> {
+        &self.process.pane_transaction_osc_pending
+    }
 }
 
 // Pane process lifecycle and PTY synchronization.
@@ -219,7 +265,7 @@ impl RuntimeSessionService {
                 self.terminal_history_rotate_lines,
             )?,
         );
-        self.pane_transaction_osc_screens.insert(
+        self.process.pane_transaction_osc_screens.insert(
             descriptor.pane_id.to_string(),
             TerminalScreen::new_with_history_config(
                 descriptor.size,
@@ -450,6 +496,7 @@ impl RuntimeSessionService {
             screen.resize(size);
         }
         if let Some(screen) = self
+            .process
             .pane_transaction_osc_screens
             .get_mut(descriptor.pane_id.as_str())
         {
@@ -675,7 +722,7 @@ impl RuntimeSessionService {
                 self.terminal_history_rotate_lines,
             )?,
         );
-        self.pane_transaction_osc_screens.insert(
+        self.process.pane_transaction_osc_screens.insert(
             descriptor.pane_id.to_string(),
             TerminalScreen::new_with_history_config(
                 descriptor.size,
@@ -964,12 +1011,18 @@ impl RuntimeSessionService {
         self.queued_pane_pipe_effects
             .retain(|(queued_pane_id, _)| queued_pane_id != pane_id);
         self.pane_screens.remove(pane_id);
-        self.pane_transaction_osc_screens.remove(pane_id);
-        self.pane_transaction_osc_pending.remove(pane_id);
-        self.pane_mez_wrapper_filter_pending.remove(pane_id);
-        self.pane_mez_wrapper_filter_recent_commands.remove(pane_id);
-        self.pane_mez_wrapper_filter_recent_polls.remove(pane_id);
-        self.pane_hidden_shell_render_recent_polls.remove(pane_id);
+        self.process.pane_transaction_osc_screens.remove(pane_id);
+        self.process.pane_transaction_osc_pending.remove(pane_id);
+        self.process.pane_mez_wrapper_filter_pending.remove(pane_id);
+        self.process
+            .pane_mez_wrapper_filter_recent_commands
+            .remove(pane_id);
+        self.process
+            .pane_mez_wrapper_filter_recent_polls
+            .remove(pane_id);
+        self.process
+            .pane_hidden_shell_render_recent_polls
+            .remove(pane_id);
         self.pane_exit_records.remove(pane_id);
         self.active_pane_pipes.remove(pane_id);
         self.pane_transcript_refs.remove(pane_id);

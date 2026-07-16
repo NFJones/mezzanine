@@ -59,13 +59,15 @@ impl RuntimeSessionService {
         observed_output: bool,
     ) -> bool {
         if observed_output {
-            self.foreground_title_idle_sync_polls = 0;
+            self.process.foreground_title_idle_sync_polls = 0;
             return true;
         }
-        let should_sync = self.foreground_title_idle_sync_polls == 0;
-        self.foreground_title_idle_sync_polls =
-            self.foreground_title_idle_sync_polls.saturating_add(1)
-                % RUNTIME_FOREGROUND_TITLE_IDLE_SYNC_POLL_INTERVAL;
+        let should_sync = self.process.foreground_title_idle_sync_polls == 0;
+        self.process.foreground_title_idle_sync_polls = self
+            .process
+            .foreground_title_idle_sync_polls
+            .saturating_add(1)
+            % RUNTIME_FOREGROUND_TITLE_IDLE_SYNC_POLL_INTERVAL;
         should_sync
     }
 

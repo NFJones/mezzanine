@@ -256,8 +256,7 @@ impl RuntimeSessionService {
         }
         self.active_copy_modes_mut().clear();
         self.pane_screens.clear();
-        self.pane_transaction_osc_screens.clear();
-        self.pane_transaction_osc_pending.clear();
+        self.clear_pane_transaction_parsers();
         self.pane_exit_records.clear();
         self.pane_closing.clear();
         self.pane_transcript_refs.clear();

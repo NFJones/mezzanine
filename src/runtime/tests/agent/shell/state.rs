@@ -149,7 +149,9 @@ fn runtime_control_agent_shell_visibility_enters_and_exits_pane_subshell() {
 fn runtime_hidden_agent_shell_osc_parser_skips_large_command_bodies() {
     let mut service = test_runtime_service();
     let size = Size::new(80, 24).unwrap();
-    service.pane_transaction_osc_screens.remove("%1");
+    service
+        .pane_transaction_osc_screens_mut_for_tests()
+        .remove("%1");
     service.running_shell_transactions.insert(
         "marker-1".to_string(),
         RunningShellTransactionRef {
@@ -189,10 +191,16 @@ fn runtime_hidden_agent_shell_osc_parser_skips_large_command_bodies() {
         }]
     );
     assert!(
-        !service.pane_transaction_osc_screens.contains_key("%1"),
+        !service
+            .pane_transaction_osc_screens_for_tests()
+            .contains_key("%1"),
         "hidden agent shell output should not allocate or feed the full terminal parser"
     );
-    assert!(!service.pane_transaction_osc_pending.contains_key("%1"));
+    assert!(
+        !service
+            .pane_transaction_osc_pending_for_tests()
+            .contains_key("%1")
+    );
 }
 
 /// Verifies the bounded hidden-output marker scanner still preserves
@@ -203,7 +211,9 @@ fn runtime_hidden_agent_shell_osc_parser_skips_large_command_bodies() {
 fn runtime_hidden_agent_shell_osc_parser_preserves_fragmented_markers() {
     let mut service = test_runtime_service();
     let size = Size::new(80, 24).unwrap();
-    service.pane_transaction_osc_screens.remove("%1");
+    service
+        .pane_transaction_osc_screens_mut_for_tests()
+        .remove("%1");
     service.running_shell_transactions.insert(
         "marker-1".to_string(),
         RunningShellTransactionRef {
@@ -244,7 +254,11 @@ fn runtime_hidden_agent_shell_osc_parser_preserves_fragmented_markers() {
             exit_code: 0,
         }]
     );
-    assert!(!service.pane_transaction_osc_pending.contains_key("%1"));
+    assert!(
+        !service
+            .pane_transaction_osc_pending_for_tests()
+            .contains_key("%1")
+    );
 }
 
 ///
