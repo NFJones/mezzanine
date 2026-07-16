@@ -5,7 +5,22 @@
 //! deliberately keeps file-system canonicalization and overlay capability
 //! summarization separate from the broader live-config application code.
 
-use super::*;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use serde_json::Value;
+
+use crate::config::{
+    ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigScope, validate_config_text,
+};
+use crate::control::unix_seconds_to_rfc3339;
+use crate::error::{MezError, Result};
+use crate::project::{ProjectTrustRecord, TrustDecision};
+
+use super::{
+    ensure_absolute, json_escape, optional_path_json, optional_string_json,
+    runtime_json_string_field, runtime_json_value, runtime_string_array_json,
+};
 
 /// Extracts and canonicalizes the project root from a project-trust params object.
 ///

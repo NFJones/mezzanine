@@ -4,7 +4,15 @@
 //! resolved terminal UI themes. Keeping theme parsing here separates visual
 //! palette materialization from the broader runtime config application flow.
 
-use super::*;
+use std::collections::BTreeMap;
+
+use serde_json::Value;
+
+use crate::error::{MezError, Result};
+use mez_mux::theme::{
+    DEFAULT_UI_THEME_NAME, UiTheme, UiThemeDefinition, builtin_ui_theme_definition,
+    resolve_ui_theme, valid_color_alias_name,
+};
 
 /// Runs the runtime ui theme from config operation for this subsystem.
 ///

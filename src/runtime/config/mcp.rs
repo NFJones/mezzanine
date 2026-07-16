@@ -5,8 +5,18 @@
 //! capability settings. Keeping MCP parsing here separates integration policy
 //! from provider, hook, permission, and general JSON helper domains.
 
-use super::*;
+use std::collections::BTreeMap;
+
 use mez_agent::mcp::{McpApprovalSetting, McpExternalCapability, McpServerConfig, McpServerKind};
+use serde_json::Value;
+
+use crate::error::{MezError, Result};
+use mez_agent::mcp::McpRegistry;
+
+use super::{
+    runtime_json_bool, runtime_json_object, runtime_json_string, runtime_json_string_array,
+    runtime_json_string_map, runtime_json_u64,
+};
 
 /// Runs the runtime mcp registry from config operation for this subsystem.
 ///

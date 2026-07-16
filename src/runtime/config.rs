@@ -5,35 +5,18 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    ActionResult, AgentAction, AgentId, AgentTurnRecord, ApprovalDecision, ApprovalPolicy,
-    AuditConfig, AuditLog, AuditRetentionPolicy, BTreeMap, BlockedApprovalRequest, CommandRule,
-    CommandRuleScope, ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigScope,
-    DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT, DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
+    BTreeMap, DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT,
+    DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
     DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS, DEFAULT_AGENT_LOOP_LIMIT,
-    DEFAULT_AGENT_ROUTING, DEFAULT_AUTO_SIZING_FALLBACK_POLICY,
-    DEFAULT_COMMAND_SHELL_CLASSIFICATION, DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES,
-    DEFAULT_MAX_CONCURRENT_AGENTS, DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH,
-    DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW, DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT, DEFAULT_PANE_TERM,
-    DEFAULT_SUBAGENT_WAIT_POLICY, EffectiveConfig, HookDefinition, HookEvent, HookInvocation,
-    HookMatcherGroup, HookMatcherOperator, HookMatcherPredicate, HostClipboard,
-    HostClipboardCommand, KeyBindings, KeyChord, MarkerToken, McpRegistry, MezError, ModelProfile,
-    PaneId, Path, PathBuf, PermissionPolicy, PermissionPreset, ProjectTrustRecord, Recipient,
-    Result, RuleDecision, RuleMatch, RuntimeAgentPersonalityProfile, RuntimeAutoSizingConfig,
-    RuntimeAutoSizingFallbackPolicy, RuntimeCommandBinding, RuntimeConfigApplyReport,
-    RuntimeModelPreset, RuntimeModelProfileOverrideScope, RuntimePresetRegistry,
-    RuntimeProviderConfig, RuntimeProviderRegistry, RuntimeSessionService, SubagentProfile,
-    SubagentScopeDeclaration, SubagentWaitPolicy, TerminalCursorStyle, TrustDecision, Value,
-    WindowId, builtin_subagent_profiles, ensure_absolute, exact_command_sha256, fs,
-    key_chord_notation, optional_path_json, optional_string_json, parse_command_sequence,
+    DEFAULT_AGENT_ROUTING, DEFAULT_AUTO_SIZING_FALLBACK_POLICY, DEFAULT_MAX_CONCURRENT_AGENTS,
+    DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH, DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW,
+    DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT, DEFAULT_SUBAGENT_WAIT_POLICY, MezError, Result,
+    RuntimeAgentPersonalityProfile, RuntimeAutoSizingConfig, RuntimeAutoSizingFallbackPolicy,
+    RuntimeConfigApplyReport, RuntimeSessionService, SubagentProfile, SubagentWaitPolicy, Value,
+    builtin_subagent_profiles, ensure_absolute, optional_path_json, optional_string_json,
     runtime_cooperation_mode, runtime_cooperation_mode_name, runtime_json_string_field,
-    runtime_json_value, unix_seconds_to_rfc3339, valid_color_alias_name, validate_config_text,
+    runtime_json_value,
 };
-use crate::transcript::DEFAULT_SAVED_AGENT_SESSION_LIMIT;
-use mez_mux::theme::{
-    DEFAULT_UI_THEME_NAME, UiTheme, UiThemeDefinition, builtin_ui_theme_definition,
-    resolve_ui_theme,
-};
-use mez_terminal::TerminalEmojiWidth;
 
 mod agents;
 mod audit;

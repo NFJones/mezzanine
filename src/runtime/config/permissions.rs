@@ -6,7 +6,23 @@
 //! outside the config root separates permission-specific contracts from shared
 //! JSON and scalar parsing utilities.
 
-use super::*;
+use serde_json::Value;
+
+use mez_agent::messaging::Recipient;
+use mez_agent::permissions::{
+    ApprovalDecision, ApprovalPolicy, BlockedApprovalRequest, CommandRule, CommandRuleScope,
+    DEFAULT_COMMAND_SHELL_CLASSIFICATION, PermissionPolicy, PermissionPreset, RuleDecision,
+    RuleMatch,
+};
+use mez_agent::{ActionResult, AgentTurnRecord, SubagentScopeDeclaration};
+use mez_core::ids::{AgentId, PaneId, WindowId};
+
+use crate::error::{MezError, Result};
+
+use super::{
+    runtime_cooperation_mode_name, runtime_json_bool, runtime_json_object, runtime_json_string,
+    runtime_json_string_array,
+};
 
 /// Runs the runtime approval decision name to kind operation for this subsystem.
 ///

@@ -5,8 +5,21 @@
 //! parsing here separates model-selection policy from terminal, frame, MCP,
 //! permission, hook, and project-trust config domains.
 
-use super::*;
+use std::collections::BTreeMap;
+
 use mez_agent::resolve_provider_api;
+use mez_agent::{
+    ModelPreset as RuntimeModelPreset, ModelProfile, PresetRegistry as RuntimePresetRegistry,
+    ProviderConfig as RuntimeProviderConfig, ProviderRegistry as RuntimeProviderRegistry,
+};
+use serde_json::Value;
+
+use crate::error::{MezError, Result};
+
+use super::{
+    runtime_json_bool, runtime_json_object, runtime_json_string, runtime_json_string_array,
+    runtime_json_string_map, runtime_validate_latency_preference,
+};
 
 pub(in crate::runtime) fn runtime_provider_registry_from_config(
     root: &Value,

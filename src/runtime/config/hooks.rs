@@ -5,7 +5,21 @@
 //! helpers out of the config root separates hook-specific contracts from the
 //! general JSON and permission parsing utilities.
 
-use super::*;
+use serde_json::Value;
+use std::fs;
+
+use crate::error::{MezError, Result};
+use crate::hooks::{
+    HookDefinition, HookEvent, HookInvocation, HookMatcherGroup, HookMatcherOperator,
+    HookMatcherPredicate,
+};
+use mez_agent::permissions::{DEFAULT_COMMAND_SHELL_CLASSIFICATION, exact_command_sha256};
+use mez_agent::{ActionResult, AgentAction, AgentTurnRecord, MarkerToken, ModelProfile};
+
+use super::{
+    json_escape, runtime_json_bool, runtime_json_object, runtime_json_scalar_string,
+    runtime_json_string, runtime_json_string_array, runtime_json_u64,
+};
 
 /// Runs the runtime marker for action operation for this subsystem.
 ///

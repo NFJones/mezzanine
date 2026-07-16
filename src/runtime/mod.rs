@@ -8,7 +8,7 @@
 //! commands, and provides an owned in-memory runtime service that coordinates
 //! session lifecycle state without requiring a long-running daemon.
 
-use mez_mux::presentation::{ClientViewRole, RenderedClientView, TerminalCursorStyle};
+use mez_mux::presentation::{ClientViewRole, RenderedClientView};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs::{self, DirBuilder, File, OpenOptions};
@@ -38,18 +38,16 @@ use crate::agent::provider::{
 use crate::agent::slash::{
     AgentShellCommandOutcome, AgentShellRuntimeContext, execute_agent_shell_command_with_context,
 };
-use crate::audit::{
-    AuditActor, AuditConfig, AuditDeferredWrite, AuditLog, AuditRecord, AuditRetentionPolicy,
-};
+use crate::audit::{AuditActor, AuditDeferredWrite, AuditLog, AuditRecord};
 use crate::auth::AuthStore;
 use crate::command::{
     CommandOutcome, bind_key_args, binding_config_key, execute_auth_command, execute_command,
     execute_mark_pane_ready_command, key_chord_notation,
 };
 use crate::config::{
-    ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,
-    ConfigMutationValue, ConfigPaths, ConfigScope, EffectiveConfig, compose_effective_config,
-    persist_config_text, plan_config_mutation, validate_config_text,
+    ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
+    ConfigPaths, ConfigScope, EffectiveConfig, compose_effective_config, persist_config_text,
+    plan_config_mutation, validate_config_text,
 };
 #[cfg(test)]
 use crate::control::handle_control_frames_for_connection;
@@ -80,8 +78,7 @@ use crate::event::{
 use crate::hooks::{
     FocusedShellExecutor, FocusedShellHookDispatch, FocusedShellHookDispatchStatus,
     FocusedShellHookOutput, HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult,
-    HookExecutionStatus, HookFailure, HookFailureDecision, HookFailureKind, HookInvocation,
-    HookMatcherGroup, HookMatcherOperator, HookMatcherPredicate, HookOnFailure,
+    HookExecutionStatus, HookFailure, HookFailureDecision, HookFailureKind, HookOnFailure,
     decide_hook_failure, execute_focused_shell_hook, execute_program_hook,
     hook_execution_audit_record, plan_event,
 };
@@ -91,8 +88,8 @@ use crate::mcp::{
 };
 use crate::message::{decode_mmp_frame, encode_mmp_body, handle_mmp_frame};
 use crate::project::{
-    ProjectTrustRecord, ProjectTrustStore, TrustDecision, default_trust_database_path,
-    discover_existing_overlays, discover_project_root,
+    ProjectTrustStore, TrustDecision, default_trust_database_path, discover_existing_overlays,
+    discover_project_root,
 };
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt, ReadlinePromptKind};
 use crate::registry::{SessionRecord, SessionRegistry};
@@ -105,7 +102,7 @@ use crate::snapshot::{
 };
 use crate::subagent::SUBAGENT_FRIENDLY_NAMES;
 use crate::terminal::{
-    AttachedTerminalClientStepPlan, CopyMode, HostClipboard, HostClipboardCommand, MouseAction,
+    AttachedTerminalClientStepPlan, CopyMode, HostClipboard, MouseAction,
     MouseWindowActionFrameCell, TerminalClientLoopAction, TerminalClientLoopConfig,
     TerminalFrameContext, WindowFrameAction, agent_prompt_reserved_line_count,
     render_attached_client_view, rendered_pane_geometries, route_client_input_actions,
@@ -174,12 +171,9 @@ use mez_mux::process::{
 };
 use mez_mux::readline::ReadlineOutcome;
 use mez_mux::session::{ClientRole, ClientState, ObserverDecisionState, Session};
-use mez_mux::theme::valid_color_alias_name;
 use mez_mux::theme::{UiThemeDefinition, builtin_ui_theme_definition, resolve_ui_theme};
 use mez_terminal::DEFAULT_PANE_TERM;
-use mez_terminal::{
-    DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, TerminalOscEvent, TerminalScreen,
-};
+use mez_terminal::{TerminalOscEvent, TerminalScreen};
 
 /// Coordinates the seven private application runtime components.
 ///
@@ -365,8 +359,7 @@ use mez_agent::{
     AutoSizingFallbackPolicy as RuntimeAutoSizingFallbackPolicy,
     AutoSizingTargetProfile as RuntimeAutoSizingTargetProfile, DEFAULT_AUTO_SIZING_FALLBACK_POLICY,
     DEFAULT_AUTO_SIZING_ROUTER_PROFILE, ModelPreset as RuntimeModelPreset,
-    PresetRegistry as RuntimePresetRegistry, ProviderConfig as RuntimeProviderConfig,
-    ProviderRegistry as RuntimeProviderRegistry,
+    ProviderConfig as RuntimeProviderConfig, ProviderRegistry as RuntimeProviderRegistry,
 };
 use mez_mux::process::PaneProcessEnvironment as PaneEnvironment;
 use pane_io::{ActivePanePipe, PaneExitRecord, StoppedPanePipe};

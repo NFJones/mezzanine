@@ -6,8 +6,18 @@
 //! live-option parsing from frame, agent, permission, provider, and hook
 //! config domains.
 
-use super::*;
+use serde_json::Value;
+
+use crate::error::{MezError, Result};
 use crate::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP;
+use crate::terminal::{HostClipboard, HostClipboardCommand};
+use crate::transcript::DEFAULT_SAVED_AGENT_SESSION_LIMIT;
+use mez_mux::presentation::TerminalCursorStyle;
+use mez_terminal::{
+    DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, DEFAULT_PANE_TERM, TerminalEmojiWidth,
+};
+
+use super::{runtime_json_object, runtime_json_string, validate_runtime_terminal_term};
 
 /// Runs the runtime history limit from config operation for this subsystem.
 ///
