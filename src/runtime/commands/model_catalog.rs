@@ -6,7 +6,16 @@
 //! catalog mechanics separate from model selection keeps `/model` command
 //! execution focused on state transitions and profile overrides.
 
-use super::*;
+use super::{
+    AsyncModelProvider, AuthCredentialKind, BTreeMap, DEFAULT_PROVIDER_TIMEOUT_MS, MezError,
+    ModelProfile, ProviderApiCompatibility, ProviderModelCatalog, ProviderModelInfo,
+    ProviderQuotaUsage, ReqwestProviderHttpTransport, Result, RuntimeSessionService,
+    deepseek_chat_completions_provider_from_auth_store_with_provider_options, json_escape,
+    openai_compatible_provider_from_auth_store_with_provider_options,
+    openai_default_reasoning_levels_for_model,
+    openai_responses_provider_from_auth_store_with_provider_options, resolve_provider_api,
+    runtime_default_models_for_provider, runtime_recommended_model_for_provider,
+};
 
 impl RuntimeSessionService {
     pub(super) fn runtime_model_catalog_for_provider(

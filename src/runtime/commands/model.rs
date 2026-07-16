@@ -6,7 +6,21 @@
 //! profiles. It keeps provider-catalog mechanics separate from the broader
 //! agent-shell command dispatcher.
 
-use super::*;
+use super::model_catalog::{
+    RuntimeModelCatalog, runtime_configured_reasoning_levels_for_model,
+    runtime_model_catalog_display, runtime_provider_default_models,
+    runtime_routing_model_profile_display,
+};
+use super::slash::runtime_single_mode_arg;
+use super::{
+    AgentShellCommandOutcome, AgentShellVisibility, DEFAULT_AUTO_SIZING_ROUTER_PROFILE, MezError,
+    ModelProfile, ModelProfileOverrides, ProviderCapabilities, RUNTIME_LATENCY_PREFERENCES, Result,
+    RuntimeAutoSizingConfig, RuntimeModelPreset, RuntimeModelProfileOverrideScope,
+    RuntimeSessionService, json_escape, parse_slash_command, runtime_default_models_for_provider,
+    runtime_model_command_args, runtime_model_override_scope_for_args,
+    runtime_model_override_scope_name, runtime_model_profile_display,
+    runtime_validate_latency_preference, select_model_profile,
+};
 
 impl RuntimeSessionService {
     pub(super) fn execute_agent_shell_model_command(

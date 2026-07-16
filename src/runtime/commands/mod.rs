@@ -88,13 +88,9 @@ use compaction::{
     runtime_model_compaction_request, runtime_model_compaction_summary_from_response,
 };
 pub(super) use model_catalog::RuntimeModelCatalog;
+use model_catalog::runtime_markdown_table;
 #[cfg(test)]
 use model_catalog::runtime_model_catalog_unavailable_reason;
-use model_catalog::{
-    runtime_configured_reasoning_levels_for_model, runtime_markdown_table,
-    runtime_model_catalog_display, runtime_provider_default_models,
-    runtime_routing_model_profile_display,
-};
 use remember::{
     runtime_git_repository_root, runtime_git_text, runtime_git_untracked_diff,
     runtime_git_untracked_files, runtime_remember_scope_display,
