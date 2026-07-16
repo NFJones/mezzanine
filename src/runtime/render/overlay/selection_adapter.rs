@@ -1,8 +1,8 @@
 //! Pane-agent selector and record-browser layout projection.
 
 use super::product_content::*;
-use super::*;
 use crate::runtime::render::*;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub(in crate::runtime::render) fn runtime_pane_agent_status_selector_layout(
     selector: &RuntimePaneAgentStatusSelector,

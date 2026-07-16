@@ -1,11 +1,38 @@
 //! Runtime service application of projected agent presentation rows.
 
-use super::actions::*;
-use super::diff::*;
-use super::style::*;
-use super::text::*;
-use super::*;
-use crate::runtime::render::*;
+use super::actions::{
+    agent_action_execution_display_header, agent_action_execution_rendered_line,
+    agent_action_model_thinking_lines, agent_action_result_display_header,
+    agent_macro_lifecycle_display_lines_for_width, agent_thinking_display_lines_for_width,
+    bounded_agent_action_result_display_lines,
+};
+use super::diff::{
+    agent_action_result_uses_diff_preview, cleaned_agent_diff_source_lines,
+    readable_agent_diff_display_lines_for_width,
+};
+use super::style::{
+    AGENT_PROMPT_TEXT_PREFIX, AGENT_TERMINAL_MESSAGE_PREFIX, AgentTerminalPresentationStyle,
+};
+use super::text::{
+    agent_say_text_is_displayed_patch_block, append_styled_agent_terminal_line,
+    append_styled_agent_terminal_rendered_line, bounded_agent_terminal_presentation_columns,
+    command_preview_terminal_rendered_lines, fit_agent_terminal_text_width,
+    markdown_block_copy_lines, prefixed_agent_terminal_lines, render_agent_markdown_body_lines,
+    sanitized_agent_terminal_line, wrapped_prefixed_agent_terminal_lines,
+};
+use super::{
+    AGENT_COPY_SKIP_LINE, AgentAction, RichTextLine, UnicodeWidthStr, diff_section_path,
+    frame_markdown_lines, parse_unified_diff_sections, wrap_rich_text_lines_to_width,
+};
+use crate::runtime::render::{
+    ActionResult, AgentPresentationEntry, MezError, PaneGeometry, Result, RuntimeSessionService,
+    TerminalScreen, current_unix_seconds, default_runtime_agent_prompt_input,
+    pane_content_size_for_geometry, rendered_window_body_size,
+};
+use mez_agent::{
+    AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, agent_output_content_type_is_diff,
+    agent_output_content_type_is_markdown,
+};
 
 impl RuntimeSessionService {
     /// Runs the append agent user prompt to terminal buffer operation for this subsystem.

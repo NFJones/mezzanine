@@ -5,7 +5,29 @@
 //! and terminal frame context. Keeping this large frame-assembly path separate
 //! from input mutation helpers makes the runtime render facade easier to scan.
 
-use super::*;
+use super::{
+    AgentShellVisibility, AgentTurnRecord, AgentTurnState, ClientViewRole, CopyMode, CopyPosition,
+    MezError, MouseBorderCell, MousePaneAgentSelectorCell, MousePaneAgentStatusCell,
+    MousePaneRegion, MouseWindowActionFrameCell, MouseWindowFrameCell, ObserverDecisionState,
+    ROOT_AGENT_DISPLAY_NAME, ReadlinePrompt, ReadlinePromptKind, RenderedClientView, Result,
+    RunningShellTransactionKind, RuntimeDisplayOverlay, RuntimePaneAgentStatusSelector,
+    RuntimePrimaryPromptInput, RuntimeSessionService, Size, TerminalClientLoopConfig,
+    TerminalFrameContext, TerminalFramePosition, TerminalPaneFrameContext, TerminalScreen,
+    TerminalStyleSpan, TerminalStyledLine, TerminalWindowFrameContext,
+    TerminalWindowGroupFrameContext, TerminalWindowStatusContext, agent_prompt_reserved_line_count,
+    compose_modal_display_overlay_lines, compose_prompt_overlay_presentation_with_styles,
+    current_unix_millis, current_unix_seconds, modal_overlay_page_rows,
+    mouse_border_cells_for_geometries, overlay_footer, overlay_render_lines,
+    overlay_rendered_line_style_spans, overlay_rendered_selection_start,
+    overlay_selection_rendition, overlay_styled_lines, overlay_text_at,
+    pane_content_size_for_geometry, pane_frame_agent_status_pillbox_cells,
+    pane_render_region_size_for_geometry, render_attached_client_view, rendered_pane_geometries,
+    rendered_window_body_size, runtime_agent_turn_duration_display, runtime_agent_turn_state_name,
+    runtime_fit_status_line, runtime_human_system_uptime, runtime_local_datetime_seconds_string,
+    runtime_pane_agent_selector_rendition, runtime_pane_agent_status_selector_layout,
+    runtime_selector_line, terminal_text_width, window_frame_action_pillbox_cells,
+    window_frame_pillbox_cells, window_group_frame_pillbox_cells,
+};
 
 /// Runs the apply copy mode selection spans operation for this subsystem.
 ///

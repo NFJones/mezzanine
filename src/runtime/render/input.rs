@@ -4,7 +4,17 @@
 //! selectors. It intentionally has no render-state dependencies, keeping
 //! navigation semantics reusable across overlay surfaces.
 
-use super::*;
+use super::{
+    AgentTerminalPresentationStyle, AgentTurnState, DEFAULT_READLINE_HISTORY_LIMIT,
+    ReadlineOutcome, ReadlinePromptKind, Result, RuntimeAgentShellDisplayOutput,
+    RuntimeSessionService, RuntimeSideEffect, SelectorCandidate, SelectorCandidateKind,
+    SelectorExtraCandidate, SelectorSurface, TerminalClientLoopAction,
+    agent_display_lines_are_error, agent_display_lines_are_low_level_status,
+    agent_prompt_error_display_lines, agent_shell_mcp_display_state_name, current_unix_millis,
+    default_runtime_agent_prompt_input, runtime_agent_shell_display_output,
+    runtime_agent_shell_visibility, runtime_command_display_overlay_content,
+    runtime_command_display_should_open_overlay,
+};
 use crate::runtime::service_state::RuntimeRecordBrowserOverlayState;
 
 /// Display-overlay navigation action decoded from terminal input.

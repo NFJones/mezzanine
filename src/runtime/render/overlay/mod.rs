@@ -6,9 +6,6 @@
 //! facade makes overlay behavior easier to maintain without mixing it with pane
 //! input dispatch and frame composition.
 
-use mez_mux::theme::parse_hex_color;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-
 mod display_content;
 mod product_content;
 mod record_adapter;

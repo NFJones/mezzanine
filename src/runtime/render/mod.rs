@@ -603,10 +603,7 @@ use crate::terminal::{
 };
 use crate::transcript::AgentPresentationEntry;
 use mez_agent::mcp::McpServerStatus;
-use mez_agent::{
-    AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, ActionResult, agent_output_content_type_is_diff,
-    agent_output_content_type_is_markdown,
-};
+use mez_agent::{ActionResult, agent_output_content_type_is_markdown};
 use mez_mux::attached_client::mouse_border_cells_for_geometries;
 use mez_mux::copy::CopyPosition;
 use mez_mux::presentation::{
@@ -637,7 +634,7 @@ use input::{
     runtime_display_overlay_input_action, runtime_selector_input_action,
     runtime_selector_step_index,
 };
-use mez_mux::render::{RichTextLine, push_or_extend_style_span, terminal_color_luminance};
+use mez_mux::render::{RichTextLine, push_or_extend_style_span};
 #[cfg(test)]
 use mez_mux::render::{RichTextLineKind, wrap_rich_text_line_to_width};
 use overlay::{

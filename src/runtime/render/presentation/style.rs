@@ -1,6 +1,6 @@
 //! Terminal presentation styles, palettes, and SGR projection.
 
-use super::*;
+use super::{GraphicRendition, TerminalColor, UiColorPair, UiTheme};
 
 /// Carries Agent Terminal Presentation Style state for this subsystem.
 ///

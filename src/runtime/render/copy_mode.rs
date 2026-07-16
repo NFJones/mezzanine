@@ -6,7 +6,7 @@
 //! attached terminal step orchestration while preserving runtime-visible helper
 //! methods used by commands, processes, and tests.
 
-use super::*;
+use super::{CopyMode, CopyModeKeyAction, MezError, Result, RuntimeSessionService};
 
 impl RuntimeSessionService {
     /// Runs the apply attached copy mode action operation for this subsystem.

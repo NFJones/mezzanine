@@ -1,8 +1,9 @@
 //! Runtime display-record parsing and executable-choice adaptation.
 
 use super::display_content::*;
-use super::*;
 use crate::runtime::render::*;
+use mez_mux::theme::parse_hex_color;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Structured representation of one compact display row.
 #[derive(Debug, Clone, PartialEq, Eq)]

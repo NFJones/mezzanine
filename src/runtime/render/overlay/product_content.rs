@@ -4,8 +4,8 @@ use super::display_content::{
     RuntimeCommandDisplayOverlayContent, runtime_human_readable_display_lines,
 };
 use super::record_adapter::runtime_theme_preview_style_spans;
-use super::*;
 use crate::runtime::render::*;
+use unicode_width::UnicodeWidthStr;
 
 /// Render placement for an open pane agent status selector.
 #[derive(Debug, Clone, PartialEq, Eq)]

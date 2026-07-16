@@ -1,10 +1,21 @@
 //! Unified-diff cleanup, syntax projection, and bounded rendering.
 
 use super::actions::{bounded_agent_action_result_display_lines, truncate_to_utf8_boundary};
-use super::style::*;
-use super::text::*;
-use super::*;
-use crate::runtime::render::*;
+use super::style::{
+    AGENT_ACTION_RESULT_DISPLAY_MAX_BYTES, AGENT_ACTION_RESULT_DISPLAY_MAX_LINES,
+    AgentTerminalPresentationStyle,
+};
+use super::text::{
+    agent_terminal_label_rendition, agent_terminal_text_width, sanitized_agent_terminal_line,
+};
+use super::{
+    AgentAction, AgentActionPayload, DiffDisplayLine, DiffDisplaySection, RichTextLine,
+    RichTextLineKind, ShellClassification, SyntaxHighlighter, SyntaxTheme, SyntaxThemePalette,
+    TerminalColor, TerminalStyleSpan, UiTheme, append_syntax_spans, diff_highlighter_for_path,
+    diff_section_path, format_diff_display_line, parse_unified_diff_sections,
+    syntax_highlighter_for_extension, syntax_theme, wrap_rich_text_line_to_width,
+};
+use mez_mux::render::push_or_extend_style_span;
 
 /// Chooses the presentation style for one generated diff preview line.
 ///

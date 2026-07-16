@@ -1,9 +1,21 @@
 //! Agent text, Markdown, wrapping, and styled-line composition.
 
 use super::diff::{agent_command_syntax_theme, agent_shell_command_highlighter};
-use super::style::*;
-use super::*;
-use crate::runtime::render::*;
+use super::style::{
+    AGENT_TERMINAL_MESSAGE_PREFIX, AgentTerminalPresentationStyle, agent_terminal_sgr_sequence,
+    agent_text_foreground_rendition,
+};
+use super::{
+    GraphicRendition, MARKDOWN_DARK_MUTED_FOREGROUND, MARKDOWN_DARK_NEUTRAL_FOREGROUND,
+    MARKDOWN_LIGHT_NEUTRAL_FOREGROUND, RenderedClientView, RichTextLine, RichTextLineKind,
+    RichTextTheme, ShellClassification, TerminalColor, TerminalStyleSpan, TerminalStyledLine,
+    UiTheme, UnicodeSegmentation, UnicodeWidthStr, agent_wrap_column_cap, append_syntax_spans,
+    mux_markdown_block_copy_lines, overlay_fixed_column_style_spans, overlay_text_cells,
+    prefix_rich_text_lines, render_markdown, runtime_mezzanine_error_code, terminal_grapheme_width,
+    wrap_rich_text_lines_to_width,
+};
+use crate::error::MezError;
+use mez_mux::render::{push_or_extend_style_span, terminal_color_luminance};
 
 /// Runs the sanitized agent terminal line operation for this subsystem.
 ///

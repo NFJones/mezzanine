@@ -1,9 +1,18 @@
 //! Agent action headers, previews, thinking text, and result bounds.
 
-use super::style::*;
-use super::text::*;
-use super::*;
-use crate::runtime::render::*;
+use super::style::{
+    AGENT_ACTION_RESULT_DISPLAY_MAX_BYTES, AGENT_ACTION_RESULT_DISPLAY_MAX_LINES,
+    AGENT_TERMINAL_MESSAGE_PREFIX, agent_text_foreground_rendition,
+};
+use super::text::{
+    agent_terminal_text_width, bounded_agent_terminal_presentation_columns,
+    sanitized_agent_terminal_line, wrap_agent_terminal_text,
+};
+use super::{
+    AgentAction, AgentActionPayload, GraphicRendition, RichTextLine, RichTextLineKind,
+    TerminalStyleSpan, UiTheme, UnicodeWidthStr, apply_patch_touched_paths,
+};
+use mez_mux::render::push_or_extend_style_span;
 
 /// Builds the compact header shown for action execution/result output.
 pub(in crate::runtime::render) fn agent_action_execution_display_header(

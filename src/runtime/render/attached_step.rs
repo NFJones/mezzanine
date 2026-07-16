@@ -6,7 +6,13 @@
 //! facade leaves  as the module root for types, imports, and
 //! tests while preserving behavior through  methods.
 
-use super::*;
+use super::{
+    AgentShellVisibility, AttachedClientStepApplication, AttachedTerminalClientStepPlan,
+    ClientViewRole, EventKind, MezError, MouseAction, MuxAction, PaneDescriptor, PaneInputDispatch,
+    ReadlinePromptKind, Result, RuntimeSessionService, Size, TerminalClientLoopAction,
+    TerminalClientLoopConfig, json_escape, mouse_action_name, mux_action_command_prompt_prefill,
+    mux_action_name, runtime_primary_prompt_input,
+};
 use crate::runtime::{RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition};
 use crate::terminal::{
     AttachedTerminalFdReadiness, AttachedTerminalFdRole, TerminalFdInterest,
