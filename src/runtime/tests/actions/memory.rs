@@ -642,7 +642,7 @@ fn runtime_executes_memory_actions_and_audits_action_arguments() {
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
     let turn = service
         .agent_turn_ledger
         .turns()
@@ -788,7 +788,7 @@ fn runtime_memory_store_rejects_episode_and_scratch_kinds() {
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
     let turn = service
         .agent_turn_ledger
         .turns()
@@ -918,7 +918,7 @@ fn runtime_memory_disabled_failure_tells_model_to_continue_without_retrying_memo
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
     let turn = service
         .agent_turn_ledger
         .turns()

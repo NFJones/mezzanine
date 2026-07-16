@@ -188,8 +188,6 @@ impl RuntimeSessionService {
             agent_context_usage_snapshot_by_conversation: BTreeMap::new(),
             agent_quota_usage_by_conversation: BTreeMap::new(),
             provider_model_catalog_cache: BTreeMap::new(),
-            pending_agent_provider_tasks: BTreeSet::new(),
-            claimed_agent_provider_tasks: BTreeMap::new(),
             subagent_task_routes: BTreeMap::new(),
             subagent_window_ids: BTreeSet::new(),
             pending_terminal_subagent_pane_closes: BTreeSet::new(),

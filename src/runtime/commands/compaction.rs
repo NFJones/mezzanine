@@ -242,7 +242,7 @@ impl RuntimeSessionService {
             .find(|turn| turn.turn_id == turn_id)
             .cloned()
         else {
-            self.pending_agent_provider_tasks.remove(turn_id);
+            self.remove_pending_agent_provider_task(turn_id);
             return Ok(false);
         };
         if turn.agent_id != agent_id.as_str() {
@@ -251,7 +251,7 @@ impl RuntimeSessionService {
             ));
         }
         if turn.state != AgentTurnState::Running {
-            self.pending_agent_provider_tasks.remove(turn_id);
+            self.remove_pending_agent_provider_task(turn_id);
             return Ok(false);
         }
         if self.agent_compacting_panes.contains_key(&turn.pane_id) {
@@ -262,7 +262,7 @@ impl RuntimeSessionService {
             "provider-output-limit",
             Some(turn_id),
         )?;
-        self.pending_agent_provider_tasks.remove(turn_id);
+        self.remove_pending_agent_provider_task(turn_id);
         self.append_agent_status_text_to_terminal_buffer(
             &turn.pane_id,
             &format!(

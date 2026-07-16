@@ -329,7 +329,7 @@ context_window_tokens = 40000
             label: "synthetic provider-rejected action result".to_string(),
             content: format!("provider-context-limit- {}", "cp ".repeat(10_000)),
         });
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
     let provider = RuntimeContextLimitThenSuccessProvider {
         requests: RefCell::new(Vec::new()),
     };
@@ -704,7 +704,7 @@ max_output_tokens = 4096
             label: "synthetic retained action result".to_string(),
             content: "output-limit-retained-context".to_string(),
         });
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
     let provider = RuntimeOutputLimitThenSuccessProvider {
         requests: RefCell::new(Vec::new()),
     };
@@ -886,11 +886,11 @@ context_window_tokens = 128000
             .and_then(|task| task.resume_turn_id.as_deref())
             == Some("turn-1")
     );
-    assert!(!service.pending_agent_provider_tasks.contains("turn-1"));
+    assert!(!service.agent_provider_task_is_pending("turn-1"));
 
     complete_runtime_test_compaction(&mut service, "%1", "summary after output-limit exhaustion");
 
-    assert!(service.pending_agent_provider_tasks.contains("turn-1"));
+    assert!(service.agent_provider_task_is_pending("turn-1"));
     assert_eq!(
         service
             .agent_shell_store()

@@ -130,8 +130,8 @@ impl RuntimeSessionService {
         self.clear_joined_subagent_dependencies_for_turn(turn_id);
         self.clear_agent_pre_shell_hook_completions_for_turn(turn_id);
         self.agent.agent_turn_model_profiles.remove(turn_id);
-        self.pending_agent_provider_tasks.remove(turn_id);
-        self.claimed_agent_provider_tasks.remove(turn_id);
+        self.agent.pending_agent_provider_tasks.remove(turn_id);
+        self.agent.claimed_agent_provider_tasks.remove(turn_id);
         self.blocked_agent_approval_refs
             .retain(|_, approval_ref| approval_ref.turn_id != turn_id);
         let finished = self
@@ -210,8 +210,12 @@ impl RuntimeSessionService {
         self.clear_joined_subagent_dependencies_for_turn(&turn.turn_id);
         self.clear_agent_pre_shell_hook_completions_for_turn(&turn.turn_id);
         self.agent.agent_turn_model_profiles.remove(&turn.turn_id);
-        self.pending_agent_provider_tasks.remove(&turn.turn_id);
-        self.claimed_agent_provider_tasks.remove(&turn.turn_id);
+        self.agent
+            .pending_agent_provider_tasks
+            .remove(&turn.turn_id);
+        self.agent
+            .claimed_agent_provider_tasks
+            .remove(&turn.turn_id);
         self.blocked_agent_approval_refs
             .retain(|_, approval_ref| approval_ref.turn_id != turn.turn_id);
         let session = self
@@ -295,7 +299,8 @@ impl RuntimeSessionService {
             self.agent_turn_ledger.mark_turn_running(&running.turn_id)?;
             self.agent_shell_store
                 .start_turn(&turn.pane_id, running.turn_id.clone())?;
-            self.pending_agent_provider_tasks
+            self.agent
+                .pending_agent_provider_tasks
                 .insert(running.turn_id.clone());
             self.append_agent_trace_turn_transition(
                 &turn,
@@ -398,7 +403,9 @@ impl RuntimeSessionService {
                 self.clear_joined_subagent_dependencies_for_turn(&turn.turn_id);
                 self.clear_agent_pre_shell_hook_completions_for_turn(&turn.turn_id);
                 self.agent.agent_turn_model_profiles.remove(&turn.turn_id);
-                self.pending_agent_provider_tasks.remove(&turn.turn_id);
+                self.agent
+                    .pending_agent_provider_tasks
+                    .remove(&turn.turn_id);
                 self.blocked_agent_approval_refs
                     .retain(|_, approval_ref| approval_ref.turn_id != turn.turn_id);
             }

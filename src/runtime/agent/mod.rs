@@ -156,6 +156,10 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     agent_turn_model_profiles: BTreeMap<String, ModelProfile>,
     /// Provider retry attempt number retained by turn id.
     agent_provider_retry_attempts: BTreeMap<String, u32>,
+    /// Provider turns queued for worker dispatch.
+    pending_agent_provider_tasks: BTreeSet<String>,
+    /// Provider turns claimed by workers but not yet settled.
+    claimed_agent_provider_tasks: BTreeMap<String, RuntimeAgentProviderClaim>,
 }
 
 impl RuntimeAgentComponent {
@@ -181,6 +185,52 @@ impl RuntimeAgentComponent {
 }
 
 impl RuntimeSessionService {
+    /// Reports whether one provider turn is queued for dispatch.
+    pub(in crate::runtime) fn agent_provider_task_is_pending(&self, turn_id: &str) -> bool {
+        self.agent.pending_agent_provider_tasks.contains(turn_id)
+    }
+
+    /// Reports whether one provider turn is claimed by a worker.
+    pub(in crate::runtime) fn agent_provider_task_is_claimed(&self, turn_id: &str) -> bool {
+        self.agent
+            .claimed_agent_provider_tasks
+            .contains_key(turn_id)
+    }
+
+    /// Reports whether a provider turn is queued or claimed.
+    pub(in crate::runtime) fn agent_provider_task_is_owned(&self, turn_id: &str) -> bool {
+        self.agent_provider_task_is_pending(turn_id) || self.agent_provider_task_is_claimed(turn_id)
+    }
+
+    /// Queues one provider turn when it is not already pending.
+    pub(in crate::runtime) fn queue_agent_provider_task(
+        &mut self,
+        turn_id: impl Into<String>,
+    ) -> bool {
+        self.agent
+            .pending_agent_provider_tasks
+            .insert(turn_id.into())
+    }
+
+    /// Removes one pending provider turn.
+    pub(in crate::runtime) fn remove_pending_agent_provider_task(&mut self, turn_id: &str) -> bool {
+        self.agent.pending_agent_provider_tasks.remove(turn_id)
+    }
+
+    /// Removes one claimed provider turn.
+    pub(in crate::runtime) fn remove_claimed_agent_provider_task(
+        &mut self,
+        turn_id: &str,
+    ) -> Option<RuntimeAgentProviderClaim> {
+        self.agent.claimed_agent_provider_tasks.remove(turn_id)
+    }
+
+    /// Clears all queued and claimed provider work for session replacement.
+    pub(in crate::runtime) fn clear_agent_provider_task_ownership(&mut self) {
+        self.agent.pending_agent_provider_tasks.clear();
+        self.agent.claimed_agent_provider_tasks.clear();
+    }
+
     /// Returns the effective model profile retained for one turn.
     pub(in crate::runtime) fn agent_turn_model_profile(
         &self,

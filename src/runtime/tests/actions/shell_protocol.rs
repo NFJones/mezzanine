@@ -582,7 +582,7 @@ fn runtime_bash_agent_shell_transaction_keeps_parent_shell_alive() {
             provider_transcript_events: Vec::new(),
         },
     };
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
 
     let execution = service
         .execute_agent_turn_with_provider(
@@ -701,7 +701,7 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
             provider_transcript_events: Vec::new(),
         },
     };
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
 
     let execution = service
         .execute_agent_turn_with_provider(
@@ -789,7 +789,7 @@ fn runtime_shell_transaction_metadata_mismatch_fails_live_action() {
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
     let provider = RuntimeBatchProvider {
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
@@ -1004,7 +1004,7 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
     let provider = RuntimeBatchProvider {
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),

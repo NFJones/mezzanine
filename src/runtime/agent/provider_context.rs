@@ -95,7 +95,7 @@ impl RuntimeSessionService {
             .find(|turn| turn.turn_id == turn_id)
             .cloned()
         else {
-            self.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         };
         if turn.agent_id != agent_id.as_str() {
@@ -104,12 +104,12 @@ impl RuntimeSessionService {
             ));
         }
         if turn.state != AgentTurnState::Running {
-            self.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         }
         let Some(stored_model_profile) = self.agent.agent_turn_model_profiles.get(turn_id).cloned()
         else {
-            self.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Err(MezError::invalid_state(
                 "runtime agent turn has no model profile",
             ));
@@ -216,7 +216,7 @@ impl RuntimeSessionService {
             .find(|turn| turn.turn_id == turn_id)
             .cloned()
         else {
-            self.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         };
         if turn.agent_id != agent_id.as_str() {
@@ -225,12 +225,12 @@ impl RuntimeSessionService {
             ));
         }
         if turn.state != AgentTurnState::Running {
-            self.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         }
         let Some(mut model_profile) = self.agent.agent_turn_model_profiles.get(turn_id).cloned()
         else {
-            self.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Err(MezError::invalid_state(
                 "runtime agent turn has no model profile",
             ));

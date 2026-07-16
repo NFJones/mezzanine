@@ -1459,11 +1459,7 @@ impl RuntimeSessionService {
         if self.runtime_agent_turn_is_auto_sizing_routing(turn) {
             return "routing";
         }
-        if self.pending_agent_provider_tasks.contains(&turn.turn_id)
-            || self
-                .claimed_agent_provider_tasks
-                .contains_key(&turn.turn_id)
-        {
+        if self.agent_provider_task_is_owned(&turn.turn_id) {
             return "thinking";
         }
         "running"
@@ -1476,11 +1472,7 @@ impl RuntimeSessionService {
         if self.agent_turn_executions.contains_key(&turn.turn_id) {
             return false;
         }
-        if !(self.pending_agent_provider_tasks.contains(&turn.turn_id)
-            || self
-                .claimed_agent_provider_tasks
-                .contains_key(&turn.turn_id))
-        {
+        if !self.agent_provider_task_is_owned(&turn.turn_id) {
             return false;
         }
         true

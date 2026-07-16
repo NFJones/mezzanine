@@ -59,8 +59,12 @@ impl RuntimeSessionService {
         let decision =
             self.macro_judge_decision_from_response(&turn.turn_id, step_index, &response)?;
         self.apply_macro_judge_decision(turn, step_index, decision.clone())?;
-        self.pending_agent_provider_tasks.remove(&turn.turn_id);
-        self.claimed_agent_provider_tasks.remove(&turn.turn_id);
+        self.agent
+            .pending_agent_provider_tasks
+            .remove(&turn.turn_id);
+        self.agent
+            .claimed_agent_provider_tasks
+            .remove(&turn.turn_id);
         self.append_provider_request_audit(
             turn,
             model_profile,

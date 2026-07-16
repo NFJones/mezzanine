@@ -333,8 +333,7 @@ impl RuntimeSessionService {
                     .get(turn_id)
                     .is_some_and(runtime_execution_ready_for_provider_continuation)
             {
-                self.pending_agent_provider_tasks
-                    .insert(turn_id.to_string());
+                self.queue_agent_provider_task(turn_id.to_string());
                 self.append_agent_trace_turn_event(
                     pane_id,
                     turn_id,

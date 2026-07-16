@@ -564,8 +564,8 @@ impl RuntimeSessionService {
             self.clear_agent_action_bookkeeping_for_turn(&turn_id);
             self.clear_joined_subagent_dependencies_for_turn(&turn_id);
             self.remove_agent_turn_model_profile(&turn_id);
-            self.pending_agent_provider_tasks.remove(&turn_id);
-            self.claimed_agent_provider_tasks.remove(&turn_id);
+            self.remove_pending_agent_provider_task(&turn_id);
+            self.remove_claimed_agent_provider_task(&turn_id);
             self.blocked_agent_approval_refs
                 .retain(|_, approval_ref| approval_ref.turn_id != turn_id);
             self.start_ready_agent_turns()?;
@@ -963,17 +963,13 @@ impl RuntimeSessionService {
             &turn.turn_id,
             "user_steering queued reason=mid_turn_agent_prompt",
         )?;
-        if !self.pending_agent_provider_tasks.contains(&turn.turn_id)
-            && !self
-                .claimed_agent_provider_tasks
-                .contains_key(&turn.turn_id)
+        if !self.agent_provider_task_is_owned(&turn.turn_id)
             && self
                 .agent_turn_executions
                 .get(&turn.turn_id)
                 .is_some_and(runtime_execution_ready_for_provider_continuation)
         {
-            self.pending_agent_provider_tasks
-                .insert(turn.turn_id.clone());
+            self.queue_agent_provider_task(turn.turn_id.clone());
             self.append_agent_trace_turn_event(
                 pane_id,
                 &turn.turn_id,

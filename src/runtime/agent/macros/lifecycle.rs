@@ -290,9 +290,11 @@ impl RuntimeSessionService {
                 terminal_state: AgentTurnState::Running,
             },
         );
-        self.pending_agent_provider_tasks
+        self.agent
+            .pending_agent_provider_tasks
             .remove(&parent_turn.turn_id);
-        self.claimed_agent_provider_tasks
+        self.agent
+            .claimed_agent_provider_tasks
             .remove(&parent_turn.turn_id);
         self.agent_turn_ledger
             .finish_turn(&parent_turn.turn_id, AgentTurnState::Blocked)?;

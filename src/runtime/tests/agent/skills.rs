@@ -432,9 +432,7 @@ fn runtime_explicit_skill_prompt_rejects_redundant_call_skill_loop() {
     let started = service
         .start_agent_prompt_turn("%1", "$create-skill create a review skill")
         .unwrap();
-    service
-        .pending_agent_provider_tasks
-        .remove(&started.turn_id);
+    service.remove_pending_agent_provider_task(&started.turn_id);
     let provider = RuntimeBatchProvider {
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
@@ -531,9 +529,7 @@ fn runtime_explicit_skill_prompt_rejects_redundant_skill_catalog_lookup() {
     let started = service
         .start_agent_prompt_turn("%1", "$create-skill create a review skill")
         .unwrap();
-    service
-        .pending_agent_provider_tasks
-        .remove(&started.turn_id);
+    service.remove_pending_agent_provider_task(&started.turn_id);
     let provider = RuntimeBatchProvider {
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),

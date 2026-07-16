@@ -568,7 +568,8 @@ impl RuntimeSessionService {
                     label: format!("action result {}", observed_result.action_id),
                     content: action_result_context_content(&observed_result),
                 });
-            self.pending_agent_provider_tasks
+            self.agent
+                .pending_agent_provider_tasks
                 .insert(turn.turn_id.clone());
             self.append_agent_trace_turn_event(
                 &turn.pane_id,
@@ -795,7 +796,8 @@ impl RuntimeSessionService {
                             label: format!("action result {}", observed_result.action_id),
                             content: action_result_context_content(&observed_result),
                         });
-                    self.pending_agent_provider_tasks
+                    self.agent
+                        .pending_agent_provider_tasks
                         .insert(turn.turn_id.clone());
                     self.append_agent_trace_turn_event(
                         &turn.pane_id,

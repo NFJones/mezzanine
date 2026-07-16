@@ -131,7 +131,8 @@ impl RuntimeSessionService {
         });
         execution.final_turn = false;
         execution.terminal_state = AgentTurnState::Running;
-        self.pending_agent_provider_tasks
+        self.agent
+            .pending_agent_provider_tasks
             .insert(turn.turn_id.clone());
         let feedback_status_line = runtime_failure_feedback_status_line(
             execution,

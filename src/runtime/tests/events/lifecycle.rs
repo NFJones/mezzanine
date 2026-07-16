@@ -80,7 +80,7 @@ fn runtime_mixed_say_and_file_mutation_defers_say_until_after_diff() {
             provider_transcript_events: Vec::new(),
         },
     };
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
 
     let execution = service
         .execute_agent_turn_with_provider(

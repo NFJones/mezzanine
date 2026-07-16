@@ -268,8 +268,7 @@ impl RuntimeSessionService {
         self.clear_agent_session_artifacts();
         self.clear_agent_prompt_inputs();
         self.clear_agent_turn_model_profiles();
-        self.pending_agent_provider_tasks.clear();
-        self.claimed_agent_provider_tasks.clear();
+        self.clear_agent_provider_task_ownership();
         self.agent_scheduler = AgentScheduler::with_default_limit();
         self.subagent_task_routes.clear();
         self.joined_subagent_dependencies.clear();

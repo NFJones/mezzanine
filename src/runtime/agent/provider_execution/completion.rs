@@ -24,13 +24,13 @@ impl RuntimeSessionService {
             .find(|turn| turn.turn_id == turn_id)
             .cloned()
         else {
-            self.pending_agent_provider_tasks.remove(turn_id);
-            self.claimed_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.claimed_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         };
         if turn.state != AgentTurnState::Running {
-            self.pending_agent_provider_tasks.remove(turn_id);
-            self.claimed_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.claimed_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         }
         let Some(mut model_profile) = self.agent.agent_turn_model_profiles.get(turn_id).cloned()
@@ -75,8 +75,8 @@ impl RuntimeSessionService {
                 return Ok(true);
             };
             let provider_id = execution.response.provider.clone();
-            self.pending_agent_provider_tasks.remove(turn_id);
-            self.claimed_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.claimed_agent_provider_tasks.remove(turn_id);
             self.append_agent_trace_turn_event(
                 &turn.pane_id,
                 turn_id,
@@ -126,8 +126,8 @@ impl RuntimeSessionService {
             )?;
             model_profile = execution_profile;
         }
-        self.pending_agent_provider_tasks.remove(turn_id);
-        self.claimed_agent_provider_tasks.remove(turn_id);
+        self.agent.pending_agent_provider_tasks.remove(turn_id);
+        self.agent.claimed_agent_provider_tasks.remove(turn_id);
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             turn_id,

@@ -274,7 +274,7 @@ impl RuntimeSessionService {
             .find(|turn| turn.turn_id == turn_id)
             .cloned()
         else {
-            self.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(None);
         };
         if turn.agent_id != agent_id.as_str() {
@@ -287,15 +287,15 @@ impl RuntimeSessionService {
             .get(turn_id)
             .is_some_and(|execution| self.execution_has_pending_shell_dispatch(turn_id, execution))
         {
-            self.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
             let _ = self.dispatch_stored_running_shell_actions(turn_id)?;
             return Ok(None);
         }
-        if !self.pending_agent_provider_tasks.contains(turn_id) {
+        if !self.agent.pending_agent_provider_tasks.contains(turn_id) {
             return Ok(None);
         }
         if turn.state != AgentTurnState::Running {
-            self.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(None);
         }
 
@@ -538,7 +538,7 @@ impl RuntimeSessionService {
             self.path_scopes_for_pane(&turn.pane_id)
         };
         let permission_policy = self.permission_policy_for_turn(&turn);
-        self.pending_agent_provider_tasks.remove(turn_id);
+        self.agent.pending_agent_provider_tasks.remove(turn_id);
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             turn_id,
@@ -582,27 +582,27 @@ impl RuntimeSessionService {
             .find(|turn| turn.turn_id == turn_id)
             .cloned()
         else {
-            self.pending_agent_provider_tasks.remove(turn_id);
-            self.claimed_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.claimed_agent_provider_tasks.remove(turn_id);
             return Ok(());
         };
         if !matches!(
             turn.state,
             AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked
         ) {
-            self.pending_agent_provider_tasks.remove(turn_id);
-            self.claimed_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.claimed_agent_provider_tasks.remove(turn_id);
             return Ok(());
         }
         let Some(model_profile) = self.agent.agent_turn_model_profiles.get(turn_id).cloned() else {
-            self.pending_agent_provider_tasks.remove(turn_id);
-            self.claimed_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.claimed_agent_provider_tasks.remove(turn_id);
             return Err(MezError::invalid_state(
                 "runtime agent turn has no model profile",
             ));
         };
-        self.pending_agent_provider_tasks.remove(turn_id);
-        self.claimed_agent_provider_tasks.remove(turn_id);
+        self.agent.pending_agent_provider_tasks.remove(turn_id);
+        self.agent.claimed_agent_provider_tasks.remove(turn_id);
         self.append_provider_request_failure_audit(
             &turn,
             &model_profile,
@@ -654,7 +654,7 @@ impl RuntimeSessionService {
             .find(|turn| turn.turn_id == turn_id)
             .cloned()
         else {
-            self.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         };
         if turn.agent_id != agent_id.as_str() {
@@ -663,16 +663,16 @@ impl RuntimeSessionService {
             ));
         }
         if turn.state != AgentTurnState::Running {
-            self.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         }
         let Some(model_profile) = self.agent.agent_turn_model_profiles.get(turn_id).cloned() else {
-            self.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Err(MezError::invalid_state(
                 "runtime agent turn has no model profile",
             ));
         };
-        self.pending_agent_provider_tasks.remove(turn_id);
+        self.agent.pending_agent_provider_tasks.remove(turn_id);
         self.append_provider_request_failure_audit(
             &turn,
             &model_profile,
@@ -737,11 +737,11 @@ impl RuntimeSessionService {
             .find(|turn| turn.turn_id == turn_id)
             .cloned()
         else {
-            self.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         };
         if turn.state != AgentTurnState::Running {
-            self.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         }
         if !self.agent.agent_turn_model_profiles.contains_key(turn_id) {
@@ -749,7 +749,8 @@ impl RuntimeSessionService {
                 "runtime agent turn has no model profile",
             ));
         }
-        self.pending_agent_provider_tasks
+        self.agent
+            .pending_agent_provider_tasks
             .insert(turn_id.to_string());
         self.append_agent_trace_turn_event(
             &turn.pane_id,
@@ -810,11 +811,11 @@ impl RuntimeSessionService {
             .find(|turn| turn.turn_id == turn_id)
             .cloned()
         else {
-            self.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         };
         if turn.state != AgentTurnState::Running {
-            self.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         }
         if !self.agent.agent_turn_model_profiles.contains_key(turn_id) {
@@ -822,7 +823,8 @@ impl RuntimeSessionService {
                 "runtime agent turn has no model profile",
             ));
         }
-        self.pending_agent_provider_tasks
+        self.agent
+            .pending_agent_provider_tasks
             .insert(turn_id.to_string());
         self.append_agent_trace_turn_event(
             &turn.pane_id,
@@ -863,7 +865,7 @@ impl RuntimeSessionService {
             .find(|turn| turn.turn_id == turn_id)
             .cloned()
         else {
-            self.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         };
         if turn.agent_id != agent_id.as_str() {
@@ -907,7 +909,8 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn pending_agent_provider_tasks(&self) -> Vec<RuntimeAgentProviderTask> {
-        self.pending_agent_provider_tasks
+        self.agent
+            .pending_agent_provider_tasks
             .iter()
             .filter_map(|turn_id| self.runtime_agent_provider_task(turn_id))
             .collect()
@@ -925,7 +928,7 @@ impl RuntimeSessionService {
         timeout_ms: u64,
     ) -> Result<RuntimeTransition> {
         let turn = &dispatch.turn;
-        self.claimed_agent_provider_tasks.insert(
+        self.agent.claimed_agent_provider_tasks.insert(
             turn.turn_id.clone(),
             RuntimeAgentProviderClaim {
                 turn_id: turn.turn_id.clone(),
@@ -957,7 +960,7 @@ impl RuntimeSessionService {
 
     /// Clears the provider-worker claim lease for a settled turn.
     pub(crate) fn clear_claimed_agent_provider_task(&mut self, turn_id: &str) {
-        self.claimed_agent_provider_tasks.remove(turn_id);
+        self.agent.claimed_agent_provider_tasks.remove(turn_id);
     }
 
     /// Fails a running turn when its claimed provider worker lease expires.
@@ -969,11 +972,16 @@ impl RuntimeSessionService {
         turn_id: &str,
         generation: u64,
     ) -> Result<bool> {
-        let Some(claim) = self.claimed_agent_provider_tasks.get(turn_id).cloned() else {
+        let Some(claim) = self
+            .agent
+            .claimed_agent_provider_tasks
+            .get(turn_id)
+            .cloned()
+        else {
             return Ok(false);
         };
         if claim.turn_id != turn_id {
-            self.claimed_agent_provider_tasks.remove(turn_id);
+            self.agent.claimed_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         }
         if claim.generation != generation {
@@ -986,11 +994,11 @@ impl RuntimeSessionService {
             .find(|turn| turn.turn_id == turn_id)
             .cloned()
         else {
-            self.claimed_agent_provider_tasks.remove(turn_id);
+            self.agent.claimed_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         };
         if turn.state != AgentTurnState::Running {
-            self.claimed_agent_provider_tasks.remove(turn_id);
+            self.agent.claimed_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         }
         self.append_agent_status_text_to_terminal_buffer(
@@ -1045,7 +1053,8 @@ impl RuntimeSessionService {
     #[cfg(test)]
     fn prune_stale_agent_provider_tasks(&mut self) {
         let stale_turn_ids =
-            self.pending_agent_provider_tasks
+            self.agent
+                .pending_agent_provider_tasks
                 .iter()
                 .filter(|turn_id| {
                     let turn_id = turn_id.as_str();
@@ -1056,7 +1065,7 @@ impl RuntimeSessionService {
                 .cloned()
                 .collect::<Vec<_>>();
         for turn_id in stale_turn_ids {
-            self.pending_agent_provider_tasks.remove(&turn_id);
+            self.agent.pending_agent_provider_tasks.remove(&turn_id);
         }
     }
 
@@ -1080,6 +1089,7 @@ impl RuntimeSessionService {
 
         self.prune_stale_agent_provider_tasks();
         let task_ids = self
+            .agent
             .pending_agent_provider_tasks
             .iter()
             .filter(|turn_id| {
@@ -1100,7 +1110,7 @@ impl RuntimeSessionService {
                     self.execution_has_pending_shell_dispatch(&turn_id, execution)
                 })
             {
-                self.pending_agent_provider_tasks.remove(&turn_id);
+                self.agent.pending_agent_provider_tasks.remove(&turn_id);
                 if let Some(execution) = self.dispatch_stored_running_shell_actions(&turn_id)? {
                     executions.push(execution);
                 }
@@ -1108,10 +1118,10 @@ impl RuntimeSessionService {
             }
             let Some(model_profile) = self.agent.agent_turn_model_profiles.get(&turn_id).cloned()
             else {
-                self.pending_agent_provider_tasks.remove(&turn_id);
+                self.agent.pending_agent_provider_tasks.remove(&turn_id);
                 continue;
             };
-            self.pending_agent_provider_tasks.remove(&turn_id);
+            self.agent.pending_agent_provider_tasks.remove(&turn_id);
             if let Some(turn) = self
                 .agent_turn_ledger
                 .turns()

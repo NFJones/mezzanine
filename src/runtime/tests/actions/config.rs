@@ -357,7 +357,7 @@ fn runtime_agent_config_change_batches_broad_theme_palette() {
             provider_transcript_events: Vec::new(),
         },
     };
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
 
     let execution = service
         .execute_agent_turn_with_provider(

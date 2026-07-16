@@ -29,7 +29,7 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .expect("started turn should be recorded");
-    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.remove_pending_agent_provider_task(&turn.turn_id);
 
     let action = mez_agent::AgentAction {
         id: "patch-invalid".to_string(),
@@ -187,7 +187,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_guides_context_refresh() {
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .expect("started turn should be recorded");
-    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.remove_pending_agent_provider_task(&turn.turn_id);
 
     let action = mez_agent::AgentAction {
         id: "patch-hunk".to_string(),
@@ -384,7 +384,7 @@ fn runtime_apply_patch_replacement_hint_recovery_guides_reconcile_or_skip() {
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .expect("started turn should be recorded");
-    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.remove_pending_agent_provider_task(&turn.turn_id);
 
     let action = mez_agent::AgentAction {
         id: "patch-replacement".to_string(),
@@ -517,7 +517,7 @@ fn runtime_apply_patch_missing_anchor_recovery_guides_anchor_refresh() {
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .expect("started turn should be recorded");
-    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.remove_pending_agent_provider_task(&turn.turn_id);
 
     let action = mez_agent::AgentAction {
         id: "patch-anchor".to_string(),
@@ -645,7 +645,7 @@ fn runtime_apply_patch_candidate_region_recovery_guides_ambiguous_ranges() {
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .expect("started turn should be recorded");
-    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.remove_pending_agent_provider_task(&turn.turn_id);
 
     let action = mez_agent::AgentAction {
         id: "patch-candidates".to_string(),
@@ -771,7 +771,7 @@ fn runtime_apply_patch_write_phase_hunk_mismatch_queues_model_recovery() {
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
     let provider = RuntimeBatchProvider {
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
@@ -935,7 +935,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_is_unbounded_and_hides_retry_budge
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .expect("started turn should be recorded");
-    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.remove_pending_agent_provider_task(&turn.turn_id);
 
     let build_execution = |raw_text: &str, action_id: &str| {
         let action = mez_agent::AgentAction {
@@ -1097,7 +1097,7 @@ fn runtime_apply_patch_unsafe_path_recovery_guides_relative_headers() {
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .expect("started turn should be recorded");
-    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.remove_pending_agent_provider_task(&turn.turn_id);
 
     let unsafe_path = "/home/neil/Documents/repos/chimera/src/conf/document.rs";
     let action = mez_agent::AgentAction {

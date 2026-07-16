@@ -119,7 +119,7 @@ impl RuntimeSessionService {
                 turn_id,
                 "scheduler running -> blocked reason=approval_required",
             )?;
-            self.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
             self.append_agent_trace_turn_event(
                 &turn.pane_id,
                 turn_id,
@@ -170,7 +170,7 @@ impl RuntimeSessionService {
                     turn_id,
                     "scheduler running -> blocked reason=waiting_for_subagents",
                 )?;
-                self.pending_agent_provider_tasks.remove(turn_id);
+                self.agent.pending_agent_provider_tasks.remove(turn_id);
                 self.append_agent_trace_turn_event(
                     &turn.pane_id,
                     turn_id,
@@ -196,7 +196,8 @@ impl RuntimeSessionService {
                 )?;
                 self.start_ready_agent_turns()?;
             } else if runtime_execution_ready_for_provider_continuation(&execution) {
-                self.pending_agent_provider_tasks
+                self.agent
+                    .pending_agent_provider_tasks
                     .insert(turn_id.to_string());
                 self.append_agent_trace_turn_event(
                     &turn.pane_id,

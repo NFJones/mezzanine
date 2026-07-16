@@ -265,7 +265,7 @@ fn runtime_stale_joined_spawn_result_is_unreachable_progress() {
             terminal_state: AgentTurnState::Running,
         },
     );
-    service.pending_agent_provider_tasks.remove(&parent.turn_id);
+    service.remove_pending_agent_provider_task(&parent.turn_id);
 
     assert!(
         service.unreachable_running_agent_turn_timer_needed_with_actor_progress(
@@ -321,7 +321,7 @@ fn runtime_unrecovered_failure_with_pending_sibling_explains_blocker() {
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .expect("started turn should be recorded");
-    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.remove_pending_agent_provider_task(&turn.turn_id);
 
     let patch_action = mez_agent::AgentAction {
         id: "patch-fail".to_string(),
@@ -446,7 +446,7 @@ fn runtime_unrecovered_non_correctable_failure_explains_boundary() {
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .expect("started turn should be recorded");
-    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.remove_pending_agent_provider_task(&turn.turn_id);
 
     let action = mez_agent::AgentAction {
         id: "patch-denied".to_string(),
@@ -583,7 +583,7 @@ fn runtime_spawn_limit_denial_queues_model_recovery() {
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
     let turn = service
         .agent_turn_ledger
         .turns()
@@ -637,7 +637,7 @@ fn runtime_spawn_limit_denial_queues_model_recovery() {
 
     assert!(queued);
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
-    assert!(service.pending_agent_provider_tasks.contains("turn-1"));
+    assert!(service.agent_provider_task_is_pending("turn-1"));
     let context = service.agent_turn_contexts.get("turn-1").unwrap();
     assert!(context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::ActionResult

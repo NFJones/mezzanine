@@ -644,7 +644,7 @@ fn runtime_provider_failure_after_nonzero_shell_result_does_not_report_running_r
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
     let first_provider = RuntimeBatchProvider {
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
@@ -760,7 +760,7 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
     let turn = service
         .agent_turn_ledger
         .turns()

@@ -853,7 +853,7 @@ fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
             child_display_name: Some("macro child".to_string()),
         },
     );
-    service.pending_agent_provider_tasks.remove(&parent.turn_id);
+    service.remove_pending_agent_provider_task(&parent.turn_id);
     service
         .agent_scheduler_mut()
         .complete(&parent.turn_id)
@@ -879,11 +879,7 @@ fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
             .joined_subagent_dependencies
             .contains_key(&child.turn_id)
     );
-    assert!(
-        !service
-            .pending_agent_provider_tasks
-            .contains(&parent.turn_id)
-    );
+    assert!(!service.agent_provider_task_is_pending(&parent.turn_id));
     let execution = service.agent_turn_executions.get(&parent.turn_id).unwrap();
     assert_eq!(execution.action_results[0].status, ActionStatus::Failed);
     assert_eq!(execution.terminal_state, AgentTurnState::Failed);

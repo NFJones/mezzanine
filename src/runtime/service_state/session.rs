@@ -297,18 +297,6 @@ pub struct RuntimeSessionService {
     /// Latest live provider model catalogs keyed by provider id.
     pub(in crate::runtime) provider_model_catalog_cache:
         BTreeMap<String, crate::runtime::commands::RuntimeModelCatalog>,
-    /// Stores the pending agent provider tasks value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pending_agent_provider_tasks: BTreeSet<String>,
-    /// Stores provider tasks claimed by async workers but not yet settled.
-    ///
-    /// Claimed tasks are removed from `pending_agent_provider_tasks`, so this
-    /// map keeps running turns observable and gives the actor a timeout path if
-    /// a worker fails to deliver a provider event.
-    pub(in crate::runtime) claimed_agent_provider_tasks:
-        BTreeMap<String, RuntimeAgentProviderClaim>,
     /// Stores the subagent task routes value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

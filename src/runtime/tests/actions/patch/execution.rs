@@ -68,7 +68,7 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
             provider_transcript_events: Vec::new(),
         },
     };
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
 
     let execution = service
         .execute_agent_turn_with_provider(
@@ -257,7 +257,7 @@ fn runtime_apply_patch_read_phase_truncation_dispatches_specific_error_plan() {
             provider_transcript_events: Vec::new(),
         },
     };
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
 
     let execution = service
         .execute_agent_turn_with_provider(
@@ -405,7 +405,7 @@ fn runtime_apply_patch_uses_full_read_transport_when_preview_truncates() {
             provider_transcript_events: Vec::new(),
         },
     };
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
 
     let execution = service
         .execute_agent_turn_with_provider(
@@ -567,7 +567,7 @@ fn runtime_agent_loop_continues_after_apply_patch_iteration() {
             provider_transcript_events: Vec::new(),
         },
     };
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
 
     let execution = service
         .execute_agent_turn_with_provider(
@@ -813,7 +813,7 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .expect("started turn should be recorded");
-    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.remove_pending_agent_provider_task(&turn.turn_id);
 
     let action = mez_agent::AgentAction {
         id: "patch-transport".to_string(),

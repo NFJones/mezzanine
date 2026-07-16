@@ -195,7 +195,7 @@ context_window_tokens = 40000
             label: "synthetic provider-context-window action result".to_string(),
             content: format!("provider-context-window- {}", "cw ".repeat(10_000)),
         });
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
     let provider = RuntimeContextWindowErrorProvider {
         requests: RefCell::new(Vec::new()),
     };

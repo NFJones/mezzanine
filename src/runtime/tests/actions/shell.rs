@@ -177,7 +177,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
         .start_agent_prompt_turn("%1", "run a command")
         .unwrap();
     assert_eq!(start.state, AgentTurnState::Running);
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
     let turn = service
         .agent_turn_ledger
         .turns()
@@ -531,7 +531,7 @@ fn runtime_agent_shell_command_output_keeps_decoded_context() {
             provider_transcript_events: Vec::new(),
         },
     };
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
 
     let execution = service
         .execute_agent_turn_with_provider(
@@ -663,7 +663,7 @@ fn runtime_agent_shell_command_without_output_keeps_mez_framing_out_of_logs() {
             provider_transcript_events: Vec::new(),
         },
     };
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
 
     let execution = service
         .execute_agent_turn_with_provider(
@@ -676,13 +676,13 @@ fn runtime_agent_shell_command_without_output_keeps_mez_framing_out_of_logs() {
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
     for _ in 0..600 {
         let _ = service.poll_pane_outputs(4096).unwrap();
-        if service.pending_agent_provider_tasks.contains("turn-1") {
+        if service.agent_provider_task_is_pending("turn-1") {
             break;
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
         thread::yield_now();
     }
-    assert!(service.pending_agent_provider_tasks.contains("turn-1"));
+    assert!(service.agent_provider_task_is_pending("turn-1"));
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
@@ -775,7 +775,7 @@ fn runtime_agent_shell_command_preview_is_wrapped_and_capped() {
             provider_transcript_events: Vec::new(),
         },
     };
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
 
     let execution = service
         .execute_agent_turn_with_provider(
@@ -947,7 +947,7 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
     let first_provider = RuntimeBatchProvider {
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
@@ -1149,7 +1149,7 @@ fn runtime_shell_action_timeout_queues_model_self_correction() {
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .expect("started turn should be recorded");
-    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.remove_pending_agent_provider_task(&turn.turn_id);
 
     let action = mez_agent::AgentAction {
         id: "patch-timeout".to_string(),
@@ -1247,7 +1247,7 @@ fn runtime_shell_command_heredoc_is_rejected_before_pane_dispatch() {
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
     let provider = RuntimeBatchProvider {
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),

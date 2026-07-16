@@ -162,10 +162,10 @@ impl RuntimeSessionService {
         if !turn_is_running {
             return None;
         }
-        if self.pending_agent_provider_tasks.contains(turn_id) {
+        if self.agent_provider_task_is_pending(turn_id) {
             return Some(turn_id.to_string());
         }
-        if self.claimed_agent_provider_tasks.contains_key(turn_id) {
+        if self.agent_provider_task_is_claimed(turn_id) {
             return None;
         }
         let execution = self.agent_turn_executions.get(turn_id)?;
@@ -192,7 +192,7 @@ impl RuntimeSessionService {
         else {
             return Ok(0);
         };
-        if !self.pending_agent_provider_tasks.insert(turn_id.clone()) {
+        if !self.queue_agent_provider_task(turn_id.clone()) {
             return Ok(0);
         }
         self.append_agent_trace_turn_event(

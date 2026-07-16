@@ -493,7 +493,7 @@ context_window_tokens = 64000
                 "context-pressure ".repeat(10_000)
             ),
         });
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
     let provider = RuntimeRecordingProvider {
         provider: "runtime-batch",
         response: mez_agent::ModelResponse {
@@ -794,7 +794,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
             child_display_name: Some("child two".to_string()),
         },
     );
-    service.pending_agent_provider_tasks.remove(&parent.turn_id);
+    service.remove_pending_agent_provider_task(&parent.turn_id);
     service
         .agent_scheduler_mut()
         .complete(&parent.turn_id)

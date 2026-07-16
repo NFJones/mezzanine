@@ -23,10 +23,7 @@ impl RuntimeSessionService {
                 .get(&turn_id)
                 .is_some_and(runtime_execution_ready_for_provider_continuation)
             {
-                if self
-                    .pending_agent_provider_tasks
-                    .insert(turn.turn_id.clone())
-                {
+                if self.queue_agent_provider_task(turn.turn_id.clone()) {
                     recovered = recovered.saturating_add(1);
                     self.append_agent_trace_turn_event(
                         &turn.pane_id,
@@ -42,10 +39,7 @@ impl RuntimeSessionService {
                 | PaneReadinessState::Unknown
                 | PaneReadinessState::PromptCandidate
                 | PaneReadinessState::Degraded => {
-                    if self
-                        .pending_agent_provider_tasks
-                        .insert(turn.turn_id.clone())
-                    {
+                    if self.queue_agent_provider_task(turn.turn_id.clone()) {
                         recovered = recovered.saturating_add(1);
                         self.append_agent_trace_turn_event(
                             &turn.pane_id,
@@ -63,10 +57,7 @@ impl RuntimeSessionService {
                             .pane_readiness_overrides
                             .clear_pending_probe(&turn.pane_id);
                         self.set_pane_readiness(&turn.pane_id, PaneReadinessState::Degraded);
-                        if self
-                            .pending_agent_provider_tasks
-                            .insert(turn.turn_id.clone())
-                        {
+                        if self.queue_agent_provider_task(turn.turn_id.clone()) {
                             recovered = recovered.saturating_add(1);
                             self.append_agent_status_text_to_terminal_buffer(
                                 &turn.pane_id,
@@ -96,10 +87,7 @@ impl RuntimeSessionService {
                     };
                     if let Some((next_readiness, status, trace)) = recovery {
                         self.set_pane_readiness(&turn.pane_id, next_readiness);
-                        if self
-                            .pending_agent_provider_tasks
-                            .insert(turn.turn_id.clone())
-                        {
+                        if self.queue_agent_provider_task(turn.turn_id.clone()) {
                             recovered = recovered.saturating_add(1);
                             self.append_agent_status_text_to_terminal_buffer(
                                 &turn.pane_id,
@@ -120,10 +108,7 @@ impl RuntimeSessionService {
                         continue;
                     }
                     self.set_pane_readiness(&turn.pane_id, PaneReadinessState::PromptCandidate);
-                    if self
-                        .pending_agent_provider_tasks
-                        .insert(turn.turn_id.clone())
-                    {
+                    if self.queue_agent_provider_task(turn.turn_id.clone()) {
                         recovered = recovered.saturating_add(1);
                         self.append_agent_status_text_to_terminal_buffer(
                             &turn.pane_id,
@@ -157,8 +142,7 @@ impl RuntimeSessionService {
             .filter(|(turn_id, execution)| {
                 (self.execution_has_pending_shell_dispatch(turn_id, execution)
                     || runtime_execution_ready_for_provider_continuation(execution))
-                    && !self.pending_agent_provider_tasks.contains(*turn_id)
-                    && !self.claimed_agent_provider_tasks.contains_key(*turn_id)
+                    && !self.agent_provider_task_is_owned(turn_id)
                     && !self
                         .process
                         .running_shell_transactions
@@ -230,9 +214,8 @@ impl RuntimeSessionService {
         actor_progress_turn_ids: &BTreeSet<String>,
     ) -> bool {
         let turn_id = turn.turn_id.as_str();
-        self.pending_agent_provider_tasks.contains(turn_id)
+        self.agent_provider_task_is_owned(turn_id)
             || actor_progress_turn_ids.contains(turn_id)
-            || self.claimed_agent_provider_tasks.contains_key(turn_id)
             || self.agent_turn_pending_steering.contains_key(turn_id)
             || self
                 .process

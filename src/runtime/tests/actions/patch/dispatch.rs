@@ -70,7 +70,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
             terminal_state: AgentTurnState::Running,
         },
     );
-    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.remove_pending_agent_provider_task(&turn.turn_id);
     service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
 
     let execution_after_dispatch = service
@@ -162,7 +162,7 @@ fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_block
             terminal_state: AgentTurnState::Running,
         },
     );
-    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.remove_pending_agent_provider_task(&turn.turn_id);
     service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
 
     let execution_after_dispatch = service
@@ -312,7 +312,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_shell_process_
             terminal_state: AgentTurnState::Running,
         },
     );
-    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.remove_pending_agent_provider_task(&turn.turn_id);
     service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
 
     let execution_after_dispatch = service
@@ -404,7 +404,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_cached_foregro
             terminal_state: AgentTurnState::Running,
         },
     );
-    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.remove_pending_agent_provider_task(&turn.turn_id);
     service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
 
     let execution_after_dispatch = service
@@ -461,7 +461,7 @@ fn runtime_shell_command_dispatch_uses_action_timeout() {
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-    service.pending_agent_provider_tasks.remove("turn-1");
+    service.remove_pending_agent_provider_task("turn-1");
     let provider = RuntimeBatchProvider {
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),

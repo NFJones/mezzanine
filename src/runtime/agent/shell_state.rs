@@ -264,8 +264,11 @@ impl RuntimeSessionService {
         else {
             return 0;
         };
-        if self.pending_agent_provider_tasks.contains(turn_id)
-            || self.claimed_agent_provider_tasks.contains_key(turn_id)
+        if self.agent.pending_agent_provider_tasks.contains(turn_id)
+            || self
+                .agent
+                .claimed_agent_provider_tasks
+                .contains_key(turn_id)
         {
             return 0;
         }
@@ -285,7 +288,8 @@ impl RuntimeSessionService {
         {
             return 0;
         }
-        self.pending_agent_provider_tasks
+        self.agent
+            .pending_agent_provider_tasks
             .insert(turn_id.to_string());
         1
     }

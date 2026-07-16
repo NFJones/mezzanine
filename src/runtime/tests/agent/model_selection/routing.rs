@@ -779,7 +779,7 @@ fn runtime_shell_pane_not_ready_queues_model_self_correction() {
         .find(|turn| turn.turn_id == started.turn_id)
         .cloned()
         .expect("started turn should be recorded");
-    service.pending_agent_provider_tasks.remove(&turn.turn_id);
+    service.remove_pending_agent_provider_task(&turn.turn_id);
     service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
 
     let action = mez_agent::AgentAction {

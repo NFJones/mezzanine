@@ -461,7 +461,8 @@ impl RuntimeSessionService {
                         content: action_result_context_content(result),
                     });
             }
-            self.pending_agent_provider_tasks
+            self.agent
+                .pending_agent_provider_tasks
                 .insert(turn.turn_id.clone());
         }
         Ok(executed)
@@ -623,7 +624,8 @@ impl RuntimeSessionService {
                         content: action_result_context_content(result),
                     });
             }
-            self.pending_agent_provider_tasks
+            self.agent
+                .pending_agent_provider_tasks
                 .insert(turn.turn_id.clone());
         }
         Ok(executed)
