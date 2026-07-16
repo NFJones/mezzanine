@@ -5,12 +5,11 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    ActionStatus, AgentShellVisibility, AgentTurnState, AuthStore, BTreeMap, BTreeSet,
-    FocusedShellHookQueue, HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult,
-    HookFailureKind, McpServerStatus, McpStartupPlan, McpStdioConnection, McpToolCallPlan,
-    McpToolCallResponse, MezError, ModelRequest, ModelResponse, ModelTokenUsage,
-    ModelTokenUsageKey, PaneGeometry, PaneId, PathBuf, ProjectTrustStore, Result, SessionRecord,
-    Size, SplitDirection, WindowId, execute_streamable_http_exchange, mcp_tools_call_operation,
+    ActionStatus, AgentShellVisibility, AgentTurnState, AuthStore, BTreeMap, HookEvent,
+    HookExecutionPlan, HookFailureKind, McpServerStatus, McpStartupPlan, McpStdioConnection,
+    McpToolCallPlan, McpToolCallResponse, MezError, ModelRequest, ModelResponse, ModelTokenUsage,
+    ModelTokenUsageKey, PaneGeometry, PaneId, Result, SessionRecord, Size, SplitDirection,
+    WindowId, execute_streamable_http_exchange, mcp_tools_call_operation,
 };
 use crate::error::MezErrorKind;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};

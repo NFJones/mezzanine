@@ -9,7 +9,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn project_trust_store(&self) -> Option<&ProjectTrustStore> {
-        self.project_trust_store.as_ref()
+        self.integration.project_trust_store()
     }
 
     /// Runs the set project trust store operation for this subsystem.
@@ -22,7 +22,8 @@ impl RuntimeSessionService {
         store: ProjectTrustStore,
         database_path: Option<PathBuf>,
     ) {
-        self.project_trust_store = Some(store);
-        self.project_trust_database_path = database_path;
+        self.integration.set_project_trust_store(Some(store));
+        self.integration
+            .set_project_trust_database_path(database_path);
     }
 }

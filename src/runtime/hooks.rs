@@ -64,7 +64,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn focused_shell_hook_queue_len(&self) -> usize {
-        self.focused_shell_hooks.len()
+        self.integration.focused_shell_hook_queue().len()
     }
 
     /// Runs the focused shell hook results operation for this subsystem.
@@ -73,7 +73,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn focused_shell_hook_results(&self) -> &[HookExecutionResult] {
-        &self.focused_shell_hook_results
+        self.integration.focused_shell_hook_results()
     }
 
     /// Runs the focused shell available operation for this subsystem.
@@ -113,7 +113,9 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn enqueue_focused_shell_hook(&mut self, plan: HookExecutionPlan) -> Result<u64> {
         self.require_live()?;
-        self.focused_shell_hooks.enqueue(plan)
+        self.integration
+            .focused_shell_hook_queue_mut()
+            .enqueue(plan)
     }
 
     /// Runs the defer program hook operation for this subsystem.
@@ -139,13 +141,17 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn push_focused_shell_hook_result(&mut self, result: HookExecutionResult) {
-        self.focused_shell_hook_results.push(result);
-        if self.focused_shell_hook_results.len() > MAX_FOCUSED_SHELL_HOOK_RESULTS_RETAINED {
+        let results = self.integration.focused_shell_hook_results_mut();
+        results.push(result);
+        if results.len() > MAX_FOCUSED_SHELL_HOOK_RESULTS_RETAINED {
             let overflow = self
-                .focused_shell_hook_results
+                .integration
+                .focused_shell_hook_results()
                 .len()
                 .saturating_sub(MAX_FOCUSED_SHELL_HOOK_RESULTS_RETAINED);
-            self.focused_shell_hook_results.drain(0..overflow);
+            self.integration
+                .focused_shell_hook_results_mut()
+                .drain(0..overflow);
         }
     }
 
@@ -163,7 +169,8 @@ impl RuntimeSessionService {
         loop {
             let shell_available = self.focused_shell_available();
             let Some(dispatch) = self
-                .focused_shell_hooks
+                .integration
+                .focused_shell_hook_queue_mut()
                 .dispatch_next(shell_available, executor)?
             else {
                 break;
@@ -250,7 +257,7 @@ impl RuntimeSessionService {
         primary_client_id: &ClientId,
     ) -> Result<Vec<FocusedShellHookDispatch>> {
         self.require_live()?;
-        let mut queue = std::mem::take(&mut self.focused_shell_hooks);
+        let mut queue = std::mem::take(self.integration.focused_shell_hook_queue_mut());
         let result = (|| {
             let mut executor = RuntimeFocusedShellPaneExecutor {
                 service: self,
@@ -283,7 +290,7 @@ impl RuntimeSessionService {
             }
             Ok(dispatches)
         })();
-        self.focused_shell_hooks = queue;
+        self.integration.replace_focused_shell_hook_queue(queue);
         result
     }
 
@@ -379,7 +386,7 @@ impl RuntimeSessionService {
         Ok(RuntimeFocusedShellHookRun {
             enqueued,
             dispatches,
-            pending_hooks: self.focused_shell_hooks.len(),
+            pending_hooks: self.integration.focused_shell_hook_queue().len(),
         })
     }
 }

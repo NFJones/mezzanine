@@ -53,14 +53,21 @@ impl RuntimeSessionService {
         event: HookEvent,
         event_payload_json: &str,
     ) -> Result<()> {
-        if self.hook_definitions.is_empty() {
+        if self.integration.hook_definitions().is_empty() {
             return Ok(());
         }
-        let event_plan = plan_event(&self.hook_definitions, event, event_payload_json)?;
+        let event_plan = plan_event(
+            self.integration.hook_definitions(),
+            event,
+            event_payload_json,
+        )?;
         for mut plan in event_plan.plans {
             plan.target_pane_id = runtime_hook_target_pane_id(event_payload_json);
             if plan.run_in_focused_shell {
-                let _ = self.focused_shell_hooks.enqueue(plan)?;
+                let _ = self
+                    .integration
+                    .focused_shell_hook_queue_mut()
+                    .enqueue(plan)?;
                 continue;
             }
             self.append_program_hook_start_audit(&plan)?;
@@ -126,10 +133,14 @@ impl RuntimeSessionService {
         event_payload_json: &str,
         continuation: Option<PendingFocusedShellHookContinuation>,
     ) -> Result<RuntimeHookPipelineDecision> {
-        if self.hook_definitions.is_empty() {
+        if self.integration.hook_definitions().is_empty() {
             return Ok(RuntimeHookPipelineDecision::Continue);
         }
-        let event_plan = plan_event(&self.hook_definitions, event, event_payload_json)?;
+        let event_plan = plan_event(
+            self.integration.hook_definitions(),
+            event,
+            event_payload_json,
+        )?;
         for mut plan in event_plan.plans {
             plan.target_pane_id = runtime_hook_target_pane_id(event_payload_json);
             if let Some(continuation) = continuation.as_ref()
@@ -160,7 +171,10 @@ impl RuntimeSessionService {
                     }
                     continue;
                 }
-                let _ = self.focused_shell_hooks.enqueue(plan)?;
+                let _ = self
+                    .integration
+                    .focused_shell_hook_queue_mut()
+                    .enqueue(plan)?;
                 continue;
             }
             self.append_program_hook_start_audit(&plan)?;
@@ -236,7 +250,8 @@ impl RuntimeSessionService {
             ));
         }
         let transaction_start = self
-            .focused_shell_hook_transactions
+            .integration
+            .focused_shell_hook_transactions()
             .keys()
             .cloned()
             .collect::<BTreeSet<_>>();
@@ -258,7 +273,8 @@ impl RuntimeSessionService {
 
         let marker = executor
             .service
-            .focused_shell_hook_transactions
+            .integration
+            .focused_shell_hook_transactions()
             .iter()
             .find(|(marker, pending)| {
                 !transaction_start.contains(*marker)
@@ -271,7 +287,8 @@ impl RuntimeSessionService {
             })?;
         let pane_id = executor
             .service
-            .focused_shell_hook_transactions
+            .integration
+            .focused_shell_hook_transactions()
             .get(marker.as_str())
             .map(|pending| pending.pane_id.clone())
             .ok_or_else(|| {
@@ -287,12 +304,14 @@ impl RuntimeSessionService {
                 .poll_pane_outputs(DEFAULT_PTY_READ_LIMIT_BYTES)?;
             if !executor
                 .service
-                .focused_shell_hook_transactions
+                .integration
+                .focused_shell_hook_transactions()
                 .contains_key(&marker)
             {
                 let result = executor
                     .service
-                    .focused_shell_hook_results
+                    .integration
+                    .focused_shell_hook_results()
                     .iter()
                     .rev()
                     .find(|result| result.hook_id == plan.hook_id && result.event == plan.event)
@@ -307,7 +326,8 @@ impl RuntimeSessionService {
             if Instant::now() >= deadline {
                 executor
                     .service
-                    .focused_shell_hook_transactions
+                    .integration
+                    .focused_shell_hook_transactions_mut()
                     .remove(&marker);
                 let result = focused_shell_pre_action_timeout_result(plan);
                 executor
@@ -330,7 +350,8 @@ impl RuntimeSessionService {
             } else {
                 executor
                     .service
-                    .focused_shell_hook_transactions
+                    .integration
+                    .focused_shell_hook_transactions_mut()
                     .remove(&marker);
                 let result = focused_shell_pre_action_failed_result(
                     plan,

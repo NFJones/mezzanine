@@ -45,7 +45,8 @@ impl RuntimeSessionService {
             })
             .collect::<Vec<_>>();
         timers.extend(
-            self.focused_shell_hook_transactions
+            self.integration
+                .focused_shell_hook_transactions()
                 .iter()
                 .map(|(marker, transaction)| RuntimeShellTransactionTimerRef {
                     marker: marker.clone(),

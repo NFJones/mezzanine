@@ -73,7 +73,8 @@ impl RuntimeSessionService {
         now_unix_ms: u64,
     ) -> Result<usize> {
         let expired = self
-            .focused_shell_hook_transactions
+            .integration
+            .focused_shell_hook_transactions()
             .iter()
             .filter_map(|(marker, transaction)| {
                 let elapsed_ms = now_unix_ms.saturating_sub(transaction.started_at_unix_ms);
@@ -82,7 +83,11 @@ impl RuntimeSessionService {
             .collect::<Vec<_>>();
         let mut expired_count = 0usize;
         for marker in expired {
-            let Some(pending) = self.focused_shell_hook_transactions.remove(&marker) else {
+            let Some(pending) = self
+                .integration
+                .focused_shell_hook_transactions_mut()
+                .remove(&marker)
+            else {
                 continue;
             };
             expired_count = expired_count.saturating_add(1);

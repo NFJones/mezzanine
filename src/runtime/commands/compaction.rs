@@ -321,7 +321,7 @@ impl RuntimeSessionService {
             "provider_compact",
             "requested",
         )?;
-        let Some(auth_store) = self.auth_store.as_ref() else {
+        let Some(auth_store) = self.integration.auth_store() else {
             self.append_credential_access_audit(
                 &task.model_profile.provider,
                 &provider_config.auth_profile,

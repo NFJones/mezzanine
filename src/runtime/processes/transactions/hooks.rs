@@ -15,7 +15,11 @@ impl RuntimeSessionService {
         pane_id: &str,
         exit_code: i32,
     ) -> Result<usize> {
-        let Some(pending) = self.focused_shell_hook_transactions.remove(marker) else {
+        let Some(pending) = self
+            .integration
+            .focused_shell_hook_transactions_mut()
+            .remove(marker)
+        else {
             return Ok(0);
         };
         if pending.pane_id != pane_id || output_pane_id != pane_id {

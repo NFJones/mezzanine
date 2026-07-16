@@ -1,6 +1,5 @@
 //! Long-lived runtime session-service aggregate and owned subsystem stores.
 
-use super::*;
 use crate::runtime::{
     RuntimeAgentComponent, RuntimeControlComponent, RuntimeIntegrationComponent,
     RuntimePersistenceComponent, RuntimePresentationComponent, RuntimeProcessComponent,
@@ -27,55 +26,4 @@ pub struct RuntimeSessionService {
     pub(in crate::runtime) integration: RuntimeIntegrationComponent,
     /// Private owner for the mux session and application lifecycle metadata.
     pub(in crate::runtime) session: RuntimeSessionComponent,
-    /// Stores the auth store value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) auth_store: Option<AuthStore>,
-    /// Seconds before provider access-token expiry that triggers proactive refresh.
-    ///
-    /// The field is part of structured runtime state so startup and provider
-    /// turn preflight checks use the same configured threshold.
-    pub(in crate::runtime) provider_auth_refresh_leeway_seconds: u64,
-    /// Stores the project trust store value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) project_trust_store: Option<ProjectTrustStore>,
-    /// Stores the project trust database path value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) project_trust_database_path: Option<PathBuf>,
-    /// Stores the announced project trust roots value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) announced_project_trust_roots: BTreeSet<PathBuf>,
-    /// Stores the hook definitions value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) hook_definitions: Vec<HookDefinition>,
-    /// Stores the focused shell hooks value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) focused_shell_hooks: FocusedShellHookQueue,
-    /// Stores the next focused shell hook marker value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) next_focused_shell_hook_marker: u64,
-    /// Stores the focused shell hook transactions value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) focused_shell_hook_transactions:
-        BTreeMap<String, PendingFocusedShellHookTransaction>,
-    /// Stores the focused shell hook results value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) focused_shell_hook_results: Vec<HookExecutionResult>,
 }

@@ -137,17 +137,6 @@ impl RuntimeSessionService {
                 socket_path,
                 created_at_unix_seconds,
             ),
-            auth_store: None,
-            provider_auth_refresh_leeway_seconds:
-                crate::auth::DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS,
-            project_trust_store: None,
-            project_trust_database_path: None,
-            announced_project_trust_roots: BTreeSet::new(),
-            hook_definitions: Vec::new(),
-            focused_shell_hooks: FocusedShellHookQueue::default(),
-            next_focused_shell_hook_marker: 1,
-            focused_shell_hook_transactions: BTreeMap::new(),
-            focused_shell_hook_results: Vec::new(),
         })
     }
 }

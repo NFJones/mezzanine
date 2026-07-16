@@ -109,7 +109,8 @@ impl RuntimeSessionService {
         turn_id: &str,
         action_id: &str,
     ) -> bool {
-        self.focused_shell_hook_transactions
+        self.integration
+            .focused_shell_hook_transactions()
             .values()
             .any(|pending| {
                 pending.continuation.as_ref().is_some_and(|continuation| {

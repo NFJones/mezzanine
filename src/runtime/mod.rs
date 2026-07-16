@@ -79,9 +79,9 @@ use crate::event::{
 };
 use crate::hooks::{
     FocusedShellExecutor, FocusedShellHookDispatch, FocusedShellHookDispatchStatus,
-    FocusedShellHookOutput, FocusedShellHookQueue, HookDefinition, HookEvent, HookExecutionPlan,
-    HookExecutionResult, HookExecutionStatus, HookFailure, HookFailureDecision, HookFailureKind,
-    HookInvocation, HookMatcherGroup, HookMatcherOperator, HookMatcherPredicate, HookOnFailure,
+    FocusedShellHookOutput, HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult,
+    HookExecutionStatus, HookFailure, HookFailureDecision, HookFailureKind, HookInvocation,
+    HookMatcherGroup, HookMatcherOperator, HookMatcherPredicate, HookOnFailure,
     decide_hook_failure, execute_focused_shell_hook, execute_program_hook,
     hook_execution_audit_record, plan_event,
 };

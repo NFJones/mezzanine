@@ -238,7 +238,7 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         let project_root = self.project_root_for_approval(approval);
         if let Some(record) = self
-            .project_trust_store
+            .project_trust_store()
             .as_ref()
             .and_then(|store| store.get(&project_root))
         {
@@ -330,7 +330,7 @@ impl RuntimeSessionService {
         project_root: PathBuf,
     ) -> Result<()> {
         let trusted = self
-            .project_trust_store
+            .project_trust_store()
             .as_ref()
             .and_then(|store| store.get(&project_root))
             .is_none_or(|record| record.state == TrustDecision::Trusted);

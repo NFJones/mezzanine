@@ -19,12 +19,12 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn auth_store(&self) -> Option<&AuthStore> {
-        self.auth_store.as_ref()
+        self.integration.auth_store()
     }
 
     /// Returns the configured provider auth refresh leeway in seconds.
     pub fn provider_auth_refresh_leeway_seconds(&self) -> u64 {
-        self.provider_auth_refresh_leeway_seconds
+        self.integration.provider_auth_refresh_leeway_seconds()
     }
 
     /// Runs the set auth store operation for this subsystem.
@@ -33,7 +33,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn set_auth_store(&mut self, store: AuthStore) {
-        self.auth_store = Some(store);
+        self.integration.set_auth_store(Some(store));
     }
 
     /// Runs the set audit log operation for this subsystem.

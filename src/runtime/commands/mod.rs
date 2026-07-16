@@ -488,8 +488,8 @@ impl RuntimeSessionService {
             return Err(MezError::invalid_args(message));
         }
         let persistence_path = self
-            .project_trust_database_path
-            .as_ref()
+            .integration
+            .project_trust_database_path()
             .map(|path| path.to_string_lossy().to_string())
             .unwrap_or_else(|| "unconfigured".to_string());
         Ok(AgentShellCommandOutcome::Mutated {
@@ -497,7 +497,7 @@ impl RuntimeSessionService {
             body: format!(
                 "project trust granted root={} persisted={} persistence_path={} overlays={}",
                 agent_path_preview(&root),
-                self.project_trust_database_path.is_some(),
+                self.integration.project_trust_database_path().is_some(),
                 agent_approval_summary_preview(&persistence_path),
                 selection.overlay_files.len()
             ),
@@ -1151,7 +1151,7 @@ impl RuntimeSessionService {
                 .or_else(|| layer.path.as_ref().map(|path| discover_project_root(path)))
                 .unwrap_or_else(|| PathBuf::from("."));
             let decision = self
-                .project_trust_store
+                .project_trust_store()
                 .as_ref()
                 .and_then(|store| store.get(&root))
                 .map(|record| record.state)

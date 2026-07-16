@@ -179,7 +179,7 @@ impl RuntimeSessionService {
             "provider_model_list",
             "requested",
         )?;
-        let Some(auth_store) = self.auth_store.as_ref() else {
+        let Some(auth_store) = self.integration.auth_store() else {
             self.append_credential_access_audit(
                 provider_id,
                 &provider_config.auth_profile,

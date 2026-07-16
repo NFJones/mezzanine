@@ -160,7 +160,7 @@ impl RuntimeSessionService {
         let Some(path) = target.path.as_ref() else {
             return Ok(());
         };
-        let Some(store) = self.project_trust_store.as_ref() else {
+        let Some(store) = self.integration.project_trust_store() else {
             return Err(MezError::conflict(
                 "project config persistence is blocked until project trust is available",
             ));
@@ -661,7 +661,7 @@ impl RuntimeSessionService {
         text: &str,
     ) {
         let trusted = scope != ConfigScope::ProjectOverlay
-            || self.project_trust_store.as_ref().is_some_and(|store| {
+            || self.integration.project_trust_store().is_some_and(|store| {
                 store.records().any(|record| {
                     record.state == TrustDecision::Trusted
                         && runtime_path_under_project_root(&path, &record.project_root)
@@ -894,13 +894,18 @@ impl RuntimeSessionService {
             runtime_trust_decision_param(params)?
         };
         let record = {
-            let database_path = self.project_trust_database_path.clone().or_else(|| {
+            let database_path = self
+                .integration
+                .project_trust_database_path()
+                .map(Path::to_path_buf)
+                .or_else(|| {
+                    self.integration
+                        .config_root()
+                        .map(default_trust_database_path)
+                });
+            if self.integration.project_trust_database_path().is_none() {
                 self.integration
-                    .config_root()
-                    .map(|root| default_trust_database_path(root))
-            });
-            if self.project_trust_database_path.is_none() {
-                self.project_trust_database_path = database_path.clone();
+                    .set_project_trust_database_path(database_path.clone());
             }
             let store = self.runtime_project_trust_store_mut()?;
             store.decide_with_client(
@@ -918,7 +923,8 @@ impl RuntimeSessionService {
                 .ok_or_else(|| MezError::invalid_state("project trust record was not retained"))?
         };
         let changed_layers = self.apply_project_trust_decision_to_layers(&project_root, decision);
-        self.announced_project_trust_roots.remove(&project_root);
+        self.integration
+            .clear_project_trust_root_announcement(&project_root);
         let report = self.apply_runtime_config_layers()?;
         self.append_lifecycle_event(
             EventKind::ConfigChanged,
@@ -955,8 +961,8 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn runtime_project_trust_store(&self) -> Result<&ProjectTrustStore> {
-        self.project_trust_store
-            .as_ref()
+        self.integration
+            .project_trust_store()
             .ok_or_else(|| MezError::invalid_state("runtime project trust store is not configured"))
     }
 
@@ -966,8 +972,8 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn runtime_project_trust_store_mut(&mut self) -> Result<&mut ProjectTrustStore> {
-        self.project_trust_store
-            .as_mut()
+        self.integration
+            .project_trust_store_mut()
             .ok_or_else(|| MezError::invalid_state("runtime project trust store is not configured"))
     }
 

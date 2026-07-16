@@ -155,7 +155,7 @@ impl RuntimeSessionService {
                 return ClaudeCodeProvider::new(provider_name, DEFAULT_PROVIDER_TIMEOUT_MS)
                     .map(RuntimeAgentProviderDispatchProvider::ClaudeCode);
             }
-            let auth_store = self.auth_store.as_ref().ok_or_else(|| {
+            let auth_store = self.integration.auth_store().ok_or_else(|| {
                 MezError::invalid_state(format!(
                     "provider `{provider_name}` execution requires an attached auth store"
                 ))

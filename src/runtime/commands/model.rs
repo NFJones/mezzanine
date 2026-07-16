@@ -598,7 +598,7 @@ impl RuntimeSessionService {
             .keys()
             .cloned()
             .collect();
-        if let Some(auth_store) = self.auth_store.as_ref() {
+        if let Some(auth_store) = self.integration.auth_store() {
             let all_metadata = auth_store.read_all_metadata().unwrap_or_default();
             for auth_provider in all_metadata.keys() {
                 if !provider_ids.contains(auth_provider) {

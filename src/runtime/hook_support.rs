@@ -308,11 +308,10 @@ impl FocusedShellExecutor for RuntimeFocusedShellPaneExecutor<'_> {
             return Ok(focused_shell_unavailable_output());
         }
         let descriptor = runtime_focused_shell_descriptor_for_plan(self.service, plan)?;
-        let marker_sequence = self.service.next_focused_shell_hook_marker;
-        self.service.next_focused_shell_hook_marker = self
+        let marker_sequence = self
             .service
-            .next_focused_shell_hook_marker
-            .saturating_add(1);
+            .integration
+            .allocate_focused_shell_hook_marker();
         let marker = MarkerToken::new(exact_command_sha256(
             DEFAULT_COMMAND_SHELL_CLASSIFICATION,
             &format!(
@@ -349,16 +348,19 @@ unset MEZ_HOOK_PAYLOAD MEZ_MARKER_TOKEN MEZ_TURN MEZ_AGENT MEZ_PANE MEZ_STATUS\n
             input.as_bytes(),
         ) {
             Ok(_) => {
-                self.service.focused_shell_hook_transactions.insert(
-                    marker.as_str().to_string(),
-                    PendingFocusedShellHookTransaction {
-                        pane_id: descriptor.pane_id.to_string(),
-                        plan: plan.clone(),
-                        started_at_unix_ms: current_unix_millis(),
-                        timeout_ms: plan.timeout_ms,
-                        continuation: self.continuation.clone(),
-                    },
-                );
+                self.service
+                    .integration
+                    .focused_shell_hook_transactions_mut()
+                    .insert(
+                        marker.as_str().to_string(),
+                        PendingFocusedShellHookTransaction {
+                            pane_id: descriptor.pane_id.to_string(),
+                            plan: plan.clone(),
+                            started_at_unix_ms: current_unix_millis(),
+                            timeout_ms: plan.timeout_ms,
+                            continuation: self.continuation.clone(),
+                        },
+                    );
                 Ok(FocusedShellHookOutput {
                     exit_code: None,
                     stdout: "focused-shell hook queued in active pane".to_string(),

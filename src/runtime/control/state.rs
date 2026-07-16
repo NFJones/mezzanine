@@ -211,7 +211,7 @@ impl RuntimeSessionService {
             .iter()
             .any(|layer| layer.scope == ConfigScope::ProjectOverlay && layer.trusted);
         let trusted_directories = self
-            .project_trust_store
+            .project_trust_store()
             .as_ref()
             .map(|store| {
                 store

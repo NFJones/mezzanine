@@ -122,7 +122,7 @@ impl RuntimeSessionService {
         environment: &BTreeMap<String, String>,
     ) -> Result<Vec<String>> {
         let server_ids = runtime_mcp_pending_discovery_server_ids(registry, |server| {
-            runtime_mcp_server_has_live_auth_recovery(server, self.auth_store.as_ref())
+            runtime_mcp_server_has_live_auth_recovery(server, self.integration.auth_store())
         });
         let mut blacklisted = Vec::new();
         for server_id in server_ids {
@@ -133,7 +133,10 @@ impl RuntimeSessionService {
                 .is_some_and(|server| {
                     runtime_mcp_server_needs_live_auth_rediscovery(
                         server,
-                        runtime_mcp_server_has_live_auth_recovery(server, self.auth_store.as_ref()),
+                        runtime_mcp_server_has_live_auth_recovery(
+                            server,
+                            self.integration.auth_store(),
+                        ),
                     )
                 });
             if should_reset {
@@ -243,8 +246,8 @@ impl RuntimeSessionService {
                 bearer_token_env, ..
             } => {
                 let oauth_token = if bearer_token_env.is_none() {
-                    self.auth_store
-                        .as_ref()
+                    self.integration
+                        .auth_store()
                         .and_then(|store| store.mcp_access_token(server_id).ok())
                 } else {
                     None
@@ -264,11 +267,11 @@ impl RuntimeSessionService {
                     Err(error)
                         if error.kind() == crate::error::MezErrorKind::Forbidden
                             && bearer_token_env.is_none()
-                            && self.auth_store.as_ref().is_some_and(|store| {
+                            && self.integration.auth_store().is_some_and(|store| {
                                 store.mcp_refresh_token(server_id).ok().flatten().is_some()
                             }) =>
                     {
-                        let auth_store = self.auth_store.as_ref().ok_or_else(|| {
+                        let auth_store = self.integration.auth_store().ok_or_else(|| {
                             MezError::invalid_state("MCP OAuth refresh requires an auth store")
                         })?;
                         auth_store

@@ -434,7 +434,7 @@ impl RuntimeSessionService {
             self.provider_registry().providers.len(),
             self.provider_registry().profiles.len(),
             self.mcp_registry().list_servers().len(),
-            self.hook_definitions.len()
+            self.integration.hook_definitions().len()
         )];
         for (index, layer) in self.integration.config_layers().iter().enumerate() {
             lines.push(format!(

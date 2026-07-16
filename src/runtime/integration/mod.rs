@@ -10,7 +10,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::async_runtime::AsyncRuntimeActorMetrics;
+use crate::auth::AuthStore;
 use crate::config::ConfigLayer;
+use crate::hooks::{FocusedShellHookQueue, HookDefinition, HookExecutionResult};
+use crate::project::ProjectTrustStore;
 use mez_agent::ApprovalPolicy;
 use mez_agent::mcp::McpRegistry;
 use mez_agent::memory::SessionMemoryStore;
@@ -21,14 +24,18 @@ use mez_agent::{
 };
 
 use super::service_state::{
-    RuntimeAgentPersonalityProfile, RuntimeMcpTransportSet, RuntimeMetricsSnapshot,
-    RuntimeModelProfileOverrideStore,
+    PendingFocusedShellHookTransaction, RuntimeAgentPersonalityProfile, RuntimeMcpTransportSet,
+    RuntimeMetricsSnapshot, RuntimeModelProfileOverrideStore,
 };
 
 mod bindings;
+mod credentials;
+mod hooks;
 mod security;
 
 use bindings::RuntimeBindingsState;
+use credentials::RuntimeCredentialState;
+use hooks::RuntimeHookState;
 use security::RuntimeSecurityState;
 
 /// Owns concrete application integration bindings for one runtime session.
@@ -40,6 +47,8 @@ pub(in crate::runtime) struct RuntimeIntegrationComponent {
     runtime_metrics: RuntimeMetricsSnapshot,
     security: RuntimeSecurityState,
     bindings: RuntimeBindingsState,
+    credentials: RuntimeCredentialState,
+    hooks: RuntimeHookState,
 }
 
 impl RuntimeIntegrationComponent {
@@ -55,6 +64,8 @@ impl RuntimeIntegrationComponent {
             runtime_metrics: RuntimeMetricsSnapshot::default(),
             security: RuntimeSecurityState::default(),
             bindings: RuntimeBindingsState::new(provider_registry, subagent_profiles),
+            credentials: RuntimeCredentialState::default(),
+            hooks: RuntimeHookState::default(),
         }
     }
 
@@ -199,6 +210,16 @@ impl RuntimeIntegrationComponent {
         self.bindings.mcp_transports_mut()
     }
 
+    /// Borrows disjoint MCP transport and credential bindings for one execution.
+    pub(in crate::runtime) fn mcp_execution_bindings(
+        &mut self,
+    ) -> (&mut RuntimeMcpTransportSet, Option<&AuthStore>) {
+        (
+            self.bindings.mcp_transports_mut(),
+            self.credentials.auth_store(),
+        )
+    }
+
     /// Returns the live provider registry.
     pub(in crate::runtime) fn provider_registry(&self) -> &RuntimeProviderRegistry {
         self.bindings.provider_registry()
@@ -300,5 +321,128 @@ impl RuntimeIntegrationComponent {
         &mut self,
     ) -> &mut RuntimeModelProfileOverrideStore {
         self.bindings.model_profile_overrides_mut()
+    }
+
+    /// Returns the optional provider credential store.
+    pub(in crate::runtime) fn auth_store(&self) -> Option<&AuthStore> {
+        self.credentials.auth_store()
+    }
+
+    /// Replaces the optional provider credential store.
+    pub(in crate::runtime) fn set_auth_store(&mut self, store: Option<AuthStore>) {
+        self.credentials.set_auth_store(store);
+    }
+
+    /// Returns the proactive provider-token refresh leeway.
+    pub(in crate::runtime) fn provider_auth_refresh_leeway_seconds(&self) -> u64 {
+        self.credentials.provider_auth_refresh_leeway_seconds()
+    }
+
+    /// Replaces the proactive provider-token refresh leeway.
+    pub(in crate::runtime) fn set_provider_auth_refresh_leeway_seconds(&mut self, seconds: u64) {
+        self.credentials
+            .set_provider_auth_refresh_leeway_seconds(seconds);
+    }
+
+    /// Returns the optional project-trust store.
+    pub(in crate::runtime) fn project_trust_store(&self) -> Option<&ProjectTrustStore> {
+        self.credentials.project_trust_store()
+    }
+
+    /// Returns the project-trust store for decision mutation.
+    pub(in crate::runtime) fn project_trust_store_mut(&mut self) -> Option<&mut ProjectTrustStore> {
+        self.credentials.project_trust_store_mut()
+    }
+
+    /// Replaces the optional project-trust store.
+    pub(in crate::runtime) fn set_project_trust_store(&mut self, store: Option<ProjectTrustStore>) {
+        self.credentials.set_project_trust_store(store);
+    }
+
+    /// Returns the optional project-trust database path.
+    pub(in crate::runtime) fn project_trust_database_path(&self) -> Option<&Path> {
+        self.credentials.project_trust_database_path()
+    }
+
+    /// Replaces the optional project-trust database path.
+    pub(in crate::runtime) fn set_project_trust_database_path(&mut self, path: Option<PathBuf>) {
+        self.credentials.set_project_trust_database_path(path);
+    }
+
+    /// Marks a project-trust root as already announced and reports whether it was new.
+    pub(in crate::runtime) fn mark_project_trust_root_announced(&mut self, root: PathBuf) -> bool {
+        self.credentials.mark_project_trust_root_announced(root)
+    }
+
+    /// Clears a project-trust root announcement marker.
+    pub(in crate::runtime) fn clear_project_trust_root_announcement(
+        &mut self,
+        root: &Path,
+    ) -> bool {
+        self.credentials.clear_project_trust_root_announcement(root)
+    }
+
+    /// Returns configured hook definitions.
+    pub(in crate::runtime) fn hook_definitions(&self) -> &[HookDefinition] {
+        self.hooks.definitions()
+    }
+
+    /// Replaces configured hook definitions.
+    pub(in crate::runtime) fn replace_hook_definitions(
+        &mut self,
+        definitions: Vec<HookDefinition>,
+    ) {
+        self.hooks.replace_definitions(definitions);
+    }
+
+    /// Returns the focused-shell hook queue.
+    pub(in crate::runtime) fn focused_shell_hook_queue(&self) -> &FocusedShellHookQueue {
+        self.hooks.focused_shell_queue()
+    }
+
+    /// Returns the focused-shell hook queue for mutation.
+    pub(in crate::runtime) fn focused_shell_hook_queue_mut(
+        &mut self,
+    ) -> &mut FocusedShellHookQueue {
+        self.hooks.focused_shell_queue_mut()
+    }
+
+    /// Replaces the focused-shell hook queue after transactional execution.
+    pub(in crate::runtime) fn replace_focused_shell_hook_queue(
+        &mut self,
+        queue: FocusedShellHookQueue,
+    ) {
+        self.hooks.replace_focused_shell_queue(queue);
+    }
+
+    /// Allocates one monotonic focused-shell hook marker.
+    pub(in crate::runtime) fn allocate_focused_shell_hook_marker(&mut self) -> u64 {
+        self.hooks.allocate_focused_shell_marker()
+    }
+
+    /// Returns pending focused-shell hook transactions.
+    pub(in crate::runtime) fn focused_shell_hook_transactions(
+        &self,
+    ) -> &BTreeMap<String, PendingFocusedShellHookTransaction> {
+        self.hooks.focused_shell_transactions()
+    }
+
+    /// Returns pending focused-shell hook transactions for mutation.
+    pub(in crate::runtime) fn focused_shell_hook_transactions_mut(
+        &mut self,
+    ) -> &mut BTreeMap<String, PendingFocusedShellHookTransaction> {
+        self.hooks.focused_shell_transactions_mut()
+    }
+
+    /// Returns retained focused-shell hook results.
+    pub(in crate::runtime) fn focused_shell_hook_results(&self) -> &[HookExecutionResult] {
+        self.hooks.focused_shell_results()
+    }
+
+    /// Returns retained focused-shell hook results for bounded mutation.
+    pub(in crate::runtime) fn focused_shell_hook_results_mut(
+        &mut self,
+    ) -> &mut Vec<HookExecutionResult> {
+        self.hooks.focused_shell_results_mut()
     }
 }

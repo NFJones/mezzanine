@@ -58,26 +58,31 @@ fn runtime_config_parses_hook_matcher_groups() {
         .unwrap();
 
     let matching = crate::hooks::plan_event(
-        &service.hook_definitions,
+        service.integration.hook_definitions(),
         HookEvent::UserPromptSubmit,
         r#"{"pane_id":"pane-2"}"#,
     )
     .unwrap();
     let fallback = crate::hooks::plan_event(
-        &service.hook_definitions,
+        service.integration.hook_definitions(),
         HookEvent::UserPromptSubmit,
         r#"{"agent_id":"agent-1"}"#,
     )
     .unwrap();
     let filtered = crate::hooks::plan_event(
-        &service.hook_definitions,
+        service.integration.hook_definitions(),
         HookEvent::UserPromptSubmit,
         r#"{"pane_id":"other","agent_id":"agent-2"}"#,
     )
     .unwrap();
 
     assert_eq!(report.hooks_configured, 1);
-    assert_eq!(service.hook_definitions[0].matcher_groups.len(), 2);
+    assert_eq!(
+        service.integration.hook_definitions()[0]
+            .matcher_groups
+            .len(),
+        2
+    );
     assert_eq!(matching.plans.len(), 1);
     assert_eq!(fallback.plans.len(), 1);
     assert!(filtered.plans.is_empty());

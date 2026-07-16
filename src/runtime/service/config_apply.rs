@@ -81,7 +81,7 @@ impl RuntimeSessionService {
         }
 
         let trusted = self
-            .project_trust_store
+            .project_trust_store()
             .as_ref()
             .and_then(|store| store.get(&project_root))
             .is_some_and(|record| record.state == TrustDecision::Trusted);
@@ -298,8 +298,9 @@ impl RuntimeSessionService {
             runtime_agent_implementation_pressure_after_shell_actions_from_config(&structured)?,
         );
         self.set_agent_loop_limit(runtime_agent_loop_limit_from_config(&structured)?);
-        self.provider_auth_refresh_leeway_seconds =
-            runtime_provider_auth_refresh_leeway_seconds_from_config(&structured);
+        self.integration.set_provider_auth_refresh_leeway_seconds(
+            runtime_provider_auth_refresh_leeway_seconds_from_config(&structured),
+        );
         self.set_agent_auto_sizing(runtime_agent_auto_sizing_from_config(&structured)?);
         self.configure_agent_scheduler_limit(max_concurrent_agents)?;
         self.start_ready_agent_turns()?;
@@ -322,7 +323,7 @@ impl RuntimeSessionService {
         let preset_registry =
             runtime_preset_registry_from_config(&structured, &provider_registry.profiles)?;
         // Synthesize provider entries for authenticated providers not in config.
-        if let Some(auth_store) = self.auth_store.as_ref() {
+        if let Some(auth_store) = self.integration.auth_store() {
             let all_metadata = auth_store.read_all_metadata().unwrap_or_default();
             for auth_provider in all_metadata.keys() {
                 if !provider_registry.providers.contains_key(auth_provider)
@@ -371,7 +372,8 @@ impl RuntimeSessionService {
         self.integration.set_custom_agent_system_prompt(
             runtime_agent_custom_system_prompt_from_config(&structured)?,
         );
-        self.hook_definitions = runtime_hook_definitions_from_config(&structured)?;
+        self.integration
+            .replace_hook_definitions(runtime_hook_definitions_from_config(&structured)?);
         let mut registry = runtime_mcp_registry_from_config(&structured)?;
         let environment = std::env::vars().collect::<BTreeMap<_, _>>();
         let blacklisted = registry
@@ -397,7 +399,7 @@ impl RuntimeSessionService {
             providers_configured: self.provider_registry().providers.len(),
             model_profiles_configured: self.provider_registry().profiles.len(),
             default_model_profile: self.provider_registry().default_profile.clone(),
-            hooks_configured: self.hook_definitions.len(),
+            hooks_configured: self.integration.hook_definitions().len(),
             project_trust_prompts_announced: trust_prompts_announced,
             ui_theme: self.ui_theme().name.clone(),
         })
@@ -472,7 +474,7 @@ impl RuntimeSessionService {
             self.append_runtime_mcp_prechecked_status_events(registry, source)?;
         }
         let pending_server_ids = runtime_mcp_pending_discovery_server_ids(registry, |server| {
-            runtime_mcp_server_has_live_auth_recovery(server, self.auth_store.as_ref())
+            runtime_mcp_server_has_live_auth_recovery(server, self.integration.auth_store())
         });
         if pending_server_ids.is_empty() {
             if emit_empty_completion && runtime_mcp_enabled_server_count(registry) > 0 {
@@ -559,7 +561,7 @@ impl RuntimeSessionService {
                 .map(discover_project_root)
                 .unwrap_or_else(|| discover_project_root(path));
             let pending = self
-                .project_trust_store
+                .project_trust_store()
                 .as_ref()
                 .and_then(|store| store.get(&root))
                 .map(|record| record.state == TrustDecision::Pending)
@@ -571,7 +573,10 @@ impl RuntimeSessionService {
 
         let mut announced = 0usize;
         for (root, overlays) in overlays_by_root {
-            if !self.announced_project_trust_roots.insert(root.clone()) {
+            if !self
+                .integration
+                .mark_project_trust_root_announced(root.clone())
+            {
                 continue;
             }
             let overlay_json = overlays

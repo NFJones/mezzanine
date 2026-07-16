@@ -534,11 +534,12 @@ impl RuntimeSessionService {
         let environment = std::env::vars().collect::<BTreeMap<_, _>>();
         let execution_request = McpExecutionRequest::from(&plan);
         let audit_log = self.persistence.audit_log_mut();
+        let (transports, auth_store) = self.integration.mcp_execution_bindings();
         let mut executor = RuntimeMcpActionExecutor {
-            transports: self.integration.mcp_transports_mut(),
+            transports,
             audit_log,
             environment,
-            auth_store: self.auth_store.as_ref(),
+            auth_store,
             session_id: self.session.id.to_string(),
             actor: AuditActor {
                 kind: "agent".to_string(),
@@ -636,11 +637,12 @@ impl RuntimeSessionService {
         let environment = std::env::vars().collect::<BTreeMap<_, _>>();
         let execution_request = McpExecutionRequest::from(&plan);
         let audit_log = self.persistence.audit_log_mut();
+        let (transports, auth_store) = self.integration.mcp_execution_bindings();
         let mut executor = RuntimeMcpActionExecutor {
-            transports: self.integration.mcp_transports_mut(),
+            transports,
             audit_log,
             environment,
-            auth_store: self.auth_store.as_ref(),
+            auth_store,
             session_id: self.session.id.to_string(),
             actor: AuditActor {
                 kind: "agent".to_string(),
