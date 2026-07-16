@@ -36,7 +36,12 @@ impl RuntimePersistenceComponent {
         effects
     }
 
-    /// Removes queued pane I/O and pipe effects for a closed pane.
+    /// Removes obsolete queued pane I/O and pipe effects for a closed pane.
+    ///
+    /// A queued termination is deliberately retained: pane cleanup runs after
+    /// the runtime has requested termination from an async process owner, and
+    /// that owner still needs the effect even though the pane has left the
+    /// session layout.
     pub(in crate::runtime) fn cleanup_pane_io(&mut self, pane_id: &str) {
         self.queued_pane_input_effects
             .retain(|effect| match effect {
@@ -49,7 +54,6 @@ impl RuntimePersistenceComponent {
                 _ => true,
             });
         self.queued_pane_resize_effects.remove(pane_id);
-        self.queued_pane_termination_effects.remove(pane_id);
         self.queued_pane_pipe_effects
             .retain(|(queued_pane_id, _)| queued_pane_id != pane_id);
     }
