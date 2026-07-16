@@ -152,6 +152,8 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     agent_turn_network_action_history: BTreeMap<String, AgentNetworkActionHistory>,
     /// Pre-shell hooks already completed for an action.
     agent_pre_shell_hook_completions: BTreeSet<RuntimeAgentPreShellHookCompletion>,
+    /// Effective provider model profile retained for each active turn.
+    agent_turn_model_profiles: BTreeMap<String, ModelProfile>,
 }
 
 impl RuntimeAgentComponent {
@@ -177,6 +179,38 @@ impl RuntimeAgentComponent {
 }
 
 impl RuntimeSessionService {
+    /// Returns the effective model profile retained for one turn.
+    pub(in crate::runtime) fn agent_turn_model_profile(
+        &self,
+        turn_id: &str,
+    ) -> Option<&ModelProfile> {
+        self.agent.agent_turn_model_profiles.get(turn_id)
+    }
+
+    /// Replaces the effective model profile retained for one turn.
+    pub(in crate::runtime) fn set_agent_turn_model_profile(
+        &mut self,
+        turn_id: impl Into<String>,
+        profile: ModelProfile,
+    ) {
+        self.agent
+            .agent_turn_model_profiles
+            .insert(turn_id.into(), profile);
+    }
+
+    /// Removes the effective model profile retained for one turn.
+    pub(in crate::runtime) fn remove_agent_turn_model_profile(
+        &mut self,
+        turn_id: &str,
+    ) -> Option<ModelProfile> {
+        self.agent.agent_turn_model_profiles.remove(turn_id)
+    }
+
+    /// Clears all retained turn model profiles for session replacement.
+    pub(in crate::runtime) fn clear_agent_turn_model_profiles(&mut self) {
+        self.agent.agent_turn_model_profiles.clear();
+    }
+
     /// Clears correction attempts and action histories for one completed turn.
     pub(in crate::runtime) fn clear_agent_action_bookkeeping_for_turn(&mut self, turn_id: &str) {
         self.clear_agent_failure_feedback_attempts_for_turn(turn_id);

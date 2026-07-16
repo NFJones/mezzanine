@@ -33,7 +33,8 @@ impl RuntimeSessionService {
             self.claimed_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         }
-        let Some(mut model_profile) = self.agent_turn_model_profiles.get(turn_id).cloned() else {
+        let Some(mut model_profile) = self.agent.agent_turn_model_profiles.get(turn_id).cloned()
+        else {
             let error = MezError::invalid_state("runtime agent turn has no model profile");
             self.fail_agent_turn_after_provider_completion_application_error(
                 &turn,
@@ -107,7 +108,8 @@ impl RuntimeSessionService {
         let execution_profile =
             runtime_apply_auto_sizing_execution_profile(model_profile.clone(), &execution.request);
         if execution_profile != model_profile {
-            self.agent_turn_model_profiles
+            self.agent
+                .agent_turn_model_profiles
                 .insert(turn_id.to_string(), execution_profile.clone());
             self.append_agent_trace_turn_event(
                 &turn.pane_id,

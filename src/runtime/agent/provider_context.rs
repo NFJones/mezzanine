@@ -107,7 +107,7 @@ impl RuntimeSessionService {
             self.pending_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         }
-        let Some(stored_model_profile) = self.agent_turn_model_profiles.get(turn_id).cloned()
+        let Some(stored_model_profile) = self.agent.agent_turn_model_profiles.get(turn_id).cloned()
         else {
             self.pending_agent_provider_tasks.remove(turn_id);
             return Err(MezError::invalid_state(
@@ -228,7 +228,8 @@ impl RuntimeSessionService {
             self.pending_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         }
-        let Some(mut model_profile) = self.agent_turn_model_profiles.get(turn_id).cloned() else {
+        let Some(mut model_profile) = self.agent.agent_turn_model_profiles.get(turn_id).cloned()
+        else {
             self.pending_agent_provider_tasks.remove(turn_id);
             return Err(MezError::invalid_state(
                 "runtime agent turn has no model profile",
@@ -239,7 +240,8 @@ impl RuntimeSessionService {
             model_profile
                 .provider_options
                 .insert("max_output_tokens".to_string(), retry_tokens.to_string());
-            self.agent_turn_model_profiles
+            self.agent
+                .agent_turn_model_profiles
                 .insert(turn_id.to_string(), model_profile);
         }
 

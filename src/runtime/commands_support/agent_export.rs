@@ -161,7 +161,7 @@ fn runtime_agent_context_dump_for_pane(
             message,
         });
     };
-    let Some(model_profile) = service.agent_turn_model_profiles.get(&turn_id).cloned() else {
+    let Some(model_profile) = service.agent_turn_model_profile(&turn_id).cloned() else {
         let message = format!("agent context dump: running turn {turn_id} has no model profile");
         return Ok(RuntimeAgentContextDumpResult::NotWritten {
             turn_id: Some(turn_id),

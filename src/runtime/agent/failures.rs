@@ -96,7 +96,7 @@ impl RuntimeSessionService {
             .remove(&turn.turn_id);
         self.clear_joined_subagent_dependencies_for_turn(&turn.turn_id);
         self.clear_agent_pre_shell_hook_completions_for_turn(&turn.turn_id);
-        self.agent_turn_model_profiles.remove(&turn.turn_id);
+        self.agent.agent_turn_model_profiles.remove(&turn.turn_id);
         self.pending_agent_provider_tasks.remove(&turn.turn_id);
         self.claimed_agent_provider_tasks.remove(&turn.turn_id);
         self.blocked_agent_approval_refs
@@ -352,7 +352,12 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
     ) -> Result<()> {
-        let Some(model_profile) = self.agent_turn_model_profiles.get(&turn.turn_id).cloned() else {
+        let Some(model_profile) = self
+            .agent
+            .agent_turn_model_profiles
+            .get(&turn.turn_id)
+            .cloned()
+        else {
             return Ok(());
         };
         let error = runtime_agent_execution_failure_error(execution);

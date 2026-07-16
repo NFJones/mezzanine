@@ -1279,8 +1279,7 @@ impl RuntimeSessionService {
                 });
                 let agent_model = active_turn_profile
                     .and_then(|turn| {
-                        self.agent_turn_model_profiles
-                            .get(&turn.turn_id)
+                        self.agent_turn_model_profile(&turn.turn_id)
                             .map(|profile| profile.model.clone())
                             .or_else(|| {
                                 self.provider_registry
@@ -1296,8 +1295,7 @@ impl RuntimeSessionService {
                     });
                 let agent_reasoning = active_turn_profile
                     .and_then(|turn| {
-                        self.agent_turn_model_profiles
-                            .get(&turn.turn_id)
+                        self.agent_turn_model_profile(&turn.turn_id)
                             .and_then(|profile| profile.reasoning_display_value())
                     })
                     .or_else(|| {
@@ -1306,7 +1304,7 @@ impl RuntimeSessionService {
                             .and_then(|(_name, profile)| profile.reasoning_display_value())
                     });
                 let agent_thinking_profile = active_turn_profile
-                    .and_then(|turn| self.agent_turn_model_profiles.get(&turn.turn_id).cloned())
+                    .and_then(|turn| self.agent_turn_model_profile(&turn.turn_id).cloned())
                     .or_else(|| {
                         active_agent_profile
                             .as_ref()
@@ -1327,7 +1325,7 @@ impl RuntimeSessionService {
                     }
                 });
                 let agent_latency_profile = active_turn_profile
-                    .and_then(|turn| self.agent_turn_model_profiles.get(&turn.turn_id).cloned())
+                    .and_then(|turn| self.agent_turn_model_profile(&turn.turn_id).cloned())
                     .or_else(|| {
                         active_agent_profile
                             .as_ref()

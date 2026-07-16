@@ -129,7 +129,7 @@ impl RuntimeSessionService {
         self.agent.agent_turn_network_action_history.remove(turn_id);
         self.clear_joined_subagent_dependencies_for_turn(turn_id);
         self.clear_agent_pre_shell_hook_completions_for_turn(turn_id);
-        self.agent_turn_model_profiles.remove(turn_id);
+        self.agent.agent_turn_model_profiles.remove(turn_id);
         self.pending_agent_provider_tasks.remove(turn_id);
         self.claimed_agent_provider_tasks.remove(turn_id);
         self.blocked_agent_approval_refs
@@ -209,7 +209,7 @@ impl RuntimeSessionService {
             .remove(&turn.turn_id);
         self.clear_joined_subagent_dependencies_for_turn(&turn.turn_id);
         self.clear_agent_pre_shell_hook_completions_for_turn(&turn.turn_id);
-        self.agent_turn_model_profiles.remove(&turn.turn_id);
+        self.agent.agent_turn_model_profiles.remove(&turn.turn_id);
         self.pending_agent_provider_tasks.remove(&turn.turn_id);
         self.claimed_agent_provider_tasks.remove(&turn.turn_id);
         self.blocked_agent_approval_refs
@@ -397,7 +397,7 @@ impl RuntimeSessionService {
                     .remove(&turn.turn_id);
                 self.clear_joined_subagent_dependencies_for_turn(&turn.turn_id);
                 self.clear_agent_pre_shell_hook_completions_for_turn(&turn.turn_id);
-                self.agent_turn_model_profiles.remove(&turn.turn_id);
+                self.agent.agent_turn_model_profiles.remove(&turn.turn_id);
                 self.pending_agent_provider_tasks.remove(&turn.turn_id);
                 self.blocked_agent_approval_refs
                     .retain(|_, approval_ref| approval_ref.turn_id != turn.turn_id);

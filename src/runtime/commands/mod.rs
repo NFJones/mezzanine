@@ -563,7 +563,7 @@ impl RuntimeSessionService {
             self.clear_agent_failure_feedback_attempts_for_turn(&turn_id);
             self.clear_agent_action_bookkeeping_for_turn(&turn_id);
             self.clear_joined_subagent_dependencies_for_turn(&turn_id);
-            self.agent_turn_model_profiles.remove(&turn_id);
+            self.remove_agent_turn_model_profile(&turn_id);
             self.pending_agent_provider_tasks.remove(&turn_id);
             self.claimed_agent_provider_tasks.remove(&turn_id);
             self.blocked_agent_approval_refs
@@ -1071,8 +1071,7 @@ impl RuntimeSessionService {
             ),
         )?;
         self.agent_turn_contexts.insert(turn_id.clone(), context);
-        self.agent_turn_model_profiles
-            .insert(turn_id.clone(), model_profile);
+        self.set_agent_turn_model_profile(turn_id.clone(), model_profile);
         self.agent_scheduler.enqueue(ScheduledWork {
             turn_id: turn_id.clone(),
             agent_id: agent_id.clone(),

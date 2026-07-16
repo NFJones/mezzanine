@@ -1023,9 +1023,7 @@ context_window_tokens = 100000
         .provider_registry()
         .resolve_profile("default")
         .unwrap();
-    service
-        .agent_turn_model_profiles
-        .insert("turn-1".to_string(), default_profile);
+    service.set_agent_turn_model_profile("turn-1", default_profile);
     service
         .agent_turn_contexts
         .get_mut("turn-1")

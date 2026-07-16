@@ -59,7 +59,8 @@ impl RuntimeSessionService {
                 "only running runtime agent turns can execute through a provider",
             ));
         }
-        self.agent_turn_model_profiles
+        self.agent
+            .agent_turn_model_profiles
             .insert(turn_id.to_string(), model_profile.clone());
         if let Some(step_index) = self.macro_judge_step_index_for_turn(turn_id) {
             return self.execute_macro_judge_with_provider(
@@ -123,7 +124,8 @@ impl RuntimeSessionService {
                 auto_sizing_execution.fallback.as_deref(),
             )?;
             model_profile = auto_sizing_execution.selected_profile;
-            self.agent_turn_model_profiles
+            self.agent
+                .agent_turn_model_profiles
                 .insert(turn_id.to_string(), model_profile.clone());
         }
         if let Some(block) = self.run_configured_pre_action_hooks(
@@ -311,6 +313,7 @@ impl RuntimeSessionService {
                                     },
                                 )?;
                             model_profile = self
+                                .agent
                                 .agent_turn_model_profiles
                                 .get(turn_id)
                                 .cloned()
@@ -374,7 +377,8 @@ impl RuntimeSessionService {
                 "only running runtime agent turns can execute through a provider",
             ));
         }
-        self.agent_turn_model_profiles
+        self.agent
+            .agent_turn_model_profiles
             .insert(turn_id.to_string(), model_profile.clone());
         if let Some(step_index) = self.macro_judge_step_index_for_turn(turn_id) {
             return self.execute_macro_judge_with_provider(
@@ -436,7 +440,8 @@ impl RuntimeSessionService {
                 auto_sizing_execution.fallback.as_deref(),
             )?;
             model_profile = auto_sizing_execution.selected_profile;
-            self.agent_turn_model_profiles
+            self.agent
+                .agent_turn_model_profiles
                 .insert(turn_id.to_string(), model_profile.clone());
         }
         if let Some(block) = self.run_configured_pre_action_hooks(
@@ -590,6 +595,7 @@ impl RuntimeSessionService {
                                     },
                                 )?;
                             model_profile = self
+                                .agent
                                 .agent_turn_model_profiles
                                 .get(turn_id)
                                 .cloned()

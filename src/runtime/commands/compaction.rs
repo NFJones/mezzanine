@@ -555,7 +555,7 @@ impl RuntimeSessionService {
         if turn.state != AgentTurnState::Running {
             return Ok(());
         }
-        let Some(model_profile) = self.agent_turn_model_profiles.get(turn_id).cloned() else {
+        let Some(model_profile) = self.agent_turn_model_profile(turn_id).cloned() else {
             return Ok(());
         };
         let error = MezError::invalid_state(format!(

@@ -297,6 +297,7 @@ impl RuntimeSessionService {
         }
 
         let model_profile = self
+            .agent
             .agent_turn_model_profiles
             .get(turn_id)
             .cloned()
@@ -321,7 +322,8 @@ impl RuntimeSessionService {
             .map(|step_index| self.macro_judge_request_for_turn(&turn, &model_profile, step_index))
             .transpose()?;
 
-        self.agent_turn_model_profiles
+        self.agent
+            .agent_turn_model_profiles
             .insert(turn_id.to_string(), model_profile.clone());
         let (context, available_mcp_tools) = if macro_judge_step_index.is_some() {
             (
@@ -589,7 +591,7 @@ impl RuntimeSessionService {
             self.claimed_agent_provider_tasks.remove(turn_id);
             return Ok(());
         }
-        let Some(model_profile) = self.agent_turn_model_profiles.get(turn_id).cloned() else {
+        let Some(model_profile) = self.agent.agent_turn_model_profiles.get(turn_id).cloned() else {
             self.pending_agent_provider_tasks.remove(turn_id);
             self.claimed_agent_provider_tasks.remove(turn_id);
             return Err(MezError::invalid_state(
@@ -661,7 +663,7 @@ impl RuntimeSessionService {
             self.pending_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         }
-        let Some(model_profile) = self.agent_turn_model_profiles.get(turn_id).cloned() else {
+        let Some(model_profile) = self.agent.agent_turn_model_profiles.get(turn_id).cloned() else {
             self.pending_agent_provider_tasks.remove(turn_id);
             return Err(MezError::invalid_state(
                 "runtime agent turn has no model profile",
@@ -739,7 +741,7 @@ impl RuntimeSessionService {
             self.pending_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         }
-        if !self.agent_turn_model_profiles.contains_key(turn_id) {
+        if !self.agent.agent_turn_model_profiles.contains_key(turn_id) {
             return Err(MezError::invalid_state(
                 "runtime agent turn has no model profile",
             ));
@@ -812,7 +814,7 @@ impl RuntimeSessionService {
             self.pending_agent_provider_tasks.remove(turn_id);
             return Ok(false);
         }
-        if !self.agent_turn_model_profiles.contains_key(turn_id) {
+        if !self.agent.agent_turn_model_profiles.contains_key(turn_id) {
             return Err(MezError::invalid_state(
                 "runtime agent turn has no model profile",
             ));
@@ -1046,7 +1048,7 @@ impl RuntimeSessionService {
                     let turn_id = turn_id.as_str();
                     !self.agent_turn_ledger.turns().iter().any(|turn| {
                         turn.turn_id == turn_id && turn.state == AgentTurnState::Running
-                    }) || !self.agent_turn_model_profiles.contains_key(turn_id)
+                    }) || !self.agent.agent_turn_model_profiles.contains_key(turn_id)
                 })
                 .cloned()
                 .collect::<Vec<_>>();
@@ -1078,7 +1080,8 @@ impl RuntimeSessionService {
             .pending_agent_provider_tasks
             .iter()
             .filter(|turn_id| {
-                self.agent_turn_model_profiles
+                self.agent
+                    .agent_turn_model_profiles
                     .get(*turn_id)
                     .is_some_and(|profile| profile.provider == provider.provider_id())
             })
@@ -1100,7 +1103,8 @@ impl RuntimeSessionService {
                 }
                 continue;
             }
-            let Some(model_profile) = self.agent_turn_model_profiles.get(&turn_id).cloned() else {
+            let Some(model_profile) = self.agent.agent_turn_model_profiles.get(&turn_id).cloned()
+            else {
                 self.pending_agent_provider_tasks.remove(&turn_id);
                 continue;
             };
@@ -1144,7 +1148,7 @@ impl RuntimeSessionService {
             .turns()
             .iter()
             .find(|turn| turn.turn_id == turn_id && turn.state == AgentTurnState::Running)?;
-        let model_profile = self.agent_turn_model_profiles.get(turn_id)?.clone();
+        let model_profile = self.agent.agent_turn_model_profiles.get(turn_id)?.clone();
         Some(RuntimeAgentProviderTask {
             turn_id: turn.turn_id.clone(),
             agent_id: turn.agent_id.clone(),

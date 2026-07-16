@@ -250,7 +250,8 @@ impl RuntimeSessionService {
         };
         self.agent_turn_ledger.queue_turn(turn.clone())?;
         self.agent_turn_contexts.insert(turn_id.clone(), context);
-        self.agent_turn_model_profiles
+        self.agent
+            .agent_turn_model_profiles
             .insert(turn_id.clone(), model_profile);
         self.subagent_task_routes
             .insert(turn_id.clone(), parent_turn.agent_id.clone());

@@ -262,11 +262,6 @@ pub struct RuntimeSessionService {
     /// the next provider-bound context so the same turn can incorporate the new
     /// instruction before taking further action.
     pub(in crate::runtime) agent_turn_pending_steering: BTreeMap<String, Vec<AgentTurnSteering>>,
-    /// Stores the agent turn model profiles value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) agent_turn_model_profiles: BTreeMap<String, ModelProfile>,
     /// Panes currently running model-backed context compaction, keyed by start
     /// time for timer rendering.
     pub(in crate::runtime) agent_compacting_panes: BTreeMap<String, u64>,
