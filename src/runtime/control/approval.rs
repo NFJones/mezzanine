@@ -6,7 +6,17 @@
 //! keeps request dispatch routing while this module keeps approval persistence
 //! details out of the main control facade.
 
-use super::*;
+use super::{
+    ApprovalDecision, ApprovalDecisionScopePersistence, BlockedApprovalRequest, CommandRule,
+    CommandRuleScope, ConfigFormat, ConfigLayer, ConfigScope, DEFAULT_COMMAND_SHELL_CLASSIFICATION,
+    EventKind, HookEvent, MezError, Path, PathBuf, Result, RuleDecision, RuleMatch,
+    RuntimeSessionService, RuntimeSideEffect, TrustDecision, approval_decide_scope_persistence,
+    discover_project_root, dispatch_control_request_with_approvals,
+    dispatch_control_request_with_approvals_and_audit, json_escape, normalize_exact_command_text,
+    paths_equivalent, runtime_approval_decision_name_to_kind, runtime_json_rpc_error,
+    runtime_json_string_field, runtime_permission_decision_hook_payload, validate_config_text,
+};
+use std::fs;
 
 impl RuntimeSessionService {
     /// Runs the dispatch runtime approval request operation for this subsystem.

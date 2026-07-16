@@ -6,7 +6,14 @@
 //! routing while this module keeps lifecycle mutation and rollback details out
 //! of the main control facade.
 
-use super::*;
+use super::{
+    AgentShellStore, AgentTurnLedger, AuditActor, AuditRecord, ControlConnectionState, EventKind,
+    EventVisibility, MezError, Result, RuntimeLifecycleState, RuntimeSessionService,
+    SnapshotRepository, current_unix_seconds, json_escape, runtime_hook_event_for_lifecycle,
+    runtime_initialize_requested_observer, runtime_initialize_requested_primary,
+    runtime_initialize_terminal_size, runtime_json_string_field, runtime_snapshot_resume_plan_json,
+    runtime_string_array_json, snapshot_id_for_idempotency_key,
+};
 
 impl RuntimeSessionService {
     /// Runs the apply runtime initialize side effects operation for this subsystem.

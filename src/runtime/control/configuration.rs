@@ -6,7 +6,24 @@
 //! control module keeps request routing while this module keeps configuration
 //! persistence rules out of the main control facade.
 
-use super::*;
+use super::{
+    AuditActor, AuditRecord, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,
+    ConfigScope, ControlPersistTarget, EventKind, MezError, Path, PathBuf, ProjectTrustStore,
+    RUNTIME_CONTROL_LIVE_OVERRIDE_LAYER, Result, RuntimeSessionService, RuntimeSideEffect,
+    TrustDecision, authorize_control_request, config_audit_outcome, config_audit_plan,
+    config_mutation_plan_result_json, config_mutation_value_from_json, config_request_cache_key,
+    config_response_advances_generation, default_trust_database_path, discover_project_root,
+    dispatch_control_request_for_client_with_config,
+    dispatch_control_request_for_client_with_config_and_audit, paths_equivalent,
+    persist_target_from_json, plan_config_mutation, project_trust_state_filter_from_params,
+    runtime_approval_policy_name, runtime_config_apply_event_payload,
+    runtime_config_method_applies_to_live_service, runtime_json_rpc_error,
+    runtime_json_string_field, runtime_path_under_project_root, runtime_permission_preset_name,
+    runtime_project_root_param, runtime_project_trust_record_json, runtime_string_array_json,
+    runtime_trust_decision_name, runtime_trust_decision_param,
+    validate_control_method_params_schema,
+};
+use std::fs;
 
 impl RuntimeSessionService {
     /// Runs the dispatch runtime config request operation for this subsystem.

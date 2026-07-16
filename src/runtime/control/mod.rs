@@ -39,17 +39,17 @@ use super::{
     dispatch_control_request_for_client_with_snapshot_context,
     dispatch_control_request_for_connection, dispatch_control_request_with_approvals,
     dispatch_control_request_with_approvals_and_audit, dispatch_control_request_with_captures,
-    dispatch_control_request_with_mcp, dispatch_snapshot_request_with_context_async, fs,
-    json_escape, layout_state_json, normalize_exact_command_text, observer_json,
-    pane_target_checked_resolved, parse_json_rpc_request, plan_config_mutation,
-    project_trust_state_filter_from_params, rendered_client_view_json, route_client_input_actions,
-    runtime_agent_turn_state_json, runtime_append_observer_decision_audit,
-    runtime_approval_decision_name_to_kind, runtime_approval_policy_name,
-    runtime_config_apply_event_payload, runtime_config_method_applies_to_live_service,
-    runtime_cooperation_mode_name, runtime_hook_event_for_lifecycle,
-    runtime_initialize_requested_observer, runtime_initialize_requested_primary,
-    runtime_initialize_terminal_size, runtime_json_bool_field, runtime_json_creation_command,
-    runtime_json_input_bytes, runtime_json_optional_client_size, runtime_json_optional_size_field,
+    dispatch_control_request_with_mcp, dispatch_snapshot_request_with_context_async, json_escape,
+    layout_state_json, normalize_exact_command_text, observer_json, pane_target_checked_resolved,
+    parse_json_rpc_request, plan_config_mutation, project_trust_state_filter_from_params,
+    rendered_client_view_json, route_client_input_actions, runtime_agent_turn_state_json,
+    runtime_append_observer_decision_audit, runtime_approval_decision_name_to_kind,
+    runtime_approval_policy_name, runtime_config_apply_event_payload,
+    runtime_config_method_applies_to_live_service, runtime_cooperation_mode_name,
+    runtime_hook_event_for_lifecycle, runtime_initialize_requested_observer,
+    runtime_initialize_requested_primary, runtime_initialize_terminal_size,
+    runtime_json_bool_field, runtime_json_creation_command, runtime_json_input_bytes,
+    runtime_json_optional_client_size, runtime_json_optional_size_field,
     runtime_json_optional_view_offset, runtime_json_rpc_error, runtime_json_size,
     runtime_json_start_directory, runtime_json_string_field, runtime_mcp_retry_event_payload,
     runtime_mutating_method, runtime_pane_by_id, runtime_pane_readiness_state_name,
@@ -1232,7 +1232,7 @@ fn runtime_mutating_response_is_cacheable(_method: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::runtime_agent_transcript_context_blocks;
     use mez_agent::ProviderTranscriptEvent;
     use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
 
