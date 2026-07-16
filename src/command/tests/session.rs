@@ -2,16 +2,6 @@
 
 use super::*;
 
-/// Verifies the product parser adapter preserves lower command diagnostics
-/// while projecting them into the product invalid-argument category.
-#[test]
-fn command_parser_projects_mux_errors_to_product_invalid_args() {
-    let error = parse_command_sequence("rename-window \"unterminated").unwrap_err();
-
-    assert_eq!(error.kind(), crate::error::MezErrorKind::InvalidArgs);
-    assert!(error.message().contains("unterminated quoted"));
-}
-
 /// Verifies executes window commands against session state.
 ///
 /// This regression scenario documents the behavior being protected so a

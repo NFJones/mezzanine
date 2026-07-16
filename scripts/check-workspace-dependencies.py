@@ -144,6 +144,20 @@ PRODUCT_RUNNER_FORBIDDEN_CALLS = {
 }
 
 PRODUCT_FORBIDDEN_DECLARATIONS = {
+    "fn apply_patch_touched_paths": "semantic-patch touched-path forwarding",
+    "fn apply_patch_write_plan_from_read_output": "semantic-patch plan forwarding",
+    "fn apply_patch_write_plan_from_read_outputs": "semantic-patch plan forwarding",
+    "fn memory_action_kind": "model-writable memory-kind policy",
+    "fn memory_kind_name_for_show": "canonical memory-kind naming",
+    "fn memory_source_name_for_show": "canonical memory-source naming",
+    "fn memory_state_name_for_show": "canonical memory-state naming",
+    "fn pane_content_size_for_geometry": "mux pane-content geometry",
+    "fn pane_render_region_size_for_geometry": "mux pane render-region geometry",
+    "fn parse_command_sequence": "mux command-language parsing",
+    "fn parse_memory_kind_for_show": "canonical memory-kind parsing",
+    "fn parse_memory_state_for_show": "canonical memory-state parsing",
+    "fn rendered_window_body_size": "mux window-body geometry",
+    "fn validate_conversation_id": "canonical transcript conversation-id validation",
     "enum SelectorCandidateKind": "selector candidate category",
     "fn dedupe_selector_candidates": "selector candidate deduplication",
     "fn filter_and_sort_selector_candidates": "selector candidate ranking",

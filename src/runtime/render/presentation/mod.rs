@@ -9,8 +9,8 @@
 use super::super::{RenderedClientView, ShellClassification, runtime_mezzanine_error_code};
 use mez_mux::render::overlay_text_cells;
 
-use crate::agent::semantic::apply_patch_touched_paths;
 use crate::terminal::{agent_wrap_column_cap, terminal_grapheme_width};
+use mez_agent::semantic_patch_planning::apply_patch_touched_paths;
 use mez_agent::{AgentAction, AgentActionPayload};
 use mez_mux::copy::COPY_SKIP_LINE as AGENT_COPY_SKIP_LINE;
 use mez_mux::render::{

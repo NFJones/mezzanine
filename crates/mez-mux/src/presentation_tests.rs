@@ -1,9 +1,9 @@
 //! Direct regression tests for mux-owned presentation boundaries.
 
-use crate::layout::Size;
+use crate::layout::{PaneGeometry, Size};
 use crate::presentation::{
     ClientStatusKind, ClientStatusLine, ClientViewRole, RenderedClientView, TerminalCursorStyle,
-    compose_client_presentation, pane_divider_glyph,
+    compose_client_presentation, pane_divider_glyph, pane_render_region_size_for_geometry,
 };
 use crate::theme::UiTheme;
 
@@ -80,4 +80,62 @@ fn pane_divider_connection_masks_use_correct_box_drawing_glyphs() {
             "unexpected glyph for up={up} down={down} left={left} right={right}"
         );
     }
+}
+
+/// Verifies an even vertical split reserves the shared right divider column.
+///
+/// This selected-agent prompt regression belongs at the mux render-region
+/// boundary so product renderers cannot accidentally own divider sizing.
+#[test]
+fn pane_render_region_reserves_right_divider_for_even_vertical_split() {
+    let geometries = [
+        PaneGeometry {
+            index: 0,
+            column: 0,
+            row: 0,
+            columns: 5,
+            rows: 3,
+        },
+        PaneGeometry {
+            index: 1,
+            column: 5,
+            row: 0,
+            columns: 5,
+            rows: 3,
+        },
+    ];
+
+    assert_eq!(
+        pane_render_region_size_for_geometry(&geometries[0], &geometries),
+        Size::new(4, 3).unwrap()
+    );
+}
+
+/// Verifies an uneven vertical split still reserves the shared divider column.
+///
+/// The left pane may be one column wider than its neighbor; that asymmetry must
+/// not let product prompt text overwrite the mux-owned divider.
+#[test]
+fn pane_render_region_reserves_right_divider_for_odd_vertical_split() {
+    let geometries = [
+        PaneGeometry {
+            index: 0,
+            column: 0,
+            row: 0,
+            columns: 6,
+            rows: 3,
+        },
+        PaneGeometry {
+            index: 1,
+            column: 6,
+            row: 0,
+            columns: 5,
+            rows: 3,
+        },
+    ];
+
+    assert_eq!(
+        pane_render_region_size_for_geometry(&geometries[0], &geometries),
+        Size::new(5, 3).unwrap()
+    );
 }

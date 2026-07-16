@@ -370,11 +370,8 @@ pub fn pane_frame_agent_status_pillbox_cells(
                 .iter()
                 .find(|pane| pane.index == geometry.index)
                 .unwrap_or_else(|| window.active_pane());
-            let width = usize::from(
-                pane_render_region_size_for_geometry(geometry, geometries)
-                    .map(|size| size.columns)
-                    .unwrap_or(geometry.columns),
-            );
+            let width =
+                usize::from(pane_render_region_size_for_geometry(geometry, geometries).columns);
             let row = mez_mux::presentation::pane_frame_row_for_geometry(
                 geometry, geometries, position, row_offset,
             );

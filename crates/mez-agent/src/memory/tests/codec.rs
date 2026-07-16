@@ -2,7 +2,8 @@
 
 use super::record;
 use crate::memory::{
-    MemoryKind, MemoryRecord, MemoryScope, MemoryState, decode_scope, encode_scope,
+    MemoryKind, MemoryRecord, MemoryScope, MemorySource, MemoryState, decode_scope, encode_scope,
+    kind_name, parse_kind, parse_model_writable_kind, parse_state, source_name, state_name,
 };
 
 /// Verifies TSV export preserves every extended memory metadata field.
@@ -44,4 +45,57 @@ fn memory_scope_round_trips_escaped_project_paths() {
     };
 
     assert_eq!(decode_scope(&encode_scope(&scope)).unwrap(), scope);
+}
+
+/// Verifies canonical memory labels round trip through the public agent API.
+///
+/// Product browsers and persistence adapters consume these names directly so
+/// they cannot silently grow a second taxonomy when new variants are added.
+#[test]
+fn memory_taxonomy_names_and_parsers_are_canonical() {
+    let kinds = [
+        MemoryKind::Preference,
+        MemoryKind::Fact,
+        MemoryKind::Procedure,
+        MemoryKind::Documentation,
+        MemoryKind::Research,
+        MemoryKind::Episode,
+        MemoryKind::Warning,
+        MemoryKind::Scratch,
+    ];
+    for kind in kinds {
+        assert_eq!(parse_kind(kind_name(kind)).unwrap(), kind);
+    }
+
+    let states = [
+        MemoryState::Active,
+        MemoryState::Stale,
+        MemoryState::Superseded,
+        MemoryState::Archived,
+        MemoryState::Expired,
+    ];
+    for state in states {
+        assert_eq!(parse_state(state_name(state)).unwrap(), state);
+    }
+
+    assert_eq!(source_name(MemorySource::User), "user");
+    assert_eq!(source_name(MemorySource::Agent), "agent");
+    assert_eq!(source_name(MemorySource::Imported), "imported");
+    assert_eq!(source_name(MemorySource::Configuration), "configuration");
+}
+
+/// Verifies model-authored stores use one canonical writable-kind policy.
+///
+/// Durable episodes and scratch records are runtime-managed even though they
+/// remain valid storage kinds, while user-facing model labels accept harmless
+/// surrounding whitespace and ASCII case differences.
+#[test]
+fn model_writable_memory_kinds_reject_runtime_managed_taxonomy() {
+    assert_eq!(
+        parse_model_writable_kind(" Research ").unwrap(),
+        MemoryKind::Research
+    );
+    assert!(parse_model_writable_kind("episode").is_err());
+    assert!(parse_model_writable_kind("scratch").is_err());
+    assert!(parse_model_writable_kind("unknown").is_err());
 }

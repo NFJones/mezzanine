@@ -11,7 +11,7 @@ mod summary;
 
 pub use checkpoint::AgentSessionMetadata;
 pub use error::TranscriptContractError;
-pub use records::{TranscriptEntry, TranscriptRole};
+pub use records::{TranscriptEntry, TranscriptRole, validate_conversation_id};
 pub use summary::{ConversationSummary, summarize_conversation};
 
 /// Persistence boundary required by agent transcript projection.

@@ -7,6 +7,7 @@
 
 use super::*;
 use crate::runtime::service_state::RuntimeRecordBrowserOverlaySource;
+use mez_agent::memory::{kind_name, parse_kind, parse_state, source_name, state_name};
 use mez_mux::record_browser::{
     RecordBrowser, RecordBrowserFilterChoice, RecordBrowserFilterField, RecordBrowserRecord,
 };
@@ -337,7 +338,7 @@ impl RuntimeSessionService {
                 },
                 kind: if field == RecordBrowserFilterField::Kind {
                     (!value.is_empty())
-                        .then(|| parse_memory_kind_for_show(value))
+                        .then(|| parse_kind(value).map_err(MezError::from))
                         .transpose()?
                 } else {
                     *kind
@@ -484,9 +485,10 @@ fn parse_show_memories_args(args: &str) -> Result<ShowMemoriesArgs> {
             "--all-scopes" => parsed.all_scopes = true,
             "--kind" => {
                 index = index.saturating_add(1);
-                parsed.kind = Some(parse_memory_kind_for_show(required_show_value(
-                    &tokens, index, "kind",
-                )?)?);
+                parsed.kind = Some(
+                    parse_kind(required_show_value(&tokens, index, "kind")?)
+                        .map_err(MezError::from)?,
+                );
             }
             "--state" => {
                 index = index.saturating_add(1);
@@ -494,7 +496,7 @@ fn parse_show_memories_args(args: &str) -> Result<ShowMemoriesArgs> {
                 parsed.state = if value == "all" {
                     None
                 } else {
-                    Some(parse_memory_state_for_show(value)?)
+                    Some(parse_state(value).map_err(MezError::from)?)
                 };
             }
             "--text" | "--query" => {
@@ -606,18 +608,9 @@ fn memory_browser_record(record: mez_agent::memory::MemoryRecord) -> RecordBrows
                 "scope".to_string(),
                 runtime_remember_scope_display(&record.scope),
             ),
-            (
-                "kind".to_string(),
-                memory_kind_name_for_show(record.kind).to_string(),
-            ),
-            (
-                "state".to_string(),
-                memory_state_name_for_show(record.state).to_string(),
-            ),
-            (
-                "source".to_string(),
-                memory_source_name_for_show(record.source).to_string(),
-            ),
+            ("kind".to_string(), kind_name(record.kind).to_string()),
+            ("state".to_string(), state_name(record.state).to_string()),
+            ("source".to_string(), source_name(record.source).to_string()),
             ("priority".to_string(), record.priority.to_string()),
             (
                 "created_at_unix_seconds".to_string(),
@@ -665,97 +658,38 @@ fn memory_kind_filter_choices() -> Vec<RecordBrowserFilterChoice> {
             value: String::new(),
         },
         RecordBrowserFilterChoice {
-            label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Preference).to_string(),
-            value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Preference).to_string(),
+            label: kind_name(mez_agent::memory::MemoryKind::Preference).to_string(),
+            value: kind_name(mez_agent::memory::MemoryKind::Preference).to_string(),
         },
         RecordBrowserFilterChoice {
-            label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Fact).to_string(),
-            value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Fact).to_string(),
+            label: kind_name(mez_agent::memory::MemoryKind::Fact).to_string(),
+            value: kind_name(mez_agent::memory::MemoryKind::Fact).to_string(),
         },
         RecordBrowserFilterChoice {
-            label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Procedure).to_string(),
-            value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Procedure).to_string(),
+            label: kind_name(mez_agent::memory::MemoryKind::Procedure).to_string(),
+            value: kind_name(mez_agent::memory::MemoryKind::Procedure).to_string(),
         },
         RecordBrowserFilterChoice {
-            label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Documentation)
-                .to_string(),
-            value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Documentation)
-                .to_string(),
+            label: kind_name(mez_agent::memory::MemoryKind::Documentation).to_string(),
+            value: kind_name(mez_agent::memory::MemoryKind::Documentation).to_string(),
         },
         RecordBrowserFilterChoice {
-            label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Research).to_string(),
-            value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Research).to_string(),
+            label: kind_name(mez_agent::memory::MemoryKind::Research).to_string(),
+            value: kind_name(mez_agent::memory::MemoryKind::Research).to_string(),
         },
         RecordBrowserFilterChoice {
-            label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Episode).to_string(),
-            value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Episode).to_string(),
+            label: kind_name(mez_agent::memory::MemoryKind::Episode).to_string(),
+            value: kind_name(mez_agent::memory::MemoryKind::Episode).to_string(),
         },
         RecordBrowserFilterChoice {
-            label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Warning).to_string(),
-            value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Warning).to_string(),
+            label: kind_name(mez_agent::memory::MemoryKind::Warning).to_string(),
+            value: kind_name(mez_agent::memory::MemoryKind::Warning).to_string(),
         },
         RecordBrowserFilterChoice {
-            label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Scratch).to_string(),
-            value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Scratch).to_string(),
+            label: kind_name(mez_agent::memory::MemoryKind::Scratch).to_string(),
+            value: kind_name(mez_agent::memory::MemoryKind::Scratch).to_string(),
         },
     ]
-}
-
-fn parse_memory_kind_for_show(value: &str) -> Result<mez_agent::memory::MemoryKind> {
-    match value {
-        "preference" => Ok(mez_agent::memory::MemoryKind::Preference),
-        "fact" => Ok(mez_agent::memory::MemoryKind::Fact),
-        "procedure" => Ok(mez_agent::memory::MemoryKind::Procedure),
-        "documentation" => Ok(mez_agent::memory::MemoryKind::Documentation),
-        "research" => Ok(mez_agent::memory::MemoryKind::Research),
-        "episode" => Ok(mez_agent::memory::MemoryKind::Episode),
-        "warning" => Ok(mez_agent::memory::MemoryKind::Warning),
-        "scratch" => Ok(mez_agent::memory::MemoryKind::Scratch),
-        _ => Err(MezError::invalid_args("unknown memory kind")),
-    }
-}
-
-fn parse_memory_state_for_show(value: &str) -> Result<mez_agent::memory::MemoryState> {
-    match value {
-        "active" => Ok(mez_agent::memory::MemoryState::Active),
-        "stale" => Ok(mez_agent::memory::MemoryState::Stale),
-        "superseded" => Ok(mez_agent::memory::MemoryState::Superseded),
-        "archived" => Ok(mez_agent::memory::MemoryState::Archived),
-        "expired" => Ok(mez_agent::memory::MemoryState::Expired),
-        _ => Err(MezError::invalid_args("unknown memory state")),
-    }
-}
-
-fn memory_kind_name_for_show(kind: mez_agent::memory::MemoryKind) -> &'static str {
-    match kind {
-        mez_agent::memory::MemoryKind::Preference => "preference",
-        mez_agent::memory::MemoryKind::Fact => "fact",
-        mez_agent::memory::MemoryKind::Procedure => "procedure",
-        mez_agent::memory::MemoryKind::Documentation => "documentation",
-        mez_agent::memory::MemoryKind::Research => "research",
-        mez_agent::memory::MemoryKind::Episode => "episode",
-        mez_agent::memory::MemoryKind::Warning => "warning",
-        mez_agent::memory::MemoryKind::Scratch => "scratch",
-    }
-}
-
-fn memory_state_name_for_show(state: mez_agent::memory::MemoryState) -> &'static str {
-    match state {
-        mez_agent::memory::MemoryState::Active => "active",
-        mez_agent::memory::MemoryState::Stale => "stale",
-        mez_agent::memory::MemoryState::Superseded => "superseded",
-        mez_agent::memory::MemoryState::Archived => "archived",
-        mez_agent::memory::MemoryState::Expired => "expired",
-    }
-}
-
-fn memory_source_name_for_show(source: mez_agent::memory::MemorySource) -> &'static str {
-    match source {
-        mez_agent::memory::MemorySource::User => "user",
-        mez_agent::memory::MemorySource::Agent => "agent",
-        mez_agent::memory::MemorySource::Imported => "imported",
-        mez_agent::memory::MemorySource::Configuration => "configuration",
-    }
 }
 
 fn record_browser_save_destination(

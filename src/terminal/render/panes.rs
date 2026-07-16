@@ -295,14 +295,6 @@ pub(super) fn render_styled_window_with_pane_frame_template(
     Ok(lines)
 }
 
-/// Returns the drawable window body after reserving mux-managed window frames.
-pub fn rendered_window_body_size(size: Size, window_frames_enabled: bool) -> Result<Size> {
-    Ok(mez_mux::presentation::rendered_window_body_size(
-        size,
-        window_frames_enabled,
-    ))
-}
-
 /// Runs the window body size operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -313,37 +305,8 @@ pub fn rendered_pane_geometries(
     window: &Window,
     window_frames_enabled: bool,
 ) -> Result<Vec<PaneGeometry>> {
-    let body_size = rendered_window_body_size(window.size, window_frames_enabled)?;
+    let body_size = rendered_window_body_size(window.size, window_frames_enabled);
     Ok(window.pane_geometries_for_size(body_size))
-}
-
-/// Returns the visible pane region after reserving shared divider cells.
-pub fn pane_render_region_size_for_geometry(
-    geometry: &PaneGeometry,
-    geometries: &[PaneGeometry],
-) -> Result<Size> {
-    Ok(mez_mux::presentation::pane_render_region_size_for_geometry(
-        geometry, geometries,
-    ))
-}
-
-/// Returns the pane body size available to the pane's PTY primary process.
-///
-/// When `pane_frames_enabled` is true and the frame is adjacent to a shared
-/// divider, the frame is rendered in the divider row instead of consuming a
-/// separate pane row, so the content size does not subtract that frame row.
-pub fn pane_content_size_for_geometry(
-    geometry: &PaneGeometry,
-    geometries: &[PaneGeometry],
-    pane_frames_enabled: bool,
-    pane_frame_position: TerminalFramePosition,
-) -> Result<Size> {
-    Ok(mez_mux::presentation::pane_content_size_for_geometry(
-        geometry,
-        geometries,
-        pane_frames_enabled,
-        pane_frame_position,
-    ))
 }
 
 /// Runs the render panes by geometry operation for this subsystem.

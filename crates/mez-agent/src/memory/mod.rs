@@ -22,11 +22,14 @@ pub use types::{
 use error::{MemoryRecordError as MezError, MemoryRecordResult as Result};
 use validation::{scope_belongs_to_session, validate_non_empty, validate_scope};
 
+pub use encoding::{
+    kind_name, parse_kind, parse_model_writable_kind, parse_state, source_name, state_name,
+};
+
 #[doc(hidden)]
 pub use encoding::{
-    decode_scope, encode_scope, escape_component, escape_field, kind_name, parse_kind,
-    parse_optional_u64, parse_source, parse_state, parse_u64, source_name, split_components,
-    split_escaped, split_fields, state_name,
+    decode_scope, encode_scope, escape_component, escape_field, parse_optional_u64, parse_source,
+    parse_u64, split_components, split_escaped, split_fields,
 };
 
 #[cfg(test)]

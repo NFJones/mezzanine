@@ -46,7 +46,7 @@ use crate::audit::{
 use crate::auth::AuthStore;
 use crate::command::{
     CommandOutcome, bind_key_args, binding_config_key, execute_auth_command, execute_command,
-    execute_mark_pane_ready_command, key_chord_notation, parse_command_sequence,
+    execute_mark_pane_ready_command, key_chord_notation,
 };
 use crate::config::{
     ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,
@@ -158,7 +158,7 @@ use mez_agent::{
     ShellTransactionOutputTransport, ToolDiscoveryCache, agent_subshell_enter_command,
 };
 use mez_core::ids::{AgentId, ClientId, PaneId, SessionId, WindowId};
-use mez_mux::command::CommandInvocation;
+use mez_mux::command::{CommandInvocation, parse_command_sequence};
 use mez_mux::copy::CopyModeKeyAction;
 use mez_mux::copy::{CopyPosition, SearchDirection};
 use mez_mux::input::{

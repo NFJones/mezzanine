@@ -16,7 +16,6 @@ use crate::error::{MezError, MezErrorKind, Result};
 use super::encoding::{
     decode_agent_session_metadata, decode_prompt_history_entry, decode_transcript_entry,
     encode_agent_session_metadata, encode_prompt_history_entry, encode_transcript_entry,
-    validate_conversation_id,
 };
 use super::fs::{
     set_private_dir_permissions, set_private_dir_permissions_async, set_private_file_permissions,
@@ -25,7 +24,7 @@ use super::fs::{
 use super::types::{AgentPresentationEntry, AgentTranscriptStore};
 use mez_agent::transcript::{
     AgentSessionMetadata, ConversationSummary, TranscriptEntry, TranscriptRole,
-    summarize_conversation,
+    summarize_conversation, validate_conversation_id,
 };
 
 /// Defines the SESSION TRANSCRIPT FILE NAME const used by this subsystem.

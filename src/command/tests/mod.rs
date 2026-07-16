@@ -10,12 +10,12 @@ use super::{
     AuditLog, AuthStore, CommandOutcome, LayoutLoadSelector, PaneReadinessOverrideStore,
     PaneReadinessState, baseline_commands, execute_auth_command, execute_command,
     execute_command_sequence, execute_config_store_command, execute_mark_pane_ready_command,
-    parse_command_sequence,
 };
 use crate::auth::AuthPaths;
 use crate::config::ConfigPaths;
 use crate::shell::{ResolvedShell, ShellSource};
 use mez_core::ids::ClientId;
+use mez_mux::command::parse_command_sequence;
 use mez_mux::layout::Size;
 use mez_mux::session::{ClientState, Session};
 use std::fs;

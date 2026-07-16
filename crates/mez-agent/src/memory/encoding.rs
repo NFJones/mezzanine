@@ -129,6 +129,23 @@ pub fn parse_kind(value: &str) -> Result<MemoryKind> {
     }
 }
 
+/// Parses a memory kind that an agent action is allowed to persist durably.
+///
+/// Model-authored stores may create reusable preference, fact, procedure,
+/// documentation, research, and warning records. Episode and scratch records
+/// are runtime-managed and therefore rejected even though they are valid
+/// members of the broader persistence taxonomy.
+pub fn parse_model_writable_kind(value: &str) -> Result<MemoryKind> {
+    let normalized = value.trim().to_ascii_lowercase();
+    let kind = parse_kind(&normalized)?;
+    if matches!(kind, MemoryKind::Episode | MemoryKind::Scratch) {
+        return Err(MezError::invalid_args(
+            "memory kind is not writable by model actions",
+        ));
+    }
+    Ok(kind)
+}
+
 /// Returns the serialized name for one memory lifecycle state.
 pub fn state_name(state: MemoryState) -> &'static str {
     match state {

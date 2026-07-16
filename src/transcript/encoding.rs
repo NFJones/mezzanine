@@ -8,7 +8,9 @@ use crate::error::{MezError, Result};
 use crate::terminal::{agent_log_wrap_width, terminal_text_width, wrap_agent_log_lines};
 
 use super::types::AgentPresentationEntry;
-use mez_agent::transcript::{AgentSessionMetadata, TranscriptEntry, TranscriptRole};
+use mez_agent::transcript::{
+    AgentSessionMetadata, TranscriptEntry, TranscriptRole, validate_conversation_id,
+};
 use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
 use std::collections::BTreeMap;
 
@@ -208,22 +210,6 @@ fn validate_presentation_line_width(field: &str, line: &str, wrap_width: usize) 
         return Err(MezError::invalid_args(format!(
             "presentation {field} line exceeds {wrap_width} display columns"
         )));
-    }
-    Ok(())
-}
-
-/// Runs the validate conversation id operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn validate_conversation_id(value: &str) -> Result<()> {
-    if value.is_empty()
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    {
-        return Err(MezError::invalid_args("conversation id is invalid"));
     }
     Ok(())
 }

@@ -72,11 +72,6 @@ mod dispatch;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod display;
-/// Exposes the parser module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-mod parser;
 /// Exposes the permissions module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -105,8 +100,7 @@ pub use dispatch::{
 pub(crate) use display::{
     bind_key_args, binding_config_key, command_help_display_with_key_bindings, key_chord_notation,
 };
-use mez_mux::command::CommandInvocation;
-pub use parser::parse_command_sequence;
+use mez_mux::command::{CommandInvocation, parse_command_sequence};
 pub use types::{
     BaselineCommand, BaselineCommandStatus, CommandOutcome, LayoutLoadSelector, baseline_commands,
 };

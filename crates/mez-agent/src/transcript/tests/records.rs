@@ -1,6 +1,6 @@
 //! Canonical transcript entry tests.
 
-use crate::transcript::{TranscriptEntry, TranscriptRole};
+use crate::transcript::{TranscriptEntry, TranscriptRole, validate_conversation_id};
 
 fn valid_entry() -> TranscriptEntry {
     TranscriptEntry {
@@ -41,4 +41,16 @@ fn transcript_entry_validation_rejects_invalid_records() {
     entry.content = "done".to_string();
     entry.conversation_id = "../conversation".to_string();
     assert!(entry.validate().is_err());
+}
+
+/// Verifies product stores can use the canonical conversation-ID grammar.
+///
+/// Direct validation keeps filesystem and compatibility adapters from copying
+/// the byte predicate owned by the provider-independent transcript contract.
+#[test]
+fn conversation_id_validation_is_public_and_canonical() {
+    validate_conversation_id("conversation_A-19").unwrap();
+    assert!(validate_conversation_id("").is_err());
+    assert!(validate_conversation_id("../conversation").is_err());
+    assert!(validate_conversation_id("conversation space").is_err());
 }

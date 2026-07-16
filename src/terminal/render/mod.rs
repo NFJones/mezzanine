@@ -57,8 +57,9 @@ pub use frame::{
     window_frame_pillbox_cells, window_group_frame_pillbox_cells,
 };
 use mez_mux::presentation::{
-    compose_client_presentation_with_styles, pane_frame_merges_into_divider, place_group_frame,
-    place_window_frame,
+    compose_client_presentation_with_styles, pane_content_size_for_geometry,
+    pane_frame_merges_into_divider, pane_render_region_size_for_geometry, place_group_frame,
+    place_window_frame, rendered_window_body_size,
 };
 use mez_mux::render::{
     agent_status_running_gradient_palette, animated_scan_background, blend_terminal_color,
@@ -73,9 +74,8 @@ pub use overlay::{
     modal_display_overlay_max_scroll, modal_display_overlay_page_rows,
 };
 pub use panes::{
-    draw_styled_window_from_screens, draw_window_from_screens, pane_content_size_for_geometry,
-    pane_render_region_size_for_geometry, render_window, render_window_with_pane_frame_template,
-    rendered_pane_geometries,
+    draw_styled_window_from_screens, draw_window_from_screens, render_window,
+    render_window_with_pane_frame_template, rendered_pane_geometries,
 };
 pub(crate) use prompt::agent_prompt_input_rendition;
 use prompt::{
@@ -359,7 +359,7 @@ fn rendered_cursor(
         &geometries,
         config.pane_frames_enabled,
         config.pane_frame_position,
-    )?;
+    );
     let content_rows = usize::from(content_size.rows);
     let content_columns = usize::from(content_size.columns);
     if pane_agent_shell_visible(&config.frame_context, active_pane.id.as_str()) {
@@ -468,7 +468,7 @@ fn active_pane_render_region(
         &geometries,
         config.pane_frames_enabled,
         config.pane_frame_position,
-    )?;
+    );
     let rows = usize::from(content_size.rows);
     let columns = usize::from(content_size.columns);
     if rows == 0 || columns == 0 {

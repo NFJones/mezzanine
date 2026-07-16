@@ -202,7 +202,11 @@ impl RuntimeSessionService {
             priority,
             body,
         );
-        record.kind = memory_action_kind(kind)?;
+        record.kind = mez_agent::memory::parse_model_writable_kind(kind).map_err(|_| {
+            MezError::invalid_args(
+                "memory_store kind must be preference, fact, procedure, documentation, research, or warning",
+            )
+        })?;
         if let Some(days) = expires_in_days {
             let seconds = days.checked_mul(86_400).ok_or_else(|| {
                 MezError::invalid_args("memory expires_in_days is too large to store")
@@ -310,24 +314,6 @@ fn memory_action_limit(limit: Option<u64>) -> usize {
         .and_then(|value| usize::try_from(value).ok())
         .unwrap_or(DEFAULT_MEMORY_ACTION_LIMIT)
         .clamp(1, MAX_MEMORY_ACTION_LIMIT)
-}
-
-/// Parses the model-facing kind label into the durable memory taxonomy.
-fn memory_action_kind(kind: &str) -> Result<mez_agent::memory::MemoryKind> {
-    match kind.trim().to_ascii_lowercase().as_str() {
-        "preference" => Ok(mez_agent::memory::MemoryKind::Preference),
-        "fact" => Ok(mez_agent::memory::MemoryKind::Fact),
-        "procedure" => Ok(mez_agent::memory::MemoryKind::Procedure),
-        "documentation" => Ok(mez_agent::memory::MemoryKind::Documentation),
-        "research" => Ok(mez_agent::memory::MemoryKind::Research),
-        "warning" => Ok(mez_agent::memory::MemoryKind::Warning),
-        "episode" | "scratch" => Err(MezError::invalid_args(
-            "memory_store kind must be preference, fact, procedure, documentation, research, or warning",
-        )),
-        _ => Err(MezError::invalid_args(
-            "memory_store kind must be preference, fact, procedure, documentation, research, or warning",
-        )),
-    }
 }
 
 /// Builds durable content with optional keyword anchors.

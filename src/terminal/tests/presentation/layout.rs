@@ -13,7 +13,6 @@ use mez_mux::presentation::{ClientViewRole, RenderedClientView, TerminalCursorSt
 use mez_mux::presentation::{
     TerminalFramePosition, TerminalWindowFrameContext, TerminalWindowGroupFrameContext,
     TerminalWindowStatusContext, apply_client_view_offset, compose_client_presentation,
-    pane_render_region_size_for_geometry,
 };
 use mez_mux::theme::UiTheme;
 use mez_terminal::{GraphicRendition, TerminalColor, TerminalScreen, TerminalStyleSpan};
@@ -77,67 +76,6 @@ fn client_loop_draws_window_from_live_pane_screens() {
     assert_eq!(rendered.len(), 4);
     assert!(joined.contains("left"));
     assert!(joined.contains("right"));
-}
-
-/// Verifies left panes reserve the shared divider column when an even vertical
-/// split creates a right divider neighbor.
-///
-/// This regression covers the selected-agent prompt bug directly at the
-/// render-region sizing boundary so later render changes cannot let content
-/// overwrite the right-side divider.
-#[test]
-fn pane_render_region_reserves_right_divider_for_even_vertical_split() {
-    let geometries = vec![
-        PaneGeometry {
-            index: 0,
-            column: 0,
-            row: 0,
-            columns: 5,
-            rows: 3,
-        },
-        PaneGeometry {
-            index: 1,
-            column: 5,
-            row: 0,
-            columns: 5,
-            rows: 3,
-        },
-    ];
-
-    assert_eq!(
-        pane_render_region_size_for_geometry(&geometries[0], &geometries),
-        Size::new(4, 3).unwrap()
-    );
-}
-
-/// Verifies left panes reserve the shared divider column when an odd vertical
-/// split leaves the left pane one column wider than its neighbor.
-///
-/// This regression protects the off-by-one case called out in the fix plan so
-/// uneven split math cannot let agent-prompt text overwrite the divider.
-#[test]
-fn pane_render_region_reserves_right_divider_for_odd_vertical_split() {
-    let geometries = vec![
-        PaneGeometry {
-            index: 0,
-            column: 0,
-            row: 0,
-            columns: 6,
-            rows: 3,
-        },
-        PaneGeometry {
-            index: 1,
-            column: 6,
-            row: 0,
-            columns: 5,
-            rows: 3,
-        },
-    ];
-
-    assert_eq!(
-        pane_render_region_size_for_geometry(&geometries[0], &geometries),
-        Size::new(5, 3).unwrap()
-    );
 }
 
 /// Verifies that rendered client views carry visible screen SGR spans beside

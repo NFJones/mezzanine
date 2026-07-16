@@ -10,37 +10,6 @@ use super::{AgentAction, AgentActionPayload};
 use mez_agent::validate_agent_authored_shell_command;
 use mez_agent::{LocalActionKind, LocalActionPlan};
 
-/// Returns the sorted relative paths touched by one Mezzanine patch.
-pub fn apply_patch_touched_paths(patch: &str) -> Result<Vec<String>> {
-    Ok(mez_agent::semantic_patch_planning::apply_patch_touched_paths(patch)?)
-}
-
-/// Builds the verified write plan for one decoded patch snapshot output.
-pub fn apply_patch_write_plan_from_read_output(
-    patch: &str,
-    read_output: &str,
-) -> Result<LocalActionPlan> {
-    Ok(
-        mez_agent::semantic_patch_planning::apply_patch_write_plan_from_read_output(
-            patch,
-            read_output,
-        )?,
-    )
-}
-
-/// Builds the verified write plan from accumulated patch snapshot outputs.
-pub fn apply_patch_write_plan_from_read_outputs(
-    patch: &str,
-    read_outputs: &[String],
-) -> Result<LocalActionPlan> {
-    Ok(
-        mez_agent::semantic_patch_planning::apply_patch_write_plan_from_read_outputs(
-            patch,
-            read_outputs,
-        )?,
-    )
-}
-
 /// Returns the local shell plan for a shell-backed MAAP action.
 pub fn local_action_plan(action: &AgentAction) -> Result<Option<LocalActionPlan>> {
     match &action.payload {

@@ -58,10 +58,6 @@ use crate::agent::provider::{
     openai_compatible_provider_from_auth_store_with_provider_options,
     openai_responses_provider_from_auth_store_with_provider_options,
 };
-use crate::agent::semantic::{
-    apply_patch_touched_paths, apply_patch_write_plan_from_read_output,
-    apply_patch_write_plan_from_read_outputs,
-};
 use crate::config::{
     ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
     ConfigPaths, ConfigScope,
@@ -71,7 +67,8 @@ use mez_agent::AgentTurnLedger;
 use mez_agent::resolve_provider_api;
 use mez_agent::semantic_patch_planning::{
     ApplyPatchTransactionPhase, apply_patch_error_plan, apply_patch_read_plan_for_paths,
-    apply_patch_transaction_phase,
+    apply_patch_touched_paths, apply_patch_transaction_phase,
+    apply_patch_write_plan_from_read_output, apply_patch_write_plan_from_read_outputs,
 };
 use mez_agent::{
     DEFAULT_PROVIDER_TIMEOUT_MS, MaapBatch, ModelTokenUsage, ModelTokenUsageKey,

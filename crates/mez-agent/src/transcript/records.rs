@@ -55,7 +55,12 @@ impl TranscriptEntry {
     }
 }
 
-pub(super) fn validate_conversation_id(value: &str) -> Result<(), TranscriptContractError> {
+/// Validates a conversation identifier shared by records and product stores.
+///
+/// Conversation identifiers are safe path components containing only ASCII
+/// letters, digits, hyphens, and underscores. An empty value or any other byte
+/// returns a transcript contract error.
+pub fn validate_conversation_id(value: &str) -> Result<(), TranscriptContractError> {
     if value.is_empty()
         || !value
             .bytes()
