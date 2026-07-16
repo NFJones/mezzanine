@@ -5,12 +5,11 @@
 
 use serde_json::{Value, json};
 
-use crate::error::{MezError, Result};
-
 use super::types::{
     DEFAULT_MCP_PROTOCOL_VERSION, McpDiscoveredTool, McpInitializeResponse, McpToolCallPlan,
     McpToolCallResponse, McpToolsListResponse,
 };
+use super::{McpError as MezError, McpResult as Result};
 
 /// Runs the build mcp initialize request operation for this subsystem.
 ///
@@ -94,7 +93,7 @@ pub fn build_mcp_initialized_notification() -> String {
 /// Transports keep connection-specific exchange policy outside this type while
 /// sharing the request id, serialized body, timeout, and typed response parsing
 /// that make up one protocol operation lifecycle.
-pub(crate) struct McpJsonRpcOperation<T> {
+pub struct McpJsonRpcOperation<T> {
     id: u64,
     request_body: String,
     timeout_ms: u64,
@@ -103,28 +102,28 @@ pub(crate) struct McpJsonRpcOperation<T> {
 
 impl<T> McpJsonRpcOperation<T> {
     /// Returns the JSON-RPC id that callers should expect in the response.
-    pub(crate) fn request_id(&self) -> u64 {
+    pub fn request_id(&self) -> u64 {
         self.id
     }
 
     /// Returns the serialized JSON-RPC request body to send over a transport.
-    pub(crate) fn request_body(&self) -> &str {
+    pub fn request_body(&self) -> &str {
         &self.request_body
     }
 
     /// Returns the timeout budget associated with this protocol operation.
-    pub(crate) fn timeout_ms(&self) -> u64 {
+    pub fn timeout_ms(&self) -> u64 {
         self.timeout_ms
     }
 
     /// Parses a transport response body using this operation's expected id.
-    pub(crate) fn parse_response(&self, body: &str) -> Result<T> {
+    pub fn parse_response(&self, body: &str) -> Result<T> {
         (self.parse_response)(body, self.id)
     }
 }
 
 /// Builds one typed MCP initialize JSON-RPC operation.
-pub(crate) fn mcp_initialize_operation(
+pub fn mcp_initialize_operation(
     id: u64,
     client_name: &str,
     client_version: &str,
@@ -139,7 +138,7 @@ pub(crate) fn mcp_initialize_operation(
 }
 
 /// Builds one typed MCP tools/list JSON-RPC operation.
-pub(crate) fn mcp_tools_list_operation(
+pub fn mcp_tools_list_operation(
     id: u64,
     cursor: Option<&str>,
     timeout_ms: u64,
@@ -153,7 +152,7 @@ pub(crate) fn mcp_tools_list_operation(
 }
 
 /// Builds one typed MCP tools/call JSON-RPC operation.
-pub(crate) fn mcp_tools_call_operation(
+pub fn mcp_tools_call_operation(
     id: u64,
     plan: &McpToolCallPlan,
 ) -> Result<McpJsonRpcOperation<McpToolCallResponse>> {
@@ -310,7 +309,7 @@ pub(super) fn mcp_response_result(body: &str, expected_id: u64) -> Result<Value>
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn parse_mcp_json(body: &str, context: &str) -> Result<Value> {
+pub fn parse_mcp_json(body: &str, context: &str) -> Result<Value> {
     serde_json::from_str(body)
         .map_err(|error| MezError::invalid_state(format!("{context} is not valid JSON: {error}")))
 }
@@ -320,7 +319,7 @@ pub(super) fn parse_mcp_json(body: &str, context: &str) -> Result<Value> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn string_field(value: &Value, field: &str) -> Option<String> {
+pub fn string_field(value: &Value, field: &str) -> Option<String> {
     value.get(field)?.as_str().map(ToString::to_string)
 }
 
@@ -338,7 +337,7 @@ pub(super) fn bool_field(value: &Value, field: &str) -> Option<bool> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn object_field<'a>(value: &'a Value, field: &str) -> Option<&'a Value> {
+pub fn object_field<'a>(value: &'a Value, field: &str) -> Option<&'a Value> {
     value.get(field).filter(|field| field.is_object())
 }
 
@@ -356,7 +355,7 @@ pub(super) fn array_field<'a>(value: &'a Value, field: &str) -> Option<&'a Vec<V
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn json_id_matches(body: &str, expected: &str) -> bool {
+pub fn json_id_matches(body: &str, expected: &str) -> bool {
     parse_mcp_json(body, "MCP JSON-RPC message")
         .ok()
         .and_then(|value| json_value_id(&value))

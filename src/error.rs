@@ -336,6 +336,19 @@ impl From<mez_agent::issues::IssueError> for MezError {
     }
 }
 
+impl From<mez_agent::mcp::McpError> for MezError {
+    fn from(error: mez_agent::mcp::McpError) -> Self {
+        match error.kind() {
+            mez_agent::mcp::McpErrorKind::InvalidArgs => Self::invalid_args(error.to_string()),
+            mez_agent::mcp::McpErrorKind::InvalidState => Self::invalid_state(error.to_string()),
+            mez_agent::mcp::McpErrorKind::Forbidden => Self::forbidden(error.to_string()),
+            mez_agent::mcp::McpErrorKind::NotFound => {
+                Self::new(MezErrorKind::NotFound, error.to_string())
+            }
+        }
+    }
+}
+
 impl From<mez_mux::MuxError> for MezError {
     fn from(error: mez_mux::MuxError) -> Self {
         match error.kind() {

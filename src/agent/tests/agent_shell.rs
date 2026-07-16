@@ -257,7 +257,7 @@ fn agent_shell_executes_builtin_slash_command_effects() {
 fn agent_shell_mcp_command_lists_injected_registry_state() {
     let mut registry = McpRegistry::default();
     registry
-        .add_server(crate::mcp::McpServerConfig::stdio(
+        .add_server(mez_agent::mcp::McpServerConfig::stdio(
             "fs",
             "filesystem",
             "mcp-fs",
@@ -265,7 +265,7 @@ fn agent_shell_mcp_command_lists_injected_registry_state() {
         ))
         .unwrap();
     registry
-        .mark_available("fs", vec![agent_shell_test_mcp_tool("read_file")])
+        .mark_available("fs", vec![agent_shell_test_mcp_tool("read_file")], 1)
         .unwrap();
 
     let body = agent_shell_test_mcp_body(&registry);
@@ -294,8 +294,12 @@ fn agent_shell_mcp_command_lists_injected_registry_state() {
 /// visible to the agent shell rather than disappearing from the listing.
 fn agent_shell_mcp_command_reports_disabled_server() {
     let mut registry = McpRegistry::default();
-    let mut disabled =
-        crate::mcp::McpServerConfig::stdio("disabled", "Disabled MCP", "mcp-disabled", Vec::new());
+    let mut disabled = mez_agent::mcp::McpServerConfig::stdio(
+        "disabled",
+        "Disabled MCP",
+        "mcp-disabled",
+        Vec::new(),
+    );
     disabled.enabled = false;
     registry.add_server(disabled).unwrap();
 
@@ -315,11 +319,12 @@ fn agent_shell_mcp_command_reports_disabled_server() {
 /// discovery found it, matching the registry's action-planning behavior.
 fn agent_shell_mcp_command_reports_disabled_tool_precedence() {
     let mut registry = McpRegistry::default();
-    let mut config = crate::mcp::McpServerConfig::stdio("fs", "filesystem", "mcp-fs", Vec::new());
+    let mut config =
+        mez_agent::mcp::McpServerConfig::stdio("fs", "filesystem", "mcp-fs", Vec::new());
     config.disabled_tools.push("read_file".to_string());
     registry.add_server(config).unwrap();
     registry
-        .mark_available("fs", vec![agent_shell_test_mcp_tool("read_file")])
+        .mark_available("fs", vec![agent_shell_test_mcp_tool("read_file")], 1)
         .unwrap();
 
     let body = agent_shell_test_mcp_body(&registry);
@@ -351,7 +356,7 @@ fn agent_shell_mcp_command_reports_empty_registry() {
 fn agent_shell_mcp_command_reports_session_blacklisted_server_and_tools() {
     let mut registry = McpRegistry::default();
     registry
-        .add_server(crate::mcp::McpServerConfig::stdio(
+        .add_server(mez_agent::mcp::McpServerConfig::stdio(
             "fs",
             "filesystem",
             "mcp-fs",
@@ -359,10 +364,10 @@ fn agent_shell_mcp_command_reports_session_blacklisted_server_and_tools() {
         ))
         .unwrap();
     registry
-        .mark_available("fs", vec![agent_shell_test_mcp_tool("read_file")])
+        .mark_available("fs", vec![agent_shell_test_mcp_tool("read_file")], 1)
         .unwrap();
     registry
-        .blacklist_for_session("fs", "failed handshake")
+        .blacklist_for_session("fs", "failed handshake", 1)
         .unwrap();
 
     let body = agent_shell_test_mcp_body(&registry);
@@ -384,7 +389,7 @@ fn agent_shell_mcp_command_reports_session_blacklisted_server_and_tools() {
 fn agent_shell_mcp_command_reports_unavailable_server_reason() {
     let mut registry = McpRegistry::default();
     registry
-        .add_server(crate::mcp::McpServerConfig::stdio(
+        .add_server(mez_agent::mcp::McpServerConfig::stdio(
             "fs",
             "filesystem",
             "mcp-fs",
@@ -392,9 +397,11 @@ fn agent_shell_mcp_command_reports_unavailable_server_reason() {
         ))
         .unwrap();
     registry
-        .mark_available("fs", vec![agent_shell_test_mcp_tool("read_file")])
+        .mark_available("fs", vec![agent_shell_test_mcp_tool("read_file")], 1)
         .unwrap();
-    registry.mark_unavailable("fs", "process exited").unwrap();
+    registry
+        .mark_unavailable("fs", "process exited", 1)
+        .unwrap();
 
     let body = agent_shell_test_mcp_body(&registry);
 

@@ -497,7 +497,7 @@ fn runtime_maap_validation_failure_persists_provider_response_detail() {
         .unwrap();
     service
         .mcp_registry_mut()
-        .add_server(crate::mcp::McpServerConfig::stdio(
+        .add_server(mez_agent::mcp::McpServerConfig::stdio(
             "state",
             "state",
             "mcp-state",
@@ -508,17 +508,18 @@ fn runtime_maap_validation_failure_persists_provider_response_detail() {
         .mcp_registry_mut()
         .mark_available(
             "state",
-            vec![crate::mcp::McpToolState {
+            vec![mez_agent::mcp::McpToolState {
                 server_id: String::new(),
                 name: "list".to_string(),
                 available: true,
                 blacklisted: false,
                 permission_required: false,
-                effects: crate::mcp::McpToolEffects::none(),
-                approval: crate::mcp::McpApprovalSetting::Allow,
+                effects: mez_agent::mcp::McpToolEffects::none(),
+                approval: mez_agent::mcp::McpApprovalSetting::Allow,
                 description: "list state".to_string(),
                 input_schema_json: "{}".to_string(),
             }],
+            1,
         )
         .unwrap();
     let conversation_id = service

@@ -335,7 +335,7 @@ fn runtime_primary_command_prompt_mcp_status_autocompletes_configured_server_id(
     let mut service = test_runtime_service();
     service
         .mcp_registry_mut()
-        .add_server(crate::mcp::McpServerConfig::stdio(
+        .add_server(mez_agent::mcp::McpServerConfig::stdio(
             "fixture",
             "Fixture MCP",
             "mcp-fixture",

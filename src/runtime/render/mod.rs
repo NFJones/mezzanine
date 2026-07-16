@@ -42,7 +42,6 @@ const DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS: u64 = 500;
 const DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS: u64 = 500;
 
 use crate::command::baseline_commands;
-use crate::mcp::McpServerStatus;
 use crate::selector::{SelectorExtraCandidate, SelectorSurface};
 use crate::terminal::{
     MousePaneAgentSelectorCell, MousePaneAgentStatusCell, PaneAgentStatusField,
@@ -53,6 +52,7 @@ use crate::terminal::{
     window_group_frame_pillbox_cells,
 };
 use crate::transcript::AgentPresentationEntry;
+use mez_agent::mcp::McpServerStatus;
 use mez_agent::{
     AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, ActionResult, agent_output_content_type_is_diff,
     agent_output_content_type_is_markdown,

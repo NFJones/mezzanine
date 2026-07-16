@@ -15,15 +15,11 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 
 use crate::error::{MezError, Result};
 
-use super::protocol::{
-    build_mcp_initialized_notification, json_id_matches, mcp_initialize_operation,
-    mcp_tools_call_operation, mcp_tools_list_operation,
-};
-use super::registry::McpRegistry;
-use super::types::{
-    DEFAULT_MCP_MAX_MESSAGE_BYTES, McpInitializeResponse, McpStartupPlan, McpStartupTransportPlan,
-    McpStdioDiscovery, McpToolCallPlan, McpToolCallResponse, McpToolListPagination,
-    McpToolsListResponse,
+use mez_agent::mcp::{
+    DEFAULT_MCP_MAX_MESSAGE_BYTES, McpInitializeResponse, McpRegistry, McpStartupPlan,
+    McpStartupTransportPlan, McpStdioDiscovery, McpToolCallPlan, McpToolCallResponse,
+    McpToolListPagination, McpToolsListResponse, build_mcp_initialized_notification,
+    json_id_matches, mcp_initialize_operation, mcp_tools_call_operation, mcp_tools_list_operation,
 };
 
 /// Carries Mcp Stdio Read Event state for this subsystem.
@@ -106,7 +102,7 @@ impl McpStdioConnection {
                 operation.timeout_ms(),
             )
             .await?;
-        operation.parse_response(&response)
+        Ok(operation.parse_response(&response)?)
     }
 
     /// Runs the send initialized notification operation for this subsystem.
@@ -137,7 +133,7 @@ impl McpStdioConnection {
                 operation.timeout_ms(),
             )
             .await?;
-        operation.parse_response(&response)
+        Ok(operation.parse_response(&response)?)
     }
 
     /// Runs the call tool operation for this subsystem.
@@ -154,7 +150,7 @@ impl McpStdioConnection {
                 operation.timeout_ms(),
             )
             .await?;
-        operation.parse_response(&response)
+        Ok(operation.parse_response(&response)?)
     }
 
     /// Runs the send request operation for this subsystem.
@@ -362,15 +358,20 @@ pub async fn discover_stdio_mcp_server_into_registry(
     client_name: &str,
     client_version: &str,
 ) -> Result<McpStdioDiscovery> {
-    let plan = registry.startup_plan(server_id, environment)?;
+    let checked_at = super::current_mcp_unix_seconds();
+    let plan = registry.startup_plan(server_id, environment, checked_at)?;
     match discover_stdio_mcp_server(&plan, environment, client_name, client_version).await {
         Ok(discovery) => {
-            registry.mark_available_from_discovered_tools(server_id, discovery.tools.clone())?;
+            registry.mark_available_from_discovered_tools(
+                server_id,
+                discovery.tools.clone(),
+                checked_at,
+            )?;
             Ok(discovery)
         }
         Err(error) => {
             let reason = error.message().to_string();
-            let _ = registry.blacklist_for_session(server_id, reason);
+            let _ = registry.blacklist_for_session(server_id, reason, checked_at);
             Err(error)
         }
     }

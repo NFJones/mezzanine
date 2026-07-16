@@ -10,7 +10,7 @@ use crate::error::Result;
 
 use super::stdio::McpStdioConnection;
 use super::streamable_http::call_streamable_http_mcp_tool;
-use super::types::{McpStartupPlan, McpToolCallPlan, McpToolCallResponse};
+use mez_agent::mcp::{McpStartupPlan, McpToolCallPlan, McpToolCallResponse};
 
 /// Runs the call stdio mcp tool with audit operation for this subsystem.
 ///

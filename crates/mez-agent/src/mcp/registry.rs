@@ -4,19 +4,17 @@
 //! gating, tool exposure, and permission-aware tool-call planning.
 
 use std::collections::BTreeMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::error::{MezError, Result};
-
+use super::prompt::{
+    AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellMcpToolSummary, McpPromptServer,
+    McpPromptSummary, McpPromptTool, McpPromptUnavailableServer,
+};
 use super::types::{
     McpApprovalSetting, McpDiscoveredTool, McpEnvironmentPlan, McpServerConfig, McpServerKind,
     McpServerState, McpServerStatus, McpStartupPlan, McpStartupTransportPlan, McpToolCallPlan,
     McpToolCallRequest, McpToolEffects, McpToolState,
 };
-use mez_agent::{
-    AgentShellMcpServerSummary, AgentShellMcpSummary, AgentShellMcpToolSummary, McpPromptServer,
-    McpPromptSummary, McpPromptTool, McpPromptUnavailableServer,
-};
+use super::{McpError as MezError, McpResult as Result};
 
 /// Carries Mcp Registry state for this subsystem.
 ///
@@ -69,10 +67,15 @@ impl McpRegistry {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn mark_available(&mut self, server_id: &str, tools: Vec<McpToolState>) -> Result<()> {
+    pub fn mark_available(
+        &mut self,
+        server_id: &str,
+        tools: Vec<McpToolState>,
+        checked_at_unix_seconds: u64,
+    ) -> Result<()> {
         let server = self.server_mut(server_id)?;
         server.status = McpServerStatus::Available;
-        server.last_checked_at_unix_seconds = Some(current_unix_seconds());
+        server.last_checked_at_unix_seconds = Some(checked_at_unix_seconds);
         server.blacklist_reason = None;
         server.tools = tools
             .into_iter()
@@ -96,6 +99,7 @@ impl McpRegistry {
         &mut self,
         server_id: &str,
         tools: Vec<McpDiscoveredTool>,
+        checked_at_unix_seconds: u64,
     ) -> Result<()> {
         let tool_states = tools
             .into_iter()
@@ -114,7 +118,7 @@ impl McpRegistry {
                 input_schema_json: tool.input_schema_json,
             })
             .collect();
-        self.mark_available(server_id, tool_states)
+        self.mark_available(server_id, tool_states, checked_at_unix_seconds)
     }
 
     /// Runs the mark starting operation for this subsystem.
@@ -122,11 +126,11 @@ impl McpRegistry {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn mark_starting(&mut self, server_id: &str) -> Result<()> {
+    pub fn mark_starting(&mut self, server_id: &str, checked_at_unix_seconds: u64) -> Result<()> {
         let server = self.server_mut(server_id)?;
         ensure_enabled(server)?;
         server.status = McpServerStatus::Starting;
-        server.last_checked_at_unix_seconds = Some(current_unix_seconds());
+        server.last_checked_at_unix_seconds = Some(checked_at_unix_seconds);
         Ok(())
     }
 
@@ -135,10 +139,15 @@ impl McpRegistry {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn mark_unavailable(&mut self, server_id: &str, reason: impl Into<String>) -> Result<()> {
+    pub fn mark_unavailable(
+        &mut self,
+        server_id: &str,
+        reason: impl Into<String>,
+        checked_at_unix_seconds: u64,
+    ) -> Result<()> {
         let server = self.server_mut(server_id)?;
         server.status = McpServerStatus::Unavailable;
-        server.last_checked_at_unix_seconds = Some(current_unix_seconds());
+        server.last_checked_at_unix_seconds = Some(checked_at_unix_seconds);
         server.blacklist_reason = Some(reason.into());
         for tool in &mut server.tools {
             tool.available = false;
@@ -151,10 +160,15 @@ impl McpRegistry {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub fn mark_failed(&mut self, server_id: &str, reason: impl Into<String>) -> Result<()> {
+    pub fn mark_failed(
+        &mut self,
+        server_id: &str,
+        reason: impl Into<String>,
+        checked_at_unix_seconds: u64,
+    ) -> Result<()> {
         let server = self.server_mut(server_id)?;
         server.status = McpServerStatus::Failed;
-        server.last_checked_at_unix_seconds = Some(current_unix_seconds());
+        server.last_checked_at_unix_seconds = Some(checked_at_unix_seconds);
         server.blacklist_reason = Some(reason.into());
         for tool in &mut server.tools {
             tool.available = false;
@@ -171,10 +185,11 @@ impl McpRegistry {
         &mut self,
         server_id: &str,
         reason: impl Into<String>,
+        checked_at_unix_seconds: u64,
     ) -> Result<()> {
         let server = self.server_mut(server_id)?;
         server.status = McpServerStatus::Blacklisted;
-        server.last_checked_at_unix_seconds = Some(current_unix_seconds());
+        server.last_checked_at_unix_seconds = Some(checked_at_unix_seconds);
         server.blacklist_reason = Some(reason.into());
         for tool in &mut server.tools {
             tool.available = false;
@@ -208,6 +223,7 @@ impl McpRegistry {
     pub fn blacklist_servers_with_missing_environment(
         &mut self,
         environment: &BTreeMap<String, String>,
+        checked_at_unix_seconds: u64,
     ) -> Result<Vec<String>> {
         let server_ids = self.servers.keys().cloned().collect::<Vec<_>>();
         let mut blacklisted = Vec::new();
@@ -224,7 +240,7 @@ impl McpRegistry {
                 continue;
             }
             let reason = format!("missing required environment: {}", missing.join(", "));
-            self.blacklist_for_session(&server_id, &reason)?;
+            self.blacklist_for_session(&server_id, &reason, checked_at_unix_seconds)?;
             blacklisted.push(server_id);
         }
         Ok(blacklisted)
@@ -239,6 +255,7 @@ impl McpRegistry {
         &mut self,
         server_id: &str,
         environment: &BTreeMap<String, String>,
+        checked_at_unix_seconds: u64,
     ) -> Result<McpStartupPlan> {
         let server = self.server(server_id)?;
         ensure_enabled(server)?;
@@ -246,7 +263,7 @@ impl McpRegistry {
         let missing = missing_environment(server, environment);
         if !missing.is_empty() {
             let reason = format!("missing required environment: {}", missing.join(", "));
-            self.blacklist_for_session(server_id, &reason)?;
+            self.blacklist_for_session(server_id, &reason, checked_at_unix_seconds)?;
             return Err(MezError::forbidden(reason));
         }
 
@@ -277,7 +294,7 @@ impl McpRegistry {
             timeout_ms: server.configured.startup_timeout_ms,
             transport,
         };
-        self.mark_starting(server_id)?;
+        self.mark_starting(server_id, checked_at_unix_seconds)?;
         Ok(plan)
     }
 
@@ -298,9 +315,7 @@ impl McpRegistry {
             .tools
             .iter()
             .find(|tool| tool.name == request.tool_name)
-            .ok_or_else(|| {
-                MezError::new(crate::error::MezErrorKind::NotFound, "MCP tool not found")
-            })?;
+            .ok_or_else(|| MezError::not_found("MCP tool not found"))?;
         if tool.blacklisted || !tool.available {
             return Err(MezError::forbidden("MCP tool is not available"));
         }
@@ -578,9 +593,9 @@ impl McpRegistry {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn server(&self, server_id: &str) -> Result<&McpServerState> {
-        self.servers.get(server_id).ok_or_else(|| {
-            MezError::new(crate::error::MezErrorKind::NotFound, "MCP server not found")
-        })
+        self.servers
+            .get(server_id)
+            .ok_or_else(|| MezError::not_found("MCP server not found"))
     }
 
     /// Runs the server mut operation for this subsystem.
@@ -589,9 +604,9 @@ impl McpRegistry {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn server_mut(&mut self, server_id: &str) -> Result<&mut McpServerState> {
-        self.servers.get_mut(server_id).ok_or_else(|| {
-            MezError::new(crate::error::MezErrorKind::NotFound, "MCP server not found")
-        })
+        self.servers
+            .get_mut(server_id)
+            .ok_or_else(|| MezError::not_found("MCP server not found"))
     }
 }
 
@@ -641,18 +656,6 @@ fn mcp_prompt_push_description_part(parts: &mut Vec<String>, label: &str, value:
     } else {
         parts.push(format!("{label}: {collapsed}."));
     }
-}
-
-/// Runs the current unix seconds operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn current_unix_seconds() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0)
 }
 
 /// Runs the ensure enabled operation for this subsystem.

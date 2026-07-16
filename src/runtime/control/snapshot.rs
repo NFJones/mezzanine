@@ -84,7 +84,7 @@ pub(super) fn runtime_snapshot_approval_request(
 
 /// Converts one live MCP server state into snapshot metadata.
 pub(super) fn runtime_snapshot_mcp_server_state(
-    server: &crate::mcp::McpServerState,
+    server: &mez_agent::mcp::McpServerState,
 ) -> SnapshotMcpServerState {
     SnapshotMcpServerState {
         id: server.configured.id.clone(),

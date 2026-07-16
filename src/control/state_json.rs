@@ -2379,7 +2379,7 @@ pub(super) fn mcp_tools_json(registry: &McpRegistry) -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn mcp_tool_effects_json(effects: crate::mcp::McpToolEffects) -> String {
+fn mcp_tool_effects_json(effects: mez_agent::mcp::McpToolEffects) -> String {
     format!(
         r#"{{"reads_filesystem":{},"mutates_filesystem":{},"executes_processes":{},"accesses_credentials":{},"uses_network":{},"has_side_effects":{}}}"#,
         effects.reads_filesystem,
@@ -2396,7 +2396,7 @@ fn mcp_tool_effects_json(effects: crate::mcp::McpToolEffects) -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn mcp_server_tool_ids_json(server: &crate::mcp::McpServerState) -> String {
+pub(super) fn mcp_server_tool_ids_json(server: &mez_agent::mcp::McpServerState) -> String {
     let ids = server
         .tools
         .iter()
@@ -2410,7 +2410,7 @@ pub(super) fn mcp_server_tool_ids_json(server: &crate::mcp::McpServerState) -> S
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn mcp_tool_id(tool: &crate::mcp::McpToolState) -> String {
+pub(super) fn mcp_tool_id(tool: &mez_agent::mcp::McpToolState) -> String {
     format!("{}:{}", tool.server_id, tool.name)
 }
 
@@ -2419,7 +2419,7 @@ pub(super) fn mcp_tool_id(tool: &crate::mcp::McpToolState) -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn mcp_server_diagnostics_json(server: &crate::mcp::McpServerState) -> String {
+pub(super) fn mcp_server_diagnostics_json(server: &mez_agent::mcp::McpServerState) -> String {
     match server.blacklist_reason.as_deref() {
         Some(reason) => format!(
             r#"[{{"severity":"warning","code":"mcp_blacklisted","message":"{}"}}]"#,
@@ -2446,7 +2446,7 @@ pub(super) fn mcp_kind_name(kind: McpServerKind) -> &'static str {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn mcp_server_state_name(server: &crate::mcp::McpServerState) -> &'static str {
+pub(super) fn mcp_server_state_name(server: &mez_agent::mcp::McpServerState) -> &'static str {
     if !server.configured.enabled {
         return "disabled";
     }
@@ -2481,12 +2481,12 @@ pub(super) fn mcp_status_name(status: McpServerStatus) -> &'static str {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn mcp_approval_name(approval: crate::mcp::McpApprovalSetting) -> &'static str {
+pub(super) fn mcp_approval_name(approval: mez_agent::mcp::McpApprovalSetting) -> &'static str {
     match approval {
-        crate::mcp::McpApprovalSetting::Inherit => "inherit",
-        crate::mcp::McpApprovalSetting::Prompt => "prompt",
-        crate::mcp::McpApprovalSetting::Allow => "allow",
-        crate::mcp::McpApprovalSetting::Deny => "deny",
+        mez_agent::mcp::McpApprovalSetting::Inherit => "inherit",
+        mez_agent::mcp::McpApprovalSetting::Prompt => "prompt",
+        mez_agent::mcp::McpApprovalSetting::Allow => "allow",
+        mez_agent::mcp::McpApprovalSetting::Deny => "deny",
     }
 }
 

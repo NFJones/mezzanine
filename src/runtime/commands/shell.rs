@@ -681,7 +681,8 @@ impl RuntimeSessionService {
     /// agent-shell commands through the synchronous service API.
     fn ensure_runtime_mcp_transports_discovered_blocking(&mut self) -> Result<()> {
         let needs_discovery = self.mcp_registry.list_servers().into_iter().any(|server| {
-            server.configured.enabled && server.status == crate::mcp::McpServerStatus::Configured
+            server.configured.enabled
+                && server.status == mez_agent::mcp::McpServerStatus::Configured
         });
         if !needs_discovery {
             return Ok(());

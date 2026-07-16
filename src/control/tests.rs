@@ -27,8 +27,6 @@ use super::{
     initialize_result_json, json_escape, parse_json_rpc_request,
 };
 use crate::event::{EventKind, EventLog, EventVisibility};
-use crate::mcp::McpRegistry;
-use crate::mcp::{McpServerConfig, McpToolEffects, McpToolState};
 use crate::project::ProjectTrustStore;
 use crate::shell::{ResolvedShell, ShellSource};
 use crate::snapshot::{
@@ -38,6 +36,7 @@ use crate::snapshot::{
 use crate::test_support::control::JsonRpcRequestBuilder;
 use crate::test_support::runtime::SessionFixture;
 use crate::test_support::temp::TestTempDir;
+use mez_agent::mcp::{McpRegistry, McpServerConfig, McpToolEffects, McpToolState};
 use mez_agent::permissions::{
     BlockedApprovalQueue, BlockedApprovalRequest, BlockedApprovalState, builtin_rules,
 };
@@ -3762,10 +3761,11 @@ fn mcp_list_exposes_registry_state() {
                     reads_filesystem: true,
                     ..McpToolEffects::none()
                 },
-                approval: crate::mcp::McpApprovalSetting::Inherit,
+                approval: mez_agent::mcp::McpApprovalSetting::Inherit,
                 description: "Read a file".to_string(),
                 input_schema_json: r#"{"type":"object"}"#.to_string(),
             }],
+            1,
         )
         .unwrap();
 

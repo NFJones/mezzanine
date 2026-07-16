@@ -551,6 +551,7 @@ impl RuntimeSessionService {
                 let _ = self.mcp_registry.mark_unavailable(
                     &plan.server_id,
                     format!("runtime tool call failed: {}", error.message()),
+                    current_unix_seconds(),
                 );
                 ActionResult::failed(
                     turn,
@@ -654,6 +655,7 @@ impl RuntimeSessionService {
                 let _ = self.mcp_registry.mark_unavailable(
                     &plan.server_id,
                     format!("runtime tool call failed: {}", error.message()),
+                    current_unix_seconds(),
                 );
                 ActionResult::failed(
                     turn,

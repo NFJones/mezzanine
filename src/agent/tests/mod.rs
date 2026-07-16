@@ -37,10 +37,10 @@ use super::slash::{
 };
 use crate::auth::{AuthStore, OpenAiProviderCredential};
 use crate::error::Result;
-use crate::mcp::McpRegistry;
 use crate::test_support::agent::ActionBuilder;
 use crate::transcript::AgentTranscriptStore;
 use base64::Engine;
+use mez_agent::mcp::McpRegistry;
 use mez_agent::permissions::{PathScopes, PermissionPolicy, SessionApprovalStore};
 use mez_agent::transcript::TranscriptRole as DurableTranscriptRole;
 use mez_agent::{
@@ -81,18 +81,18 @@ use std::time::Duration;
 /// registry normalizes server id, availability, and approval from the owning
 /// server config, so tests can override only the fields relevant to each
 /// display-state case before calling `mark_available`.
-fn agent_shell_test_mcp_tool(name: &str) -> crate::mcp::McpToolState {
-    crate::mcp::McpToolState {
+fn agent_shell_test_mcp_tool(name: &str) -> mez_agent::mcp::McpToolState {
+    mez_agent::mcp::McpToolState {
         server_id: String::new(),
         name: name.to_string(),
         available: true,
         blacklisted: false,
         permission_required: true,
-        effects: crate::mcp::McpToolEffects {
+        effects: mez_agent::mcp::McpToolEffects {
             reads_filesystem: true,
-            ..crate::mcp::McpToolEffects::none()
+            ..mez_agent::mcp::McpToolEffects::none()
         },
-        approval: crate::mcp::McpApprovalSetting::Inherit,
+        approval: mez_agent::mcp::McpApprovalSetting::Inherit,
         description: format!("{name} description"),
         input_schema_json: r#"{"type":"object"}"#.to_string(),
     }

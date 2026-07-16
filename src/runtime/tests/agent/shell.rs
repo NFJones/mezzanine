@@ -1218,7 +1218,7 @@ fn runtime_agent_shell_mcp_command_reports_live_registry_detail() {
         .unwrap();
     service
         .mcp_registry_mut()
-        .add_server(crate::mcp::McpServerConfig::stdio(
+        .add_server(mez_agent::mcp::McpServerConfig::stdio(
             "fs",
             "filesystem",
             "mcp-fs",
@@ -1229,22 +1229,23 @@ fn runtime_agent_shell_mcp_command_reports_live_registry_detail() {
         .mcp_registry_mut()
         .mark_available(
             "fs",
-            vec![crate::mcp::McpToolState {
+            vec![mez_agent::mcp::McpToolState {
                 server_id: String::new(),
                 name: "read_file".to_string(),
                 available: true,
                 blacklisted: false,
                 permission_required: true,
-                effects: crate::mcp::McpToolEffects::none(),
-                approval: crate::mcp::McpApprovalSetting::Inherit,
+                effects: mez_agent::mcp::McpToolEffects::none(),
+                approval: mez_agent::mcp::McpApprovalSetting::Inherit,
                 description: "read a file".to_string(),
                 input_schema_json: "{}".to_string(),
             }],
+            1,
         )
         .unwrap();
     service
         .mcp_registry_mut()
-        .blacklist_for_session("fs", "failed handshake")
+        .blacklist_for_session("fs", "failed handshake", 1)
         .unwrap();
 
     let response = service.dispatch_runtime_control_body(

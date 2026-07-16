@@ -1134,7 +1134,8 @@ impl RuntimeSessionService {
         self.hook_definitions = runtime_hook_definitions_from_config(&structured)?;
         let mut registry = runtime_mcp_registry_from_config(&structured)?;
         let environment = std::env::vars().collect::<BTreeMap<_, _>>();
-        let blacklisted = registry.blacklist_servers_with_missing_environment(&environment)?;
+        let blacklisted = registry
+            .blacklist_servers_with_missing_environment(&environment, current_unix_seconds())?;
         self.mcp_transports.clear();
         let configured = registry.list_servers().len();
         self.mcp_registry = registry;
@@ -1787,7 +1788,8 @@ impl RuntimeSessionService {
         if let Err(error) = self.discover_runtime_mcp_transport(registry, server_id, &environment) {
             rediscovered = false;
             let message = error.message().to_string();
-            let _ = registry.blacklist_for_session(server_id, message.clone());
+            let _ =
+                registry.blacklist_for_session(server_id, message.clone(), current_unix_seconds());
             self.mcp_transports.remove(server_id);
             reason = Some(message);
         }
@@ -1859,7 +1861,11 @@ impl RuntimeSessionService {
                 }
                 Err(error) => {
                     let reason = error.message().to_string();
-                    let _ = registry.blacklist_for_session(&server_id, reason.clone());
+                    let _ = registry.blacklist_for_session(
+                        &server_id,
+                        reason.clone(),
+                        current_unix_seconds(),
+                    );
                     self.mcp_transports.remove(&server_id);
                     self.append_runtime_mcp_discovery_event(
                         &server_id,
@@ -1903,7 +1909,8 @@ impl RuntimeSessionService {
         server_id: &str,
         environment: &BTreeMap<String, String>,
     ) -> Result<()> {
-        let plan = registry.startup_plan(server_id, environment)?;
+        let checked_at = current_unix_seconds();
+        let plan = registry.startup_plan(server_id, environment, checked_at)?;
         match &plan.transport {
             McpStartupTransportPlan::Stdio { .. } => {
                 let mut connection = spawn_stdio_mcp_connection(&plan, environment).await?;
@@ -1914,7 +1921,7 @@ impl RuntimeSessionService {
                 let mut tools = Vec::new();
                 if initialize.supports_tools {
                     let mut cursor = None;
-                    let mut pagination = crate::mcp::McpToolListPagination::default();
+                    let mut pagination = mez_agent::mcp::McpToolListPagination::default();
                     loop {
                         let response = connection
                             .list_tools(cursor.as_deref(), plan.timeout_ms)
@@ -1928,7 +1935,7 @@ impl RuntimeSessionService {
                         cursor = Some(next_cursor);
                     }
                 }
-                registry.mark_available_from_discovered_tools(server_id, tools)?;
+                registry.mark_available_from_discovered_tools(server_id, tools, checked_at)?;
                 self.mcp_transports
                     .insert_stdio(server_id.to_string(), connection);
             }
@@ -1979,8 +1986,11 @@ impl RuntimeSessionService {
                     }
                     Err(error) => return Err(error),
                 };
-                registry
-                    .mark_available_from_discovered_tools(server_id, discovery.tools.clone())?;
+                registry.mark_available_from_discovered_tools(
+                    server_id,
+                    discovery.tools.clone(),
+                    checked_at,
+                )?;
                 self.mcp_transports.insert_streamable_http(
                     server_id.to_string(),
                     RuntimeHttpMcpTransportState {
@@ -2737,7 +2747,7 @@ fn runtime_mcp_pending_discovery_server_ids<F>(
     has_live_auth_recovery: F,
 ) -> Vec<String>
 where
-    F: Fn(&crate::mcp::McpServerState) -> bool,
+    F: Fn(&mez_agent::mcp::McpServerState) -> bool,
 {
     registry
         .list_servers()
@@ -2751,7 +2761,7 @@ where
 
 /// Returns whether one enabled MCP server should re-enter runtime discovery.
 fn runtime_mcp_server_needs_runtime_discovery(
-    server: &crate::mcp::McpServerState,
+    server: &mez_agent::mcp::McpServerState,
     has_live_auth_recovery: bool,
 ) -> bool {
     server.configured.enabled
@@ -2761,11 +2771,11 @@ fn runtime_mcp_server_needs_runtime_discovery(
 
 /// Returns whether one MCP server should retry live discovery after auth changes.
 fn runtime_mcp_server_needs_live_auth_rediscovery(
-    server: &crate::mcp::McpServerState,
+    server: &mez_agent::mcp::McpServerState,
     has_live_auth_recovery: bool,
 ) -> bool {
     has_live_auth_recovery
-        && server.configured.kind == crate::mcp::McpServerKind::Http
+        && server.configured.kind == mez_agent::mcp::McpServerKind::Http
         && server.configured.bearer_token_env.is_none()
         && matches!(
             server.status,
@@ -2775,7 +2785,7 @@ fn runtime_mcp_server_needs_live_auth_rediscovery(
 
 /// Returns whether a server has stored OAuth state that can recover live discovery.
 fn runtime_mcp_server_has_live_auth_recovery(
-    server: &crate::mcp::McpServerState,
+    server: &mez_agent::mcp::McpServerState,
     auth_store: Option<&crate::auth::AuthStore>,
 ) -> bool {
     auth_store.is_some_and(|store| {
@@ -2876,14 +2886,14 @@ mod tests {
     fn runtime_mcp_pending_discovery_retries_blacklisted_http_server_with_auth_recovery() {
         let mut registry = McpRegistry::default();
         registry
-            .add_server(crate::mcp::McpServerConfig::streamable_http(
+            .add_server(mez_agent::mcp::McpServerConfig::streamable_http(
                 "fixture",
                 "fixture",
                 "https://example.invalid/mcp",
             ))
             .unwrap();
         registry
-            .blacklist_for_session("fixture", "oauth expired")
+            .blacklist_for_session("fixture", "oauth expired", 1)
             .unwrap();
 
         assert_eq!(
@@ -2901,14 +2911,14 @@ mod tests {
     fn runtime_mcp_pending_discovery_excludes_blacklisted_http_server_without_auth_recovery() {
         let mut registry = McpRegistry::default();
         registry
-            .add_server(crate::mcp::McpServerConfig::streamable_http(
+            .add_server(mez_agent::mcp::McpServerConfig::streamable_http(
                 "fixture",
                 "fixture",
                 "https://example.invalid/mcp",
             ))
             .unwrap();
         registry
-            .blacklist_for_session("fixture", "oauth expired")
+            .blacklist_for_session("fixture", "oauth expired", 1)
             .unwrap();
 
         assert!(runtime_mcp_pending_discovery_server_ids(&registry, |_| false).is_empty());

@@ -1599,7 +1599,7 @@ impl RuntimeMcpTransportSet {
                 state.next_request_id = state.next_request_id.saturating_add(1);
                 let operation = mcp_tools_call_operation(request_id, plan)?;
                 let oauth_token = match &state.startup_plan.transport {
-                    crate::mcp::McpStartupTransportPlan::StreamableHttp {
+                    mez_agent::mcp::McpStartupTransportPlan::StreamableHttp {
                         bearer_token_env,
                         ..
                     } if bearer_token_env.is_none() => {
@@ -1653,7 +1653,7 @@ impl RuntimeMcpTransportSet {
                 if response.session_id.is_some() {
                     state.session_id = response.session_id.clone();
                 }
-                operation.parse_response(&response.protocol_body)
+                Ok(operation.parse_response(&response.protocol_body)?)
             }
         }
     }

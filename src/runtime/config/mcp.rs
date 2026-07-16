@@ -6,7 +6,7 @@
 //! from provider, hook, permission, and general JSON helper domains.
 
 use super::*;
-use crate::mcp::{McpApprovalSetting, McpExternalCapability, McpServerConfig, McpServerKind};
+use mez_agent::mcp::{McpApprovalSetting, McpExternalCapability, McpServerConfig, McpServerKind};
 
 /// Runs the runtime mcp registry from config operation for this subsystem.
 ///

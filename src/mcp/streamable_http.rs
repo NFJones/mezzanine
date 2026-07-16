@@ -7,18 +7,14 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use crate::error::{MezError, Result};
-use mez_agent::parse_sse_events;
-
-use super::protocol::{
+use mez_agent::mcp::{
+    DEFAULT_MCP_MAX_MESSAGE_BYTES, DEFAULT_MCP_PROTOCOL_VERSION, McpInitializeResponse,
+    McpRegistry, McpStartupPlan, McpStartupTransportPlan, McpStreamableHttpDiscovery,
+    McpStreamableHttpResponse, McpToolCallPlan, McpToolCallResponse, McpToolListPagination,
     build_mcp_initialized_notification, json_id_matches, mcp_initialize_operation,
     mcp_tools_call_operation, mcp_tools_list_operation, object_field, parse_mcp_json, string_field,
 };
-use super::registry::McpRegistry;
-use super::types::{
-    DEFAULT_MCP_MAX_MESSAGE_BYTES, DEFAULT_MCP_PROTOCOL_VERSION, McpInitializeResponse,
-    McpStartupPlan, McpStartupTransportPlan, McpStreamableHttpDiscovery, McpStreamableHttpResponse,
-    McpToolCallPlan, McpToolCallResponse, McpToolListPagination,
-};
+use mez_agent::parse_sse_events;
 
 /// Runs the execute streamable http exchange operation for this subsystem.
 ///
@@ -264,16 +260,21 @@ pub async fn discover_streamable_http_mcp_server_into_registry(
     client_name: &str,
     client_version: &str,
 ) -> Result<McpStreamableHttpDiscovery> {
-    let plan = registry.startup_plan(server_id, environment)?;
+    let checked_at = super::current_mcp_unix_seconds();
+    let plan = registry.startup_plan(server_id, environment, checked_at)?;
     match discover_streamable_http_mcp_server(&plan, environment, client_name, client_version).await
     {
         Ok(discovery) => {
-            registry.mark_available_from_discovered_tools(server_id, discovery.tools.clone())?;
+            registry.mark_available_from_discovered_tools(
+                server_id,
+                discovery.tools.clone(),
+                checked_at,
+            )?;
             Ok(discovery)
         }
         Err(error) => {
             let reason = error.message().to_string();
-            let _ = registry.blacklist_for_session(server_id, reason);
+            let _ = registry.blacklist_for_session(server_id, reason, checked_at);
             Err(error)
         }
     }
@@ -302,7 +303,7 @@ pub async fn call_streamable_http_mcp_tool(
         None,
     )
     .await?;
-    operation.parse_response(&response.protocol_body)
+    Ok(operation.parse_response(&response.protocol_body)?)
 }
 
 /// Runs the execute streamable http post operation for this subsystem.

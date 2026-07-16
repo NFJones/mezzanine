@@ -90,7 +90,7 @@ fn runtime_control_mcp_list_uses_runtime_owned_registry() {
         .unwrap();
     service
         .mcp_registry_mut()
-        .add_server(crate::mcp::McpServerConfig::stdio(
+        .add_server(mez_agent::mcp::McpServerConfig::stdio(
             "fs",
             "filesystem",
             "mcp-fs",
@@ -101,17 +101,18 @@ fn runtime_control_mcp_list_uses_runtime_owned_registry() {
         .mcp_registry_mut()
         .mark_available(
             "fs",
-            vec![crate::mcp::McpToolState {
+            vec![mez_agent::mcp::McpToolState {
                 server_id: String::new(),
                 name: "read_file".to_string(),
                 available: true,
                 blacklisted: false,
                 permission_required: true,
-                effects: crate::mcp::McpToolEffects::none(),
-                approval: crate::mcp::McpApprovalSetting::Inherit,
+                effects: mez_agent::mcp::McpToolEffects::none(),
+                approval: mez_agent::mcp::McpApprovalSetting::Inherit,
                 description: "read a file".to_string(),
                 input_schema_json: "{}".to_string(),
             }],
+            1,
         )
         .unwrap();
 
@@ -165,7 +166,7 @@ async fn runtime_mcp_retry_control_keeps_async_only_blacklisted_server_hidden() 
     service.apply_runtime_config_layers_async().await.unwrap();
     service
         .mcp_registry_mut()
-        .blacklist_for_session("fixture", "failed handshake")
+        .blacklist_for_session("fixture", "failed handshake", 1)
         .unwrap();
     assert!(
         service
@@ -195,7 +196,7 @@ async fn runtime_mcp_retry_control_keeps_async_only_blacklisted_server_hidden() 
     );
     assert_eq!(
         service.mcp_registry().list_servers()[0].status,
-        crate::mcp::McpServerStatus::Blacklisted
+        mez_agent::mcp::McpServerStatus::Blacklisted
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -262,7 +263,7 @@ fn runtime_agent_prompt_list_mcp_autocompletes_configured_server_id() {
     let mut service = test_runtime_service();
     service
         .mcp_registry_mut()
-        .add_server(crate::mcp::McpServerConfig::stdio(
+        .add_server(mez_agent::mcp::McpServerConfig::stdio(
             "fixture",
             "Fixture MCP",
             "mcp-fixture",
@@ -315,7 +316,7 @@ fn runtime_agent_prompt_at_mcp_autocompletes_configured_server_id() {
     let mut service = test_runtime_service();
     service
         .mcp_registry_mut()
-        .add_server(crate::mcp::McpServerConfig::stdio(
+        .add_server(mez_agent::mcp::McpServerConfig::stdio(
             "fixture",
             "Fixture MCP",
             "mcp-fixture",
@@ -375,7 +376,7 @@ async fn runtime_agent_shell_list_mcp_inside_active_runtime_reports_configured_s
         .unwrap();
     service
         .mcp_registry_mut()
-        .add_server(crate::mcp::McpServerConfig::stdio(
+        .add_server(mez_agent::mcp::McpServerConfig::stdio(
             "fixture",
             "fixture",
             "mcp-fixture",
@@ -402,7 +403,7 @@ async fn runtime_agent_shell_list_mcp_inside_active_runtime_reports_configured_s
     );
     assert_eq!(
         service.mcp_registry().list_servers()[0].status,
-        crate::mcp::McpServerStatus::Configured
+        mez_agent::mcp::McpServerStatus::Configured
     );
 }
 
@@ -437,7 +438,7 @@ async fn runtime_async_config_apply_initializes_mcp_and_logs_readable_status() {
     assert_eq!(report.mcp_servers_configured, 1);
     assert_eq!(
         service.mcp_registry().list_servers()[0].status,
-        crate::mcp::McpServerStatus::Available
+        mez_agent::mcp::McpServerStatus::Available
     );
     assert_eq!(
         service.mcp_registry().prompt_summary().available_tools[0].tool_name,
@@ -504,7 +505,7 @@ fn runtime_agent_shell_list_mcp_lazily_discovers_configured_server() {
         .unwrap();
     assert_eq!(
         service.mcp_registry().list_servers()[0].status,
-        crate::mcp::McpServerStatus::Configured
+        mez_agent::mcp::McpServerStatus::Configured
     );
     service
         .agent_shell_store_mut()

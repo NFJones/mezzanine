@@ -6,10 +6,11 @@
 
 use super::*;
 use crate::mcp::{
-    McpApprovalSetting, McpConfigCommandReport, McpServerKind, McpServerStatus,
-    mcp_config_command_display, mcp_config_command_from_words, mcp_config_command_mutations,
+    McpConfigCommandReport, mcp_config_command_display, mcp_config_command_from_words,
+    mcp_config_command_mutations,
 };
 use crate::runtime::{ConfigPaths, ConfigScope, RuntimeMcpRetryReport};
+use mez_agent::mcp::{McpApprovalSetting, McpServerKind, McpServerStatus};
 
 /// Refreshes provider information through the async runtime command path.
 ///

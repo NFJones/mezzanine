@@ -21,9 +21,9 @@ use crate::event::{EventAudience, EventKind, EventLog, VisibleEvent};
 use crate::framing::{
     FrameContext, FrameOverflow, ProtocolFrame, decode_frame, encode_frame, render_frame_template,
 };
-use crate::mcp::{McpRegistry, McpServerKind, McpServerStatus};
 use crate::project::{ProjectTrustRecord, ProjectTrustStore, TrustDecision};
 use crate::snapshot::{LayoutLoadPlan, SnapshotKind, SnapshotRepository, SnapshotState};
+use mez_agent::mcp::{McpRegistry, McpServerKind, McpServerStatus};
 use mez_agent::permissions::{
     ApprovalDecision, BlockedApprovalQueue, BlockedApprovalRequest, BlockedApprovalState,
 };

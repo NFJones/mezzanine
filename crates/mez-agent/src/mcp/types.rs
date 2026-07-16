@@ -5,9 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::error::{MezError, Result};
-
-use super::protocol::build_mcp_tools_call_request;
+use super::{McpError as MezError, McpResult as Result, build_mcp_tools_call_request};
 
 /// Defines the DEFAULT MCP STARTUP TIMEOUT MS const used by this subsystem.
 ///

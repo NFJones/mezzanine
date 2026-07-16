@@ -88,8 +88,8 @@ role = "Thin mez binary entry point."
 
 [[surface]]
 path = "src/mcp"
-state = "temporary"
-role = "Concrete MCP transports and configuration still contain lower-owned protocol and registry state."
+state = "adapter"
+role = "Concrete MCP stdio and HTTP transports, credential and environment resolution, persisted configuration commands, product clock injection, and audit over canonical mez-agent MCP contracts."
 
 [[surface]]
 path = "src/memory"

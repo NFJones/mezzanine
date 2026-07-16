@@ -39,6 +39,10 @@ REQUIRED_OWNER_PATHS = {
     "crates/mez-agent/src/memory/mod.rs",
     "crates/mez-agent/src/memory/session_store.rs",
     "crates/mez-agent/src/memory/types.rs",
+    "crates/mez-agent/src/mcp/mod.rs",
+    "crates/mez-agent/src/mcp/protocol.rs",
+    "crates/mez-agent/src/mcp/registry.rs",
+    "crates/mez-agent/src/mcp/types.rs",
     "crates/mez-agent/src/permissions/mod.rs",
     "crates/mez-agent/src/permissions/classification.rs",
     "crates/mez-agent/src/subagent/scope.rs",
@@ -107,6 +111,11 @@ ROOT_FORBIDDEN_DECLARATIONS = {
     "struct IssueRecord {": "canonical issue record",
     "struct IssueUpdate {": "canonical issue update",
     "struct MessageService": "MMP delivery service state",
+    "struct McpRegistry": "canonical MCP registry state",
+    "struct McpServerConfig {": "secret-safe MCP server policy",
+    "enum McpServerStatus": "canonical MCP availability state",
+    "struct McpToolCallPlan {": "canonical MCP tool-call plan",
+    "struct McpToolListPagination": "bounded MCP pagination state",
     "enum MemoryScope": "canonical memory scope",
     "struct MemoryRecord {": "canonical memory record",
     "struct SessionMemoryStore": "process-local session memory store",
@@ -126,6 +135,7 @@ ROOT_FORBIDDEN_DECLARATIONS = {
     "trait PaneShellExecutor": "pane shell execution port",
     "trait SubagentScopeEnforcement": "default subagent scope enforcement",
     "fn plan_instruction_discovery": "instruction discovery command planning",
+    "fn build_mcp_initialize_request": "MCP JSON-RPC construction",
 }
 
 LOWER_CRATE_PREFIXES = ("mez_agent::", "mez_core::", "mez_mux::", "mez_terminal::")

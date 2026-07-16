@@ -89,11 +89,8 @@ use crate::hooks::{
     hook_execution_audit_record, plan_event,
 };
 use crate::mcp::{
-    McpApprovalSetting, McpExternalCapability, McpRegistry, McpServerKind, McpServerStatus,
-    McpStartupPlan, McpStartupTransportPlan, McpStdioConnection, McpToolCallPlan,
-    McpToolCallRequest, McpToolCallResponse, McpToolEffects, McpToolState,
-    discover_streamable_http_mcp_server_with_auth_token, execute_streamable_http_exchange,
-    mcp_tools_call_operation, spawn_stdio_mcp_connection,
+    McpStdioConnection, discover_streamable_http_mcp_server_with_auth_token,
+    execute_streamable_http_exchange, spawn_stdio_mcp_connection,
 };
 use crate::message::{decode_mmp_frame, encode_mmp_body, handle_mmp_frame};
 use crate::project::{
@@ -118,6 +115,11 @@ use crate::terminal::{
     route_client_input_actions, window_frame_action_pillbox_cells, window_frame_pillbox_cells,
 };
 use crate::transcript::AgentTranscriptStore;
+use mez_agent::mcp::{
+    McpApprovalSetting, McpExternalCapability, McpRegistry, McpServerKind, McpServerStatus,
+    McpStartupPlan, McpStartupTransportPlan, McpToolCallPlan, McpToolCallRequest,
+    McpToolCallResponse, McpToolEffects, McpToolState, mcp_tools_call_operation,
+};
 use mez_agent::memory::{MemoryRecord, MemoryScope, MemorySource, SessionMemoryStore};
 use mez_agent::messaging::{
     Envelope, MessageConnection, MessageService, MessageServiceSnapshot, Recipient, SenderIdentity,
