@@ -933,7 +933,24 @@ pub(super) fn runtime_openai_prompt_cache_diagnostics_trace_json(
         "provider_request_shape_bytes": diagnostics.provider_request_shape_bytes,
         "provider_request_shape_sha256": diagnostics.provider_request_shape_sha256,
         "cacheable_prefix_bytes": diagnostics.cacheable_prefix_bytes,
-        "cacheable_prefix_sha256": diagnostics.cacheable_prefix_sha256
+        "cacheable_prefix_sha256": diagnostics.cacheable_prefix_sha256,
+        "continuity_snapshot": {
+            "request_bytes": diagnostics.continuity_snapshot.request_bytes,
+            "request_sha256": diagnostics.continuity_snapshot.request_sha256,
+            "instructions_sha256": diagnostics.continuity_snapshot.instructions_sha256,
+            "response_format_sha256": diagnostics.continuity_snapshot.response_format_sha256,
+            "tools_sha256": diagnostics.continuity_snapshot.tools_sha256,
+            "tool_choice_sha256": diagnostics.continuity_snapshot.tool_choice_sha256,
+            "request_control_sha256": diagnostics.continuity_snapshot.request_control_sha256,
+            "messages": diagnostics.continuity_snapshot.messages.into_iter().map(|message| {
+                serde_json::json!({
+                    "index": message.index,
+                    "role": message.role,
+                    "bytes": message.bytes,
+                    "sha256": message.sha256
+                })
+            }).collect::<Vec<_>>()
+        }
     })
 }
 

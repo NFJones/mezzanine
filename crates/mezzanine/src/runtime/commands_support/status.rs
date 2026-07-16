@@ -353,6 +353,44 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
                 .unwrap_or("none")
         ),
         format!(
+            "last_provider_request_sha256 = {}",
+            runtime_metrics
+                .last_provider_request_sha256
+                .as_deref()
+                .unwrap_or("none")
+        ),
+        format!(
+            "last_provider_request_bytes = {}",
+            runtime_metrics
+                .last_provider_request_bytes
+                .map_or_else(|| "none".to_string(), |value| value.to_string())
+        ),
+        format!(
+            "last_provider_request_continuity_category = {}",
+            runtime_metrics
+                .last_provider_request_continuity_category
+                .as_deref()
+                .unwrap_or("none")
+        ),
+        format!(
+            "last_provider_request_continuity_message_index = {}",
+            runtime_metrics
+                .last_provider_request_continuity_message_index
+                .map_or_else(|| "none".to_string(), |value| value.to_string())
+        ),
+        format!(
+            "last_provider_request_common_message_prefix = {}",
+            runtime_metrics
+                .last_provider_request_common_message_prefix
+                .map_or_else(|| "none".to_string(), |value| value.to_string())
+        ),
+        format!(
+            "last_provider_request_messages_append_only = {}",
+            runtime_metrics
+                .last_provider_request_messages_append_only
+                .map_or_else(|| "none".to_string(), |value| value.to_string())
+        ),
+        format!(
             "last_tool_choice_sha256 = {}",
             runtime_metrics
                 .last_tool_choice_sha256

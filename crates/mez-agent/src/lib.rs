@@ -88,6 +88,8 @@ pub mod network_action;
 pub mod openai_cache;
 /// Provider-independent OpenAI-compatible Chat Completions request shaping.
 pub mod openai_chat_completions;
+/// Sensitive-content-free OpenAI request continuity diagnostics.
+pub mod openai_continuity;
 /// Provider-independent OpenAI Responses request construction.
 pub mod openai_request;
 /// Provider-independent OpenAI Responses API response parsing.
@@ -334,6 +336,10 @@ pub use openai_chat_completions::{
     ChatCompletionsResponseEnvelope, OpenAiChatCompletionsOptions, OpenAiChatCompletionsResponse,
     OpenAiChatCompletionsResponseError, openai_chat_completions_request_body,
     parse_chat_completions_response_envelope, parse_openai_chat_completions_response_body,
+};
+pub use openai_continuity::{
+    OpenAiRequestContinuity, OpenAiRequestContinuitySnapshot, OpenAiRequestMessageDigest,
+    compare_openai_request_continuity,
 };
 pub use openai_request::{
     openai_responses_request_body, openai_responses_request_body_with_stream,

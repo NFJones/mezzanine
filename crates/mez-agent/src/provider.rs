@@ -7,6 +7,7 @@
 use sha2::Digest;
 use std::fmt;
 
+use crate::openai_continuity::{OpenAiRequestContinuitySnapshot, OpenAiRequestMessageDigest};
 use crate::{
     AllowedActionSet, ContextSourceKind, ModelInteractionKind, ModelMessage, ModelMessageRole,
     ProviderTranscriptEvent,
@@ -300,6 +301,8 @@ pub struct OpenAiPromptCacheDiagnostics {
     pub cacheable_prefix_bytes: usize,
     /// SHA-256 of the stable cacheable prompt prefix material Mezzanine can observe.
     pub cacheable_prefix_sha256: String,
+    /// Sensitive-content-free snapshot of the complete provider-visible request.
+    pub continuity_snapshot: OpenAiRequestContinuitySnapshot,
 }
 
 /// Builds non-model-visible OpenAI prompt-cache diagnostics from one rendered
@@ -335,6 +338,13 @@ pub fn openai_prompt_cache_diagnostics(
         provider_request_shape,
         "OpenAI request-shape diagnostics failed",
     )?;
+    let continuity_snapshot = openai_request_continuity_snapshot(
+        rendered,
+        &response_format_text,
+        &tools_text,
+        &tool_choice_text,
+        &provider_request_shape,
+    )?;
 
     let stable_prompt_prefix_sha256 = sha256_hex(stable_prompt_prefix.as_bytes());
     Ok(OpenAiPromptCacheDiagnostics {
@@ -357,6 +367,63 @@ pub fn openai_prompt_cache_diagnostics(
         provider_request_shape_sha256: sha256_hex(provider_request_shape.as_bytes()),
         cacheable_prefix_bytes: stable_prompt_prefix.len(),
         cacheable_prefix_sha256: stable_prompt_prefix_sha256,
+        continuity_snapshot,
+    })
+}
+
+/// Builds a complete request snapshot from canonical provider-visible material.
+fn openai_request_continuity_snapshot(
+    rendered: &OpenAiRenderedMessages,
+    response_format: &str,
+    tools: &str,
+    tool_choice: &str,
+    request_control: &str,
+) -> ProviderRequestAssemblyResult<OpenAiRequestContinuitySnapshot> {
+    let messages = rendered
+        .input
+        .iter()
+        .enumerate()
+        .map(|(index, message)| {
+            let text = openai_diagnostic_json(
+                message,
+                "OpenAI request-message continuity diagnostics failed",
+            )?;
+            Ok(OpenAiRequestMessageDigest {
+                index,
+                role: message
+                    .get("role")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_string(),
+                bytes: text.len(),
+                sha256: sha256_hex(text.as_bytes()),
+            })
+        })
+        .collect::<ProviderRequestAssemblyResult<Vec<_>>>()?;
+    let request_text = openai_diagnostic_json(
+        &serde_json::json!({
+            "instructions": rendered.instructions,
+            "response_format": serde_json::from_str::<serde_json::Value>(response_format)
+                .unwrap_or(serde_json::Value::Null),
+            "tools": serde_json::from_str::<serde_json::Value>(tools)
+                .unwrap_or(serde_json::Value::Null),
+            "tool_choice": serde_json::from_str::<serde_json::Value>(tool_choice)
+                .unwrap_or(serde_json::Value::Null),
+            "request_control": serde_json::from_str::<serde_json::Value>(request_control)
+                .unwrap_or(serde_json::Value::Null),
+            "input": rendered.input,
+        }),
+        "OpenAI complete-request continuity diagnostics failed",
+    )?;
+    Ok(OpenAiRequestContinuitySnapshot {
+        request_bytes: request_text.len(),
+        request_sha256: sha256_hex(request_text.as_bytes()),
+        instructions_sha256: sha256_hex(rendered.instructions.as_bytes()),
+        response_format_sha256: sha256_hex(response_format.as_bytes()),
+        tools_sha256: sha256_hex(tools.as_bytes()),
+        tool_choice_sha256: sha256_hex(tool_choice.as_bytes()),
+        request_control_sha256: sha256_hex(request_control.as_bytes()),
+        messages,
     })
 }
 
@@ -1202,7 +1269,10 @@ mod request_assembly_tests {
 
         assert!(current_user.starts_with("[user prompt transcript entry]\n"));
         assert!(current_user.contains("ordered conversation transcript"));
-        assert_eq!(current_user.replace("fix it", "old request"), historical_user);
+        assert_eq!(
+            current_user.replace("fix it", "old request"),
+            historical_user
+        );
         assert!(current_result.starts_with("[executed result transcript entry]\n"));
         assert!(current_result.contains("execution evidence, not as a user request"));
         assert_eq!(

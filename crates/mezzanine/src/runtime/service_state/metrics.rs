@@ -167,6 +167,21 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub(crate) last_stable_prompt_prefix_sha256: Option<String>,
     /// Most recent provider request-shape digest observed by runtime metrics.
     pub(crate) last_provider_request_shape_sha256: Option<String>,
+    /// Most recent complete provider-visible request digest.
+    pub(crate) last_provider_request_sha256: Option<String>,
+    /// Most recent complete provider-visible request byte count.
+    pub(crate) last_provider_request_bytes: Option<usize>,
+    /// First divergence category from the preceding comparable request.
+    pub(crate) last_provider_request_continuity_category: Option<String>,
+    /// First divergent provider input message index, when applicable.
+    pub(crate) last_provider_request_continuity_message_index: Option<usize>,
+    /// Number of unchanged provider input messages at the request front.
+    pub(crate) last_provider_request_common_message_prefix: Option<usize>,
+    /// Whether provider input messages only appended after the previous request.
+    pub(crate) last_provider_request_messages_append_only: Option<bool>,
+    /// Previous OpenAI request snapshot retained only for continuity comparison.
+    pub(crate) last_openai_request_continuity_snapshot:
+        Option<mez_agent::OpenAiRequestContinuitySnapshot>,
     /// Most recent tool-choice digest observed by runtime metrics.
     pub(crate) last_tool_choice_sha256: Option<String>,
     /// Most recent provider output-token budget source observed by runtime metrics.
@@ -285,10 +300,38 @@ impl RuntimeMetricsSnapshot {
             self.last_provider_request_shape_sha256 =
                 Some(diagnostics.provider_request_shape_sha256.clone());
             self.last_tool_choice_sha256 = Some(diagnostics.tool_choice_sha256.clone());
+            self.last_provider_request_sha256 =
+                Some(diagnostics.continuity_snapshot.request_sha256.clone());
+            self.last_provider_request_bytes = Some(diagnostics.continuity_snapshot.request_bytes);
+            let continuity =
+                self.last_openai_request_continuity_snapshot
+                    .as_ref()
+                    .map(|previous| {
+                        mez_agent::compare_openai_request_continuity(
+                            previous,
+                            &diagnostics.continuity_snapshot,
+                        )
+                    });
+            self.last_provider_request_continuity_category = Some(
+                continuity
+                    .as_ref()
+                    .map_or_else(|| "initial".to_string(), |value| value.category.clone()),
+            );
+            self.last_provider_request_continuity_message_index =
+                continuity.as_ref().and_then(|value| value.message_index);
+            self.last_provider_request_common_message_prefix =
+                continuity.as_ref().map(|value| value.common_message_prefix);
+            self.last_provider_request_messages_append_only =
+                continuity.as_ref().map(|value| value.messages_append_only);
+            self.last_openai_request_continuity_snapshot =
+                Some(diagnostics.continuity_snapshot.clone());
         } else if diagnostics_failed {
             self.provider_prompt_cache_diagnostics_failed = self
                 .provider_prompt_cache_diagnostics_failed
                 .saturating_add(1);
+            self.last_openai_request_continuity_snapshot = None;
+        } else {
+            self.last_openai_request_continuity_snapshot = None;
         }
     }
 
