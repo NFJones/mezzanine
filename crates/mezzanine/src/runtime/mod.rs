@@ -1,12 +1,11 @@
-//! Runtime service model, runtime directory helpers, and pane environment helpers.
+//! Serialized application runtime state and cross-domain coordination.
 //!
-//! The live session service will eventually own Unix-domain sockets, server
-//! locks, and peer credential checks. This module keeps the path and environment
-//! rules separate from that transport code so they can be tested before the
-//! daemon exists. In particular, it validates the private socket directory
-//! invariant, defines the `MEZ` pane-environment format used by in-pane `mez`
-//! commands, and provides an owned in-memory runtime service that coordinates
-//! session lifecycle state without requiring a long-running daemon.
+//! `RuntimeSessionService` coordinates seven private state-owning components
+//! through typed operations and side-effect plans. This module also owns the
+//! product runtime-directory, server-lock, peer-credential, and `MEZ` pane
+//! environment rules. Concrete Tokio actors, Unix socket serving, terminal
+//! loops, and workers live in `crate::host::async_runtime`; lower-domain state
+//! transitions remain in the four lower workspace crates.
 
 use mez_mux::presentation::{ClientViewRole, RenderedClientView};
 use std::collections::{BTreeMap, BTreeSet};

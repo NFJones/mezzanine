@@ -62,10 +62,12 @@ dependency graph does not by itself prove that package ownership remains
 correct, so architecture, public API, dependency, feature, and package-content
 audits are part of refactor validation.
 
-The architecture check also verifies the exhaustive product ownership manifest,
-rejects restoration of retired compatibility surfaces and lower-contract
-forwarding exports, and rejects Rust compilation units over 2,000 lines or
-module implementations flattened with `include!`. When the ownership state is
-complete, it additionally requires `crates/mezzanine/Cargo.toml`, a virtual
-workspace root with no `src/` or `tests/`, explicit production imports, and
-private runtime component state.
+The architecture check also verifies the exact manifest locations and lower
+dependency allowlists, the exhaustive product ownership manifest, and the
+narrow product public API. It rejects restoration of retired compatibility
+surfaces and lower-contract forwarding exports, Rust compilation units over
+2,000 lines, module implementations flattened with `include!`, single-owner
+fixtures in shared test support, broad production imports, and crate-visible
+runtime state. Complete ownership additionally requires a virtual workspace
+root with no `src/` or `tests/` and the exact seven-component runtime
+coordinator.

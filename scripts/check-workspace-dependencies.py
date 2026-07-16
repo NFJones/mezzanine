@@ -19,12 +19,49 @@ EXPECTED_PACKAGES = {
     "mezzanine",
 }
 
+EXPECTED_MANIFESTS = {
+    "mez-agent": Path("crates/mez-agent/Cargo.toml"),
+    "mez-core": Path("crates/mez-core/Cargo.toml"),
+    "mez-mux": Path("crates/mez-mux/Cargo.toml"),
+    "mez-terminal": Path("crates/mez-terminal/Cargo.toml"),
+    "mezzanine": Path("crates/mezzanine/Cargo.toml"),
+}
+
 EXPECTED_EDGES = {
     "mez-agent": {"mez-core"},
     "mez-core": set(),
     "mez-mux": {"mez-core", "mez-terminal"},
     "mez-terminal": set(),
     "mezzanine": {"mez-agent", "mez-core", "mez-mux", "mez-terminal"},
+}
+
+EXPECTED_LOWER_DEPENDENCIES = {
+    "mez-agent": {
+        "base64",
+        "mez-core",
+        "rand",
+        "serde",
+        "serde_json",
+        "serde_norway",
+        "sha2",
+        "shlex",
+        "urlencoding",
+        "wait-timeout",
+    },
+    "mez-core": set(),
+    "mez-mux": {
+        "mez-core",
+        "mez-terminal",
+        "portable-pty",
+        "pulldown-cmark",
+        "rustix",
+        "shlex",
+        "syntect",
+        "thiserror",
+        "unicode-segmentation",
+        "unicode-width",
+    },
+    "mez-terminal": {"unicode-segmentation", "unicode-width"},
 }
 
 LOWER_FORBIDDEN_PRODUCT_IO_DEPENDENCIES = {
@@ -124,6 +161,33 @@ FINAL_WORKSPACE_MEMBERS = {
     "crates/mez-mux",
     "crates/mez-terminal",
 }
+EXPECTED_PRODUCT_PRIVATE_MODULES = {
+    "cli",
+    "config",
+    "control",
+    "error",
+    "host",
+    "integrations",
+    "protocol",
+    "runtime",
+    "security",
+    "storage",
+    "test_support",
+    "ui",
+}
+EXPECTED_PRODUCT_PUBLIC_MODULES = {"control_client"}
+EXPECTED_PRODUCT_PUBLIC_FUNCTIONS = {"run_cli"}
+EXPECTED_PRODUCT_PUBLIC_USES = {"pub use error::{MezError, MezErrorKind, Result};"}
+EXPECTED_RUNTIME_COMPONENT_FIELDS = [
+    ("presentation", "RuntimePresentationComponent"),
+    ("process", "RuntimeProcessComponent"),
+    ("agent", "RuntimeAgentComponent"),
+    ("persistence", "RuntimePersistenceComponent"),
+    ("control", "RuntimeControlComponent"),
+    ("integration", "RuntimeIntegrationComponent"),
+    ("session", "RuntimeSessionComponent"),
+]
+EXPECTED_SHARED_TEST_SUPPORT = {"mod.rs", "runtime.rs"}
 MAX_RUST_SOURCE_LINES = 2_000
 
 RETIRED_COMPATIBILITY_PATHS = {
@@ -131,7 +195,12 @@ RETIRED_COMPATIBILITY_PATHS = {
     "agent/semantic/mod.rs",
     "agent/maap.rs",
     "agent/provider/catalog.rs",
+    "integrations/agent/shell.rs",
+    "integrations/agent/semantic/mod.rs",
+    "integrations/agent/maap.rs",
+    "integrations/agent/provider/catalog.rs",
     "command/shell.rs",
+    "ui/command/shell.rs",
     "ids.rs",
     "layout.rs",
     "layout/mod.rs",
@@ -501,7 +570,7 @@ def source_ownership_violations(product_root: Path) -> list[str]:
             if identifier in source:
                 violations.append(f"{path}: retired {ownership} `{identifier}`")
 
-    product_runner = product_root / "agent/actions/runner.rs"
+    product_runner = product_root / "integrations/agent/actions/runner.rs"
     if product_runner.is_file():
         runner_source = product_runner.read_text(encoding="utf-8")
         for call, ownership in PRODUCT_RUNNER_FORBIDDEN_CALLS.items():
@@ -619,6 +688,94 @@ def final_layout_violations(
             + ", ".join(sorted(FINAL_WORKSPACE_MEMBERS))
         )
 
+    product_lib = product_root / "lib.rs"
+    lib_source = product_lib.read_text(encoding="utf-8")
+    private_modules = set(
+        re.findall(r"^mod\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*;", lib_source, re.MULTILINE)
+    )
+    public_modules = set(
+        re.findall(
+            r"^pub\s+mod\s+([a-zA-Z_][a-zA-Z0-9_]*)\b", lib_source, re.MULTILINE
+        )
+    )
+    public_functions = set(
+        re.findall(
+            r"^pub\s+(?:async\s+)?fn\s+([a-zA-Z_][a-zA-Z0-9_]*)\b",
+            lib_source,
+            re.MULTILINE,
+        )
+    )
+    public_uses = {
+        line.strip()
+        for line in lib_source.splitlines()
+        if line.startswith("pub use ")
+    }
+    unsupported_public_items = [
+        f"{line_number}:{line.strip()}"
+        for line_number, line in enumerate(lib_source.splitlines(), start=1)
+        if line.startswith("pub ")
+        and not line.startswith(("pub mod ", "pub use ", "pub fn ", "pub async fn "))
+    ]
+    if private_modules != EXPECTED_PRODUCT_PRIVATE_MODULES:
+        violations.append(
+            "product lib private modules differ from the admitted application surfaces: "
+            f"expected {sorted(EXPECTED_PRODUCT_PRIVATE_MODULES)}, "
+            f"found {sorted(private_modules)}"
+        )
+    if public_modules != EXPECTED_PRODUCT_PUBLIC_MODULES:
+        violations.append(
+            "product lib public modules must remain the supported control-client surface: "
+            f"found {sorted(public_modules)}"
+        )
+    if public_functions != EXPECTED_PRODUCT_PUBLIC_FUNCTIONS:
+        violations.append(
+            "product lib public functions must remain the CLI bootstrap only: "
+            f"found {sorted(public_functions)}"
+        )
+    if public_uses != EXPECTED_PRODUCT_PUBLIC_USES:
+        violations.append(
+            "product lib public re-exports must remain the product error surface: "
+            f"found {sorted(public_uses)}"
+        )
+    if unsupported_public_items:
+        violations.append(
+            "product lib contains unsupported public items: "
+            + ", ".join(unsupported_public_items)
+        )
+
+    runtime_source_path = product_root / "runtime/mod.rs"
+    runtime_source = runtime_source_path.read_text(encoding="utf-8")
+    runtime_service = re.search(
+        r"pub struct RuntimeSessionService\s*\{(?P<body>.*?)^\}",
+        runtime_source,
+        re.MULTILINE | re.DOTALL,
+    )
+    if runtime_service is None:
+        violations.append(f"{runtime_source_path}: missing RuntimeSessionService coordinator")
+    else:
+        runtime_fields = re.findall(
+            r"^\s{4}([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*"
+            r"([a-zA-Z_][a-zA-Z0-9_]*)\s*,\s*$",
+            runtime_service.group("body"),
+            re.MULTILINE,
+        )
+        if runtime_fields != EXPECTED_RUNTIME_COMPONENT_FIELDS:
+            violations.append(
+                f"{runtime_source_path}: runtime coordinator fields must be exactly "
+                f"{EXPECTED_RUNTIME_COMPONENT_FIELDS}, found {runtime_fields}"
+            )
+
+    test_support_root = product_root / "test_support"
+    shared_test_support = {
+        path.relative_to(test_support_root).as_posix()
+        for path in test_support_root.rglob("*.rs")
+    }
+    if shared_test_support != EXPECTED_SHARED_TEST_SUPPORT:
+        violations.append(
+            "shared application test support must contain only multi-owner runtime fixtures: "
+            f"found {sorted(shared_test_support)}"
+        )
+
     for path in sorted(product_root.rglob("*.rs")):
         if "tests" in path.parts or path.name.endswith("_tests.rs"):
             continue
@@ -681,9 +838,17 @@ def main() -> int:
         return 1
 
     product_root = product_source_root(metadata)
+    workspace_root = Path(str(metadata["workspace_root"])).resolve()
 
     violations: list[str] = []
     for package_name, package in packages.items():
+        manifest_path = Path(str(package["manifest_path"])).resolve()
+        expected_manifest = workspace_root / EXPECTED_MANIFESTS[package_name]
+        if manifest_path != expected_manifest:
+            violations.append(
+                f"{package_name} manifest must be {EXPECTED_MANIFESTS[package_name]}, "
+                f"found {manifest_path.relative_to(workspace_root)}"
+            )
         dependency_names = {dependency["name"] for dependency in package["dependencies"]}
         internal_dependencies = dependency_names & EXPECTED_PACKAGES
         forbidden = internal_dependencies - EXPECTED_EDGES[package_name]
@@ -693,6 +858,17 @@ def main() -> int:
         for dependency_name in sorted(absent):
             violations.append(f"{package_name} missing -> {dependency_name}")
         if package_name != "mezzanine":
+            expected_dependencies = EXPECTED_LOWER_DEPENDENCIES[package_name]
+            unexpected_dependencies = dependency_names - expected_dependencies
+            missing_dependencies = expected_dependencies - dependency_names
+            for dependency_name in sorted(unexpected_dependencies):
+                violations.append(
+                    f"{package_name} has unapproved dependency {dependency_name}"
+                )
+            for dependency_name in sorted(missing_dependencies):
+                violations.append(
+                    f"{package_name} is missing approved dependency {dependency_name}"
+                )
             for dependency_name in sorted(
                 dependency_names & LOWER_FORBIDDEN_PRODUCT_IO_DEPENDENCIES
             ):
@@ -708,7 +884,7 @@ def main() -> int:
                     )
 
     if violations:
-        print("forbidden Mezzanine dependency edges:")
+        print("Mezzanine package or dependency boundary violations:")
         for violation in violations:
             print(f"  {violation}")
         return 1

@@ -1,8 +1,7 @@
-//! Temporary filesystem fixtures for tests.
+//! Temporary filesystem fixture owned by the control protocol tests.
 //!
-//! Tests use many private roots for config files, snapshots, patches, and
-//! socket paths. This module provides one guard that creates unique directories
-//! and removes them automatically when the test ends.
+//! Control tests use private roots for snapshots and related persistent state.
+//! This guard creates unique directories and removes them when each test ends.
 
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -13,13 +12,13 @@ static NEXT_TEST_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Owns one automatically cleaned temporary directory.
 #[derive(Debug)]
-pub(crate) struct TestTempDir {
+pub(super) struct TestTempDir {
     path: PathBuf,
 }
 
 impl TestTempDir {
     /// Creates a unique temporary directory beneath the system temp root.
-    pub(crate) fn new(label: &str) -> Self {
+    pub(super) fn new(label: &str) -> Self {
         let unique = NEXT_TEST_TEMP_ID.fetch_add(1, Ordering::Relaxed);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -39,18 +38,13 @@ impl TestTempDir {
     }
 
     /// Returns this temporary directory as a path.
-    pub(crate) fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.path
     }
 
     /// Returns a child path beneath this temporary directory.
-    pub(crate) fn join(&self, path: impl AsRef<Path>) -> PathBuf {
+    pub(super) fn join(&self, path: impl AsRef<Path>) -> PathBuf {
         self.path.join(path)
-    }
-
-    /// Returns a clone of the underlying path for APIs that need ownership.
-    pub(crate) fn to_path_buf(&self) -> PathBuf {
-        self.path.clone()
     }
 }
 

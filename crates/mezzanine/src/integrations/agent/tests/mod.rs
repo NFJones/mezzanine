@@ -11,6 +11,7 @@
 
 // Agent module tests.
 
+use self::fixtures::ActionBuilder;
 use super::actions::{
     AgentTurnRunner, discover_tools_through_pane_shell, execute_mcp_action_through_runtime,
     execute_shell_action_through_pane, persist_turn_execution_transcript,
@@ -36,7 +37,6 @@ use super::slash::{
 use crate::error::Result;
 use crate::security::auth::{AuthStore, OpenAiProviderCredential};
 use crate::storage::transcript::AgentTranscriptStore;
-use crate::test_support::agent::ActionBuilder;
 use base64::Engine;
 use mez_agent::local_action_plan;
 use mez_agent::mcp::McpRegistry;
@@ -73,6 +73,8 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::thread;
 use std::time::Duration;
+
+mod fixtures;
 
 /// Builds a representative MCP tool state for agent-shell display tests. The
 /// registry normalizes server id, availability, and approval from the owning

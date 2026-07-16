@@ -62,6 +62,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc as StdArc, Mutex};
 use std::time::Instant;
 
+use self::actor_fixture::AsyncRuntimeActorFixture;
 use crate::host::shell::resolve_shell;
 use crate::host::terminal::{
     AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopIo, AttachedTerminalFdReadiness,
@@ -69,7 +70,6 @@ use crate::host::terminal::{
 };
 use crate::runtime::RuntimeEventConnectionTable;
 use crate::storage::transcript::AgentTranscriptStore;
-use crate::test_support::async_runtime::AsyncRuntimeActorFixture;
 use mez_mux::input::MuxAction;
 use mez_mux::layout::Size;
 use mez_mux::presentation::{ClientStatusKind, ClientStatusLine};
@@ -81,6 +81,7 @@ use mez_terminal::TerminalStyleSpan;
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+mod actor_fixture;
 mod fixtures;
 
 use fixtures::*;

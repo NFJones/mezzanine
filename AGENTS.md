@@ -2,9 +2,9 @@
 
 ## Project Structure & Module Organization
 Mezzanine is a five-package Rust 2024 workspace with a virtual repository root;
-the `crates/mezzanine` product package builds the `mez` binary. Keep user-visible behavior aligned with `SPEC.md`, and keep
-implementation logic in subsystem modules rather than expanding
-`crates/mezzanine/src/main.rs`.
+the `crates/mezzanine` product package builds the `mez` binary. Keep
+user-visible behavior aligned with `SPEC.md`, and keep implementation logic in
+subsystem modules rather than expanding `crates/mezzanine/src/main.rs`.
 
 - `SPEC.md`: normative behavior for the multiplexer, agent harness,
   configuration, protocol, and security posture.
@@ -20,22 +20,22 @@ implementation logic in subsystem modules rather than expanding
   behavior.
 - `crates/mez-agent/`: provider-independent agent harness, protocols, and
   deterministic policy.
-- `justfile`: local development command entry points.
+- `Justfile`: local development command entry points.
 - `crates/mezzanine/src/main.rs`: thin binary entry point for `mez`.
 - `crates/mezzanine/src/lib.rs`: deliberately narrow product library root.
 - `crates/mezzanine/src/*.rs`: crate roots plus single-file product modules.
-- `crates/mezzanine/src/<subsystem>/mod.rs`: roots for product subsystem modules, including
-  CLI, config, runtime, terminal handling, control protocol, command handling,
-  permissions, and the agent harness.
-- `crates/mezzanine/src/<subsystem>/*.rs`: focused components that implement decomposed
-  subsystem behavior behind the subsystem `mod.rs` facade.
+- `crates/mezzanine/src/<subsystem>/mod.rs`: roots for product subsystem
+  modules, including CLI, config, control, host, integrations, protocol,
+  runtime, security, storage, and UI.
+- `crates/mezzanine/src/<subsystem>/*.rs`: focused components that implement
+  decomposed subsystem behavior behind the subsystem `mod.rs` facade.
 - Product subsystem modules are adapters and application composition. Import
   lower-crate contracts directly rather than forwarding them through product
   compatibility exports.
-- `crates/mezzanine/src/<subsystem>/tests/`: purpose-named test modules grouped by production
-  behavior or domain and connected with true Rust `mod` declarations. Do not
-  flatten test files with `include!` or use numbered chunk names such as
-  `part_01.rs`.
+- `crates/mezzanine/src/<subsystem>/tests/`: purpose-named test modules grouped
+  by production behavior or domain and connected with true Rust `mod`
+  declarations. Do not flatten test files with `include!` or use numbered
+  chunk names such as `part_01.rs`.
 - Shared test fixture modules should contain only helpers used by at least two
   test owners and should use the narrowest practical visibility. Keep
   one-consumer setup beside its owning tests, preserve test function names
@@ -63,7 +63,9 @@ implementation logic in subsystem modules rather than expanding
 
 ## Coding Style & Naming Convention Requirements
 - Rust edition is 2024; follow standard `rustfmt` defaults (4-space indentation, line-wrapping via rustfmt).
-- Module and file names are `snake_case` (e.g., `crates/mezzanine/src/modules/raw.rs`); config module types are lowercase (e.g., `raw`, `mez`).
+- Module and file names are `snake_case` (for example,
+  `crates/mezzanine/src/modules/raw.rs`); config module types are lowercase
+  (for example, `raw`, `mez`).
 
 ## Maintainability & Documentation Standards
 - New or substantially changed modules should include a full module-level comment describing purpose, boundaries, and key invariants.

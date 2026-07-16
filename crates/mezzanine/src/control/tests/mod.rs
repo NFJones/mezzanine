@@ -6,6 +6,8 @@
 
 // Control module tests.
 
+use self::json_rpc_fixture::JsonRpcRequestBuilder;
+use self::temp_dir::TestTempDir;
 use super::registry::control_method_spec;
 use super::types::PRIMARY_CONTROL_METHODS;
 use super::{
@@ -33,9 +35,7 @@ use crate::storage::snapshot::{
     PaneSnapshotPayload, SessionSnapshotPayload, SnapshotFrameState, SnapshotPaneGeometry,
     SnapshotRepository, SnapshotSessionState, SnapshotShellMetadata, WindowSnapshotPayload,
 };
-use crate::test_support::control::JsonRpcRequestBuilder;
 use crate::test_support::runtime::SessionFixture;
-use crate::test_support::temp::TestTempDir;
 use mez_agent::mcp::{McpRegistry, McpServerConfig, McpToolEffects, McpToolState};
 use mez_agent::permissions::{
     BlockedApprovalQueue, BlockedApprovalRequest, BlockedApprovalState, builtin_rules,
@@ -51,6 +51,9 @@ use mez_terminal::{
 };
 use std::fs;
 use std::path::PathBuf;
+
+mod json_rpc_fixture;
+mod temp_dir;
 
 /// Runs the primary params operation for this subsystem.
 ///

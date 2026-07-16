@@ -1,12 +1,7 @@
-//! Shared crate-internal test support.
+//! Shared crate-internal runtime test support.
 //!
-//! These helpers collect high-reuse fixtures that previously lived inside
-//! large subsystem test files. They are available only to test builds and
-//! should stay focused on setup mechanics rather than behavior assertions.
+//! This module contains only runtime fixtures used by more than one owning test
+//! tree. Single-owner fixtures stay beside their subsystem tests.
 #![allow(dead_code)]
 
-pub(crate) mod agent;
-pub(crate) mod async_runtime;
-pub(crate) mod control;
 pub(crate) mod runtime;
-pub(crate) mod temp;
