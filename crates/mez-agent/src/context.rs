@@ -133,6 +133,17 @@ pub enum ContextCachePolicy {
     ProviderBreakpoint,
 }
 
+/// Provider-neutral lifecycle disposition used to build cache-monotonic requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ContextCacheDisposition {
+    /// Product and repository instructions that remain stable across turns.
+    Static,
+    /// Completed conversation material whose model-visible bytes are immutable.
+    Immutable,
+    /// Active-turn or runtime state that may change between continuations.
+    Volatile,
+}
+
 /// One ordered unit of model-visible context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextBlock {
@@ -216,6 +227,17 @@ impl ContextBlock {
     pub fn stable_prefix_eligible(&self) -> bool {
         self.cache_policy() != ContextCachePolicy::Ineligible
             && self.stability() != ContextStability::TurnVolatile
+    }
+
+    /// Returns the cache lifecycle disposition used for request ordering.
+    pub fn cache_disposition(&self) -> ContextCacheDisposition {
+        match self.stability() {
+            ContextStability::Static | ContextStability::RepoScoped => {
+                ContextCacheDisposition::Static
+            }
+            ContextStability::SessionStable => ContextCacheDisposition::Immutable,
+            ContextStability::TurnVolatile => ContextCacheDisposition::Volatile,
+        }
     }
 
     /// Returns whether exact content can be recovered outside model context.
@@ -318,6 +340,27 @@ pub struct ModelMessage {
     pub source: ContextSourceKind,
     /// Model-visible message content.
     pub content: String,
+}
+
+impl ModelMessage {
+    /// Returns the provider-neutral cache lifecycle disposition for this message.
+    pub fn cache_disposition(&self) -> ContextCacheDisposition {
+        let block = ContextBlock {
+            source: self.source,
+            label: model_message_context_label(&self.content),
+            content: String::new(),
+        };
+        block.cache_disposition()
+    }
+}
+
+/// Recovers the framing label used by lifecycle exceptions from one message.
+fn model_message_context_label(content: &str) -> String {
+    content
+        .trim_start()
+        .strip_prefix('[')
+        .and_then(|content| content.split_once(']'))
+        .map_or_else(String::new, |(label, _)| label.to_string())
 }
 
 /// One complete provider-independent model request.

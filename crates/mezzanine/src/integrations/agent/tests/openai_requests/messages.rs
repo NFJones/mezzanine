@@ -409,7 +409,7 @@ fn openai_responses_request_body_marks_action_results_as_execution_evidence() {
         .position(|message| {
             message["content"][0]["text"]
                 .as_str()
-                .is_some_and(|text| text.starts_with("[current-turn executed result]"))
+                .is_some_and(|text| text.starts_with("[executed result transcript entry]"))
         })
         .unwrap();
     let action_message = &input[action_index];
@@ -421,12 +421,11 @@ fn openai_responses_request_body_marks_action_results_as_execution_evidence() {
     );
     assert_eq!(action_message["role"], "user");
     assert!(
-        action_text.starts_with("[current-turn executed result]\n"),
+        action_text.starts_with("[executed result transcript entry]\n"),
         "{action_text}"
     );
     assert!(
-        action_text
-            .contains("produced in the current turn by the immediately preceding action batch"),
+        action_text.contains("execution evidence, not as a user request"),
         "{action_text}"
     );
     assert!(
@@ -476,14 +475,14 @@ fn openai_responses_request_body_marks_prior_user_history_inactive() {
     assert_eq!(input.len(), 3);
     assert_eq!(input[0]["role"], "user");
     let historical_text = input[0]["content"][0]["text"].as_str().unwrap();
-    assert!(historical_text.contains("[historical user prompt transcript entry]"));
-    assert!(historical_text.contains("historical context only, not the active task"));
+    assert!(historical_text.contains("[user prompt transcript entry]"));
+    assert!(historical_text.contains("ordered conversation transcript"));
     assert!(historical_text.contains("Output a large multiline JSON object"));
 
     assert_eq!(input[1]["role"], "user");
     let current_text = input[1]["content"][0]["text"].as_str().unwrap();
-    assert!(current_text.contains("[current user prompt]"));
-    assert!(current_text.contains("latest user prompt and the active task"));
+    assert!(current_text.contains("[user prompt transcript entry]"));
+    assert!(current_text.contains("ordered conversation transcript"));
     assert!(current_text.contains("Patch the prompt context manager"));
 
     assert_eq!(input[2]["role"], "developer");

@@ -354,10 +354,10 @@ fn model_request_keeps_context_sources_distinct() {
         request.messages[0].content
     );
     assert_eq!(request.messages[1].role, ModelMessageRole::Developer);
-    assert_eq!(request.messages[2].source, ContextSourceKind::LocalMessage);
-    assert_eq!(request.messages[3].source, ContextSourceKind::RuntimeHint);
-    assert_eq!(request.messages[3].role, ModelMessageRole::Developer);
-    assert_eq!(request.messages[4].source, ContextSourceKind::Transcript);
+    assert_eq!(request.messages[2].source, ContextSourceKind::Transcript);
+    assert_eq!(request.messages[3].source, ContextSourceKind::LocalMessage);
+    assert_eq!(request.messages[4].source, ContextSourceKind::RuntimeHint);
+    assert_eq!(request.messages[4].role, ModelMessageRole::Developer);
 }
 
 #[test]

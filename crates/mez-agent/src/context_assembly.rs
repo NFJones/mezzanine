@@ -60,7 +60,9 @@ pub fn assemble_model_request_from_context(
             prompt_assets,
         )?,
     });
-    for block in &blocks {
+    let mut ordered_blocks = blocks.iter().enumerate().collect::<Vec<_>>();
+    ordered_blocks.sort_by_key(|(index, block)| (block.cache_disposition(), *index));
+    for (_, block) in ordered_blocks {
         if ProviderTranscriptEvent::from_transcript_content(&block.content).is_some() {
             messages.push(ModelMessage {
                 role: ModelMessageRole::System,

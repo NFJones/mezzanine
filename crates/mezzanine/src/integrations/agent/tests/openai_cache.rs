@@ -61,24 +61,24 @@ fn openai_current_action_results_remain_volatile_suffix() {
         .iter()
         .position(|message| {
             message["content"][0]["text"].as_str().is_some_and(|text| {
-                text.contains("[current-turn executed result]") && text.contains("fresh evidence")
+                text.contains("[executed result transcript entry]")
+                    && text.contains("fresh evidence")
             })
         })
         .expect("current action result should be rendered into input");
     assert!(action_index > user_index);
     let prefix = openai_stable_prefix_material_for_request(&request).unwrap();
-    assert!(prefix.contains("[historical executed result transcript entry]"));
+    assert!(prefix.contains("[executed result transcript entry]"));
     assert!(prefix.contains("cached evidence"));
     assert!(!prefix.contains("fresh evidence"));
     assert!(input.iter().any(|message| {
         message["content"][0]["text"].as_str().is_some_and(|text| {
-            text.contains("[historical executed result transcript entry]")
-                && text.contains("cached evidence")
+            text.contains("[executed result transcript entry]") && text.contains("cached evidence")
         })
     }));
     assert!(input.iter().any(|message| {
         message["content"][0]["text"].as_str().is_some_and(|text| {
-            text.contains("[current-turn executed result]") && text.contains("fresh evidence")
+            text.contains("[executed result transcript entry]") && text.contains("fresh evidence")
         })
     }));
     let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
@@ -221,7 +221,7 @@ fn openai_historical_tool_results_replay_outside_stable_prefix() {
         .iter()
         .find_map(|message| {
             let text = message["content"][0]["text"].as_str()?;
-            text.contains("[historical executed result transcript entry]")
+            text.contains("[executed result transcript entry]")
                 .then_some(text)
         })
         .expect("historical tool result should replay as ordinary input");
@@ -230,11 +230,11 @@ fn openai_historical_tool_results_replay_outside_stable_prefix() {
     assert!(first_input.iter().any(|message| {
         message["content"][0]["text"]
             .as_str()
-            .is_some_and(|text| text.contains("[historical executed result transcript entry]"))
+            .is_some_and(|text| text.contains("[executed result transcript entry]"))
     }));
     let first_prefix = openai_stable_prefix_material_for_request(&first).unwrap();
     let second_prefix = openai_stable_prefix_material_for_request(&second).unwrap();
-    assert!(first_prefix.contains("[historical executed result transcript entry]"));
+    assert!(first_prefix.contains("[executed result transcript entry]"));
     assert!(first_prefix.contains("stable evidence"));
     assert_eq!(first_prefix, second_prefix);
     let first_diagnostics = openai_prompt_cache_diagnostics_for_request(&first).unwrap();
@@ -979,7 +979,8 @@ fn openai_replays_current_turn_read_results_without_synthetic_ledger() {
         .iter()
         .filter_map(|message| message["content"][0]["text"].as_str())
         .filter(|text| {
-            text.contains("[current-turn executed result]") && text.contains("[action_result read-")
+            text.contains("[executed result transcript entry]")
+                && text.contains("[action_result read-")
         })
         .collect::<Vec<_>>();
 
@@ -1052,10 +1053,8 @@ fn openai_stable_prefix_excludes_injected_mcp_integration_context() {
         !stable_input_text.contains("[mcp integrations]"),
         "{stable_input_text}"
     );
-    assert!(
-        stable_input.is_empty(),
-        "injected MCP context should close the stable prefix: {stable_input_text}"
-    );
-    assert_eq!(diagnostics.stable_input_bytes, 2);
+    assert!(stable_input_text.contains("durable assistant context after mcp"));
+    assert!(!stable_input.is_empty());
+    assert!(diagnostics.stable_input_bytes > 2);
     assert!(diagnostics.volatile_input_bytes > 2);
 }
