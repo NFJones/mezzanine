@@ -20,15 +20,8 @@ use mez_agent::{
     redact_claude_code_text, validate_claude_code_auto_sizing_output,
 };
 use std::collections::BTreeMap;
-use std::future::Future;
-use std::path::PathBuf;
-use std::pin::Pin;
-use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
-use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
 
 /// Executable name used for Claude Code subprocess requests.
 const CLAUDE_CODE_PROGRAM: &str = "claude";

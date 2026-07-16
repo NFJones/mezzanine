@@ -216,7 +216,7 @@ fn parse_openai_chat_completions_http_response(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::build_openai_chat_completions_models_http_request;
 
     /// Verifies model listing derives the sibling `/models` endpoint only from
     /// the normalized trailing Chat Completions suffix, so compatible proxy

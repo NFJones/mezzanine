@@ -297,7 +297,12 @@ impl AsyncProviderHttpTransport for ReqwestProviderHttpTransport {
 
 #[cfg(test)]
 mod provider_transport_tests {
-    use super::*;
+    use super::{
+        AsyncProviderHttpTransport, ProviderHttpRequest, ProviderSseTerminalDetector,
+        ReqwestProviderHttpTransport, apply_provider_transport_default_headers,
+    };
+    use std::collections::BTreeMap;
+    use std::time::Duration;
 
     /// Verifies provider HTTP calls ask for identity response bytes unless a
     /// caller explicitly chooses a different content encoding.

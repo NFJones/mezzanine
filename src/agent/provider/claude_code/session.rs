@@ -1,6 +1,14 @@
 //! Process-local Claude Code session serialization and corrective retry.
 
-use super::*;
+use super::{
+    CLAUDE_CODE_SESSION_STATES, ClaudeCodeRequestOutput, ClaudeCodeSubprocessRequest, ModelRequest,
+    Result, claude_code_corrective_retry_instruction, claude_code_empty_output_error,
+    claude_code_maap_json_schema, claude_code_prompt, claude_code_resume_prompt,
+    claude_code_session_id, claude_code_system_prompt, parse_claude_code_maap_output,
+    run_claude_code_subprocess,
+};
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 
 /// Tracks one Claude Code conversation id across short-lived print subprocesses.
 pub(super) struct ClaudeCodeSessionState {

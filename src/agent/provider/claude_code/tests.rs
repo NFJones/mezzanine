@@ -1,6 +1,9 @@
 //! Claude Code provider and subprocess integration tests.
 
-use super::*;
+use super::{
+    AsyncModelProvider, CLAUDE_CODE_DISALLOWED_NATIVE_TOOLS, ClaudeCodeProvider,
+    ModelInteractionKind, claude_code_spawn_error_is_transient,
+};
 
 /// Verifies the Claude Code disallowed tool list omits stale tool names
 /// that are not part of the current Claude native tool surface.

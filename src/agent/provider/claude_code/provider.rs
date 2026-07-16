@@ -1,6 +1,15 @@
 //! The concrete asynchronous Claude Code model provider adapter.
 
-use super::*;
+use super::{
+    AsyncModelProvider, CLAUDE_CODE_PROGRAM, ClaudeCodeSubprocessRequest, MezError,
+    ModelInteractionKind, ModelRequest, ModelResponse, ProviderModelCatalog, Result,
+    claude_code_auto_sizing_json_schema, claude_code_empty_output_error,
+    claude_code_macro_judge_json_schema, claude_code_prompt, claude_code_system_prompt,
+    run_claude_code_request_with_corrective_retry, run_claude_code_subprocess,
+    validate_claude_code_auto_sizing_output, validate_non_empty,
+};
+use std::future::Future;
+use std::pin::Pin;
 
 /// Experimental Claude Code subprocess provider.
 #[derive(Debug, Clone, PartialEq, Eq)]

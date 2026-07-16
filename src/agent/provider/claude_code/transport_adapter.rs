@@ -1,6 +1,16 @@
 //! Bounded Claude Code subprocess invocation and resume transport.
 
-use super::*;
+use super::{
+    CLAUDE_CODE_SESSION_LOCK_RETRY_ATTEMPTS, CLAUDE_CODE_SESSION_LOCK_RETRY_DELAY_MS,
+    ClaudeCodeOutput, ClaudeCodeSessionErrorKind, ClaudeCodeSessionInvocation,
+    ClaudeCodeSessionRef, ClaudeCodeSettingsFile, ClaudeCodeSystemPromptFile, MaapBatch, MezError,
+    ModelTokenUsage, Result, bound_claude_code_text, claude_code_session_error_kind,
+    parse_claude_code_json_output, redact_claude_code_text,
+};
+use std::process::Stdio;
+use std::time::Duration;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
 
 /// Captures one Claude Code subprocess completion for retry and validation.
 pub(super) struct ClaudeCodeSubprocessOutput {

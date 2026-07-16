@@ -182,13 +182,18 @@ fn build_anthropic_messages_http_request(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        ANTHROPIC_MESSAGES_ENDPOINT, AnthropicMessagesOptions, MezError, ModelRequest,
+        OPENAI_MAAP_FUNCTION_TOOL_NAME, anthropic_messages_request_body,
+        parse_anthropic_messages_provider_body,
+    };
     use crate::agent::provider::{
         AnthropicMessagesProvider, ReqwestProviderHttpTransport, provider_error_retry_class,
     };
     use crate::auth::{AuthPaths, AuthStore};
     use crate::error::MezErrorKind;
     use mez_agent::{DEFAULT_PROVIDER_TIMEOUT_MS, ProviderErrorRetryClass};
+    use std::collections::BTreeMap;
     use std::fs;
 
     /// Parses one synthetic Anthropic response with the requested stop reason

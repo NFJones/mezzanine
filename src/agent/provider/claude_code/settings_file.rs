@@ -1,6 +1,11 @@
 //! Temporary settings and system-prompt files for Claude Code subprocesses.
 
-use super::*;
+use super::{
+    CLAUDE_CODE_DISALLOWED_NATIVE_TOOLS, CLAUDE_CODE_SETTINGS_FILE_COUNTER,
+    CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL, MezError, Result, redact_claude_code_text,
+};
+use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 
 /// Owns a per-invocation Claude Code settings file and removes it when the
 /// subprocess invocation completes or fails before spawn.
