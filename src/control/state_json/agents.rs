@@ -1,6 +1,13 @@
 //! Agent, shell session, task list, and model-profile state projection.
 
-use super::*;
+use super::{
+    AgentShellCommandOutcome, AgentShellSession, AgentShellStore, AgentShellVisibility,
+    AgentTurnLedger, AgentTurnState, BTreeMap, JsonRpcRequest, MezError, Result, Session, Window,
+    execute_agent_shell_command, json_escape, json_optional_string, json_string_field, pane_by_id,
+    pane_target_checked_resolved, parse_json_object_value, require_idempotency_key,
+    require_session_target_matches_value, state_request_session_target_matches,
+    target_or_active_pane, unix_seconds_to_rfc3339,
+};
 
 /// Runs the agents json operation for this subsystem.
 ///

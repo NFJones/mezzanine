@@ -1,9 +1,29 @@
 //! Parsed control-method execution and JSON-RPC response projection.
 
-use super::connection::initialize_control_connection;
-use super::schema_validation::*;
-use super::*;
-
+use super::connection::{ControlConnectionState, initialize_control_connection};
+use super::schema_validation::{
+    control_current_unix_seconds, control_pane_size_spec, dispatch_session_attach_parsed,
+    reject_runtime_required_creation_fields, validate_control_method_params_schema,
+};
+use super::{
+    BlockedApprovalQueue, ClientId, ControlDispatchKind, EventLog, JsonRpcRequest,
+    MAX_EVENT_REPLAY_RETENTION, McpRegistry, MezError, Result, Session, SplitDirection,
+    agent_shell_command_response_json, agent_state_json, agents_json_for_params,
+    approval_decide_scope_persistence, approval_json, approvals_json_for_params,
+    clients_json_for_params, control_method_spec, destination_target_checked_resolved,
+    dispatch_config_parsed_request, dispatch_event_list_request, dispatch_pane_capture_request,
+    error_code, frame_read_json, initialize_result_json, json_bool_field, json_escape,
+    json_object_field, json_raw_field, json_rpc_error, json_rpc_success, json_string_field,
+    layout_state_json, mcp_servers_json, mcp_tools_json, mezzanine_error_code,
+    nullable_state_request_session_target_matches, observer_json, observers_json_for_params,
+    pane_by_id, pane_state_json, pane_target_checked_resolved, panes_json_for_params,
+    parse_approval_decision, parse_join_position, parse_json_rpc_request, parse_split_direction,
+    parse_trust_decision, project_trust_state_filter_from_params, require_idempotency_key,
+    require_session_target_matches, session_state_json_for_params, session_summary_json,
+    source_pane_target_checked_resolved, target_or_active_pane, validate_agent_task_list_params,
+    window_by_id, window_id_for_target, window_state_json, window_target_checked_resolved,
+    windows_json_for_params,
+};
 /// Runs the dispatch control request internal operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

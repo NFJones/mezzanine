@@ -3,8 +3,10 @@
 use super::approvals::optional_rfc3339_timestamp_json;
 use super::mcp::observer_json_by_ref;
 use super::snapshots::{client_role_name, client_state_name};
-use super::*;
-
+use super::{
+    ClientRole, ClientState, ClientTerminalDescriptor, DEFAULT_PANE_TERM, ObserverDecisionState,
+    Session, json_escape, string_array_json,
+};
 /// Runs the clients json operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

@@ -1,8 +1,11 @@
 //! Event audience filtering, listing, and payload serialization.
 
 use super::mcp::event_kind_name;
-use super::*;
-
+use super::{
+    ClientId, ClientRole, EventAudience, EventLog, JsonRpcRequest, MAX_EVENT_REPLAY_RETENTION,
+    MezError, Result, Session, VisibleEvent, json_escape, json_optional_string,
+    reject_unknown_json_fields,
+};
 /// Runs the control event audience operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
