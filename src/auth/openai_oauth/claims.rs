@@ -1,6 +1,10 @@
 //! Provider token claim parsing and credential projection.
 
-use super::*;
+use super::{OpenAiProviderCredential, TokenResponse};
+use base64::Engine;
+use serde::Deserialize;
+use serde_json::Value;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Parses the JSON claims from a provider JWT without validating its signature.
 pub(super) fn parse_jwt_claims(token: &str) -> Option<Value> {

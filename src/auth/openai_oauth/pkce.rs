@@ -1,6 +1,10 @@
 //! PKCE authorization URL, token, form, and query helpers.
 
-use super::*;
+use super::{MezError, OPENAI_OAUTH_SCOPE, PkceCodes, Result};
+use base64::Engine;
+use rand::Rng;
+use sha2::Digest;
+use std::collections::BTreeMap;
 
 /// Builds the provider authorization URL for a PKCE login.
 pub(super) fn build_authorize_url(

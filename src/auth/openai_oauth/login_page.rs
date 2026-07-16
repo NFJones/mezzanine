@@ -1,7 +1,10 @@
 //! Themed browser callback page rendering and color translation.
 
 use super::platform_browser::html_escape;
-use super::*;
+use super::{LoginPageKind, LoginPageRgb, LoginPageThemeTokens};
+use mez_mux::theme::UiTheme;
+use mez_terminal::TerminalColor;
+use std::io::Write;
 
 /// Writes a themed browser callback response to a blocking stream.
 pub(super) fn write_http_response_with_tokens(

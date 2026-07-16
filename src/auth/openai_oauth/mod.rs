@@ -6,22 +6,11 @@
 //! directly. The local metadata file remains non-secret, and credential
 //! persistence stays centralized in the configured credential store.
 
-use std::collections::BTreeMap;
-use std::io::Write;
-use std::net::TcpListener;
-use std::process::{Command, Stdio};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
-use base64::Engine;
-use rand::Rng;
 use serde::Deserialize;
-use serde_json::Value;
-use sha2::Digest;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::error::{MezError, MezErrorKind, Result};
-use mez_mux::theme::UiTheme;
-use mez_terminal::TerminalColor;
 
 /// Defines the DEFAULT ISSUER const used by this subsystem.
 ///

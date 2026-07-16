@@ -1,6 +1,6 @@
 //! Escaping and platform browser-launch adapters.
 
-use super::*;
+use std::process::{Command, Stdio};
 
 /// Escapes text for insertion into the local callback HTML document.
 pub(super) fn html_escape(value: &str) -> String {

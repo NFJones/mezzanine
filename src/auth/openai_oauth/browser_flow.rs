@@ -9,7 +9,14 @@ use super::http::{
 use super::login_page::login_page_theme_tokens;
 use super::pkce::{build_authorize_url, generate_pkce, random_urlsafe_token};
 use super::platform_browser::open_browser;
-use super::*;
+use super::{
+    DEFAULT_BROWSER_PORT, DEFAULT_CLIENT_ID, DEFAULT_ISSUER, DEVICE_VERIFICATION_PATH,
+    FALLBACK_BROWSER_PORT, HTTP_REQUEST_TIMEOUT, LOGIN_TIMEOUT, LoginPageThemeTokens, MezError,
+    OpenAiProviderCredential, PkceCodes, Result,
+};
+use mez_mux::theme::UiTheme;
+use std::net::TcpListener;
+use tokio::io::AsyncReadExt;
 
 pub async fn run_openai_browser_login_async() -> Result<OpenAiProviderCredential> {
     run_openai_browser_login_with_theme_async(&UiTheme::default()).await

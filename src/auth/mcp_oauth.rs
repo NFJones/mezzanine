@@ -593,7 +593,10 @@ fn browser_open_commands(url: &str) -> Vec<Command> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        McpOAuthMetadata, PkceCodes, Value, build_authorize_url, dynamic_client_registration_body,
+        optional_string_json_field, parse_callback_request, string_json_field,
+    };
 
     /// Verifies authorize URLs carry the PKCE, scope, and resource fields MCP
     /// servers need for OAuth authorization-code login.
