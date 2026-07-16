@@ -1,7 +1,17 @@
 //! Provider-backed macro judge request and decision application.
 
-use super::super::*;
-use super::*;
+#[cfg(test)]
+use super::super::AgentTurnExecution;
+use super::super::{
+    AgentAction, AgentActionPayload, AgentTurnRecord, AgentTurnState, EventKind, MezError,
+    ModelProfile, ModelResponse, Result, RuntimeSessionService, json_escape, runtime_agent_pane_id,
+};
+use super::{
+    MacroJudgeDecision, MacroJudgeOutcome, MacroRunPhase, ModelRequest,
+    macro_judge_decision_from_text, macro_judge_model_request,
+};
+#[cfg(test)]
+use crate::agent::provider::ModelProvider;
 
 impl RuntimeSessionService {
     /// Returns whether one parent turn is waiting for a structured macro judge

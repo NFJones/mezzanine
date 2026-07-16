@@ -5,7 +5,22 @@
 //! shaping for runtime agent turns. Keeping these helpers outside the service
 //! facade leaves the facade focused on state transitions and dispatch.
 
-use super::*;
+use super::{
+    ActionPresentationInput, ActionResult, ActionStatus, AgentAction, AgentActionPayload,
+    AgentTurnExecution, AgentTurnRecord, AgentTurnState, BTreeSet, BlockedApprovalRequest,
+    ContextBlock, ContextSourceKind, MezError, Result, RuntimeSessionService, action_outcome_line,
+    action_rationale_repeats_visible_summary, action_result_context_content, action_summary,
+    current_unix_seconds, local_action_plan, network_action_plan, runtime_action_result_error_code,
+    runtime_action_result_is_aggregated_loop_guard_failure,
+    runtime_action_result_is_feedback_candidate, runtime_action_type_is_shell_backed,
+    runtime_agent_terminal_preview, runtime_agent_turn_duration_display,
+    runtime_agent_turn_state_name, runtime_execution_can_feed_failure_to_model,
+    runtime_execution_uses_unbounded_apply_patch_recovery, runtime_failure_feedback_attempt_keys,
+    runtime_failure_feedback_evidence_guidance, runtime_failure_feedback_loop_guard_aggregate_note,
+    runtime_failure_feedback_repeat_guidance, runtime_failure_feedback_specific_guidance,
+    runtime_failure_feedback_status_line, runtime_mezzanine_error_code,
+    runtime_provider_audit_error_message,
+};
 
 impl RuntimeSessionService {
     /// Queues one provider continuation after model-correctable action

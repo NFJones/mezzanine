@@ -5,7 +5,18 @@
 //! deferred output, and terminal failure diagnostics so execution modules can
 //! update state without duplicating display policy.
 
-use super::*;
+use super::{
+    AgentActionPayload, AgentTurnExecution, AgentTurnState, BTreeSet, Result,
+    RuntimeSessionService, SayStatus, normalize_agent_user_visible_text,
+    runtime_action_result_has_error_code, runtime_action_result_is_terminal_failure,
+    runtime_agent_action_error_suffix, runtime_agent_action_has_runtime_visible_effect,
+    runtime_agent_action_outcome_line, runtime_agent_action_rationale_repeats_visible_batch_text,
+    runtime_agent_action_rationale_repeats_visible_summary, runtime_agent_action_summary,
+    runtime_agent_batch_rationale_repeats_visible_batch_text,
+    runtime_agent_batch_visible_action_texts, runtime_loop_guard_failure_label,
+    runtime_loop_guard_failure_summary_line, runtime_unrecovered_action_failure_output,
+    runtime_unrecovered_failure_output_lines,
+};
 
 impl RuntimeSessionService {
     /// Runs the present agent response actions to terminal buffer operation for this subsystem.

@@ -1,6 +1,13 @@
 //! Synchronous provider result application used by deterministic tests.
 
-use super::super::*;
+use super::super::RuntimeSessionService;
+#[cfg(test)]
+use super::super::{
+    AgentTurnExecution, AgentTurnRecord, AgentTurnState, EventKind, ModelProfile,
+    ModelTokenUsageKey, Result, TaskState, json_escape, runtime_agent_execution_failure_error,
+    runtime_agent_execution_prompt_display_lines, runtime_agent_turn_state_name,
+    runtime_execution_ready_for_provider_continuation,
+};
 
 impl RuntimeSessionService {
     /// Runs the apply agent provider execution operation for this subsystem.

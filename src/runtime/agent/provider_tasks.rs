@@ -6,12 +6,28 @@
 //! dispatch while preserving the runtime service method surface used by the
 //! async actor and tests.
 
-use super::*;
 use crate::agent::provider::{
     ClaudeCodeProvider, anthropic_provider_from_auth_store_with_provider_options,
 };
 use crate::runtime::{RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition};
 use mez_agent::{DEFAULT_PROVIDER_RETRY_POLICY, ProviderErrorRetryClass};
+
+#[cfg(test)]
+use super::AgentTurnExecution;
+use super::{
+    AgentId, AgentTurnState, DEFAULT_PROVIDER_TIMEOUT_MS, EventKind, HookEvent, MezError,
+    ProviderApiCompatibility, ReqwestProviderHttpTransport, Result, RuntimeAgentProviderClaim,
+    RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask,
+    RuntimeProviderConfig, RuntimeSessionService, append_mcp_context, assemble_model_request,
+    current_unix_millis, deepseek_chat_completions_provider_from_auth_store_with_provider_options,
+    invoked_mcp_tools_for_context, json_escape,
+    openai_compatible_provider_from_auth_store_with_provider_options,
+    openai_responses_provider_from_auth_store_with_provider_options, resolve_provider_api,
+    runtime_agent_turn_start_hook_payload, runtime_mezzanine_error_code,
+    runtime_provider_event_error,
+};
+#[cfg(test)]
+use crate::agent::provider::ModelProvider;
 
 impl RuntimeSessionService {
     /// Returns whether one provider failure remains eligible for retry.

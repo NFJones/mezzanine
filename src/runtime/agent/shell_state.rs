@@ -5,7 +5,15 @@
 //! shell readiness. It is shared by action execution, process observation, and
 //! command/control paths.
 
-use super::*;
+use super::{
+    AgentAction, AgentActionPayload, AgentTurnRecord, AgentTurnState, ApplyPatchTransactionPhase,
+    MezError, PaneReadinessState, PathScopes, PermissionPolicy, ReadinessOverrideRevocation,
+    Result, RunningShellTransactionKind, RunningShellTransactionRef, RuntimeSessionService,
+    ShellTransaction, ShellTransactionOutputTransport, SubagentScopeDeclaration,
+    apply_patch_transaction_phase, current_unix_millis, runtime_agent_shell_status,
+    runtime_agent_terminal_preview, runtime_execution_ready_for_provider_continuation,
+    runtime_marker_for_action, runtime_pane_readiness_state_name,
+};
 
 impl RuntimeSessionService {
     /// Runs the dispatch shell action to pane operation for this subsystem.

@@ -5,7 +5,12 @@
 //! shaping close to policy-sensitive execution without mixing it into the main
 //! agent facade.
 
-use super::*;
+use super::{
+    AgentAction, AgentActionPayload, AgentTurnRecord, AuditActor, AuditRecord,
+    DEFAULT_COMMAND_SHELL_CLASSIFICATION, MezError, ModelProfile, Result, RuntimeSessionService,
+    exact_command_sha256, runtime_mezzanine_error_code, runtime_permission_preset_name,
+    runtime_provider_audit_error_message,
+};
 
 impl RuntimeSessionService {
     /// Runs the append agent shell command audit operation for this subsystem.

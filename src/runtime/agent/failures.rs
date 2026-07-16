@@ -5,7 +5,15 @@
 //! cleanup, transcript persistence, subagent result emission, and status display
 //! decisions grouped around failure handling.
 
-use super::*;
+use super::{
+    ActionResult, ActionStatus, AgentTurnExecution, AgentTurnRecord, AgentTurnState, EventKind,
+    MezError, ModelProfile, ModelResponse, Result, RunningShellTransactionRef,
+    RuntimeHookPipelineBlock, RuntimeSessionService, RuntimeShellTransactionActionFailure,
+    assemble_model_request, json_escape, local_action_plan, runtime_action_status_name,
+    runtime_agent_execution_failure_error, runtime_agent_execution_prompt_display_lines,
+    runtime_agent_terminal_preview, runtime_agent_turn_state_from_action_results,
+    runtime_agent_turn_state_name, runtime_hook_event_name, runtime_mezzanine_error_code,
+};
 
 impl RuntimeSessionService {
     /// Settles a provider completion that failed while applying runtime state.

@@ -5,7 +5,7 @@
 //! strings into runtime error/state values separate from the agent lifecycle
 //! orchestration code.
 
-use super::*;
+use super::MezError;
 use crate::agent::provider::provider_event_error_from_parts;
 
 /// Builds a typed provider event error from serialized async-provider fields.

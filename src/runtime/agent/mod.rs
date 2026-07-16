@@ -50,12 +50,6 @@ use super::{
     runtime_subagent_placement_mode, runtime_subagent_spawn_request,
     transcript_entries_for_execution, validate_mmp_payload_metadata,
 };
-#[cfg(test)]
-use crate::agent::actions::AgentTurnRunner;
-#[cfg(test)]
-use crate::agent::provider::ModelProvider;
-#[cfg(test)]
-use crate::agent::provider::provider_error_retry_class;
 use crate::agent::provider::{
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     openai_compatible_provider_from_auth_store_with_provider_options,
@@ -1806,7 +1800,10 @@ fn runtime_agent_failed_execution_raw_text_is_placeholder(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        ActionResult, ActionStatus, AgentTurnExecution, AgentTurnState, MaapBatch, ModelResponse,
+        runtime_agent_execution_prompt_display_lines,
+    };
 
     /// Verifies failed DeepSeek tool-call turns display the action failure
     /// diagnostic instead of the provider's `executing` placeholder.

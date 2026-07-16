@@ -5,7 +5,12 @@
 //! subagent trees close. Provider execution, action dispatch, and presentation
 //! remain in their narrower runtime-agent modules.
 
-use super::*;
+use super::{
+    AgentShellSession, AgentShellVisibility, AgentTurnRecord, AgentTurnState, EventKind, MezError,
+    Result, RuntimeSessionService, json_escape, runtime_agent_finished_footer_line,
+    runtime_agent_pane_id, runtime_agent_turn_state_name, runtime_pane_by_id,
+    runtime_unrecovered_failure_reason,
+};
 
 impl RuntimeSessionService {
     /// Runs the start agent turn operation for this subsystem.
