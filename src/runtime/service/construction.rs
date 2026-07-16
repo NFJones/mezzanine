@@ -153,7 +153,6 @@ impl RuntimeSessionService {
             auth_store: None,
             provider_auth_refresh_leeway_seconds:
                 crate::auth::DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS,
-            audit_log: None,
             project_trust_store: None,
             project_trust_database_path: None,
             announced_project_trust_roots: BTreeSet::new(),

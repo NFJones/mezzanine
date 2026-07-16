@@ -5,7 +5,7 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    ActionStatus, AgentShellVisibility, AgentTurnState, AuditLog, AuthStore, BTreeMap, BTreeSet,
+    ActionStatus, AgentShellVisibility, AgentTurnState, AuthStore, BTreeMap, BTreeSet,
     BlockedApprovalQueue, ConfigLayer, ControlIdempotencyCache, EventLog, FocusedShellHookQueue,
     HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult, HookFailureKind,
     McpRegistry, McpServerStatus, McpStartupPlan, McpStdioConnection, McpToolCallPlan,

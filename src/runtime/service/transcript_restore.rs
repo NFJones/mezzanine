@@ -42,7 +42,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn set_audit_log(&mut self, mut audit_log: AuditLog) {
-        if let Some(existing) = self.audit_log.as_mut() {
+        if let Some(existing) = self.persistence.audit_log_mut() {
             let pending = existing.drain_deferred_writes();
             for write in pending {
                 self.persistence
@@ -50,19 +50,19 @@ impl RuntimeSessionService {
             }
         }
         audit_log.set_defer_writes(self.persistence.audit_uses_adapter());
-        self.audit_log = Some(audit_log);
+        self.persistence.set_audit_log(audit_log);
     }
 
     /// Clears the active audit writer while preserving deferred writes.
     pub(super) fn clear_audit_log(&mut self) {
-        if let Some(existing) = self.audit_log.as_mut() {
+        if let Some(existing) = self.persistence.audit_log_mut() {
             let pending = existing.drain_deferred_writes();
             for write in pending {
                 self.persistence
                     .queue_audit(audit_persistence_effect(write));
             }
         }
-        self.audit_log = None;
+        self.persistence.clear_audit_log();
     }
 
     /// Runs the audit log operation for this subsystem.
@@ -71,12 +71,12 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn audit_log(&self) -> Option<&AuditLog> {
-        self.audit_log.as_ref()
+        self.persistence.audit_log()
     }
 
     /// Drains queued audit persistence through the transport-neutral transition contract.
     pub(crate) fn drain_audit_persistence_transition(&mut self) -> RuntimeTransition {
-        if let Some(audit_log) = self.audit_log.as_mut() {
+        if let Some(audit_log) = self.persistence.audit_log_mut() {
             let pending = audit_log.drain_deferred_writes();
             for write in pending {
                 self.persistence

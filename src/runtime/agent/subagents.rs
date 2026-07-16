@@ -314,7 +314,7 @@ impl RuntimeSessionService {
         child_agent_id: &str,
         pane_id: &str,
     ) -> Result<()> {
-        let Some(audit_log) = self.audit_log.as_mut() else {
+        let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };
         let record = AuditRecord::subagent_spawn(

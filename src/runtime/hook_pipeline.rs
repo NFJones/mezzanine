@@ -356,7 +356,7 @@ impl RuntimeSessionService {
         &mut self,
         plan: &HookExecutionPlan,
     ) -> Result<()> {
-        let Some(audit_log) = self.audit_log.as_mut() else {
+        let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };
         let actor = AuditActor {
@@ -392,7 +392,7 @@ impl RuntimeSessionService {
         plan: &HookExecutionPlan,
         result: &HookExecutionResult,
     ) -> Result<()> {
-        let Some(audit_log) = self.audit_log.as_mut() else {
+        let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };
         let actor = AuditActor {

@@ -840,7 +840,7 @@ pub(super) fn runtime_append_observer_decision_audit(
     target_id: &str,
     decision: &str,
 ) -> Result<()> {
-    let Some(audit_log) = service.audit_log.as_mut() else {
+    let Some(audit_log) = service.persistence.audit_log_mut() else {
         return Ok(());
     };
     let record = AuditRecord::observer_decision(
@@ -868,7 +868,7 @@ pub(super) fn runtime_append_auth_command_audit(
     invocation: &CommandInvocation,
     outcome: &CommandOutcome,
 ) -> Result<()> {
-    let Some(audit_log) = service.audit_log.as_mut() else {
+    let Some(audit_log) = service.persistence.audit_log_mut() else {
         return Ok(());
     };
     let CommandOutcome::Display { body, .. } = outcome else {
@@ -887,7 +887,7 @@ pub(super) fn runtime_append_auth_logout_audit(
     service: &mut RuntimeSessionService,
     changed: bool,
 ) -> Result<()> {
-    let Some(audit_log) = service.audit_log.as_mut() else {
+    let Some(audit_log) = service.persistence.audit_log_mut() else {
         return Ok(());
     };
     let actor = AuditActor {

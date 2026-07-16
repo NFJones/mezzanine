@@ -153,11 +153,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured runtime state so startup and provider
     /// turn preflight checks use the same configured threshold.
     pub(in crate::runtime) provider_auth_refresh_leeway_seconds: u64,
-    /// Stores the audit log value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) audit_log: Option<AuditLog>,
     /// Stores the project trust store value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

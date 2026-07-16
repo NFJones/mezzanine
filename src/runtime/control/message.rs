@@ -62,7 +62,7 @@ impl RuntimeSessionService {
         let Some(bridge_id) = bridge_id else {
             return Ok(());
         };
-        let Some(audit_log) = self.audit_log.as_mut() else {
+        let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };
         let mut record = AuditRecord::local_protocol_bridge_change(

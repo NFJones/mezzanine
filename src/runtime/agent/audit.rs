@@ -20,7 +20,7 @@ impl RuntimeSessionService {
         command: &str,
         outcome: &str,
     ) -> Result<()> {
-        let Some(audit_log) = self.audit_log.as_mut() else {
+        let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };
         let mut record = AuditRecord::new(
@@ -59,7 +59,7 @@ impl RuntimeSessionService {
         action: &AgentAction,
         outcome: &str,
     ) -> Result<()> {
-        let Some(audit_log) = self.audit_log.as_mut() else {
+        let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };
         let mut record = AuditRecord::new(
@@ -113,7 +113,7 @@ impl RuntimeSessionService {
         action: &AgentAction,
         outcome: &str,
     ) -> Result<()> {
-        let Some(audit_log) = self.audit_log.as_mut() else {
+        let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };
         let mut record = AuditRecord::new(
@@ -189,7 +189,7 @@ impl RuntimeSessionService {
         purpose: &str,
         outcome: &str,
     ) -> Result<()> {
-        let Some(audit_log) = self.audit_log.as_mut() else {
+        let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };
         let record = AuditRecord::credential_access_attempt(
@@ -219,7 +219,7 @@ impl RuntimeSessionService {
         provider_id: &str,
         outcome: &str,
     ) -> Result<()> {
-        let Some(audit_log) = self.audit_log.as_mut() else {
+        let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };
         let record = AuditRecord::provider_request(
@@ -251,7 +251,7 @@ impl RuntimeSessionService {
         provider_id: &str,
         error: &MezError,
     ) -> Result<()> {
-        let Some(audit_log) = self.audit_log.as_mut() else {
+        let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };
         let mut record = AuditRecord::provider_request(

@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::audit::AuditLog;
 use crate::registry::SessionRegistry;
 use crate::snapshot::SnapshotRepository;
 use crate::transcript::AgentTranscriptStore;
@@ -23,6 +24,7 @@ pub(in crate::runtime) struct RuntimePersistenceComponent {
     snapshot_repository: Option<SnapshotRepository>,
     agent_transcript_store: Option<AgentTranscriptStore>,
     session_registry: Option<SessionRegistry>,
+    audit_log: Option<AuditLog>,
     queued_pane_input_effects: Vec<RuntimeSideEffect>,
     queued_pane_resize_effects: BTreeMap<String, RuntimeSideEffect>,
     queued_pane_termination_effects: BTreeMap<String, RuntimeSideEffect>,

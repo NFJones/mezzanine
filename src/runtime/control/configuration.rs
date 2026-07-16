@@ -33,7 +33,7 @@ impl RuntimeSessionService {
         if let Err(error) = self.validate_runtime_config_disk_persist_target(request) {
             return runtime_json_rpc_error(&request.id, error.kind(), error.message());
         }
-        let response = if let Some(audit_log) = self.audit_log.as_mut() {
+        let response = if let Some(audit_log) = self.persistence.audit_log_mut() {
             dispatch_control_request_for_client_with_config_and_audit(
                 body,
                 &mut self.session,
@@ -692,7 +692,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn append_runtime_config_audit_record(&mut self, record: AuditRecord) -> Result<()> {
-        let Some(audit_log) = self.audit_log.as_mut() else {
+        let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };
         audit_log.append(record.sanitized())?;
@@ -709,7 +709,7 @@ impl RuntimeSessionService {
         caller_client_id: &mez_core::ids::ClientId,
         previous: &mez_agent::permissions::PermissionPolicy,
     ) -> Result<()> {
-        if self.audit_log.is_none() {
+        if self.persistence.audit_log().is_none() {
             return Ok(());
         }
         if previous.preset != self.permission_policy.preset {
@@ -759,7 +759,7 @@ impl RuntimeSessionService {
         decision: &str,
     ) -> Result<()> {
         let policy_mode = runtime_permission_preset_name(self.permission_policy.preset).to_string();
-        let Some(audit_log) = self.audit_log.as_mut() else {
+        let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };
         let record = AuditRecord::permission_decision(
@@ -908,7 +908,7 @@ impl RuntimeSessionService {
             EventKind::ConfigChanged,
             runtime_config_apply_event_payload(method, &report),
         )?;
-        if let Some(audit_log) = self.audit_log.as_mut() {
+        if let Some(audit_log) = self.persistence.audit_log_mut() {
             let operation = method.replace('/', "_");
             let record = AuditRecord::config_change(
                 self.session.id.to_string(),

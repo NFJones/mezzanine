@@ -297,7 +297,7 @@ impl RuntimeSessionService {
         primary_client_id: &ClientId,
         result: &HookExecutionResult,
     ) -> Result<()> {
-        let Some(audit_log) = self.audit_log.as_mut() else {
+        let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };
         let mut record = AuditRecord::new(
@@ -332,7 +332,7 @@ impl RuntimeSessionService {
         primary_client_id: &ClientId,
         hook_id: &str,
     ) -> Result<()> {
-        let Some(audit_log) = self.audit_log.as_mut() else {
+        let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };
         let mut record = AuditRecord::new(

@@ -533,7 +533,7 @@ impl RuntimeSessionService {
         let call_id = format!("{}:{}", turn.turn_id, action.id);
         let environment = std::env::vars().collect::<BTreeMap<_, _>>();
         let execution_request = McpExecutionRequest::from(&plan);
-        let audit_log = self.audit_log.as_mut();
+        let audit_log = self.persistence.audit_log_mut();
         let mut executor = RuntimeMcpActionExecutor {
             transports: &mut self.mcp_transports,
             audit_log,
@@ -635,7 +635,7 @@ impl RuntimeSessionService {
         let call_id = format!("{}:{}", turn.turn_id, action.id);
         let environment = std::env::vars().collect::<BTreeMap<_, _>>();
         let execution_request = McpExecutionRequest::from(&plan);
-        let audit_log = self.audit_log.as_mut();
+        let audit_log = self.persistence.audit_log_mut();
         let mut executor = RuntimeMcpActionExecutor {
             transports: &mut self.mcp_transports,
             audit_log,

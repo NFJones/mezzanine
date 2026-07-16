@@ -29,7 +29,7 @@ impl RuntimeSessionService {
     /// reloads retain adapter ownership without consulting the global mode.
     pub(crate) fn use_audit_effect_adapter(&mut self) {
         self.persistence.enable_audit_adapter();
-        if let Some(audit_log) = self.audit_log.as_mut() {
+        if let Some(audit_log) = self.persistence.audit_log_mut() {
             audit_log.set_defer_writes(true);
         }
     }

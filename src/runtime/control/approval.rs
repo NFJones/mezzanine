@@ -71,7 +71,7 @@ impl RuntimeSessionService {
             }
         }
 
-        let response = if let Some(audit_log) = self.audit_log.as_mut() {
+        let response = if let Some(audit_log) = self.persistence.audit_log_mut() {
             dispatch_control_request_with_approvals_and_audit(
                 body,
                 &mut self.session,

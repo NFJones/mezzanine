@@ -87,7 +87,7 @@ impl RuntimeSessionService {
             };
             expired_count = expired_count.saturating_add(1);
             let result = focused_shell_pre_action_timeout_result(&pending.plan);
-            if let Some(audit_log) = self.audit_log.as_mut() {
+            if let Some(audit_log) = self.persistence.audit_log_mut() {
                 let record = hook_execution_audit_record(
                     &pending.plan,
                     self.session.id.as_str(),

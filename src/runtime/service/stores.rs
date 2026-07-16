@@ -210,7 +210,7 @@ impl RuntimeSessionService {
         &mut self,
         approval: &BlockedApprovalRequest,
     ) -> Result<()> {
-        let Some(audit_log) = self.audit_log.as_mut() else {
+        let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };
         let scope = if approval.read_scopes.is_empty() && approval.write_scopes.is_empty() {

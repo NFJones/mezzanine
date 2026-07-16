@@ -406,7 +406,7 @@ impl RuntimeSessionService {
             invocation,
             current_state,
             current_epoch,
-            self.audit_log.as_mut(),
+            self.persistence.audit_log_mut(),
         )
     }
 

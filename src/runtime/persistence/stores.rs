@@ -1,5 +1,6 @@
 //! Repository handles, transcript sequences, and durable pane references.
 
+use crate::audit::AuditLog;
 use crate::registry::SessionRegistry;
 use crate::snapshot::SnapshotRepository;
 use crate::transcript::AgentTranscriptStore;
@@ -7,6 +8,26 @@ use crate::transcript::AgentTranscriptStore;
 use super::RuntimePersistenceComponent;
 
 impl RuntimePersistenceComponent {
+    /// Returns the attached security audit writer.
+    pub(in crate::runtime) fn audit_log(&self) -> Option<&AuditLog> {
+        self.audit_log.as_ref()
+    }
+
+    /// Returns mutable access to the attached security audit writer.
+    pub(in crate::runtime) fn audit_log_mut(&mut self) -> Option<&mut AuditLog> {
+        self.audit_log.as_mut()
+    }
+
+    /// Replaces the attached security audit writer.
+    pub(in crate::runtime) fn set_audit_log(&mut self, audit_log: AuditLog) {
+        self.audit_log = Some(audit_log);
+    }
+
+    /// Removes the attached security audit writer.
+    pub(in crate::runtime) fn clear_audit_log(&mut self) {
+        self.audit_log = None;
+    }
+
     /// Clones the configured snapshot repository handle.
     pub(in crate::runtime) fn cloned_snapshot_repository(&self) -> Option<SnapshotRepository> {
         self.snapshot_repository.clone()

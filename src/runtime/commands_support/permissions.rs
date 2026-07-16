@@ -514,7 +514,7 @@ pub(in crate::runtime) fn runtime_append_permission_audit(
     outcome: &str,
 ) -> Result<()> {
     let policy_mode = runtime_permission_preset_name(service.permission_policy.preset).to_string();
-    let Some(audit_log) = service.audit_log.as_mut() else {
+    let Some(audit_log) = service.persistence.audit_log_mut() else {
         return Ok(());
     };
     let record = AuditRecord::permission_decision(
