@@ -60,6 +60,11 @@ pub fn assemble_model_request_from_context(
             prompt_assets,
         )?,
     });
+    if is_deepseek && !repository_instruction_blocks.is_empty() {
+        messages.push(deepseek_repository_instructions_message(
+            &repository_instruction_blocks,
+        ));
+    }
     let mut ordered_blocks = blocks.iter().enumerate().collect::<Vec<_>>();
     ordered_blocks.sort_by_key(|(index, block)| (block.cache_disposition(), *index));
     for (_, block) in ordered_blocks {
@@ -88,13 +93,6 @@ pub fn assemble_model_request_from_context(
             content: format!("{}{}", model_context_block_header(block), block.content),
         });
     }
-    if is_deepseek && !repository_instruction_blocks.is_empty() {
-        prepend_repository_instructions_to_first_user_message(
-            &mut messages,
-            &repository_instruction_blocks,
-        );
-    }
-
     let mut request = ModelRequest {
         provider: profile.provider.clone(),
         model: profile.model.clone(),
@@ -332,28 +330,23 @@ fn prompt_cache_lineage_id_from_blocks(blocks: &[ContextBlock]) -> Option<String
 
 /// Returns the system-prompt pointer used for DeepSeek repository guidance.
 fn deepseek_repository_instructions_system_prompt_pointer() -> String {
-    "DeepSeek provider note: active repository instructions are repeated at the beginning of the first user message for provider adherence. Treat that repeated block as the authoritative repository instruction contents for this turn; do not reread repository instruction files merely because the full text is reinforced outside section 3.".to_string()
+    "DeepSeek provider note: active repository instructions are provided in a dedicated user message immediately after this system prompt. Treat that block as the authoritative repository instruction contents for this turn; do not reread repository instruction files merely because the full text is reinforced outside section 3.".to_string()
 }
 
-/// Prepends repository instructions to the first user message for DeepSeek.
-fn prepend_repository_instructions_to_first_user_message(
-    messages: &mut [ModelMessage],
+/// Builds the fixed-position repository-guidance message used by DeepSeek.
+fn deepseek_repository_instructions_message(
     repository_instruction_blocks: &[String],
-) {
-    let Some(first_user) = messages
-        .iter_mut()
-        .find(|message| message.role == ModelMessageRole::User)
-    else {
-        return;
-    };
+) -> ModelMessage {
     let mut content = String::from("Active repository instructions:\n\n");
     for block in repository_instruction_blocks {
         content.push_str(block);
         content.push_str("\n\n");
     }
-    content.push_str("---\n\n");
-    content.push_str(&first_user.content);
-    first_user.content = content;
+    ModelMessage {
+        role: ModelMessageRole::User,
+        source: ContextSourceKind::ProjectGuidance,
+        content,
+    }
 }
 
 #[cfg(test)]

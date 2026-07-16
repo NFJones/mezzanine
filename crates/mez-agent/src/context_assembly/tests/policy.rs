@@ -56,12 +56,12 @@ fn assemble_model_request(
 }
 
 #[test]
-/// Verifies DeepSeek system prompts point to repository guidance reinforced in user context.
+/// Verifies DeepSeek system prompts point to fixed-position repository guidance.
 ///
-/// DeepSeek receives repository instructions at the front of the first user
-/// message for provider adherence, but section 3 must still contain prompt
-/// material explaining where those active instructions live so the model does
-/// not treat the empty section as permission to reread instruction files.
+/// DeepSeek receives repository instructions in a dedicated user message after
+/// the system prompt, while ordinary user transcript content remains unchanged.
+/// Section 3 still explains where those active instructions live so the model
+/// does not treat the empty section as permission to reread instruction files.
 fn assemble_model_request_points_deepseek_system_prompt_to_user_repository_instructions() {
     let request = assemble_model_request(
         &ModelProfile {
@@ -91,23 +91,68 @@ fn assemble_model_request_points_deepseek_system_prompt_to_user_repository_instr
     .unwrap();
 
     let system = &request.messages[0].content;
-    let first_user = request
-        .messages
-        .iter()
-        .find(|message| message.role == ModelMessageRole::User)
-        .unwrap();
+    let repository_guidance = &request.messages[1];
+    let user_prompt = &request.messages[2];
 
     assert!(system.contains("3. Repository Instructions"));
     assert!(system.contains("DeepSeek provider note"));
-    assert!(system.contains("first user message"));
+    assert!(system.contains("dedicated user message"));
     assert!(!system.contains("Run just test before handoff."));
     assert!(
-        first_user
+        repository_guidance
             .content
             .starts_with("Active repository instructions:")
     );
-    assert!(first_user.content.contains("Run just test before handoff."));
-    assert!(first_user.content.contains("fix the prompt"));
+    assert_eq!(
+        repository_guidance.source,
+        ContextSourceKind::ProjectGuidance
+    );
+    assert!(
+        repository_guidance
+            .content
+            .contains("Run just test before handoff.")
+    );
+    assert_eq!(user_prompt.source, ContextSourceKind::UserInstruction);
+    assert_eq!(user_prompt.content, "[user]\nfix the prompt");
+}
+
+#[test]
+/// Verifies DeepSeek repository guidance remains provider-visible without an ordinary user prompt.
+///
+/// Dedicated placement must not depend on finding a mutable user transcript
+/// entry, because compaction and internal request modes can omit one.
+fn assemble_model_request_keeps_deepseek_repository_guidance_without_user_prompt() {
+    let request = assemble_model_request(
+        &ModelProfile {
+            provider: "deepseek".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            reasoning_profile: Some("high".to_string()),
+            latency_preference: None,
+            multimodal_required: false,
+            provider_options: std::collections::BTreeMap::new(),
+            safety_tier: None,
+        },
+        &turn(),
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::ProjectGuidance,
+            label: "active repository instructions".to_string(),
+            content: "Run just test before handoff.".to_string(),
+        }])
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(request.messages.len(), 2);
+    assert_eq!(request.messages[1].role, ModelMessageRole::User);
+    assert_eq!(
+        request.messages[1].source,
+        ContextSourceKind::ProjectGuidance
+    );
+    assert!(
+        request.messages[1]
+            .content
+            .contains("Run just test before handoff.")
+    );
 }
 
 #[test]
