@@ -1,12 +1,24 @@
 //! Schema migration dispatch and implementations through version 7.
 
-use super::ops::*;
+use super::ops::{
+    copy_json_default_if_absent, copy_toml_default_if_absent,
+    ensure_json_agent_preset_visible_field, ensure_json_agent_thinking_visible_field,
+    ensure_toml_agent_preset_visible_field, ensure_toml_agent_thinking_visible_field,
+    json_string_at, normalize_json_rename, normalize_toml_rename, parse_json_compatible_config,
+    remove_json_path, remove_toml_path, removed_v2_paths, rename_json_string_array_value,
+    rename_json_table_key, rename_toml_string_array_value, rename_toml_table_key,
+    set_json_default_usize_if_absent_or_old_default, set_json_path_value,
+    set_toml_default_usize_if_absent_or_old_default, set_toml_path_item,
+    should_backfill_v2_default_path, toml_item_at, toml_string_at,
+    update_json_model_profile_context_window_default,
+    update_toml_model_profile_context_window_default,
+};
 use super::v07_v12::{
     migrate_json_compatible_v7_to_v8, migrate_json_compatible_v8_to_v9,
     migrate_json_compatible_v9_to_v10, migrate_toml_v7_to_v8, migrate_toml_v8_to_v9,
     migrate_toml_v9_to_v10,
 };
-use super::*;
+use super::{ConfigFormat, DEFAULT_CONFIG_TOML, MezError, Result, extract_config_values};
 
 /// Applies the version 1 to version 2 migration.
 ///

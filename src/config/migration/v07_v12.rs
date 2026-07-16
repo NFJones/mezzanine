@@ -1,7 +1,11 @@
 //! Schema migration implementations from version 7 through version 13.
 
-use super::ops::*;
-use super::*;
+use super::ops::{
+    backfill_json_provider_api_defaults, backfill_toml_provider_api_defaults,
+    copy_json_default_if_absent, copy_toml_default_if_absent, parse_json_compatible_config,
+    remove_json_path, remove_toml_path, removed_v12_paths, set_json_path_value, set_toml_path_item,
+};
+use super::{ConfigFormat, DEFAULT_CONFIG_TOML, MezError, Result};
 
 /// Applies the version 7 to version 8 migration to TOML while preserving
 /// comments and formatting where `toml_edit` can retain them.

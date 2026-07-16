@@ -1,9 +1,17 @@
 //! Config migration planning, schema detection, file persistence, and step dispatch.
 
-use super::v01_v06::*;
-use super::v07_v12::*;
-use super::v13_v19::*;
-use super::*;
+use super::v01_v06::{
+    migrate_v1_to_v2, migrate_v2_to_v3, migrate_v3_to_v4, migrate_v4_to_v5, migrate_v5_to_v6,
+    migrate_v6_to_v7, migrate_v7_to_v8, migrate_v8_to_v9, migrate_v9_to_v10,
+};
+use super::v07_v12::{migrate_v10_to_v11, migrate_v11_to_v12, migrate_v12_to_v13};
+use super::v13_v19::{
+    migrate_v13_to_v14, migrate_v14_to_v15, migrate_v15_to_v16, migrate_v16_to_v17,
+    migrate_v17_to_v18, migrate_v18_to_v19,
+};
+use super::{
+    ConfigFormat, MezError, Path, Result, extract_config_values, fs, write_private_config_file,
+};
 
 /// The newest configuration schema version understood by this binary.
 pub const CURRENT_CONFIG_SCHEMA_VERSION: u64 = 19;
