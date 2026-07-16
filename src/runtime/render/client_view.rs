@@ -692,11 +692,12 @@ impl RuntimeSessionService {
         config.pane_frame_position = self.pane_frame_position;
         config.pane_frame_style = self.pane_frame_style;
         config.pane_frame_visible_fields = self.pane_frame_visible_fields.clone();
-        config.cursor_style = self.terminal_cursor_style;
-        config.cursor_blink = self.terminal_cursor_blink;
-        config.cursor_blink_interval_ms = self.terminal_cursor_blink_interval_ms;
-        config.resize_debounce_ms = self.terminal_resize_debounce_ms;
-        config.render_rate_limit_fps = self.terminal_render_rate_limit_fps;
+        config.cursor_style = self.presentation.settings.terminal_cursor_style;
+        config.cursor_blink = self.presentation.settings.terminal_cursor_blink;
+        config.cursor_blink_interval_ms =
+            self.presentation.settings.terminal_cursor_blink_interval_ms;
+        config.resize_debounce_ms = self.presentation.settings.terminal_resize_debounce_ms;
+        config.render_rate_limit_fps = self.presentation.settings.terminal_render_rate_limit_fps;
         config.ui_theme = self.ui_theme.clone();
         config.primary_display_overlay_active = self.presentation.primary_display_overlay.is_some();
         let frame_context = self.terminal_frame_context();
@@ -857,7 +858,13 @@ impl RuntimeSessionService {
         if !self.window_frames_enabled {
             return Vec::new();
         }
-        if self.window_frame_right_status_template.trim().is_empty() {
+        if self
+            .presentation
+            .settings
+            .window_frame_right_status_template
+            .trim()
+            .is_empty()
+        {
             return Vec::new();
         }
         let group_top_offset = u16::from(self.session.window_groups().len() > 1);
@@ -1003,7 +1010,9 @@ impl RuntimeSessionService {
 
     /// Builds the animation tick used by terminal frame rendering.
     fn runtime_frame_animation_tick_ms(&self) -> u64 {
-        if self.terminal_reduced_motion || !self.active_window_has_agent_animation() {
+        if self.presentation.settings.terminal_reduced_motion
+            || !self.active_window_has_agent_animation()
+        {
             0
         } else {
             current_unix_millis()
@@ -1011,10 +1020,20 @@ impl RuntimeSessionService {
     }
     /// Builds right-status context only for fields the active template uses.
     fn runtime_window_status_context(&self) -> Option<TerminalWindowStatusContext> {
-        if self.window_frame_right_status_template.trim().is_empty() {
+        if self
+            .presentation
+            .settings
+            .window_frame_right_status_template
+            .trim()
+            .is_empty()
+        {
             return None;
         }
-        let template = self.window_frame_right_status_template.clone();
+        let template = self
+            .presentation
+            .settings
+            .window_frame_right_status_template
+            .clone();
         let active_pane_working_directory = if template.contains("#{pane.pwd}") {
             self.active_pane_id()
                 .ok()
@@ -1035,9 +1054,13 @@ impl RuntimeSessionService {
             String::new()
         };
         let status_pills = self
+            .presentation
             .window_status_pill_cache
             .borrow_mut()
-            .refresh_active(&self.window_status_pill_definitions, &template);
+            .refresh_active(
+                &self.presentation.settings.window_status_pill_definitions,
+                &template,
+            );
         Some(TerminalWindowStatusContext {
             template,
             active_pane_working_directory,
@@ -1074,7 +1097,7 @@ impl RuntimeSessionService {
             pending_observer_count,
             pressed_window_action: self.presentation.pressed_window_action.clone(),
             animation_tick_ms: self.runtime_frame_animation_tick_ms(),
-            reduced_motion: self.terminal_reduced_motion,
+            reduced_motion: self.presentation.settings.terminal_reduced_motion,
             window_status: self.runtime_window_status_context(),
             ..TerminalFrameContext::default()
         };

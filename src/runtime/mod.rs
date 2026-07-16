@@ -280,7 +280,7 @@ mod processes;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod render;
-pub(in crate::runtime) use render::RuntimePresentationComponent;
+pub(in crate::runtime) use render::{RuntimePresentationComponent, RuntimePresentationSettings};
 /// Exposes the service module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

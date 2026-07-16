@@ -20,11 +20,10 @@ use super::{
     McpToolCallResponse, MessageService, MezError, ModelProfile, ModelRequest, ModelResponse,
     ModelTokenUsage, ModelTokenUsageKey, PaneGeometry, PaneId, PaneProcessManager,
     PaneReadinessOverrideStore, PaneReadinessState, PasteBuffers, PathBuf, PermissionPolicy,
-    ProjectTrustStore, ProviderQuotaUsage, Result, RuntimeSideEffect, RuntimeStatusPillCache,
-    RuntimeStatusPillDefinition, ScopeRegistry, Session, SessionApprovalStore, SessionMemoryStore,
-    SessionRecord, SessionRegistry, Size, SnapshotRepository, SplitDirection, SubagentProfile,
-    SubagentScopeDeclaration, TerminalCursorStyle, TerminalScreen, ToolDiscoveryCache, WindowId,
-    execute_streamable_http_exchange, mcp_tools_call_operation,
+    ProjectTrustStore, ProviderQuotaUsage, Result, RuntimeSideEffect, ScopeRegistry, Session,
+    SessionApprovalStore, SessionMemoryStore, SessionRecord, SessionRegistry, Size,
+    SnapshotRepository, SplitDirection, SubagentProfile, SubagentScopeDeclaration, TerminalScreen,
+    ToolDiscoveryCache, WindowId, execute_streamable_http_exchange, mcp_tools_call_operation,
 };
 use super::{RuntimePresetRegistry, RuntimeProviderRegistry};
 use crate::error::MezErrorKind;

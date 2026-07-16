@@ -140,7 +140,7 @@ fn runtime_applies_frame_display_options_from_config_layers() {
         vec!["session.id".to_string(), "window.index".to_string()]
     );
     assert_eq!(
-        service.window_frame_right_status_template,
+        service.window_frame_right_status_template(),
         "#{datetime.local}"
     );
     assert!(config.pane_frames_enabled);

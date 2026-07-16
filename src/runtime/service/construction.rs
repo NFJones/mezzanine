@@ -156,10 +156,6 @@ impl RuntimeSessionService {
             terminal_term: DEFAULT_PANE_TERM.to_string(),
             window_frames_enabled: true,
             window_frame_template: crate::terminal::DEFAULT_WINDOW_FRAME_TEMPLATE.to_string(),
-            window_frame_right_status_template:
-                crate::terminal::DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE.to_string(),
-            window_status_pill_definitions: BTreeMap::new(),
-            window_status_pill_cache: std::cell::RefCell::new(RuntimeStatusPillCache::default()),
             window_frame_position: TerminalFramePosition::Bottom,
             window_frame_style: TerminalFrameStyle::Default,
             window_frame_visible_fields: crate::terminal::DEFAULT_WINDOW_FRAME_VISIBLE_FIELDS
@@ -174,15 +170,8 @@ impl RuntimeSessionService {
                 .iter()
                 .map(|field| (*field).to_string())
                 .collect(),
-            terminal_cursor_style: mez_mux::presentation::TerminalCursorStyle::Block,
-            terminal_cursor_blink: false,
-            terminal_cursor_blink_interval_ms: 500,
             terminal_emoji_width,
-            terminal_resize_debounce_ms: 200,
-            terminal_render_rate_limit_fps: 5,
             terminal_shell_output_preview_lines: 5,
-            terminal_agent_wrap_column_cap: crate::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP,
-            terminal_reduced_motion: false,
             terminal_clipboard: "external".to_string(),
             ui_theme: mez_mux::theme::UiTheme::default(),
             key_bindings: KeyBindings::default(),

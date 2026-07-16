@@ -230,10 +230,7 @@ impl RuntimeSessionService {
         let terminal_term = runtime_terminal_term_from_config(&structured)?;
         let window_frames_enabled = runtime_window_frames_enabled_from_config(&structured)?;
         let window_frame_template = runtime_window_frame_template_from_config(&structured)?;
-        let window_frame_right_status_template =
-            runtime_window_frame_right_status_template_from_config(&structured)?;
-        let window_status_pill_definitions =
-            runtime_status_pill_definitions_from_config(&structured)?;
+        let presentation_settings = RuntimePresentationSettings::from_config(&structured)?;
         let window_frame_position = runtime_window_frame_position_from_config(&structured)?;
         let window_frame_style = runtime_window_frame_style_from_config(&structured)?;
         let window_frame_visible_fields =
@@ -243,18 +240,7 @@ impl RuntimeSessionService {
         let pane_frame_position = runtime_pane_frame_position_from_config(&structured)?;
         let pane_frame_style = runtime_pane_frame_style_from_config(&structured)?;
         let pane_frame_visible_fields = runtime_pane_frame_visible_fields_from_config(&structured)?;
-        let terminal_cursor_style = runtime_terminal_cursor_style_from_config(&structured)?;
-        let terminal_cursor_blink = runtime_terminal_cursor_blink_from_config(&structured)?;
-        let terminal_cursor_blink_interval_ms =
-            runtime_terminal_cursor_blink_interval_ms_from_config(&structured)?;
         let terminal_emoji_width = runtime_terminal_emoji_width_from_config(&structured)?;
-        let terminal_resize_debounce_ms =
-            runtime_terminal_resize_debounce_ms_from_config(&structured)?;
-        let terminal_render_rate_limit_fps =
-            runtime_terminal_render_rate_limit_fps_from_config(&structured)?;
-        let terminal_agent_wrap_column_cap =
-            runtime_terminal_agent_wrap_column_cap_from_config(&structured)?;
-        let terminal_reduced_motion = runtime_terminal_reduced_motion_from_config(&structured)?;
         let terminal_clipboard = runtime_terminal_clipboard_from_config(&structured)?;
         let host_clipboard = runtime_host_clipboard_from_config(&structured)?;
         let ui_theme = runtime_ui_theme_from_config(&structured)?;
@@ -276,8 +262,6 @@ impl RuntimeSessionService {
         self.terminal_term = terminal_term;
         self.window_frames_enabled = window_frames_enabled;
         self.window_frame_template = window_frame_template;
-        self.window_frame_right_status_template = window_frame_right_status_template;
-        self.window_status_pill_definitions = window_status_pill_definitions;
         self.window_frame_position = window_frame_position;
         self.window_frame_style = window_frame_style;
         self.window_frame_visible_fields = window_frame_visible_fields;
@@ -286,18 +270,11 @@ impl RuntimeSessionService {
         self.pane_frame_position = pane_frame_position;
         self.pane_frame_style = pane_frame_style;
         self.pane_frame_visible_fields = pane_frame_visible_fields;
-        self.terminal_cursor_style = terminal_cursor_style;
-        self.terminal_cursor_blink = terminal_cursor_blink;
-        self.terminal_cursor_blink_interval_ms = terminal_cursor_blink_interval_ms;
         self.terminal_emoji_width = terminal_emoji_width;
         mez_terminal::set_terminal_emoji_width(terminal_emoji_width);
-        self.terminal_resize_debounce_ms = terminal_resize_debounce_ms;
-        self.terminal_render_rate_limit_fps = terminal_render_rate_limit_fps;
         self.terminal_shell_output_preview_lines =
             runtime_terminal_shell_output_preview_lines_from_config(&structured)?;
-        self.terminal_agent_wrap_column_cap = terminal_agent_wrap_column_cap;
-        crate::terminal::set_agent_wrap_column_cap(terminal_agent_wrap_column_cap);
-        self.terminal_reduced_motion = terminal_reduced_motion;
+        self.presentation.apply_settings(presentation_settings);
         self.terminal_clipboard = terminal_clipboard;
         self.host_clipboard = host_clipboard;
         self.ui_theme = ui_theme;

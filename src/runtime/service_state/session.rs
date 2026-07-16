@@ -257,16 +257,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) window_frame_template: String,
-    /// Stores the window frame right status template value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) window_frame_right_status_template: String,
-    /// Stores configured command-backed window status pill definitions.
-    pub(in crate::runtime) window_status_pill_definitions:
-        BTreeMap<String, RuntimeStatusPillDefinition>,
-    /// Stores cached command-backed window status pill output state.
-    pub(in crate::runtime) window_status_pill_cache: std::cell::RefCell<RuntimeStatusPillCache>,
     /// Stores the window frame position value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -307,52 +297,17 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) pane_frame_visible_fields: Vec<String>,
-    /// Stores the terminal cursor style value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) terminal_cursor_style: TerminalCursorStyle,
-    /// Stores the terminal cursor blink value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) terminal_cursor_blink: bool,
-    /// Stores the terminal cursor blink interval ms value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) terminal_cursor_blink_interval_ms: u64,
     /// Stores the terminal emoji status-glyph width policy value.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) terminal_emoji_width: TerminalEmojiWidth,
-    /// Stores the terminal resize debounce ms value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) terminal_resize_debounce_ms: u64,
-    /// Stores the terminal render rate limit fps value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) terminal_render_rate_limit_fps: u64,
     /// Stores the hidden shell-output preview tail line count for this data
     /// structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) terminal_shell_output_preview_lines: usize,
-    /// Stores the maximum display width for Mezzanine-owned agent rows.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) terminal_agent_wrap_column_cap: usize,
-    /// Stores whether optional terminal animations should be disabled.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) terminal_reduced_motion: bool,
     /// Stores the terminal clipboard value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

@@ -564,7 +564,7 @@ impl RuntimeSessionService {
     /// fails when the runtime is no longer live.
     pub fn show_primary_display_overlay(&mut self, lines: Vec<String>) -> Result<()> {
         let wrap_columns = usize::from(self.session.authoritative_size.columns)
-            .min(self.terminal_agent_wrap_column_cap)
+            .min(self.presentation.settings.terminal_agent_wrap_column_cap)
             .max(1);
         let lines = lines
             .into_iter()

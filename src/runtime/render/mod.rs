@@ -40,20 +40,89 @@ use super::{
     PaneInputDispatch, PaneNavigationDirection, ReadlineInputDecoder, ReadlineOutcome,
     ReadlinePrompt, ReadlinePromptKind, RenderedClientView, Result,
     RuntimeAgentModifiedFileSummary, RuntimeAgentPromptInput, RuntimeSessionService,
-    RuntimeSideEffect, Size, SplitDirection, TerminalClientLoopAction, TerminalClientLoopConfig,
-    TerminalFrameContext, TerminalScreen, WindowFrameAction, agent_prompt_reserved_line_count,
-    current_unix_millis, current_unix_seconds, json_escape, mouse_action_name,
-    mux_action_command_prompt_prefill, mux_action_name, pane_navigation_direction,
-    parse_command_sequence, render_attached_client_view, rendered_pane_geometries,
-    runtime_agent_shell_command_response_json, runtime_agent_turn_duration_display,
-    runtime_agent_turn_state_name, runtime_approval_policy_name, runtime_copy_position_for_view,
-    runtime_fit_status_line, runtime_paste_bytes, window_frame_action_pillbox_cells,
-    window_frame_pillbox_cells,
+    RuntimeSideEffect, RuntimeStatusPillCache, RuntimeStatusPillDefinition, Size, SplitDirection,
+    TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFrameContext, TerminalScreen,
+    WindowFrameAction, agent_prompt_reserved_line_count, current_unix_millis, current_unix_seconds,
+    json_escape, mouse_action_name, mux_action_command_prompt_prefill, mux_action_name,
+    pane_navigation_direction, parse_command_sequence, render_attached_client_view,
+    rendered_pane_geometries, runtime_agent_shell_command_response_json,
+    runtime_agent_turn_duration_display, runtime_agent_turn_state_name,
+    runtime_approval_policy_name, runtime_copy_position_for_view, runtime_fit_status_line,
+    runtime_paste_bytes, window_frame_action_pillbox_cells, window_frame_pillbox_cells,
 };
 /// Maximum elapsed time between two pane-content clicks recognized as a double click.
 const DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS: u64 = 500;
 /// How long the copied-word highlight remains visible after a double click.
 const DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS: u64 = 500;
+
+/// Immutable presentation configuration replaced atomically on config reload.
+///
+/// Parsing builds a complete value before the live component changes, so an
+/// invalid option cannot leave cursor, frame-status, or render pacing policy
+/// partially updated.
+#[derive(Debug)]
+pub(in crate::runtime) struct RuntimePresentationSettings {
+    /// Template rendered at the right side of a window frame.
+    window_frame_right_status_template: String,
+    /// Command-backed window status pill definitions keyed by pill name.
+    window_status_pill_definitions: std::collections::BTreeMap<String, RuntimeStatusPillDefinition>,
+    /// Cursor shape used for the focused terminal client.
+    terminal_cursor_style: mez_mux::presentation::TerminalCursorStyle,
+    /// Whether the focused terminal cursor blinks.
+    terminal_cursor_blink: bool,
+    /// Cursor blink interval in milliseconds.
+    terminal_cursor_blink_interval_ms: u64,
+    /// Resize-event debounce interval in milliseconds.
+    terminal_resize_debounce_ms: u64,
+    /// Maximum attached-client render frequency.
+    terminal_render_rate_limit_fps: u64,
+    /// Maximum display width for product-owned agent rows.
+    terminal_agent_wrap_column_cap: usize,
+    /// Whether optional terminal animation is disabled.
+    terminal_reduced_motion: bool,
+}
+
+impl Default for RuntimePresentationSettings {
+    fn default() -> Self {
+        Self {
+            window_frame_right_status_template:
+                crate::terminal::DEFAULT_WINDOW_FRAME_RIGHT_STATUS_TEMPLATE.to_string(),
+            window_status_pill_definitions: std::collections::BTreeMap::new(),
+            terminal_cursor_style: mez_mux::presentation::TerminalCursorStyle::Block,
+            terminal_cursor_blink: false,
+            terminal_cursor_blink_interval_ms: 500,
+            terminal_resize_debounce_ms: 200,
+            terminal_render_rate_limit_fps: 5,
+            terminal_agent_wrap_column_cap: crate::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP,
+            terminal_reduced_motion: false,
+        }
+    }
+}
+
+impl RuntimePresentationSettings {
+    /// Parses one complete presentation settings replacement.
+    pub(in crate::runtime) fn from_config(root: &serde_json::Value) -> Result<Self> {
+        Ok(Self {
+            window_frame_right_status_template:
+                crate::runtime::runtime_window_frame_right_status_template_from_config(root)?,
+            window_status_pill_definitions:
+                crate::runtime::runtime_status_pill_definitions_from_config(root)?,
+            terminal_cursor_style: crate::runtime::runtime_terminal_cursor_style_from_config(root)?,
+            terminal_cursor_blink: crate::runtime::runtime_terminal_cursor_blink_from_config(root)?,
+            terminal_cursor_blink_interval_ms:
+                crate::runtime::runtime_terminal_cursor_blink_interval_ms_from_config(root)?,
+            terminal_resize_debounce_ms:
+                crate::runtime::runtime_terminal_resize_debounce_ms_from_config(root)?,
+            terminal_render_rate_limit_fps:
+                crate::runtime::runtime_terminal_render_rate_limit_fps_from_config(root)?,
+            terminal_agent_wrap_column_cap:
+                crate::runtime::runtime_terminal_agent_wrap_column_cap_from_config(root)?,
+            terminal_reduced_motion: crate::runtime::runtime_terminal_reduced_motion_from_config(
+                root,
+            )?,
+        })
+    }
+}
 
 /// Owns transient client interaction state used by product presentation.
 ///
@@ -62,6 +131,10 @@ const DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS: u64 = 500;
 /// reaching into the session coordinator's former shared field bag.
 #[derive(Debug, Default)]
 pub(in crate::runtime) struct RuntimePresentationComponent {
+    /// Current atomically replaceable presentation configuration.
+    settings: RuntimePresentationSettings,
+    /// Cached output for command-backed window status pills.
+    window_status_pill_cache: std::cell::RefCell<RuntimeStatusPillCache>,
     /// Submitted command-prompt history retained across prompt openings.
     primary_command_prompt_history: Vec<String>,
     /// Active primary-client readline prompt, when one is open.
@@ -89,6 +162,12 @@ pub(in crate::runtime) struct RuntimePresentationComponent {
 }
 
 impl RuntimePresentationComponent {
+    /// Replaces validated presentation settings and synchronizes global width policy.
+    pub(in crate::runtime) fn apply_settings(&mut self, settings: RuntimePresentationSettings) {
+        crate::terminal::set_agent_wrap_column_cap(settings.terminal_agent_wrap_column_cap);
+        self.settings = settings;
+    }
+
     /// Clears an in-progress pane-resize gesture after layout mutation.
     pub(in crate::runtime) fn clear_mouse_resize_drag_state(&mut self) {
         self.mouse_resize_drag_state = None;
@@ -154,6 +233,14 @@ impl RuntimeSessionService {
     /// Returns the active primary display overlay for product integration tests.
     pub(in crate::runtime) fn primary_display_overlay(&self) -> Option<&RuntimeDisplayOverlay> {
         self.presentation.primary_display_overlay.as_ref()
+    }
+
+    /// Returns the right-side frame status template for integration tests.
+    pub(in crate::runtime) fn window_frame_right_status_template(&self) -> &str {
+        &self
+            .presentation
+            .settings
+            .window_frame_right_status_template
     }
 
     /// Replaces a pending record browser's parent stack for a test fixture.
