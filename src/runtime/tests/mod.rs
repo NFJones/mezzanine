@@ -16,7 +16,7 @@ use super::{
     AuthStore, AuxiliarySocketKind, BlockedApprovalRequest, CommandRuleScope, ConfigFormat,
     ConfigLayer, ConfigScope, ContextBlock, ContextSourceKind, ControlConnectionState,
     CooperationMode, EventAudience, EventKind, HookEvent, JoinedSubagentDependency,
-    MEZ_ENV_FIELD_SEPARATOR, MemoryRecord, ModelProfile, OsString, PaneExitRecord, PaneExitUpdate,
+    MEZ_ENV_FIELD_SEPARATOR, MemoryRecord, ModelProfile, OsString, PaneExitUpdate,
     PaneReadinessState, Path, PathBuf, ProjectTrustStore, Result, RuleDecision, RuleMatch,
     RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentModifiedFileSummary,
     RuntimeEnv, RuntimeLifecycleState, RuntimeRegistryUpdatePlan, RuntimeSessionService,

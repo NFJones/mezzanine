@@ -448,7 +448,7 @@ pub(super) fn runtime_kill_pane_command(
         .kill_pane_with_effects(primary_client_id, target, force)?;
     let terminated = if let Some(pane) = transition.pane {
         let pane_id = pane.id.to_string();
-        service.pane_closing.insert(pane_id.clone());
+        service.mark_pane_closing(pane_id.clone());
         let _ = service.stop_active_pane_pipe(pane.id.as_str());
         let terminated = usize::from(service.terminate_runtime_pane_process(&pane_id, force)?);
         service.cleanup_removed_pane_runtime_state(&pane_id);

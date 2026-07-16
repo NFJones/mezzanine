@@ -403,11 +403,10 @@ impl RuntimeSessionService {
     ) -> String {
         let primary_pid = self.primary_pid_for_live_pane_process(pane.id.as_str());
         let exit_status = self
-            .pane_exit_records
-            .get(pane.id.as_str())
-            .map(|record| record.exit_status.to_json())
+            .pane_exit_status(pane.id.as_str())
+            .map(|status| status.to_json())
             .unwrap_or_else(|| "null".to_string());
-        let process_state = if self.pane_closing.contains(pane.id.as_str()) {
+        let process_state = if self.pane_is_closing(pane.id.as_str()) {
             "closing"
         } else if primary_pid.is_some() {
             "running"

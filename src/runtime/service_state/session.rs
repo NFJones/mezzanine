@@ -122,11 +122,6 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) pane_screens: BTreeMap<String, TerminalScreen>,
-    /// Stores the pane exit records value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_exit_records: BTreeMap<String, PaneExitRecord>,
     /// Stores the active pane pipes value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -588,11 +583,6 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) pane_instruction_files: BTreeMap<String, Vec<DiscoveredInstructionFile>>,
-    /// Stores the pane closing value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_closing: BTreeSet<String>,
     /// Stores the agent transcript store value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

@@ -841,10 +841,7 @@ impl RuntimeSessionService {
                         runtime_pane_readiness_state_name(self.pane_readiness_state(pane_id))
                             .to_string(),
                     ),
-                    exit_status: self
-                        .pane_exit_records
-                        .get(pane_id)
-                        .map(|record| record.exit_status),
+                    exit_status: self.pane_exit_status(pane_id),
                 }
             })
             .collect()

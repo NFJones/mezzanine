@@ -1011,7 +1011,7 @@ impl RuntimeSessionService {
         {
             return Ok(());
         }
-        if self.pane_closing.contains(&turn.pane_id) {
+        if self.pane_is_closing(&turn.pane_id) {
             return Ok(());
         }
         if self.find_pane_descriptor(&turn.pane_id).is_none() {

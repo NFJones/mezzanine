@@ -91,6 +91,10 @@ pub(in crate::runtime) struct RuntimeProcessComponent {
     pane_hidden_shell_render_recent_polls: std::collections::BTreeMap<String, usize>,
     /// Consecutive idle polls used to synchronize foreground titles.
     foreground_title_idle_sync_polls: usize,
+    /// Terminal exit records retained for panes whose primary process ended.
+    pane_exit_records: std::collections::BTreeMap<String, PaneExitRecord>,
+    /// Panes whose process teardown has begun but is not yet fully reconciled.
+    pane_closing: BTreeSet<String>,
 }
 
 impl RuntimeSessionService {
@@ -98,6 +102,30 @@ impl RuntimeSessionService {
     pub(in crate::runtime) fn clear_pane_transaction_parsers(&mut self) {
         self.process.pane_transaction_osc_screens.clear();
         self.process.pane_transaction_osc_pending.clear();
+    }
+
+    /// Clears pane exit and closing markers when the live session is replaced.
+    pub(in crate::runtime) fn clear_pane_process_lifecycle_tracking(&mut self) {
+        self.process.pane_exit_records.clear();
+        self.process.pane_closing.clear();
+    }
+
+    /// Returns the last observed exit status for a pane process.
+    pub(in crate::runtime) fn pane_exit_status(&self, pane_id: &str) -> Option<PaneExitStatus> {
+        self.process
+            .pane_exit_records
+            .get(pane_id)
+            .map(|record| record.exit_status)
+    }
+
+    /// Marks a pane as being in process teardown.
+    pub(in crate::runtime) fn mark_pane_closing(&mut self, pane_id: impl Into<String>) {
+        self.process.pane_closing.insert(pane_id.into());
+    }
+
+    /// Reports whether a pane is already in process teardown.
+    pub(in crate::runtime) fn pane_is_closing(&self, pane_id: &str) -> bool {
+        self.process.pane_closing.contains(pane_id)
     }
 }
 
@@ -122,6 +150,17 @@ impl RuntimeSessionService {
         &self,
     ) -> &std::collections::BTreeMap<String, Vec<u8>> {
         &self.process.pane_transaction_osc_pending
+    }
+
+    /// Installs one pane exit status for presentation integration tests.
+    pub(in crate::runtime) fn set_pane_exit_status_for_tests(
+        &mut self,
+        pane_id: impl Into<String>,
+        exit_status: PaneExitStatus,
+    ) {
+        self.process
+            .pane_exit_records
+            .insert(pane_id.into(), PaneExitRecord { exit_status });
     }
 }
 
@@ -254,7 +293,9 @@ impl RuntimeSessionService {
         let primary_pid = pid
             .or_else(|| self.pane_processes.primary_pid(descriptor.pane_id.as_str()))
             .unwrap_or(0);
-        self.pane_exit_records.remove(descriptor.pane_id.as_str());
+        self.process
+            .pane_exit_records
+            .remove(descriptor.pane_id.as_str());
         self.session
             .set_pane_live_state(descriptor.pane_id.as_str(), true)?;
         self.pane_screens.insert(
@@ -545,7 +586,7 @@ impl RuntimeSessionService {
             std::slice::from_ref(&process.pane_id),
             "pane primary process exited",
         )?;
-        self.pane_exit_records.insert(
+        self.process.pane_exit_records.insert(
             process.pane_id.clone(),
             PaneExitRecord {
                 exit_status: process.status,
@@ -713,7 +754,9 @@ impl RuntimeSessionService {
             descriptor.size,
             start_directory,
         )?;
-        self.pane_exit_records.remove(descriptor.pane_id.as_str());
+        self.process
+            .pane_exit_records
+            .remove(descriptor.pane_id.as_str());
         self.pane_screens.insert(
             descriptor.pane_id.to_string(),
             TerminalScreen::new_with_history_config(
@@ -1023,7 +1066,7 @@ impl RuntimeSessionService {
         self.process
             .pane_hidden_shell_render_recent_polls
             .remove(pane_id);
-        self.pane_exit_records.remove(pane_id);
+        self.process.pane_exit_records.remove(pane_id);
         self.active_pane_pipes.remove(pane_id);
         self.pane_transcript_refs.remove(pane_id);
         self.pane_readiness_states.remove(pane_id);
@@ -1033,7 +1076,7 @@ impl RuntimeSessionService {
         self.pane_environment_signatures.remove(pane_id);
         self.pane_bootstrap_pending.remove(pane_id);
         self.pane_instruction_files.remove(pane_id);
-        self.pane_closing.remove(pane_id);
+        self.process.pane_closing.remove(pane_id);
         self.pending_terminal_subagent_pane_closes.remove(pane_id);
         self.model_profile_overrides.pane_profiles.remove(pane_id);
         self.agent_auto_sizing_overrides.remove(pane_id);

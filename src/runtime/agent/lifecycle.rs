@@ -346,7 +346,7 @@ impl RuntimeSessionService {
             self.close_subagent_descendants_for_parent_agent(&parent_agent_id, reason)?;
         }
         for pane_id in &pane_ids {
-            self.pane_closing.insert((*pane_id).to_string());
+            self.mark_pane_closing(*pane_id);
         }
         let turns = self
             .agent_turn_ledger

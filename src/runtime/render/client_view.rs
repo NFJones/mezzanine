@@ -1384,9 +1384,8 @@ impl RuntimeSessionService {
                             },
                         ),
                         exit_status: self
-                            .pane_exit_records
-                            .get(pane_id.as_str())
-                            .map(|record| record.exit_status.frame_value()),
+                            .pane_exit_status(pane_id.as_str())
+                            .map(|status| status.frame_value()),
                         current_working_directory,
                         mode: Some(mode.to_string()),
                         agent_id,

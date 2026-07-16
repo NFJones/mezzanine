@@ -82,10 +82,7 @@ impl RuntimeSessionService {
                     terminal_saved_state: screen
                         .map(|screen| screen.saved_state())
                         .unwrap_or_default(),
-                    exit_status: self
-                        .pane_exit_records
-                        .get(pane_id)
-                        .map(|record| record.exit_status),
+                    exit_status: self.pane_exit_status(pane_id),
                     alternate_screen_active: screen
                         .is_some_and(|screen| screen.alternate_screen_active()),
                     transcript_refs: self.snapshot_transcript_refs_for_pane(pane_id),

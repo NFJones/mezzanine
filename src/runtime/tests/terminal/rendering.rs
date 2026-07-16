@@ -92,14 +92,12 @@ fn runtime_frame_context_uses_known_pane_exit_status() {
         .session
         .set_pane_live_state(&pane_id, false)
         .unwrap();
-    service.pane_exit_records.insert(
+    service.set_pane_exit_status_for_tests(
         pane_id.clone(),
-        PaneExitRecord {
-            exit_status: mez_mux::process::PaneExitStatus {
-                code: Some(7),
-                signal: None,
-                success: false,
-            },
+        mez_mux::process::PaneExitStatus {
+            code: Some(7),
+            signal: None,
+            success: false,
         },
     );
 

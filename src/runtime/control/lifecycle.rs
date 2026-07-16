@@ -257,8 +257,7 @@ impl RuntimeSessionService {
         self.active_copy_modes_mut().clear();
         self.pane_screens.clear();
         self.clear_pane_transaction_parsers();
-        self.pane_exit_records.clear();
-        self.pane_closing.clear();
+        self.clear_pane_process_lifecycle_tracking();
         self.pane_transcript_refs.clear();
         self.agent_shell_store = AgentShellStore::default();
         self.agent_turn_ledger = AgentTurnLedger::new(false);
