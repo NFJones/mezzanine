@@ -25,10 +25,10 @@ use super::{
     PaneProcessStart, PaneReadinessState, Path, PathBuf, ProjectTrustStore, Recipient, Result,
     RuleDecision, RuleMatch, RuntimeAutoSizingConfig, RuntimeLifecycleState,
     RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSideEffect, RuntimeSubagentLineage,
-    RuntimeSubagentPlacement, SUBAGENT_FRIENDLY_NAMES, ScopeRegistry, SenderIdentity,
-    SessionRecord, SnapshotCreationContext, SnapshotRepository, SplitDirection,
-    SubagentScopeDeclaration, SubagentSpawnRequest, TaskState, TaskStatusPayload,
-    TerminalClientLoopAction, TerminalClientLoopConfig, TrustDecision, agent_state_control_method,
+    RuntimeSubagentPlacement, SUBAGENT_FRIENDLY_NAMES, SenderIdentity, SessionRecord,
+    SnapshotCreationContext, SnapshotRepository, SplitDirection, SubagentScopeDeclaration,
+    SubagentSpawnRequest, TaskState, TaskStatusPayload, TerminalClientLoopAction,
+    TerminalClientLoopConfig, TrustDecision, agent_state_control_method,
     approval_decide_scope_persistence, compare_permission_preset_authority, current_unix_seconds,
     default_trust_database_path, destination_target_checked_resolved, discover_project_root,
     dispatch_control_request_cached, dispatch_control_request_for_client_with_agent_state,
@@ -191,7 +191,7 @@ impl RuntimeSessionService {
                 content: message_lines.join("\n\n"),
             });
         }
-        let active_subagent_scopes = self.subagent_scopes.active_write_scopes();
+        let active_subagent_scopes = self.active_subagent_write_scopes();
         if !active_subagent_scopes.is_empty() {
             let insert_at = blocks
                 .iter()

@@ -212,10 +212,7 @@ impl RuntimeSessionService {
         &self,
         turn: &AgentTurnRecord,
     ) -> Option<SubagentScopeDeclaration> {
-        let mut declaration = self
-            .subagent_scope_declarations
-            .get(&turn.agent_id)
-            .cloned()?;
+        let mut declaration = self.subagent_scope_declaration(&turn.agent_id)?;
         if let Some(signature) = self.pane_environment_signature(&turn.pane_id) {
             declaration.current_directory = signature.working_directory.clone();
         }

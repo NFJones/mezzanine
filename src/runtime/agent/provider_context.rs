@@ -399,7 +399,7 @@ impl RuntimeSessionService {
         if let Some(parent_turn_id) = turn.parent_turn_id.as_deref() {
             lines.push(format!("parent_turn_id={parent_turn_id}"));
         }
-        if let Some(lineage) = self.subagent_lineage.get(&turn.agent_id) {
+        if let Some(lineage) = self.subagent_lineage(&turn.agent_id) {
             lines.push(format!("parent_agent_id={}", lineage.parent_agent_id));
             lines.push(format!("root_agent_id={}", lineage.root_agent_id));
             lines.push(format!("subagent_display_name={}", lineage.display_name));

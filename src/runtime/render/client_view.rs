@@ -1387,8 +1387,7 @@ impl RuntimeSessionService {
 
     /// Returns the human-readable display name for a pane-associated agent.
     fn runtime_agent_display_name(&self, agent_id: &str) -> String {
-        self.subagent_lineage
-            .get(agent_id)
+        self.subagent_lineage(agent_id)
             .and_then(|lineage| {
                 let display_name = lineage.display_name.trim();
                 (!display_name.is_empty()).then(|| display_name.to_string())

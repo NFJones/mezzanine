@@ -354,9 +354,7 @@ impl RuntimeSessionService {
                         }
                     } else {
                         self.deregister_macro_managed_subagent(child_agent_id);
-                        self.subagent_lineage.remove(child_agent_id);
-                        self.subagent_scope_declarations.remove(child_agent_id);
-                        self.subagent_scopes.unregister(child_agent_id);
+                        self.remove_subagent_authority_state(child_agent_id);
                     }
                 }
                 self.append_agent_macro_error_to_terminal_buffer(
@@ -419,9 +417,7 @@ impl RuntimeSessionService {
                         }
                     } else {
                         self.deregister_macro_managed_subagent(child_agent_id);
-                        self.subagent_lineage.remove(child_agent_id);
-                        self.subagent_scope_declarations.remove(child_agent_id);
-                        self.subagent_scopes.unregister(child_agent_id);
+                        self.remove_subagent_authority_state(child_agent_id);
                     }
                 }
                 self.append_agent_macro_status_to_terminal_buffer(

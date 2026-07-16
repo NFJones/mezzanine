@@ -569,12 +569,8 @@ fn runtime_agent_macro_judge_stop_failure_closes_successful_child_subagent() {
     );
     assert!(!service.has_macro_run(parent_turn.turn_id.as_str()));
     assert!(!service.has_macro_managed_subagent(&child_agent_id));
-    assert!(!service.subagent_lineage.contains_key(&child_agent_id));
-    assert!(
-        !service
-            .subagent_scope_declarations
-            .contains_key(&child_agent_id)
-    );
+    assert!(!service.has_subagent_lineage(&child_agent_id));
+    assert!(!service.has_subagent_scope_declaration(&child_agent_id));
     assert!(service.agent_shell_store().get(&child_pane_id).is_none());
     assert!(
         service
@@ -696,12 +692,8 @@ fn runtime_agent_macro_judge_finish_success_closes_child_subagent_and_completes_
     );
     assert!(!service.has_macro_run(parent_turn.turn_id.as_str()));
     assert!(!service.has_macro_managed_subagent(&child_agent_id));
-    assert!(!service.subagent_lineage.contains_key(&child_agent_id));
-    assert!(
-        !service
-            .subagent_scope_declarations
-            .contains_key(&child_agent_id)
-    );
+    assert!(!service.has_subagent_lineage(&child_agent_id));
+    assert!(!service.has_subagent_scope_declaration(&child_agent_id));
     assert!(service.agent_shell_store().get(&child_pane_id).is_none());
     assert!(
         service

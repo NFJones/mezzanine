@@ -27,7 +27,7 @@ use super::{
     RuntimeAutoSizingConfig, RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile,
     RuntimeHookPipelineBlock, RuntimeHookPipelineDecision, RuntimeMcpActionExecutor,
     RuntimeProviderConfig, RuntimeSessionService, RuntimeShellTransactionActionFailure,
-    RuntimeSideEffect, ScheduledWork, SenderIdentity, ShellTransaction,
+    RuntimeSideEffect, RuntimeSubagentLineage, ScheduledWork, SenderIdentity, ShellTransaction,
     ShellTransactionOutputTransport, SubagentScopeDeclaration, SubagentSpawnRequest,
     SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload, TranscriptEntry,
     TranscriptRole, action_result_context_content, assemble_model_request,
@@ -65,8 +65,6 @@ use crate::config::{
     ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
     ConfigPaths, ConfigScope,
 };
-#[cfg(test)]
-use mez_agent::AgentTurnLedger;
 use mez_agent::resolve_provider_api;
 use mez_agent::semantic_patch_planning::{
     ApplyPatchTransactionPhase, apply_patch_error_plan, apply_patch_read_plan_for_paths,
@@ -74,12 +72,14 @@ use mez_agent::semantic_patch_planning::{
     apply_patch_write_plan_from_read_output, apply_patch_write_plan_from_read_outputs,
 };
 use mez_agent::{
-    AgentNetworkActionHistory, AgentShellDispatchHistory, AgentTurnSteering,
+    ActiveWriteScope, AgentNetworkActionHistory, AgentShellDispatchHistory, AgentTurnSteering,
     DEFAULT_PROVIDER_TIMEOUT_MS, MaapBatch, MacroManagedSubagent, MacroRunState, ModelTokenUsage,
     ModelTokenUsageKey, ProviderApiCompatibility, ProviderQuotaUsage, SayStatus,
     append_mcp_context, assistant_context_content_for_execution, invoked_mcp_tools_for_context,
     set_project_guidance_context,
 };
+#[cfg(test)]
+use mez_agent::{AgentTurnLedger, CooperationMode};
 use mez_mux::command::CommandInvocation;
 
 mod approvals;
@@ -222,6 +222,12 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     blocked_agent_approval_refs: BTreeMap<String, BlockedAgentApprovalRef>,
     /// Spawned child turns currently joined by parent agent actions.
     joined_subagent_dependencies: BTreeMap<String, JoinedSubagentDependency>,
+    /// Declared scope and permission inheritance keyed by child agent id.
+    subagent_scope_declarations: BTreeMap<String, SubagentScopeDeclaration>,
+    /// Runtime delegation lineage keyed by child agent id.
+    subagent_lineage: BTreeMap<String, RuntimeSubagentLineage>,
+    /// Canonical active write-scope ownership registry.
+    subagent_scopes: mez_agent::ScopeRegistry,
 }
 
 /// State removed when a compaction worker reports failure.
@@ -273,6 +279,142 @@ impl RuntimeAgentComponent {
 }
 
 impl RuntimeSessionService {
+    /// Returns runtime lineage metadata for one child agent.
+    pub(in crate::runtime) fn subagent_lineage(
+        &self,
+        agent_id: &str,
+    ) -> Option<&RuntimeSubagentLineage> {
+        self.agent.subagent_lineage.get(agent_id)
+    }
+
+    /// Records runtime lineage metadata for one child agent.
+    pub(in crate::runtime) fn set_subagent_lineage(
+        &mut self,
+        agent_id: impl Into<String>,
+        lineage: RuntimeSubagentLineage,
+    ) {
+        self.agent.subagent_lineage.insert(agent_id.into(), lineage);
+    }
+
+    /// Counts direct active children of one parent agent.
+    pub(in crate::runtime) fn active_direct_subagent_count_for(
+        &self,
+        parent_agent_id: &str,
+    ) -> usize {
+        self.agent
+            .subagent_lineage
+            .values()
+            .filter(|lineage| lineage.parent_agent_id == parent_agent_id)
+            .count()
+    }
+
+    /// Returns non-empty active subagent display names.
+    pub(in crate::runtime) fn active_subagent_display_names(&self) -> Vec<String> {
+        self.agent
+            .subagent_lineage
+            .values()
+            .filter(|lineage| !lineage.display_name.trim().is_empty())
+            .map(|lineage| lineage.display_name.clone())
+            .collect()
+    }
+
+    /// Returns one inherited subagent scope declaration.
+    pub(in crate::runtime) fn subagent_scope_declaration(
+        &self,
+        agent_id: &str,
+    ) -> Option<SubagentScopeDeclaration> {
+        self.agent
+            .subagent_scope_declarations
+            .get(agent_id)
+            .cloned()
+    }
+
+    /// Records one inherited subagent scope declaration.
+    pub(in crate::runtime) fn set_subagent_scope_declaration(
+        &mut self,
+        agent_id: impl Into<String>,
+        declaration: SubagentScopeDeclaration,
+    ) {
+        self.agent
+            .subagent_scope_declarations
+            .insert(agent_id.into(), declaration);
+    }
+
+    /// Reports whether an agent has lineage, declarations, or active scopes.
+    pub(in crate::runtime) fn has_subagent_authority_state(&self, agent_id: &str) -> bool {
+        self.agent.subagent_lineage.contains_key(agent_id)
+            || self
+                .agent
+                .subagent_scope_declarations
+                .contains_key(agent_id)
+            || !self
+                .agent
+                .subagent_scopes
+                .active_write_scopes_for(agent_id)
+                .is_empty()
+    }
+
+    /// Removes lineage, declarations, and active scopes for one agent.
+    pub(in crate::runtime) fn remove_subagent_authority_state(&mut self, agent_id: &str) {
+        self.agent.subagent_lineage.remove(agent_id);
+        self.agent.subagent_scope_declarations.remove(agent_id);
+        self.agent.subagent_scopes.unregister(agent_id);
+    }
+
+    /// Returns active write scopes for one agent.
+    pub(in crate::runtime) fn active_subagent_write_scopes_for(
+        &self,
+        agent_id: &str,
+    ) -> Vec<ActiveWriteScope> {
+        self.agent.subagent_scopes.active_write_scopes_for(agent_id)
+    }
+
+    /// Returns every active subagent write scope.
+    pub(in crate::runtime) fn active_subagent_write_scopes(&self) -> Vec<ActiveWriteScope> {
+        self.agent.subagent_scopes.active_write_scopes()
+    }
+
+    /// Returns the number of active subagent write scopes.
+    pub(in crate::runtime) fn active_subagent_write_scope_count(&self) -> usize {
+        self.agent.subagent_scopes.active_write_scope_count()
+    }
+
+    /// Clears all runtime subagent authority state on session replacement.
+    pub(in crate::runtime) fn clear_all_subagent_authority_state(&mut self) {
+        self.agent.subagent_lineage.clear();
+        self.agent.subagent_scope_declarations.clear();
+        self.agent.subagent_scopes = mez_agent::ScopeRegistry::default();
+    }
+
+    /// Registers active write scopes in crate-local regression tests.
+    #[cfg(test)]
+    pub(crate) fn register_subagent_write_scopes_for_tests(
+        &mut self,
+        agent_id: &str,
+        mode: CooperationMode,
+        write_scopes: &[String],
+        serial_lock: Option<String>,
+    ) -> Result<()> {
+        self.agent
+            .subagent_scopes
+            .register(agent_id, mode, write_scopes, serial_lock)?;
+        Ok(())
+    }
+
+    /// Reports whether one child agent retains lineage in regression tests.
+    #[cfg(test)]
+    pub(crate) fn has_subagent_lineage(&self, agent_id: &str) -> bool {
+        self.agent.subagent_lineage.contains_key(agent_id)
+    }
+
+    /// Reports whether one child agent retains a scope declaration in tests.
+    #[cfg(test)]
+    pub(crate) fn has_subagent_scope_declaration(&self, agent_id: &str) -> bool {
+        self.agent
+            .subagent_scope_declarations
+            .contains_key(agent_id)
+    }
+
     /// Returns the joined dependency for one child turn.
     pub(in crate::runtime) fn joined_subagent_dependency(
         &self,

@@ -40,7 +40,7 @@ impl RuntimeSessionService {
         else {
             return Ok(None);
         };
-        let Some(child_lineage) = self.subagent_lineage.get(child_agent_id.as_str()) else {
+        let Some(child_lineage) = self.subagent_lineage(child_agent_id.as_str()) else {
             return Ok(Some(ActionResult::failed(
                 parent_turn,
                 action,

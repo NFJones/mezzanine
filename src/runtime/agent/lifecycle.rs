@@ -447,9 +447,7 @@ impl RuntimeSessionService {
         for agent_id in descendants {
             let Some(pane_id) = runtime_agent_pane_id(&agent_id) else {
                 self.deregister_macro_managed_subagent(&agent_id);
-                self.subagent_lineage.remove(&agent_id);
-                self.subagent_scope_declarations.remove(&agent_id);
-                self.subagent_scopes.unregister(&agent_id);
+                self.remove_subagent_authority_state(&agent_id);
                 continue;
             };
             let pane_id_string = pane_id.to_string();
@@ -483,6 +481,7 @@ impl RuntimeSessionService {
     /// - `parent_agent_id`: Direct or root parent agent id to inspect.
     fn subagent_descendant_agent_ids_for_parent(&self, parent_agent_id: &str) -> Vec<String> {
         let mut descendants = self
+            .agent
             .subagent_lineage
             .iter()
             .filter(|(_agent_id, lineage)| {
@@ -517,7 +516,7 @@ impl RuntimeSessionService {
             if current_parent == ancestor_agent_id {
                 return true;
             }
-            let Some(parent_lineage) = self.subagent_lineage.get(current_parent) else {
+            let Some(parent_lineage) = self.agent.subagent_lineage.get(current_parent) else {
                 return false;
             };
             current_parent = parent_lineage.parent_agent_id.as_str();

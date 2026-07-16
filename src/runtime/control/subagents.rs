@@ -216,8 +216,7 @@ impl RuntimeSessionService {
     /// Returns lineage metadata for an agent id, treating untracked pane agents
     /// as delegation roots.
     fn subagent_lineage_for_agent(&self, agent_id: &str) -> RuntimeSubagentLineage {
-        self.subagent_lineage
-            .get(agent_id)
+        self.subagent_lineage(agent_id)
             .cloned()
             .unwrap_or_else(|| RuntimeSubagentLineage {
                 parent_agent_id: String::new(),
@@ -229,10 +228,7 @@ impl RuntimeSessionService {
 
     /// Counts active direct child subagents owned by the given parent agent.
     fn active_direct_subagent_count(&self, parent_agent_id: &str) -> usize {
-        self.subagent_lineage
-            .values()
-            .filter(|lineage| lineage.parent_agent_id == parent_agent_id)
-            .count()
+        self.active_direct_subagent_count_for(parent_agent_id)
     }
 
     /// Validates configured subagent width/depth limits for the next spawn.
@@ -281,16 +277,13 @@ impl RuntimeSessionService {
         rng: &mut R,
     ) -> String {
         let active_names = self
-            .subagent_lineage
-            .values()
-            .filter_map(|lineage| {
-                (!lineage.display_name.trim().is_empty()).then_some(lineage.display_name.as_str())
-            })
+            .active_subagent_display_names()
+            .into_iter()
             .collect::<std::collections::BTreeSet<_>>();
         let available_names = SUBAGENT_FRIENDLY_NAMES
             .iter()
             .copied()
-            .filter(|name| !active_names.contains(name))
+            .filter(|name| !active_names.contains(*name))
             .collect::<Vec<_>>();
         if !available_names.is_empty() {
             return available_names[rng.random_range(0..available_names.len())].to_string();
@@ -366,10 +359,7 @@ impl RuntimeSessionService {
                 spawn.task_prompt, instructions
             );
         }
-        let inherited_scope = self
-            .subagent_scope_declarations
-            .get(&spawn.parent_agent_id)
-            .cloned();
+        let inherited_scope = self.subagent_scope_declaration(&spawn.parent_agent_id);
         if let Some(parent_scope) = inherited_scope.as_ref() {
             spawn.cooperation_mode = parent_scope.cooperation_mode;
             spawn.read_scopes = parent_scope.read_scopes.clone();
@@ -408,8 +398,7 @@ impl RuntimeSessionService {
             self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
             return Err(error);
         }
-        self.subagent_lineage
-            .insert(child_agent_id.clone(), child_lineage);
+        self.set_subagent_lineage(child_agent_id.clone(), child_lineage);
         let current_directory = self
             .pane_current_working_directory(&started.pane_id)
             .or_else(|| child_start_directory.clone())
@@ -434,8 +423,7 @@ impl RuntimeSessionService {
             });
         }
         if let Some(declaration) = child_scope {
-            self.subagent_scope_declarations
-                .insert(child_agent_id.clone(), declaration);
+            self.set_subagent_scope_declaration(child_agent_id.clone(), declaration);
         }
         if let Err(error) = self.enter_agent_mode_for_pane(&started.pane_id) {
             self.cleanup_failed_subagent_spawn(controller, &started.pane_id, &child_agent_id, None);
@@ -732,8 +720,7 @@ impl RuntimeSessionService {
             .iter()
             .filter_map(|pane| {
                 let agent_id = format!("agent-{}", pane.id);
-                self.subagent_lineage
-                    .get(&agent_id)
+                self.subagent_lineage(&agent_id)
                     .map(|lineage| lineage.display_name.trim())
                     .filter(|display_name| !display_name.is_empty())
                     .or_else(|| {
@@ -881,9 +868,7 @@ impl RuntimeSessionService {
             self.remove_subagent_task_parent(turn_id);
             self.clear_joined_subagent_dependencies_for_turn(turn_id);
         }
-        self.subagent_scopes.unregister(child_agent_id);
-        self.subagent_scope_declarations.remove(child_agent_id);
-        self.subagent_lineage.remove(child_agent_id);
+        self.remove_subagent_authority_state(child_agent_id);
         self.deregister_macro_managed_subagent(child_agent_id);
         self.model_profile_overrides
             .agent_profiles

@@ -296,7 +296,7 @@ fn runtime_parent_agent_shell_exit_closes_child_subagent_panes() {
         .agent_shell_store_mut()
         .enter_or_resume(&child_pane_id)
         .unwrap();
-    service.subagent_lineage.insert(
+    service.set_subagent_lineage(
         child_agent_id.clone(),
         RuntimeSubagentLineage {
             parent_agent_id: "agent-%1".to_string(),
@@ -316,7 +316,7 @@ fn runtime_parent_agent_shell_exit_closes_child_subagent_panes() {
             .iter()
             .all(|pane| pane.id.as_str() != child_pane_id)
     );
-    assert!(!service.subagent_lineage.contains_key(&child_agent_id));
+    assert!(!service.has_subagent_lineage(&child_agent_id));
     assert!(service.agent_shell_store().get(&child_pane_id).is_none());
     service.terminate_all_pane_processes().unwrap();
 }

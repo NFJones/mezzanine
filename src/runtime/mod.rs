@@ -148,8 +148,8 @@ use mez_agent::{AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ScheduledWork, Sc
 use mez_agent::{ApprovalPolicy, PermissionPreset, RuleDecision};
 use mez_agent::{AsyncMcpActionExecutor, McpActionExecutor};
 use mez_agent::{
-    CooperationMode, ScopeRegistry, SubagentProfile, SubagentScopeDeclaration,
-    SubagentSpawnRequest, builtin_subagent_profiles,
+    CooperationMode, SubagentProfile, SubagentScopeDeclaration, SubagentSpawnRequest,
+    builtin_subagent_profiles,
 };
 use mez_agent::{
     EnvironmentSignature, MarkerToken, ShellClassification, ShellTransaction,

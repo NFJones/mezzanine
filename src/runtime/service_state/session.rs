@@ -250,16 +250,6 @@ pub struct RuntimeSessionService {
     /// The key is `turn_id/action_id`, keeping the accumulator scoped to one
     /// running semantic action while successive read transactions complete.
     pub(in crate::runtime) apply_patch_batch_states: BTreeMap<String, RuntimeApplyPatchBatchState>,
-    /// Stores the subagent scope declarations value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) subagent_scope_declarations: BTreeMap<String, SubagentScopeDeclaration>,
-    /// Runtime-only delegation lineage for active spawned subagents.
-    ///
-    /// Entries are keyed by child agent id. Root pane agents are inferred when
-    /// absent from this map, which keeps limits scoped to active child work.
-    pub(in crate::runtime) subagent_lineage: BTreeMap<String, RuntimeSubagentLineage>,
     /// Stores the tool discovery cache value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -275,11 +265,6 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) agent_transcript_store: Option<AgentTranscriptStore>,
-    /// Stores the subagent scopes value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) subagent_scopes: ScopeRegistry,
     /// Stores the project trust store value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

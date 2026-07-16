@@ -139,7 +139,7 @@ impl RuntimeSessionService {
             .unwrap_or_else(|| "unknown".to_string());
         let (model_profile_name, model_profile) =
             self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
-        let active_scopes = self.subagent_scopes.active_write_scopes_for(&agent_id);
+        let active_scopes = self.active_subagent_write_scopes_for(&agent_id);
         let writable_roots = active_scopes
             .iter()
             .map(|scope| scope.scope.clone())
@@ -249,7 +249,7 @@ impl RuntimeSessionService {
             ],
             vec![
                 "Active write scopes".to_string(),
-                self.subagent_scopes.active_write_scope_count().to_string(),
+                self.active_subagent_write_scope_count().to_string(),
             ],
             vec![
                 "Context".to_string(),

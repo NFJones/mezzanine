@@ -489,8 +489,7 @@ impl RuntimeSessionService {
             summary: summary.to_string(),
         };
         let child_display_name = self
-            .subagent_lineage
-            .get(&turn.agent_id)
+            .subagent_lineage(&turn.agent_id)
             .map(|lineage| lineage.display_name.clone());
         let envelope = Envelope {
             protocol: "mmp/1",
@@ -567,23 +566,15 @@ impl RuntimeSessionService {
                     .map(|turn| turn.agent_id.clone())
             })
             .or_else(|| self.subagent_task_result_parent_agent_id(turn));
-        let has_subagent_runtime_state = parent_agent_id.is_some()
-            || self
-                .subagent_scope_declarations
-                .contains_key(&turn.agent_id)
-            || self.subagent_lineage.contains_key(&turn.agent_id)
-            || !self
-                .subagent_scopes
-                .active_write_scopes_for(&turn.agent_id)
-                .is_empty();
+        let has_subagent_runtime_state =
+            parent_agent_id.is_some() || self.has_subagent_authority_state(&turn.agent_id);
         if !has_subagent_runtime_state {
             return Ok(());
         }
 
         let now_ms = current_unix_seconds().saturating_mul(1000);
         let child_display_name = self
-            .subagent_lineage
-            .get(&turn.agent_id)
+            .subagent_lineage(&turn.agent_id)
             .map(|lineage| lineage.display_name.clone());
         let child_label =
             runtime_subagent_display_label(&turn.agent_id, child_display_name.as_deref());
@@ -625,9 +616,7 @@ impl RuntimeSessionService {
             dependency.is_some() || turn.cooperation_mode.as_deref() == Some("macro-step");
         let terminal_macro_step_failure = is_macro_step && !success;
         if !is_macro_step || terminal_macro_step_failure {
-            self.subagent_scopes.unregister(&turn.agent_id);
-            self.subagent_scope_declarations.remove(&turn.agent_id);
-            self.subagent_lineage.remove(&turn.agent_id);
+            self.remove_subagent_authority_state(&turn.agent_id);
         }
         if let Some(dependency) = dependency {
             self.resolve_joined_subagent_dependency_record(
@@ -674,8 +663,7 @@ impl RuntimeSessionService {
                     .map(|turn| turn.agent_id.clone())
             })
             .or_else(|| {
-                self.subagent_lineage
-                    .get(&turn.agent_id)
+                self.subagent_lineage(&turn.agent_id)
                     .map(|lineage| lineage.parent_agent_id.clone())
                     .filter(|parent_agent_id| !parent_agent_id.is_empty())
             })
@@ -716,8 +704,7 @@ impl RuntimeSessionService {
         }
         let child_identity = self.runtime_message_sender_identity(turn)?;
         let child_display_name = self
-            .subagent_lineage
-            .get(&turn.agent_id)
+            .subagent_lineage(&turn.agent_id)
             .map(|lineage| lineage.display_name.clone());
         let payload = TaskResultPayload {
             task_id: turn.turn_id.clone(),

@@ -272,9 +272,7 @@ impl RuntimeSessionService {
         self.reset_agent_scheduler();
         self.clear_subagent_placement_state();
         self.clear_all_joined_subagent_dependencies();
-        self.subagent_lineage.clear();
-        self.subagent_scope_declarations.clear();
-        self.subagent_scopes = ScopeRegistry::default();
+        self.clear_all_subagent_authority_state();
         self.clear_all_blocked_agent_approval_refs();
         self.clear_all_shell_transaction_state();
         self.clear_pane_readiness_state_and_overrides();

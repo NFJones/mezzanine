@@ -1584,9 +1584,7 @@ impl RuntimeSessionService {
         self.model_profile_overrides
             .agent_profiles
             .remove(&agent_id);
-        self.subagent_scopes.unregister(&agent_id);
-        self.subagent_scope_declarations.remove(&agent_id);
-        self.subagent_lineage.remove(&agent_id);
+        self.remove_subagent_authority_state(&agent_id);
         self.deregister_macro_managed_subagent(&agent_id);
         if let Some(agent_id) = AgentId::opaque(agent_id)
             && self

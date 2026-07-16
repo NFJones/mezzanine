@@ -185,8 +185,7 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         &mez_agent::ModelTokenUsageKey::new("runtime-metrics", "metrics-only"),
     );
     service
-        .subagent_scopes
-        .register(
+        .register_subagent_write_scopes_for_tests(
             "agent-%1",
             CooperationMode::OwnedWrite,
             &["src".to_string()],
