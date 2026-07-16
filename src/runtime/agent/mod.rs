@@ -119,9 +119,56 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     agent_copy_outputs: BTreeMap<String, RuntimeAgentCopyOutput>,
     /// File modification summaries retained by pane and display path.
     agent_modified_files: BTreeMap<String, BTreeMap<String, RuntimeAgentModifiedFileSummary>>,
+    /// Panes with explicit planning-mode presentation enabled.
+    agent_planning_modes: BTreeSet<String>,
+    /// Pane-local response style selections.
+    agent_response_styles: BTreeMap<String, String>,
 }
 
 impl RuntimeSessionService {
+    /// Reports whether planning presentation is enabled for one pane.
+    pub(in crate::runtime) fn agent_planning_enabled(&self, pane_id: &str) -> bool {
+        self.agent.agent_planning_modes.contains(pane_id)
+    }
+
+    /// Sets pane-local planning presentation state.
+    pub(in crate::runtime) fn set_agent_planning_enabled(&mut self, pane_id: &str, enabled: bool) {
+        if enabled {
+            self.agent.agent_planning_modes.insert(pane_id.to_string());
+        } else {
+            self.agent.agent_planning_modes.remove(pane_id);
+        }
+    }
+
+    /// Returns the pane-local response style selection.
+    pub(in crate::runtime) fn agent_response_style(&self, pane_id: &str) -> Option<&str> {
+        self.agent
+            .agent_response_styles
+            .get(pane_id)
+            .map(String::as_str)
+    }
+
+    /// Replaces or clears one pane-local response style selection.
+    pub(in crate::runtime) fn set_agent_response_style(
+        &mut self,
+        pane_id: &str,
+        style: Option<String>,
+    ) {
+        if let Some(style) = style {
+            self.agent
+                .agent_response_styles
+                .insert(pane_id.to_string(), style);
+        } else {
+            self.agent.agent_response_styles.remove(pane_id);
+        }
+    }
+
+    /// Clears transcript-persisted pane presentation preferences.
+    pub(in crate::runtime) fn clear_agent_pane_presentation_preferences(&mut self, pane_id: &str) {
+        self.agent.agent_planning_modes.remove(pane_id);
+        self.agent.agent_response_styles.remove(pane_id);
+    }
+
     /// Returns retained patch attempts for one agent session.
     pub(in crate::runtime) fn retained_agent_patch_records(
         &self,

@@ -682,7 +682,7 @@ impl RuntimeSessionService {
             });
         }
         let selected_profile = self.agent_selected_personality_profile(pane_id);
-        let planning_enabled = self.agent_planning_modes.contains(pane_id)
+        let planning_enabled = self.agent_planning_enabled(pane_id)
             || selected_profile.is_some_and(|profile| profile.planning_enabled == Some(true));
         if planning_enabled {
             context.blocks.push(ContextBlock {
@@ -693,12 +693,7 @@ impl RuntimeSessionService {
             });
         }
         let profile_style = selected_profile.and_then(|profile| profile.response_style.as_deref());
-        if let Some(style) = self
-            .agent_response_styles
-            .get(pane_id)
-            .map(String::as_str)
-            .or(profile_style)
-        {
+        if let Some(style) = self.agent_response_style(pane_id).or(profile_style) {
             context.blocks.push(ContextBlock {
                 source: ContextSourceKind::Configuration,
                 label: "agent shell personality".to_string(),

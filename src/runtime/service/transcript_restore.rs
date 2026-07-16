@@ -166,17 +166,8 @@ impl RuntimeSessionService {
                     .pane_profiles
                     .remove(&metadata.pane_id);
             }
-            if metadata.planning_enabled {
-                self.agent_planning_modes.insert(metadata.pane_id.clone());
-            } else {
-                self.agent_planning_modes.remove(&metadata.pane_id);
-            }
-            if let Some(style) = metadata.response_style.as_ref() {
-                self.agent_response_styles
-                    .insert(metadata.pane_id.clone(), style.clone());
-            } else {
-                self.agent_response_styles.remove(&metadata.pane_id);
-            }
+            self.set_agent_planning_enabled(&metadata.pane_id, metadata.planning_enabled);
+            self.set_agent_response_style(&metadata.pane_id, metadata.response_style.clone());
             if let Some(enabled) = metadata.routing_enabled {
                 self.agent_routing_overrides
                     .insert(metadata.pane_id.clone(), enabled);
@@ -316,8 +307,10 @@ impl RuntimeSessionService {
                         .pane_profiles
                         .get(&session.pane_id)
                         .cloned(),
-                    planning_enabled: self.agent_planning_modes.contains(&session.pane_id),
-                    response_style: self.agent_response_styles.get(&session.pane_id).cloned(),
+                    planning_enabled: self.agent_planning_enabled(&session.pane_id),
+                    response_style: self
+                        .agent_response_style(&session.pane_id)
+                        .map(ToOwned::to_owned),
                     directive: session.directive.clone(),
                     routing_enabled: self.agent_routing_overrides.get(&session.pane_id).copied(),
                     approval_policy: self
@@ -372,17 +365,8 @@ impl RuntimeSessionService {
             } else {
                 self.model_profile_overrides.pane_profiles.remove(pane_id);
             }
-            if metadata.planning_enabled {
-                self.agent_planning_modes.insert(pane_id.to_string());
-            } else {
-                self.agent_planning_modes.remove(pane_id);
-            }
-            if let Some(style) = metadata.response_style.as_ref() {
-                self.agent_response_styles
-                    .insert(pane_id.to_string(), style.clone());
-            } else {
-                self.agent_response_styles.remove(pane_id);
-            }
+            self.set_agent_planning_enabled(pane_id, metadata.planning_enabled);
+            self.set_agent_response_style(pane_id, metadata.response_style.clone());
             if let Some(enabled) = metadata.routing_enabled {
                 self.agent_routing_overrides
                     .insert(pane_id.to_string(), enabled);

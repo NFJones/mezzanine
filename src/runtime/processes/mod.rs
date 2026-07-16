@@ -1510,9 +1510,8 @@ impl RuntimeSessionService {
         self.agent_shell_store.remove_session(pane_id);
         self.clear_agent_subshell_state(pane_id);
         self.remove_agent_prompt_input(pane_id);
-        self.agent_planning_modes.remove(pane_id);
+        self.clear_agent_pane_presentation_preferences(pane_id);
         self.agent_personality_selections.remove(pane_id);
-        self.agent_response_styles.remove(pane_id);
         self.agent_routing_overrides.remove(pane_id);
         self.clear_agent_pane_artifacts(pane_id);
         self.active_copy_modes_mut().remove(pane_id);

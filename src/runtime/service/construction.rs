@@ -179,8 +179,6 @@ impl RuntimeSessionService {
             agent_turn_network_action_history: BTreeMap::new(),
             agent_pre_shell_hook_completions: BTreeSet::new(),
             agent_turn_model_profiles: BTreeMap::new(),
-            agent_planning_modes: BTreeSet::new(),
-            agent_response_styles: BTreeMap::new(),
             agent_compaction_raw_retention_percent: DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
             agent_compacting_panes: BTreeMap::new(),
             pending_agent_compaction_tasks: BTreeMap::new(),

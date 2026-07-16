@@ -309,16 +309,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) agent_turn_model_profiles: BTreeMap<String, ModelProfile>,
-    /// Stores the agent planning modes value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) agent_planning_modes: BTreeSet<String>,
-    /// Stores the agent response styles value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) agent_response_styles: BTreeMap<String, String>,
     /// Percent of the active model context retained as uncompacted raw tail.
     pub(in crate::runtime) agent_compaction_raw_retention_percent: usize,
     /// Panes currently running model-backed context compaction, keyed by start

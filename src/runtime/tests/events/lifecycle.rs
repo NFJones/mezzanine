@@ -586,10 +586,7 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
         restored.pane_current_working_directory("%1").as_deref(),
         Some(cwd.as_path())
     );
-    assert_eq!(
-        restored.agent_response_styles.get("%1").map(String::as_str),
-        Some("concise")
-    );
+    assert_eq!(restored.agent_response_style("%1"), Some("concise"));
     assert_eq!(
         restored_session.directive.as_deref(),
         Some("Prefer focused tests.")

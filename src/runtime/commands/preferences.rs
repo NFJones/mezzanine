@@ -70,7 +70,7 @@ impl RuntimeSessionService {
         let invocation = parse_slash_command(input)?
             .ok_or_else(|| MezError::invalid_args("personality command must be a slash command"))?;
         let requested = invocation.args.trim();
-        let current = self.agent_response_styles.get(pane_id).cloned();
+        let current = self.agent_response_style(pane_id).map(ToOwned::to_owned);
         let current_profile = self
             .agent_selected_personality_profile_id(pane_id)
             .map(ToOwned::to_owned);
@@ -126,7 +126,7 @@ impl RuntimeSessionService {
             let changed =
                 current.is_some() || self.agent_personality_selections.contains_key(pane_id);
             self.agent_personality_selections.remove(pane_id);
-            self.agent_response_styles.remove(pane_id);
+            self.set_agent_response_style(pane_id, None);
             return Ok(AgentShellCommandOutcome::Mutated {
                 command: "personality".to_string(),
                 body: format!(
@@ -148,13 +148,8 @@ impl RuntimeSessionService {
                 Some(requested.to_string())
             };
         let changed = current != requested_style || current_profile.as_deref() != Some(requested);
-        if let Some(style) = requested_style {
-            self.agent_response_styles
-                .insert(pane_id.to_string(), style);
-        } else {
-            self.agent_response_styles.remove(pane_id);
-        }
-        let active = self.agent_response_styles.get(pane_id);
+        self.set_agent_response_style(pane_id, requested_style);
+        let active = self.agent_response_style(pane_id);
         Ok(AgentShellCommandOutcome::Mutated {
             command: "personality".to_string(),
             body: format!(
@@ -164,7 +159,7 @@ impl RuntimeSessionService {
                     .map(json_escape)
                     .unwrap_or_else(|| "custom".to_string()),
                 active
-                    .map(|style| json_escape(style))
+                    .map(json_escape)
                     .unwrap_or_else(|| "default".to_string()),
                 changed
             ),
@@ -193,11 +188,7 @@ impl RuntimeSessionService {
                 .insert(pane_id.to_string(), model_profile.to_string());
         }
         if let Some(planning_enabled) = profile.planning_enabled {
-            if planning_enabled {
-                self.agent_planning_modes.insert(pane_id.to_string());
-            } else {
-                self.agent_planning_modes.remove(pane_id);
-            }
+            self.set_agent_planning_enabled(pane_id, planning_enabled);
         }
         if let Some(routing_enabled) = profile.routing_enabled {
             self.agent_routing_overrides
