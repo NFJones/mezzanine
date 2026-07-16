@@ -5,7 +5,7 @@
 //! lifecycle coordination out of the main runtime agent facade.
 
 use super::*;
-use crate::runtime::service_state::MacroRunPhase;
+use mez_agent::{MacroRunPhase, MacroStepTaskResult};
 
 impl RuntimeSessionService {
     /// Clears joined-subagent dependencies owned by or waiting on a turn.
@@ -927,7 +927,7 @@ impl RuntimeSessionService {
                 step.child_turn_id.as_deref() == Some(dependency.child_turn_id.as_str())
             })
         {
-            step.task_result = Some(crate::runtime::service_state::MacroStepTaskResult {
+            step.task_result = Some(MacroStepTaskResult {
                 success,
                 summary: summary.to_string(),
                 output: output.to_string(),

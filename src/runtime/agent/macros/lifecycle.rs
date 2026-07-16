@@ -1,10 +1,6 @@
 //! Macro catalog, run registration, and step dispatch lifecycle.
 
 use super::super::*;
-use super::helpers::{
-    runtime_macro_initial_step_prompt, runtime_macro_parent_orchestration_prompt,
-    runtime_owned_macro_step_model_request,
-};
 use super::*;
 
 impl RuntimeSessionService {
@@ -182,7 +178,7 @@ impl RuntimeSessionService {
             "",
             &format!("macro child spawned idle child_agent_id={}", child_agent_id),
         )?;
-        let orchestration_prompt = runtime_macro_parent_orchestration_prompt(
+        let orchestration_prompt = macro_parent_orchestration_prompt(
             &definition,
             invocation.additional_context.as_deref(),
             &child_agent_id,
@@ -263,8 +259,7 @@ impl RuntimeSessionService {
             .steps
             .first()
             .ok_or_else(|| MezError::invalid_state("agent macro has no scripted steps"))?;
-        let payload =
-            runtime_macro_initial_step_prompt(first_step.prompt.as_str(), additional_context);
+        let payload = macro_initial_step_prompt(first_step.prompt.as_str(), additional_context);
         let action = AgentAction {
             id: "macro-step-1".to_string(),
             rationale: "send first macro step".to_string(),
@@ -294,7 +289,7 @@ impl RuntimeSessionService {
         self.agent_turn_executions.insert(
             parent_turn.turn_id.clone(),
             AgentTurnExecution {
-                request: runtime_owned_macro_step_model_request(&parent_turn),
+                request: macro_step_model_request(&parent_turn),
                 response: ModelResponse {
                     provider: "runtime".to_string(),
                     model: "macro-orchestration".to_string(),

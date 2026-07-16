@@ -9,7 +9,7 @@ use super::{
 };
 use crate::issues::{IssueStore, issue_database_location, project_key_for_working_directory};
 use mez_agent::issues::{
-    IssueKind, IssueQuery, IssueRecord, IssueState, IssueUpdate, NewIssueRecord,
+    IssueKind, IssueQuery, IssueRecord, IssueState, IssueUpdate, NewIssueRecord, issue_record_json,
 };
 
 /// Runs one `mez issue` command against the configured local issue store.
@@ -62,7 +62,7 @@ pub(super) fn run_issue<W: Write>(
                 },
                 super::current_unix_seconds()?,
             )?;
-            issue_record_json(&record)?
+            issue_record_json(&record).to_string()
         }
         IssueCliCommand::Query {
             kind,
@@ -79,7 +79,7 @@ pub(super) fn run_issue<W: Write>(
                 text,
                 limit,
             )?;
-            issue_records_json(&store.query_issues(&query)?)?
+            issue_records_json(&store.query_issues(&query)?)
         }
         IssueCliCommand::Delete { id } => {
             let result = store.delete_issue(project, id)?;
@@ -90,8 +90,8 @@ pub(super) fn run_issue<W: Write>(
             })?
         }
         IssueCliCommand::Show { id } => match store.get_issue(project, id)? {
-            Some(record) => issue_record_json(&record)?,
-            None => super::serialize_json(&Option::<IssueRecordJson<'_>>::None)?,
+            Some(record) => issue_record_json(&record).to_string(),
+            None => serde_json::Value::Null.to_string(),
         },
         IssueCliCommand::Update {
             id,
@@ -222,48 +222,6 @@ enum IssueCliCommand {
     },
 }
 
-/// JSON payload emitted for one issue record.
-#[derive(Serialize)]
-struct IssueRecordJson<'a> {
-    /// Stable issue id.
-    id: &'a str,
-    /// Canonical project key.
-    project: &'a str,
-    /// Defect or task classification.
-    kind: &'static str,
-    /// Open or resolved workflow state.
-    state: &'static str,
-    /// Required issue title.
-    title: &'a str,
-    /// Optional issue body.
-    body: Option<&'a str>,
-    /// Optional mutable progress or handoff notes.
-    notes: Option<&'a str>,
-    /// Issue ids that must be completed before this issue.
-    depends_on: &'a [String],
-    /// Creation time as Unix seconds.
-    created_at_unix_seconds: u64,
-    /// Last update time as Unix seconds.
-    updated_at_unix_seconds: u64,
-}
-
-impl<'a> From<&'a IssueRecord> for IssueRecordJson<'a> {
-    fn from(record: &'a IssueRecord) -> Self {
-        Self {
-            id: &record.id,
-            project: &record.project,
-            kind: record.kind.as_str(),
-            state: record.state.as_str(),
-            title: &record.title,
-            body: record.body.as_deref(),
-            notes: record.notes.as_deref(),
-            depends_on: &record.depends_on,
-            created_at_unix_seconds: record.created_at_unix_seconds,
-            updated_at_unix_seconds: record.updated_at_unix_seconds,
-        }
-    }
-}
-
 /// JSON payload emitted after deleting an issue.
 #[derive(Serialize)]
 struct IssueDeleteJson<'a> {
@@ -285,7 +243,7 @@ struct IssueUpdateJson<'a> {
     /// Whether a row was updated.
     updated: bool,
     /// Updated record when a matching issue existed.
-    record: Option<IssueRecordJson<'a>>,
+    record: Option<serde_json::Value>,
 }
 
 impl<'a> From<&'a mez_agent::issues::UpdateIssueResult> for IssueUpdateJson<'a> {
@@ -294,19 +252,11 @@ impl<'a> From<&'a mez_agent::issues::UpdateIssueResult> for IssueUpdateJson<'a> 
             project: &result.project,
             id: &result.id,
             updated: result.updated,
-            record: result.record.as_ref().map(IssueRecordJson::from),
+            record: result.record.as_ref().map(issue_record_json),
         }
     }
 }
 
-fn issue_record_json(record: &IssueRecord) -> Result<String> {
-    super::serialize_json(&IssueRecordJson::from(record))
-}
-
-fn issue_records_json(records: &[IssueRecord]) -> Result<String> {
-    let records = records
-        .iter()
-        .map(IssueRecordJson::from)
-        .collect::<Vec<_>>();
-    super::serialize_json(&records)
+fn issue_records_json(records: &[IssueRecord]) -> String {
+    serde_json::Value::Array(records.iter().map(issue_record_json).collect()).to_string()
 }

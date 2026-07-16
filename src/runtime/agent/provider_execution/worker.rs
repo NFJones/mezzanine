@@ -4,27 +4,6 @@ use super::super::*;
 #[cfg(test)]
 use mez_agent::ProviderErrorRetryClass;
 
-/// Returns true when a completed work turn finished without any `apply_patch`
-/// action results.
-///
-/// `/loop` uses this to require at least one reevaluation pass that does not
-/// mutate files before the controller may accept completion.
-pub(super) fn runtime_execution_is_patch_free(execution: &AgentTurnExecution) -> bool {
-    !execution
-        .response
-        .action_batch
-        .as_ref()
-        .map(|batch| {
-            batch.actions.iter().any(|action| {
-                matches!(
-                    action.payload,
-                    mez_agent::AgentActionPayload::ApplyPatch { .. }
-                )
-            })
-        })
-        .unwrap_or(false)
-}
-
 impl RuntimeSessionService {
     /// Applies provider output progress through the transport-neutral transition contract.
     pub(crate) fn apply_agent_provider_output_progress_transition(

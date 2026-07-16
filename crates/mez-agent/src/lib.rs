@@ -133,6 +133,8 @@ pub mod shell_observation;
 pub mod shell_read_observation;
 /// Provider-independent shell-output transport decoding.
 pub mod shell_transport;
+/// Provider-independent agent skill contracts and parsing.
+pub mod skill_workflow;
 /// Dependency-neutral agent slash-command registry and parsing.
 pub mod slash;
 /// Provider-independent subagent cooperation and scope contracts.
@@ -253,7 +255,7 @@ pub use deepseek_response::{
 pub use execution::{
     AsyncMcpActionExecutor, LocalActionExecutor, LocalExecutionOutput, LocalExecutionRequest,
     LocalExecutionTransport, McpActionExecutor, PaneShellExecutor, ShellExecutionOutput,
-    ShellExecutionRequest,
+    ShellExecutionRequest, action_content_blocks_from_json_or_text, mcp_response_to_action_result,
 };
 pub use execution_transcript::{
     AgentTurnExecution, assistant_context_content_for_execution, transcript_entries_for_execution,
@@ -283,8 +285,12 @@ pub use maap::{
 };
 pub use macro_workflow::{
     MACRO_FILE_NAME, MACRO_STEPS_HEADING, MAX_MACRO_FILE_BYTES, MAX_MACRO_STEPS, MacroCatalog,
-    MacroContractError, MacroDefinition, MacroDiagnostic, MacroPromptInvocation, MacroSource,
-    MacroStep, MacroSummary, ParsedMacroDocument, is_valid_macro_name, parse_macro_document,
+    MacroContractError, MacroDefinition, MacroDiagnostic, MacroJudgeDecision, MacroJudgeOutcome,
+    MacroManagedSubagent, MacroPromptInvocation, MacroRunPhase, MacroRunState, MacroRunStep,
+    MacroSource, MacroStep, MacroStepTaskResult, MacroSummary, ParsedMacroDocument,
+    is_valid_macro_name, macro_initial_step_prompt, macro_judge_decision_from_text,
+    macro_judge_policy, macro_judge_task, macro_message_recipient_agent_id,
+    macro_parent_orchestration_prompt, macro_step_model_request, parse_macro_document,
     parse_macro_prompt_invocation, parse_macro_steps,
 };
 pub use mcp::{
@@ -414,6 +420,12 @@ pub use shell_transport::{
     SHELL_OUTPUT_BASE64_BEGIN_MARKER, SHELL_OUTPUT_BASE64_DROPPED_BYTES_MARKER,
     SHELL_OUTPUT_BASE64_END_MARKER, ShellTransportDecodeResult, ShellTransportDiagnostics,
     decode_shell_output_transport, decode_shell_output_transport_with_diagnostics,
+};
+pub use skill_workflow::{
+    ParsedSkillDocument, SKILL_ADDITIONAL_CONTEXT_HEADING, SKILL_FILE_NAME, SkillCatalog,
+    SkillContractError, SkillDiagnostic, SkillDocument, SkillPromptInvocation, SkillSource,
+    SkillSummary, parse_skill_document, parse_skill_prompt_invocation, skill_context_text,
+    split_skill_front_matter,
 };
 pub use slash::{
     SlashCommandEffect, SlashCommandInvocation, SlashCommandParseError, SlashCommandSpec,

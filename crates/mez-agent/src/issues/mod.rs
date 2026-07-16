@@ -6,10 +6,15 @@
 //! product adapter concerns.
 
 mod error;
+mod presentation;
 mod types;
 mod validation;
 
 pub use error::{IssueError, IssueResult};
+pub use presentation::{
+    issue_delete_action_result, issue_query_action_result, issue_record_action_result,
+    issue_record_json, issue_update_action_result,
+};
 pub use types::{
     DeleteIssueResult, IssueBrowserQuery, IssueKind, IssueQuery, IssueRecord, IssueState,
     IssueUpdate, NewIssueRecord, UpdateIssueResult,

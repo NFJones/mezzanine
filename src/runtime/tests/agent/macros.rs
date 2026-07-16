@@ -318,7 +318,7 @@ fn runtime_agent_macro_judge_dispatches_next_step_after_child_result() {
     assert!(macro_run.steps[0].task_result.as_ref().unwrap().success);
     assert_eq!(
         macro_run.steps[0].judgment.as_ref().unwrap().outcome,
-        crate::runtime::service_state::MacroJudgeOutcome::Continue
+        mez_agent::MacroJudgeOutcome::Continue
     );
     assert_eq!(
         macro_run.steps[1].submitted_prompt.as_deref(),

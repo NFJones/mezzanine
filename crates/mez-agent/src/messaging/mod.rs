@@ -24,7 +24,7 @@ pub use types::{
     MessageServiceSnapshot, PresenceRecord, Recipient, SenderIdentity, SequencedEnvelope,
     TaskResultPayload, TaskState, TaskStatusPayload,
 };
-pub use validation::validate_mmp_payload_metadata;
+pub use validation::{task_state_name, validate_mmp_payload_metadata};
 
 #[doc(hidden)]
 pub use json::mmp_error_code;

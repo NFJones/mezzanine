@@ -6,9 +6,10 @@
 //! main agent turn loop only has to settle ordinary MAAP action results.
 
 use super::*;
-
-const DEFAULT_MEMORY_ACTION_LIMIT: usize = 5;
-const MAX_MEMORY_ACTION_LIMIT: usize = 20;
+use mez_agent::memory::{
+    MemorySearchActionRecord, memory_action_content, memory_action_limit, memory_action_record_id,
+    memory_search_action_result, memory_store_action_result,
+};
 
 impl RuntimeSessionService {
     /// Executes provider-produced persistent-memory actions for one running turn.
@@ -119,7 +120,22 @@ impl RuntimeSessionService {
                 let limit = memory_action_limit(*limit);
                 let scopes = self.memory_action_search_scopes(turn);
                 match search_runtime_memory_scopes(&store, query, &scopes, limit) {
-                    Ok(results) => Ok(memory_search_action_result(turn, action, query, &results)),
+                    Ok(results) => {
+                        let presentation = results
+                            .iter()
+                            .map(|result| MemorySearchActionRecord {
+                                record: &result.record,
+                                score: result.score,
+                                reason: &result.reason,
+                            })
+                            .collect::<Vec<_>>();
+                        Ok(memory_search_action_result(
+                            turn,
+                            action,
+                            query,
+                            &presentation,
+                        ))
+                    }
                     Err(error) => Ok(ActionResult::failed(
                         turn,
                         action,
@@ -306,126 +322,4 @@ fn compare_runtime_memory_results(
                 .cmp(&left.record.updated_at_unix_seconds)
         })
         .then_with(|| left.record.id.cmp(&right.record.id))
-}
-
-/// Returns the bounded search result limit for a memory action.
-fn memory_action_limit(limit: Option<u64>) -> usize {
-    limit
-        .and_then(|value| usize::try_from(value).ok())
-        .unwrap_or(DEFAULT_MEMORY_ACTION_LIMIT)
-        .clamp(1, MAX_MEMORY_ACTION_LIMIT)
-}
-
-/// Builds durable content with optional keyword anchors.
-fn memory_action_content(content: &str, keywords: &[String]) -> String {
-    let keywords = keywords
-        .iter()
-        .map(|keyword| keyword.trim())
-        .filter(|keyword| !keyword.is_empty())
-        .collect::<Vec<_>>();
-    if keywords.is_empty() {
-        content.to_string()
-    } else {
-        format!("{}\n\nKeywords: {}", content.trim(), keywords.join(", "))
-    }
-}
-
-/// Builds a stable idempotent record id for one memory store action.
-fn memory_action_record_id(turn: &AgentTurnRecord, action: &AgentAction) -> String {
-    format!("agent:{}:{}", turn.turn_id, action.id)
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':') {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect()
-}
-
-/// Builds the MAAP result for a successful memory search.
-fn memory_search_action_result(
-    turn: &AgentTurnRecord,
-    action: &AgentAction,
-    query: &str,
-    results: &[crate::memory::MemorySearchResult],
-) -> ActionResult {
-    let content = if results.is_empty() {
-        vec!["memory_search returned 0 records".to_string()]
-    } else {
-        results
-            .iter()
-            .map(|result| {
-                format!(
-                    "{} score={:.3}: {}",
-                    result.record.id,
-                    result.score,
-                    memory_action_preview(&result.record.content)
-                )
-            })
-            .collect()
-    };
-    let records = results
-        .iter()
-        .map(|result| {
-            serde_json::json!({
-                "id": result.record.id,
-                "scope": format!("{:?}", result.record.scope),
-                "kind": format!("{:?}", result.record.kind),
-                "priority": result.record.priority,
-                "score": result.score,
-                "reason": result.reason,
-                "content": result.record.content,
-            })
-        })
-        .collect::<Vec<_>>();
-    ActionResult::succeeded(
-        turn,
-        action,
-        content,
-        Some(
-            serde_json::json!({
-                "query": query,
-                "count": results.len(),
-                "results": records,
-            })
-            .to_string(),
-        ),
-    )
-}
-
-/// Builds the MAAP result for a successful memory store action.
-fn memory_store_action_result(
-    turn: &AgentTurnRecord,
-    action: &AgentAction,
-    record: &mez_agent::memory::MemoryRecord,
-) -> ActionResult {
-    ActionResult::succeeded(
-        turn,
-        action,
-        vec![format!("stored memory {}", record.id)],
-        Some(
-            serde_json::json!({
-                "id": record.id,
-                "scope": format!("{:?}", record.scope),
-                "kind": format!("{:?}", record.kind),
-                "priority": record.priority,
-                "expires_at_unix_seconds": record.expires_at_unix_seconds,
-            })
-            .to_string(),
-        ),
-    )
-}
-
-/// Returns a bounded single-line preview for memory action output.
-fn memory_action_preview(content: &str) -> String {
-    const MAX_PREVIEW_CHARS: usize = 160;
-    let text = content.split_whitespace().collect::<Vec<_>>().join(" ");
-    if text.chars().count() <= MAX_PREVIEW_CHARS {
-        return text;
-    }
-    let mut preview = text.chars().take(MAX_PREVIEW_CHARS).collect::<String>();
-    preview.push('…');
-    preview
 }

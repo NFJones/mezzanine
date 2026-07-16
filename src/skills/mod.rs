@@ -15,20 +15,19 @@ use crate::{MezError, MezErrorKind, Result};
 use include_dir::{Dir, include_dir};
 use mez_agent::{
     CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_VALUE_DESCRIPTION, baseline_slash_commands,
-    is_valid_skill_name,
+    is_valid_skill_name, parse_skill_document, split_skill_front_matter,
 };
 use mez_mux::theme::UI_COLOR_SLOT_NAMES;
 use serde::Deserialize;
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use mez_agent::{
+    SKILL_FILE_NAME, SkillCatalog, SkillDiagnostic, SkillDocument, SkillSource, SkillSummary,
+};
+
 /// Directory name that contains user or project skills.
 pub const SKILLS_DIRECTORY_NAME: &str = "skills";
-/// File name that carries one skill's metadata and markdown instructions.
-pub const SKILL_FILE_NAME: &str = "SKILL.md";
-/// Markdown heading used when caller-provided context is appended to a skill.
-pub const SKILL_ADDITIONAL_CONTEXT_HEADING: &str = "## Additional context";
 /// Stable name for the built-in skill-authoring workflow.
 pub const BUILTIN_CREATE_SKILL_NAME: &str = "create-skill";
 /// Stable name for the built-in macro-authoring workflow.
@@ -59,146 +58,6 @@ const BUILTIN_ADD_RESEARCH_SKILL_DESCRIPTION: &str =
     "Use when the user asks to save durable research findings into memory.";
 const BUILTIN_FIX_ISSUES_SKILL_DESCRIPTION: &str = "Use when you need to query the current project's Mez issue tracker, fix open issues, keep progress notes current, and mark verified fixes resolved.";
 const BUILTIN_MEZ_REFERENCE_SKILL_DESCRIPTION: &str = "Use Mezzanine terminal commands, agent slash commands, skill invocation, common workflows, and live config_change schema guidance without rediscovering the command or config surface.";
-
-/// Source scope for one effective skill.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SkillSource {
-    /// Skill shipped with Mezzanine.
-    Builtin,
-    /// Skill from the primary user configuration directory.
-    User,
-    /// Skill from a trusted project configuration directory.
-    Project,
-}
-
-impl SkillSource {
-    /// Returns the stable model-facing scope name for this source.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SkillSource::Builtin => "builtin",
-            SkillSource::User => "user",
-            SkillSource::Project => "project",
-        }
-    }
-}
-
-/// Catalog metadata for one available skill.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SkillSummary {
-    /// Skill identifier from `SKILL.md` front matter.
-    pub name: String,
-    /// Short usage description from `SKILL.md` front matter.
-    pub description: String,
-    /// Effective source scope for this skill.
-    pub source: SkillSource,
-    /// Absolute or caller-supplied path to the backing `SKILL.md` file.
-    pub path: PathBuf,
-}
-
-impl SkillSummary {
-    /// Returns a human-facing source label.
-    pub fn attribution_label(&self) -> String {
-        self.source.as_str().to_string()
-    }
-}
-
-/// Non-fatal discovery diagnostic for an invalid or unreadable skill path.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SkillDiagnostic {
-    /// Path whose skill metadata could not be used.
-    pub path: PathBuf,
-    /// Human-readable reason the path was skipped.
-    pub message: String,
-}
-
-/// Effective skill catalog for one pane/project context.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SkillCatalog {
-    /// Deterministically ordered effective skills.
-    pub skills: Vec<SkillSummary>,
-    /// Non-fatal discovery diagnostics.
-    pub diagnostics: Vec<SkillDiagnostic>,
-}
-
-impl SkillCatalog {
-    /// Returns a skill summary by exact name.
-    ///
-    /// # Parameters
-    /// - `name`: Skill name to resolve from the effective catalog.
-    pub fn get(&self, name: &str) -> Option<&SkillSummary> {
-        self.skills.iter().find(|skill| skill.name == name)
-    }
-
-    /// Returns skill names in deterministic catalog order.
-    pub fn names(&self) -> Vec<String> {
-        self.skills.iter().map(|skill| skill.name.clone()).collect()
-    }
-
-    /// Builds compact model-facing catalog text.
-    pub fn model_catalog_text(&self) -> String {
-        let mut lines = Vec::new();
-        if self.skills.is_empty() {
-            lines.push("No skills are currently available.".to_string());
-        } else {
-            lines.push("Available skills:".to_string());
-            lines.extend(self.skills.iter().map(|skill| {
-                format!(
-                    "- {} ({}) - {}",
-                    skill.name,
-                    skill.source.as_str(),
-                    skill.description
-                )
-            }));
-        }
-        if !self.diagnostics.is_empty() {
-            lines.push(String::new());
-            lines.push("Skipped skill diagnostics:".to_string());
-            lines.extend(self.diagnostics.iter().map(|diagnostic| {
-                format!("- {} - {}", diagnostic.path.display(), diagnostic.message)
-            }));
-        }
-        lines.join("\n")
-    }
-
-    /// Builds structured JSON for action-result metadata.
-    pub fn structured_json(&self) -> String {
-        serde_json::json!({
-            "skills": self.skills.iter().map(|skill| {
-                serde_json::json!({
-                    "name": skill.name,
-                    "description": skill.description,
-                    "source": skill.source.as_str(),
-                    "path": skill.path.to_string_lossy(),
-                })
-            }).collect::<Vec<_>>(),
-            "diagnostics": self.diagnostics.iter().map(|diagnostic| {
-                serde_json::json!({
-                    "path": diagnostic.path.to_string_lossy(),
-                    "message": diagnostic.message,
-                })
-            }).collect::<Vec<_>>(),
-        })
-        .to_string()
-    }
-}
-
-/// Full skill document loaded for an explicit invocation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SkillDocument {
-    /// Catalog metadata for the loaded skill.
-    pub summary: SkillSummary,
-    /// Complete raw `SKILL.md` text.
-    pub text: String,
-}
-
-/// Parsed explicit `$<skill-name>` agent prompt invocation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SkillPromptInvocation {
-    /// Skill name after the leading `$`.
-    pub name: String,
-    /// Optional trailing prompt text used as a semantic skill argument.
-    pub additional_context: Option<String>,
-}
 
 #[derive(Debug, Deserialize)]
 struct SkillFrontMatter {
@@ -281,31 +140,25 @@ pub fn discover_skill_catalog(
     user_config_root: Option<&Path>,
     project_root: Option<&Path>,
 ) -> SkillCatalog {
-    let mut skills = BTreeMap::<String, SkillSummary>::new();
-    let mut diagnostics = Vec::new();
+    let mut catalog = SkillCatalog::default();
     for summary in builtin_skill_summaries() {
-        skills.insert(summary.name.clone(), summary);
+        catalog.insert(summary);
     }
     if let Some(root) = user_config_root {
         discover_skills_under_root(
             &root.join(SKILLS_DIRECTORY_NAME),
             SkillSource::User,
-            &mut skills,
-            &mut diagnostics,
+            &mut catalog,
         );
     }
     if let Some(root) = project_root {
         discover_skills_under_root(
             &root.join(".mezzanine").join(SKILLS_DIRECTORY_NAME),
             SkillSource::Project,
-            &mut skills,
-            &mut diagnostics,
+            &mut catalog,
         );
     }
-    SkillCatalog {
-        skills: skills.into_values().collect(),
-        diagnostics,
-    }
+    catalog
 }
 
 /// Synchronizes Mez-managed built-in skill copies below the user skill root.
@@ -509,30 +362,6 @@ pub fn load_skill_document(summary: &SkillSummary) -> Result<SkillDocument> {
     })
 }
 
-/// Formats a loaded skill for model context.
-///
-/// # Parameters
-/// - `document`: Loaded skill document.
-/// - `additional_context`: Optional semantic argument to append.
-pub fn skill_context_text(document: &SkillDocument, additional_context: Option<&str>) -> String {
-    let mut text = format!(
-        "# Skill: {}\n\nSource: {}\nPath: {}\n\nInvocation state: this skill is already loaded for the current turn. Do not call `request_skills` or `call_skill` merely to discover, confirm, or reload this skill; follow the workflow below with the currently available actions, or request a missing action family with `request_capability`.\n\n{}",
-        document.summary.name,
-        document.summary.source.as_str(),
-        document.summary.path.display(),
-        document.text.trim_end()
-    );
-    if let Some(additional_context) = additional_context
-        && !additional_context.trim().is_empty()
-    {
-        text.push_str("\n\n");
-        text.push_str(SKILL_ADDITIONAL_CONTEXT_HEADING);
-        text.push_str("\n\n");
-        text.push_str(additional_context.trim());
-    }
-    text
-}
-
 /// Returns the built-in skills shipped with Mezzanine.
 fn builtin_skill_summaries() -> Vec<SkillSummary> {
     [
@@ -650,29 +479,6 @@ fn format_builtin_mez_reference_skill(template: &str) -> String {
     )
 }
 
-/// Parses explicit `$<skill-name>` agent prompt syntax.
-///
-/// # Parameters
-/// - `input`: User-submitted pane-local agent prompt text.
-pub fn parse_skill_prompt_invocation(input: &str) -> Option<SkillPromptInvocation> {
-    let trimmed = input.trim_start();
-    let remainder = trimmed.strip_prefix('$')?;
-    let name_end = remainder
-        .char_indices()
-        .find_map(|(index, ch)| ch.is_whitespace().then_some(index))
-        .unwrap_or(remainder.len());
-    let name = remainder[..name_end].trim();
-    if name.is_empty() {
-        return None;
-    }
-    let argument = remainder[name_end..].trim();
-    let additional_context = (!argument.is_empty()).then(|| argument.to_string());
-    Some(SkillPromptInvocation {
-        name: name.to_string(),
-        additional_context,
-    })
-}
-
 /// Discovers valid direct child skill directories below one `skills` root.
 ///
 /// # Parameters
@@ -680,17 +486,12 @@ pub fn parse_skill_prompt_invocation(input: &str) -> Option<SkillPromptInvocatio
 /// - `source`: Source scope assigned to discovered skill summaries.
 /// - `skills`: Effective skill map updated by skill name.
 /// - `diagnostics`: Non-fatal discovery diagnostics appended for skipped paths.
-fn discover_skills_under_root(
-    root: &Path,
-    source: SkillSource,
-    skills: &mut BTreeMap<String, SkillSummary>,
-    diagnostics: &mut Vec<SkillDiagnostic>,
-) {
+fn discover_skills_under_root(root: &Path, source: SkillSource, catalog: &mut SkillCatalog) {
     let metadata = match fs::metadata(root) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
         Err(error) => {
-            diagnostics.push(SkillDiagnostic {
+            catalog.diagnostics.push(SkillDiagnostic {
                 path: root.to_path_buf(),
                 message: format!("skill root is unreadable: {error}"),
             });
@@ -698,7 +499,7 @@ fn discover_skills_under_root(
         }
     };
     if !metadata.is_dir() {
-        diagnostics.push(SkillDiagnostic {
+        catalog.diagnostics.push(SkillDiagnostic {
             path: root.to_path_buf(),
             message: "skill root is not a directory".to_string(),
         });
@@ -710,7 +511,7 @@ fn discover_skills_under_root(
             .map(|entry| entry.path())
             .collect::<Vec<_>>(),
         Err(error) => {
-            diagnostics.push(SkillDiagnostic {
+            catalog.diagnostics.push(SkillDiagnostic {
                 path: root.to_path_buf(),
                 message: format!("skill root could not be listed: {error}"),
             });
@@ -721,58 +522,12 @@ fn discover_skills_under_root(
     for path in entries {
         let skill_path = path.join(SKILL_FILE_NAME);
         match read_skill_summary(&path, &skill_path, source) {
-            Ok(summary) => {
-                insert_skill_summary(skills, diagnostics, summary);
-            }
-            Err(message) => diagnostics.push(SkillDiagnostic {
+            Ok(summary) => catalog.insert(summary),
+            Err(message) => catalog.diagnostics.push(SkillDiagnostic {
                 path: skill_path,
                 message,
             }),
         }
-    }
-}
-
-/// Inserts one discovered skill while reporting name collisions and enforcing
-/// source precedence.
-fn insert_skill_summary(
-    skills: &mut BTreeMap<String, SkillSummary>,
-    diagnostics: &mut Vec<SkillDiagnostic>,
-    summary: SkillSummary,
-) {
-    if let Some(existing) = skills.get(&summary.name) {
-        let replace =
-            skill_source_precedence(summary.source) > skill_source_precedence(existing.source);
-        diagnostics.push(SkillDiagnostic {
-            path: summary.path.clone(),
-            message: if replace {
-                format!(
-                    "skill name {:?} from {} overrides existing {} entry",
-                    summary.name,
-                    summary.attribution_label(),
-                    existing.attribution_label()
-                )
-            } else {
-                format!(
-                    "skill name {:?} from {} ignored because existing {} entry has precedence",
-                    summary.name,
-                    summary.attribution_label(),
-                    existing.attribution_label()
-                )
-            },
-        });
-        if !replace {
-            return;
-        }
-    }
-    skills.insert(summary.name.clone(), summary);
-}
-
-/// Returns deterministic skill-source precedence from lowest to highest.
-fn skill_source_precedence(source: SkillSource) -> u8 {
-    match source {
-        SkillSource::Builtin => 0,
-        SkillSource::User => 1,
-        SkillSource::Project => 2,
     }
 }
 
@@ -801,48 +556,19 @@ fn read_skill_summary(
     }
     let text = fs::read_to_string(skill_path)
         .map_err(|error| format!("failed to read SKILL.md: {error}"))?;
-    let (front_matter, _body) = split_skill_front_matter(&text)?;
-    let front_matter: SkillFrontMatter = serde_norway::from_str(front_matter)
-        .map_err(|error| format!("failed to parse SKILL.md front matter: {error}"))?;
-    if !is_valid_skill_name(&front_matter.name) {
-        return Err(format!("skill name {:?} is invalid", front_matter.name));
-    }
-    if front_matter.name != directory_name {
+    let document = parse_skill_document(&text).map_err(|error| error.message().to_string())?;
+    if document.name != directory_name {
         return Err(format!(
             "skill name {:?} does not match directory {:?}",
-            front_matter.name, directory_name
+            document.name, directory_name
         ));
     }
-    if front_matter.description.trim().is_empty() {
-        return Err("skill description must not be empty".to_string());
-    }
     Ok(SkillSummary {
-        name: front_matter.name,
-        description: front_matter.description.trim().to_string(),
+        name: document.name,
+        description: document.description,
         source,
         path: skill_path.to_path_buf(),
     })
-}
-
-/// Splits a markdown skill file into YAML front matter and body text.
-///
-/// # Parameters
-/// - `text`: Complete `SKILL.md` contents.
-fn split_skill_front_matter(text: &str) -> std::result::Result<(&str, &str), String> {
-    let normalized = text
-        .strip_prefix("---\r\n")
-        .or_else(|| text.strip_prefix("---\n"));
-    let Some(after_open) = normalized else {
-        return Err("SKILL.md must start with YAML front matter".to_string());
-    };
-    for marker in ["\n---\n", "\n---\r\n", "\r\n---\r\n", "\r\n---\n"] {
-        if let Some(index) = after_open.find(marker) {
-            let front_matter = &after_open[..index];
-            let body = &after_open[index + marker.len()..];
-            return Ok((front_matter, body));
-        }
-    }
-    Err("SKILL.md front matter is not closed".to_string())
 }
 
 #[cfg(test)]
@@ -851,10 +577,9 @@ mod tests {
         BUILTIN_ADD_DOC_SKILL_NAME, BUILTIN_ADD_ISSUES_SKILL_NAME, BUILTIN_ADD_RESEARCH_SKILL_NAME,
         BUILTIN_CREATE_MACRO_NAME, BUILTIN_CREATE_SKILL_NAME, BUILTIN_FIX_ISSUES_SKILL_NAME,
         BUILTIN_MEZ_REFERENCE_SKILL_NAME, BUILTIN_SKILL_PATH_PREFIX, ManagedBuiltinSkillSyncStatus,
-        SkillSource, discover_skill_catalog, load_skill_document, parse_skill_prompt_invocation,
-        skill_context_text, split_skill_front_matter, sync_managed_builtin_skills,
+        discover_skill_catalog, load_skill_document, sync_managed_builtin_skills,
     };
-    use mez_agent::is_valid_skill_name;
+    use mez_agent::{SkillSource, skill_context_text, split_skill_front_matter};
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -1264,29 +989,5 @@ mod tests {
         assert!(context.contains("Do review."));
         assert!(context.contains("Invocation state: this skill is already loaded"));
         assert!(context.contains("## Additional context\n\nFocus on tests."));
-    }
-
-    /// Verifies explicit skill prompt parsing keeps the skill token distinct
-    /// from the trailing semantic argument.
-    #[test]
-    fn skill_prompt_invocation_parses_name_and_argument() {
-        let invocation = parse_skill_prompt_invocation("  $review focus src/lib.rs").unwrap();
-
-        assert_eq!(invocation.name, "review");
-        assert_eq!(
-            invocation.additional_context.as_deref(),
-            Some("focus src/lib.rs")
-        );
-    }
-
-    /// Verifies skill names follow the OpenAI-compatible lowercase hyphenated
-    /// grammar used by discovery, prompt syntax, and MAAP calls.
-    #[test]
-    fn skill_name_validation_rejects_paths_and_uppercase() {
-        assert!(is_valid_skill_name("openai-docs"));
-        assert!(is_valid_skill_name("a1"));
-        assert!(!is_valid_skill_name("../skill"));
-        assert!(!is_valid_skill_name("OpenAI"));
-        assert!(!is_valid_skill_name("-"));
     }
 }

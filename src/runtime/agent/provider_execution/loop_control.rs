@@ -2,7 +2,7 @@
 
 use super::super::*;
 
-use super::worker::runtime_execution_is_patch_free;
+use mez_agent::outcome::runtime_execution_has_apply_patch_action;
 
 impl RuntimeSessionService {
     /// Continues or stops an active `/loop` controller after one owned turn settles.
@@ -26,7 +26,7 @@ impl RuntimeSessionService {
                     .agent_loops_by_pane
                     .get(&loop_turn.pane_id)
                     .map(|state| state.emitted_apply_patch)
-                    .unwrap_or_else(|| !runtime_execution_is_patch_free(execution));
+                    .unwrap_or_else(|| runtime_execution_has_apply_patch_action(execution));
                 if !iteration_emitted_apply_patch {
                     if let Some(state) = self.agent_loops_by_pane.remove(&loop_turn.pane_id) {
                         self.restore_agent_loop_parent_conversation(&loop_turn.pane_id, &state)?;
@@ -96,7 +96,7 @@ impl RuntimeSessionService {
             return false;
         };
         let emitted_apply_patch =
-            state.emitted_apply_patch || !runtime_execution_is_patch_free(execution);
+            state.emitted_apply_patch || runtime_execution_has_apply_patch_action(execution);
         emitted_apply_patch && state.iteration < state.max_iterations
     }
 }

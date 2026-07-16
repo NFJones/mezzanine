@@ -1,7 +1,6 @@
 //! Macro-managed message routing into persistent child turns.
 
 use super::super::*;
-use super::helpers::macro_message_recipient_agent_id;
 use super::*;
 
 impl RuntimeSessionService {

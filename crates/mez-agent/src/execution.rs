@@ -9,9 +9,81 @@
 use std::error::Error;
 
 use crate::{
-    AgentAction, LocalActionPlan, MarkerToken, McpExecutionRequest, McpExecutionResponse,
-    ShellTransaction, ShellTransportDiagnostics,
+    ActionContentBlock, ActionResult, ActionResultContractResult, ActionStatus, AgentAction,
+    AgentTurnResultIdentity, LocalActionPlan, MarkerToken, McpExecutionRequest,
+    McpExecutionResponse, ShellTransaction, ShellTransportDiagnostics,
 };
+
+/// Converts JSON-encoded MCP content blocks into canonical action content.
+///
+/// Non-array, malformed, or unsupported payloads remain visible as one text
+/// block so a concrete MCP transport cannot silently discard tool output.
+pub fn action_content_blocks_from_json_or_text(content_json: &str) -> Vec<ActionContentBlock> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(content_json) else {
+        return vec![ActionContentBlock::text(content_json.to_string())];
+    };
+    let Some(items) = value.as_array() else {
+        return vec![ActionContentBlock::text(content_json.to_string())];
+    };
+    let blocks = items
+        .iter()
+        .filter_map(|item| {
+            let item_type = item.get("type").and_then(serde_json::Value::as_str)?;
+            if item_type != "text" {
+                return None;
+            }
+            let text = item.get("text").and_then(serde_json::Value::as_str)?;
+            Some(ActionContentBlock::text(text.to_string()))
+        })
+        .collect::<Vec<_>>();
+    if blocks.is_empty() {
+        vec![ActionContentBlock::text(content_json.to_string())]
+    } else {
+        blocks
+    }
+}
+
+/// Converts one concrete MCP response into its canonical action result.
+///
+/// Transport execution remains product-owned. This function owns only record
+/// projection from the lower MCP request/response contracts into the lower
+/// action-result contract.
+pub fn mcp_response_to_action_result(
+    turn: &(impl AgentTurnResultIdentity + ?Sized),
+    action: &AgentAction,
+    request: &McpExecutionRequest,
+    response: McpExecutionResponse,
+) -> ActionResultContractResult<ActionResult> {
+    let content_json = response.content_json.clone();
+    let server_json = serde_json::Value::String(request.server_id.clone()).to_string();
+    let tool_json = serde_json::Value::String(request.tool_name.clone()).to_string();
+    let structured_payload = format!(
+        r#"{{"server":{server_json},"tool":{tool_json},"content":{content_json},"structured_content":{},"is_error":{}}}"#,
+        response
+            .structured_content_json
+            .as_deref()
+            .unwrap_or("null"),
+        response.is_error
+    );
+    let content = action_content_blocks_from_json_or_text(&response.content_json);
+    if response.is_error {
+        let mut result = ActionResult::failed(
+            turn,
+            action,
+            ActionStatus::Failed,
+            "mcp_tool_error",
+            "MCP tool returned an error",
+        )?;
+        result.content = content;
+        result.structured_content_json = Some(structured_payload);
+        Ok(result)
+    } else {
+        let mut result =
+            ActionResult::succeeded(turn, action, Vec::new(), Some(structured_payload));
+        result.content = content;
+        Ok(result)
+    }
+}
 
 /// One request to execute a rendered shell transaction through a pane adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,7 +255,38 @@ pub trait AsyncMcpActionExecutor {
 
 #[cfg(test)]
 mod tests {
-    use super::{LocalExecutionOutput, LocalExecutionTransport, ShellExecutionOutput};
+    use super::*;
+    use crate::{AgentActionPayload, AgentTurnRecord, AgentTurnState, AgentTurnTrigger};
+
+    /// Builds one turn fixture for execution result projection.
+    fn turn() -> AgentTurnRecord {
+        AgentTurnRecord {
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            pane_id: "%1".to_string(),
+            trigger: AgentTurnTrigger::UserPrompt,
+            started_at_unix_seconds: 1,
+            policy_profile: "default".to_string(),
+            model_profile: "default".to_string(),
+            parent_turn_id: None,
+            state: AgentTurnState::Running,
+            cooperation_mode: None,
+            initial_capability: None,
+        }
+    }
+
+    /// Builds one MCP action fixture for response projection.
+    fn action() -> AgentAction {
+        AgentAction {
+            id: "mcp-1".to_string(),
+            rationale: "inspect remote state".to_string(),
+            payload: AgentActionPayload::McpCall {
+                server: "issues".to_string(),
+                tool: "query".to_string(),
+                arguments_json: "{}".to_string(),
+            },
+        }
+    }
 
     /// Execution records preserve explicit transport and normalized shell
     /// outcome state without requiring a product adapter.
@@ -201,5 +304,60 @@ mod tests {
         assert_eq!(output.transport.as_str(), "pane_shell");
         assert!(output.sent_to_pane);
         assert_eq!(output.shell_output.exit_code, Some(0));
+    }
+
+    /// Verifies successful MCP responses preserve text blocks and structured
+    /// request/response metadata in one canonical action result.
+    #[test]
+    fn mcp_response_projection_preserves_canonical_content() {
+        let result = mcp_response_to_action_result(
+            &turn(),
+            &action(),
+            &McpExecutionRequest {
+                server_id: "issues".to_string(),
+                tool_name: "query".to_string(),
+                arguments_json: "{}".to_string(),
+                timeout_ms: 1_000,
+            },
+            McpExecutionResponse {
+                content_json: r#"[{"type":"text","text":"found one"}]"#.to_string(),
+                structured_content_json: Some(r#"{"count":1}"#.to_string()),
+                is_error: false,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.status, ActionStatus::Succeeded);
+        assert_eq!(result.content_text(), "found one");
+        let structured: serde_json::Value =
+            serde_json::from_str(result.structured_content_json.as_deref().unwrap()).unwrap();
+        assert_eq!(structured["server"], "issues");
+        assert_eq!(structured["structured_content"]["count"], 1);
+    }
+
+    /// Verifies error MCP responses become failed results while malformed
+    /// content remains visible as a fallback text block.
+    #[test]
+    fn mcp_response_projection_preserves_error_fallback_text() {
+        let result = mcp_response_to_action_result(
+            &turn(),
+            &action(),
+            &McpExecutionRequest {
+                server_id: "issues".to_string(),
+                tool_name: "query".to_string(),
+                arguments_json: "{}".to_string(),
+                timeout_ms: 1_000,
+            },
+            McpExecutionResponse {
+                content_json: "not-json".to_string(),
+                structured_content_json: None,
+                is_error: true,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.status, ActionStatus::Failed);
+        assert_eq!(result.content_text(), "not-json");
+        assert_eq!(result.error.unwrap().code, "mcp_tool_error");
     }
 }

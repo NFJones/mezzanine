@@ -32,6 +32,7 @@ use crate::error::MezErrorKind;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
 use crate::terminal::PaneAgentStatusField;
 use mez_agent::instructions::DiscoveredInstructionFile;
+use mez_agent::{MacroManagedSubagent, MacroRunState};
 use mez_mux::copy::CopyPosition;
 use mez_mux::layout::PaneTitleSource;
 use mez_mux::presentation::{TerminalFramePosition, TerminalFrameStyle};
@@ -49,9 +50,8 @@ mod mcp_transport;
 mod metrics;
 mod session;
 pub(in crate::runtime) use agent_state::{
-    BlockedAgentApprovalRef, JoinedSubagentDependency, MacroJudgeDecision, MacroJudgeOutcome,
-    MacroManagedSubagent, MacroRunPhase, MacroRunState, MacroRunStep, MacroStepTaskResult,
-    PaneDescriptor, PendingFocusedShellHookContinuation, PendingFocusedShellHookTransaction,
+    BlockedAgentApprovalRef, JoinedSubagentDependency, PaneDescriptor,
+    PendingFocusedShellHookContinuation, PendingFocusedShellHookTransaction,
     RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentPersonalityProfile,
     RuntimeAgentPreShellHookCompletion, RuntimeApplyPatchBatchState, RuntimeDisplayOverlay,
     RuntimeHookPipelineDecision, RuntimeModelProfileOverrideScope,

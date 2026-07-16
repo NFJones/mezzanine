@@ -649,6 +649,21 @@ pub fn runtime_execution_has_apply_patch_failure(execution: &AgentTurnExecution)
         .any(|result| result.is_error && result.action_type == "apply_patch")
 }
 
+/// Returns true when the provider batch contains an `apply_patch` action,
+/// independent of whether runtime execution has produced a result yet.
+pub fn runtime_execution_has_apply_patch_action(execution: &AgentTurnExecution) -> bool {
+    execution
+        .response
+        .action_batch
+        .as_ref()
+        .is_some_and(|batch| {
+            batch
+                .actions
+                .iter()
+                .any(|action| matches!(action.payload, AgentActionPayload::ApplyPatch { .. }))
+        })
+}
+
 /// Returns true when a failed execution includes an `apply_patch` hunk
 /// mismatch.
 pub fn runtime_execution_has_apply_patch_hunk_mismatch(execution: &AgentTurnExecution) -> bool {
@@ -1650,6 +1665,31 @@ mod tests {
         )
         .unwrap();
         assert!(runtime_action_result_is_feedback_candidate(&result));
+    }
+
+    /// Verifies loop policy can classify patch-bearing provider batches before
+    /// any concrete runtime result has been produced.
+    #[test]
+    fn execution_classifies_apply_patch_actions_from_canonical_batch() {
+        let mut execution = execution();
+        execution.response.action_batch = Some(MaapBatch {
+            protocol: "maap/1".to_string(),
+            rationale: "Update the file".to_string(),
+            thought: None,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            actions: vec![AgentAction {
+                id: "patch-1".to_string(),
+                rationale: "Update the file".to_string(),
+                payload: AgentActionPayload::ApplyPatch {
+                    patch: "*** Begin Patch\n*** End Patch".to_string(),
+                    strip: None,
+                },
+            }],
+            final_turn: false,
+        });
+
+        assert!(runtime_execution_has_apply_patch_action(&execution));
     }
 
     /// Verifies neutral summary and rationale suppression consume the explicit

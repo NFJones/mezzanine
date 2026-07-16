@@ -8,6 +8,10 @@
 
 use super::*;
 use crate::runtime::runtime_effective_config_value;
+use mez_agent::issues::{
+    issue_delete_action_result, issue_query_action_result, issue_record_action_result,
+    issue_update_action_result,
+};
 use std::path::Path;
 
 impl RuntimeSessionService {
@@ -276,101 +280,6 @@ fn issue_action_project(
         .pane_current_working_directory(&turn.pane_id)
         .unwrap_or_else(|| config_root.to_path_buf())
         .pipe(crate::issues::project_key_for_working_directory)
-}
-
-fn issue_record_action_result(
-    turn: &AgentTurnRecord,
-    action: &AgentAction,
-    operation: &str,
-    record: &mez_agent::issues::IssueRecord,
-) -> ActionResult {
-    ActionResult::succeeded(
-        turn,
-        action,
-        vec![format!("issue_{operation} {}", record.id)],
-        Some(issue_record_json(record).to_string()),
-    )
-}
-
-fn issue_query_action_result(
-    turn: &AgentTurnRecord,
-    action: &AgentAction,
-    records: &[mez_agent::issues::IssueRecord],
-) -> ActionResult {
-    ActionResult::succeeded(
-        turn,
-        action,
-        vec![format!("issue_query returned {} records", records.len())],
-        Some(
-            serde_json::json!({
-                "count": records.len(),
-                "issues": records.iter().map(issue_record_json).collect::<Vec<_>>(),
-            })
-            .to_string(),
-        ),
-    )
-}
-
-fn issue_update_action_result(
-    turn: &AgentTurnRecord,
-    action: &AgentAction,
-    result: &mez_agent::issues::UpdateIssueResult,
-) -> ActionResult {
-    ActionResult::succeeded(
-        turn,
-        action,
-        vec![format!(
-            "issue_update {} updated={}",
-            result.id, result.updated
-        )],
-        Some(
-            serde_json::json!({
-                "id": result.id,
-                "project": result.project,
-                "updated": result.updated,
-                "record": result.record.as_ref().map(issue_record_json),
-            })
-            .to_string(),
-        ),
-    )
-}
-
-fn issue_delete_action_result(
-    turn: &AgentTurnRecord,
-    action: &AgentAction,
-    result: &mez_agent::issues::DeleteIssueResult,
-) -> ActionResult {
-    ActionResult::succeeded(
-        turn,
-        action,
-        vec![format!(
-            "issue_delete {} deleted={}",
-            result.id, result.deleted
-        )],
-        Some(
-            serde_json::json!({
-                "id": result.id,
-                "project": result.project,
-                "deleted": result.deleted,
-            })
-            .to_string(),
-        ),
-    )
-}
-
-fn issue_record_json(record: &mez_agent::issues::IssueRecord) -> serde_json::Value {
-    serde_json::json!({
-        "id": record.id,
-        "project": record.project,
-        "kind": record.kind.as_str(),
-        "state": record.state.as_str(),
-        "title": record.title,
-        "body": record.body,
-        "notes": record.notes,
-        "depends_on": record.depends_on,
-        "created_at_unix_seconds": record.created_at_unix_seconds,
-        "updated_at_unix_seconds": record.updated_at_unix_seconds,
-    })
 }
 
 trait Pipe: Sized {

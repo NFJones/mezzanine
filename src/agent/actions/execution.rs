@@ -8,16 +8,15 @@
 use super::super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnRecord,
     DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MarkerToken, McpExecutionRequest,
-    McpExecutionResponse, MezError, Path, Result, ShellTransaction,
-    ShellTransactionOutputTransport, ToolDiscoveryCache, ToolInventory,
-    action_content_blocks_from_json_or_text, action_text_content_blocks, json_escape,
-    local_action_plan, tool_discovery_script,
+    MezError, Path, Result, ShellTransaction, ShellTransactionOutputTransport, ToolDiscoveryCache,
+    ToolInventory, action_text_content_blocks, local_action_plan, tool_discovery_script,
 };
 use super::shell_command_structured_content_json;
 use mez_agent::{
     AsyncMcpActionExecutor, LocalActionExecutor, LocalExecutionOutput, LocalExecutionRequest,
     LocalExecutionTransport, McpActionExecutor, PaneShellExecutor, ShellExecutionOutput,
     ShellExecutionRequest, decode_shell_output_transport_with_diagnostics,
+    mcp_response_to_action_result,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 /// Default turn-wide shell action timeout used by transport-neutral execution.
@@ -260,7 +259,7 @@ pub fn execute_mcp_action_through_runtime(
     }
 
     let response = executor.execute_mcp_call(plan)?;
-    mcp_response_to_action_result(turn, action, plan, response)
+    Ok(mcp_response_to_action_result(turn, action, plan, response)?)
 }
 
 /// Executes the `execute_mcp_action_through_runtime_async` operation for the owning subsystem.
@@ -293,7 +292,7 @@ pub async fn execute_mcp_action_through_runtime_async(
     }
 
     let response = executor.execute_mcp_call_async(plan).await?;
-    mcp_response_to_action_result(turn, action, plan, response)
+    Ok(mcp_response_to_action_result(turn, action, plan, response)?)
 }
 
 /// Executes the `discover_tools_through_pane_shell` operation for the owning subsystem.
@@ -483,48 +482,6 @@ fn local_output_to_action_result_with_transport(
         )?;
         result.content = action_text_content_blocks(content);
         result.structured_content_json = Some(structured);
-        Ok(result)
-    }
-}
-
-/// Executes the `mcp_response_to_action_result` operation for the owning subsystem.
-///
-/// Callers receive a typed result or error with context from the underlying
-/// runtime operation.
-pub(super) fn mcp_response_to_action_result(
-    turn: &AgentTurnRecord,
-    action: &AgentAction,
-    plan: &McpExecutionRequest,
-    response: McpExecutionResponse,
-) -> Result<ActionResult> {
-    let content_json = response.content_json.clone();
-    let structured_payload = format!(
-        r#"{{"server":"{}","tool":"{}","content":{},"structured_content":{},"is_error":{}}}"#,
-        json_escape(&plan.server_id),
-        json_escape(&plan.tool_name),
-        content_json,
-        response
-            .structured_content_json
-            .as_deref()
-            .unwrap_or("null"),
-        response.is_error
-    );
-    let content = action_content_blocks_from_json_or_text(&response.content_json);
-    if response.is_error {
-        let mut result = ActionResult::failed(
-            turn,
-            action,
-            ActionStatus::Failed,
-            "mcp_tool_error",
-            "MCP tool returned an error",
-        )?;
-        result.content = content;
-        result.structured_content_json = Some(structured_payload);
-        Ok(result)
-    } else {
-        let mut result =
-            ActionResult::succeeded(turn, action, Vec::new(), Some(structured_payload));
-        result.content = content;
         Ok(result)
     }
 }

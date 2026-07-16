@@ -1,11 +1,6 @@
 //! Provider-backed macro judge request and decision application.
 
 use super::super::*;
-#[cfg(test)]
-use super::helpers::macro_judge_outcome_wire_value;
-use super::helpers::{
-    macro_judge_decision_from_text, runtime_macro_judge_policy, runtime_macro_judge_task,
-};
 use super::*;
 
 impl RuntimeSessionService {
@@ -77,7 +72,7 @@ impl RuntimeSessionService {
             &turn.turn_id,
             &format!(
                 "macro_judge_response applied outcome={} step_index={}",
-                macro_judge_outcome_wire_value(decision.outcome),
+                decision.outcome.as_str(),
                 step_index
             ),
         )?;
@@ -140,12 +135,12 @@ impl RuntimeSessionService {
                 ModelMessage {
                     role: ModelMessageRole::System,
                     source: ContextSourceKind::RuntimeHint,
-                    content: runtime_macro_judge_policy(),
+                    content: macro_judge_policy(),
                 },
                 ModelMessage {
                     role: ModelMessageRole::User,
                     source: ContextSourceKind::RuntimeHint,
-                    content: runtime_macro_judge_task(run, step, result, next_step),
+                    content: macro_judge_task(run, step, result, next_step),
                 },
             ],
         })
@@ -164,6 +159,7 @@ impl RuntimeSessionService {
             .get(turn_id)
             .ok_or_else(|| MezError::invalid_state("macro judge response has no macro run"))?;
         macro_judge_decision_from_text(&response.raw_text, run.steps.len(), step_index)
+            .map_err(|error| MezError::invalid_args(error.message()))
     }
 
     /// Applies one validated macro judge decision to the parent macro run.

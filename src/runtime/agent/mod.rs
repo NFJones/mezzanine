@@ -100,6 +100,7 @@ mod skills;
 mod subagents;
 mod trace;
 
+use mez_agent::messaging::task_state_name as runtime_task_state_suffix;
 use mez_agent::outcome::{
     ActionPresentationInput, RuntimeSkillActionContext,
     action_error_suffix as runtime_agent_action_error_suffix,
@@ -149,7 +150,7 @@ use outcome::{
     runtime_agent_pending_approval_log_line, runtime_agent_shell_status,
     runtime_agent_turn_steering_context_content,
 };
-use provider_events::{runtime_provider_event_error, runtime_task_state_suffix};
+use provider_events::runtime_provider_event_error;
 use subagents::runtime_agent_pane_id;
 use trace::{
     runtime_maap_message_content_type, runtime_spawn_json_agent_and_turn,

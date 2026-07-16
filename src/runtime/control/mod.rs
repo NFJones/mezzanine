@@ -67,18 +67,16 @@ use crate::control::{
     config_response_advances_generation, persist_target_from_json,
     validate_control_method_params_schema,
 };
-use crate::skills::{
-    BUILTIN_MEZ_REFERENCE_SKILL_NAME, SkillDocument, load_skill_document,
-    parse_skill_prompt_invocation, skill_context_text,
-};
+use crate::skills::{BUILTIN_MEZ_REFERENCE_SKILL_NAME, load_skill_document};
 use context::{
     AGENT_TRANSCRIPT_CONTEXT_READ_BYTES, runtime_agent_transcript_context_blocks,
     runtime_context_block_is_compaction_refresh_owned, runtime_local_message_context_content,
     runtime_transcript_context_entry_limit,
 };
 use mez_agent::{
-    append_memory_context, append_permission_policy_context, append_scheduler_context,
-    is_valid_skill_name, set_project_guidance_context,
+    SkillDocument, append_memory_context, append_permission_policy_context,
+    append_scheduler_context, is_valid_skill_name, parse_skill_prompt_invocation,
+    set_project_guidance_context, skill_context_text,
 };
 use protocol::{
     pane_id_from_runtime_agent_id, paths_equivalent, runtime_project_trust_read_method,

@@ -334,12 +334,8 @@ fn parse_task_state_name(state: &str) -> Result<TaskState> {
     }
 }
 
-/// Runs the task state name operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn task_state_name(state: TaskState) -> &'static str {
+/// Returns the canonical wire and presentation name for a task state.
+pub fn task_state_name(state: TaskState) -> &'static str {
     match state {
         TaskState::Queued => "queued",
         TaskState::Running => "running",

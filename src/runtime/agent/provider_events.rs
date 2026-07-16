@@ -23,18 +23,3 @@ pub(super) fn runtime_provider_event_error(
 ) -> MezError {
     provider_event_error_from_parts(kind, message, provider_failure_json, provider_raw_text)
 }
-
-/// Returns the status suffix used in task-result presentation.
-///
-/// # Parameters
-/// - `state`: Current task state to render.
-pub(super) fn runtime_task_state_suffix(state: TaskState) -> &'static str {
-    match state {
-        TaskState::Queued => "queued",
-        TaskState::Running => "running",
-        TaskState::Blocked => "blocked",
-        TaskState::Succeeded => "succeeded",
-        TaskState::Failed => "failed",
-        TaskState::Cancelled => "cancelled",
-    }
-}
