@@ -241,8 +241,6 @@ impl RuntimeSessionService {
             running_shell_transactions: BTreeMap::new(),
             shell_transaction_require_start_markers: BTreeSet::new(),
             shell_transaction_started_markers: BTreeSet::new(),
-            agent_shell_output_status_lines: BTreeMap::new(),
-            agent_presentation_replay_panes: BTreeSet::new(),
             pane_readiness_states: BTreeMap::new(),
             pane_readiness_overrides: PaneReadinessOverrideStore::default(),
             pane_environment_signatures: BTreeMap::new(),

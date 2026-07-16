@@ -196,7 +196,10 @@ impl RuntimeSessionService {
         copy_lines: Vec<String>,
         ansi_text: String,
     ) {
-        if self.agent_presentation_replay_panes.contains(pane_id)
+        if self
+            .presentation
+            .agent_presentation_replay_panes
+            .contains(pane_id)
             || display_lines.is_empty()
             || style_names.len() != display_lines.len()
         {
@@ -238,7 +241,8 @@ impl RuntimeSessionService {
         if entries.is_empty() {
             return Ok(false);
         }
-        self.agent_presentation_replay_panes
+        self.presentation
+            .agent_presentation_replay_panes
             .insert(pane_id.to_string());
         let result = (|| -> Result<bool> {
             let mut sorted_entries = entries.iter().collect::<Vec<_>>();
@@ -306,7 +310,9 @@ impl RuntimeSessionService {
             state.display_lines.clear();
             Ok(true)
         })();
-        self.agent_presentation_replay_panes.remove(pane_id);
+        self.presentation
+            .agent_presentation_replay_panes
+            .remove(pane_id);
         result
     }
 
@@ -762,6 +768,7 @@ impl RuntimeSessionService {
             return Ok(());
         }
         let previous_line_count = self
+            .presentation
             .agent_shell_output_status_lines
             .get(pane_id)
             .map(Vec::len)
@@ -802,14 +809,19 @@ impl RuntimeSessionService {
             bytes.push_str("\x1b[0m");
         }
         Self::feed_agent_terminal_screen(screen, bytes.as_bytes(), "updating shell output status")?;
-        self.agent_shell_output_status_lines
+        self.presentation
+            .agent_shell_output_status_lines
             .insert(pane_id.to_string(), lines);
         Ok(())
     }
 
     /// Clears transient shell-output status rows if one is active for a pane.
     fn clear_agent_shell_output_status_line(&mut self, pane_id: &str) -> Result<()> {
-        let Some(lines) = self.agent_shell_output_status_lines.remove(pane_id) else {
+        let Some(lines) = self
+            .presentation
+            .agent_shell_output_status_lines
+            .remove(pane_id)
+        else {
             return Ok(());
         };
         if let Some(screen) = self.pane_screens.get_mut(pane_id) {

@@ -234,6 +234,10 @@ pub(in crate::runtime) struct RuntimePresentationComponent {
     copy: RuntimeCopyPresentationState,
     /// Active agent prompt editor state keyed by pane id.
     agent_prompt_inputs: std::collections::BTreeMap<String, RuntimeAgentPromptInput>,
+    /// Pane-local transient shell-output status rows.
+    agent_shell_output_status_lines: std::collections::BTreeMap<String, Vec<String>>,
+    /// Panes replaying durable agent presentation entries.
+    agent_presentation_replay_panes: std::collections::BTreeSet<String>,
     /// Submitted command-prompt history retained across prompt openings.
     primary_command_prompt_history: Vec<String>,
     /// Active primary-client readline prompt, when one is open.

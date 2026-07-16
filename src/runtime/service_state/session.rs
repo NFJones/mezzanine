@@ -611,18 +611,6 @@ pub struct RuntimeSessionService {
     /// stateful commands have no deferred payload but still must emit exactly
     /// one wrapper start marker before they can complete.
     pub(in crate::runtime) shell_transaction_started_markers: BTreeSet<String>,
-    /// Tracks pane-local transient shell-output status rows for hidden agent
-    /// shell commands.
-    ///
-    /// The rows are display-only progress feedback: each output tail update
-    /// replaces the prior preview block, and the next durable agent transcript
-    /// line clears it before writing its own content.
-    pub(in crate::runtime) agent_shell_output_status_lines: BTreeMap<String, Vec<String>>,
-    /// Panes currently replaying durable agent presentation entries.
-    ///
-    /// Replay writes use the same terminal append primitives as live agent
-    /// output, so this set prevents restored rows from being persisted again.
-    pub(in crate::runtime) agent_presentation_replay_panes: BTreeSet<String>,
     /// Stores the pane readiness states value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
