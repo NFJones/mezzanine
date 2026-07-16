@@ -27,7 +27,11 @@ impl RuntimeSessionService {
             };
             let mut title_changed =
                 self.restore_program_pane_title_for_foreground_change(&pane_id, foreground_group)?;
-            if self.program_owned_pane_titles.contains_key(&pane_id) {
+            if self
+                .process
+                .program_owned_pane_titles
+                .contains_key(&pane_id)
+            {
                 continue;
             }
             title_changed |= self
@@ -91,6 +95,7 @@ impl RuntimeSessionService {
         foreground_process_group_id: u32,
     ) -> Result<bool> {
         if self
+            .process
             .program_owned_pane_titles
             .get(pane_id)
             .is_some_and(|state| state.foreground_process_group_id != foreground_process_group_id)
@@ -100,12 +105,12 @@ impl RuntimeSessionService {
                 foreground_process_group_id,
             )?;
         }
-        if !self.program_owned_pane_titles.contains_key(pane_id) {
+        if !self.process.program_owned_pane_titles.contains_key(pane_id) {
             let (previous_title, previous_source) = self.session.pane_title_state(pane_id)?;
             if previous_source.is_explicit() {
                 return Ok(false);
             }
-            self.program_owned_pane_titles.insert(
+            self.process.program_owned_pane_titles.insert(
                 pane_id.to_string(),
                 ProgramOwnedPaneTitle {
                     foreground_process_group_id,
@@ -124,13 +129,14 @@ impl RuntimeSessionService {
         foreground_process_group_id: u32,
     ) -> Result<bool> {
         if self
+            .process
             .program_owned_pane_titles
             .get(pane_id)
             .is_some_and(|state| state.foreground_process_group_id == foreground_process_group_id)
         {
             return Ok(false);
         }
-        let Some(state) = self.program_owned_pane_titles.remove(pane_id) else {
+        let Some(state) = self.process.program_owned_pane_titles.remove(pane_id) else {
             return Ok(false);
         };
         Ok(self.session.restore_pane_title_state(
@@ -159,7 +165,8 @@ impl RuntimeSessionService {
             self.pane_current_working_directories
                 .insert(pane_id.clone(), PathBuf::from(current_working_directory));
         }
-        self.pane_foreground_process_groups
+        self.process
+            .pane_foreground_process_groups
             .insert(pane_id.clone(), process_group_id);
         if self.pane_foreground_primary_shell_state(&pane_id) == Some(true) {
             let _ = self.observe_passive_shell_prompt_candidate(
@@ -177,7 +184,11 @@ impl RuntimeSessionService {
         };
         let mut title_changed =
             self.restore_program_pane_title_for_foreground_change(&pane_id, process_group_id)?;
-        if self.program_owned_pane_titles.contains_key(&pane_id) {
+        if self
+            .process
+            .program_owned_pane_titles
+            .contains_key(&pane_id)
+        {
             return Ok(false);
         }
         title_changed |= self

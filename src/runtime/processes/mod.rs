@@ -34,6 +34,7 @@ use super::{
     runtime_pane_readiness_state_name, runtime_post_shell_hook_payload,
     runtime_random_marker_token, shell_command_result_content, validate_pane_size_for_resize,
 };
+use crate::runtime::service_state::ProgramOwnedPaneTitle;
 use crate::runtime::{
     PaneEvent, ProcessEvent, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition,
 };
@@ -61,6 +62,22 @@ use transactions::{
     RUNTIME_MEZ_OSC_SCAN_LIMIT_BYTES, RUNTIME_SHELL_WRAPPER_FILTER_RECENT_COMMAND_LIMIT,
     RUNTIME_SHELL_WRAPPER_FILTER_RETENTION_POLLS, runtime_running_shell_transaction_kind_name,
 };
+
+/// Owns live process metadata that is private to the pane process subsystem.
+///
+/// Detached process ids, observed foreground groups, and program-owned title
+/// lifetimes change together with pane process events. Keeping them behind
+/// this component prevents unrelated runtime leaves from mutating incomplete
+/// process metadata.
+#[derive(Debug, Default)]
+pub(in crate::runtime) struct RuntimeProcessComponent {
+    /// Primary process ids for panes whose handles are adapter-owned.
+    detached_pane_primary_pids: std::collections::BTreeMap<String, u32>,
+    /// Latest foreground process groups observed by pane workers.
+    pane_foreground_process_groups: std::collections::BTreeMap<String, u32>,
+    /// Program-owned pane title state keyed by pane id.
+    program_owned_pane_titles: std::collections::BTreeMap<String, ProgramOwnedPaneTitle>,
+}
 
 // Pane process lifecycle and PTY synchronization.
 
@@ -133,7 +150,7 @@ impl RuntimeSessionService {
             false,
         )
         .map(|update| {
-            self.detached_pane_primary_pids.remove(&pane_id);
+            self.process.detached_pane_primary_pids.remove(&pane_id);
             Some(update)
         })
     }
@@ -721,7 +738,8 @@ impl RuntimeSessionService {
                 .insert(pane_id.to_string(), current_working_directory);
         }
         let process = self.pane_processes.take_running_pane_process(pane_id)?;
-        self.detached_pane_primary_pids
+        self.process
+            .detached_pane_primary_pids
             .insert(pane_id.to_string(), primary_pid);
         Ok(process)
     }
@@ -765,7 +783,7 @@ impl RuntimeSessionService {
     ) -> Result<u32> {
         self.require_live()?;
         let pane_id = pane_id.into();
-        self.detached_pane_primary_pids.remove(&pane_id);
+        self.process.detached_pane_primary_pids.remove(&pane_id);
         Ok(self
             .pane_processes
             .insert_running_pane_process(pane_id, process)?)
@@ -785,7 +803,9 @@ impl RuntimeSessionService {
 
     /// Returns true when a pane's PTY/process handle is owned by an external adapter.
     pub fn pane_process_is_adapter_owned(&self, pane_id: &str) -> bool {
-        self.detached_pane_primary_pids.contains_key(pane_id)
+        self.process
+            .detached_pane_primary_pids
+            .contains_key(pane_id)
     }
 
     /// Runs the primary pid for live pane process operation for this subsystem.
@@ -794,9 +814,12 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn primary_pid_for_live_pane_process(&self, pane_id: &str) -> Option<u32> {
-        self.pane_processes
-            .primary_pid(pane_id)
-            .or_else(|| self.detached_pane_primary_pids.get(pane_id).copied())
+        self.pane_processes.primary_pid(pane_id).or_else(|| {
+            self.process
+                .detached_pane_primary_pids
+                .get(pane_id)
+                .copied()
+        })
     }
 
     /// Writes pane input immediately when the synchronous manager still owns
@@ -863,7 +886,12 @@ impl RuntimeSessionService {
                 .terminate_pane(pane_id)
                 .map(|process| process.is_some())?);
         }
-        if self.detached_pane_primary_pids.remove(pane_id).is_some() {
+        if self
+            .process
+            .detached_pane_primary_pids
+            .remove(pane_id)
+            .is_some()
+        {
             self.queued_pane_termination_effects.insert(
                 pane_id.to_string(),
                 RuntimeSideEffect::TerminatePane {
@@ -894,7 +922,7 @@ impl RuntimeSessionService {
     /// Terminates all manager-owned and adapter-owned pane processes.
     pub(super) fn terminate_all_runtime_pane_processes(&mut self, force: bool) -> Result<usize> {
         let mut pane_ids = self.pane_processes.tracked_pane_ids();
-        pane_ids.extend(self.detached_pane_primary_pids.keys().cloned());
+        pane_ids.extend(self.process.detached_pane_primary_pids.keys().cloned());
         self.terminate_runtime_pane_processes(pane_ids.iter().map(String::as_str), force)
     }
 
@@ -918,8 +946,8 @@ impl RuntimeSessionService {
         self.agent_modified_files.remove(pane_id);
         self.active_copy_modes_mut().remove(pane_id);
         self.pane_current_working_directories.remove(pane_id);
-        self.pane_foreground_process_groups.remove(pane_id);
-        self.program_owned_pane_titles.remove(pane_id);
+        self.process.pane_foreground_process_groups.remove(pane_id);
+        self.process.program_owned_pane_titles.remove(pane_id);
         self.queued_pane_input_effects
             .retain(|effect| match effect {
                 RuntimeSideEffect::WritePaneInput {

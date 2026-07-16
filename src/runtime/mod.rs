@@ -267,6 +267,7 @@ mod pane_io;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod processes;
+pub(in crate::runtime) use processes::RuntimeProcessComponent;
 /// Exposes runtime provider registry and model preset records.
 ///
 /// The nested module keeps provider configuration records out of the central

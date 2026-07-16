@@ -235,6 +235,7 @@ impl RuntimeSessionService {
         self.write_active_pane_pipe(output.pane_id.as_str(), &render_bytes)?;
         let title_changed = if let Some(title) = terminal_title {
             let foreground_group = self
+                .process
                 .pane_foreground_process_groups
                 .get(output.pane_id.as_str())
                 .copied()

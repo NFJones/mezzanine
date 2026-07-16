@@ -13,7 +13,12 @@ impl RuntimeSessionService {
         let foreground_group = self
             .pane_processes
             .foreground_process_group_id(pane_id)
-            .or_else(|| self.pane_foreground_process_groups.get(pane_id).copied())?;
+            .or_else(|| {
+                self.process
+                    .pane_foreground_process_groups
+                    .get(pane_id)
+                    .copied()
+            })?;
         let primary_process_group = self
             .pane_processes
             .process_group_leader(pane_id)

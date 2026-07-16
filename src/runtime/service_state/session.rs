@@ -1,7 +1,7 @@
 //! Long-lived runtime session-service aggregate and owned subsystem stores.
 
 use super::*;
-use crate::runtime::RuntimePresentationComponent;
+use crate::runtime::{RuntimePresentationComponent, RuntimeProcessComponent};
 
 /// Carries Runtime Session Service state for this subsystem.
 ///
@@ -11,6 +11,8 @@ use crate::runtime::RuntimePresentationComponent;
 pub struct RuntimeSessionService {
     /// Private state owner for terminal presentation and client interaction.
     pub(in crate::runtime) presentation: RuntimePresentationComponent,
+    /// Private state owner for pane process metadata and lifecycle invariants.
+    pub(in crate::runtime) process: RuntimeProcessComponent,
     /// Stores the session value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -52,11 +54,6 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) pane_processes: PaneProcessManager,
-    /// Stores the async owned pane processes value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) detached_pane_primary_pids: BTreeMap<String, u32>,
     /// Stores the latest async runtime actor metrics snapshot when available.
     ///
     /// The actor-owned command path updates this snapshot before rendering
@@ -76,19 +73,6 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) pane_current_working_directories: BTreeMap<String, PathBuf>,
-    /// Last foreground process group reported by the async pane worker.
-    ///
-    /// The synchronous PTY metadata path is best-effort and can be unavailable
-    /// immediately after new pane creation or layout restoration. This cache
-    /// lets readiness recovery use the actor-owned foreground observation when
-    /// it is newer than no host metadata at all.
-    pub(in crate::runtime) pane_foreground_process_groups: BTreeMap<String, u32>,
-    /// Program-owned pane titles keyed by pane id.
-    ///
-    /// The map stores the pane title mode that was active before a foreground
-    /// program emitted an OSC title so process metadata refreshes can leave that
-    /// title sticky until the owning foreground process changes or exits.
-    pub(in crate::runtime) program_owned_pane_titles: BTreeMap<String, ProgramOwnedPaneTitle>,
     /// Stores the deferred pane inputs value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

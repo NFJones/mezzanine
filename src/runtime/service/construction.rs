@@ -1,7 +1,7 @@
 //! Runtime session-service construction and initial aggregate assembly.
 
 use super::*;
-use crate::runtime::RuntimePresentationComponent;
+use crate::runtime::{RuntimePresentationComponent, RuntimeProcessComponent};
 #[cfg(test)]
 use crate::terminal::HostClipboard;
 
@@ -111,6 +111,7 @@ impl RuntimeSessionService {
         crate::terminal::set_agent_wrap_column_cap(crate::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP);
         Ok(Self {
             presentation: RuntimePresentationComponent::default(),
+            process: RuntimeProcessComponent::default(),
             session,
             window_created_at_unix_seconds,
             config_layers: Vec::new(),
@@ -119,7 +120,6 @@ impl RuntimeSessionService {
             control_idempotency,
             message_service,
             pane_processes,
-            detached_pane_primary_pids: BTreeMap::new(),
             async_runtime_metrics: None,
             runtime_metrics: Default::default(),
             pane_current_working_directories: BTreeMap::new(),
@@ -218,8 +218,6 @@ impl RuntimeSessionService {
             agent_context_usage_snapshot_by_conversation: BTreeMap::new(),
             agent_quota_usage_by_conversation: BTreeMap::new(),
             provider_model_catalog_cache: BTreeMap::new(),
-            pane_foreground_process_groups: BTreeMap::new(),
-            program_owned_pane_titles: BTreeMap::new(),
             pending_agent_provider_tasks: BTreeSet::new(),
             agent_provider_retry_attempts: BTreeMap::new(),
             claimed_agent_provider_tasks: BTreeMap::new(),
