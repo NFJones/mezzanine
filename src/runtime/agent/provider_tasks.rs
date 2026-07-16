@@ -306,7 +306,7 @@ impl RuntimeSessionService {
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn has no model profile"))?;
         let provider_config = self
-            .provider_registry
+            .provider_registry()
             .provider(&model_profile.provider)
             .cloned()
             .ok_or_else(|| {
@@ -348,7 +348,7 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("runtime agent turn context is unavailable")
                 })?;
-            let mcp_summary = self.mcp_registry.prompt_summary();
+            let mcp_summary = self.mcp_registry().prompt_summary();
             let context = append_mcp_context(context, &mcp_summary)?;
             let available_mcp_tools = invoked_mcp_tools_for_context(&context, &mcp_summary);
             self.agent_turn_contexts_mut()
@@ -381,7 +381,7 @@ impl RuntimeSessionService {
             && auto_sizing.router_profile.provider != model_profile.provider
         {
             let router_provider_config = self
-                .provider_registry
+                .provider_registry()
                 .provider(&auto_sizing.router_profile.provider)
                 .cloned()
                 .ok_or_else(|| {
@@ -426,7 +426,7 @@ impl RuntimeSessionService {
                     continue;
                 }
                 let Some(target_provider_config) =
-                    self.provider_registry.provider(provider_id).cloned()
+                    self.provider_registry().provider(provider_id).cloned()
                 else {
                     self.append_agent_trace_turn_event(
                         &turn.pane_id,

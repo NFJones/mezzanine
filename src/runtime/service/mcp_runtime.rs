@@ -10,7 +10,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn mcp_registry(&self) -> &McpRegistry {
-        &self.mcp_registry
+        self.integration.mcp_registry()
     }
 
     /// Runs the mcp registry mut operation for this subsystem.
@@ -19,12 +19,12 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn mcp_registry_mut(&mut self) -> &mut McpRegistry {
-        &mut self.mcp_registry
+        self.integration.mcp_registry_mut()
     }
 
     /// Clears all runtime-owned MCP transports and returns the number dropped.
     pub(crate) fn clear_runtime_mcp_transports(&mut self) -> usize {
-        self.mcp_transports.clear_counted()
+        self.integration.mcp_transports_mut().clear_counted()
     }
 
     /// Runs the retry runtime mcp server operation for this subsystem.
@@ -37,7 +37,8 @@ impl RuntimeSessionService {
         server_id: &str,
     ) -> Result<RuntimeMcpRetryReport> {
         let previous = self
-            .mcp_registry
+            .integration
+            .mcp_registry()
             .list_servers()
             .into_iter()
             .find(|server| server.configured.id == server_id)
@@ -55,14 +56,14 @@ impl RuntimeSessionService {
             McpServerStatus::Unavailable | McpServerStatus::Blacklisted | McpServerStatus::Failed
         );
 
-        let mut registry = std::mem::take(&mut self.mcp_registry);
+        let mut registry = std::mem::take(self.integration.mcp_registry_mut());
         let result = self.retry_runtime_mcp_server_with_registry(
             &mut registry,
             server_id,
             previous.status,
             retryable_before_retry,
         );
-        self.mcp_registry = registry;
+        *self.integration.mcp_registry_mut() = registry;
         result
     }
 
@@ -79,7 +80,7 @@ impl RuntimeSessionService {
         retryable_before_retry: bool,
     ) -> Result<RuntimeMcpRetryReport> {
         registry.retry_server(server_id)?;
-        self.mcp_transports.remove(server_id);
+        self.integration.mcp_transports_mut().remove(server_id);
         let environment = std::env::vars().collect::<BTreeMap<_, _>>();
         let mut rediscovered = true;
         let mut reason = None;
@@ -88,7 +89,7 @@ impl RuntimeSessionService {
             let message = error.message().to_string();
             let _ =
                 registry.blacklist_for_session(server_id, message.clone(), current_unix_seconds());
-            self.mcp_transports.remove(server_id);
+            self.integration.mcp_transports_mut().remove(server_id);
             reason = Some(message);
         }
 
@@ -164,7 +165,7 @@ impl RuntimeSessionService {
                         reason.clone(),
                         current_unix_seconds(),
                     );
-                    self.mcp_transports.remove(&server_id);
+                    self.integration.mcp_transports_mut().remove(&server_id);
                     self.append_runtime_mcp_discovery_event(
                         &server_id,
                         McpServerStatus::Blacklisted,
@@ -234,7 +235,8 @@ impl RuntimeSessionService {
                     }
                 }
                 registry.mark_available_from_discovered_tools(server_id, tools, checked_at)?;
-                self.mcp_transports
+                self.integration
+                    .mcp_transports_mut()
                     .insert_stdio(server_id.to_string(), connection);
             }
             McpStartupTransportPlan::StreamableHttp {
@@ -289,14 +291,16 @@ impl RuntimeSessionService {
                     discovery.tools.clone(),
                     checked_at,
                 )?;
-                self.mcp_transports.insert_streamable_http(
-                    server_id.to_string(),
-                    RuntimeHttpMcpTransportState {
-                        startup_plan: plan,
-                        session_id: discovery.session_id,
-                        next_request_id: 1000,
-                    },
-                );
+                self.integration
+                    .mcp_transports_mut()
+                    .insert_streamable_http(
+                        server_id.to_string(),
+                        RuntimeHttpMcpTransportState {
+                            startup_plan: plan,
+                            session_id: discovery.session_id,
+                            next_request_id: 1000,
+                        },
+                    );
             }
         }
         Ok(())

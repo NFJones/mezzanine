@@ -644,7 +644,7 @@ impl RuntimeSessionService {
                     body,
                     &mut self.session,
                     primary_client_id,
-                    &self.mcp_registry,
+                    self.integration.mcp_registry(),
                 );
             }
             return dispatch_control_request_cached(
@@ -1076,7 +1076,7 @@ impl RuntimeSessionService {
                     body,
                     &mut self.session,
                     &caller_client_id,
-                    &self.mcp_registry,
+                    self.integration.mcp_registry(),
                 );
             }
             return dispatch_control_request_for_connection(

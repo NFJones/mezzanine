@@ -17,7 +17,7 @@ impl RuntimeSessionService {
             return Ok(catalog);
         }
         let provider_config = self
-            .provider_registry
+            .provider_registry()
             .provider(provider_id)
             .cloned()
             .ok_or_else(|| {
@@ -26,7 +26,7 @@ impl RuntimeSessionService {
         let fallback = runtime_configured_model_catalog(
             provider_id,
             &provider_config,
-            &self.provider_registry,
+            self.provider_registry(),
         );
         Ok(fallback)
     }
@@ -44,7 +44,7 @@ impl RuntimeSessionService {
             return Ok(catalog);
         }
         let provider_config = self
-            .provider_registry
+            .provider_registry()
             .provider(provider_id)
             .cloned()
             .ok_or_else(|| {
@@ -53,7 +53,7 @@ impl RuntimeSessionService {
         let fallback = runtime_configured_model_catalog(
             provider_id,
             &provider_config,
-            &self.provider_registry,
+            self.provider_registry(),
         );
         match resolve_provider_api(&provider_config.kind, provider_config.api.as_deref())? {
             ProviderApiCompatibility::OpenAiResponses
@@ -86,7 +86,7 @@ impl RuntimeSessionService {
     /// Refreshes cached provider information for every configured provider.
     pub(crate) async fn refresh_provider_info_async(&mut self) -> Result<String> {
         let provider_ids = self
-            .provider_registry
+            .provider_registry()
             .providers()
             .keys()
             .cloned()

@@ -1263,7 +1263,7 @@ impl RuntimeSessionService {
                         self.agent_turn_model_profile(&turn.turn_id)
                             .map(|profile| profile.model.clone())
                             .or_else(|| {
-                                self.provider_registry
+                                self.provider_registry()
                                     .resolve_profile(&turn.model_profile)
                                     .ok()
                                     .map(|profile| profile.model)

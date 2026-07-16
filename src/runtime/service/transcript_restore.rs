@@ -10,7 +10,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn provider_registry(&self) -> &RuntimeProviderRegistry {
-        &self.provider_registry
+        self.integration.provider_registry()
     }
 
     /// Runs the auth store operation for this subsystem.
@@ -146,11 +146,13 @@ impl RuntimeSessionService {
             session.log_level = log_level;
             session.directive = metadata.directive.clone();
             if let Some(profile) = metadata.pane_model_profile.as_ref() {
-                self.model_profile_overrides
+                self.integration
+                    .model_profile_overrides_mut()
                     .pane_profiles
                     .insert(metadata.pane_id.clone(), profile.clone());
             } else {
-                self.model_profile_overrides
+                self.integration
+                    .model_profile_overrides_mut()
                     .pane_profiles
                     .remove(&metadata.pane_id);
             }
@@ -276,7 +278,8 @@ impl RuntimeSessionService {
                     transcript_entries,
                     log_level: session.log_level.as_str().to_string(),
                     pane_model_profile: self
-                        .model_profile_overrides
+                        .integration
+                        .model_profile_overrides()
                         .pane_profiles
                         .get(&session.pane_id)
                         .cloned(),
@@ -329,11 +332,15 @@ impl RuntimeSessionService {
             session.prompt_cache_lineage_id = metadata.prompt_cache_lineage_id.clone();
             session.directive = metadata.directive.clone();
             if let Some(profile) = metadata.pane_model_profile.as_ref() {
-                self.model_profile_overrides
+                self.integration
+                    .model_profile_overrides_mut()
                     .pane_profiles
                     .insert(pane_id.to_string(), profile.clone());
             } else {
-                self.model_profile_overrides.pane_profiles.remove(pane_id);
+                self.integration
+                    .model_profile_overrides_mut()
+                    .pane_profiles
+                    .remove(pane_id);
             }
             self.set_agent_planning_enabled(pane_id, metadata.planning_enabled);
             self.set_agent_response_style(pane_id, metadata.response_style.clone());

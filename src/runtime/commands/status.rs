@@ -431,9 +431,9 @@ impl RuntimeSessionService {
             runtime_permission_preset_name(self.permission_policy().preset),
             runtime_approval_policy_name(self.permission_policy().approval_policy),
             self.permission_policy().approval_bypass(),
-            self.provider_registry.providers.len(),
-            self.provider_registry.profiles.len(),
-            self.mcp_registry.list_servers().len(),
+            self.provider_registry().providers.len(),
+            self.provider_registry().profiles.len(),
+            self.mcp_registry().list_servers().len(),
             self.hook_definitions.len()
         )];
         for (index, layer) in self.integration.config_layers().iter().enumerate() {

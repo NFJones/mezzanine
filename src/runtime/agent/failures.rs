@@ -131,7 +131,7 @@ impl RuntimeSessionService {
             None => format!("provider_error: {error}"),
         };
         let safe_fallbacks = self
-            .provider_registry
+            .provider_registry()
             .safe_fallback_profiles(&turn.model_profile)?;
         if !safe_fallbacks.is_empty() {
             raw_text.push_str("\nsafe_fallback_profiles: ");

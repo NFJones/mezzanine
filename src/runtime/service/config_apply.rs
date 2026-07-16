@@ -189,24 +189,38 @@ impl RuntimeSessionService {
     /// Captures live generated model profiles referenced by override state.
     pub(super) fn preserved_model_override_profiles(&self) -> BTreeMap<String, ModelProfile> {
         let mut names = BTreeSet::new();
-        if let Some(profile) = self.model_profile_overrides.session_profile.as_ref() {
+        if let Some(profile) = self
+            .integration
+            .model_profile_overrides()
+            .session_profile
+            .as_ref()
+        {
             names.insert(profile.clone());
         }
         names.extend(
-            self.model_profile_overrides
+            self.integration
+                .model_profile_overrides()
                 .window_profiles
                 .values()
                 .cloned(),
         );
-        names.extend(self.model_profile_overrides.pane_profiles.values().cloned());
         names.extend(
-            self.model_profile_overrides
+            self.integration
+                .model_profile_overrides()
+                .pane_profiles
+                .values()
+                .cloned(),
+        );
+        names.extend(
+            self.integration
+                .model_profile_overrides()
                 .agent_profiles
                 .values()
                 .cloned(),
         );
         names.extend(
-            self.model_profile_overrides
+            self.integration
+                .model_profile_overrides()
                 .subagent_profiles
                 .values()
                 .cloned(),
@@ -214,7 +228,7 @@ impl RuntimeSessionService {
         names
             .into_iter()
             .filter_map(|name| {
-                self.provider_registry
+                self.provider_registry()
                     .profile(&name)
                     .cloned()
                     .map(|profile| (name, profile))
@@ -305,17 +319,16 @@ impl RuntimeSessionService {
                 provider_registry.profiles.entry(name).or_insert(profile);
             }
         }
-        self.provider_registry = provider_registry;
-        self.preset_registry =
-            runtime_preset_registry_from_config(&structured, &self.provider_registry.profiles)?;
+        let preset_registry =
+            runtime_preset_registry_from_config(&structured, &provider_registry.profiles)?;
         // Synthesize provider entries for authenticated providers not in config.
         if let Some(auth_store) = self.auth_store.as_ref() {
             let all_metadata = auth_store.read_all_metadata().unwrap_or_default();
             for auth_provider in all_metadata.keys() {
-                if !self.provider_registry.providers.contains_key(auth_provider)
+                if !provider_registry.providers.contains_key(auth_provider)
                     && let Ok(default_models) = runtime_default_models_for_provider(auth_provider)
                 {
-                    self.provider_registry.providers.insert(
+                    provider_registry.providers.insert(
                         auth_provider.clone(),
                         RuntimeProviderConfig {
                             provider_id: auth_provider.clone(),
@@ -336,31 +349,36 @@ impl RuntimeSessionService {
                 }
             }
         }
+        self.integration
+            .replace_provider_registry(provider_registry);
+        *self.integration.preset_registry_mut() = preset_registry;
         self.clear_provider_model_catalog_cache();
-        self.subagent_profiles = runtime_subagent_profiles_from_config(&structured)?;
-        self.agent_personality_profiles =
-            runtime_agent_personality_profiles_from_config(&structured)?;
-        self.default_agent_personality =
-            runtime_default_agent_personality_from_config(&structured)?;
-        if let Some(default_personality) = self.default_agent_personality.as_ref()
-            && !self
-                .agent_personality_profiles
-                .contains_key(default_personality)
+        self.integration
+            .replace_subagent_profiles(runtime_subagent_profiles_from_config(&structured)?);
+        let personality_profiles = runtime_agent_personality_profiles_from_config(&structured)?;
+        let default_personality = runtime_default_agent_personality_from_config(&structured)?;
+        if let Some(default_personality) = default_personality.as_ref()
+            && !personality_profiles.contains_key(default_personality)
         {
             return Err(MezError::config(format!(
                 "agents.default_personality `{default_personality}` is not defined in personalities"
             )));
         }
-        self.custom_agent_system_prompt =
-            runtime_agent_custom_system_prompt_from_config(&structured)?;
+        self.integration
+            .replace_agent_personality_profiles(personality_profiles);
+        self.integration
+            .set_default_agent_personality(default_personality);
+        self.integration.set_custom_agent_system_prompt(
+            runtime_agent_custom_system_prompt_from_config(&structured)?,
+        );
         self.hook_definitions = runtime_hook_definitions_from_config(&structured)?;
         let mut registry = runtime_mcp_registry_from_config(&structured)?;
         let environment = std::env::vars().collect::<BTreeMap<_, _>>();
         let blacklisted = registry
             .blacklist_servers_with_missing_environment(&environment, current_unix_seconds())?;
-        self.mcp_transports.clear();
+        self.integration.mcp_transports_mut().clear();
         let configured = registry.list_servers().len();
-        self.mcp_registry = registry;
+        *self.integration.mcp_registry_mut() = registry;
         let trust_prompts_announced =
             self.append_project_trust_prompt_events_for_pending_layers()?;
         let _ = self.load_persistent_memory_into_session();
@@ -376,9 +394,9 @@ impl RuntimeSessionService {
             permission_policy_applied: true,
             mcp_servers_configured: configured,
             mcp_servers_blacklisted: blacklisted,
-            providers_configured: self.provider_registry.providers.len(),
-            model_profiles_configured: self.provider_registry.profiles.len(),
-            default_model_profile: self.provider_registry.default_profile.clone(),
+            providers_configured: self.provider_registry().providers.len(),
+            model_profiles_configured: self.provider_registry().profiles.len(),
+            default_model_profile: self.provider_registry().default_profile.clone(),
             hooks_configured: self.hook_definitions.len(),
             project_trust_prompts_announced: trust_prompts_announced,
             ui_theme: self.ui_theme().name.clone(),
@@ -393,7 +411,7 @@ impl RuntimeSessionService {
     pub async fn apply_runtime_config_layers_async(&mut self) -> Result<RuntimeConfigApplyReport> {
         let mut report = self.apply_runtime_config_layers()?;
         let environment = std::env::vars().collect::<BTreeMap<_, _>>();
-        let mut registry = std::mem::take(&mut self.mcp_registry);
+        let mut registry = std::mem::take(self.integration.mcp_registry_mut());
         let discovery_blacklisted = self
             .initialize_runtime_mcp_transports_async(
                 &mut registry,
@@ -403,7 +421,7 @@ impl RuntimeSessionService {
             )
             .await?;
         report.mcp_servers_blacklisted.extend(discovery_blacklisted);
-        self.mcp_registry = registry;
+        *self.integration.mcp_registry_mut() = registry;
         Ok(report)
     }
 
@@ -416,7 +434,7 @@ impl RuntimeSessionService {
         &mut self,
     ) -> Result<Vec<String>> {
         let environment = std::env::vars().collect::<BTreeMap<_, _>>();
-        let mut registry = std::mem::take(&mut self.mcp_registry);
+        let mut registry = std::mem::take(self.integration.mcp_registry_mut());
         let blacklisted = self
             .initialize_runtime_mcp_transports_async(
                 &mut registry,
@@ -425,7 +443,7 @@ impl RuntimeSessionService {
                 false,
             )
             .await?;
-        self.mcp_registry = registry;
+        *self.integration.mcp_registry_mut() = registry;
         let _ = self.persist_registry_update_plan(&self.registry_update_plan());
         Ok(blacklisted)
     }

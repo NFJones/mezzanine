@@ -7,13 +7,11 @@
 use super::{
     ActionStatus, AgentShellVisibility, AgentTurnState, AuthStore, BTreeMap, BTreeSet,
     FocusedShellHookQueue, HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult,
-    HookFailureKind, McpRegistry, McpServerStatus, McpStartupPlan, McpStdioConnection,
-    McpToolCallPlan, McpToolCallResponse, MezError, ModelRequest, ModelResponse, ModelTokenUsage,
+    HookFailureKind, McpServerStatus, McpStartupPlan, McpStdioConnection, McpToolCallPlan,
+    McpToolCallResponse, MezError, ModelRequest, ModelResponse, ModelTokenUsage,
     ModelTokenUsageKey, PaneGeometry, PaneId, PathBuf, ProjectTrustStore, Result, SessionRecord,
-    Size, SplitDirection, SubagentProfile, WindowId, execute_streamable_http_exchange,
-    mcp_tools_call_operation,
+    Size, SplitDirection, WindowId, execute_streamable_http_exchange, mcp_tools_call_operation,
 };
-use super::{RuntimePresetRegistry, RuntimeProviderRegistry};
 use crate::error::MezErrorKind;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
 use crate::terminal::PaneAgentStatusField;

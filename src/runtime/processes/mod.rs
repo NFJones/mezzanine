@@ -1511,7 +1511,9 @@ impl RuntimeSessionService {
         self.clear_agent_subshell_state(pane_id);
         self.remove_agent_prompt_input(pane_id);
         self.clear_agent_pane_presentation_preferences(pane_id);
-        self.agent_personality_selections.remove(pane_id);
+        self.integration
+            .agent_personality_selections_mut()
+            .remove(pane_id);
         self.clear_agent_routing_override(pane_id);
         self.clear_agent_pane_artifacts(pane_id);
         self.active_copy_modes_mut().remove(pane_id);
@@ -1549,7 +1551,10 @@ impl RuntimeSessionService {
         self.clear_pane_agent_instruction_files(pane_id);
         self.process.pane_closing.remove(pane_id);
         self.clear_terminal_subagent_pane_close(pane_id);
-        self.model_profile_overrides.pane_profiles.remove(pane_id);
+        self.integration
+            .model_profile_overrides_mut()
+            .pane_profiles
+            .remove(pane_id);
         self.set_agent_auto_sizing_override(pane_id, None);
         let pane_turn_ids = self
             .agent_turn_ledger()
@@ -1567,7 +1572,8 @@ impl RuntimeSessionService {
         let agent_id = format!("agent-{pane_id}");
         self.remove_subagent_task_routes_for_parent(&agent_id);
         self.remove_joined_subagent_dependencies_for_agent(&agent_id);
-        self.model_profile_overrides
+        self.integration
+            .model_profile_overrides_mut()
             .agent_profiles
             .remove(&agent_id);
         self.remove_subagent_authority_state(&agent_id);

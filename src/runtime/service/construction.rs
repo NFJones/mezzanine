@@ -126,7 +126,10 @@ impl RuntimeSessionService {
             ),
             persistence: RuntimePersistenceComponent::default(),
             control: RuntimeControlComponent::new(control_idempotency, message_service, event_log),
-            integration: RuntimeIntegrationComponent::default(),
+            integration: RuntimeIntegrationComponent::new(
+                runtime_provider_registry_from_config(&Value::Object(serde_json::Map::new()))?,
+                builtin_subagent_profiles(),
+            ),
             session: RuntimeSessionComponent::new(
                 session,
                 window_created_at_unix_seconds,
@@ -134,18 +137,6 @@ impl RuntimeSessionService {
                 socket_path,
                 created_at_unix_seconds,
             ),
-            mcp_registry: McpRegistry::default(),
-            mcp_transports: RuntimeMcpTransportSet::default(),
-            provider_registry: runtime_provider_registry_from_config(&Value::Object(
-                serde_json::Map::new(),
-            ))?,
-            preset_registry: RuntimePresetRegistry::default(),
-            subagent_profiles: builtin_subagent_profiles(),
-            agent_personality_profiles: BTreeMap::new(),
-            default_agent_personality: None,
-            custom_agent_system_prompt: None,
-            agent_personality_selections: BTreeMap::new(),
-            model_profile_overrides: RuntimeModelProfileOverrideStore::default(),
             auth_store: None,
             provider_auth_refresh_leeway_seconds:
                 crate::auth::DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS,

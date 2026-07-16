@@ -127,14 +127,14 @@ fn runtime_config_reload_applies_agent_prompt_and_personality_profiles() {
         .unwrap();
 
     assert_eq!(
-        service.custom_agent_system_prompt.as_deref(),
+        service.integration.custom_agent_system_prompt(),
         Some("Always preserve user work.")
     );
     assert_eq!(
-        service.default_agent_personality.as_deref(),
+        service.integration.default_agent_personality(),
         Some("careful")
     );
-    assert_eq!(service.agent_personality_profiles.len(), 1);
+    assert_eq!(service.integration.agent_personality_profiles().len(), 1);
 
     service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)

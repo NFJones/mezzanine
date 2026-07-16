@@ -516,7 +516,7 @@ impl RuntimeSessionService {
             timeout_ms: None,
             approval_bypass: self.permission_policy().approval_bypass(),
         };
-        let plan = self.mcp_registry.plan_tool_call(&request)?;
+        let plan = self.mcp_registry().plan_tool_call(&request)?;
         if plan.approval_required && !approved && !self.permission_policy().approval_bypass() {
             return Ok(ActionResult::blocked(
                 turn,
@@ -535,7 +535,7 @@ impl RuntimeSessionService {
         let execution_request = McpExecutionRequest::from(&plan);
         let audit_log = self.persistence.audit_log_mut();
         let mut executor = RuntimeMcpActionExecutor {
-            transports: &mut self.mcp_transports,
+            transports: self.integration.mcp_transports_mut(),
             audit_log,
             environment,
             auth_store: self.auth_store.as_ref(),
@@ -555,7 +555,7 @@ impl RuntimeSessionService {
         ) {
             Ok(result) => result,
             Err(error) => {
-                let _ = self.mcp_registry.mark_unavailable(
+                let _ = self.mcp_registry_mut().mark_unavailable(
                     &plan.server_id,
                     format!("runtime tool call failed: {}", error.message()),
                     current_unix_seconds(),
@@ -618,7 +618,7 @@ impl RuntimeSessionService {
             timeout_ms: None,
             approval_bypass: self.permission_policy().approval_bypass(),
         };
-        let plan = self.mcp_registry.plan_tool_call(&request)?;
+        let plan = self.mcp_registry().plan_tool_call(&request)?;
         if plan.approval_required && !approved && !self.permission_policy().approval_bypass() {
             return Ok(ActionResult::blocked(
                 turn,
@@ -637,7 +637,7 @@ impl RuntimeSessionService {
         let execution_request = McpExecutionRequest::from(&plan);
         let audit_log = self.persistence.audit_log_mut();
         let mut executor = RuntimeMcpActionExecutor {
-            transports: &mut self.mcp_transports,
+            transports: self.integration.mcp_transports_mut(),
             audit_log,
             environment,
             auth_store: self.auth_store.as_ref(),
@@ -659,7 +659,7 @@ impl RuntimeSessionService {
         {
             Ok(result) => result,
             Err(error) => {
-                let _ = self.mcp_registry.mark_unavailable(
+                let _ = self.mcp_registry_mut().mark_unavailable(
                     &plan.server_id,
                     format!("runtime tool call failed: {}", error.message()),
                     current_unix_seconds(),

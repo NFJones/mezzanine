@@ -27,54 +27,6 @@ pub struct RuntimeSessionService {
     pub(in crate::runtime) integration: RuntimeIntegrationComponent,
     /// Private owner for the mux session and application lifecycle metadata.
     pub(in crate::runtime) session: RuntimeSessionComponent,
-    /// Stores the mcp registry value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) mcp_registry: McpRegistry,
-    /// Stores the mcp transports value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) mcp_transports: RuntimeMcpTransportSet,
-    /// Stores the provider registry value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) provider_registry: RuntimeProviderRegistry,
-    /// Stores the preset registry value for this data structure.
-    pub(in crate::runtime) preset_registry: RuntimePresetRegistry,
-    /// Stores the subagent profiles value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) subagent_profiles: BTreeMap<String, SubagentProfile>,
-    /// User-defined pane personality profiles.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) agent_personality_profiles:
-        BTreeMap<String, RuntimeAgentPersonalityProfile>,
-    /// Configured default personality profile id, when one exists.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) default_agent_personality: Option<String>,
-    /// User-configured system prompt text appended after the built-in prompt.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) custom_agent_system_prompt: Option<String>,
-    /// Pane-local selected personality profile ids.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) agent_personality_selections: BTreeMap<String, String>,
-    /// Stores the model profile overrides value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) model_profile_overrides: RuntimeModelProfileOverrideStore,
     /// Stores the auth store value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

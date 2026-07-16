@@ -174,7 +174,7 @@ fn runtime_agent_context_dump_for_pane(
         .agent_turn_contexts()
         .get(&turn_id)
         .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-    let mcp_summary = service.mcp_registry.prompt_summary();
+    let mcp_summary = service.mcp_registry().prompt_summary();
     let context = append_mcp_context(context.clone(), &mcp_summary)?;
     let mut request = assemble_model_request(&model_profile, &turn, &context)?;
     request.available_mcp_tools = mcp_summary.available_tools.clone();
@@ -208,7 +208,7 @@ fn runtime_idle_agent_context_dump_for_pane(
         100,
     )?;
     let context = service.apply_agent_shell_preference_context(pane_id, context)?;
-    let mcp_summary = service.mcp_registry.prompt_summary();
+    let mcp_summary = service.mcp_registry().prompt_summary();
     let context = append_mcp_context(context, &mcp_summary)?;
     let turn_id = format!("idle-context-preview-{pane_id}");
     let turn = AgentTurnRecord {

@@ -370,7 +370,7 @@ impl RuntimeSessionService {
         }
         let config = self.runtime_auto_sizing_config_for_pane(&turn.pane_id);
         let router_profile = self
-            .provider_registry
+            .provider_registry()
             .resolve_profile(&config.router_model_profile)?;
         let small =
             self.runtime_auto_sizing_target_profile("small", &config.small_model_profile)?;
@@ -434,8 +434,8 @@ impl RuntimeSessionService {
         size: &str,
         profile_name: &str,
     ) -> Result<RuntimeAutoSizingTargetProfile> {
-        let profile = self.provider_registry.resolve_profile(profile_name)?;
-        let provider_config = self.provider_registry.provider(&profile.provider);
+        let profile = self.provider_registry().resolve_profile(profile_name)?;
+        let provider_config = self.provider_registry().provider(&profile.provider);
         Ok(RuntimeAutoSizingTargetProfile {
             size: size.to_string(),
             profile_name: profile_name.to_string(),

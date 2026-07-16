@@ -77,7 +77,7 @@ impl RuntimeSessionService {
             .get(turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        let mcp_summary = self.mcp_registry.prompt_summary();
+        let mcp_summary = self.mcp_registry().prompt_summary();
         let context = append_mcp_context(context, &mcp_summary)?;
         let available_mcp_tools = invoked_mcp_tools_for_context(&context, &mcp_summary);
         self.agent_turn_contexts_mut()
@@ -399,7 +399,7 @@ impl RuntimeSessionService {
             .get(turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        let mcp_summary = self.mcp_registry.prompt_summary();
+        let mcp_summary = self.mcp_registry().prompt_summary();
         let context = append_mcp_context(context, &mcp_summary)?;
         let available_mcp_tools = invoked_mcp_tools_for_context(&context, &mcp_summary);
         self.agent_turn_contexts_mut()

@@ -147,7 +147,7 @@ impl RuntimeSessionService {
             self.agent_context_for_pane_prompt(pane_id, "[context compaction requested]", 100)?;
         let compaction_context =
             self.apply_agent_shell_preference_context(pane_id, compaction_context)?;
-        let mcp_summary = self.mcp_registry.prompt_summary();
+        let mcp_summary = self.mcp_registry().prompt_summary();
         let compaction_context = runtime_compaction_context_without_transcript_blocks(
             append_mcp_context(compaction_context, &mcp_summary)?,
         )?;
@@ -304,7 +304,7 @@ impl RuntimeSessionService {
             return Ok(None);
         }
         let provider_config = self
-            .provider_registry
+            .provider_registry()
             .provider(&task.model_profile.provider)
             .cloned()
             .ok_or_else(|| {

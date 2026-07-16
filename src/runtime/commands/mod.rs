@@ -650,11 +650,11 @@ impl RuntimeSessionService {
         pane_id: &str,
         mut context: AgentContext,
     ) -> Result<AgentContext> {
-        if let Some(prompt) = self.custom_agent_system_prompt.as_ref() {
+        if let Some(prompt) = self.integration.custom_agent_system_prompt() {
             context.blocks.push(ContextBlock {
                 source: ContextSourceKind::System,
                 label: "configured agent system prompt".to_string(),
-                content: prompt.clone(),
+                content: prompt.to_string(),
             });
         }
         if let Some(profile) = self.agent_selected_personality_profile(pane_id)

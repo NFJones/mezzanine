@@ -85,13 +85,14 @@ impl RuntimeSessionService {
                         .as_deref()
                         .map(json_escape)
                         .unwrap_or_else(|| "default".to_string()),
-                    self.agent_personality_profiles.len()
+                    self.integration.agent_personality_profiles().len()
                 ),
             });
         }
         if requested == "list" {
             let profiles = self
-                .agent_personality_profiles
+                .integration
+                .agent_personality_profiles()
                 .iter()
                 .map(|(id, profile)| {
                     format!(
@@ -110,8 +111,8 @@ impl RuntimeSessionService {
                 body: format!(
                     "profiles=[{}] default={} source=runtime-personality",
                     profiles.join(", "),
-                    self.default_agent_personality
-                        .as_deref()
+                    self.integration
+                        .default_agent_personality()
                         .map(json_escape)
                         .unwrap_or_else(|| "none".to_string())
                 ),
@@ -120,9 +121,14 @@ impl RuntimeSessionService {
         validate_agent_personality(requested)?;
         let visibility = self.agent_shell_visibility_for_pane(pane_id)?;
         if matches!(requested, "clear" | "default") {
-            let changed =
-                current.is_some() || self.agent_personality_selections.contains_key(pane_id);
-            self.agent_personality_selections.remove(pane_id);
+            let changed = current.is_some()
+                || self
+                    .integration
+                    .agent_personality_selections()
+                    .contains_key(pane_id);
+            self.integration
+                .agent_personality_selections_mut()
+                .remove(pane_id);
             self.set_agent_response_style(pane_id, None);
             return Ok(AgentShellCommandOutcome::Mutated {
                 command: "personality".to_string(),
@@ -134,16 +140,23 @@ impl RuntimeSessionService {
                 visibility,
             });
         }
-        let requested_style =
-            if let Some(profile) = self.agent_personality_profiles.get(requested).cloned() {
-                self.agent_personality_selections
-                    .insert(pane_id.to_string(), requested.to_string());
-                self.apply_agent_personality_profile_overrides(pane_id, &profile)?;
-                profile.response_style
-            } else {
-                self.agent_personality_selections.remove(pane_id);
-                Some(requested.to_string())
-            };
+        let requested_style = if let Some(profile) = self
+            .integration
+            .agent_personality_profiles()
+            .get(requested)
+            .cloned()
+        {
+            self.integration
+                .agent_personality_selections_mut()
+                .insert(pane_id.to_string(), requested.to_string());
+            self.apply_agent_personality_profile_overrides(pane_id, &profile)?;
+            profile.response_style
+        } else {
+            self.integration
+                .agent_personality_selections_mut()
+                .remove(pane_id);
+            Some(requested.to_string())
+        };
         let changed = current != requested_style || current_profile.as_deref() != Some(requested);
         self.set_agent_response_style(pane_id, requested_style);
         let active = self.agent_response_style(pane_id);
@@ -175,12 +188,13 @@ impl RuntimeSessionService {
         profile: &crate::runtime::RuntimeAgentPersonalityProfile,
     ) -> Result<()> {
         if let Some(model_profile) = profile.model_profile.as_ref() {
-            if self.provider_registry.profile(model_profile).is_none() {
+            if self.provider_registry().profile(model_profile).is_none() {
                 return Err(MezError::invalid_args(format!(
                     "personality model_profile `{model_profile}` is not configured"
                 )));
             }
-            self.model_profile_overrides
+            self.integration
+                .model_profile_overrides_mut()
                 .pane_profiles
                 .insert(pane_id.to_string(), model_profile.to_string());
         }
@@ -198,11 +212,16 @@ impl RuntimeSessionService {
     /// # Parameters
     /// - `pane_id`: The pane whose selected profile should be resolved.
     pub(super) fn agent_selected_personality_profile_id(&self, pane_id: &str) -> Option<&str> {
-        self.agent_personality_selections
+        self.integration
+            .agent_personality_selections()
             .get(pane_id)
             .map(String::as_str)
-            .or(self.default_agent_personality.as_deref())
-            .filter(|profile_id| self.agent_personality_profiles.contains_key(*profile_id))
+            .or(self.integration.default_agent_personality())
+            .filter(|profile_id| {
+                self.integration
+                    .agent_personality_profiles()
+                    .contains_key(*profile_id)
+            })
     }
 
     /// Returns the selected or default personality profile for a pane.
@@ -214,7 +233,11 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Option<&crate::runtime::RuntimeAgentPersonalityProfile> {
         self.agent_selected_personality_profile_id(pane_id)
-            .and_then(|profile_id| self.agent_personality_profiles.get(profile_id))
+            .and_then(|profile_id| {
+                self.integration
+                    .agent_personality_profiles()
+                    .get(profile_id)
+            })
     }
 
     /// Runs the agent shell visibility for pane operation for this subsystem.

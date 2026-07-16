@@ -234,7 +234,7 @@ impl RuntimeSessionService {
                 ));
             }
         }
-        let mcp_summary = self.mcp_registry.agent_shell_summary();
+        let mcp_summary = self.mcp_registry().agent_shell_summary();
         let permission_summary = self.permission_policy().agent_shell_summary();
         let outcome = match execute_agent_shell_command_with_context(
             self.agent_shell_store_mut(),
@@ -680,10 +680,14 @@ impl RuntimeSessionService {
     /// path exists for foreground/control helpers that still execute
     /// agent-shell commands through the synchronous service API.
     fn ensure_runtime_mcp_transports_discovered_blocking(&mut self) -> Result<()> {
-        let needs_discovery = self.mcp_registry.list_servers().into_iter().any(|server| {
-            server.configured.enabled
-                && server.status == mez_agent::mcp::McpServerStatus::Configured
-        });
+        let needs_discovery = self
+            .mcp_registry()
+            .list_servers()
+            .into_iter()
+            .any(|server| {
+                server.configured.enabled
+                    && server.status == mez_agent::mcp::McpServerStatus::Configured
+            });
         if !needs_discovery {
             return Ok(());
         }
@@ -791,7 +795,7 @@ impl RuntimeSessionService {
                 .await?;
         }
         self.persist_agent_prompt_history_entry(&pane_id, input, true)?;
-        let mcp_summary = self.mcp_registry.agent_shell_summary();
+        let mcp_summary = self.mcp_registry().agent_shell_summary();
         let permission_summary = self.permission_policy().agent_shell_summary();
         let outcome = match execute_agent_shell_command_with_context(
             self.agent_shell_store_mut(),

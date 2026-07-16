@@ -220,7 +220,7 @@ impl RuntimeSessionService {
         let normalized_cooperation_mode = runtime_cooperation_mode(cooperation_mode)?;
         let normalized_role = normalize_subagent_spawn_role(
             role,
-            self.subagent_profiles.contains_key(role),
+            self.integration.subagent_profiles().contains_key(role),
             normalized_cooperation_mode,
             write_scopes,
         );

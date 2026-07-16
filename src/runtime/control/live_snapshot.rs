@@ -172,7 +172,7 @@ impl RuntimeSessionService {
 
     /// Captures MCP server state for a live snapshot.
     pub(super) fn live_snapshot_mcp_servers(&self) -> Vec<SnapshotMcpServerState> {
-        self.mcp_registry
+        self.mcp_registry()
             .list_servers()
             .iter()
             .map(|server| runtime_snapshot_mcp_server_state(server))

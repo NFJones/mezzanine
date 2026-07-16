@@ -545,7 +545,7 @@ impl RuntimeSessionService {
 
     /// Builds dynamic primary command prompt selector candidates.
     pub(super) fn runtime_command_selector_extra_candidates(&self) -> Vec<SelectorExtraCandidate> {
-        self.mcp_registry
+        self.mcp_registry()
             .list_servers()
             .into_iter()
             .flat_map(|server| {
@@ -577,7 +577,8 @@ impl RuntimeSessionService {
     /// Builds dynamic agent prompt selector candidates from saved transcripts.
     fn runtime_agent_selector_extra_candidates(&self) -> Vec<SelectorExtraCandidate> {
         let mut candidates = self
-            .agent_personality_profiles
+            .integration
+            .agent_personality_profiles()
             .iter()
             .map(|(profile_id, profile)| {
                 SelectorExtraCandidate::new(
@@ -594,7 +595,7 @@ impl RuntimeSessionService {
             })
             .collect::<Vec<_>>();
         candidates.extend(
-            self.mcp_registry
+            self.mcp_registry()
                 .list_servers()
                 .into_iter()
                 .flat_map(|server| {

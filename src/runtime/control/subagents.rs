@@ -330,7 +330,8 @@ impl RuntimeSessionService {
         placement: RuntimeSubagentPlacement,
     ) -> Result<String> {
         let profile = self
-            .subagent_profiles
+            .integration
+            .subagent_profiles()
             .get(&spawn.requested_role)
             .cloned()
             .ok_or_else(|| MezError::invalid_args("unsupported subagent role"))?;
@@ -451,7 +452,8 @@ impl RuntimeSessionService {
                     &child_display_name,
                     &spawn,
                     None as Option<&RuntimeAgentPromptTurnStart>,
-                    self.model_profile_overrides
+                    self.integration
+                        .model_profile_overrides()
                         .agent_profiles
                         .get(child_agent_id.as_str())
                         .map(String::as_str),
@@ -474,14 +476,16 @@ impl RuntimeSessionService {
             self.set_agent_auto_sizing_override(&started.pane_id, Some(auto_sizing));
         }
         if let Some(profile_name) = profile.model_profile.as_deref() {
-            self.provider_registry.resolve_profile(profile_name)?;
-            self.model_profile_overrides
+            self.provider_registry().resolve_profile(profile_name)?;
+            self.integration
+                .model_profile_overrides_mut()
                 .agent_profiles
                 .insert(child_agent_id.clone(), profile_name.to_string());
         } else if let Some(parent_profile) =
             self.inherited_model_profile_for_child_agent(&spawn.parent_agent_id)
         {
-            self.model_profile_overrides
+            self.integration
+                .model_profile_overrides_mut()
                 .agent_profiles
                 .insert(child_agent_id.clone(), parent_profile);
         }
@@ -575,7 +579,8 @@ impl RuntimeSessionService {
                 &child_display_name,
                 &spawn,
                 Some(&turn),
-                self.model_profile_overrides
+                self.integration
+                    .model_profile_overrides()
                     .agent_profiles
                     .get(child_agent_id.as_str())
                     .map(String::as_str),
@@ -870,7 +875,8 @@ impl RuntimeSessionService {
         }
         self.remove_subagent_authority_state(child_agent_id);
         self.deregister_macro_managed_subagent(child_agent_id);
-        self.model_profile_overrides
+        self.integration
+            .model_profile_overrides_mut()
             .agent_profiles
             .remove(child_agent_id);
         if let Some(controller) = controller {

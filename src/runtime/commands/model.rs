@@ -68,7 +68,7 @@ impl RuntimeSessionService {
                 body: runtime_model_profile_display(
                     &active_name,
                     &active_profile,
-                    self.provider_registry.profiles(),
+                    self.provider_registry().profiles(),
                 ),
             });
         }
@@ -77,7 +77,7 @@ impl RuntimeSessionService {
             .as_deref()
             .ok_or_else(|| MezError::invalid_args("model command requires a profile name"))?;
         let profile_name = if args.reasoning_profile.is_none()
-            && self.provider_registry.profile(requested).is_some()
+            && self.provider_registry().profile(requested).is_some()
         {
             requested.to_string()
         } else {
@@ -91,7 +91,7 @@ impl RuntimeSessionService {
             )?
         };
         self.set_model_profile_override(scope.clone(), &profile_name)?;
-        let profile = self.provider_registry.resolve_profile(&profile_name)?;
+        let profile = self.provider_registry().resolve_profile(&profile_name)?;
         Ok(AgentShellCommandOutcome::Mutated {
             command: "model".to_string(),
             body: format!(
@@ -176,7 +176,7 @@ impl RuntimeSessionService {
                 body: runtime_model_profile_display(
                     &active_name,
                     &active_profile,
-                    self.provider_registry.profiles(),
+                    self.provider_registry().profiles(),
                 ),
             });
         }
@@ -185,7 +185,7 @@ impl RuntimeSessionService {
             .as_deref()
             .ok_or_else(|| MezError::invalid_args("model command requires a profile name"))?;
         let profile_name = if args.reasoning_profile.is_none()
-            && self.provider_registry.profile(requested).is_some()
+            && self.provider_registry().profile(requested).is_some()
         {
             requested.to_string()
         } else {
@@ -199,7 +199,7 @@ impl RuntimeSessionService {
             )?
         };
         self.set_model_profile_override(scope.clone(), &profile_name)?;
-        let profile = self.provider_registry.resolve_profile(&profile_name)?;
+        let profile = self.provider_registry().resolve_profile(&profile_name)?;
         Ok(AgentShellCommandOutcome::Mutated {
             command: "model".to_string(),
             body: format!(
@@ -266,7 +266,7 @@ impl RuntimeSessionService {
         )?;
         let scope = RuntimeModelProfileOverrideScope::Pane(pane_id.to_string());
         self.set_model_profile_override(scope.clone(), &profile_name)?;
-        let profile = self.provider_registry.resolve_profile(&profile_name)?;
+        let profile = self.provider_registry().resolve_profile(&profile_name)?;
         Ok(AgentShellCommandOutcome::Mutated {
             command: "latency".to_string(),
             body: format!(
@@ -292,7 +292,7 @@ impl RuntimeSessionService {
         &self,
         profile: &ModelProfile,
     ) -> bool {
-        self.provider_registry
+        self.provider_registry()
             .provider(&profile.provider)
             .is_some_and(|provider| {
                 ProviderCapabilities::for_provider_config(&provider.kind, provider.api.as_deref())
@@ -350,7 +350,7 @@ impl RuntimeSessionService {
         let profile_name = self.insert_runtime_generated_model_profile(profile);
         let scope = RuntimeModelProfileOverrideScope::Pane(pane_id.to_string());
         self.set_model_profile_override(scope.clone(), &profile_name)?;
-        let profile = self.provider_registry.resolve_profile(&profile_name)?;
+        let profile = self.provider_registry().resolve_profile(&profile_name)?;
         Ok(AgentShellCommandOutcome::Mutated {
             command: "thinking".to_string(),
             body: format!(
@@ -398,7 +398,7 @@ impl RuntimeSessionService {
         &self,
         profile: &ModelProfile,
     ) -> bool {
-        self.provider_registry
+        self.provider_registry()
             .provider(&profile.provider)
             .is_some_and(|provider| {
                 ProviderCapabilities::for_provider_config(&provider.kind, provider.api.as_deref())
@@ -452,7 +452,7 @@ impl RuntimeSessionService {
             .profile
             .ok_or_else(|| MezError::invalid_args("model command requires a profile name"))?;
         let profile_name = if args.reasoning_profile.is_none()
-            && self.provider_registry.profile(requested).is_some()
+            && self.provider_registry().profile(requested).is_some()
         {
             requested.to_string()
         } else {
@@ -512,7 +512,7 @@ impl RuntimeSessionService {
             .profile
             .ok_or_else(|| MezError::invalid_args("model command requires a profile name"))?;
         let profile_name = if args.reasoning_profile.is_none()
-            && self.provider_registry.profile(requested).is_some()
+            && self.provider_registry().profile(requested).is_some()
         {
             requested.to_string()
         } else {
@@ -535,7 +535,7 @@ impl RuntimeSessionService {
     /// Returns the currently configured routing auto-sizing model profile.
     fn active_routing_model_profile(&self) -> Result<(String, ModelProfile)> {
         let profile_name = self.agent_auto_sizing().router_model_profile.clone();
-        let profile = self.provider_registry.resolve_profile(&profile_name)?;
+        let profile = self.provider_registry().resolve_profile(&profile_name)?;
         Ok((profile_name, profile))
     }
     /// Applies a routing auto-sizing model profile after provider validation.
@@ -546,7 +546,7 @@ impl RuntimeSessionService {
         active_provider: &str,
         source: &str,
     ) -> Result<AgentShellCommandOutcome> {
-        let profile = self.provider_registry.resolve_profile(profile_name)?;
+        let profile = self.provider_registry().resolve_profile(profile_name)?;
         if profile.provider != active_provider {
             return Err(MezError::config(format!(
                 "routing model profile `{profile_name}` uses provider `{}`, but active provider is `{active_provider}`",
@@ -586,13 +586,18 @@ impl RuntimeSessionService {
             self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
         let active_model_label = format!("{}: {}", active_profile.provider, active_profile.model);
         let mut models: Vec<String> = self
-            .preset_registry
+            .integration
+            .preset_registry()
             .presets
             .keys()
             .map(|preset| format!("preset: {preset}"))
             .collect();
-        let mut provider_ids: Vec<String> =
-            self.provider_registry.providers().keys().cloned().collect();
+        let mut provider_ids: Vec<String> = self
+            .provider_registry()
+            .providers()
+            .keys()
+            .cloned()
+            .collect();
         if let Some(auth_store) = self.auth_store.as_ref() {
             let all_metadata = auth_store.read_all_metadata().unwrap_or_default();
             for auth_provider in all_metadata.keys() {
@@ -603,7 +608,7 @@ impl RuntimeSessionService {
         }
         for provider_id in &provider_ids {
             let models_for_provider: Vec<String> = if let Some(provider_config) =
-                self.provider_registry.provider(provider_id).cloned()
+                self.provider_registry().provider(provider_id).cloned()
             {
                 let catalog = self.runtime_model_catalog_for_provider(provider_id)?;
                 let mut items: Vec<String> = catalog
@@ -658,7 +663,7 @@ impl RuntimeSessionService {
         let (_active_name, active_profile) =
             self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
         let catalog = self.runtime_model_catalog_for_provider(&active_profile.provider)?;
-        let provider_config = self.provider_registry.provider(&active_profile.provider);
+        let provider_config = self.provider_registry().provider(&active_profile.provider);
         let mut levels = catalog
             .models
             .iter()
@@ -747,7 +752,12 @@ impl RuntimeSessionService {
         pane_id: &str,
         preset_name: &str,
     ) -> Result<AgentShellCommandOutcome> {
-        let Some(preset) = self.preset_registry.resolve(preset_name).cloned() else {
+        let Some(preset) = self
+            .integration
+            .preset_registry()
+            .resolve(preset_name)
+            .cloned()
+        else {
             return Err(MezError::invalid_args(format!(
                 "model preset `{preset_name}` is not configured"
             )));
@@ -756,7 +766,7 @@ impl RuntimeSessionService {
         let (_active_name, _active_profile) =
             self.active_model_profile_for_pane(pane_id, &agent_id, None)?;
         let new_profile = self
-            .provider_registry
+            .provider_registry()
             .resolve_profile(&preset.default_model_profile)?;
         let provider_id = new_profile.provider.clone();
         let model_name = new_profile.model.clone();
@@ -782,7 +792,7 @@ impl RuntimeSessionService {
             auto_sizing.allowed_reasoning_efforts = preset.allowed_reasoning_efforts.clone();
         }
         self.set_agent_auto_sizing_override(pane_id, Some(auto_sizing));
-        let resolved = self.provider_registry.resolve_profile(&profile_name)?;
+        let resolved = self.provider_registry().resolve_profile(&profile_name)?;
         Ok(AgentShellCommandOutcome::Mutated {
             command: "preset".to_string(),
             body: format!(
@@ -817,7 +827,7 @@ impl RuntimeSessionService {
         &self,
         pane_id: &str,
     ) -> Option<String> {
-        if !self.preset_registry.has_presets() {
+        if !self.integration.preset_registry().has_presets() {
             return None;
         }
         Some(
@@ -831,7 +841,7 @@ impl RuntimeSessionService {
         &self,
         pane_id: &str,
     ) -> Option<String> {
-        if !self.preset_registry.has_presets() {
+        if !self.integration.preset_registry().has_presets() {
             return None;
         }
         let agent_id = format!("agent-{pane_id}");
@@ -839,12 +849,13 @@ impl RuntimeSessionService {
             .active_model_profile_for_pane(pane_id, &agent_id, None)
             .ok()?;
         let auto_sizing = self.runtime_auto_sizing_config_for_pane(pane_id);
-        self.preset_registry
+        self.integration
+            .preset_registry()
             .presets
             .iter()
             .find_map(|(preset_name, preset)| {
                 let preset_profile = self
-                    .provider_registry
+                    .provider_registry()
                     .resolve_profile(&preset.default_model_profile)
                     .ok()?;
                 (runtime_model_profile_matches_preset_profile(&active_profile, &preset_profile)
@@ -873,7 +884,7 @@ impl RuntimeSessionService {
         )?;
         let scope = RuntimeModelProfileOverrideScope::Pane(pane_id.to_string());
         self.set_model_profile_override(scope.clone(), &profile_name)?;
-        let profile = self.provider_registry.resolve_profile(&profile_name)?;
+        let profile = self.provider_registry().resolve_profile(&profile_name)?;
         Ok(AgentShellCommandOutcome::Mutated {
             command: "latency".to_string(),
             body: format!(
@@ -908,7 +919,7 @@ impl RuntimeSessionService {
             .ok()
             .and_then(|(_active_name, active_profile)| {
                 let new_provider_supports_latency = self
-                    .provider_registry
+                    .provider_registry()
                     .provider(&provider_id)
                     .is_some_and(|provider| {
                         ProviderCapabilities::for_provider_config(
@@ -935,7 +946,7 @@ impl RuntimeSessionService {
         )?;
         let scope = RuntimeModelProfileOverrideScope::Pane(pane_id.to_string());
         self.set_model_profile_override(scope.clone(), &profile_name)?;
-        let profile = self.provider_registry.resolve_profile(&profile_name)?;
+        let profile = self.provider_registry().resolve_profile(&profile_name)?;
         Ok(AgentShellCommandOutcome::Mutated {
             command: "model".to_string(),
             body: format!(
@@ -1058,13 +1069,14 @@ impl RuntimeSessionService {
             safety_tier: None,
         };
         let profile_name = runtime_generated_model_profile_name(
-            &self.provider_registry,
+            self.provider_registry(),
             provider_id,
             model_name,
             reasoning_profile,
             &profile,
         );
-        self.provider_registry
+        self.integration
+            .provider_registry_mut()
             .profiles
             .entry(profile_name.clone())
             .or_insert(profile);
@@ -1075,13 +1087,14 @@ impl RuntimeSessionService {
     /// options carried by the supplied profile.
     fn insert_runtime_generated_model_profile(&mut self, profile: ModelProfile) -> String {
         let profile_name = runtime_generated_model_profile_name(
-            &self.provider_registry,
+            self.provider_registry(),
             &profile.provider,
             &profile.model,
             profile.reasoning_profile.as_deref(),
             &profile,
         );
-        self.provider_registry
+        self.integration
+            .provider_registry_mut()
             .profiles
             .entry(profile_name.clone())
             .or_insert(profile);
@@ -1095,42 +1108,33 @@ impl RuntimeSessionService {
         subagent_id: Option<&str>,
     ) -> Result<(String, ModelProfile)> {
         let default_profile = self
-            .provider_registry
+            .provider_registry()
             .default_profile_name()
             .ok_or_else(|| MezError::config("default model profile is not configured"))?;
         let window_id = self
             .find_pane_descriptor(pane_id)
             .map(|descriptor| descriptor.window_id.to_string());
+        let model_profile_overrides = self.integration.model_profile_overrides();
         let overrides = ModelProfileOverrides {
             default_profile: self
                 .agent_selected_personality_profile(pane_id)
                 .and_then(|profile| profile.model_profile.clone()),
-            session_profile: self.model_profile_overrides.session_profile.clone(),
-            window_profile: window_id.as_deref().and_then(|id| {
-                self.model_profile_overrides
-                    .window_profiles
-                    .get(id)
-                    .cloned()
-            }),
-            pane_profile: self
-                .model_profile_overrides
-                .pane_profiles
-                .get(pane_id)
-                .cloned(),
-            agent_profile: self
-                .model_profile_overrides
+            session_profile: model_profile_overrides.session_profile.clone(),
+            window_profile: window_id
+                .as_deref()
+                .and_then(|id| model_profile_overrides.window_profiles.get(id).cloned()),
+            pane_profile: model_profile_overrides.pane_profiles.get(pane_id).cloned(),
+            agent_profile: model_profile_overrides
                 .agent_profiles
                 .get(agent_id)
                 .cloned(),
-            subagent_profile: subagent_id.and_then(|id| {
-                self.model_profile_overrides
-                    .subagent_profiles
-                    .get(id)
-                    .cloned()
-            }),
+            subagent_profile: subagent_id
+                .and_then(|id| model_profile_overrides.subagent_profiles.get(id).cloned()),
         };
         let selection = select_model_profile(&overrides, default_profile)?;
-        let profile = self.provider_registry.resolve_profile(&selection.profile)?;
+        let profile = self
+            .provider_registry()
+            .resolve_profile(&selection.profile)?;
         Ok((selection.profile, profile))
     }
 
@@ -1144,28 +1148,29 @@ impl RuntimeSessionService {
         scope: RuntimeModelProfileOverrideScope,
         profile_name: &str,
     ) -> Result<()> {
-        self.provider_registry.resolve_profile(profile_name)?;
+        self.provider_registry().resolve_profile(profile_name)?;
+        let overrides = self.integration.model_profile_overrides_mut();
         match scope {
             RuntimeModelProfileOverrideScope::Session => {
-                self.model_profile_overrides.session_profile = Some(profile_name.to_string());
+                overrides.session_profile = Some(profile_name.to_string());
             }
             RuntimeModelProfileOverrideScope::Window(window_id) => {
-                self.model_profile_overrides
+                overrides
                     .window_profiles
                     .insert(window_id, profile_name.to_string());
             }
             RuntimeModelProfileOverrideScope::Pane(pane_id) => {
-                self.model_profile_overrides
+                overrides
                     .pane_profiles
                     .insert(pane_id, profile_name.to_string());
             }
             RuntimeModelProfileOverrideScope::Agent(agent_id) => {
-                self.model_profile_overrides
+                overrides
                     .agent_profiles
                     .insert(agent_id, profile_name.to_string());
             }
             RuntimeModelProfileOverrideScope::Subagent(agent_id) => {
-                self.model_profile_overrides
+                overrides
                     .subagent_profiles
                     .insert(agent_id, profile_name.to_string());
             }
@@ -1179,27 +1184,22 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn clear_model_profile_override(&mut self, scope: RuntimeModelProfileOverrideScope) {
+        let overrides = self.integration.model_profile_overrides_mut();
         match scope {
             RuntimeModelProfileOverrideScope::Session => {
-                self.model_profile_overrides.session_profile = None;
+                overrides.session_profile = None;
             }
             RuntimeModelProfileOverrideScope::Window(window_id) => {
-                self.model_profile_overrides
-                    .window_profiles
-                    .remove(&window_id);
+                overrides.window_profiles.remove(&window_id);
             }
             RuntimeModelProfileOverrideScope::Pane(pane_id) => {
-                self.model_profile_overrides.pane_profiles.remove(&pane_id);
+                overrides.pane_profiles.remove(&pane_id);
             }
             RuntimeModelProfileOverrideScope::Agent(agent_id) => {
-                self.model_profile_overrides
-                    .agent_profiles
-                    .remove(&agent_id);
+                overrides.agent_profiles.remove(&agent_id);
             }
             RuntimeModelProfileOverrideScope::Subagent(agent_id) => {
-                self.model_profile_overrides
-                    .subagent_profiles
-                    .remove(&agent_id);
+                overrides.subagent_profiles.remove(&agent_id);
             }
         }
     }
@@ -1214,14 +1214,15 @@ impl RuntimeSessionService {
         parent_agent_id: &str,
     ) -> Option<String> {
         if let Some(profile) = self
-            .model_profile_overrides
+            .integration
+            .model_profile_overrides()
             .agent_profiles
             .get(parent_agent_id)
         {
             return Some(profile.clone());
         }
         let parent_pane = parent_agent_id.strip_prefix("agent-")?;
-        let default_profile = self.provider_registry.default_profile_name()?;
+        let default_profile = self.provider_registry().default_profile_name()?;
         self.active_model_profile_for_pane(parent_pane, parent_agent_id, None)
             .ok()
             .map(|(profile, _)| profile)

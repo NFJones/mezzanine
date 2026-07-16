@@ -715,7 +715,7 @@ impl RuntimeSessionService {
         audit_operation: &str,
     ) -> Result<RuntimeAgentProviderDispatchProvider> {
         let provider_config = self
-            .provider_registry
+            .provider_registry()
             .provider(&model_profile.provider)
             .cloned()
             .ok_or_else(|| {
