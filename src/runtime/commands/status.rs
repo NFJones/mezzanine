@@ -408,7 +408,7 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Result<bool> {
         self.active_copy_modes_mut().remove(pane_id);
-        let Some(screen) = self.pane_screens.get_mut(pane_id) else {
+        let Some(screen) = self.pane_screen_mut(pane_id) else {
             return Ok(false);
         };
         screen.clear_visible_into_history();

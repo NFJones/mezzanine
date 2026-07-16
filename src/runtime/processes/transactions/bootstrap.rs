@@ -84,7 +84,7 @@ impl RuntimeSessionService {
         let mut bootstrap_parsed = false;
         if exit_code == 0 {
             let all_output = if observed_output_preview.trim().is_empty() {
-                let screen = self.pane_screens.get(pane_id).ok_or_else(|| {
+                let screen = self.process.pane_screens.get(pane_id).ok_or_else(|| {
                     MezError::new(
                         crate::error::MezErrorKind::NotFound,
                         "pane terminal screen not found",

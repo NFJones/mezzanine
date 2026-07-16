@@ -84,7 +84,7 @@ fn runtime_primary_command_prompt_ctrl_l_clears_and_escape_exits() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(50, 8).unwrap(), 120).unwrap();
     screen.feed(b"old output");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     assert!(
         service
             .pane_screen("%1")

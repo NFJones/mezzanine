@@ -17,7 +17,7 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -140,7 +140,7 @@ fn runtime_agent_keeps_redundant_progress_say_updates_visible() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(80, 8).unwrap(), 20).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")

@@ -80,24 +80,6 @@ impl RuntimeSessionService {
         &mut self.message_service
     }
 
-    /// Runs the pane screens operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn pane_screens(&self) -> &BTreeMap<String, TerminalScreen> {
-        &self.pane_screens
-    }
-
-    /// Runs the pane screen operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub fn pane_screen(&self, pane_id: &str) -> Option<&TerminalScreen> {
-        self.pane_screens.get(pane_id)
-    }
-
     /// Runs the terminal history limit operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

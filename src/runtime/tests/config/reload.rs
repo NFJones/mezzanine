@@ -112,7 +112,7 @@ fn runtime_config_reload_applies_history_limit_to_live_screens() {
         &["one".to_string(), "two".to_string(), "three".to_string()],
         &[],
     );
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
 
     fs::write(&path, "[history]\nlines = 2\nrotate_lines = 3\n").unwrap();
     let response = service.dispatch_runtime_control_body(

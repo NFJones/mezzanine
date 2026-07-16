@@ -28,7 +28,7 @@ impl RuntimeSessionService {
             .flat_map(|window| window.panes().iter())
             .map(|pane| {
                 let pane_id = pane.id.as_str();
-                let screen = self.pane_screens.get(pane_id);
+                let screen = self.pane_screen(pane_id);
                 let history_styled_lines = screen
                     .map(|screen| screen.history().styled_lines().collect::<Vec<_>>())
                     .unwrap_or_default();

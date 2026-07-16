@@ -120,7 +120,7 @@ context_window_tokens = 4500
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(80, 8).unwrap(), 80).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -229,7 +229,7 @@ context_window_tokens = 4500
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(80, 8).unwrap(), 80).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -353,7 +353,7 @@ context_window_tokens = 4500
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(80, 8).unwrap(), 80).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -616,7 +616,7 @@ fn runtime_executes_memory_actions_and_audits_action_arguments() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -778,7 +778,7 @@ fn runtime_memory_store_rejects_episode_and_scratch_kinds() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -908,7 +908,7 @@ fn runtime_memory_disabled_failure_tells_model_to_continue_without_retrying_memo
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")

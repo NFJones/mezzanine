@@ -174,13 +174,15 @@ impl RuntimeSessionService {
             render_alternate_active,
             terminal_response_bytes,
         ) = {
-            let screen = self.pane_screens.entry(output.pane_id.clone()).or_insert(
-                TerminalScreen::new_with_history_config(
+            let screen = self
+                .process
+                .pane_screens
+                .entry(output.pane_id.clone())
+                .or_insert(TerminalScreen::new_with_history_config(
                     descriptor_size,
                     self.terminal_history_limit,
                     self.terminal_history_rotate_lines,
-                )?,
-            );
+                )?);
             let previous_activity_events = screen.activity_events();
             let previous_bell_events = screen.bell_events();
             let previous_alternate_active = screen.alternate_screen_active();

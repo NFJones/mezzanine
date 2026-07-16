@@ -393,7 +393,7 @@ fn runtime_mouse_drag_copies_visible_alternate_screen_content() {
             .iter()
             .any(|line| line.contains("alpha beta"))
     );
-    service.pane_screens.insert(pane_id.clone(), screen);
+    service.set_pane_screen(pane_id.clone(), screen);
 
     service
         .apply_attached_terminal_step_plan(

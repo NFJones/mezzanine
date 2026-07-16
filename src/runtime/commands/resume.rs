@@ -250,8 +250,7 @@ impl RuntimeSessionService {
     /// Builds `/list-sessions` from saved agent conversation transcripts.
     fn runtime_agent_list_sessions_display(&self, pane_id: &str) -> Result<String> {
         let width = self
-            .pane_screens
-            .get(pane_id)
+            .pane_screen(pane_id)
             .map(|screen| usize::from(screen.size().columns))
             .unwrap_or(120);
         if let Some(store) = self.agent_transcript_store.as_ref() {

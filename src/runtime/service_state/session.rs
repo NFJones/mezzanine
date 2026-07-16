@@ -107,11 +107,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) deferred_transcript_next_sequences: BTreeMap<String, u64>,
-    /// Stores the pane screens value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_screens: BTreeMap<String, TerminalScreen>,
     /// Stores the active pane pipes value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

@@ -98,8 +98,7 @@ fn runtime_control_agent_shell_visibility_enters_and_exits_pane_subshell() {
         .take_running_pane_process_for_adapter(&pane_id)
         .unwrap();
     service
-        .pane_screens
-        .get_mut(&pane_id)
+        .pane_screen_mut(&pane_id)
         .unwrap()
         .feed(b"control show history\ncontrol show visible text");
 

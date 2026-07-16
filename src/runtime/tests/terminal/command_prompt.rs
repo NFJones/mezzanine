@@ -57,7 +57,7 @@ fn runtime_double_click_copies_readline_word_under_pointer() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
     screen.feed(b"alpha beta --flag");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
 
     for _ in 0..2 {
         service

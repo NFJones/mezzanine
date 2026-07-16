@@ -141,7 +141,7 @@ fn runtime_running_agent_turn_hides_shell_prompt_repaints_by_default() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap(),
     );
@@ -170,7 +170,7 @@ fn runtime_running_agent_turn_shell_prompt_is_visible_with_verbose_enabled() {
         .agent_shell_store_mut()
         .set_log_level("%1", AgentLogLevel::Verbose)
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap(),
     );
@@ -281,7 +281,7 @@ fn runtime_config_reload_starts_newly_runnable_agent_turns() {
     for pane_id in ["%1", second_pane.as_str()] {
         let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
         screen.feed(b"ready\n");
-        service.pane_screens.insert(pane_id.to_string(), screen);
+        service.set_pane_screen(pane_id.to_string(), screen);
         service
             .agent_shell_store_mut()
             .enter_or_resume(pane_id)
@@ -344,7 +344,7 @@ fn runtime_stop_agent_turn_cleans_up_queued_turn_without_shell_running_marker() 
     for pane_id in ["%1", second_pane.as_str()] {
         let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
         screen.feed(b"ready\n");
-        service.pane_screens.insert(pane_id.to_string(), screen);
+        service.set_pane_screen(pane_id.to_string(), screen);
         service
             .agent_shell_store_mut()
             .enter_or_resume(pane_id)
@@ -564,7 +564,7 @@ fn runtime_prompt_during_running_turn_becomes_steering_context() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -647,7 +647,7 @@ fn runtime_scheduler_prefers_other_runnable_agent_after_completion() {
             .unwrap();
         let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
         screen.feed(b"ready\n");
-        service.pane_screens.insert(pane.to_string(), screen);
+        service.set_pane_screen(pane.to_string(), screen);
     }
 
     service.start_agent_prompt_turn("%1", "first").unwrap();
@@ -713,7 +713,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
             .unwrap();
         let mut screen = TerminalScreen::new(Size::new(24, 5).unwrap(), 10).unwrap();
         screen.feed(b"ready\n");
-        service.pane_screens.insert(pane.to_string(), screen);
+        service.set_pane_screen(pane.to_string(), screen);
     }
 
     let parent = service.start_agent_prompt_turn("%1", "parent").unwrap();

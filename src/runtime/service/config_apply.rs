@@ -257,10 +257,10 @@ impl RuntimeSessionService {
             Some(None) => self.clear_audit_log(),
             None => {}
         }
-        for screen in self.pane_screens.values_mut() {
-            screen.set_history_limit(self.terminal_history_limit)?;
-            screen.set_history_rotate_lines(self.terminal_history_rotate_lines)?;
-        }
+        self.configure_pane_screen_history(
+            self.terminal_history_limit,
+            self.terminal_history_rotate_lines,
+        )?;
         let max_concurrent_agents = runtime_max_concurrent_agents_from_config(&structured)?;
         self.max_subagent_panes_per_window =
             runtime_max_subagent_panes_per_window_from_config(&structured)?;

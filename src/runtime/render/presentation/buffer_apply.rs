@@ -133,8 +133,7 @@ impl RuntimeSessionService {
             return Ok(columns);
         }
         let columns = self
-            .pane_screens
-            .get(pane_id)
+            .pane_screen(pane_id)
             .map(|screen| screen.size().columns)
             .unwrap_or(descriptor.size.columns);
         Ok(usize::from(columns))
@@ -178,8 +177,7 @@ impl RuntimeSessionService {
 
     /// Returns the pane width to persist with one agent presentation entry.
     fn agent_presentation_terminal_width(&self, pane_id: &str) -> Option<u16> {
-        self.pane_screens
-            .get(pane_id)
+        self.pane_screen(pane_id)
             .map(|screen| screen.size().columns)
             .or_else(|| {
                 self.find_pane_descriptor(pane_id)
@@ -255,16 +253,16 @@ impl RuntimeSessionService {
                             "agent terminal presentation target pane not found",
                         )
                     })?;
-                    if !self.pane_screens.contains_key(pane_id) {
+                    if self.pane_screen(pane_id).is_none() {
                         let screen = TerminalScreen::new_with_history_config(
                             descriptor.size,
                             self.terminal_history_limit,
                             self.terminal_history_rotate_lines,
                         )?;
-                        self.pane_screens.insert(pane_id.to_string(), screen);
+                        self.set_pane_screen(pane_id.to_string(), screen);
                     }
                     self.clear_agent_shell_output_status_line(pane_id)?;
-                    let screen = self.pane_screens.get_mut(pane_id).ok_or_else(|| {
+                    let screen = self.pane_screen_mut(pane_id).ok_or_else(|| {
                         MezError::invalid_state(
                             "agent terminal presentation screen was not initialized",
                         )
@@ -297,7 +295,7 @@ impl RuntimeSessionService {
                     .collect::<Vec<_>>();
                 self.append_agent_terminal_styled_lines_to_buffer(pane_id, &styled_lines)?;
                 if !entry.copy_lines.is_empty()
-                    && let Some(screen) = self.pane_screens.get_mut(pane_id)
+                    && let Some(screen) = self.pane_screen_mut(pane_id)
                 {
                     screen.set_recent_normal_copy_texts(&entry.copy_lines, AGENT_COPY_SKIP_LINE);
                 }
@@ -502,8 +500,7 @@ impl RuntimeSessionService {
         /// boundary and avoids relying on call-site inference.
         const MAX_AGENT_COMMAND_PREVIEW_LINES: usize = 10;
         let columns = self
-            .pane_screens
-            .get(pane_id)
+            .pane_screen(pane_id)
             .map(|screen| usize::from(screen.size().columns))
             .or_else(|| {
                 self.find_pane_descriptor(pane_id)
@@ -592,17 +589,18 @@ impl RuntimeSessionService {
                 "agent terminal presentation target pane not found",
             )
         })?;
-        if !self.pane_screens.contains_key(pane_id) {
+        if self.pane_screen(pane_id).is_none() {
             let screen = TerminalScreen::new_with_history_config(
                 descriptor.size,
                 self.terminal_history_limit,
                 self.terminal_history_rotate_lines,
             )?;
-            self.pane_screens.insert(pane_id.to_string(), screen);
+            self.set_pane_screen(pane_id.to_string(), screen);
         }
         self.clear_agent_shell_output_status_line(pane_id)?;
+        let ui_theme = self.presentation.settings.ui_theme.clone();
         let ansi_text = {
-            let screen = self.pane_screens.get_mut(pane_id).ok_or_else(|| {
+            let screen = self.pane_screen_mut(pane_id).ok_or_else(|| {
                 MezError::invalid_state("agent terminal presentation screen was not initialized")
             })?;
             let mut bytes = String::new();
@@ -617,12 +615,7 @@ impl RuntimeSessionService {
                 bytes.push_str("\r\n");
             }
             for (style, line) in styled_lines {
-                append_styled_agent_terminal_line(
-                    &mut bytes,
-                    *style,
-                    line,
-                    &self.presentation.settings.ui_theme,
-                );
+                append_styled_agent_terminal_line(&mut bytes, *style, line, &ui_theme);
                 bytes.push_str("\x1b[0m\r\n");
             }
             Self::feed_agent_terminal_screen(
@@ -668,17 +661,18 @@ impl RuntimeSessionService {
                 "agent terminal presentation target pane not found",
             )
         })?;
-        if !self.pane_screens.contains_key(pane_id) {
+        if self.pane_screen(pane_id).is_none() {
             let screen = TerminalScreen::new_with_history_config(
                 descriptor.size,
                 self.terminal_history_limit,
                 self.terminal_history_rotate_lines,
             )?;
-            self.pane_screens.insert(pane_id.to_string(), screen);
+            self.set_pane_screen(pane_id.to_string(), screen);
         }
         self.clear_agent_shell_output_status_line(pane_id)?;
+        let ui_theme = self.presentation.settings.ui_theme.clone();
         let ansi_text = {
-            let screen = self.pane_screens.get_mut(pane_id).ok_or_else(|| {
+            let screen = self.pane_screen_mut(pane_id).ok_or_else(|| {
                 MezError::invalid_state("agent terminal presentation screen was not initialized")
             })?;
             let mut bytes = String::new();
@@ -693,12 +687,7 @@ impl RuntimeSessionService {
                 bytes.push_str("\r\n");
             }
             for line in rendered_lines {
-                append_styled_agent_terminal_rendered_line(
-                    &mut bytes,
-                    style,
-                    line,
-                    &self.presentation.settings.ui_theme,
-                );
+                append_styled_agent_terminal_rendered_line(&mut bytes, style, line, &ui_theme);
                 bytes.push_str("\x1b[0m\r\n");
             }
             Self::feed_agent_terminal_screen(
@@ -741,17 +730,16 @@ impl RuntimeSessionService {
                 "agent terminal presentation target pane not found",
             )
         })?;
-        if !self.pane_screens.contains_key(pane_id) {
+        if self.pane_screen(pane_id).is_none() {
             let screen = TerminalScreen::new_with_history_config(
                 descriptor.size,
                 self.terminal_history_limit,
                 self.terminal_history_rotate_lines,
             )?;
-            self.pane_screens.insert(pane_id.to_string(), screen);
+            self.set_pane_screen(pane_id.to_string(), screen);
         }
         let columns = self
-            .pane_screens
-            .get(pane_id)
+            .pane_screen(pane_id)
             .map(|screen| usize::from(screen.size().columns))
             .unwrap_or_else(|| usize::from(descriptor.size.columns));
         let content_columns = columns
@@ -773,7 +761,8 @@ impl RuntimeSessionService {
             .get(pane_id)
             .map(Vec::len)
             .unwrap_or(0);
-        let screen = self.pane_screens.get_mut(pane_id).ok_or_else(|| {
+        let ui_theme = self.presentation.settings.ui_theme.clone();
+        let screen = self.pane_screen_mut(pane_id).ok_or_else(|| {
             MezError::invalid_state("agent terminal presentation screen was not initialized")
         })?;
         let mut bytes = String::new();
@@ -804,7 +793,7 @@ impl RuntimeSessionService {
                 &mut bytes,
                 AgentTerminalPresentationStyle::Status,
                 line,
-                &self.presentation.settings.ui_theme,
+                &ui_theme,
             );
             bytes.push_str("\x1b[0m");
         }
@@ -824,7 +813,7 @@ impl RuntimeSessionService {
         else {
             return Ok(());
         };
-        if let Some(screen) = self.pane_screens.get_mut(pane_id) {
+        if let Some(screen) = self.pane_screen_mut(pane_id) {
             let mut bytes = String::new();
             for index in 0..lines.len() {
                 if index > 0 {

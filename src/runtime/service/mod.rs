@@ -27,7 +27,7 @@ use super::{
     RuntimeProviderRegistry, RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSideEffect,
     RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition, ScopeRegistry, Session,
     SessionApprovalStore, SessionMemoryStore, SessionRegistry, SnapshotRepository,
-    TerminalClientLoopConfig, TerminalScreen, ToolDiscoveryCache, TrustDecision, Value,
+    TerminalClientLoopConfig, ToolDiscoveryCache, TrustDecision, Value,
     agent_shell_visibility_json_name, apply_registry_update, builtin_subagent_profiles,
     compare_approval_policy_authority, compose_effective_config, current_unix_seconds,
     discover_existing_overlays, discover_project_root,

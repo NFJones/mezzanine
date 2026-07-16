@@ -81,7 +81,7 @@ fn runtime_agent_loop_limit_option_rejects_zero() {
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap(),
     );
@@ -117,7 +117,7 @@ fn runtime_agent_loop_stop_clears_interrupted_loop_state() {
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap(),
     );

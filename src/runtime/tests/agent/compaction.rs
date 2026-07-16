@@ -39,7 +39,7 @@ fn runtime_agent_prompt_displays_large_paste_as_compact_block() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap(),
     );
@@ -105,7 +105,7 @@ fn runtime_agent_prompt_displays_over_height_paste_as_compact_block() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(50, 8).unwrap(), 10).unwrap(),
     );
@@ -250,7 +250,7 @@ context_window_tokens = 1024
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(80, 8).unwrap(), 80).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -1193,7 +1193,7 @@ context_window_tokens = 5000
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap(),
     );

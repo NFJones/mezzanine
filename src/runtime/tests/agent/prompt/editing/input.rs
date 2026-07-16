@@ -16,7 +16,7 @@ fn runtime_attached_input_submits_visible_agent_prompt_non_modally() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap(),
     );
@@ -97,7 +97,7 @@ fn runtime_agent_prompt_preserves_large_split_paste_beyond_visible_area() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(50, 8).unwrap(), 10).unwrap(),
     );

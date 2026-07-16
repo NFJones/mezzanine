@@ -1106,11 +1106,11 @@ fn execute_runtime_send_message_action(
             0,
         )
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap(),
     );
-    service.pane_screens.get_mut("%1").unwrap().feed(b"ready\n");
+    service.pane_screen_mut("%1").unwrap().feed(b"ready\n");
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")

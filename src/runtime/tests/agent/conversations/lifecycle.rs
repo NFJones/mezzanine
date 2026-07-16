@@ -61,7 +61,7 @@ fn runtime_agent_loop_reuses_current_conversation_by_default() {
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap(),
     );
@@ -125,7 +125,7 @@ fn runtime_agent_loop_fork_option_starts_first_iteration_in_ephemeral_conversati
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap(),
     );
@@ -224,7 +224,7 @@ fn runtime_agent_loop_fork_option_starts_when_parent_conversation_has_no_saved_e
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap(),
     );
@@ -288,7 +288,7 @@ fn runtime_agent_loop_new_option_starts_first_iteration_in_fresh_ephemeral_conve
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(80, 24).unwrap(), 100).unwrap(),
     );
@@ -389,7 +389,7 @@ fn runtime_agent_shell_clear_command_resets_conversation_and_terminal_view() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(20, 3).unwrap(), 10).unwrap();
     screen.feed(b"old visible text");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")

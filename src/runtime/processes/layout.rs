@@ -687,7 +687,11 @@ impl RuntimeSessionService {
                     },
                 );
             }
-            if let Some(screen) = self.pane_screens.get_mut(descriptor.pane_id.as_str()) {
+            if let Some(screen) = self
+                .process
+                .pane_screens
+                .get_mut(descriptor.pane_id.as_str())
+            {
                 screen.resize(process_size);
             }
             if let Some(screen) = self

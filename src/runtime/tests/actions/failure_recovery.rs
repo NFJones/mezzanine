@@ -18,7 +18,7 @@ fn runtime_action_pressure_context_reaches_provider_continuation() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -221,7 +221,7 @@ fn runtime_stale_joined_spawn_result_is_unreachable_progress() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(24, 5).unwrap(), 10).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     let parent = service.start_agent_prompt_turn("%1", "parent").unwrap();
     let parent_turn = service
         .agent_turn_ledger

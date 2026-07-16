@@ -16,7 +16,7 @@ fn runtime_mouse_history_scroll_requests_diff_refresh() {
     let pane_id = service.active_pane_id().unwrap().to_string();
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 20).unwrap();
     screen.feed(b"one\ntwo\nthree\nfour\nfive\nsix");
-    service.pane_screens.insert(pane_id.clone(), screen);
+    service.set_pane_screen(pane_id.clone(), screen);
 
     let report = service
         .apply_attached_terminal_step_plan(
@@ -77,7 +77,7 @@ fn runtime_double_click_highlight_persists_until_cleanup_deadline() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
     screen.feed(b"alpha beta --flag");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
 
     for _ in 0..2 {
         service

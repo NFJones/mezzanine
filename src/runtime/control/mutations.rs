@@ -805,7 +805,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn pane_capture_sources(&self) -> Vec<PaneCaptureSource> {
-        self.pane_screens
+        self.pane_screens()
             .iter()
             .map(|(pane_id, screen)| {
                 let history_styled_lines = screen.history().styled_lines().collect::<Vec<_>>();

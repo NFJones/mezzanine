@@ -64,7 +64,7 @@ fn runtime_agent_shell_command_is_presented_before_pty_dispatch() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(80, 12).unwrap(), 20).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -168,7 +168,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
     let mut service = test_runtime_service();
     let mut screen = TerminalScreen::new(Size::new(80, 12).unwrap(), 20).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -728,7 +728,7 @@ fn runtime_agent_shell_command_preview_is_wrapped_and_capped() {
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(24, 8).unwrap(), 20).unwrap(),
     );
@@ -817,7 +817,7 @@ fn runtime_agent_shell_command_preview_caps_wide_panes_at_120_cells() {
     service
         .attach_primary("primary", true, Size::new(200, 24).unwrap(), 120)
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(200, 24).unwrap(), 120).unwrap(),
     );
@@ -885,7 +885,7 @@ fn runtime_no_shell_session_provider_failure_starts_queued_turn() {
             .unwrap();
         let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
         screen.feed(b"ready\n");
-        service.pane_screens.insert(pane.to_string(), screen);
+        service.set_pane_screen(pane.to_string(), screen);
     }
 
     service.start_agent_prompt_turn("%1", "first").unwrap();

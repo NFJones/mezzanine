@@ -106,7 +106,7 @@ fn runtime_agent_plain_say_wraps_under_agent_indicator() {
     service
         .attach_primary("primary", true, Size::new(28, 12).unwrap(), 120)
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(28, 12).unwrap(), 120).unwrap(),
     );

@@ -15,7 +15,7 @@ fn runtime_deferred_foreground_paste_stays_ordered_and_exits_copy_mode() {
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap(),
     );
@@ -69,7 +69,7 @@ fn runtime_copy_mode_command_preserves_live_viewport_height() {
     let pane_id = service.active_pane_id().unwrap().to_string();
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
     screen.feed(b"one\ntwo\nthree\nfour");
-    service.pane_screens.insert(pane_id.clone(), screen);
+    service.set_pane_screen(pane_id.clone(), screen);
 
     service
         .execute_terminal_command(&primary, "copy-mode")
@@ -100,7 +100,7 @@ fn runtime_copy_mode_key_navigation_requests_diff_refresh() {
     let pane_id = service.active_pane_id().unwrap().to_string();
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 20).unwrap();
     screen.feed(b"one\ntwo\nthree\nfour\nfive\nsix");
-    service.pane_screens.insert(pane_id.clone(), screen);
+    service.set_pane_screen(pane_id.clone(), screen);
     service.ensure_active_copy_mode(&pane_id).unwrap();
 
     let report = service
@@ -142,7 +142,7 @@ fn runtime_agent_shell_copy_writes_latest_say_text_to_destinations() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -266,7 +266,7 @@ fn runtime_agent_shell_copy_writes_latest_say_text_to_destinations() {
             .is_some_and(|text| text == "Latest say text.")
     );
 
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(80, 6).unwrap(), 20).unwrap(),
     );

@@ -79,7 +79,11 @@ impl RuntimeSessionService {
             .collect::<Vec<_>>();
         let mut starts = Vec::with_capacity(descriptors.len());
         for descriptor in descriptors {
-            let restored_screen = self.pane_screens.get(descriptor.pane_id.as_str()).cloned();
+            let restored_screen = self
+                .process
+                .pane_screens
+                .get(descriptor.pane_id.as_str())
+                .cloned();
             let start_directory = self.restored_pane_start_directory(descriptor.pane_id.as_str());
             let started = self.start_restored_pane_process_with_best_effort_directory(
                 descriptor,
@@ -88,7 +92,9 @@ impl RuntimeSessionService {
             )?;
             if let Some(mut screen) = restored_screen {
                 screen.feed(b"\n[mezzanine: pane restarted with a fresh primary PID]\n");
-                self.pane_screens.insert(started.pane_id.clone(), screen);
+                self.process
+                    .pane_screens
+                    .insert(started.pane_id.clone(), screen);
             }
             self.set_pane_readiness(&started.pane_id, PaneReadinessState::PromptCandidate);
             self.session.set_pane_live_state(&started.pane_id, true)?;
@@ -316,7 +322,9 @@ impl RuntimeSessionService {
                 screen.restore_normal_styled_history_content(&history_lines, &visible_lines);
                 screen.restore_mode_state(&pane.terminal_modes);
                 screen.restore_saved_state(&pane.terminal_saved_state);
-                self.pane_screens.insert(pane.pane_id.clone(), screen);
+                self.process
+                    .pane_screens
+                    .insert(pane.pane_id.clone(), screen);
                 seeded = seeded.saturating_add(1);
             }
         }

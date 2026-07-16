@@ -416,8 +416,7 @@ impl RuntimeSessionService {
             "exited"
         };
         let alternate_screen_active = self
-            .pane_screens
-            .get(pane.id.as_str())
+            .pane_screen(pane.id.as_str())
             .is_some_and(|screen| screen.alternate_screen_active());
         let current_working_directory = self
             .pane_current_working_directory(pane.id.as_str())

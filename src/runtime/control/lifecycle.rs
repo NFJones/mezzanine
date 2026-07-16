@@ -255,7 +255,7 @@ impl RuntimeSessionService {
             self.cleanup_removed_pane_runtime_state(pane_id);
         }
         self.active_copy_modes_mut().clear();
-        self.pane_screens.clear();
+        self.clear_pane_screens();
         self.clear_pane_transaction_parsers();
         self.clear_pane_process_lifecycle_tracking();
         self.pane_transcript_refs.clear();

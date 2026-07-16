@@ -435,7 +435,7 @@ fn runtime_config_change_resumes_after_full_access_change() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(80, 12).unwrap(), 20).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")

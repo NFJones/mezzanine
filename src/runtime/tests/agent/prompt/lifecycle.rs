@@ -101,7 +101,7 @@ fn runtime_agent_shell_prompt_starts_live_turn_lifecycle() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -172,7 +172,7 @@ fn runtime_agent_prompt_and_say_response_are_interleaved_in_pane_buffer() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(80, 12).unwrap(), 100).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -363,7 +363,7 @@ fn runtime_user_prompt_logs_wrap_with_sixth_column_hanging_indent() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(24, 12).unwrap(), 100).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -408,7 +408,7 @@ fn runtime_agent_user_prompt_renders_pasted_provider_error_without_terminal_fail
     service
         .attach_primary("primary", true, Size::new(80, 12).unwrap(), 120)
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(80, 12).unwrap(), 120).unwrap(),
     );

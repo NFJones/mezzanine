@@ -21,8 +21,8 @@ use super::{
     PermissionPolicy, ProjectTrustStore, ProviderQuotaUsage, Result, RuntimeSideEffect,
     ScopeRegistry, Session, SessionApprovalStore, SessionMemoryStore, SessionRecord,
     SessionRegistry, Size, SnapshotRepository, SplitDirection, SubagentProfile,
-    SubagentScopeDeclaration, TerminalScreen, ToolDiscoveryCache, WindowId,
-    execute_streamable_http_exchange, mcp_tools_call_operation,
+    SubagentScopeDeclaration, ToolDiscoveryCache, WindowId, execute_streamable_http_exchange,
+    mcp_tools_call_operation,
 };
 use super::{RuntimePresetRegistry, RuntimeProviderRegistry};
 use crate::error::MezErrorKind;

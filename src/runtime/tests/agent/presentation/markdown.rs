@@ -249,7 +249,7 @@ fn runtime_agent_markdown_copy_preserves_raw_table_when_rendered_rows_wrap() {
     service
         .attach_primary("primary", true, Size::new(34, 12).unwrap(), 120)
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(34, 12).unwrap(), 120).unwrap(),
     );
@@ -339,7 +339,7 @@ fn runtime_agent_markdown_copy_omits_synthetic_frame_row() {
     service
         .attach_primary("primary", true, Size::new(40, 12).unwrap(), 120)
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(40, 12).unwrap(), 120).unwrap(),
     );
@@ -397,7 +397,7 @@ fn runtime_agent_markdown_partial_and_continuation_copy_matches_rendered_selecti
     service
         .attach_primary("primary", true, Size::new(24, 12).unwrap(), 120)
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(24, 12).unwrap(), 120).unwrap(),
     );
@@ -486,7 +486,7 @@ fn runtime_agent_commonmark_say_renders_rich_markdown_features() {
     service
         .attach_primary("primary", true, Size::new(96, 40).unwrap(), 120)
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(96, 40).unwrap(), 120).unwrap(),
     );
@@ -689,7 +689,7 @@ fn runtime_agent_markdown_uses_dark_neutral_accents_on_light_theme() {
     service
         .attach_primary("primary", true, Size::new(80, 16).unwrap(), 120)
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(80, 16).unwrap(), 120).unwrap(),
     );
@@ -742,7 +742,7 @@ fn runtime_agent_markdown_wraps_to_120_cells_and_indents_continuations() {
     service
         .attach_primary("primary", true, Size::new(200, 40).unwrap(), 120)
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(200, 40).unwrap(), 120).unwrap(),
     );
@@ -801,7 +801,7 @@ fn runtime_agent_markdown_thematic_break_expands_to_capped_divider_width() {
     service
         .attach_primary("primary", true, Size::new(200, 40).unwrap(), 120)
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(200, 40).unwrap(), 120).unwrap(),
     );
@@ -842,7 +842,7 @@ fn runtime_agent_markdown_tables_wrap_only_at_terminal_width() {
     service
         .attach_primary("primary", true, Size::new(200, 40).unwrap(), 120)
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(200, 40).unwrap(), 120).unwrap(),
     );
@@ -893,7 +893,7 @@ fn runtime_agent_markdown_box_drawing_paragraph_uses_prose_width() {
     service
         .attach_primary("primary", true, Size::new(200, 40).unwrap(), 120)
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(200, 40).unwrap(), 120).unwrap(),
     );
@@ -941,7 +941,7 @@ fn runtime_agent_slash_markdown_display_opens_command_overlay() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(80, 60).unwrap(), 120).unwrap(),
     );

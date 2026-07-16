@@ -785,7 +785,7 @@ fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
             .unwrap();
         let mut screen = TerminalScreen::new(Size::new(24, 5).unwrap(), 10).unwrap();
         screen.feed(b"ready\n");
-        service.pane_screens.insert(pane.to_string(), screen);
+        service.set_pane_screen(pane.to_string(), screen);
     }
 
     let parent = service

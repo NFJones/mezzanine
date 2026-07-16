@@ -204,7 +204,7 @@ fn runtime_prompt_submission_starts_ready_work_behind_blocked_queue_head() {
     for pane_id in ["%1", second_pane.as_str()] {
         let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
         screen.feed(b"ready\n");
-        service.pane_screens.insert(pane_id.to_string(), screen);
+        service.set_pane_screen(pane_id.to_string(), screen);
         service
             .agent_shell_store_mut()
             .enter_or_resume(pane_id)
@@ -347,7 +347,7 @@ fn runtime_agent_shell_toggle_syncs_process_size_with_reserved_prompt_rows() {
     assert_eq!(enter_report.mux_actions_applied, 1);
     assert_eq!(agent_size.columns, initial_size.columns);
     assert!(agent_size.rows < initial_size.rows);
-    assert_eq!(service.pane_screens.get("%1").unwrap().size(), agent_size);
+    assert_eq!(service.pane_screen("%1").unwrap().size(), agent_size);
 
     let exit_report = service
         .apply_attached_terminal_step_plan(&primary, &step)
@@ -361,6 +361,6 @@ fn runtime_agent_shell_toggle_syncs_process_size_with_reserved_prompt_rows() {
 
     assert_eq!(exit_report.mux_actions_applied, 1);
     assert_eq!(restored_size, initial_size);
-    assert_eq!(service.pane_screens.get("%1").unwrap().size(), initial_size);
+    assert_eq!(service.pane_screen("%1").unwrap().size(), initial_size);
     service.terminate_all_pane_processes().unwrap();
 }

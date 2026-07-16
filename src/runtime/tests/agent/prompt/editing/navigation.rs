@@ -18,7 +18,7 @@ fn runtime_agent_prompt_up_moves_within_soft_wrapped_draft_before_history() {
         .enter_or_resume("%1")
         .unwrap();
     service.reload_agent_prompt_history_for_pane("%1").unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(24, 8).unwrap(), 10).unwrap(),
     );
@@ -186,7 +186,7 @@ fn runtime_agent_prompt_navigation_scrolls_visible_rows_with_cursor() {
         .enter_or_resume("%1")
         .unwrap();
     service.reload_agent_prompt_history_for_pane("%1").unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(24, 8).unwrap(), 10).unwrap(),
     );
@@ -313,7 +313,7 @@ fn runtime_agent_prompt_accepts_application_cursor_arrow_sequences() {
         .enter_or_resume("%1")
         .unwrap();
     service.reload_agent_prompt_history_for_pane("%1").unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(24, 8).unwrap(), 10).unwrap(),
     );
@@ -369,7 +369,7 @@ fn runtime_agent_prompt_up_moves_within_multiline_draft_before_history() {
         .enter_or_resume("%1")
         .unwrap();
     service.reload_agent_prompt_history_for_pane("%1").unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(24, 8).unwrap(), 10).unwrap(),
     );

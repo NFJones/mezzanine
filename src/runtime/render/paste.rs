@@ -176,7 +176,7 @@ impl RuntimeSessionService {
             return Ok(false);
         }
         let paste_bytes = runtime_paste_bytes(
-            self.pane_screens.get(descriptor.pane_id.as_str()),
+            self.pane_screen(descriptor.pane_id.as_str()),
             source.content.as_str(),
         );
         let dispatch = self.write_input_to_pane(

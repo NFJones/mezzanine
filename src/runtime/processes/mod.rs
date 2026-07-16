@@ -84,6 +84,8 @@ pub(in crate::runtime) struct RuntimeProcessComponent {
     pane_environment_signatures: std::collections::BTreeMap<String, EnvironmentSignature>,
     /// Panes with an in-flight bootstrap transaction.
     pane_bootstrap_pending: BTreeSet<String>,
+    /// Modeled terminal screen state keyed by pane id.
+    pane_screens: std::collections::BTreeMap<String, TerminalScreen>,
     /// Primary process ids for panes whose handles are adapter-owned.
     detached_pane_primary_pids: std::collections::BTreeMap<String, u32>,
     /// Latest foreground process groups observed by pane workers.
@@ -121,6 +123,53 @@ impl RuntimeProcessComponent {
 }
 
 impl RuntimeSessionService {
+    /// Returns all modeled pane screens for whole-layout presentation.
+    pub(in crate::runtime) fn pane_screens(
+        &self,
+    ) -> &std::collections::BTreeMap<String, TerminalScreen> {
+        &self.process.pane_screens
+    }
+
+    /// Returns the modeled terminal screen for one pane.
+    pub(crate) fn pane_screen(&self, pane_id: &str) -> Option<&TerminalScreen> {
+        self.process.pane_screens.get(pane_id)
+    }
+
+    /// Returns mutable modeled terminal state for one runtime operation.
+    pub(in crate::runtime) fn pane_screen_mut(
+        &mut self,
+        pane_id: &str,
+    ) -> Option<&mut TerminalScreen> {
+        self.process.pane_screens.get_mut(pane_id)
+    }
+
+    /// Replaces the modeled terminal screen for one pane.
+    pub(in crate::runtime) fn set_pane_screen(
+        &mut self,
+        pane_id: impl Into<String>,
+        screen: TerminalScreen,
+    ) {
+        self.process.pane_screens.insert(pane_id.into(), screen);
+    }
+
+    /// Clears modeled terminal state when the live session is replaced.
+    pub(in crate::runtime) fn clear_pane_screens(&mut self) {
+        self.process.pane_screens.clear();
+    }
+
+    /// Applies new history retention policy to every modeled pane screen.
+    pub(in crate::runtime) fn configure_pane_screen_history(
+        &mut self,
+        history_limit: usize,
+        rotate_lines: usize,
+    ) -> Result<()> {
+        for screen in self.process.pane_screens.values_mut() {
+            screen.set_history_limit(history_limit)?;
+            screen.set_history_rotate_lines(rotate_lines)?;
+        }
+        Ok(())
+    }
+
     /// Returns the last readiness state observed for a pane shell.
     pub(in crate::runtime) fn pane_readiness_state(&self, pane_id: &str) -> PaneReadinessState {
         self.process
@@ -487,7 +536,7 @@ impl RuntimeSessionService {
             .remove(descriptor.pane_id.as_str());
         self.session
             .set_pane_live_state(descriptor.pane_id.as_str(), true)?;
-        self.pane_screens.insert(
+        self.process.pane_screens.insert(
             descriptor.pane_id.to_string(),
             TerminalScreen::new_with_history_config(
                 descriptor.size,
@@ -724,7 +773,11 @@ impl RuntimeSessionService {
         let Some(descriptor) = self.find_pane_descriptor(&pane_id) else {
             return Ok(false);
         };
-        if let Some(screen) = self.pane_screens.get_mut(descriptor.pane_id.as_str()) {
+        if let Some(screen) = self
+            .process
+            .pane_screens
+            .get_mut(descriptor.pane_id.as_str())
+        {
             screen.resize(size);
         }
         if let Some(screen) = self
@@ -956,7 +1009,7 @@ impl RuntimeSessionService {
         self.process
             .pane_exit_records
             .remove(descriptor.pane_id.as_str());
-        self.pane_screens.insert(
+        self.process.pane_screens.insert(
             descriptor.pane_id.to_string(),
             TerminalScreen::new_with_history_config(
                 descriptor.size,
@@ -1275,7 +1328,7 @@ impl RuntimeSessionService {
         self.queued_pane_resize_effects.remove(pane_id);
         self.queued_pane_pipe_effects
             .retain(|(queued_pane_id, _)| queued_pane_id != pane_id);
-        self.pane_screens.remove(pane_id);
+        self.process.pane_screens.remove(pane_id);
         self.process.pane_transaction_osc_screens.remove(pane_id);
         self.process.pane_transaction_osc_pending.remove(pane_id);
         self.process.pane_mez_wrapper_filter_pending.remove(pane_id);

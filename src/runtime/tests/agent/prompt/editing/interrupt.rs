@@ -16,7 +16,7 @@ fn runtime_attached_agent_prompt_logs_invalid_state_errors_non_modally() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap(),
     );
@@ -522,7 +522,7 @@ fn runtime_agent_prompt_ctrl_l_clears_pane_buffer() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(50, 8).unwrap(), 120).unwrap();
     screen.feed(b"old agent output");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")

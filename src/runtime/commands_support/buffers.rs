@@ -67,7 +67,7 @@ pub(super) fn runtime_copy_mode_command(
         return Ok(());
     }
     if !service.active_copy_modes().contains_key(pane_id.as_str()) {
-        let screen = service.pane_screens.get(pane_id.as_str()).ok_or_else(|| {
+        let screen = service.pane_screen(pane_id.as_str()).ok_or_else(|| {
             MezError::new(
                 crate::error::MezErrorKind::NotFound,
                 "pane screen not found",

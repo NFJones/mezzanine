@@ -619,7 +619,7 @@ fn runtime_agent_markdown_say_displays_raw_mez_patch_examples() {
     service
         .attach_primary("primary", true, Size::new(96, 24).unwrap(), 120)
         .unwrap();
-    service.pane_screens.insert(
+    service.set_pane_screen(
         "%1".to_string(),
         TerminalScreen::new(Size::new(96, 24).unwrap(), 120).unwrap(),
     );

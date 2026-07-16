@@ -94,7 +94,7 @@ fn runtime_agent_verbose_mode_injects_low_level_status_lines() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(80, 12).unwrap(), 20).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -184,7 +184,7 @@ fn runtime_agent_thinking_mode_injects_action_rationales() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(80, 12).unwrap(), 100).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -274,7 +274,7 @@ fn runtime_agent_trace_mode_prints_maap_request_response_and_results() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(100, 16).unwrap(), 500).unwrap();
     screen.feed(b"ready\n");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
@@ -601,7 +601,7 @@ fn runtime_batch_thought_is_hidden_until_verbose_logging() {
             .unwrap();
         let mut screen = TerminalScreen::new(Size::new(80, 10).unwrap(), 30).unwrap();
         screen.feed(b"ready\n");
-        service.pane_screens.insert("%1".to_string(), screen);
+        service.set_pane_screen("%1".to_string(), screen);
         service
             .agent_shell_store_mut()
             .enter_or_resume("%1")

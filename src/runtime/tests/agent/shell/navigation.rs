@@ -62,7 +62,7 @@ fn runtime_terminal_command_toggles_agent_shell_state() {
         .unwrap();
     let mut screen = TerminalScreen::new(Size::new(20, 2).unwrap(), 10).unwrap();
     screen.feed(b"history line\nvisible before agent");
-    service.pane_screens.insert("%1".to_string(), screen);
+    service.set_pane_screen("%1".to_string(), screen);
     let history_before_enter = service.pane_screen("%1").unwrap().history().len();
     assert!(
         service
@@ -113,8 +113,7 @@ fn runtime_terminal_command_toggles_agent_shell_state() {
     );
     let history_before_exit = after_enter_screen.history().len();
     service
-        .pane_screens
-        .get_mut("%1")
+        .pane_screen_mut("%1")
         .unwrap()
         .feed(b"visible inside agent");
     assert!(
@@ -382,8 +381,7 @@ fn runtime_agent_shell_slash_exit_exits_pane_subshell() {
     assert_eq!(pane_input_effects(&enter_effects).len(), 1);
     assert!(service.agent_subshell_panes.contains(&pane_id));
     service
-        .pane_screens
-        .get_mut(&pane_id)
+        .pane_screen_mut(&pane_id)
         .unwrap()
         .feed(b"slash exit history\nslash exit visible text");
     assert!(
