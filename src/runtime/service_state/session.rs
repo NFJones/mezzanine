@@ -493,24 +493,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) blocked_agent_approval_refs: BTreeMap<String, BlockedAgentApprovalRef>,
-    /// Stores the running shell transactions value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) running_shell_transactions: BTreeMap<String, RunningShellTransactionRef>,
-    /// Tracks live shell transactions whose wrapper start marker is mandatory.
-    ///
-    /// Runtime-dispatched transactions are sequenced by explicit wrapper start
-    /// and end markers. Tests and migration fixtures may still construct
-    /// transactions directly, so this set defines which live marker entries are
-    /// subject to strict start-before-end validation.
-    pub(in crate::runtime) shell_transaction_require_start_markers: BTreeSet<String>,
-    /// Tracks live shell transactions whose wrapper start marker was observed.
-    ///
-    /// This state is intentionally separate from pending command payloads:
-    /// stateful commands have no deferred payload but still must emit exactly
-    /// one wrapper start marker before they can complete.
-    pub(in crate::runtime) shell_transaction_started_markers: BTreeSet<String>,
     /// Stores the tool discovery cache value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

@@ -683,7 +683,7 @@ fn runtime_provider_failure_after_nonzero_shell_result_does_not_report_running_r
         )
         .unwrap();
     let marker = service
-        .running_shell_transactions
+        .running_shell_transactions_for_tests()
         .iter()
         .find_map(|(marker, transaction)| match &transaction.kind {
             RunningShellTransactionKind::AgentAction { action_id } if action_id == "shell-fail" => {

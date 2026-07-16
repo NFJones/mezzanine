@@ -617,19 +617,14 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: &str,
     ) -> Result<usize> {
-        let cancelled = self
-            .running_shell_transactions
-            .iter()
-            .filter(|(_, transaction)| transaction.turn_id == turn_id)
-            .map(|(marker, transaction)| (marker.clone(), transaction.pane_id.clone()))
-            .collect::<Vec<_>>();
+        let cancelled = self.running_shell_transaction_targets_for_turn(turn_id);
         if cancelled.is_empty() {
             return Ok(0);
         }
 
         let mut interrupted_panes = BTreeSet::new();
         for (marker, pane_id) in &cancelled {
-            self.running_shell_transactions.remove(marker);
+            self.remove_running_shell_transaction(marker);
             self.clear_shell_transaction_protocol_state(marker);
             if interrupted_panes.insert(pane_id.clone()) {
                 if self.agent_subshell_panes.contains(pane_id) {

@@ -15,7 +15,7 @@ impl RuntimeSessionService {
         let message = message.into();
         self.runtime_metrics
             .record_shell_transaction_protocol_violation();
-        self.running_shell_transactions.remove(marker);
+        self.process.running_shell_transactions.remove(marker);
         self.clear_shell_transaction_protocol_state(marker);
         self.interrupt_shell_transaction_pane_if_live(&transaction.pane_id)?;
         let previous = self.pane_readiness_state(&transaction.pane_id);
@@ -124,6 +124,7 @@ impl RuntimeSessionService {
         error: &str,
     ) -> Result<usize> {
         let failed_transactions = self
+            .process
             .running_shell_transactions
             .iter()
             .filter(|(_, transaction)| transaction.pane_id == pane_id)
@@ -131,7 +132,12 @@ impl RuntimeSessionService {
             .collect::<Vec<_>>();
         let mut failed_count = 0usize;
         for (marker, transaction) in failed_transactions {
-            if self.running_shell_transactions.remove(&marker).is_none() {
+            if self
+                .process
+                .running_shell_transactions
+                .remove(&marker)
+                .is_none()
+            {
                 continue;
             }
             self.clear_shell_transaction_protocol_state(&marker);

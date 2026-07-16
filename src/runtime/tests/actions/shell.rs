@@ -259,7 +259,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
     service
         .append_agent_command_preview_to_terminal_buffer("%1", "sleep 1")
         .unwrap();
-    service.running_shell_transactions.insert(
+    service.running_shell_transactions_mut_for_tests().insert(
         "marker-1".to_string(),
         RunningShellTransactionRef {
             turn_id: "turn-1".to_string(),
@@ -452,14 +452,14 @@ fn runtime_agent_shell_command_output_is_visible_in_verbose_mode() {
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
     for _ in 0..900 {
         let _ = service.poll_pane_outputs(8192).unwrap();
-        if service.running_shell_transactions.is_empty() {
+        if service.running_shell_transactions_for_tests().is_empty() {
             break;
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
         thread::yield_now();
     }
     assert!(
-        service.running_shell_transactions.is_empty(),
+        service.running_shell_transactions_for_tests().is_empty(),
         "agent shell command should settle before checking verbose presentation"
     );
     let pane_text = service
@@ -1000,7 +1000,7 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
         .unwrap();
     assert_eq!(first.terminal_state, AgentTurnState::Running);
     let marker = service
-        .running_shell_transactions
+        .running_shell_transactions_for_tests()
         .iter()
         .find_map(|(marker, transaction)| match &transaction.kind {
             RunningShellTransactionKind::AgentAction { action_id } if action_id == "shell-fail" => {
@@ -1014,7 +1014,10 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
     let encoded_transport = format!(
         "__MEZ_SHELL_OUTPUT_BASE64_BEGIN__\n{encoded_failure_output}\n__MEZ_SHELL_OUTPUT_BASE64_END__\n"
     );
-    let transaction = service.running_shell_transactions.get_mut(&marker).unwrap();
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&marker)
+        .unwrap();
     transaction.observed_output_bytes = encoded_transport.len();
     transaction.observed_output_preview = encoded_transport;
 
@@ -1030,7 +1033,7 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
     assert_eq!(pending[0].turn_id, "turn-1");
     assert!(
         !service
-            .running_shell_transactions
+            .running_shell_transactions_for_tests()
             .values()
             .any(|transaction| matches!(
                 &transaction.kind,
@@ -1277,7 +1280,7 @@ fn runtime_shell_command_heredoc_is_rejected_before_pane_dispatch() {
         .unwrap();
 
     assert_eq!(execution.terminal_state, AgentTurnState::Failed);
-    assert!(service.running_shell_transactions.is_empty());
+    assert!(service.running_shell_transactions_for_tests().is_empty());
     assert!(service.pending_agent_provider_tasks().is_empty());
     assert!(
         execution

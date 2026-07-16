@@ -94,7 +94,7 @@ fn runtime_mixed_say_and_file_mutation_defers_say_until_after_diff() {
     assert_eq!(execution.action_results[1].status, ActionStatus::Running);
     assert!(
         service
-            .running_shell_transactions
+            .running_shell_transactions_for_tests()
             .values()
             .any(|transaction| matches!(
                 transaction.kind,
@@ -104,12 +104,15 @@ fn runtime_mixed_say_and_file_mutation_defers_say_until_after_diff() {
         "file actions should dispatch through pane shell transactions"
     );
     let marker = service
-        .running_shell_transactions
+        .running_shell_transactions_for_tests()
         .keys()
         .next()
         .cloned()
         .expect("apply_patch transaction should be running");
-    let transaction = service.running_shell_transactions.get_mut(&marker).unwrap();
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&marker)
+        .unwrap();
     transaction.command = "# __MEZ_APPLY_PATCH_WRITE_PHASE__".to_string();
     transaction.observed_output_preview = format!(
         "diff -- apply patch\n--- /dev/null\n+++ b/{target_rel}\n@@ -0,0 +1,2 @@\n+alpha\n+beta\n"
@@ -345,7 +348,7 @@ fn runtime_bootstrap_unparsed_output_does_not_retry_forever() {
     service.set_pane_readiness("%1", PaneReadinessState::Busy);
     let marker = "bootstrap-unparsed-marker";
     let turn_id = "bootstrap-%1-unparsed";
-    service.running_shell_transactions.insert(
+    service.running_shell_transactions_mut_for_tests().insert(
         marker.to_string(),
         RunningShellTransactionRef {
             turn_id: turn_id.to_string(),
@@ -375,7 +378,7 @@ fn runtime_bootstrap_unparsed_output_does_not_retry_forever() {
     service.maybe_bootstrap_ready_panes().unwrap();
     assert!(
         service
-            .running_shell_transactions
+            .running_shell_transactions_for_tests()
             .values()
             .all(|transaction| transaction.kind != RunningShellTransactionKind::Bootstrap)
     );

@@ -88,6 +88,12 @@ pub(in crate::runtime) struct RuntimeProcessComponent {
     pane_bootstrap_pending: BTreeSet<String>,
     /// Modeled terminal screen state keyed by pane id.
     pane_screens: std::collections::BTreeMap<String, TerminalScreen>,
+    /// Live shell transactions keyed by their OSC marker.
+    running_shell_transactions: std::collections::BTreeMap<String, RunningShellTransactionRef>,
+    /// Markers whose runtime wrappers must emit start before completion.
+    shell_transaction_require_start_markers: BTreeSet<String>,
+    /// Markers whose mandatory wrapper start event has been observed.
+    shell_transaction_started_markers: BTreeSet<String>,
     /// Primary process ids for panes whose handles are adapter-owned.
     detached_pane_primary_pids: std::collections::BTreeMap<String, u32>,
     /// Latest foreground process groups observed by pane workers.
@@ -153,6 +159,108 @@ impl RuntimeProcessComponent {
 }
 
 impl RuntimeSessionService {
+    /// Registers one live shell transaction and its start-marker invariant.
+    pub(in crate::runtime) fn register_running_shell_transaction(
+        &mut self,
+        marker: String,
+        transaction: RunningShellTransactionRef,
+        require_start_marker: bool,
+    ) {
+        self.process
+            .running_shell_transactions
+            .insert(marker.clone(), transaction);
+        if require_start_marker {
+            self.process
+                .shell_transaction_require_start_markers
+                .insert(marker);
+        }
+    }
+
+    /// Reports whether an agent action has a live shell transaction.
+    pub(in crate::runtime) fn agent_action_has_running_shell_transaction(
+        &self,
+        turn_id: &str,
+        action_id: &str,
+    ) -> bool {
+        self.process
+            .running_shell_transactions
+            .values()
+            .any(|transaction| {
+                transaction.turn_id == turn_id
+                    && matches!(
+                        &transaction.kind,
+                        RunningShellTransactionKind::AgentAction {
+                            action_id: running_action_id
+                        } if running_action_id == action_id
+                    )
+            })
+    }
+
+    /// Reports whether a turn has any live agent-action shell transaction.
+    pub(in crate::runtime) fn turn_has_running_agent_action_shell_transaction(
+        &self,
+        turn_id: &str,
+    ) -> bool {
+        self.process
+            .running_shell_transactions
+            .values()
+            .any(|transaction| {
+                transaction.turn_id == turn_id
+                    && matches!(
+                        transaction.kind,
+                        RunningShellTransactionKind::AgentAction { .. }
+                    )
+            })
+    }
+
+    /// Reports whether a turn has a live transaction of the requested kind.
+    pub(in crate::runtime) fn turn_has_running_shell_transaction_kind(
+        &self,
+        turn_id: &str,
+        kind: &RunningShellTransactionKind,
+    ) -> bool {
+        self.process
+            .running_shell_transactions
+            .values()
+            .any(|transaction| transaction.turn_id == turn_id && &transaction.kind == kind)
+    }
+
+    /// Reports whether one pane has any live shell transaction.
+    pub(in crate::runtime) fn pane_has_running_shell_transaction(&self, pane_id: &str) -> bool {
+        self.process
+            .running_shell_transactions
+            .values()
+            .any(|transaction| transaction.pane_id == pane_id)
+    }
+
+    /// Returns marker and pane pairs for every live transaction in one turn.
+    pub(in crate::runtime) fn running_shell_transaction_targets_for_turn(
+        &self,
+        turn_id: &str,
+    ) -> Vec<(String, String)> {
+        self.process
+            .running_shell_transactions
+            .iter()
+            .filter(|(_, transaction)| transaction.turn_id == turn_id)
+            .map(|(marker, transaction)| (marker.clone(), transaction.pane_id.clone()))
+            .collect()
+    }
+
+    /// Removes one live shell transaction by marker.
+    pub(in crate::runtime) fn remove_running_shell_transaction(
+        &mut self,
+        marker: &str,
+    ) -> Option<RunningShellTransactionRef> {
+        self.process.running_shell_transactions.remove(marker)
+    }
+
+    /// Clears all live shell transactions and marker protocol state.
+    pub(in crate::runtime) fn clear_all_shell_transaction_state(&mut self) {
+        self.process.running_shell_transactions.clear();
+        self.process.shell_transaction_require_start_markers.clear();
+        self.process.shell_transaction_started_markers.clear();
+    }
+
     /// Returns the active pane-screen history limit.
     pub(crate) fn terminal_history_limit(&self) -> usize {
         self.process.settings.terminal_history_limit
@@ -390,6 +498,36 @@ impl RuntimeSessionService {
 
 #[cfg(test)]
 impl RuntimeSessionService {
+    /// Returns live shell transactions for integration-test observation.
+    pub(in crate::runtime) fn running_shell_transactions_for_tests(
+        &self,
+    ) -> &std::collections::BTreeMap<String, RunningShellTransactionRef> {
+        &self.process.running_shell_transactions
+    }
+
+    /// Returns live shell transactions for process-fixture mutation.
+    pub(in crate::runtime) fn running_shell_transactions_mut_for_tests(
+        &mut self,
+    ) -> &mut std::collections::BTreeMap<String, RunningShellTransactionRef> {
+        &mut self.process.running_shell_transactions
+    }
+
+    /// Reports whether a transaction still requires a start marker.
+    pub(in crate::runtime) fn shell_transaction_requires_start_marker_for_tests(
+        &self,
+        marker: &str,
+    ) -> bool {
+        self.process
+            .shell_transaction_require_start_markers
+            .contains(marker)
+    }
+
+    /// Reports whether a transaction start marker has been observed.
+    pub(in crate::runtime) fn shell_transaction_started_for_tests(&self, marker: &str) -> bool {
+        self.process
+            .shell_transaction_started_markers
+            .contains(marker)
+    }
     /// Installs a manual readiness override for a test epoch.
     pub(in crate::runtime) fn mark_pane_readiness_override_for_tests(
         &mut self,
@@ -799,6 +937,7 @@ impl RuntimeSessionService {
             return Ok(false);
         }
         let active_transactions = self
+            .process
             .running_shell_transactions
             .iter()
             .filter(|(_, transaction)| transaction.pane_id == pane_id)

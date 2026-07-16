@@ -809,14 +809,17 @@ fn runtime_apply_patch_write_phase_hunk_mismatch_queues_model_recovery() {
         )
         .unwrap();
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
-    assert_eq!(service.running_shell_transactions.len(), 1);
+    assert_eq!(service.running_shell_transactions_for_tests().len(), 1);
     let marker = service
-        .running_shell_transactions
+        .running_shell_transactions_for_tests()
         .keys()
         .next()
         .cloned()
         .unwrap();
-    let transaction = service.running_shell_transactions.get_mut(&marker).unwrap();
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&marker)
+        .unwrap();
     transaction.command = "# __MEZ_APPLY_PATCH_WRITE_PHASE__".to_string();
     transaction.observed_output_preview =
         "apply_patch: hunk did not match: tests/standard_config_consumer_test.rs\n\

@@ -10,6 +10,7 @@ impl RuntimeSessionService {
         now_unix_ms: u64,
     ) -> Result<usize> {
         let expired = self
+            .process
             .running_shell_transactions
             .iter()
             .filter_map(|(marker, transaction)| {
@@ -21,7 +22,12 @@ impl RuntimeSessionService {
             .collect::<Vec<_>>();
         let mut expired_count = 0usize;
         for (marker, transaction, timeout_ms, elapsed_ms) in expired {
-            if self.running_shell_transactions.remove(&marker).is_none() {
+            if self
+                .process
+                .running_shell_transactions
+                .remove(&marker)
+                .is_none()
+            {
                 continue;
             }
             self.clear_shell_transaction_protocol_state(&marker);

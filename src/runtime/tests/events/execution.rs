@@ -229,7 +229,7 @@ env\tproject_root\t/home/me/project\n\
 env\tgit_repo\t1\n\
 bootstrap\tcomplete\t1714500000\n\
 tool\tsed\t1\t/usr/bin/sed\tGNU sed 4.9\tcommand -v sed\t0\t/usr/bin/sed --version\t0\t1714500000\n";
-    service.running_shell_transactions.insert(
+    service.running_shell_transactions_mut_for_tests().insert(
         marker.to_string(),
         RunningShellTransactionRef {
             turn_id: turn_id.to_string(),
@@ -270,7 +270,7 @@ tool\tsed\t1\t/usr/bin/sed\tGNU sed 4.9\tcommand -v sed\t0\t/usr/bin/sed --versi
     service.maybe_bootstrap_ready_panes().unwrap();
     assert!(
         service
-            .running_shell_transactions
+            .running_shell_transactions_for_tests()
             .values()
             .all(|transaction| transaction.kind != RunningShellTransactionKind::Bootstrap)
     );

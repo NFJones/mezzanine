@@ -997,10 +997,7 @@ impl RuntimeSessionService {
             .get(pane_id)
             .and_then(|session| session.running_turn_id.as_deref())
             .is_some()
-            || self
-                .running_shell_transactions
-                .values()
-                .any(|transaction| transaction.pane_id == pane_id)
+            || self.pane_has_running_shell_transaction(pane_id)
         {
             return Ok(false);
         }

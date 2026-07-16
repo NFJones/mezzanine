@@ -81,7 +81,7 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
     assert_eq!(execution.action_results[0].status, ActionStatus::Running);
     let action_transaction = service
-        .running_shell_transactions
+        .running_shell_transactions_for_tests()
         .values()
         .find(|transaction| {
             matches!(
@@ -106,12 +106,15 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
         "{pane_context:?}"
     );
     let marker = service
-        .running_shell_transactions
+        .running_shell_transactions_for_tests()
         .keys()
         .next()
         .cloned()
         .expect("apply_patch transaction should be running");
-    let transaction = service.running_shell_transactions.get_mut(&marker).unwrap();
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&marker)
+        .unwrap();
     transaction.command = "# __MEZ_APPLY_PATCH_WRITE_PHASE__".to_string();
     transaction.observed_output_preview = format!(
         "diff -- apply patch\n--- /dev/null\n+++ b/{target_rel}\n@@ -0,0 +1,2 @@\n+alpha\n+beta\n"
@@ -267,12 +270,15 @@ fn runtime_apply_patch_read_phase_truncation_dispatches_specific_error_plan() {
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
     assert_eq!(execution.action_results[0].status, ActionStatus::Running);
     let marker = service
-        .running_shell_transactions
+        .running_shell_transactions_for_tests()
         .keys()
         .next()
         .cloned()
         .expect("apply_patch read transaction should be running");
-    let transaction = service.running_shell_transactions.get_mut(&marker).unwrap();
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&marker)
+        .unwrap();
     transaction.observed_output_preview = "partial apply_patch read transport".to_string();
     transaction.observed_output_bytes = transaction.observed_output_preview.len();
     transaction.observed_output_truncated = true;
@@ -284,7 +290,7 @@ fn runtime_apply_patch_read_phase_truncation_dispatches_specific_error_plan() {
         .unwrap();
 
     let write_transaction = service
-        .running_shell_transactions
+        .running_shell_transactions_for_tests()
         .values()
         .find(|transaction| {
             matches!(
@@ -309,7 +315,7 @@ fn runtime_apply_patch_read_phase_truncation_dispatches_specific_error_plan() {
         write_transaction.command
     );
     let write_marker = service
-        .running_shell_transactions
+        .running_shell_transactions_for_tests()
         .keys()
         .find(|candidate| *candidate != &marker)
         .cloned()
@@ -412,7 +418,7 @@ fn runtime_apply_patch_uses_full_read_transport_when_preview_truncates() {
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
     assert_eq!(execution.action_results[0].status, ActionStatus::Running);
     let marker = service
-        .running_shell_transactions
+        .running_shell_transactions_for_tests()
         .keys()
         .next()
         .cloned()
@@ -426,7 +432,10 @@ fn runtime_apply_patch_uses_full_read_transport_when_preview_truncates() {
         "VENIX1JFQURfRU5EX18K\n",
         "__MEZ_SHELL_OUTPUT_BASE64_END__\n",
     );
-    let transaction = service.running_shell_transactions.get_mut(&marker).unwrap();
+    let transaction = service
+        .running_shell_transactions_mut_for_tests()
+        .get_mut(&marker)
+        .unwrap();
     transaction.observed_output_preview = "partial apply_patch read transport".to_string();
     transaction.observed_output_bytes = snapshot.len();
     transaction.observed_output_truncated = true;
@@ -445,7 +454,7 @@ fn runtime_apply_patch_uses_full_read_transport_when_preview_truncates() {
         .unwrap();
 
     let write_transaction = service
-        .running_shell_transactions
+        .running_shell_transactions_for_tests()
         .values()
         .find(|transaction| {
             matches!(
@@ -571,12 +580,12 @@ fn runtime_agent_loop_continues_after_apply_patch_iteration() {
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
     for _ in 0..300 {
         let _ = service.poll_pane_outputs(8192).unwrap();
-        if service.running_shell_transactions.is_empty() {
+        if service.running_shell_transactions_for_tests().is_empty() {
             break;
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
     }
-    assert!(service.running_shell_transactions.is_empty());
+    assert!(service.running_shell_transactions_for_tests().is_empty());
     let completion_provider = RuntimeBatchProvider {
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),

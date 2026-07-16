@@ -160,6 +160,7 @@ impl RuntimeSessionService {
                     && !self.pending_agent_provider_tasks.contains(*turn_id)
                     && !self.claimed_agent_provider_tasks.contains_key(*turn_id)
                     && !self
+                        .process
                         .running_shell_transactions
                         .values()
                         .any(|transaction| transaction.turn_id == turn_id.as_str())
@@ -234,6 +235,7 @@ impl RuntimeSessionService {
             || self.claimed_agent_provider_tasks.contains_key(turn_id)
             || self.agent_turn_pending_steering.contains_key(turn_id)
             || self
+                .process
                 .running_shell_transactions
                 .values()
                 .any(|transaction| transaction.turn_id == turn_id)

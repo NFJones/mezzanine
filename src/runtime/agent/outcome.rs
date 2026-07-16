@@ -204,14 +204,7 @@ impl RuntimeSessionService {
         result.status == ActionStatus::Running
             && !result.is_error
             && runtime_action_type_is_shell_backed(result.action_type)
-            && !self.running_shell_transactions.values().any(|transaction| {
-                transaction.turn_id == turn_id
-                    && matches!(
-                        &transaction.kind,
-                        RunningShellTransactionKind::AgentAction { action_id }
-                            if action_id == &result.action_id
-                    )
-            })
+            && !self.agent_action_has_running_shell_transaction(turn_id, &result.action_id)
     }
 
     /// Removes all failure-feedback attempt counters owned by one turn.

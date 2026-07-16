@@ -84,7 +84,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
     );
     assert!(
         service
-            .running_shell_transactions
+            .running_shell_transactions_for_tests()
             .values()
             .any(|transaction| transaction.kind == RunningShellTransactionKind::ReadinessProbe)
     );
@@ -171,7 +171,7 @@ fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_block
 
     assert!(execution_after_dispatch.is_some());
     let probe_marker = service
-        .running_shell_transactions
+        .running_shell_transactions_for_tests()
         .iter()
         .find_map(|(marker, transaction)| {
             (transaction.kind == RunningShellTransactionKind::ReadinessProbe)
@@ -209,13 +209,13 @@ fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_block
 
     for _ in 0..300 {
         let _ = service.poll_pane_outputs(8192).unwrap();
-        if service.running_shell_transactions.is_empty() {
+        if service.running_shell_transactions_for_tests().is_empty() {
             break;
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
     }
 
-    assert!(service.running_shell_transactions.is_empty());
+    assert!(service.running_shell_transactions_for_tests().is_empty());
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
@@ -326,7 +326,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_shell_process_
     );
     assert!(
         service
-            .running_shell_transactions
+            .running_shell_transactions_for_tests()
             .values()
             .any(|transaction| transaction.kind == RunningShellTransactionKind::ReadinessProbe)
     );
@@ -418,7 +418,7 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_with_cached_foregro
     );
     assert!(
         service
-            .running_shell_transactions
+            .running_shell_transactions_for_tests()
             .values()
             .any(|transaction| transaction.kind == RunningShellTransactionKind::ReadinessProbe)
     );
@@ -501,7 +501,7 @@ fn runtime_shell_command_dispatch_uses_action_timeout() {
         )
         .unwrap();
     let transaction = service
-        .running_shell_transactions
+        .running_shell_transactions_for_tests()
         .values()
         .find(|transaction| {
             matches!(

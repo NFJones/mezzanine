@@ -1230,7 +1230,7 @@ fn dispatch_protocol_test_shell_action(
         )
         .unwrap();
     let marker = service
-        .running_shell_transactions
+        .running_shell_transactions_for_tests()
         .iter()
         .find_map(|(marker, transaction)| match &transaction.kind {
             RunningShellTransactionKind::AgentAction {
@@ -1239,11 +1239,7 @@ fn dispatch_protocol_test_shell_action(
             _ => None,
         })
         .unwrap();
-    assert!(
-        service
-            .shell_transaction_require_start_markers
-            .contains(&marker)
-    );
+    assert!(service.shell_transaction_requires_start_marker_for_tests(&marker));
     ("%1".to_string(), marker)
 }
 

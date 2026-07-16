@@ -10,6 +10,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(in crate::runtime) fn dispatch_bootstrap_to_pane(&mut self, pane_id: &str) -> Result<()> {
         if self
+            .process
             .running_shell_transactions
             .values()
             .any(|transaction| transaction.pane_id == pane_id)
@@ -38,7 +39,7 @@ impl RuntimeSessionService {
         self.remember_mez_wrapper_filter_command(pane_id, &bootstrap_script);
         self.write_runtime_pane_input(pane_id, wrapper.as_bytes())?;
         self.set_pane_readiness(pane_id, PaneReadinessState::Busy);
-        self.running_shell_transactions.insert(
+        self.process.running_shell_transactions.insert(
             marker_id.clone(),
             RunningShellTransactionRef {
                 turn_id: turn_id.clone(),
@@ -54,7 +55,8 @@ impl RuntimeSessionService {
                 observed_output_truncated: false,
             },
         );
-        self.shell_transaction_require_start_markers
+        self.process
+            .shell_transaction_require_start_markers
             .insert(marker_id.clone());
         self.append_lifecycle_event(
             EventKind::AgentStatus,
@@ -176,6 +178,7 @@ impl RuntimeSessionService {
             .filter(|(k, v)| {
                 self.process.pane_bootstrap_pending.contains(k.as_str())
                     && !self
+                        .process
                         .running_shell_transactions
                         .values()
                         .any(|transaction| transaction.pane_id == k.as_str())

@@ -11,7 +11,7 @@ impl RuntimeSessionService {
         let output_preview_lines = self.process.settings.terminal_shell_output_preview_lines;
         let mut apply_patch_transport_updates = Vec::new();
         let mut status_line_updates = Vec::new();
-        for (marker, transaction) in self.running_shell_transactions.iter_mut() {
+        for (marker, transaction) in self.process.running_shell_transactions.iter_mut() {
             if transaction.pane_id == pane_id {
                 let observed_bytes = match transaction.kind {
                     RunningShellTransactionKind::AgentAction { .. } => {

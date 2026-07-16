@@ -160,6 +160,7 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
     ) -> Result<()> {
         if self
+            .process
             .running_shell_transactions
             .values()
             .any(|transaction| transaction.pane_id == turn.pane_id)
@@ -171,10 +172,15 @@ impl RuntimeSessionService {
             )?;
             return Ok(());
         }
-        if self.running_shell_transactions.values().any(|transaction| {
-            transaction.turn_id == turn.turn_id
-                && transaction.kind == RunningShellTransactionKind::ReadinessProbe
-        }) {
+        if self
+            .process
+            .running_shell_transactions
+            .values()
+            .any(|transaction| {
+                transaction.turn_id == turn.turn_id
+                    && transaction.kind == RunningShellTransactionKind::ReadinessProbe
+            })
+        {
             self.append_agent_trace_turn_event(
                 &turn.pane_id,
                 &turn.turn_id,
@@ -215,7 +221,7 @@ impl RuntimeSessionService {
                 marker_id
             ),
         )?;
-        self.running_shell_transactions.insert(
+        self.process.running_shell_transactions.insert(
             marker_id.clone(),
             RunningShellTransactionRef {
                 turn_id: turn.turn_id.clone(),
@@ -231,7 +237,8 @@ impl RuntimeSessionService {
                 observed_output_truncated: false,
             },
         );
-        self.shell_transaction_require_start_markers
+        self.process
+            .shell_transaction_require_start_markers
             .insert(marker_id.clone());
         self.append_lifecycle_event(
             EventKind::AgentStatus,

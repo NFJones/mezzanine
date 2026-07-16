@@ -82,14 +82,7 @@ impl RuntimeSessionService {
                 result.status == ActionStatus::Running
                     && local_shell_backed
                     && !self.agent_action_has_pending_pre_shell_hook(turn_id, &result.action_id)
-                    && !self.running_shell_transactions.values().any(|transaction| {
-                        transaction.turn_id == turn_id
-                            && matches!(
-                                &transaction.kind,
-                                RunningShellTransactionKind::AgentAction { action_id }
-                                    if action_id == &result.action_id
-                            )
-                    })
+                    && !self.agent_action_has_running_shell_transaction(turn_id, &result.action_id)
             })
     }
 
@@ -118,10 +111,10 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(in crate::runtime) fn turn_has_running_readiness_probe(&self, turn_id: &str) -> bool {
-        self.running_shell_transactions.values().any(|transaction| {
-            transaction.turn_id == turn_id
-                && transaction.kind == RunningShellTransactionKind::ReadinessProbe
-        })
+        self.turn_has_running_shell_transaction_kind(
+            turn_id,
+            &RunningShellTransactionKind::ReadinessProbe,
+        )
     }
 
     /// Returns a local result when a shell-backed mutation has already

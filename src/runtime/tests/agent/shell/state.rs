@@ -151,7 +151,7 @@ fn runtime_hidden_agent_shell_osc_parser_skips_large_command_bodies() {
     service
         .pane_transaction_osc_screens_mut_for_tests()
         .remove("%1");
-    service.running_shell_transactions.insert(
+    service.running_shell_transactions_mut_for_tests().insert(
         "marker-1".to_string(),
         RunningShellTransactionRef {
             turn_id: "turn-1".to_string(),
@@ -213,7 +213,7 @@ fn runtime_hidden_agent_shell_osc_parser_preserves_fragmented_markers() {
     service
         .pane_transaction_osc_screens_mut_for_tests()
         .remove("%1");
-    service.running_shell_transactions.insert(
+    service.running_shell_transactions_mut_for_tests().insert(
         "marker-1".to_string(),
         RunningShellTransactionRef {
             turn_id: "turn-1".to_string(),

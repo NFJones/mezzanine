@@ -118,7 +118,7 @@ impl RuntimeSessionService {
                 wrapper_bytes, action.id, marker_id
             ),
         )?;
-        self.running_shell_transactions.insert(
+        self.register_running_shell_transaction(
             marker_id.clone(),
             RunningShellTransactionRef {
                 turn_id: turn.turn_id.clone(),
@@ -140,9 +140,8 @@ impl RuntimeSessionService {
                 observed_output_preview: String::new(),
                 observed_output_truncated: false,
             },
+            true,
         );
-        self.shell_transaction_require_start_markers
-            .insert(marker_id.clone());
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             &turn.turn_id,

@@ -34,7 +34,7 @@ fn runtime_marker_for_action_uses_fresh_entropy() {
 #[test]
 fn runtime_shell_transaction_observation_is_bounded_and_truncated() {
     let mut service = test_runtime_service();
-    service.running_shell_transactions.insert(
+    service.running_shell_transactions_mut_for_tests().insert(
         "marker-1".to_string(),
         RunningShellTransactionRef {
             turn_id: "turn-1".to_string(),
@@ -55,7 +55,10 @@ fn runtime_shell_transaction_observation_is_bounded_and_truncated() {
 
     service.record_running_shell_transaction_output("%1", &output);
 
-    let transaction = service.running_shell_transactions.get("marker-1").unwrap();
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .get("marker-1")
+        .unwrap();
     assert_eq!(transaction.observed_output_bytes, 300_001);
     assert_eq!(transaction.observed_output_preview.len(), 262_144);
     assert!(transaction.observed_output_truncated);
@@ -73,7 +76,7 @@ fn runtime_pane_input_written_traces_active_shell_transaction() {
     service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
-    service.running_shell_transactions.insert(
+    service.running_shell_transactions_mut_for_tests().insert(
         "marker-1".to_string(),
         RunningShellTransactionRef {
             turn_id: "turn-1".to_string(),
@@ -112,7 +115,7 @@ fn runtime_shell_transaction_observation_strips_prompt_and_wrapper_noise() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service.running_shell_transactions.insert(
+    service.running_shell_transactions_mut_for_tests().insert(
         "marker-1".to_string(),
         RunningShellTransactionRef {
             turn_id: "turn-1".to_string(),
@@ -136,7 +139,10 @@ fn runtime_shell_transaction_observation_strips_prompt_and_wrapper_noise() {
     );
     service.record_running_shell_transaction_output("%1", &filtered);
 
-    let transaction = service.running_shell_transactions.get("marker-1").unwrap();
+    let transaction = service
+        .running_shell_transactions_for_tests()
+        .get("marker-1")
+        .unwrap();
     assert!(
         transaction.observed_output_preview.contains("src"),
         "{}",
@@ -166,7 +172,7 @@ fn runtime_shell_transaction_wrapper_echo_is_hidden_by_default() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service.running_shell_transactions.insert(
+    service.running_shell_transactions_mut_for_tests().insert(
         "marker-1".to_string(),
         RunningShellTransactionRef {
             turn_id: "turn-1".to_string(),
@@ -250,7 +256,7 @@ fn runtime_shell_transaction_wrapper_echo_fragments_are_hidden_by_default() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service.running_shell_transactions.insert(
+    service.running_shell_transactions_mut_for_tests().insert(
         "marker-1".to_string(),
         RunningShellTransactionRef {
             turn_id: "turn-1".to_string(),
@@ -295,7 +301,7 @@ fn runtime_shell_transaction_wrapper_echo_is_visible_with_trace_enabled() {
         .agent_shell_store_mut()
         .set_log_level("%1", AgentLogLevel::Trace)
         .unwrap();
-    service.running_shell_transactions.insert(
+    service.running_shell_transactions_mut_for_tests().insert(
         "marker-1".to_string(),
         RunningShellTransactionRef {
             turn_id: "turn-1".to_string(),
@@ -333,7 +339,7 @@ fn runtime_agent_shell_transaction_output_is_hidden_from_pane_by_default() {
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service.running_shell_transactions.insert(
+    service.running_shell_transactions_mut_for_tests().insert(
         "marker-1".to_string(),
         RunningShellTransactionRef {
             turn_id: "turn-1".to_string(),
@@ -371,7 +377,7 @@ fn runtime_agent_shell_transaction_output_is_visible_with_verbose_enabled() {
         .agent_shell_store_mut()
         .set_log_level("%1", AgentLogLevel::Verbose)
         .unwrap();
-    service.running_shell_transactions.insert(
+    service.running_shell_transactions_mut_for_tests().insert(
         "marker-1".to_string(),
         RunningShellTransactionRef {
             turn_id: "turn-1".to_string(),
@@ -426,7 +432,7 @@ fn runtime_agent_shell_exit_after_shell_transaction_uses_command_exit() {
     let started = service
         .start_agent_prompt_turn(&pane_id, "search the file")
         .unwrap();
-    service.running_shell_transactions.insert(
+    service.running_shell_transactions_mut_for_tests().insert(
         "marker-grep".to_string(),
         RunningShellTransactionRef {
             turn_id: started.turn_id.clone(),
@@ -589,13 +595,13 @@ fn runtime_bash_agent_shell_transaction_keeps_parent_shell_alive() {
 
     for _ in 0..300 {
         let _ = service.poll_pane_outputs(8192).unwrap();
-        if service.running_shell_transactions.is_empty() {
+        if service.running_shell_transactions_for_tests().is_empty() {
             break;
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
     }
     assert!(
-        service.running_shell_transactions.is_empty(),
+        service.running_shell_transactions_for_tests().is_empty(),
         "agent transaction should have completed before checking parent shell liveness"
     );
     let pane_exits = service.poll_pane_processes().unwrap();
@@ -708,12 +714,12 @@ fn runtime_bash_agent_shell_transaction_preserves_strict_parent_shell_options() 
 
     for _ in 0..300 {
         let _ = service.poll_pane_outputs(8192).unwrap();
-        if service.running_shell_transactions.is_empty() {
+        if service.running_shell_transactions_for_tests().is_empty() {
             break;
         }
         wait_for_pane_process_activity(&service, "%1", Duration::from_millis(10));
     }
-    assert!(service.running_shell_transactions.is_empty());
+    assert!(service.running_shell_transactions_for_tests().is_empty());
     let pane_exits = service.poll_pane_processes().unwrap();
     assert!(pane_exits.is_empty(), "{pane_exits:?}");
     assert!(service.pane_processes().contains_pane("%1"));
@@ -822,7 +828,7 @@ fn runtime_shell_transaction_metadata_mismatch_fails_live_action() {
         )
         .unwrap();
     let marker = service
-        .running_shell_transactions
+        .running_shell_transactions_for_tests()
         .iter()
         .find_map(|(marker, transaction)| match &transaction.kind {
             RunningShellTransactionKind::AgentAction { action_id } if action_id == "shell-1" => {
@@ -837,13 +843,13 @@ fn runtime_shell_transaction_metadata_mismatch_fails_live_action() {
         .unwrap();
 
     assert_eq!(observed, 1);
-    assert!(!service.running_shell_transactions.contains_key(&marker));
     assert!(
         !service
-            .shell_transaction_require_start_markers
-            .contains(&marker)
+            .running_shell_transactions_for_tests()
+            .contains_key(&marker)
     );
-    assert!(!service.shell_transaction_started_markers.contains(&marker));
+    assert!(!service.shell_transaction_requires_start_marker_for_tests(&marker));
+    assert!(!service.shell_transaction_started_for_tests(&marker));
     assert!(
         service
             .agent_turn_ledger
@@ -883,19 +889,19 @@ fn runtime_shell_transaction_duplicate_start_marker_fails_live_action() {
     service
         .observe_agent_shell_transaction_start(&pane_id, &marker, "turn-1", "agent-%1", &pane_id)
         .unwrap();
-    assert!(service.shell_transaction_started_markers.contains(&marker));
+    assert!(service.shell_transaction_started_for_tests(&marker));
     let observed = service
         .observe_agent_shell_transaction_start(&pane_id, &marker, "turn-1", "agent-%1", &pane_id)
         .unwrap();
 
     assert_eq!(observed, 1);
-    assert!(!service.running_shell_transactions.contains_key(&marker));
     assert!(
         !service
-            .shell_transaction_require_start_markers
-            .contains(&marker)
+            .running_shell_transactions_for_tests()
+            .contains_key(&marker)
     );
-    assert!(!service.shell_transaction_started_markers.contains(&marker));
+    assert!(!service.shell_transaction_requires_start_marker_for_tests(&marker));
+    assert!(!service.shell_transaction_started_for_tests(&marker));
     assert!(
         service
             .agent_turn_ledger
@@ -935,13 +941,13 @@ fn runtime_shell_transaction_end_before_start_marker_fails_live_action() {
         .unwrap();
 
     assert_eq!(observed, 1);
-    assert!(!service.running_shell_transactions.contains_key(&marker));
     assert!(
         !service
-            .shell_transaction_require_start_markers
-            .contains(&marker)
+            .running_shell_transactions_for_tests()
+            .contains_key(&marker)
     );
-    assert!(!service.shell_transaction_started_markers.contains(&marker));
+    assert!(!service.shell_transaction_requires_start_marker_for_tests(&marker));
+    assert!(!service.shell_transaction_started_for_tests(&marker));
     assert!(
         service
             .agent_turn_ledger
@@ -1045,7 +1051,7 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
     assert!(wrapper_text.contains("__mez_tx_"), "{wrapper_text}");
     assert!(!wrapper_text.contains("payload-marker"), "{wrapper_text}");
     let (marker, transaction) = service
-        .running_shell_transactions
+        .running_shell_transactions_for_tests()
         .iter()
         .find(|(_, transaction)| {
             matches!(
@@ -1078,7 +1084,7 @@ fn runtime_shell_transaction_start_streams_deferred_payload() {
     assert!(decoded.contains("payload-marker"), "{decoded}");
     assert!(
         service
-            .running_shell_transactions
+            .running_shell_transactions_for_tests()
             .get(&marker)
             .unwrap()
             .pending_input_payload
@@ -1104,7 +1110,7 @@ fn runtime_shell_transaction_pending_payload_uses_short_start_timer() {
     let mut process = service
         .take_running_pane_process_for_adapter(&pane_id)
         .unwrap();
-    service.running_shell_transactions.insert(
+    service.running_shell_transactions_mut_for_tests().insert(
         "marker-start".to_string(),
         RunningShellTransactionRef {
             turn_id: "turn-1".to_string(),

@@ -1442,19 +1442,13 @@ impl RuntimeSessionService {
 
     /// Returns the active display substate for a running agent turn.
     fn runtime_running_agent_frame_status(&self, turn: &AgentTurnRecord) -> &'static str {
-        if self.running_shell_transactions.values().any(|transaction| {
-            transaction.turn_id == turn.turn_id
-                && matches!(
-                    transaction.kind,
-                    RunningShellTransactionKind::AgentAction { .. }
-                )
-        }) {
+        if self.turn_has_running_agent_action_shell_transaction(&turn.turn_id) {
             return "executing";
         }
-        if self.running_shell_transactions.values().any(|transaction| {
-            transaction.turn_id == turn.turn_id
-                && transaction.kind == RunningShellTransactionKind::ReadinessProbe
-        }) {
+        if self.turn_has_running_shell_transaction_kind(
+            &turn.turn_id,
+            &RunningShellTransactionKind::ReadinessProbe,
+        ) {
             return "waiting";
         }
         if self

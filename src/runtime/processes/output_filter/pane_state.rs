@@ -297,6 +297,7 @@ impl RuntimeSessionService {
             return Vec::new();
         }
         let active_transaction = self
+            .process
             .running_shell_transactions
             .values()
             .any(|transaction| transaction.pane_id == pane_id);
@@ -393,6 +394,7 @@ impl RuntimeSessionService {
         let shell_view_enabled = self.agent_shell_view_enabled(pane_id);
         let mut has_agent_action = false;
         for transaction in self
+            .process
             .running_shell_transactions
             .values()
             .filter(|transaction| transaction.pane_id == pane_id)
@@ -516,6 +518,7 @@ impl RuntimeSessionService {
         for pane_id in retained {
             if self.pane_has_running_agent_turn(&pane_id)
                 || self
+                    .process
                     .running_shell_transactions
                     .values()
                     .any(|transaction| transaction.pane_id == pane_id)
@@ -793,6 +796,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     fn mez_wrapper_filter_commands_for_pane(&self, pane_id: &str) -> Vec<String> {
         let mut commands = self
+            .process
             .running_shell_transactions
             .values()
             .filter(|transaction| transaction.pane_id == pane_id)

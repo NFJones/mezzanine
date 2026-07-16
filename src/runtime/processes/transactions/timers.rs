@@ -31,6 +31,7 @@ impl RuntimeSessionService {
     /// configured timeouts.
     pub fn running_shell_transaction_timers(&self) -> Vec<RuntimeShellTransactionTimerRef> {
         let mut timers = self
+            .process
             .running_shell_transactions
             .iter()
             .filter_map(|(marker, transaction)| {
@@ -106,8 +107,12 @@ impl RuntimeSessionService {
 
     /// Clears strict marker protocol state for one settled shell transaction.
     pub(in crate::runtime) fn clear_shell_transaction_protocol_state(&mut self, marker: &str) {
-        self.shell_transaction_require_start_markers.remove(marker);
-        self.shell_transaction_started_markers.remove(marker);
+        self.process
+            .shell_transaction_require_start_markers
+            .remove(marker);
+        self.process
+            .shell_transaction_started_markers
+            .remove(marker);
     }
 
     /// Interrupts a pane after a protocol violation when the process is live.

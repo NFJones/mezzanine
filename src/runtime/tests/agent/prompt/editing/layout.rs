@@ -56,7 +56,7 @@ fn runtime_hidden_agent_shell_rendering_retains_prompt_suppression_after_transac
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
-    service.running_shell_transactions.insert(
+    service.running_shell_transactions_mut_for_tests().insert(
         "marker-1".to_string(),
         RunningShellTransactionRef {
             turn_id: "turn-1".to_string(),
@@ -75,7 +75,9 @@ fn runtime_hidden_agent_shell_rendering_retains_prompt_suppression_after_transac
     );
 
     let command_output = service.renderable_pane_output_bytes("%1", b"file-a\n");
-    service.running_shell_transactions.remove("marker-1");
+    service
+        .running_shell_transactions_mut_for_tests()
+        .remove("marker-1");
     let prompt_repaint = service.renderable_pane_output_bytes("%1", b"user@host ~/repo $ ");
     let mut aged = 0usize;
     for _ in 0..64 {

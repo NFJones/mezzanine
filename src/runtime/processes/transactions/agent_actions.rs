@@ -13,7 +13,7 @@ impl RuntimeSessionService {
         _agent_id: &str,
         pane_id: &str,
     ) -> Result<usize> {
-        let Some(transaction) = self.running_shell_transactions.get(marker).cloned() else {
+        let Some(transaction) = self.process.running_shell_transactions.get(marker).cloned() else {
             return Ok(0);
         };
         if transaction.turn_id != turn_id
@@ -27,7 +27,11 @@ impl RuntimeSessionService {
                 "shell transaction start marker metadata does not match runtime dispatch state",
             );
         }
-        if self.shell_transaction_started_markers.contains(marker) {
+        if self
+            .process
+            .shell_transaction_started_markers
+            .contains(marker)
+        {
             return self.fail_shell_transaction_protocol_violation(
                 marker,
                 transaction,
@@ -35,14 +39,16 @@ impl RuntimeSessionService {
                 "shell transaction emitted a duplicate start marker",
             );
         }
-        self.shell_transaction_started_markers
+        self.process
+            .shell_transaction_started_markers
             .insert(marker.to_string());
         let kind_name = runtime_running_shell_transaction_kind_name(&transaction.kind).to_string();
         let payload = self
+            .process
             .running_shell_transactions
             .get_mut(marker)
             .and_then(|transaction| transaction.pending_input_payload.take());
-        if let Some(transaction) = self.running_shell_transactions.get_mut(marker) {
+        if let Some(transaction) = self.process.running_shell_transactions.get_mut(marker) {
             transaction.started_at_unix_ms = current_unix_millis();
         }
         let Some(payload) = payload else {
@@ -78,7 +84,8 @@ impl RuntimeSessionService {
         pane_id: &str,
         exit_code: i32,
     ) -> Result<usize> {
-        let Some(transaction_ref) = self.running_shell_transactions.get(marker).cloned() else {
+        let Some(transaction_ref) = self.process.running_shell_transactions.get(marker).cloned()
+        else {
             return Ok(0);
         };
         self.append_agent_trace_turn_event(
@@ -103,9 +110,13 @@ impl RuntimeSessionService {
             );
         }
         if self
+            .process
             .shell_transaction_require_start_markers
             .contains(marker)
-            && !self.shell_transaction_started_markers.contains(marker)
+            && !self
+                .process
+                .shell_transaction_started_markers
+                .contains(marker)
         {
             return self.fail_shell_transaction_protocol_violation(
                 marker,
@@ -114,7 +125,8 @@ impl RuntimeSessionService {
                 "shell transaction end marker arrived before the start marker",
             );
         }
-        let Some(mut transaction_ref) = self.running_shell_transactions.remove(marker) else {
+        let Some(mut transaction_ref) = self.process.running_shell_transactions.remove(marker)
+        else {
             return Ok(0);
         };
         self.clear_shell_transaction_protocol_state(marker);

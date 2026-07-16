@@ -871,7 +871,7 @@ fn runtime_pane_write_failure_fails_running_file_action() {
     assert_eq!(service.drain_pane_io_transition().side_effects.len(), 1);
     assert!(
         service
-            .running_shell_transactions
+            .running_shell_transactions_for_tests()
             .values()
             .any(|transaction| matches!(
                 transaction.kind,
@@ -888,7 +888,7 @@ fn runtime_pane_write_failure_fails_running_file_action() {
 
     assert!(
         service
-            .running_shell_transactions
+            .running_shell_transactions_for_tests()
             .values()
             .all(|transaction| !matches!(
                 transaction.kind,
