@@ -268,18 +268,6 @@ pub struct RuntimeSessionService {
     /// the model one chance to recover from command/tool failures without
     /// creating an unbounded retry loop.
     pub(in crate::runtime) agent_turn_failure_feedback_attempts: BTreeMap<String, usize>,
-    /// Stores the configured retry budget for model-correctable action failures.
-    ///
-    /// The value is applied per stable failed-action signature so identical
-    /// failures cannot loop forever while distinct failures in the same turn
-    /// still receive bounded correction opportunities.
-    pub(in crate::runtime) agent_action_failure_retry_limit: usize,
-    /// Stores the configured successful shell-command streak that triggers a
-    /// soft action-pressure hint during one active turn.
-    ///
-    /// The runtime uses this as advisory context only; it must not block shell
-    /// execution because legitimate audits can require long inspection runs.
-    pub(in crate::runtime) agent_implementation_pressure_after_shell_actions: usize,
     /// Stores the agent turn shell dispatch history value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

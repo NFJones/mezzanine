@@ -30,7 +30,7 @@ impl RuntimeSessionService {
         if !self.execution_can_feed_failure_to_model(&turn.turn_id, execution) {
             return Ok(false);
         }
-        let attempt_limit = self.agent_action_failure_retry_limit.max(1);
+        let attempt_limit = self.agent_action_failure_retry_limit();
         let attempt_keys = runtime_failure_feedback_attempt_keys(&turn.turn_id, execution);
         let unbounded_apply_patch_recovery =
             runtime_execution_uses_unbounded_apply_patch_recovery(execution);

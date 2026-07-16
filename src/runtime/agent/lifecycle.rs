@@ -101,7 +101,7 @@ impl RuntimeSessionService {
             let reason = runtime_unrecovered_failure_reason(
                 turn_id,
                 &execution,
-                self.agent_action_failure_retry_limit,
+                self.agent_action_failure_retry_limit(),
                 &self.agent_turn_failure_feedback_attempts,
             );
             self.present_unrecovered_agent_failure_diagnostics_to_terminal_buffer(
@@ -171,7 +171,7 @@ impl RuntimeSessionService {
             let reason = runtime_unrecovered_failure_reason(
                 &turn.turn_id,
                 &execution,
-                self.agent_action_failure_retry_limit,
+                self.agent_action_failure_retry_limit(),
                 &self.agent_turn_failure_feedback_attempts,
             );
             self.present_unrecovered_agent_failure_diagnostics_to_terminal_buffer(

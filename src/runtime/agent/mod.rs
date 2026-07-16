@@ -140,6 +140,10 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     agent_loops_by_pane: BTreeMap<String, RuntimeAgentLoopState>,
     /// Loop-owned turn metadata keyed by turn id.
     agent_loop_turns: BTreeMap<String, RuntimeAgentLoopTurn>,
+    /// Per-signature correction retry limit for failed model actions.
+    agent_action_failure_retry_limit: usize,
+    /// Successful shell streak that activates implementation-pressure hints.
+    agent_implementation_pressure_after_shell_actions: usize,
 }
 
 impl RuntimeAgentComponent {
@@ -149,18 +153,47 @@ impl RuntimeAgentComponent {
         agent_auto_sizing: RuntimeAutoSizingConfig,
         agent_compaction_raw_retention_percent: usize,
         agent_loop_limit: usize,
+        agent_action_failure_retry_limit: usize,
+        agent_implementation_pressure_after_shell_actions: usize,
     ) -> Self {
         Self {
             agent_routing,
             agent_auto_sizing,
             agent_compaction_raw_retention_percent,
             agent_loop_limit,
+            agent_action_failure_retry_limit,
+            agent_implementation_pressure_after_shell_actions,
             ..Self::default()
         }
     }
 }
 
 impl RuntimeSessionService {
+    /// Returns the bounded model-correction retry limit.
+    pub(in crate::runtime) fn agent_action_failure_retry_limit(&self) -> usize {
+        self.agent.agent_action_failure_retry_limit.max(1)
+    }
+
+    /// Replaces the bounded model-correction retry limit.
+    pub(in crate::runtime) fn set_agent_action_failure_retry_limit(&mut self, limit: usize) {
+        self.agent.agent_action_failure_retry_limit = limit;
+    }
+
+    /// Returns the shell streak that activates implementation-pressure hints.
+    pub(in crate::runtime) fn agent_implementation_pressure_after_shell_actions(&self) -> usize {
+        self.agent
+            .agent_implementation_pressure_after_shell_actions
+            .max(1)
+    }
+
+    /// Replaces the implementation-pressure shell streak.
+    pub(in crate::runtime) fn set_agent_implementation_pressure_after_shell_actions(
+        &mut self,
+        threshold: usize,
+    ) {
+        self.agent.agent_implementation_pressure_after_shell_actions = threshold;
+    }
+
     /// Returns the configured loop iteration limit.
     pub(in crate::runtime) fn agent_loop_limit(&self) -> usize {
         self.agent.agent_loop_limit.max(1)

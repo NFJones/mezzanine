@@ -142,7 +142,7 @@ fn runtime_config_reload_applies_history_limit_to_live_screens() {
 #[test]
 fn runtime_config_reload_applies_action_failure_retry_limit() {
     let mut service = test_runtime_service();
-    assert_eq!(service.agent_action_failure_retry_limit, 5);
+    assert_eq!(service.agent_action_failure_retry_limit(), 5);
     let root = temp_root("runtime-action-failure-retry-limit");
     let path = root.join("config.toml");
     fs::write(&path, "[agents]\naction_failure_retry_limit = 2\n").unwrap();
@@ -158,7 +158,7 @@ fn runtime_config_reload_applies_action_failure_retry_limit() {
         }])
         .unwrap();
 
-    assert_eq!(service.agent_action_failure_retry_limit, 2);
+    assert_eq!(service.agent_action_failure_retry_limit(), 2);
     let _ = fs::remove_file(path);
     let _ = fs::remove_dir_all(root);
 }
@@ -171,7 +171,10 @@ fn runtime_config_reload_applies_action_failure_retry_limit() {
 #[test]
 fn runtime_config_reload_applies_implementation_pressure_threshold() {
     let mut service = test_runtime_service();
-    assert_eq!(service.agent_implementation_pressure_after_shell_actions, 3);
+    assert_eq!(
+        service.agent_implementation_pressure_after_shell_actions(),
+        3
+    );
     let root = temp_root("runtime-implementation-pressure-threshold");
     let path = root.join("config.toml");
     fs::write(
@@ -191,7 +194,10 @@ fn runtime_config_reload_applies_implementation_pressure_threshold() {
         }])
         .unwrap();
 
-    assert_eq!(service.agent_implementation_pressure_after_shell_actions, 3);
+    assert_eq!(
+        service.agent_implementation_pressure_after_shell_actions(),
+        3
+    );
     let _ = fs::remove_file(path);
     let _ = fs::remove_dir_all(root);
 }

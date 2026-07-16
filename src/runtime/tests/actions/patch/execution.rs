@@ -666,7 +666,7 @@ fn runtime_agent_markdown_say_displays_raw_mez_patch_examples() {
 #[test]
 fn runtime_action_pressure_shifts_after_apply_patch_success() {
     let mut service = test_runtime_service();
-    service.agent_implementation_pressure_after_shell_actions = 1;
+    service.set_agent_implementation_pressure_after_shell_actions(1);
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();

@@ -12,7 +12,7 @@ use super::*;
 #[test]
 fn runtime_action_pressure_context_reaches_provider_continuation() {
     let mut service = test_runtime_service();
-    service.agent_implementation_pressure_after_shell_actions = 3;
+    service.set_agent_implementation_pressure_after_shell_actions(3);
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
@@ -134,7 +134,7 @@ fn runtime_action_pressure_context_reaches_provider_continuation() {
 #[test]
 fn runtime_action_pressure_escalates_through_stages() {
     let mut service = test_runtime_service();
-    service.agent_implementation_pressure_after_shell_actions = 3;
+    service.set_agent_implementation_pressure_after_shell_actions(3);
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();

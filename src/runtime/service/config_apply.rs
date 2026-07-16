@@ -271,10 +271,12 @@ impl RuntimeSessionService {
             runtime_agent_compaction_raw_retention_percent_from_config(&structured)?,
         );
         self.set_agent_default_routing(runtime_agent_routing_from_config(&structured)?);
-        self.agent_action_failure_retry_limit =
-            runtime_agent_action_failure_retry_limit_from_config(&structured)?;
-        self.agent_implementation_pressure_after_shell_actions =
-            runtime_agent_implementation_pressure_after_shell_actions_from_config(&structured)?;
+        self.set_agent_action_failure_retry_limit(
+            runtime_agent_action_failure_retry_limit_from_config(&structured)?,
+        );
+        self.set_agent_implementation_pressure_after_shell_actions(
+            runtime_agent_implementation_pressure_after_shell_actions_from_config(&structured)?,
+        );
         self.set_agent_loop_limit(runtime_agent_loop_limit_from_config(&structured)?);
         self.provider_auth_refresh_leeway_seconds =
             runtime_provider_auth_refresh_leeway_seconds_from_config(&structured);

@@ -224,9 +224,7 @@ impl RuntimeSessionService {
 
     /// Updates the active-turn action-pressure context block.
     fn refresh_agent_action_pressure_context(&mut self, turn_id: &str) {
-        let threshold = self
-            .agent_implementation_pressure_after_shell_actions
-            .max(1);
+        let threshold = self.agent_implementation_pressure_after_shell_actions();
         let phase = self
             .agent_turn_shell_dispatch_history
             .get(turn_id)
