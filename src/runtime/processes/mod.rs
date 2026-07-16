@@ -94,6 +94,8 @@ pub(in crate::runtime) struct RuntimeProcessComponent {
     shell_transaction_require_start_markers: BTreeSet<String>,
     /// Markers whose mandatory wrapper start event has been observed.
     shell_transaction_started_markers: BTreeSet<String>,
+    /// Active pane output pipes keyed by their source pane id.
+    active_pane_pipes: std::collections::BTreeMap<String, ActivePanePipe>,
     /// Primary process ids for panes whose handles are adapter-owned.
     detached_pane_primary_pids: std::collections::BTreeMap<String, u32>,
     /// Latest foreground process groups observed by pane workers.
@@ -159,6 +161,11 @@ impl RuntimeProcessComponent {
 }
 
 impl RuntimeSessionService {
+    /// Returns the number of active pane output pipes.
+    pub(in crate::runtime) fn active_pane_pipe_count(&self) -> usize {
+        self.process.active_pane_pipes.len()
+    }
+
     /// Registers one live shell transaction and its start-marker invariant.
     pub(in crate::runtime) fn register_running_shell_transaction(
         &mut self,
@@ -1546,7 +1553,7 @@ impl RuntimeSessionService {
             .pane_hidden_shell_render_recent_polls
             .remove(pane_id);
         self.process.pane_exit_records.remove(pane_id);
-        self.active_pane_pipes.remove(pane_id);
+        self.process.active_pane_pipes.remove(pane_id);
         self.pane_transcript_refs.remove(pane_id);
         self.process.pane_readiness_states.remove(pane_id);
         self.process

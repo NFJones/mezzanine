@@ -940,7 +940,7 @@ pub(super) fn runtime_pipe_pane_command(
             stopped.mode,
             stopped.target,
             stopped.bytes_written,
-            service.active_pane_pipes.len(),
+            service.active_pane_pipe_count(),
             failure
         ));
     }

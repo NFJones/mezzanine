@@ -107,11 +107,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) deferred_transcript_next_sequences: BTreeMap<String, u64>,
-    /// Stores the active pane pipes value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) active_pane_pipes: BTreeMap<String, ActivePanePipe>,
     /// Whether audit writes are emitted for an adapter instead of written inline.
     ///
     /// This ownership is explicit because config reloads may replace the writer

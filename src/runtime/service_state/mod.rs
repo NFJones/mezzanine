@@ -9,7 +9,6 @@ use super::agent_state::{
     RuntimeAgentCompactionTask, RuntimeAgentLoopState, RuntimeAgentLoopTurn,
     RuntimeAgentProviderClaim, RuntimeAgentRememberTask,
 };
-use super::pane_io::ActivePanePipe;
 use super::{
     ActionStatus, AgentContext, AgentScheduler, AgentShellStore, AgentShellVisibility,
     AgentTranscriptStore, AgentTurnExecution, AgentTurnLedger, AgentTurnState, AuditLog, AuthStore,

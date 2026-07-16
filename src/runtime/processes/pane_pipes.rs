@@ -22,7 +22,7 @@ impl RuntimeSessionService {
             return Ok(());
         }
         let use_external_effect_adapter = self.pane_pipe_effects_use_adapter;
-        let Some(pipe) = self.active_pane_pipes.get_mut(pane_id) else {
+        let Some(pipe) = self.process.active_pane_pipes.get_mut(pane_id) else {
             return Ok(());
         };
         if use_external_effect_adapter && let Some(path) = pipe.file_target_path() {
@@ -77,9 +77,9 @@ impl RuntimeSessionService {
             pipe.pane_id,
             pipe.mode(),
             pipe.target_label(),
-            self.active_pane_pipes.len().saturating_add(1)
+            self.process.active_pane_pipes.len().saturating_add(1)
         );
-        self.active_pane_pipes.insert(pane_id, pipe);
+        self.process.active_pane_pipes.insert(pane_id, pipe);
         Ok(body)
     }
 
@@ -104,9 +104,9 @@ impl RuntimeSessionService {
             pipe.pane_id,
             pipe.mode(),
             pipe.target_label(),
-            self.active_pane_pipes.len().saturating_add(1)
+            self.process.active_pane_pipes.len().saturating_add(1)
         );
-        self.active_pane_pipes.insert(pane_id, pipe);
+        self.process.active_pane_pipes.insert(pane_id, pipe);
         Ok(body)
     }
 
@@ -119,9 +119,13 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> Result<StoppedPanePipe> {
-        let pipe = self.active_pane_pipes.remove(pane_id).ok_or_else(|| {
-            MezError::new(crate::error::MezErrorKind::NotFound, "pane pipe not found")
-        })?;
+        let pipe = self
+            .process
+            .active_pane_pipes
+            .remove(pane_id)
+            .ok_or_else(|| {
+                MezError::new(crate::error::MezErrorKind::NotFound, "pane pipe not found")
+            })?;
         Ok(pipe.stop())
     }
 
@@ -137,7 +141,8 @@ impl RuntimeSessionService {
         pane_ids
             .iter()
             .filter_map(|pane_id| {
-                self.active_pane_pipes
+                self.process
+                    .active_pane_pipes
                     .remove(*pane_id)
                     .map(ActivePanePipe::stop)
             })
@@ -150,7 +155,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(in crate::runtime) fn stop_all_active_pane_pipes(&mut self) -> Vec<StoppedPanePipe> {
-        std::mem::take(&mut self.active_pane_pipes)
+        std::mem::take(&mut self.process.active_pane_pipes)
             .into_values()
             .map(ActivePanePipe::stop)
             .collect()
@@ -159,7 +164,8 @@ impl RuntimeSessionService {
     /// Returns whether the pane has a command-backed pipe that should be
     /// checked by the actor-owned health timer after accepted output.
     pub(crate) fn command_pane_pipe_health_check_needed(&self, pane_id: &str) -> Result<bool> {
-        self.active_pane_pipes
+        self.process
+            .active_pane_pipes
             .get(pane_id)
             .map(|pipe| pipe.command_status())
             .transpose()
@@ -201,7 +207,8 @@ impl RuntimeSessionService {
 
     /// Returns pane ids that currently have command-backed pipes.
     pub(crate) fn active_command_pane_pipe_ids(&self) -> Vec<String> {
-        self.active_pane_pipes
+        self.process
+            .active_pane_pipes
             .iter()
             .filter_map(|(pane_id, pipe)| match pipe.command_status() {
                 Ok(Some(_)) => Some(pane_id.clone()),
@@ -219,6 +226,7 @@ impl RuntimeSessionService {
     /// pane-output write or explicit `pipe-pane --stop`.
     pub(crate) fn stop_completed_command_pane_pipe_for(&mut self, pane_id: &str) -> Result<usize> {
         let Some(status) = self
+            .process
             .active_pane_pipes
             .get(pane_id)
             .map(|pipe| pipe.command_status())
@@ -267,6 +275,7 @@ impl RuntimeSessionService {
         reason: &str,
     ) -> Result<usize> {
         let pane_ids = self
+            .process
             .active_pane_pipes
             .iter()
             .filter_map(|(pane_id, pipe)| {
@@ -308,10 +317,11 @@ impl RuntimeSessionService {
     /// Returns the user-facing active pane pipe status line used by
     /// `pipe-pane` and async actor tests that verify pipe lifecycle state.
     pub(crate) fn active_pane_pipe_display(&self) -> String {
-        if self.active_pane_pipes.is_empty() {
+        if self.process.active_pane_pipes.is_empty() {
             return "active_pipes=0".to_string();
         }
-        self.active_pane_pipes
+        self.process
+            .active_pane_pipes
             .values()
             .map(|pipe| {
                 format!(

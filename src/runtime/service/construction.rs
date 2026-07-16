@@ -129,7 +129,6 @@ impl RuntimeSessionService {
             queued_transcript_effects: Vec::new(),
             queued_config_effects: Vec::new(),
             deferred_transcript_next_sequences: BTreeMap::new(),
-            active_pane_pipes: BTreeMap::new(),
             audit_effects_use_adapter: false,
             pane_pipe_effects_use_adapter: false,
             transcript_effects_use_adapter: false,
