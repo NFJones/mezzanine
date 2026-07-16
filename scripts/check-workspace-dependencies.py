@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tomllib
@@ -77,13 +78,21 @@ REQUIRED_OWNER_PATHS = {
     "crates/mez-mux/src/render/prompt.rs",
     "crates/mez-mux/src/selector.rs",
     "crates/mez-mux/src/session/mod.rs",
-    "crates/mez-terminal/src/screen.rs",
+    "crates/mez-terminal/src/screen/mod.rs",
+    "crates/mez-terminal/src/screen/cells.rs",
+    "crates/mez-terminal/src/screen/content.rs",
+    "crates/mez-terminal/src/screen/editing.rs",
+    "crates/mez-terminal/src/screen/lifecycle.rs",
+    "crates/mez-terminal/src/screen/parser.rs",
+    "crates/mez-terminal/src/screen/state.rs",
+    "crates/mez-terminal/src/screen/wrap.rs",
     "docs/workspace-ownership-matrix.md",
     "docs/workspace-root-ownership.toml",
 }
 
 ROOT_OWNERSHIP_STATES = {"adapter", "product", "temporary"}
 ROOT_OWNERSHIP_MANIFEST = Path("docs/workspace-root-ownership.toml")
+MAX_RUST_SOURCE_LINES = 2_000
 
 RETIRED_COMPATIBILITY_PATHS = {
     "src/agent/shell.rs",
@@ -327,6 +336,23 @@ def source_ownership_violations() -> list[str]:
     return violations
 
 
+def source_structure_violations() -> list[str]:
+    """Reject oversized source units and flattened module implementations."""
+
+    violations: list[str] = []
+    source_paths = sorted((*Path("src").rglob("*.rs"), *Path("crates").rglob("*.rs")))
+    for path in source_paths:
+        source = path.read_text(encoding="utf-8")
+        line_count = len(source.splitlines())
+        if line_count > MAX_RUST_SOURCE_LINES:
+            violations.append(
+                f"{path}: {line_count} lines exceeds the {MAX_RUST_SOURCE_LINES}-line limit"
+            )
+        if re.search(r"\binclude!\s*\(", source):
+            violations.append(f"{path}: `include!` must not flatten Rust module ownership")
+    return violations
+
+
 def main() -> int:
     """Validate package membership, dependency direction, and retired facades."""
 
@@ -411,6 +437,13 @@ def main() -> int:
     if ownership_violations:
         print("source ownership violations:")
         for violation in ownership_violations:
+            print(f"  {violation}")
+        return 1
+
+    structure_violations = source_structure_violations()
+    if structure_violations:
+        print("source structure violations:")
+        for violation in structure_violations:
             print(f"  {violation}")
         return 1
 
