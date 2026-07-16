@@ -561,10 +561,8 @@ impl RuntimeSessionService {
             self.agent_turn_executions.remove(&turn_id);
             self.agent_turn_pending_steering.remove(&turn_id);
             self.clear_agent_failure_feedback_attempts_for_turn(&turn_id);
-            self.agent_turn_shell_dispatch_history.remove(&turn_id);
-            self.agent_turn_network_action_history.remove(&turn_id);
+            self.clear_agent_action_bookkeeping_for_turn(&turn_id);
             self.clear_joined_subagent_dependencies_for_turn(&turn_id);
-            self.clear_agent_pre_shell_hook_completions_for_turn(&turn_id);
             self.agent_turn_model_profiles.remove(&turn_id);
             self.pending_agent_provider_tasks.remove(&turn_id);
             self.claimed_agent_provider_tasks.remove(&turn_id);

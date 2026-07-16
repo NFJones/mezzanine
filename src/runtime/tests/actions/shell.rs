@@ -1048,7 +1048,11 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
             .any(|turn| turn.turn_id == "turn-1" && turn.state == AgentTurnState::Running)
     );
     assert!(service.agent_turn_executions.contains_key("turn-1"));
-    assert!(service.agent_turn_failure_feedback_attempts.is_empty());
+    assert!(
+        service
+            .agent_failure_feedback_attempts_for_tests()
+            .is_empty()
+    );
     let context = service.agent_turn_contexts.get("turn-1").unwrap();
     assert!(context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::TranscriptAssistant
@@ -1109,7 +1113,11 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
                 .content
                 .contains("shell command not run because `shell-fail` exited with status 2")
     }));
-    assert!(service.agent_turn_failure_feedback_attempts.is_empty());
+    assert!(
+        service
+            .agent_failure_feedback_attempts_for_tests()
+            .is_empty()
+    );
     service.terminate_all_pane_processes().unwrap();
 }
 

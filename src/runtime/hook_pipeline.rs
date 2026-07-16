@@ -8,9 +8,9 @@ use super::{
     AuditActor, BTreeSet, DEFAULT_PTY_READ_LIMIT_BYTES, Duration, EventKind, EventVisibility,
     HookEvent, HookExecutionPlan, HookExecutionResult, HookExecutionStatus, HookFailure,
     HookFailureDecision, HookFailureKind, HookOnFailure, Instant, MezError,
-    PendingFocusedShellHookContinuation, Result, RuntimeAgentPreShellHookCompletion,
-    RuntimeFocusedShellPaneExecutor, RuntimeHookPipelineBlock, RuntimeHookPipelineDecision,
-    RuntimeSessionService, decide_hook_failure, execute_focused_shell_hook, execute_program_hook,
+    PendingFocusedShellHookContinuation, Result, RuntimeFocusedShellPaneExecutor,
+    RuntimeHookPipelineBlock, RuntimeHookPipelineDecision, RuntimeSessionService,
+    decide_hook_failure, execute_focused_shell_hook, execute_program_hook,
     focused_shell_pre_action_failed_result, focused_shell_pre_action_timeout_result,
     hook_execution_audit_record, json_escape, plan_event, runtime_hook_event_for_lifecycle,
     runtime_hook_event_name, runtime_hook_target_pane_id,
@@ -347,52 +347,6 @@ impl RuntimeSessionService {
                 return Ok(result);
             }
         }
-    }
-
-    /// Runs the agent pre shell hook completed operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn agent_pre_shell_hook_completed(
-        &self,
-        continuation: &PendingFocusedShellHookContinuation,
-        hook_id: &str,
-    ) -> bool {
-        self.agent_pre_shell_hook_completions
-            .contains(&RuntimeAgentPreShellHookCompletion {
-                turn_id: continuation.turn_id.clone(),
-                action_id: continuation.action_id.clone(),
-                hook_id: hook_id.to_string(),
-            })
-    }
-
-    /// Runs the record agent pre shell hook completed operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn record_agent_pre_shell_hook_completed(
-        &mut self,
-        continuation: &PendingFocusedShellHookContinuation,
-        hook_id: &str,
-    ) {
-        self.agent_pre_shell_hook_completions
-            .insert(RuntimeAgentPreShellHookCompletion {
-                turn_id: continuation.turn_id.clone(),
-                action_id: continuation.action_id.clone(),
-                hook_id: hook_id.to_string(),
-            });
-    }
-
-    /// Runs the clear agent pre shell hook completions for turn operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(super) fn clear_agent_pre_shell_hook_completions_for_turn(&mut self, turn_id: &str) {
-        self.agent_pre_shell_hook_completions
-            .retain(|completion| completion.turn_id != turn_id);
     }
 
     /// Emits an audit record recording that a program hook started execution

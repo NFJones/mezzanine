@@ -38,6 +38,7 @@ impl RuntimeSessionService {
         let mut any_budget_remaining = unbounded_apply_patch_recovery;
         for attempt_key in &attempt_keys {
             let attempts = self
+                .agent
                 .agent_turn_failure_feedback_attempts
                 .entry(attempt_key.clone())
                 .or_insert(0);
@@ -213,7 +214,8 @@ impl RuntimeSessionService {
         turn_id: &str,
     ) {
         let scoped_prefix = format!("{turn_id}:");
-        self.agent_turn_failure_feedback_attempts
+        self.agent
+            .agent_turn_failure_feedback_attempts
             .retain(|key, _| key != turn_id && !key.starts_with(&scoped_prefix));
     }
 

@@ -206,7 +206,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
     };
     let previous_key = "turn-1:previous-network-batch".to_string();
     service
-        .agent_turn_failure_feedback_attempts
+        .agent_failure_feedback_attempts_mut_for_tests()
         .insert(previous_key.clone(), 3);
     service
         .present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution)
@@ -242,13 +242,13 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
     assert_eq!(
         service
-            .agent_turn_failure_feedback_attempts
+            .agent_failure_feedback_attempts_for_tests()
             .get(&previous_key)
             .copied(),
         Some(3)
     );
     let mut attempt_values = service
-        .agent_turn_failure_feedback_attempts
+        .agent_failure_feedback_attempts_for_tests()
         .values()
         .copied()
         .collect::<Vec<_>>();

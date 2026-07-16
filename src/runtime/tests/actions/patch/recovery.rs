@@ -104,7 +104,7 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
     );
     assert_eq!(
         service
-            .agent_turn_failure_feedback_attempts
+            .agent_failure_feedback_attempts_for_tests()
             .values()
             .copied()
             .collect::<Vec<_>>(),
@@ -1017,7 +1017,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_is_unbounded_and_hides_retry_budge
 
     assert_eq!(
         service
-            .agent_turn_failure_feedback_attempts
+            .agent_failure_feedback_attempts_for_tests()
             .values()
             .copied()
             .collect::<Vec<_>>(),

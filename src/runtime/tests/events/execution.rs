@@ -378,7 +378,7 @@ fn runtime_action_failure_retry_budget_is_per_failed_action() {
 
     assert!(queued);
     let mut attempt_values = service
-        .agent_turn_failure_feedback_attempts
+        .agent_failure_feedback_attempts_for_tests()
         .values()
         .copied()
         .collect::<Vec<_>>();
@@ -447,7 +447,11 @@ fn runtime_cancelled_action_does_not_queue_failure_feedback() {
 
     assert_eq!(execution.terminal_state, AgentTurnState::Failed);
     assert!(service.pending_agent_provider_tasks().is_empty());
-    assert!(service.agent_turn_failure_feedback_attempts.is_empty());
+    assert!(
+        service
+            .agent_failure_feedback_attempts_for_tests()
+            .is_empty()
+    );
     assert!(
         service
             .agent_turn_ledger

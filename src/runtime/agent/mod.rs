@@ -18,17 +18,17 @@ use super::{
     ReadinessOverrideRevocation, Recipient, ReqwestProviderHttpTransport, Result, RuleDecision,
     RunningShellTransactionKind, RunningShellTransactionRef, RuntimeAgentCopyOutput,
     RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind,
-    RuntimeAgentModifiedFileSummary, RuntimeAgentProviderDispatch,
-    RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAutoSizingConfig,
-    RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile, RuntimeHookPipelineBlock,
-    RuntimeHookPipelineDecision, RuntimeMcpActionExecutor, RuntimeProviderConfig,
-    RuntimeSessionService, RuntimeShellTransactionActionFailure, RuntimeSideEffect, SenderIdentity,
-    ShellTransaction, ShellTransactionOutputTransport, SubagentScopeDeclaration,
-    SubagentSpawnRequest, SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload,
-    TranscriptEntry, TranscriptRole, action_result_context_content, assemble_model_request,
-    compact_model_context_for_budget_with_retained_tail_percent, current_unix_millis,
-    current_unix_seconds, decode_shell_output_transport_with_diagnostics, discover_project_root,
-    exact_command_sha256, execute_mcp_action_through_runtime,
+    RuntimeAgentModifiedFileSummary, RuntimeAgentPreShellHookCompletion,
+    RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask,
+    RuntimeAutoSizingConfig, RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile,
+    RuntimeHookPipelineBlock, RuntimeHookPipelineDecision, RuntimeMcpActionExecutor,
+    RuntimeProviderConfig, RuntimeSessionService, RuntimeShellTransactionActionFailure,
+    RuntimeSideEffect, SenderIdentity, ShellTransaction, ShellTransactionOutputTransport,
+    SubagentScopeDeclaration, SubagentSpawnRequest, SubagentWaitPolicy, TaskResultPayload,
+    TaskState, TaskStatusPayload, TranscriptEntry, TranscriptRole, action_result_context_content,
+    assemble_model_request, compact_model_context_for_budget_with_retained_tail_percent,
+    current_unix_millis, current_unix_seconds, decode_shell_output_transport_with_diagnostics,
+    discover_project_root, exact_command_sha256, execute_mcp_action_through_runtime,
     execute_mcp_action_through_runtime_async, execute_network_action_with_transport_async,
     json_escape, local_action_plan, network_action_plan, next_transcript_sequence,
     runtime_agent_turn_duration_display, runtime_agent_turn_start_hook_payload,
@@ -69,9 +69,9 @@ use mez_agent::semantic_patch_planning::{
     apply_patch_write_plan_from_read_output, apply_patch_write_plan_from_read_outputs,
 };
 use mez_agent::{
-    DEFAULT_PROVIDER_TIMEOUT_MS, MaapBatch, ModelTokenUsage, ModelTokenUsageKey,
-    ProviderApiCompatibility, ProviderQuotaUsage, SayStatus, append_mcp_context,
-    assistant_context_content_for_execution, invoked_mcp_tools_for_context,
+    AgentNetworkActionHistory, AgentShellDispatchHistory, DEFAULT_PROVIDER_TIMEOUT_MS, MaapBatch,
+    ModelTokenUsage, ModelTokenUsageKey, ProviderApiCompatibility, ProviderQuotaUsage, SayStatus,
+    append_mcp_context, assistant_context_content_for_execution, invoked_mcp_tools_for_context,
     set_project_guidance_context,
 };
 use mez_mux::command::CommandInvocation;
@@ -144,6 +144,14 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     agent_action_failure_retry_limit: usize,
     /// Successful shell streak that activates implementation-pressure hints.
     agent_implementation_pressure_after_shell_actions: usize,
+    /// Per-failure-signature correction attempts keyed by turn/signature.
+    agent_turn_failure_feedback_attempts: BTreeMap<String, usize>,
+    /// Per-turn successful shell dispatch history.
+    agent_turn_shell_dispatch_history: BTreeMap<String, AgentShellDispatchHistory>,
+    /// Per-turn network action history.
+    agent_turn_network_action_history: BTreeMap<String, AgentNetworkActionHistory>,
+    /// Pre-shell hooks already completed for an action.
+    agent_pre_shell_hook_completions: BTreeSet<RuntimeAgentPreShellHookCompletion>,
 }
 
 impl RuntimeAgentComponent {
@@ -169,6 +177,64 @@ impl RuntimeAgentComponent {
 }
 
 impl RuntimeSessionService {
+    /// Clears correction attempts and action histories for one completed turn.
+    pub(in crate::runtime) fn clear_agent_action_bookkeeping_for_turn(&mut self, turn_id: &str) {
+        self.clear_agent_failure_feedback_attempts_for_turn(turn_id);
+        self.agent.agent_turn_shell_dispatch_history.remove(turn_id);
+        self.agent.agent_turn_network_action_history.remove(turn_id);
+        self.agent
+            .agent_pre_shell_hook_completions
+            .retain(|completion| completion.turn_id != turn_id);
+    }
+
+    /// Clears all action bookkeeping when the live session is replaced.
+    pub(in crate::runtime) fn clear_all_agent_action_bookkeeping(&mut self) {
+        self.agent.agent_turn_failure_feedback_attempts.clear();
+        self.agent.agent_turn_shell_dispatch_history.clear();
+        self.agent.agent_turn_network_action_history.clear();
+        self.agent.agent_pre_shell_hook_completions.clear();
+    }
+
+    /// Reports whether one pre-shell hook already completed for an action.
+    pub(in crate::runtime) fn agent_pre_shell_hook_completed(
+        &self,
+        continuation: &PendingFocusedShellHookContinuation,
+        hook_id: &str,
+    ) -> bool {
+        self.agent
+            .agent_pre_shell_hook_completions
+            .contains(&RuntimeAgentPreShellHookCompletion {
+                turn_id: continuation.turn_id.clone(),
+                action_id: continuation.action_id.clone(),
+                hook_id: hook_id.to_string(),
+            })
+    }
+
+    /// Records one completed pre-shell hook for an action.
+    pub(in crate::runtime) fn record_agent_pre_shell_hook_completed(
+        &mut self,
+        continuation: &PendingFocusedShellHookContinuation,
+        hook_id: &str,
+    ) {
+        self.agent
+            .agent_pre_shell_hook_completions
+            .insert(RuntimeAgentPreShellHookCompletion {
+                turn_id: continuation.turn_id.clone(),
+                action_id: continuation.action_id.clone(),
+                hook_id: hook_id.to_string(),
+            });
+    }
+
+    /// Clears completed pre-shell hook records for one turn.
+    pub(in crate::runtime) fn clear_agent_pre_shell_hook_completions_for_turn(
+        &mut self,
+        turn_id: &str,
+    ) {
+        self.agent
+            .agent_pre_shell_hook_completions
+            .retain(|completion| completion.turn_id != turn_id);
+    }
+
     /// Returns the bounded model-correction retry limit.
     pub(in crate::runtime) fn agent_action_failure_retry_limit(&self) -> usize {
         self.agent.agent_action_failure_retry_limit.max(1)
@@ -508,6 +574,27 @@ impl RuntimeSessionService {
 
 #[cfg(test)]
 impl RuntimeSessionService {
+    /// Returns failure-feedback attempts for integration-test observation.
+    pub(in crate::runtime) fn agent_failure_feedback_attempts_for_tests(
+        &self,
+    ) -> &BTreeMap<String, usize> {
+        &self.agent.agent_turn_failure_feedback_attempts
+    }
+
+    /// Returns failure-feedback attempts for fixture setup.
+    pub(in crate::runtime) fn agent_failure_feedback_attempts_mut_for_tests(
+        &mut self,
+    ) -> &mut BTreeMap<String, usize> {
+        &mut self.agent.agent_turn_failure_feedback_attempts
+    }
+
+    /// Returns network action history for integration-test observation.
+    pub(in crate::runtime) fn agent_network_action_history_for_tests(
+        &self,
+    ) -> &BTreeMap<String, AgentNetworkActionHistory> {
+        &self.agent.agent_turn_network_action_history
+    }
+
     /// Returns loop-owned turn metadata for integration-test observation.
     pub(in crate::runtime) fn agent_loop_turns_for_tests(
         &self,

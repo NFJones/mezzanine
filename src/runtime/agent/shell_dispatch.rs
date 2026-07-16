@@ -130,6 +130,7 @@ impl RuntimeSessionService {
         command: &str,
     ) -> Result<Option<ActionResult>> {
         let history = self
+            .agent
             .agent_turn_shell_dispatch_history
             .get(&turn.turn_id)
             .cloned()
@@ -167,7 +168,8 @@ impl RuntimeSessionService {
         turn_id: &str,
         command: &str,
     ) {
-        self.agent_turn_shell_dispatch_history
+        self.agent
+            .agent_turn_shell_dispatch_history
             .entry(turn_id.to_string())
             .or_default()
             .record(command.to_string());
@@ -182,7 +184,8 @@ impl RuntimeSessionService {
         command: &str,
         action: &AgentAction,
     ) {
-        self.agent_turn_shell_dispatch_history
+        self.agent
+            .agent_turn_shell_dispatch_history
             .entry(turn_id.to_string())
             .or_default()
             .record_success(
@@ -214,6 +217,7 @@ impl RuntimeSessionService {
             return;
         }
         if let Some(history) = self
+            .agent
             .agent_turn_shell_dispatch_history
             .get_mut(&turn.turn_id)
         {
@@ -226,6 +230,7 @@ impl RuntimeSessionService {
     fn refresh_agent_action_pressure_context(&mut self, turn_id: &str) {
         let threshold = self.agent_implementation_pressure_after_shell_actions();
         let phase = self
+            .agent
             .agent_turn_shell_dispatch_history
             .get(turn_id)
             .and_then(|history| action_pressure_phase(history, threshold));
@@ -258,7 +263,8 @@ impl RuntimeSessionService {
 
     /// Records a runtime-owned network request for loop detection.
     pub(super) fn record_network_action_history(&mut self, turn_id: &str, request: &str) {
-        self.agent_turn_network_action_history
+        self.agent
+            .agent_turn_network_action_history
             .entry(turn_id.to_string())
             .or_default()
             .record(request.to_string());

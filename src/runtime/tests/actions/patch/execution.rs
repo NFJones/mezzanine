@@ -877,7 +877,7 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
     );
     assert_eq!(
         service
-            .agent_turn_failure_feedback_attempts
+            .agent_failure_feedback_attempts_for_tests()
             .values()
             .copied()
             .collect::<Vec<_>>(),

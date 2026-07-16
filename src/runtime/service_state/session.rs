@@ -262,30 +262,6 @@ pub struct RuntimeSessionService {
     /// the next provider-bound context so the same turn can incorporate the new
     /// instruction before taking further action.
     pub(in crate::runtime) agent_turn_pending_steering: BTreeMap<String, Vec<AgentTurnSteering>>,
-    /// Counts bounded model self-correction attempts after real action failures.
-    ///
-    /// Failure feedback is scoped to a turn so provider continuations can give
-    /// the model one chance to recover from command/tool failures without
-    /// creating an unbounded retry loop.
-    pub(in crate::runtime) agent_turn_failure_feedback_attempts: BTreeMap<String, usize>,
-    /// Stores the agent turn shell dispatch history value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) agent_turn_shell_dispatch_history:
-        BTreeMap<String, AgentShellDispatchHistory>,
-    /// Stores the agent turn network action history value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) agent_turn_network_action_history:
-        BTreeMap<String, AgentNetworkActionHistory>,
-    /// Stores the agent pre shell hook completions value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) agent_pre_shell_hook_completions:
-        BTreeSet<RuntimeAgentPreShellHookCompletion>,
     /// Stores the agent turn model profiles value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

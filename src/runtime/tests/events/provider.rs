@@ -899,7 +899,7 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
             && block.content.contains("network request returned HTTP 404")
     }));
     let history = service
-        .agent_turn_network_action_history
+        .agent_network_action_history_for_tests()
         .get("turn-1")
         .unwrap();
     assert_eq!(history.requests.len(), 2);
