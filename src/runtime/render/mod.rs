@@ -8,14 +8,26 @@ use mez_mux::input::{
     GroupFocusTarget, MouseBorderCell, MousePaneRegion, MouseWindowFrameCell, MuxAction,
     PasteBufferTarget, WindowFocusTarget, key_chord_input_bytes,
 };
+#[cfg(test)]
+use mez_mux::overlay::{
+    OVERLAY_ACTIVE_SELECTOR as DISPLAY_OVERLAY_ACTIVE_SELECTOR,
+    OVERLAY_INACTIVE_SELECTOR as DISPLAY_OVERLAY_INACTIVE_SELECTOR,
+};
+use mez_mux::overlay::{
+    OverlaySelection, OverlaySelectionKind, apply_overlay_scroll_delta, clamp_overlay_scroll,
+    overlay_copy_selection, overlay_footer, overlay_line_prefix_columns, overlay_link_rendition,
+    overlay_next_search_match, overlay_render_lines, overlay_rendered_line_style_spans,
+    overlay_rendered_selection_start, overlay_selection_index_at_position,
+    overlay_selection_index_is_visible, overlay_selection_rendition, overlay_text_at,
+    scroll_overlay_to_line,
+};
 use mez_mux::presentation::{
     pane_content_size_for_geometry, pane_frame_merges_into_divider,
     pane_render_region_size_for_geometry, rendered_window_body_size,
 };
 
 use super::service_state::{
-    RunningShellTransactionKind, RuntimeDisplayOverlay, RuntimeDisplayOverlaySearchMatch,
-    RuntimeDisplayOverlaySelection, RuntimeDisplayOverlaySelectionKind, RuntimeMouseClickState,
+    RunningShellTransactionKind, RuntimeDisplayOverlay, RuntimeMouseClickState,
     RuntimePaneAgentStatusSelector, RuntimePrimaryPromptInput,
 };
 use super::{
@@ -47,8 +59,7 @@ use crate::terminal::{
     MousePaneAgentSelectorCell, MousePaneAgentStatusCell, PaneAgentStatusField,
     WindowFrameCommandKind, compose_modal_display_overlay_lines,
     compose_prompt_overlay_presentation_with_styles, modal_display_overlay_max_scroll,
-    modal_display_overlay_page_rows, pane_frame_agent_status_pillbox_cells,
-    terminal_grapheme_width, terminal_graphemes, terminal_text_width,
+    modal_display_overlay_page_rows, pane_frame_agent_status_pillbox_cells, terminal_text_width,
     window_group_frame_pillbox_cells,
 };
 use crate::transcript::AgentPresentationEntry;
@@ -84,9 +95,7 @@ use input::{
     runtime_display_overlay_input_action, runtime_selector_input_action,
     runtime_selector_step_index,
 };
-use mez_mux::render::{
-    clipped_overlay_style_span, push_or_extend_style_span, terminal_color_luminance,
-};
+use mez_mux::render::{push_or_extend_style_span, terminal_color_luminance};
 use overlay::*;
 use presentation::*;
 use time::{runtime_human_system_uptime, runtime_local_datetime_seconds_string};
@@ -173,26 +182,26 @@ impl MouseSelectionEdge {
 
 #[cfg(test)]
 mod tests {
-    use super::super::service_state::{
-        RuntimeDisplayOverlay, RuntimeDisplayOverlaySearchMatch, RuntimeDisplayOverlaySelection,
-        RuntimeDisplayOverlaySelectionKind,
-    };
+    use super::super::service_state::RuntimeDisplayOverlay;
     use super::{
         AgentRenderedLine, AgentRenderedLineKind, RuntimeSessionService,
         agent_action_execution_display_header, agent_action_result_uses_diff_preview,
         agent_thinking_display_lines_for_width, command_preview_terminal_rendered_lines,
+        overlay_rendered_line_style_spans, overlay_rendered_selection_start,
         readable_agent_diff_display_lines, readable_agent_diff_display_lines_for_width,
         render_command_markdown_body_lines, rendered_line_rendition_at,
         runtime_agent_shell_markdown_overlay_content, runtime_command_display_overlay_content,
-        runtime_display_overlay_rendered_line_style_spans,
-        runtime_display_overlay_rendered_selection_start,
-        runtime_display_overlay_selection_prefix_columns, runtime_human_readable_display_lines,
-        runtime_pane_agent_selector_rendition, wrap_agent_rendered_line_to_width,
-        wrap_agent_terminal_text, wrapped_prefixed_agent_terminal_lines,
+        runtime_human_readable_display_lines, runtime_pane_agent_selector_rendition,
+        wrap_agent_rendered_line_to_width, wrap_agent_terminal_text,
+        wrapped_prefixed_agent_terminal_lines,
     };
     use crate::terminal::PaneAgentStatusField;
     use mez_agent::{AgentAction, AgentActionPayload};
     use mez_mux::layout::Size;
+    use mez_mux::overlay::{
+        OverlaySearchMatch, OverlaySelection, OverlaySelectionKind,
+        overlay_selection_prefix_columns,
+    };
     use mez_mux::theme::default_ui_theme;
     use mez_terminal::{GraphicRendition, TerminalStyleSpan};
 
@@ -960,7 +969,7 @@ mod tests {
         assert_eq!(content.selections.len(), 1, "{content:?}");
         let selection = &content.selections[0];
         let line = content.lines.get(selection.line_index).unwrap();
-        let column = runtime_display_overlay_rendered_selection_start(
+        let column = overlay_rendered_selection_start(
             &RuntimeDisplayOverlay {
                 lines: content.lines.clone(),
                 line_style_spans: content.line_style_spans.clone(),
@@ -1023,8 +1032,8 @@ mod tests {
             record_browser: None,
         };
         let selection = &overlay.selections[0];
-        let start = runtime_display_overlay_rendered_selection_start(&overlay, selection);
-        let spans = runtime_display_overlay_rendered_line_style_spans(&overlay, 0, 80, &ui_theme);
+        let start = overlay_rendered_selection_start(&overlay, selection);
+        let spans = overlay_rendered_line_style_spans(&overlay, 0, 80, &ui_theme);
         for column in start..start.saturating_add(selection.width) {
             let rendition = rendered_line_rendition_at(&spans, column);
             assert!(
@@ -1082,8 +1091,8 @@ mod tests {
             record_browser: None,
         };
         let selection = &overlay.selections[0];
-        let start = runtime_display_overlay_rendered_selection_start(&overlay, selection);
-        let spans = runtime_display_overlay_rendered_line_style_spans(&overlay, 0, 120, &ui_theme);
+        let start = overlay_rendered_selection_start(&overlay, selection);
+        let spans = overlay_rendered_line_style_spans(&overlay, 0, 120, &ui_theme);
         for column in start..start.saturating_add(selection.width) {
             let rendition = rendered_line_rendition_at(&spans, column);
             assert!(
@@ -1142,8 +1151,8 @@ mod tests {
             record_browser: None,
         };
         let selection = &overlay.selections[0];
-        let start = runtime_display_overlay_rendered_selection_start(&overlay, selection);
-        let spans = runtime_display_overlay_rendered_line_style_spans(&overlay, 0, 120, &ui_theme);
+        let start = overlay_rendered_selection_start(&overlay, selection);
+        let spans = overlay_rendered_line_style_spans(&overlay, 0, 120, &ui_theme);
         let previous_rendition = rendered_line_rendition_at(&spans, start.saturating_sub(1));
 
         assert_ne!(
@@ -1192,16 +1201,12 @@ mod tests {
             record_browser: None,
         };
         let selection = &overlay.selections[0];
-        let start = runtime_display_overlay_rendered_selection_start(&overlay, selection);
-        let spans = runtime_display_overlay_rendered_line_style_spans(&overlay, 0, 80, &ui_theme);
-        assert_eq!(
-            start,
-            runtime_display_overlay_selection_prefix_columns(),
-            "{spans:?}"
-        );
+        let start = overlay_rendered_selection_start(&overlay, selection);
+        let spans = overlay_rendered_line_style_spans(&overlay, 0, 80, &ui_theme);
+        assert_eq!(start, overlay_selection_prefix_columns(), "{spans:?}");
         assert!(
             spans.iter().any(|span| {
-                span.start == 0 && span.length == runtime_display_overlay_selection_prefix_columns()
+                span.start == 0 && span.length == overlay_selection_prefix_columns()
             }),
             "missing isolated selector gutter span: {spans:?}"
         );
@@ -1285,9 +1290,9 @@ mod tests {
             record_browser: None,
         };
         let selection = &overlay.selections[0];
-        let start = runtime_display_overlay_rendered_selection_start(&overlay, selection);
+        let start = overlay_rendered_selection_start(&overlay, selection);
         let following_column = start.saturating_add(selection.width);
-        let spans = runtime_display_overlay_rendered_line_style_spans(&overlay, 0, 80, &ui_theme);
+        let spans = overlay_rendered_line_style_spans(&overlay, 0, 80, &ui_theme);
         let following_rendition = rendered_line_rendition_at(&spans, following_column);
         assert_ne!(
             following_rendition.foreground,
@@ -1391,7 +1396,7 @@ mod tests {
             dismiss_on_any_input: false,
             search_input: None,
             search_query: Some("needle".to_string()),
-            search_match: Some(RuntimeDisplayOverlaySearchMatch {
+            search_match: Some(OverlaySearchMatch {
                 line_index: 0,
                 start_column: 7,
                 width: 6,
@@ -1401,7 +1406,7 @@ mod tests {
             record_browser: None,
         };
 
-        let spans = runtime_display_overlay_rendered_line_style_spans(&overlay, 0, 80, &ui_theme);
+        let spans = overlay_rendered_line_style_spans(&overlay, 0, 80, &ui_theme);
         let before_match = rendered_line_rendition_at(&spans, 6);
         let first_match = rendered_line_rendition_at(&spans, 7);
         let final_match = rendered_line_rendition_at(&spans, 12);
@@ -1454,7 +1459,7 @@ mod tests {
             dismiss_on_any_input: false,
             search_input: None,
             search_query: Some("needle".to_string()),
-            search_match: Some(RuntimeDisplayOverlaySearchMatch {
+            search_match: Some(OverlaySearchMatch {
                 line_index: 0,
                 start_column: 25,
                 width: 6,
@@ -1464,7 +1469,7 @@ mod tests {
             record_browser: None,
         };
 
-        let spans = runtime_display_overlay_rendered_line_style_spans(&overlay, 0, 12, &ui_theme);
+        let spans = overlay_rendered_line_style_spans(&overlay, 0, 12, &ui_theme);
 
         assert!(
             spans
@@ -1546,12 +1551,12 @@ mod tests {
             lines: vec!["text before [open] after".to_string()],
             line_style_spans: vec![Vec::new()],
             scroll_offset: 0,
-            selections: vec![RuntimeDisplayOverlaySelection {
+            selections: vec![OverlaySelection {
                 line_index: 0,
                 start_column: "text before ".len(),
                 width: "[open]".len(),
                 command: "/open".to_string(),
-                kind: RuntimeDisplayOverlaySelectionKind::Primary,
+                kind: OverlaySelectionKind::Primary,
             }],
             active_selection_index: Some(0),
             dismiss_on_any_input: false,
@@ -1562,15 +1567,14 @@ mod tests {
             mouse_selection: None,
             record_browser: None,
         };
-        let rendered_start =
-            runtime_display_overlay_rendered_selection_start(&overlay, &overlay.selections[0]);
+        let rendered_start = overlay_rendered_selection_start(&overlay, &overlay.selections[0]);
 
         assert_eq!(
-            super::runtime_display_overlay_selection_index_at_position(&overlay, 0, 0),
+            super::overlay_selection_index_at_position(&overlay, 0, 0),
             None
         );
         assert_eq!(
-            super::runtime_display_overlay_selection_index_at_position(
+            super::overlay_selection_index_at_position(
                 &overlay,
                 0,
                 rendered_start.saturating_add(1),
@@ -1597,19 +1601,19 @@ mod tests {
             line_style_spans: vec![Vec::new(); 5],
             scroll_offset: 0,
             selections: vec![
-                RuntimeDisplayOverlaySelection {
+                OverlaySelection {
                     line_index: 0,
                     start_column: 0,
                     width: 5,
                     command: "/first".to_string(),
-                    kind: RuntimeDisplayOverlaySelectionKind::Primary,
+                    kind: OverlaySelectionKind::Primary,
                 },
-                RuntimeDisplayOverlaySelection {
+                OverlaySelection {
                     line_index: 3,
                     start_column: 0,
                     width: 6,
                     command: "/second".to_string(),
-                    kind: RuntimeDisplayOverlaySelectionKind::Primary,
+                    kind: OverlaySelectionKind::Primary,
                 },
             ],
             active_selection_index: Some(0),
@@ -1622,7 +1626,7 @@ mod tests {
             record_browser: None,
         };
 
-        assert!(super::apply_display_overlay_scroll_delta(
+        assert!(super::apply_overlay_scroll_delta(
             &mut overlay,
             3,
             Size::new(80, 4).unwrap(),

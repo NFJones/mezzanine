@@ -403,9 +403,9 @@ fn runtime_agent_shell_record_browser_display_retains_overlay_state() {
         .attach_primary("primary", true, Size::new(80, 12).unwrap(), 120)
         .unwrap();
     let pane_id = service.active_pane_id().unwrap().to_string();
-    let browser = crate::runtime::record_browser::RuntimeRecordBrowser::new(
+    let browser = mez_mux::record_browser::RecordBrowser::new(
         "Issues",
-        vec![crate::runtime::record_browser::RuntimeRecordBrowserRecord {
+        vec![mez_mux::record_browser::RecordBrowserRecord {
             id: "issue-1".to_string(),
             open_command: Some("/show-issues issue-1".to_string()),
             title: "First issue".to_string(),
@@ -569,17 +569,17 @@ fn runtime_agent_shell_record_browser_escape_restores_parent_view_stack() {
         .attach_primary("primary", true, Size::new(80, 12).unwrap(), 120)
         .unwrap();
     let pane_id = service.active_pane_id().unwrap().to_string();
-    let parent_browser = crate::runtime::record_browser::RuntimeRecordBrowser::new(
+    let parent_browser = mez_mux::record_browser::RecordBrowser::new(
         "Issues",
         vec![
-            crate::runtime::record_browser::RuntimeRecordBrowserRecord {
+            mez_mux::record_browser::RecordBrowserRecord {
                 id: "issue-1".to_string(),
                 open_command: Some("/show-issues issue-1".to_string()),
                 title: "First issue".to_string(),
                 metadata: vec![("kind".to_string(), "task".to_string())],
                 markdown: "First body".to_string(),
             },
-            crate::runtime::record_browser::RuntimeRecordBrowserRecord {
+            mez_mux::record_browser::RecordBrowserRecord {
                 id: "issue-2".to_string(),
                 open_command: Some("/show-issues issue-2".to_string()),
                 title: "Second issue".to_string(),
@@ -590,9 +590,9 @@ fn runtime_agent_shell_record_browser_escape_restores_parent_view_stack() {
         Vec::new(),
     )
     .unwrap();
-    let mut child_browser = crate::runtime::record_browser::RuntimeRecordBrowser::new(
+    let mut child_browser = mez_mux::record_browser::RecordBrowser::new(
         "Issue detail",
-        vec![crate::runtime::record_browser::RuntimeRecordBrowserRecord {
+        vec![mez_mux::record_browser::RecordBrowserRecord {
             id: "issue-1".to_string(),
             open_command: Some("/show-issues issue-1".to_string()),
             title: "First issue".to_string(),

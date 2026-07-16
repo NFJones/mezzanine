@@ -30,15 +30,14 @@ use super::{
 use super::{RuntimePresetRegistry, RuntimeProviderRegistry};
 use crate::error::MezErrorKind;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
-use crate::runtime::record_browser::RuntimeRecordBrowser;
 use crate::terminal::PaneAgentStatusField;
 use mez_agent::instructions::DiscoveredInstructionFile;
 use mez_mux::copy::CopyPosition;
 use mez_mux::layout::PaneTitleSource;
 use mez_mux::presentation::{TerminalFramePosition, TerminalFrameStyle};
+use mez_mux::record_browser::RecordBrowser;
 use mez_mux::theme::UiTheme;
 use mez_terminal::TerminalEmojiWidth;
-use mez_terminal::TerminalStyleSpan;
 use secrecy::ExposeSecret;
 
 // Runtime data types, connection tables, and provider/MCP registries.
@@ -805,92 +804,17 @@ pub(super) struct RuntimeSubagentLineage {
     pub display_name: String,
 }
 
-/// Actor-owned full-window display overlay for command output, help text, and
-/// recoverable foreground errors.
-///
-/// The overlay is modal for the primary client: normal pane input is suspended
-/// while it is present, and subsequent input scrolls or closes this state
-/// through the runtime actor before rendering the next frame.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct RuntimeDisplayOverlay {
-    /// Stores the lines value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) lines: Vec<String>,
-    /// Visible terminal styles for `lines`, indexed by rendered line.
-    pub(super) line_style_spans: Vec<Vec<TerminalStyleSpan>>,
-    /// Stores the scroll offset value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) scroll_offset: usize,
-    /// Search query currently being edited in the command-output pager.
-    pub(super) search_input: Option<String>,
-    /// Last submitted pager search query, reused by empty `/` submissions.
-    pub(super) search_query: Option<String>,
-    /// Last text range matched by pager search.
-    pub(super) search_match: Option<RuntimeDisplayOverlaySearchMatch>,
-    /// Transient pager search feedback shown in the overlay footer.
-    pub(super) search_status: Option<String>,
-    /// Active mouse text selection inside overlay content, in overlay-line coordinates.
-    pub(super) mouse_selection: Option<(CopyPosition, CopyPosition)>,
-    /// Selectable line-to-command mappings rendered inside this overlay.
-    ///
-    /// Lines without an entry remain inert. The line index is measured against
-    /// `lines`, before paging offsets are applied by the renderer.
-    pub(super) selections: Vec<RuntimeDisplayOverlaySelection>,
-    /// Active selectable row for keyboard navigation.
-    ///
-    /// This index addresses `selections`, not `lines`, so multiple commands can
-    /// share the same rendered view without requiring text scraping.
-    pub(super) active_selection_index: Option<usize>,
-    /// Stores the dismiss on any input value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) dismiss_on_any_input: bool,
-    /// Retained interactive record-browser state for `/show-issues` and
-    /// `/show-memories` overlays.
-    ///
-    /// Plain command-output overlays leave this empty. Record-browser overlays
-    /// keep the backend-agnostic browser model alongside the rendered Markdown
-    /// page so later pager key handling can apply typed browser actions and
-    /// rerender without reparsing terminal text.
-    pub(super) record_browser: Option<RuntimeRecordBrowserOverlayState>,
-}
+/// Product-specialized mux overlay carrying issue or memory refresh sources.
+pub(super) type RuntimeDisplayOverlay =
+    mez_mux::overlay::DisplayOverlay<RuntimeRecordBrowserOverlaySource>;
 
-/// Retained state for one interactive record-browser display overlay.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct RuntimeRecordBrowserOverlayState {
-    /// Pane whose agent shell opened the browser.
-    pub(super) pane_id: String,
-    /// Slash command backing the browser, such as `show-issues`.
-    pub(super) command: String,
-    /// Backend-specific query context used to refresh the browser after
-    /// modal filter submissions.
-    pub(super) source: Option<RuntimeRecordBrowserOverlaySource>,
-    /// Backend-agnostic browser state rendered into the overlay.
-    pub(super) browser: RuntimeRecordBrowser,
-    /// Parent record-browser views that should be restored when Escape leaves
-    /// the current top view.
-    pub(super) stack: Vec<RuntimeRecordBrowserOverlayFrame>,
-}
+/// Product-specialized record-browser overlay state.
+pub(super) type RuntimeRecordBrowserOverlayState =
+    mez_mux::overlay::RecordBrowserOverlayState<RuntimeRecordBrowserOverlaySource>;
 
-/// One preserved record-browser view below the active overlay frame.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct RuntimeRecordBrowserOverlayFrame {
-    /// Slash command backing the preserved browser.
-    pub(super) command: String,
-    /// Backend-specific query context retained for filter refreshes.
-    pub(super) source: Option<RuntimeRecordBrowserOverlaySource>,
-    /// Backend-agnostic browser state rendered into the preserved view.
-    pub(super) browser: RuntimeRecordBrowser,
-    /// Pager scroll offset to restore with the preserved view.
-    pub(super) scroll_offset: usize,
-    /// Active built-in pager link selection to restore with the preserved view.
-    pub(super) active_selection_index: Option<usize>,
-}
+/// Product-specialized preserved record-browser frame.
+pub(super) type RuntimeRecordBrowserOverlayFrame =
+    mez_mux::overlay::RecordBrowserOverlayFrame<RuntimeRecordBrowserOverlaySource>;
 
 /// Query context retained for one backend-specific record-browser overlay.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -921,59 +845,6 @@ pub(super) enum RuntimeRecordBrowserOverlaySource {
         /// Maximum number of displayed records.
         limit: usize,
     },
-}
-
-/// Render-cell range for the last submitted command-output pager search match.
-///
-/// The range is measured in display columns within the unprefixed overlay body
-/// line. Rendering applies selector-prefix offsets and viewport clipping later,
-/// so off-screen matches do not style unrelated visible text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct RuntimeDisplayOverlaySearchMatch {
-    /// Zero-based overlay line index containing the match.
-    pub(super) line_index: usize,
-    /// Zero-based display column where the match begins inside the body line.
-    pub(super) start_column: usize,
-    /// Display-cell width of the matched text.
-    pub(super) width: usize,
-}
-
-/// One selectable command-output overlay line.
-///
-/// Command chooser output is still represented as ordinary command display
-/// text for control clients. The primary TUI stores this companion metadata so
-/// mouse clicks can execute the advertised command without scraping the
-/// already-rendered text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct RuntimeDisplayOverlaySelection {
-    /// Zero-based line in `RuntimeDisplayOverlay::lines` that activates this
-    /// selection.
-    pub(super) line_index: usize,
-    /// Zero-based display column where the interactive choice starts before
-    /// the overlay renderer adds row selector gutters.
-    pub(super) start_column: usize,
-    /// Display-cell width of the interactive choice.
-    pub(super) width: usize,
-    /// Terminal command to execute when the line is selected.
-    pub(super) command: String,
-    /// Visual importance of this selectable action.
-    pub(super) kind: RuntimeDisplayOverlaySelectionKind,
-}
-
-/// Visual category for one command-output overlay choice.
-///
-/// The category lets command overlays use theme-aware colors to distinguish
-/// routine navigation from secondary actions and potentially destructive or
-/// authority-changing choices.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RuntimeDisplayOverlaySelectionKind {
-    /// Routine primary action, such as selecting a pane or approving a request.
-    Primary,
-    /// Secondary action, such as pasting a buffer.
-    Secondary,
-    /// Destructive or disruptive action, such as deleting, detaching, or
-    /// rejecting.
-    Danger,
 }
 
 /// Pane-local drop-down selector for agent model and reasoning status pills.
@@ -2306,7 +2177,7 @@ pub struct RuntimeSessionService {
     /// that serialization boundary without changing the public command response
     /// format: record-browser commands register their typed state here, and the
     /// display path consumes it when rendering the matching pane/command.
-    pub(super) pending_record_browser_overlays: BTreeMap<(String, String), RuntimeRecordBrowser>,
+    pub(super) pending_record_browser_overlays: BTreeMap<(String, String), RecordBrowser>,
     /// Query context waiting to be attached to pending record-browser overlays.
     pub(super) pending_record_browser_overlay_sources:
         BTreeMap<(String, String), RuntimeRecordBrowserOverlaySource>,

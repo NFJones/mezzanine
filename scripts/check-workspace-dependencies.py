@@ -65,6 +65,10 @@ REQUIRED_OWNER_PATHS = {
     "crates/mez-mux/src/attached_client/output.rs",
     "crates/mez-mux/src/host_input.rs",
     "crates/mez-mux/src/process/mod.rs",
+    "crates/mez-mux/src/overlay/mod.rs",
+    "crates/mez-mux/src/overlay/interaction.rs",
+    "crates/mez-mux/src/overlay/state.rs",
+    "crates/mez-mux/src/record_browser.rs",
     "crates/mez-mux/src/readline/tests/buffer.rs",
     "crates/mez-mux/src/readline/tests/prompt.rs",
     "crates/mez-mux/src/render/wrap.rs",
@@ -165,6 +169,14 @@ ROOT_FORBIDDEN_DECLARATIONS = {
     "fn push_or_extend_style_span": "mux style-span coalescing",
     "fn terminal_color_luminance": "mux color luminance policy",
     "fn wrap_agent_log_physical_line": "generic terminal-cell text wrapping",
+    "struct RuntimeRecordBrowser": "record-browser state machine",
+    "struct RuntimeRecordBrowserRecord": "neutral record-browser record",
+    "struct RuntimeDisplayOverlay": "neutral display-overlay state",
+    "struct OverlaySearchMatch": "neutral overlay search range",
+    "struct OverlaySelection": "neutral overlay selection",
+    "fn runtime_display_overlay_next_search_match": "overlay search policy",
+    "fn primary_display_overlay_copy_selection": "overlay copy-selection policy",
+    "fn runtime_display_overlay_selection_index_at_position": "overlay hit testing",
 }
 
 LOWER_CRATE_PREFIXES = ("mez_agent::", "mez_core::", "mez_mux::", "mez_terminal::")

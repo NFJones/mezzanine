@@ -6,11 +6,10 @@
 //! the browser state itself backend-agnostic.
 
 use super::*;
-use crate::runtime::record_browser::{
-    RuntimeRecordBrowser, RuntimeRecordBrowserFilterChoice, RuntimeRecordBrowserFilterField,
-    RuntimeRecordBrowserRecord,
-};
 use crate::runtime::service_state::RuntimeRecordBrowserOverlaySource;
+use mez_mux::record_browser::{
+    RecordBrowser, RecordBrowserFilterChoice, RecordBrowserFilterField, RecordBrowserRecord,
+};
 
 const DEFAULT_SHOW_RECORD_LIMIT: usize = 100;
 
@@ -71,7 +70,7 @@ impl RuntimeSessionService {
             )?;
             store.query_issue_browser(&query)?
         };
-        let mut browser = RuntimeRecordBrowser::new(
+        let mut browser = RecordBrowser::new(
             if args.detail_id.is_some() {
                 "Issue detail"
             } else {
@@ -155,7 +154,7 @@ impl RuntimeSessionService {
                 .map(|result| result.record)
                 .collect()
         };
-        let mut browser = RuntimeRecordBrowser::new(
+        let mut browser = RecordBrowser::new(
             if args.detail_id.is_some() {
                 "Memory detail"
             } else {
@@ -213,7 +212,7 @@ impl RuntimeSessionService {
     pub(in crate::runtime) fn refresh_record_browser_overlay_source(
         &self,
         source: &RuntimeRecordBrowserOverlaySource,
-    ) -> Result<RuntimeRecordBrowser> {
+    ) -> Result<RecordBrowser> {
         match source {
             RuntimeRecordBrowserOverlaySource::Issues {
                 project_glob,
@@ -237,7 +236,7 @@ impl RuntimeSessionService {
                     text.clone(),
                     Some(*limit),
                 )?;
-                RuntimeRecordBrowser::new(
+                Ok(RecordBrowser::new(
                     "Issues",
                     store
                         .query_issue_browser(&query)?
@@ -245,7 +244,7 @@ impl RuntimeSessionService {
                         .map(issue_browser_record)
                         .collect(),
                     issue_kind_filter_choices(),
-                )
+                )?)
             }
             RuntimeRecordBrowserOverlaySource::Memories {
                 scope,
@@ -260,7 +259,7 @@ impl RuntimeSessionService {
                     ));
                 };
                 let store = crate::memory::PersistentMemoryStore::under_config_root(&config_root);
-                RuntimeRecordBrowser::new(
+                Ok(RecordBrowser::new(
                     "Memories",
                     store
                         .search(&crate::memory::MemorySearchRequest {
@@ -275,7 +274,7 @@ impl RuntimeSessionService {
                         .map(|result| memory_browser_record(result.record))
                         .collect(),
                     memory_kind_filter_choices(),
-                )
+                )?)
             }
         }
     }
@@ -284,7 +283,7 @@ impl RuntimeSessionService {
     pub(in crate::runtime) fn record_browser_source_with_filter(
         &self,
         source: &RuntimeRecordBrowserOverlaySource,
-        field: RuntimeRecordBrowserFilterField,
+        field: RecordBrowserFilterField,
         value: &str,
     ) -> Result<RuntimeRecordBrowserOverlaySource> {
         let value = value.trim();
@@ -296,12 +295,12 @@ impl RuntimeSessionService {
                 text,
                 limit,
             } => Ok(RuntimeRecordBrowserOverlaySource::Issues {
-                project_glob: if field == RuntimeRecordBrowserFilterField::ProjectGlob {
+                project_glob: if field == RecordBrowserFilterField::ProjectGlob {
                     (!value.is_empty()).then(|| value.to_string())
                 } else {
                     project_glob.clone()
                 },
-                kind: if field == RuntimeRecordBrowserFilterField::Kind {
+                kind: if field == RecordBrowserFilterField::Kind {
                     (!value.is_empty())
                         .then(|| mez_agent::issues::IssueKind::parse(value))
                         .transpose()?
@@ -309,7 +308,7 @@ impl RuntimeSessionService {
                     *kind
                 },
                 state: *state,
-                text: if field == RuntimeRecordBrowserFilterField::Text {
+                text: if field == RecordBrowserFilterField::Text {
                     (!value.is_empty()).then(|| value.to_string())
                 } else {
                     text.clone()
@@ -323,7 +322,7 @@ impl RuntimeSessionService {
                 text,
                 limit,
             } => Ok(RuntimeRecordBrowserOverlaySource::Memories {
-                scope: if field == RuntimeRecordBrowserFilterField::ProjectGlob {
+                scope: if field == RecordBrowserFilterField::ProjectGlob {
                     if value.is_empty() {
                         None
                     } else if value == "global" {
@@ -336,7 +335,7 @@ impl RuntimeSessionService {
                 } else {
                     scope.clone()
                 },
-                kind: if field == RuntimeRecordBrowserFilterField::Kind {
+                kind: if field == RecordBrowserFilterField::Kind {
                     (!value.is_empty())
                         .then(|| parse_memory_kind_for_show(value))
                         .transpose()?
@@ -344,7 +343,7 @@ impl RuntimeSessionService {
                     *kind
                 },
                 state: *state,
-                text: if field == RuntimeRecordBrowserFilterField::Text {
+                text: if field == RecordBrowserFilterField::Text {
                     (!value.is_empty()).then(|| value.to_string())
                 } else {
                     text.clone()
@@ -553,9 +552,9 @@ fn parse_show_limit(value: &str) -> Result<usize> {
     Ok(limit.min(DEFAULT_SHOW_RECORD_LIMIT))
 }
 
-fn issue_browser_record(record: mez_agent::issues::IssueRecord) -> RuntimeRecordBrowserRecord {
+fn issue_browser_record(record: mez_agent::issues::IssueRecord) -> RecordBrowserRecord {
     let markdown = issue_record_markdown(&record);
-    RuntimeRecordBrowserRecord {
+    RecordBrowserRecord {
         id: record.id.clone(),
         open_command: Some(format!("/show-issues {}", record.id)),
         title: record.title.clone(),
@@ -596,8 +595,8 @@ fn issue_record_markdown(record: &mez_agent::issues::IssueRecord) -> String {
     lines.join("\n")
 }
 
-fn memory_browser_record(record: mez_agent::memory::MemoryRecord) -> RuntimeRecordBrowserRecord {
-    RuntimeRecordBrowserRecord {
+fn memory_browser_record(record: mez_agent::memory::MemoryRecord) -> RecordBrowserRecord {
+    RecordBrowserRecord {
         id: record.id.clone(),
         open_command: Some(format!("/show-memories {}", record.id)),
         title: memory_record_title(&record),
@@ -642,60 +641,60 @@ fn memory_record_title(record: &mez_agent::memory::MemoryRecord) -> String {
         .unwrap_or_else(|| record.id.clone())
 }
 
-fn issue_kind_filter_choices() -> Vec<RuntimeRecordBrowserFilterChoice> {
+fn issue_kind_filter_choices() -> Vec<RecordBrowserFilterChoice> {
     vec![
-        RuntimeRecordBrowserFilterChoice {
+        RecordBrowserFilterChoice {
             label: "all kinds".to_string(),
             value: String::new(),
         },
-        RuntimeRecordBrowserFilterChoice {
+        RecordBrowserFilterChoice {
             label: mez_agent::issues::IssueKind::Defect.as_str().to_string(),
             value: mez_agent::issues::IssueKind::Defect.as_str().to_string(),
         },
-        RuntimeRecordBrowserFilterChoice {
+        RecordBrowserFilterChoice {
             label: mez_agent::issues::IssueKind::Task.as_str().to_string(),
             value: mez_agent::issues::IssueKind::Task.as_str().to_string(),
         },
     ]
 }
 
-fn memory_kind_filter_choices() -> Vec<RuntimeRecordBrowserFilterChoice> {
+fn memory_kind_filter_choices() -> Vec<RecordBrowserFilterChoice> {
     vec![
-        RuntimeRecordBrowserFilterChoice {
+        RecordBrowserFilterChoice {
             label: "all kinds".to_string(),
             value: String::new(),
         },
-        RuntimeRecordBrowserFilterChoice {
+        RecordBrowserFilterChoice {
             label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Preference).to_string(),
             value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Preference).to_string(),
         },
-        RuntimeRecordBrowserFilterChoice {
+        RecordBrowserFilterChoice {
             label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Fact).to_string(),
             value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Fact).to_string(),
         },
-        RuntimeRecordBrowserFilterChoice {
+        RecordBrowserFilterChoice {
             label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Procedure).to_string(),
             value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Procedure).to_string(),
         },
-        RuntimeRecordBrowserFilterChoice {
+        RecordBrowserFilterChoice {
             label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Documentation)
                 .to_string(),
             value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Documentation)
                 .to_string(),
         },
-        RuntimeRecordBrowserFilterChoice {
+        RecordBrowserFilterChoice {
             label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Research).to_string(),
             value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Research).to_string(),
         },
-        RuntimeRecordBrowserFilterChoice {
+        RecordBrowserFilterChoice {
             label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Episode).to_string(),
             value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Episode).to_string(),
         },
-        RuntimeRecordBrowserFilterChoice {
+        RecordBrowserFilterChoice {
             label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Warning).to_string(),
             value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Warning).to_string(),
         },
-        RuntimeRecordBrowserFilterChoice {
+        RecordBrowserFilterChoice {
             label: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Scratch).to_string(),
             value: memory_kind_name_for_show(mez_agent::memory::MemoryKind::Scratch).to_string(),
         },

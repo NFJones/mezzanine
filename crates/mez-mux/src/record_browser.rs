@@ -5,14 +5,11 @@
 //! backends. Command adapters provide records and later consume typed outcomes,
 //! while the runtime pager can render the returned Markdown without knowing
 //! whether the source is an issue, a memory, or another durable record type.
-
-#![allow(dead_code)]
-
-use crate::error::{MezError, Result};
+use crate::{MuxError, Result};
 
 /// Rendered pager content produced from browser state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RuntimeRecordBrowserPage {
+pub struct RecordBrowserPage {
     /// Human-readable browser title.
     pub title: String,
     /// Markdown to show in the pager, including transient prompt and error chrome.
@@ -23,7 +20,7 @@ pub(crate) struct RuntimeRecordBrowserPage {
 
 /// One record that can be shown by the shared browser.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RuntimeRecordBrowserRecord {
+pub struct RecordBrowserRecord {
     /// Stable record id used for selection and metadata.
     pub id: String,
     /// Optional agent-shell command that opens this record's detail view.
@@ -38,7 +35,7 @@ pub(crate) struct RuntimeRecordBrowserRecord {
 
 /// One selectable choice exposed by a record-browser filter selector.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RuntimeRecordBrowserFilterChoice {
+pub struct RecordBrowserFilterChoice {
     /// Human-readable label shown in the selector list.
     pub label: String,
     /// Submitted filter value applied when the choice is accepted.
@@ -47,7 +44,7 @@ pub(crate) struct RuntimeRecordBrowserFilterChoice {
 
 /// Supported reusable filter prompts for record browsers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RuntimeRecordBrowserFilterField {
+pub enum RecordBrowserFilterField {
     /// Defect/task-like kind filter when a backend supports it.
     Kind,
     /// Tag filter when a backend supports tags.
@@ -60,18 +57,18 @@ pub(crate) enum RuntimeRecordBrowserFilterField {
 
 /// Active modal prompt inside a record browser.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum RuntimeRecordBrowserPrompt {
+pub enum RecordBrowserPrompt {
     /// Prompt collecting a filter value.
     Filter {
         /// Filter field being edited.
-        field: RuntimeRecordBrowserFilterField,
+        field: RecordBrowserFilterField,
         /// Current prompt input.
         input: String,
     },
     /// Selector collecting one available kind filter choice.
     KindSelector {
         /// Available choices in display and selection order.
-        options: Vec<RuntimeRecordBrowserFilterChoice>,
+        options: Vec<RecordBrowserFilterChoice>,
         /// Zero-based active selector row.
         active_index: usize,
     },
@@ -85,13 +82,13 @@ pub(crate) enum RuntimeRecordBrowserPrompt {
 
 /// User intent decoded by the pager and applied to browser state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum RuntimeRecordBrowserAction {
+pub enum RecordBrowserAction {
     /// Return from detail or prompt state to the preserved list view.
     BackToList,
     /// Open the active list record as an in-browser detail view.
     OpenActive,
     /// Begin editing one filter field.
-    StartFilter(RuntimeRecordBrowserFilterField),
+    StartFilter(RecordBrowserFilterField),
     /// Begin editing a save destination path.
     StartSave,
     /// Move the active selector row inside the open kind prompt.
@@ -108,7 +105,7 @@ pub(crate) enum RuntimeRecordBrowserAction {
 
 /// Selector row metadata for a rendered record-browser prompt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RuntimeRecordBrowserPromptSelection {
+pub struct RecordBrowserPromptSelection {
     /// Zero-based rendered line where the selector rows begin.
     pub start_line: usize,
     /// Number of selector rows rendered for the prompt.
@@ -119,13 +116,13 @@ pub(crate) struct RuntimeRecordBrowserPromptSelection {
 
 /// Typed result of applying one browser action.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum RuntimeRecordBrowserOutcome {
+pub enum RecordBrowserOutcome {
     /// Browser state changed without requiring an external side effect.
     Updated,
     /// A filter value was accepted and the caller should refresh records.
     FilterSubmitted {
         /// Filter field that changed.
-        field: RuntimeRecordBrowserFilterField,
+        field: RecordBrowserFilterField,
         /// Submitted value.
         value: String,
     },
@@ -142,27 +139,27 @@ pub(crate) enum RuntimeRecordBrowserOutcome {
 
 /// Stateful list/detail browser shared by issue and memory pager commands.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RuntimeRecordBrowser {
+pub struct RecordBrowser {
     title: String,
-    records: Vec<RuntimeRecordBrowserRecord>,
-    kind_filter_choices: Vec<RuntimeRecordBrowserFilterChoice>,
+    records: Vec<RecordBrowserRecord>,
+    kind_filter_choices: Vec<RecordBrowserFilterChoice>,
     active_index: usize,
     scroll_offset: usize,
     detail_index: Option<usize>,
-    prompt: Option<RuntimeRecordBrowserPrompt>,
+    prompt: Option<RecordBrowserPrompt>,
     error: Option<String>,
 }
 
-impl RuntimeRecordBrowser {
+impl RecordBrowser {
     /// Builds a browser from already-filtered records.
-    pub(crate) fn new(
+    pub fn new(
         title: impl Into<String>,
-        records: Vec<RuntimeRecordBrowserRecord>,
-        kind_filter_choices: Vec<RuntimeRecordBrowserFilterChoice>,
+        records: Vec<RecordBrowserRecord>,
+        kind_filter_choices: Vec<RecordBrowserFilterChoice>,
     ) -> Result<Self> {
         let title = title.into();
         if title.trim().is_empty() {
-            return Err(MezError::invalid_args(
+            return Err(MuxError::invalid_args(
                 "record browser title must not be empty",
             ));
         }
@@ -171,7 +168,7 @@ impl RuntimeRecordBrowser {
         }
         for choice in &kind_filter_choices {
             if choice.label.trim().is_empty() {
-                return Err(MezError::invalid_args(
+                return Err(MuxError::invalid_args(
                     "record browser filter choice labels must not be empty",
                 ));
             }
@@ -189,25 +186,25 @@ impl RuntimeRecordBrowser {
     }
 
     /// Replaces the pager error shown above list or detail content.
-    pub(crate) fn set_error(&mut self, error: Option<String>) {
+    pub fn set_error(&mut self, error: Option<String>) {
         self.error = error.filter(|value| !value.trim().is_empty());
     }
 
     /// Returns the currently active modal prompt, if one is open.
-    pub(crate) fn prompt(&self) -> Option<&RuntimeRecordBrowserPrompt> {
+    pub fn prompt(&self) -> Option<&RecordBrowserPrompt> {
         self.prompt.as_ref()
     }
 
     /// Returns rendered selector-row metadata for the active kind prompt.
-    pub(crate) fn prompt_selection(&self) -> Option<RuntimeRecordBrowserPromptSelection> {
-        let RuntimeRecordBrowserPrompt::KindSelector {
+    pub fn prompt_selection(&self) -> Option<RecordBrowserPromptSelection> {
+        let RecordBrowserPrompt::KindSelector {
             options,
             active_index,
         } = self.prompt.as_ref()?
         else {
             return None;
         };
-        Some(RuntimeRecordBrowserPromptSelection {
+        Some(RecordBrowserPromptSelection {
             start_line: usize::from(self.error.is_some()) * 2 + 1,
             option_count: options.len(),
             active_index: (*active_index).min(options.len().saturating_sub(1)),
@@ -215,135 +212,132 @@ impl RuntimeRecordBrowser {
     }
 
     /// Returns the selected row index retained by the list view.
-    pub(crate) fn active_index(&self) -> usize {
+    pub fn active_index(&self) -> usize {
         self.active_index
     }
 
     /// Returns the retained list scroll offset.
-    pub(crate) fn scroll_offset(&self) -> usize {
+    pub fn scroll_offset(&self) -> usize {
         self.scroll_offset
     }
 
     /// Sets the retained list scroll offset.
-    pub(crate) fn set_scroll_offset(&mut self, scroll_offset: usize) {
+    pub fn set_scroll_offset(&mut self, scroll_offset: usize) {
         self.scroll_offset = scroll_offset;
     }
 
     /// Shows the first record as a detail page when command parsing has
     /// already resolved a concrete record id.
-    pub(crate) fn show_first_record_detail(&mut self) {
+    pub fn show_first_record_detail(&mut self) {
         if !self.records.is_empty() {
             self.detail_index = Some(0);
         }
     }
 
     /// Applies one typed pager action to this browser state.
-    pub(crate) fn apply_action(
-        &mut self,
-        action: RuntimeRecordBrowserAction,
-    ) -> Result<RuntimeRecordBrowserOutcome> {
+    pub fn apply_action(&mut self, action: RecordBrowserAction) -> Result<RecordBrowserOutcome> {
         match action {
-            RuntimeRecordBrowserAction::OpenActive => {
+            RecordBrowserAction::OpenActive => {
                 if self.records.is_empty() {
-                    return Ok(RuntimeRecordBrowserOutcome::Ignored);
+                    return Ok(RecordBrowserOutcome::Ignored);
                 }
                 self.detail_index =
                     Some(self.active_index.min(self.records.len().saturating_sub(1)));
-                Ok(RuntimeRecordBrowserOutcome::Updated)
+                Ok(RecordBrowserOutcome::Updated)
             }
-            RuntimeRecordBrowserAction::BackToList => {
+            RecordBrowserAction::BackToList => {
                 let changed = self.detail_index.take().is_some() || self.prompt.take().is_some();
                 Ok(if changed {
-                    RuntimeRecordBrowserOutcome::Updated
+                    RecordBrowserOutcome::Updated
                 } else {
-                    RuntimeRecordBrowserOutcome::Ignored
+                    RecordBrowserOutcome::Ignored
                 })
             }
-            RuntimeRecordBrowserAction::StartFilter(field) => {
+            RecordBrowserAction::StartFilter(field) => {
                 self.prompt = Some(
-                    if field == RuntimeRecordBrowserFilterField::Kind
+                    if field == RecordBrowserFilterField::Kind
                         && !self.kind_filter_choices.is_empty()
                     {
-                        RuntimeRecordBrowserPrompt::KindSelector {
+                        RecordBrowserPrompt::KindSelector {
                             options: self.kind_filter_choices.clone(),
                             active_index: 0,
                         }
                     } else {
-                        RuntimeRecordBrowserPrompt::Filter {
+                        RecordBrowserPrompt::Filter {
                             field,
                             input: String::new(),
                         }
                     },
                 );
-                Ok(RuntimeRecordBrowserOutcome::Updated)
+                Ok(RecordBrowserOutcome::Updated)
             }
-            RuntimeRecordBrowserAction::StartSave => {
-                self.prompt = Some(RuntimeRecordBrowserPrompt::Save {
+            RecordBrowserAction::StartSave => {
+                self.prompt = Some(RecordBrowserPrompt::Save {
                     input: String::new(),
                 });
-                Ok(RuntimeRecordBrowserOutcome::Updated)
+                Ok(RecordBrowserOutcome::Updated)
             }
-            RuntimeRecordBrowserAction::MovePromptSelection(delta) => {
+            RecordBrowserAction::MovePromptSelection(delta) => {
                 Ok(self.move_prompt_selection(delta))
             }
-            RuntimeRecordBrowserAction::SelectPromptFirst => Ok(self.select_prompt_first()),
-            RuntimeRecordBrowserAction::SelectPromptLast => Ok(self.select_prompt_last()),
-            RuntimeRecordBrowserAction::EditPrompt(input) => {
+            RecordBrowserAction::SelectPromptFirst => Ok(self.select_prompt_first()),
+            RecordBrowserAction::SelectPromptLast => Ok(self.select_prompt_last()),
+            RecordBrowserAction::EditPrompt(input) => {
                 match self.prompt.as_mut() {
-                    Some(RuntimeRecordBrowserPrompt::Filter { input: current, .. })
-                    | Some(RuntimeRecordBrowserPrompt::Save { input: current }) => {
+                    Some(RecordBrowserPrompt::Filter { input: current, .. })
+                    | Some(RecordBrowserPrompt::Save { input: current }) => {
                         *current = input;
                     }
-                    Some(RuntimeRecordBrowserPrompt::KindSelector { .. }) => {
-                        return Ok(RuntimeRecordBrowserOutcome::Ignored);
+                    Some(RecordBrowserPrompt::KindSelector { .. }) => {
+                        return Ok(RecordBrowserOutcome::Ignored);
                     }
-                    None => return Ok(RuntimeRecordBrowserOutcome::Ignored),
+                    None => return Ok(RecordBrowserOutcome::Ignored),
                 }
-                Ok(RuntimeRecordBrowserOutcome::Updated)
+                Ok(RecordBrowserOutcome::Updated)
             }
-            RuntimeRecordBrowserAction::SubmitPrompt => self.submit_prompt(),
+            RecordBrowserAction::SubmitPrompt => self.submit_prompt(),
         }
     }
 
     /// Renders the current list, detail, or prompt state into pager content.
-    pub(crate) fn render_page(&self) -> RuntimeRecordBrowserPage {
+    pub fn render_page(&self) -> RecordBrowserPage {
         if let Some(detail_index) = self.detail_index {
             return self.render_detail_page(detail_index);
         }
         self.render_list_page()
     }
 
-    fn submit_prompt(&mut self) -> Result<RuntimeRecordBrowserOutcome> {
+    fn submit_prompt(&mut self) -> Result<RecordBrowserOutcome> {
         let Some(prompt) = self.prompt.take() else {
-            return Ok(RuntimeRecordBrowserOutcome::Ignored);
+            return Ok(RecordBrowserOutcome::Ignored);
         };
         match prompt {
-            RuntimeRecordBrowserPrompt::Filter { field, input } => {
-                Ok(RuntimeRecordBrowserOutcome::FilterSubmitted {
+            RecordBrowserPrompt::Filter { field, input } => {
+                Ok(RecordBrowserOutcome::FilterSubmitted {
                     field,
                     value: input.trim().to_string(),
                 })
             }
-            RuntimeRecordBrowserPrompt::KindSelector {
+            RecordBrowserPrompt::KindSelector {
                 mut options,
                 active_index,
             } => {
                 let selected = options.drain(..).nth(active_index).ok_or_else(|| {
-                    MezError::invalid_state("record browser kind selector is empty")
+                    MuxError::invalid_state("record browser kind selector is empty")
                 })?;
-                Ok(RuntimeRecordBrowserOutcome::FilterSubmitted {
-                    field: RuntimeRecordBrowserFilterField::Kind,
+                Ok(RecordBrowserOutcome::FilterSubmitted {
+                    field: RecordBrowserFilterField::Kind,
                     value: selected.value,
                 })
             }
-            RuntimeRecordBrowserPrompt::Save { input } => {
+            RecordBrowserPrompt::Save { input } => {
                 let path = input.trim().to_string();
                 if path.is_empty() {
-                    return Err(MezError::invalid_args(
+                    return Err(MuxError::invalid_args(
                         "record browser save path must not be empty",
                     ));
                 }
-                Ok(RuntimeRecordBrowserOutcome::SaveSubmitted {
+                Ok(RecordBrowserOutcome::SaveSubmitted {
                     path,
                     markdown: self.render_page().raw_markdown,
                 })
@@ -351,7 +345,7 @@ impl RuntimeRecordBrowser {
         }
     }
 
-    fn render_list_page(&self) -> RuntimeRecordBrowserPage {
+    fn render_list_page(&self) -> RecordBrowserPage {
         let raw_markdown = list_markdown(&self.title, &self.records);
         let mut markdown = String::new();
         if let Some(error) = &self.error {
@@ -361,14 +355,14 @@ impl RuntimeRecordBrowser {
             markdown.push_str(&format!("{}\n\n", prompt_block(prompt)));
         }
         markdown.push_str(&raw_markdown);
-        RuntimeRecordBrowserPage {
+        RecordBrowserPage {
             title: self.title.clone(),
             markdown,
             raw_markdown,
         }
     }
 
-    fn render_detail_page(&self, detail_index: usize) -> RuntimeRecordBrowserPage {
+    fn render_detail_page(&self, detail_index: usize) -> RecordBrowserPage {
         let record = &self.records[detail_index.min(self.records.len().saturating_sub(1))];
         let raw_markdown = detail_markdown(record);
         let mut markdown = String::new();
@@ -379,7 +373,7 @@ impl RuntimeRecordBrowser {
             markdown.push_str(&format!("{}\n\n", prompt_block(prompt)));
         }
         markdown.push_str(&raw_markdown);
-        RuntimeRecordBrowserPage {
+        RecordBrowserPage {
             title: record.title.clone(),
             markdown,
             raw_markdown,
@@ -387,80 +381,80 @@ impl RuntimeRecordBrowser {
     }
 
     /// Moves the active kind-selector row by one bounded step.
-    fn move_prompt_selection(&mut self, delta: isize) -> RuntimeRecordBrowserOutcome {
-        let Some(RuntimeRecordBrowserPrompt::KindSelector {
+    fn move_prompt_selection(&mut self, delta: isize) -> RecordBrowserOutcome {
+        let Some(RecordBrowserPrompt::KindSelector {
             options,
             active_index,
         }) = self.prompt.as_mut()
         else {
-            return RuntimeRecordBrowserOutcome::Ignored;
+            return RecordBrowserOutcome::Ignored;
         };
         if options.is_empty() {
-            return RuntimeRecordBrowserOutcome::Ignored;
+            return RecordBrowserOutcome::Ignored;
         }
         *active_index = step_selector_index(*active_index, options.len(), delta);
-        RuntimeRecordBrowserOutcome::Updated
+        RecordBrowserOutcome::Updated
     }
 
     /// Jumps to the first available kind-selector row.
-    fn select_prompt_first(&mut self) -> RuntimeRecordBrowserOutcome {
-        let Some(RuntimeRecordBrowserPrompt::KindSelector {
+    fn select_prompt_first(&mut self) -> RecordBrowserOutcome {
+        let Some(RecordBrowserPrompt::KindSelector {
             options,
             active_index,
         }) = self.prompt.as_mut()
         else {
-            return RuntimeRecordBrowserOutcome::Ignored;
+            return RecordBrowserOutcome::Ignored;
         };
         if options.is_empty() {
-            return RuntimeRecordBrowserOutcome::Ignored;
+            return RecordBrowserOutcome::Ignored;
         }
         *active_index = 0;
-        RuntimeRecordBrowserOutcome::Updated
+        RecordBrowserOutcome::Updated
     }
 
     /// Jumps to the last available kind-selector row.
-    fn select_prompt_last(&mut self) -> RuntimeRecordBrowserOutcome {
-        let Some(RuntimeRecordBrowserPrompt::KindSelector {
+    fn select_prompt_last(&mut self) -> RecordBrowserOutcome {
+        let Some(RecordBrowserPrompt::KindSelector {
             options,
             active_index,
         }) = self.prompt.as_mut()
         else {
-            return RuntimeRecordBrowserOutcome::Ignored;
+            return RecordBrowserOutcome::Ignored;
         };
         if options.is_empty() {
-            return RuntimeRecordBrowserOutcome::Ignored;
+            return RecordBrowserOutcome::Ignored;
         }
         *active_index = options.len().saturating_sub(1);
-        RuntimeRecordBrowserOutcome::Updated
+        RecordBrowserOutcome::Updated
     }
 }
 
-fn validate_browser_record(record: &RuntimeRecordBrowserRecord) -> Result<()> {
+fn validate_browser_record(record: &RecordBrowserRecord) -> Result<()> {
     if record.id.trim().is_empty() {
-        return Err(MezError::invalid_args(
+        return Err(MuxError::invalid_args(
             "record browser id must not be empty",
         ));
     }
     if record.title.trim().is_empty() {
-        return Err(MezError::invalid_args(
+        return Err(MuxError::invalid_args(
             "record browser title must not be empty",
         ));
     }
     Ok(())
 }
 
-fn prompt_block(prompt: &RuntimeRecordBrowserPrompt) -> String {
+fn prompt_block(prompt: &RecordBrowserPrompt) -> String {
     match prompt {
-        RuntimeRecordBrowserPrompt::Filter { field, input } => {
+        RecordBrowserPrompt::Filter { field, input } => {
             format!("Filter {}: {}", filter_field_name(*field), input)
         }
-        RuntimeRecordBrowserPrompt::KindSelector { options, .. } => {
+        RecordBrowserPrompt::KindSelector { options, .. } => {
             std::iter::once("Filter kind:".to_string())
                 .chain(options.iter().map(|option| format!("  {}", option.label)))
                 .collect::<Vec<_>>()
                 .join("\n")
         }
-        RuntimeRecordBrowserPrompt::Save { input } => format!("Save to: {input}"),
+        RecordBrowserPrompt::Save { input } => format!("Save to: {input}"),
     }
 }
 
@@ -472,16 +466,16 @@ fn step_selector_index(active: usize, len: usize, delta: isize) -> usize {
     active.saturating_add_signed(delta).min(max)
 }
 
-fn filter_field_name(field: RuntimeRecordBrowserFilterField) -> &'static str {
+fn filter_field_name(field: RecordBrowserFilterField) -> &'static str {
     match field {
-        RuntimeRecordBrowserFilterField::Kind => "kind",
-        RuntimeRecordBrowserFilterField::Tags => "tags",
-        RuntimeRecordBrowserFilterField::ProjectGlob => "project",
-        RuntimeRecordBrowserFilterField::Text => "text",
+        RecordBrowserFilterField::Kind => "kind",
+        RecordBrowserFilterField::Tags => "tags",
+        RecordBrowserFilterField::ProjectGlob => "project",
+        RecordBrowserFilterField::Text => "text",
     }
 }
 
-fn list_markdown(title: &str, records: &[RuntimeRecordBrowserRecord]) -> String {
+fn list_markdown(title: &str, records: &[RecordBrowserRecord]) -> String {
     let mut lines = vec![format!("# {title}"), String::new()];
     if records.is_empty() {
         lines.push("No records found.".to_string());
@@ -502,7 +496,7 @@ fn list_markdown(title: &str, records: &[RuntimeRecordBrowserRecord]) -> String 
     lines.join("\n")
 }
 
-fn detail_markdown(record: &RuntimeRecordBrowserRecord) -> String {
+fn detail_markdown(record: &RecordBrowserRecord) -> String {
     let mut lines = vec![format!("# {}", record.title), String::new()];
     lines.push(record.title.clone());
     lines.push(String::new());
@@ -522,7 +516,7 @@ fn detail_markdown(record: &RuntimeRecordBrowserRecord) -> String {
     lines.join("\n")
 }
 
-fn list_record_label(record: &RuntimeRecordBrowserRecord) -> String {
+fn list_record_label(record: &RecordBrowserRecord) -> String {
     let mut label = format!("{} — {}", record.id, record.title);
     let metadata = list_metadata_summary(&record.metadata);
     if !metadata.is_empty() {
@@ -577,8 +571,8 @@ fn encode_mez_agent_command(command: &str) -> String {
 mod tests {
     use super::*;
 
-    fn browser_record(id: &str, title: &str) -> RuntimeRecordBrowserRecord {
-        RuntimeRecordBrowserRecord {
+    fn browser_record(id: &str, title: &str) -> RecordBrowserRecord {
+        RecordBrowserRecord {
             id: id.to_string(),
             open_command: Some(format!("/show-issues {id}")),
             title: title.to_string(),
@@ -591,7 +585,7 @@ mod tests {
     /// and return to the list while preserving the retained scroll position.
     #[test]
     fn record_browser_returns_from_detail_with_list_state_preserved() {
-        let mut browser = RuntimeRecordBrowser::new(
+        let mut browser = RecordBrowser::new(
             "Issues",
             vec![
                 browser_record("issue-1", "First"),
@@ -607,9 +601,9 @@ mod tests {
 
         assert_eq!(
             browser
-                .apply_action(RuntimeRecordBrowserAction::BackToList)
+                .apply_action(RecordBrowserAction::BackToList)
                 .unwrap(),
-            RuntimeRecordBrowserOutcome::Updated
+            RecordBrowserOutcome::Updated
         );
         assert_eq!(browser.scroll_offset(), 4);
         let list_page = browser.render_page();
@@ -631,7 +625,7 @@ mod tests {
     /// error states render inside the same pager content model.
     #[test]
     fn record_browser_prompts_and_empty_error_states_are_typed() {
-        let mut browser = RuntimeRecordBrowser::new("Memories", Vec::new(), Vec::new()).unwrap();
+        let mut browser = RecordBrowser::new("Memories", Vec::new(), Vec::new()).unwrap();
         browser.set_error(Some("database unavailable".to_string()));
         let empty_page = browser.render_page();
         assert!(empty_page.markdown.contains("No records found."));
@@ -639,47 +633,45 @@ mod tests {
 
         assert_eq!(
             browser
-                .apply_action(RuntimeRecordBrowserAction::StartFilter(
-                    RuntimeRecordBrowserFilterField::ProjectGlob,
+                .apply_action(RecordBrowserAction::StartFilter(
+                    RecordBrowserFilterField::ProjectGlob,
                 ))
                 .unwrap(),
-            RuntimeRecordBrowserOutcome::Updated
+            RecordBrowserOutcome::Updated
         );
         assert!(matches!(
             browser.prompt(),
-            Some(RuntimeRecordBrowserPrompt::Filter {
-                field: RuntimeRecordBrowserFilterField::ProjectGlob,
+            Some(RecordBrowserPrompt::Filter {
+                field: RecordBrowserFilterField::ProjectGlob,
                 ..
             })
         ));
         browser
-            .apply_action(RuntimeRecordBrowserAction::EditPrompt(
-                "/repo/*".to_string(),
-            ))
+            .apply_action(RecordBrowserAction::EditPrompt("/repo/*".to_string()))
             .unwrap();
         assert_eq!(
             browser
-                .apply_action(RuntimeRecordBrowserAction::SubmitPrompt)
+                .apply_action(RecordBrowserAction::SubmitPrompt)
                 .unwrap(),
-            RuntimeRecordBrowserOutcome::FilterSubmitted {
-                field: RuntimeRecordBrowserFilterField::ProjectGlob,
+            RecordBrowserOutcome::FilterSubmitted {
+                field: RecordBrowserFilterField::ProjectGlob,
                 value: "/repo/*".to_string(),
             }
         );
 
-        let mut browser = RuntimeRecordBrowser::new(
+        let mut browser = RecordBrowser::new(
             "Issues",
             Vec::new(),
             vec![
-                RuntimeRecordBrowserFilterChoice {
+                RecordBrowserFilterChoice {
                     label: "all kinds".to_string(),
                     value: String::new(),
                 },
-                RuntimeRecordBrowserFilterChoice {
+                RecordBrowserFilterChoice {
                     label: "defect".to_string(),
                     value: "defect".to_string(),
                 },
-                RuntimeRecordBrowserFilterChoice {
+                RecordBrowserFilterChoice {
                     label: "task".to_string(),
                     value: "task".to_string(),
                 },
@@ -688,19 +680,19 @@ mod tests {
         .unwrap();
         assert_eq!(
             browser
-                .apply_action(RuntimeRecordBrowserAction::StartFilter(
-                    RuntimeRecordBrowserFilterField::Kind,
+                .apply_action(RecordBrowserAction::StartFilter(
+                    RecordBrowserFilterField::Kind,
                 ))
                 .unwrap(),
-            RuntimeRecordBrowserOutcome::Updated
+            RecordBrowserOutcome::Updated
         );
         assert!(matches!(
             browser.prompt(),
-            Some(RuntimeRecordBrowserPrompt::KindSelector { .. })
+            Some(RecordBrowserPrompt::KindSelector { .. })
         ));
         assert_eq!(
             browser.prompt_selection(),
-            Some(RuntimeRecordBrowserPromptSelection {
+            Some(RecordBrowserPromptSelection {
                 start_line: 1,
                 option_count: 3,
                 active_index: 0,
@@ -708,35 +700,35 @@ mod tests {
         );
         assert_eq!(
             browser
-                .apply_action(RuntimeRecordBrowserAction::MovePromptSelection(1))
+                .apply_action(RecordBrowserAction::MovePromptSelection(1))
                 .unwrap(),
-            RuntimeRecordBrowserOutcome::Updated
+            RecordBrowserOutcome::Updated
         );
         assert_eq!(
             browser
-                .apply_action(RuntimeRecordBrowserAction::SelectPromptFirst)
+                .apply_action(RecordBrowserAction::SelectPromptFirst)
                 .unwrap(),
-            RuntimeRecordBrowserOutcome::Updated
+            RecordBrowserOutcome::Updated
         );
         assert_eq!(
             browser
-                .apply_action(RuntimeRecordBrowserAction::SelectPromptLast)
+                .apply_action(RecordBrowserAction::SelectPromptLast)
                 .unwrap(),
-            RuntimeRecordBrowserOutcome::Updated
+            RecordBrowserOutcome::Updated
         );
         assert_eq!(
             browser
-                .apply_action(RuntimeRecordBrowserAction::SubmitPrompt)
+                .apply_action(RecordBrowserAction::SubmitPrompt)
                 .unwrap(),
-            RuntimeRecordBrowserOutcome::FilterSubmitted {
-                field: RuntimeRecordBrowserFilterField::Kind,
+            RecordBrowserOutcome::FilterSubmitted {
+                field: RecordBrowserFilterField::Kind,
                 value: "task".to_string(),
             }
         );
 
-        let mut browser = RuntimeRecordBrowser::new(
+        let mut browser = RecordBrowser::new(
             "Issues",
-            vec![RuntimeRecordBrowserRecord {
+            vec![RecordBrowserRecord {
                 id: "issue-1".to_string(),
                 open_command: Some("/show-issues issue-1".to_string()),
                 title: "Pipe table".to_string(),
@@ -748,18 +740,16 @@ mod tests {
         .unwrap();
         browser.show_first_record_detail();
         browser
-            .apply_action(RuntimeRecordBrowserAction::StartSave)
+            .apply_action(RecordBrowserAction::StartSave)
             .unwrap();
         browser
-            .apply_action(RuntimeRecordBrowserAction::EditPrompt(
-                "issue.md".to_string(),
-            ))
+            .apply_action(RecordBrowserAction::EditPrompt("issue.md".to_string()))
             .unwrap();
         match browser
-            .apply_action(RuntimeRecordBrowserAction::SubmitPrompt)
+            .apply_action(RecordBrowserAction::SubmitPrompt)
             .unwrap()
         {
-            RuntimeRecordBrowserOutcome::SaveSubmitted { path, markdown } => {
+            RecordBrowserOutcome::SaveSubmitted { path, markdown } => {
                 assert_eq!(path, "issue.md");
                 assert!(markdown.contains("| state | open\\|resolved |"));
                 assert!(markdown.contains("Detail body"));

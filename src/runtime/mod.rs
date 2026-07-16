@@ -276,7 +276,6 @@ mod processes;
 ///
 /// The module keeps list/detail navigation, prompt state, and save payloads
 /// independent from issue and memory adapters.
-mod record_browser;
 /// Exposes the render module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

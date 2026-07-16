@@ -32,10 +32,6 @@ pub(super) struct PaneAgentStatusSelectorLayoutItem {
 
 /// Maximum number of model/reasoning picker rows shown at once.
 pub(super) const PANE_AGENT_STATUS_SELECTOR_MAX_ROWS: usize = 30;
-/// Selector marker shown in front of the active command-output overlay row.
-const DISPLAY_OVERLAY_ACTIVE_SELECTOR: &str = "> ";
-/// Placeholder marker shown in front of inactive selectable overlay rows.
-const DISPLAY_OVERLAY_INACTIVE_SELECTOR: &str = "  ";
 /// Returns a compact MCP server state label for command completion details.
 pub(super) fn agent_shell_mcp_display_state_name(
     enabled: bool,
@@ -222,12 +218,12 @@ pub(super) fn runtime_agent_shell_markdown_overlay_content(
         } = rendered;
         let line_index = content.lines.len();
         for (start_column, width, command) in agent_command_links_in_line(&display) {
-            content.selections.push(RuntimeDisplayOverlaySelection {
+            content.selections.push(OverlaySelection {
                 line_index,
                 start_column,
                 width,
                 command,
-                kind: RuntimeDisplayOverlaySelectionKind::Primary,
+                kind: OverlaySelectionKind::Primary,
             });
         }
         if let Some(copy_text) = copy_text.as_deref() {
@@ -241,12 +237,12 @@ pub(super) fn runtime_agent_shell_markdown_overlay_content(
                         && selection.command == command
                 });
                 if !duplicate {
-                    content.selections.push(RuntimeDisplayOverlaySelection {
+                    content.selections.push(OverlaySelection {
                         line_index,
                         start_column,
                         width,
                         command,
-                        kind: RuntimeDisplayOverlaySelectionKind::Primary,
+                        kind: OverlaySelectionKind::Primary,
                     });
                 }
                 push_or_extend_style_span(
@@ -254,7 +250,7 @@ pub(super) fn runtime_agent_shell_markdown_overlay_content(
                     TerminalStyleSpan {
                         start: start_column,
                         length: width,
-                        rendition: runtime_display_overlay_link_rendition(ui_theme),
+                        rendition: overlay_link_rendition(ui_theme),
                     },
                 );
             }
@@ -508,7 +504,7 @@ pub(super) struct RuntimeCommandDisplayOverlayContent {
     /// Visible terminal styles for each rendered display line.
     pub(super) line_style_spans: Vec<Vec<TerminalStyleSpan>>,
     /// Optional command actions keyed by line index.
-    pub(super) selections: Vec<RuntimeDisplayOverlaySelection>,
+    pub(super) selections: Vec<OverlaySelection>,
 }
 
 /// One rendered command-overlay display line with selectable choices.
@@ -534,7 +530,7 @@ pub(super) struct RuntimeDisplayChoicePlacement {
     /// Terminal command executed by this choice.
     pub(super) command: String,
     /// Visual importance of this choice.
-    pub(super) kind: RuntimeDisplayOverlaySelectionKind,
+    pub(super) kind: OverlaySelectionKind,
 }
 
 /// One parsed executable display choice before it has a line position.
@@ -545,7 +541,7 @@ pub(super) struct RuntimeDisplayChoice {
     /// Terminal command executed by this choice.
     pub(super) command: String,
     /// Visual importance of this choice.
-    pub(super) kind: RuntimeDisplayOverlaySelectionKind,
+    pub(super) kind: OverlaySelectionKind,
 }
 
 /// Parses command JSON output into human-readable overlay content.
@@ -677,12 +673,12 @@ fn list_themes_rendered_overlay_lines_align_headers_with_selectable_rows() {
         ],
         line_style_spans: vec![Vec::new(); 3],
         scroll_offset: 0,
-        selections: vec![RuntimeDisplayOverlaySelection {
+        selections: vec![OverlaySelection {
             line_index: 2,
             start_column: 13,
             width: 8,
             command: "set-theme kanagawa".to_string(),
-            kind: RuntimeDisplayOverlaySelectionKind::Primary,
+            kind: OverlaySelectionKind::Primary,
         }],
         active_selection_index: Some(0),
         dismiss_on_any_input: false,
@@ -694,7 +690,7 @@ fn list_themes_rendered_overlay_lines_align_headers_with_selectable_rows() {
         record_browser: None,
     };
 
-    let rendered = runtime_display_overlay_render_lines(&overlay);
+    let rendered = overlay_render_lines(&overlay);
 
     assert_eq!(
         rendered[0],
@@ -1025,7 +1021,7 @@ impl RuntimeCommandDisplayOverlayContent {
                 self.lines.push(display_line.text);
                 self.line_style_spans.push(display_line.style_spans);
                 for choice in display_line.choices {
-                    self.selections.push(RuntimeDisplayOverlaySelection {
+                    self.selections.push(OverlaySelection {
                         line_index,
                         start_column: choice.start_column,
                         width: choice.width,
@@ -1274,18 +1270,12 @@ pub(super) fn runtime_display_choice_label(command_name: &str) -> String {
 }
 
 /// Returns the themed visual category for one command name.
-pub(super) fn runtime_display_choice_kind(
-    command_name: &str,
-) -> RuntimeDisplayOverlaySelectionKind {
+pub(super) fn runtime_display_choice_kind(command_name: &str) -> OverlaySelectionKind {
     match command_name {
         "delete-buffer" | "detach-client" | "reject-observer" | "revoke-observer" | "kill-pane"
-        | "kill-window" | "kill-group" | "kill-session" => {
-            RuntimeDisplayOverlaySelectionKind::Danger
-        }
-        "paste-buffer" | "paste-clipboard" | "copy-selection" => {
-            RuntimeDisplayOverlaySelectionKind::Secondary
-        }
-        _ => RuntimeDisplayOverlaySelectionKind::Primary,
+        | "kill-window" | "kill-group" | "kill-session" => OverlaySelectionKind::Danger,
+        "paste-buffer" | "paste-clipboard" | "copy-selection" => OverlaySelectionKind::Secondary,
+        _ => OverlaySelectionKind::Primary,
     }
 }
 
@@ -1361,400 +1351,6 @@ fn runtime_theme_preview_style_spans(
     spans
 }
 
-/// Returns the rendered line index for the active overlay selection.
-pub(super) fn runtime_display_overlay_active_line_index(
-    overlay: &RuntimeDisplayOverlay,
-) -> Option<usize> {
-    overlay
-        .active_selection_index
-        .and_then(|index| overlay.selections.get(index))
-        .map(|selection| selection.line_index)
-}
-
-/// Keeps a target overlay line within the modal page.
-pub(super) fn runtime_scroll_display_overlay_to_line(
-    overlay: &mut RuntimeDisplayOverlay,
-    line_index: usize,
-    client_size: Size,
-) {
-    let page_rows = modal_display_overlay_page_rows(client_size).max(1);
-    if line_index < overlay.scroll_offset {
-        overlay.scroll_offset = line_index;
-    } else if line_index >= overlay.scroll_offset.saturating_add(page_rows) {
-        overlay.scroll_offset = line_index.saturating_add(1).saturating_sub(page_rows);
-    }
-    overlay.scroll_offset = overlay.scroll_offset.min(modal_display_overlay_max_scroll(
-        &overlay.lines,
-        client_size,
-    ));
-}
-
-/// Clamps overlay scrolling to the visible content range for the client size.
-pub(super) fn runtime_clamp_display_overlay_scroll(
-    overlay: &mut RuntimeDisplayOverlay,
-    client_size: Size,
-) {
-    overlay.scroll_offset = overlay.scroll_offset.min(modal_display_overlay_max_scroll(
-        &overlay.lines,
-        client_size,
-    ));
-}
-
-/// Returns display overlay lines with selector markers on actionable rows.
-pub(super) fn runtime_display_overlay_render_lines(overlay: &RuntimeDisplayOverlay) -> Vec<String> {
-    let active_line = runtime_display_overlay_active_line_index(overlay);
-    let inactive_prefix =
-        (!overlay.selections.is_empty()).then_some(DISPLAY_OVERLAY_INACTIVE_SELECTOR);
-    overlay
-        .lines
-        .iter()
-        .enumerate()
-        .map(|(line_index, line)| {
-            if active_line == Some(line_index) {
-                format!("{DISPLAY_OVERLAY_ACTIVE_SELECTOR}{line}")
-            } else if let Some(prefix) = inactive_prefix {
-                format!("{prefix}{line}")
-            } else {
-                line.to_string()
-            }
-        })
-        .collect()
-}
-
-/// Returns the rendered start column after selector gutters are added.
-pub(super) fn runtime_display_overlay_rendered_selection_start(
-    overlay: &RuntimeDisplayOverlay,
-    selection: &RuntimeDisplayOverlaySelection,
-) -> usize {
-    selection.start_column
-        + runtime_display_overlay_line_prefix_columns(overlay, selection.line_index)
-}
-
-/// Returns the terminal-cell width occupied by one rendered overlay row gutter.
-pub(super) fn runtime_display_overlay_line_prefix_columns(
-    overlay: &RuntimeDisplayOverlay,
-    _line_index: usize,
-) -> usize {
-    usize::from(!overlay.selections.is_empty()) * runtime_display_overlay_selection_prefix_columns()
-}
-
-/// Returns the terminal-cell width occupied by selectable overlay row gutters.
-pub(super) fn runtime_display_overlay_selection_prefix_columns() -> usize {
-    UnicodeWidthStr::width(DISPLAY_OVERLAY_ACTIVE_SELECTOR)
-}
-
-/// Returns the modal overlay footer text for the active overlay.
-pub(super) fn runtime_display_overlay_footer(overlay: &RuntimeDisplayOverlay) -> String {
-    if let Some(input) = overlay.search_input.as_deref() {
-        format!("/{input}")
-    } else if let Some(status) = overlay.search_status.as_deref() {
-        status.to_string()
-    } else if overlay.record_browser.is_some() {
-        "esc: back | /: search | enter: open | k/p/x: filter | s: save | arrows pgup/pgdn"
-            .to_string()
-    } else if overlay.selections.is_empty() {
-        "esc: return | /: search | up/down pgup/pgdn home/end".to_string()
-    } else {
-        "esc: return | /: search | enter: select | arrows: choose | pgup/pgdn: scroll".to_string()
-    }
-}
-
-/// Returns the themed choice style for a command-overlay selection.
-pub(super) fn runtime_display_overlay_selection_rendition(
-    ui_theme: &UiTheme,
-    kind: RuntimeDisplayOverlaySelectionKind,
-    active: bool,
-) -> GraphicRendition {
-    let pair = match kind {
-        RuntimeDisplayOverlaySelectionKind::Primary => ui_theme.colors.agent_model,
-        RuntimeDisplayOverlaySelectionKind::Secondary => ui_theme.colors.agent_reasoning,
-        RuntimeDisplayOverlaySelectionKind::Danger => ui_theme.colors.agent_status_failed,
-    };
-    let mut rendition = GraphicRendition {
-        foreground: Some(pair.foreground),
-        ..GraphicRendition::default()
-    };
-    rendition.bold = true;
-    rendition.underline = true;
-    rendition.inverse = false;
-    rendition.background = None;
-    rendition.dim = false;
-    if active {
-        rendition.background = Some(pair.background);
-    }
-    rendition
-}
-/// Returns the selector-gutter rendition for a selectable overlay row.
-///
-/// The gutter marks the active row, but it is not part of the selectable body
-/// range. Keep the selector glyph itself unstyled so active link treatment
-/// begins only on the first body cell; otherwise front-of-line `/resume` links
-/// visibly shift left into the selector prefix even when the body/background
-/// math is correct.
-pub(super) fn runtime_display_overlay_selection_gutter_rendition(
-    _ui_theme: &UiTheme,
-    _kind: RuntimeDisplayOverlaySelectionKind,
-) -> GraphicRendition {
-    GraphicRendition::default()
-}
-/// Returns the markdown-style rendition used for command-overlay links.
-pub(super) fn runtime_display_overlay_link_rendition(ui_theme: &UiTheme) -> GraphicRendition {
-    GraphicRendition {
-        foreground: Some(ui_theme.colors.agent_transcript_command.foreground),
-        bold: true,
-        underline: true,
-        inverse: false,
-        background: None,
-        ..GraphicRendition::default()
-    }
-}
-/// Returns the shifted, clipped markdown/body spans for one overlay line.
-pub(super) fn runtime_display_overlay_body_style_spans(
-    overlay: &RuntimeDisplayOverlay,
-    line_index: usize,
-    max_columns: usize,
-) -> Vec<TerminalStyleSpan> {
-    let prefix_columns = runtime_display_overlay_line_prefix_columns(overlay, line_index);
-    let visible_columns = max_columns.saturating_sub(prefix_columns);
-    overlay
-        .line_style_spans
-        .get(line_index)
-        .into_iter()
-        .flatten()
-        .filter_map(|span| clipped_overlay_style_span(*span, prefix_columns, visible_columns))
-        .collect()
-}
-/// Appends one selection rendition only where later body spans do not apply.
-pub(super) fn append_uncovered_overlay_selection_span(
-    spans: &mut Vec<TerminalStyleSpan>,
-    selection_start: usize,
-    selection_length: usize,
-    rendition: GraphicRendition,
-    occupied_spans: &[TerminalStyleSpan],
-) {
-    let selection_end = selection_start.saturating_add(selection_length);
-    if selection_start >= selection_end {
-        return;
-    }
-    let mut occupied_ranges: Vec<(usize, usize)> = occupied_spans
-        .iter()
-        .filter_map(|span| {
-            let span_start = span.start.max(selection_start);
-            let span_end = span.start.saturating_add(span.length).min(selection_end);
-            (span_start < span_end).then_some((span_start, span_end))
-        })
-        .collect();
-    occupied_ranges.sort_unstable_by_key(|(start, _)| *start);
-    let mut cursor = selection_start;
-    for (occupied_start, occupied_end) in occupied_ranges {
-        if cursor < occupied_start {
-            push_or_extend_style_span(
-                spans,
-                TerminalStyleSpan {
-                    start: cursor,
-                    length: occupied_start.saturating_sub(cursor),
-                    rendition,
-                },
-            );
-        }
-        cursor = cursor.max(occupied_end);
-        if cursor >= selection_end {
-            return;
-        }
-    }
-    push_or_extend_style_span(
-        spans,
-        TerminalStyleSpan {
-            start: cursor,
-            length: selection_end.saturating_sub(cursor),
-            rendition,
-        },
-    );
-}
-
-/// Appends one style span without coalescing it into an adjacent span.
-///
-/// Overlay selection gutters must remain a standalone cell so later body or
-/// fallback selection styling cannot visually absorb the gutter when adjacent
-/// rendered spans share the same rendition.
-fn push_style_span_without_coalescing(spans: &mut Vec<TerminalStyleSpan>, span: TerminalStyleSpan) {
-    if span.length == 0 {
-        return;
-    }
-    spans.push(span);
-}
-
-/// Appends active-selection backgrounds over body spans inside a selected range.
-fn append_active_overlay_body_selection_spans(
-    spans: &mut Vec<TerminalStyleSpan>,
-    selection_start: usize,
-    selection_length: usize,
-    selection_rendition: GraphicRendition,
-    body_spans: &[TerminalStyleSpan],
-) {
-    let selection_end = selection_start.saturating_add(selection_length);
-    if selection_start >= selection_end {
-        return;
-    }
-    for body_span in body_spans {
-        let body_start = body_span.start.max(selection_start);
-        let body_end = body_span
-            .start
-            .saturating_add(body_span.length)
-            .min(selection_end);
-        if body_start >= body_end {
-            continue;
-        }
-        let mut rendition = body_span.rendition;
-        rendition.background = selection_rendition.background;
-        if rendition.foreground.is_none() {
-            rendition.foreground = selection_rendition.foreground;
-        }
-        push_style_span_without_coalescing(
-            spans,
-            TerminalStyleSpan {
-                start: body_start,
-                length: body_end.saturating_sub(body_start),
-                rendition,
-            },
-        );
-    }
-}
-/// Returns the fully composed style spans for one rendered overlay line.
-pub(super) fn runtime_display_overlay_rendered_line_style_spans(
-    overlay: &RuntimeDisplayOverlay,
-    line_index: usize,
-    max_columns: usize,
-    ui_theme: &UiTheme,
-) -> Vec<TerminalStyleSpan> {
-    let body_spans = runtime_display_overlay_body_style_spans(overlay, line_index, max_columns);
-    let prefix_columns = runtime_display_overlay_line_prefix_columns(overlay, line_index);
-    let mut spans = Vec::new();
-    let search_span = overlay.search_match.and_then(|search_match| {
-        if search_match.line_index != line_index || search_match.width == 0 {
-            return None;
-        }
-        let start = prefix_columns.saturating_add(search_match.start_column);
-        if start >= max_columns {
-            return None;
-        }
-        Some(TerminalStyleSpan {
-            start,
-            length: search_match.width.min(max_columns.saturating_sub(start)),
-            rendition: ui_theme.colors.copy_selection.rendition(),
-        })
-    });
-    for (selection_index, selection) in overlay.selections.iter().enumerate() {
-        if selection.line_index != line_index {
-            continue;
-        }
-        let active = overlay.active_selection_index == Some(selection_index);
-        let start = runtime_display_overlay_rendered_selection_start(overlay, selection);
-        if start < max_columns && selection.width > 0 {
-            append_uncovered_overlay_selection_span(
-                &mut spans,
-                start,
-                selection.width.min(max_columns.saturating_sub(start)),
-                runtime_display_overlay_selection_rendition(ui_theme, selection.kind, active),
-                &body_spans,
-            );
-        }
-        if active {
-            push_style_span_without_coalescing(
-                &mut spans,
-                TerminalStyleSpan {
-                    start: 0,
-                    length: prefix_columns.min(max_columns),
-                    rendition: runtime_display_overlay_selection_gutter_rendition(
-                        ui_theme,
-                        selection.kind,
-                    ),
-                },
-            );
-        }
-    }
-    for span in &body_spans {
-        push_or_extend_style_span(&mut spans, *span);
-    }
-    for (selection_index, selection) in overlay.selections.iter().enumerate() {
-        if selection.line_index != line_index
-            || overlay.active_selection_index != Some(selection_index)
-        {
-            continue;
-        }
-        let start = runtime_display_overlay_rendered_selection_start(overlay, selection);
-        if start < max_columns && selection.width > 0 {
-            append_active_overlay_body_selection_spans(
-                &mut spans,
-                start,
-                selection.width.min(max_columns.saturating_sub(start)),
-                runtime_display_overlay_selection_rendition(ui_theme, selection.kind, true),
-                &body_spans,
-            );
-        }
-    }
-    if let Some(search_span) = search_span {
-        push_or_extend_style_span(&mut spans, search_span);
-    }
-    append_display_overlay_mouse_selection_spans(
-        &mut spans,
-        overlay.mouse_selection,
-        line_index,
-        prefix_columns,
-        max_columns,
-        ui_theme.colors.copy_selection.rendition(),
-    );
-    spans
-}
-
-/// Appends copy-selection style spans for one rendered overlay content row.
-fn append_display_overlay_mouse_selection_spans(
-    spans: &mut Vec<TerminalStyleSpan>,
-    selection: Option<(CopyPosition, CopyPosition)>,
-    line_index: usize,
-    prefix_columns: usize,
-    max_columns: usize,
-    rendition: GraphicRendition,
-) {
-    let Some((start, end)) = selection else {
-        return;
-    };
-    let (start, end) = if start <= end {
-        (start, end)
-    } else {
-        (end, start)
-    };
-    if line_index < start.line || line_index > end.line {
-        return;
-    }
-    let content_start = if line_index == start.line {
-        start.column
-    } else {
-        0
-    };
-    let content_end = if line_index == end.line {
-        end.column
-    } else {
-        max_columns.saturating_sub(prefix_columns)
-    };
-    let rendered_start = prefix_columns
-        .saturating_add(content_start)
-        .min(max_columns);
-    let rendered_end = prefix_columns.saturating_add(content_end).min(max_columns);
-    if rendered_start >= rendered_end {
-        return;
-    }
-    push_or_extend_style_span(
-        spans,
-        TerminalStyleSpan {
-            start: rendered_start,
-            length: rendered_end.saturating_sub(rendered_start),
-            rendition,
-        },
-    );
-}
-
-/// Computes terminal placement for a pane agent model/reasoning selector.
 pub(super) fn runtime_pane_agent_status_selector_layout(
     selector: &RuntimePaneAgentStatusSelector,
     size: Size,
@@ -1848,17 +1444,11 @@ pub(super) fn runtime_selector_line(marker: &str, value: &str, width: usize) -> 
     line
 }
 
-fn record_browser_prompt_text(
-    prompt: &crate::runtime::record_browser::RuntimeRecordBrowserPrompt,
-) -> String {
+fn record_browser_prompt_text(prompt: &mez_mux::record_browser::RecordBrowserPrompt) -> String {
     match prompt {
-        crate::runtime::record_browser::RuntimeRecordBrowserPrompt::Filter { input, .. }
-        | crate::runtime::record_browser::RuntimeRecordBrowserPrompt::Save { input } => {
-            input.clone()
-        }
-        crate::runtime::record_browser::RuntimeRecordBrowserPrompt::KindSelector { .. } => {
-            String::new()
-        }
+        mez_mux::record_browser::RecordBrowserPrompt::Filter { input, .. }
+        | mez_mux::record_browser::RecordBrowserPrompt::Save { input } => input.clone(),
+        mez_mux::record_browser::RecordBrowserPrompt::KindSelector { .. } => String::new(),
     }
 }
 
@@ -1885,12 +1475,12 @@ fn render_record_browser_overlay(
             .enumerate()
             .skip(prompt_selection.start_line)
             .take(prompt_selection.option_count)
-            .map(|(line_index, line)| RuntimeDisplayOverlaySelection {
+            .map(|(line_index, line)| OverlaySelection {
                 line_index,
                 start_column: 0,
                 width: UnicodeWidthStr::width(line.as_str()),
                 command: String::new(),
-                kind: RuntimeDisplayOverlaySelectionKind::Primary,
+                kind: OverlaySelectionKind::Primary,
             })
             .collect()
     } else {
@@ -1969,7 +1559,7 @@ impl RuntimeSessionService {
         let Some(overlay) = self.primary_display_overlay.as_mut() else {
             return Ok(false);
         };
-        Ok(apply_display_overlay_scroll_delta(
+        Ok(apply_overlay_scroll_delta(
             overlay,
             lines,
             self.session.authoritative_size,
@@ -1997,28 +1587,22 @@ impl RuntimeSessionService {
             return Ok(None);
         };
         let action = match input {
-            b"k" => Some(
-                crate::runtime::record_browser::RuntimeRecordBrowserAction::StartFilter(
-                    crate::runtime::record_browser::RuntimeRecordBrowserFilterField::Kind,
-                ),
-            ),
-            b"p" => Some(
-                crate::runtime::record_browser::RuntimeRecordBrowserAction::StartFilter(
-                    crate::runtime::record_browser::RuntimeRecordBrowserFilterField::ProjectGlob,
-                ),
-            ),
-            b"x" => Some(
-                crate::runtime::record_browser::RuntimeRecordBrowserAction::StartFilter(
-                    crate::runtime::record_browser::RuntimeRecordBrowserFilterField::Text,
-                ),
-            ),
-            b"s" => Some(crate::runtime::record_browser::RuntimeRecordBrowserAction::StartSave),
+            b"k" => Some(mez_mux::record_browser::RecordBrowserAction::StartFilter(
+                mez_mux::record_browser::RecordBrowserFilterField::Kind,
+            )),
+            b"p" => Some(mez_mux::record_browser::RecordBrowserAction::StartFilter(
+                mez_mux::record_browser::RecordBrowserFilterField::ProjectGlob,
+            )),
+            b"x" => Some(mez_mux::record_browser::RecordBrowserAction::StartFilter(
+                mez_mux::record_browser::RecordBrowserFilterField::Text,
+            )),
+            b"s" => Some(mez_mux::record_browser::RecordBrowserAction::StartSave),
             _ if matches!(
                 runtime_selector_input_action(input),
                 RuntimeSelectorInputAction::Select
             ) =>
             {
-                Some(crate::runtime::record_browser::RuntimeRecordBrowserAction::OpenActive)
+                Some(mez_mux::record_browser::RecordBrowserAction::OpenActive)
             }
             _ if matches!(
                 runtime_selector_input_action(input),
@@ -2041,12 +1625,12 @@ impl RuntimeSessionService {
                         .or_else(|| (!overlay.selections.is_empty()).then_some(0));
                     return Ok(Some(changed));
                 }
-                let outcome = record_browser.browser.apply_action(
-                    crate::runtime::record_browser::RuntimeRecordBrowserAction::BackToList,
-                )?;
+                let outcome = record_browser
+                    .browser
+                    .apply_action(mez_mux::record_browser::RecordBrowserAction::BackToList)?;
                 if matches!(
                     outcome,
-                    crate::runtime::record_browser::RuntimeRecordBrowserOutcome::Updated
+                    mez_mux::record_browser::RecordBrowserOutcome::Updated
                 ) {
                     return Ok(Some(render_record_browser_overlay(overlay, &self.ui_theme)));
                 }
@@ -2060,7 +1644,7 @@ impl RuntimeSessionService {
         let outcome = record_browser.browser.apply_action(action)?;
         if matches!(
             outcome,
-            crate::runtime::record_browser::RuntimeRecordBrowserOutcome::Ignored
+            mez_mux::record_browser::RecordBrowserOutcome::Ignored
         ) {
             return Ok(None);
         }
@@ -2085,41 +1669,37 @@ impl RuntimeSessionService {
         let action = if prompt_has_selector {
             match runtime_selector_input_action(input) {
                 RuntimeSelectorInputAction::Exit => {
-                    crate::runtime::record_browser::RuntimeRecordBrowserAction::BackToList
+                    mez_mux::record_browser::RecordBrowserAction::BackToList
                 }
                 RuntimeSelectorInputAction::Select => {
-                    crate::runtime::record_browser::RuntimeRecordBrowserAction::SubmitPrompt
+                    mez_mux::record_browser::RecordBrowserAction::SubmitPrompt
                 }
                 RuntimeSelectorInputAction::Previous => {
-                    crate::runtime::record_browser::RuntimeRecordBrowserAction::MovePromptSelection(
-                        -1,
-                    )
+                    mez_mux::record_browser::RecordBrowserAction::MovePromptSelection(-1)
                 }
                 RuntimeSelectorInputAction::Next => {
-                    crate::runtime::record_browser::RuntimeRecordBrowserAction::MovePromptSelection(
-                        1,
-                    )
+                    mez_mux::record_browser::RecordBrowserAction::MovePromptSelection(1)
                 }
                 RuntimeSelectorInputAction::First => {
-                    crate::runtime::record_browser::RuntimeRecordBrowserAction::SelectPromptFirst
+                    mez_mux::record_browser::RecordBrowserAction::SelectPromptFirst
                 }
                 RuntimeSelectorInputAction::Last => {
-                    crate::runtime::record_browser::RuntimeRecordBrowserAction::SelectPromptLast
+                    mez_mux::record_browser::RecordBrowserAction::SelectPromptLast
                 }
                 RuntimeSelectorInputAction::Ignore => return Ok(false),
             }
         } else {
             match runtime_display_overlay_input_action(input) {
                 RuntimeDisplayOverlayInputAction::Exit => {
-                    crate::runtime::record_browser::RuntimeRecordBrowserAction::BackToList
+                    mez_mux::record_browser::RecordBrowserAction::BackToList
                 }
                 RuntimeDisplayOverlayInputAction::SelectActive => {
-                    crate::runtime::record_browser::RuntimeRecordBrowserAction::SubmitPrompt
+                    mez_mux::record_browser::RecordBrowserAction::SubmitPrompt
                 }
                 RuntimeDisplayOverlayInputAction::EditSearchBackspace => {
                     let mut text = prompt_text;
                     text.pop();
-                    crate::runtime::record_browser::RuntimeRecordBrowserAction::EditPrompt(text)
+                    mez_mux::record_browser::RecordBrowserAction::EditPrompt(text)
                 }
                 RuntimeDisplayOverlayInputAction::EditSearchText => {
                     let Ok(input) = std::str::from_utf8(input) else {
@@ -2127,7 +1707,7 @@ impl RuntimeSessionService {
                     };
                     let mut text = prompt_text;
                     text.push_str(input);
-                    crate::runtime::record_browser::RuntimeRecordBrowserAction::EditPrompt(text)
+                    mez_mux::record_browser::RecordBrowserAction::EditPrompt(text)
                 }
                 RuntimeDisplayOverlayInputAction::StartSearch
                 | RuntimeDisplayOverlayInputAction::SelectPrevious
@@ -2148,11 +1728,8 @@ impl RuntimeSessionService {
             record_browser.browser.apply_action(action)?
         };
         match outcome {
-            crate::runtime::record_browser::RuntimeRecordBrowserOutcome::Ignored => Ok(false),
-            crate::runtime::record_browser::RuntimeRecordBrowserOutcome::FilterSubmitted {
-                field,
-                value,
-            } => {
+            mez_mux::record_browser::RecordBrowserOutcome::Ignored => Ok(false),
+            mez_mux::record_browser::RecordBrowserOutcome::FilterSubmitted { field, value } => {
                 let source = self
                     .primary_display_overlay
                     .as_ref()
@@ -2175,10 +1752,7 @@ impl RuntimeSessionService {
                 };
                 Ok(render_record_browser_overlay(overlay, &self.ui_theme))
             }
-            crate::runtime::record_browser::RuntimeRecordBrowserOutcome::SaveSubmitted {
-                path,
-                markdown,
-            } => {
+            mez_mux::record_browser::RecordBrowserOutcome::SaveSubmitted { path, markdown } => {
                 let pane_id = self
                     .primary_display_overlay
                     .as_ref()
@@ -2246,7 +1820,7 @@ impl RuntimeSessionService {
                     .as_ref()
                     .and_then(|overlay| {
                         let index = overlay.active_selection_index?;
-                        runtime_display_overlay_selection_index_is_visible(overlay, index, size)
+                        overlay_selection_index_is_visible(overlay, index, size)
                             .then(|| overlay.selections.get(index))
                             .flatten()
                     })
@@ -2281,7 +1855,7 @@ impl RuntimeSessionService {
                 let Some(overlay) = self.primary_display_overlay.as_mut() else {
                     return Ok(false);
                 };
-                Ok(apply_display_overlay_scroll_delta(
+                Ok(apply_overlay_scroll_delta(
                     overlay,
                     delta,
                     self.session.authoritative_size,
@@ -2291,7 +1865,7 @@ impl RuntimeSessionService {
                 let Some(overlay) = self.primary_display_overlay.as_mut() else {
                     return Ok(false);
                 };
-                Ok(apply_display_overlay_scroll_delta(
+                Ok(apply_overlay_scroll_delta(
                     overlay,
                     delta,
                     self.session.authoritative_size,
@@ -2372,15 +1946,13 @@ impl RuntimeSessionService {
             .map(|search_match| search_match.line_index)
             .or_else(|| overlay.scroll_offset.checked_sub(1))
             .unwrap_or(overlay.scroll_offset);
-        let Some(search_match) =
-            runtime_display_overlay_next_search_match(overlay, &query, start_line)
-        else {
+        let Some(search_match) = overlay_next_search_match(overlay, &query, start_line) else {
             overlay.search_status = Some(format!("pattern not found: {query}"));
             return Ok(true);
         };
         overlay.search_match = Some(search_match);
         overlay.scroll_offset = search_match.line_index;
-        runtime_clamp_display_overlay_scroll(overlay, self.session.authoritative_size);
+        clamp_overlay_scroll(overlay, self.session.authoritative_size);
         overlay.search_status = None;
         Ok(true)
     }
@@ -2391,7 +1963,7 @@ impl RuntimeSessionService {
             return Ok(false);
         };
         if overlay.selections.is_empty() {
-            return Ok(apply_display_overlay_scroll_delta(
+            return Ok(apply_overlay_scroll_delta(
                 overlay,
                 delta,
                 self.session.authoritative_size,
@@ -2405,11 +1977,7 @@ impl RuntimeSessionService {
             .get(next)
             .map(|selection| selection.line_index)
         {
-            runtime_scroll_display_overlay_to_line(
-                overlay,
-                line_index,
-                self.session.authoritative_size,
-            );
+            scroll_overlay_to_line(overlay, line_index, self.session.authoritative_size);
         }
         Ok(next != previous)
     }
@@ -2440,199 +2008,10 @@ impl RuntimeSessionService {
             .get(next)
             .map(|selection| selection.line_index)
         {
-            runtime_scroll_display_overlay_to_line(
-                overlay,
-                line_index,
-                self.session.authoritative_size,
-            );
+            scroll_overlay_to_line(overlay, line_index, self.session.authoritative_size);
         }
         Ok(next != previous)
     }
-}
-
-/// Copies the currently selected primary display-overlay text.
-pub(super) fn primary_display_overlay_copy_selection(
-    overlay: &RuntimeDisplayOverlay,
-) -> Option<String> {
-    let (start, end) = overlay.mouse_selection?;
-    let (start, end) = if start <= end {
-        (start, end)
-    } else {
-        (end, start)
-    };
-    if start.line == end.line {
-        return overlay
-            .lines
-            .get(start.line)
-            .map(|line| primary_display_overlay_line_slice(line, start.column, end.column));
-    }
-    let mut copied = Vec::new();
-    let first = overlay.lines.get(start.line)?;
-    copied.push(primary_display_overlay_line_slice(
-        first,
-        start.column,
-        terminal_text_width(first),
-    ));
-    for line_index in start.line.saturating_add(1)..end.line {
-        copied.push(overlay.lines.get(line_index)?.clone());
-    }
-    let last = overlay.lines.get(end.line)?;
-    copied.push(primary_display_overlay_line_slice(last, 0, end.column));
-    Some(copied.join("\n"))
-}
-
-/// Applies a signed scroll delta to a display overlay and clamps the viewport.
-pub(super) fn apply_display_overlay_scroll_delta(
-    overlay: &mut RuntimeDisplayOverlay,
-    delta: isize,
-    size: Size,
-) -> bool {
-    let previous = overlay.scroll_offset;
-    if delta.is_negative() {
-        overlay.scroll_offset = overlay.scroll_offset.saturating_sub(delta.unsigned_abs());
-    } else {
-        overlay.scroll_offset = overlay
-            .scroll_offset
-            .saturating_add(usize::try_from(delta).unwrap_or(usize::MAX));
-    }
-    runtime_clamp_display_overlay_scroll(overlay, size);
-    runtime_display_overlay_update_active_selection_for_viewport(overlay, size);
-    previous != overlay.scroll_offset
-}
-
-/// Returns whether one overlay selection is currently visible in the viewport.
-pub(super) fn runtime_display_overlay_selection_index_is_visible(
-    overlay: &RuntimeDisplayOverlay,
-    selection_index: usize,
-    size: Size,
-) -> bool {
-    let Some(selection) = overlay.selections.get(selection_index) else {
-        return false;
-    };
-    let page_rows = modal_display_overlay_page_rows(size).max(1);
-    let visible_start = overlay.scroll_offset;
-    let visible_end = visible_start.saturating_add(page_rows);
-    selection.line_index >= visible_start && selection.line_index < visible_end
-}
-
-/// Keeps the active overlay selection executable only when it is visible.
-pub(super) fn runtime_display_overlay_update_active_selection_for_viewport(
-    overlay: &mut RuntimeDisplayOverlay,
-    size: Size,
-) {
-    if overlay.selections.is_empty() {
-        overlay.active_selection_index = None;
-        return;
-    }
-    if overlay
-        .active_selection_index
-        .is_some_and(|selection_index| {
-            runtime_display_overlay_selection_index_is_visible(overlay, selection_index, size)
-        })
-    {
-        return;
-    }
-    let page_rows = modal_display_overlay_page_rows(size).max(1);
-    let visible_start = overlay.scroll_offset;
-    let visible_end = visible_start.saturating_add(page_rows);
-    overlay.active_selection_index = overlay.selections.iter().position(|selection| {
-        selection.line_index >= visible_start && selection.line_index < visible_end
-    });
-}
-
-/// Returns one display-column slice from a primary display-overlay line.
-pub(super) fn primary_display_overlay_line_slice(line: &str, start: usize, end: usize) -> String {
-    let mut output = String::new();
-    let mut column = 0usize;
-    for grapheme in terminal_graphemes(line) {
-        let width = terminal_grapheme_width(grapheme);
-        let next = column.saturating_add(width);
-        if next <= start {
-            column = next;
-            continue;
-        }
-        if column >= end || next > end {
-            break;
-        }
-        output.push_str(grapheme);
-        column = next;
-    }
-    output
-}
-
-/// Returns the overlay selection index under a mouse position.
-pub(super) fn runtime_display_overlay_selection_index_at_position(
-    overlay: &RuntimeDisplayOverlay,
-    line_index: usize,
-    column: usize,
-) -> Option<usize> {
-    overlay
-        .selections
-        .iter()
-        .enumerate()
-        .filter(|(_, selection)| selection.line_index == line_index)
-        .find(|(_, selection)| {
-            let start = runtime_display_overlay_rendered_selection_start(overlay, selection);
-            let end = start.saturating_add(selection.width);
-            column >= start && column < end
-        })
-        .map(|(index, _)| index)
-}
-
-/// Returns the next forward pager-search match, wrapping once to the start.
-pub(super) fn runtime_display_overlay_next_search_match(
-    overlay: &RuntimeDisplayOverlay,
-    query: &str,
-    current_line: usize,
-) -> Option<RuntimeDisplayOverlaySearchMatch> {
-    if query.is_empty() || overlay.lines.is_empty() {
-        return None;
-    }
-    let start = current_line.saturating_add(1).min(overlay.lines.len());
-    overlay.lines[start..]
-        .iter()
-        .enumerate()
-        .find_map(|(index, line)| {
-            runtime_display_overlay_search_match_on_line(line, query, start.saturating_add(index))
-        })
-        .or_else(|| {
-            overlay.lines[..start]
-                .iter()
-                .enumerate()
-                .find_map(|(index, line)| {
-                    runtime_display_overlay_search_match_on_line(line, query, index)
-                })
-        })
-}
-
-/// Returns the render-cell range for a query match on one pager line.
-pub(super) fn runtime_display_overlay_search_match_on_line(
-    line: &str,
-    query: &str,
-    line_index: usize,
-) -> Option<RuntimeDisplayOverlaySearchMatch> {
-    let byte_start = line.find(query)?;
-    let byte_end = byte_start.saturating_add(query.len());
-    Some(RuntimeDisplayOverlaySearchMatch {
-        line_index,
-        start_column: UnicodeWidthStr::width(&line[..byte_start]),
-        width: UnicodeWidthStr::width(&line[byte_start..byte_end]),
-    })
-}
-
-/// Replaces a fixed-width region of a rendered line with overlay text.
-pub(super) fn runtime_overlay_text_at(line: &mut String, column: usize, width: usize, text: &str) {
-    let mut cells = line.chars().collect::<Vec<_>>();
-    let required = column.saturating_add(width);
-    if cells.len() < required {
-        cells.resize(required, ' ');
-    }
-    for (offset, ch) in text.chars().take(width).enumerate() {
-        if let Some(cell) = cells.get_mut(column.saturating_add(offset)) {
-            *cell = ch;
-        }
-    }
-    *line = cells.into_iter().collect();
 }
 
 /// Returns a selector row rendition, highlighting the hovered item.
@@ -2718,7 +2097,7 @@ impl RuntimeSessionService {
         &mut self,
         lines: Vec<String>,
         mut line_style_spans: Vec<Vec<TerminalStyleSpan>>,
-        selections: Vec<RuntimeDisplayOverlaySelection>,
+        selections: Vec<OverlaySelection>,
         dismiss_on_any_input: bool,
     ) -> Result<()> {
         self.require_live()?;
@@ -2901,11 +2280,8 @@ impl RuntimeSessionService {
         let display_line_index = overlay
             .scroll_offset
             .saturating_add(position.line.saturating_sub(1));
-        let selection_index = runtime_display_overlay_selection_index_at_position(
-            overlay,
-            display_line_index,
-            position.column,
-        );
+        let selection_index =
+            overlay_selection_index_at_position(overlay, display_line_index, position.column);
         let Some(command) = selection_index
             .and_then(|index| overlay.selections.get(index))
             .map(|selection| selection.command.clone())
@@ -2968,7 +2344,7 @@ impl RuntimeSessionService {
                 .map(|(start, _)| start)
                 .unwrap_or(selection_position);
             overlay.mouse_selection = Some((start, selection_position));
-            primary_display_overlay_copy_selection(overlay)
+            overlay_copy_selection(overlay)
         } else {
             None
         };
@@ -2992,7 +2368,7 @@ impl RuntimeSessionService {
         let line = position.line.checked_sub(1)?;
         let line = overlay.scroll_offset.saturating_add(line);
         let text = overlay.lines.get(line)?;
-        let prefix_columns = runtime_display_overlay_line_prefix_columns(overlay, line);
+        let prefix_columns = overlay_line_prefix_columns(overlay, line);
         let column = position.column.saturating_sub(prefix_columns);
         let column = column.min(terminal_text_width(text));
         Some(CopyPosition { line, column })

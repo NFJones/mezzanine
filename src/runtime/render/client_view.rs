@@ -256,7 +256,7 @@ impl RuntimeSessionService {
             let active = item.item_index == selector.active_index;
             let marker = if active { "›" } else { " " };
             let text = runtime_selector_line(marker, value, width);
-            runtime_overlay_text_at(&mut view.lines[row], column, width, &text);
+            overlay_text_at(&mut view.lines[row], column, width, &text);
             if let Some(spans) = view.line_style_spans.get_mut(row) {
                 Self::clip_line_style_spans_for_overlay(spans, column, width);
                 spans.push(TerminalStyleSpan {
@@ -282,7 +282,7 @@ impl RuntimeSessionService {
         view: &mut RenderedClientView,
         overlay: &RuntimeDisplayOverlay,
     ) {
-        let render_lines = runtime_display_overlay_render_lines(overlay);
+        let render_lines = overlay_render_lines(overlay);
         view.lines = compose_modal_display_overlay_lines(
             &render_lines,
             view.authoritative_size,
@@ -291,7 +291,7 @@ impl RuntimeSessionService {
         view.line_style_spans = vec![Vec::new(); view.lines.len()];
         if let Some(footer) = view.lines.last_mut() {
             *footer = runtime_fit_status_line(
-                &runtime_display_overlay_footer(overlay),
+                &overlay_footer(overlay),
                 usize::from(view.authoritative_size.columns),
             );
         }
@@ -308,12 +308,12 @@ impl RuntimeSessionService {
             let row = offset.saturating_add(1);
             let active = overlay.active_selection_index == Some(selection_index);
             if let Some(spans) = view.line_style_spans.get_mut(row) {
-                let start = runtime_display_overlay_rendered_selection_start(overlay, selection);
+                let start = overlay_rendered_selection_start(overlay, selection);
                 if start < max_columns && selection.width > 0 {
                     spans.push(TerminalStyleSpan {
                         start,
                         length: selection.width.min(max_columns.saturating_sub(start)),
-                        rendition: runtime_display_overlay_selection_rendition(
+                        rendition: overlay_selection_rendition(
                             &self.ui_theme,
                             selection.kind,
                             active,
@@ -324,7 +324,7 @@ impl RuntimeSessionService {
                     spans.push(TerminalStyleSpan {
                         start: 0,
                         length: 1,
-                        rendition: runtime_display_overlay_selection_rendition(
+                        rendition: overlay_selection_rendition(
                             &self.ui_theme,
                             selection.kind,
                             true,
@@ -344,12 +344,8 @@ impl RuntimeSessionService {
             let Some(spans) = view.line_style_spans.get_mut(row) else {
                 continue;
             };
-            *spans = runtime_display_overlay_rendered_line_style_spans(
-                overlay,
-                line_index,
-                max_columns,
-                &self.ui_theme,
-            );
+            *spans =
+                overlay_rendered_line_style_spans(overlay, line_index, max_columns, &self.ui_theme);
         }
         view.cursor_visible = false;
         view.cursor_row = 0;
