@@ -757,7 +757,7 @@ fn dedupe_runtime_strings(values: Vec<String>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::runtime_configured_reasoning_levels_for_model;
     use std::collections::BTreeMap;
 
     /// Verifies configured Claude Code providers expose the local CLI effort

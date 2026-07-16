@@ -722,7 +722,7 @@ fn record_browser_save_destination(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{DEFAULT_SHOW_RECORD_LIMIT, parse_show_issues_args, parse_show_memories_args};
 
     /// Verifies `/show-issues` accepts the browser filters and save path used
     /// by the interactive issue browser command surface.

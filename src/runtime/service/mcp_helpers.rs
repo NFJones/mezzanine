@@ -219,7 +219,7 @@ pub(super) fn runtime_agent_session_metadata_visibility(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{McpRegistry, runtime_mcp_pending_discovery_server_ids};
 
     /// Verifies lazy runtime discovery retries blacklisted streamable HTTP MCP
     /// servers when stored OAuth state can recover auth. This regression keeps

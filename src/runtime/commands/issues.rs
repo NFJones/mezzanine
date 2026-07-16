@@ -441,7 +441,7 @@ pub(super) fn runtime_issue_database_path(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{RuntimeIssueArgs, parse_issue_args};
 
     /// Verifies `/issue` parsing accepts notes on add, update, and show commands
     /// so runtime users can store progress separately from issue descriptions.

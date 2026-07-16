@@ -402,7 +402,11 @@ fn runtime_status_pill_normalize_output(output: &str, max_chars: usize) -> Strin
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        BTreeMap, DEFAULT_STATUS_PILL_MAX_OUTPUT_CHARS, DEFAULT_STATUS_PILL_TIMEOUT_MS,
+        RuntimeStatusPillCache, RuntimeStatusPillDefinition, RuntimeStatusPillEmptyBehavior,
+        RuntimeStatusPillErrorBehavior, runtime_status_pill_names_from_template,
+    };
 
     /// Verifies that active pill detection follows the same `#{...}` field
     /// boundary as status rendering and ignores malformed or unrelated fields.

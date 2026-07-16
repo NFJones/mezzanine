@@ -1192,7 +1192,15 @@ impl RuntimeSessionService {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        AgentContext, BTreeMap, ContextBlock, ContextSourceKind, ModelInteractionKind,
+        ModelProfile, ModelResponse, RuntimeAgentLoopMode, RuntimeAgentLoopState, TranscriptEntry,
+        TranscriptRole, runtime_agent_loop_work_prompt,
+        runtime_compact_forced_retained_transcript_entries,
+        runtime_compact_retained_transcript_entries,
+        runtime_compact_transcript_entries_for_summary, runtime_model_catalog_unavailable_reason,
+        runtime_model_compaction_request, runtime_model_compaction_summary_from_response,
+    };
     use mez_agent::{AgentAction, MaapBatch};
 
     /// Verifies model compaction consumes the structured `say` action text
