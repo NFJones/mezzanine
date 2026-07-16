@@ -290,8 +290,8 @@ impl RuntimeSessionService {
         self.clear_all_blocked_agent_approval_refs();
         self.clear_all_shell_transaction_state();
         self.clear_pane_readiness_state_and_overrides();
-        self.blocked_approvals = Default::default();
-        self.session_approvals = Default::default();
+        self.integration.reset_blocked_approvals();
+        self.integration.reset_session_approvals();
 
         self.session = prepared_session;
         self.session.state = mez_mux::session::SessionState::Running;

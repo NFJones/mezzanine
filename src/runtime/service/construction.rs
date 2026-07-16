@@ -134,12 +134,6 @@ impl RuntimeSessionService {
                 socket_path,
                 created_at_unix_seconds,
             ),
-            permission_policy: PermissionPolicy::default(),
-            live_approval_bypass_override: None,
-            live_approval_policy_override: None,
-            blocked_approvals: BlockedApprovalQueue::default(),
-            session_approvals: SessionApprovalStore::default(),
-            session_memory: SessionMemoryStore::default(),
             mcp_registry: McpRegistry::default(),
             mcp_transports: RuntimeMcpTransportSet::default(),
             provider_registry: runtime_provider_registry_from_config(&Value::Object(

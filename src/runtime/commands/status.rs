@@ -226,14 +226,14 @@ impl RuntimeSessionService {
                 "Permissions".to_string(),
                 format!(
                     "preset {}, approval {}, bypass {}",
-                    runtime_permission_preset_name(self.permission_policy.preset),
-                    runtime_approval_policy_name(self.permission_policy.approval_policy),
-                    self.permission_policy.approval_bypass()
+                    runtime_permission_preset_name(self.permission_policy().preset),
+                    runtime_approval_policy_name(self.permission_policy().approval_policy),
+                    self.permission_policy().approval_bypass()
                 ),
             ],
             vec![
                 "Command rules".to_string(),
-                self.permission_policy.rules().len().to_string(),
+                self.permission_policy().rules().len().to_string(),
             ],
             vec![
                 "Writable roots".to_string(),
@@ -428,9 +428,9 @@ impl RuntimeSessionService {
             effective.skipped_layers().len(),
             effective.values().len(),
             effective.diagnostics().len(),
-            runtime_permission_preset_name(self.permission_policy.preset),
-            runtime_approval_policy_name(self.permission_policy.approval_policy),
-            self.permission_policy.approval_bypass(),
+            runtime_permission_preset_name(self.permission_policy().preset),
+            runtime_approval_policy_name(self.permission_policy().approval_policy),
+            self.permission_policy().approval_bypass(),
             self.provider_registry.providers.len(),
             self.provider_registry.profiles.len(),
             self.mcp_registry.list_servers().len(),

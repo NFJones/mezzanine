@@ -223,12 +223,12 @@ impl RuntimeSessionService {
             .unwrap_or_default();
         format!(
             r#"{{"preset":"{}","approval_policy":"{}","bypass_active":{},"trusted_project":{},"trusted_directories":{},"read_scopes":[],"write_scopes":[],"command_rule_generation":{}}}"#,
-            runtime_permission_preset_name(self.permission_policy.preset),
-            runtime_approval_policy_name(self.permission_policy.approval_policy),
-            self.permission_policy.approval_bypass(),
+            runtime_permission_preset_name(self.permission_policy().preset),
+            runtime_approval_policy_name(self.permission_policy().approval_policy),
+            self.permission_policy().approval_bypass(),
             trusted_project,
             runtime_string_array_json(&trusted_directories),
-            self.permission_policy.rules().len()
+            self.permission_policy().rules().len()
         )
     }
 

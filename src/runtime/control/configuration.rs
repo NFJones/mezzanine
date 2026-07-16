@@ -54,7 +54,7 @@ impl RuntimeSessionService {
         if response.contains(r#""result""#)
             && runtime_config_method_applies_to_live_service(&request.method)
         {
-            let previous_permission_policy = self.permission_policy.clone();
+            let previous_permission_policy = self.permission_policy().clone();
             match self.reload_config_layers_from_disk() {
                 Ok(report) => {
                     let payload = runtime_config_apply_event_payload(&request.method, &report);
@@ -499,7 +499,7 @@ impl RuntimeSessionService {
         )?;
         if plan.changed {
             let previous_layers = self.integration.config_layers().to_vec();
-            let previous_permission_policy = self.permission_policy.clone();
+            let previous_permission_policy = self.permission_policy().clone();
             self.store_runtime_control_live_override_plan(&plan.text);
             match self.apply_runtime_config_layers() {
                 Ok(report) => {
@@ -556,7 +556,7 @@ impl RuntimeSessionService {
         let plan = plan_config_mutation(format, &current_text, target.scope, mutation)?;
         if plan.changed {
             let previous_layers = self.integration.config_layers().to_vec();
-            let previous_permission_policy = self.permission_policy.clone();
+            let previous_permission_policy = self.permission_policy().clone();
             self.store_runtime_config_file_plan(
                 target_path.clone(),
                 plan.format,
@@ -725,32 +725,32 @@ impl RuntimeSessionService {
         if self.persistence.audit_log().is_none() {
             return Ok(());
         }
-        if previous.preset != self.permission_policy.preset {
+        if previous.preset != self.permission_policy().preset {
             self.append_config_reload_permission_audit(
                 caller_client_id,
                 "permissions.preset",
-                runtime_permission_preset_name(self.permission_policy.preset),
+                runtime_permission_preset_name(self.permission_policy().preset),
             )?;
         }
-        if previous.approval_policy != self.permission_policy.approval_policy {
+        if previous.approval_policy != self.permission_policy().approval_policy {
             self.append_config_reload_permission_audit(
                 caller_client_id,
                 "permissions.approval_policy",
-                runtime_approval_policy_name(self.permission_policy.approval_policy),
+                runtime_approval_policy_name(self.permission_policy().approval_policy),
             )?;
         }
-        if previous.approval_bypass() != self.permission_policy.approval_bypass() {
+        if previous.approval_bypass() != self.permission_policy().approval_bypass() {
             self.append_config_reload_permission_audit(
                 caller_client_id,
                 "permissions.bypass_mode",
-                if self.permission_policy.approval_bypass() {
+                if self.permission_policy().approval_bypass() {
                     "enabled"
                 } else {
                     "disabled"
                 },
             )?;
         }
-        if previous.rules() != self.permission_policy.rules() {
+        if previous.rules() != self.permission_policy().rules() {
             self.append_config_reload_permission_audit(
                 caller_client_id,
                 "permissions.command_rules",
@@ -771,7 +771,8 @@ impl RuntimeSessionService {
         permission_id: &str,
         decision: &str,
     ) -> Result<()> {
-        let policy_mode = runtime_permission_preset_name(self.permission_policy.preset).to_string();
+        let policy_mode =
+            runtime_permission_preset_name(self.permission_policy().preset).to_string();
         let Some(audit_log) = self.persistence.audit_log_mut() else {
             return Ok(());
         };

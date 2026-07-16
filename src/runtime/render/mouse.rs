@@ -993,7 +993,7 @@ impl RuntimeSessionService {
                 .to_string(),
             ),
             PaneAgentStatusField::ApprovalPolicy => Some(
-                runtime_approval_policy_name(self.permission_policy.approval_policy).to_string(),
+                runtime_approval_policy_name(self.permission_policy().approval_policy).to_string(),
             ),
             PaneAgentStatusField::Latency => {
                 let agent_id = format!("agent-{pane_id}");

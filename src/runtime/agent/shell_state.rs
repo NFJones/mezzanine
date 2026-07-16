@@ -228,7 +228,7 @@ impl RuntimeSessionService {
         &self,
         turn: &AgentTurnRecord,
     ) -> PermissionPolicy {
-        let mut policy = self.permission_policy.clone();
+        let mut policy = self.permission_policy().clone();
         if let Some(preset) = self
             .subagent_scope_declaration_for_turn(turn)
             .and_then(|declaration| declaration.permission_preset)

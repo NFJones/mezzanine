@@ -554,7 +554,7 @@ impl RuntimeSessionService {
             auto_sizing_target_providers,
             provider,
             permission_policy,
-            session_approvals: self.session_approvals.clone(),
+            session_approvals: self.session_approvals().clone(),
             path_scopes,
             subagent_scope,
             available_mcp_servers,

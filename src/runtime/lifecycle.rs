@@ -272,7 +272,7 @@ impl RuntimeSessionService {
         let terminated = self.terminate_all_runtime_pane_processes(force)?;
         let terminated_mcp_servers = self.clear_runtime_mcp_transports();
         self.persist_session_memory_to_disk();
-        let cleared_memory = self.session_memory.clear_all();
+        let cleared_memory = self.integration.session_memory_mut().clear_all();
         self.session
             .set_lifecycle_state(RuntimeLifecycleState::Killed);
         self.run_configured_completed_hooks(
@@ -386,7 +386,7 @@ impl RuntimeSessionService {
         let terminated = self.terminate_all_runtime_pane_processes(force)?;
         let terminated_mcp_servers = self.clear_runtime_mcp_transports();
         self.persist_session_memory_to_disk();
-        let cleared_memory = self.session_memory.clear_all();
+        let cleared_memory = self.integration.session_memory_mut().clear_all();
         self.session.force_supervisor_shutdown();
         self.session
             .set_lifecycle_state(RuntimeLifecycleState::Killed);

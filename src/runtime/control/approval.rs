@@ -76,7 +76,7 @@ impl RuntimeSessionService {
                 body,
                 &mut self.session,
                 caller_client_id,
-                &mut self.blocked_approvals,
+                self.integration.blocked_approvals_mut(),
                 audit_log,
             )
         } else {
@@ -84,7 +84,7 @@ impl RuntimeSessionService {
                 body,
                 &mut self.session,
                 caller_client_id,
-                &mut self.blocked_approvals,
+                self.integration.blocked_approvals_mut(),
             )
         };
         if response.contains(r#""result""#) && request.method == "approval/decide" {
@@ -100,7 +100,7 @@ impl RuntimeSessionService {
                     return runtime_json_rpc_error(&request.id, error.kind(), error.message());
                 }
             };
-            let decided_approval = self.blocked_approvals.get(&approval_id).cloned();
+            let decided_approval = self.blocked_approvals().get(&approval_id).cloned();
             if let Some(rule_decision) = (match decision_kind {
                 Some(ApprovalDecision::Approve) => Some(RuleDecision::Allow),
                 Some(ApprovalDecision::Disapprove) => Some(RuleDecision::Forbid),
@@ -221,7 +221,7 @@ impl RuntimeSessionService {
         if matches!(persistence, ApprovalDecisionScopePersistence::Project) {
             self.persist_project_shell_approval_rule(approval, &rule)?;
         } else {
-            self.permission_policy.add_rule(rule);
+            self.permission_policy_mut().add_rule(rule);
         }
         Ok(())
     }

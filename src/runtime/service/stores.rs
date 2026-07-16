@@ -119,7 +119,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn permission_policy(&self) -> &PermissionPolicy {
-        &self.permission_policy
+        self.integration.permission_policy()
     }
 
     /// Runs the permission policy mut operation for this subsystem.
@@ -128,7 +128,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn permission_policy_mut(&mut self) -> &mut PermissionPolicy {
-        &mut self.permission_policy
+        self.integration.permission_policy_mut()
     }
 
     /// Applies an explicit user-selected approval-bypass state.
@@ -136,8 +136,11 @@ impl RuntimeSessionService {
     /// # Parameters
     /// - `active`: Whether approval bypass should be active after the change.
     pub fn set_live_approval_bypass_override(&mut self, active: bool) {
-        self.live_approval_bypass_override = Some(active);
-        self.permission_policy.set_approval_bypass(active);
+        self.integration
+            .set_live_approval_bypass_override(Some(active));
+        self.integration
+            .permission_policy_mut()
+            .set_approval_bypass(active);
     }
 
     /// Applies an explicit user-selected approval policy override.
@@ -145,8 +148,9 @@ impl RuntimeSessionService {
     /// # Parameters
     /// - `policy`: Approval policy that should survive unrelated config reloads.
     pub fn set_live_approval_policy_override(&mut self, policy: mez_agent::ApprovalPolicy) {
-        self.live_approval_policy_override = Some(policy);
-        self.permission_policy.approval_policy = policy;
+        self.integration
+            .set_live_approval_policy_override(Some(policy));
+        self.integration.permission_policy_mut().approval_policy = policy;
     }
 
     /// Runs the blocked approvals operation for this subsystem.
@@ -155,7 +159,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn blocked_approvals(&self) -> &BlockedApprovalQueue {
-        &self.blocked_approvals
+        self.integration.blocked_approvals()
     }
 
     /// Runs the session approvals operation for this subsystem.
@@ -164,7 +168,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn session_approvals(&self) -> &SessionApprovalStore {
-        &self.session_approvals
+        self.integration.session_approvals()
     }
 
     /// Runs the session approvals mut operation for this subsystem.
@@ -173,7 +177,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn session_approvals_mut(&mut self) -> &mut SessionApprovalStore {
-        &mut self.session_approvals
+        self.integration.session_approvals_mut()
     }
 
     /// Runs the queue blocked approval operation for this subsystem.
@@ -183,10 +187,12 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn queue_blocked_approval(&mut self, request: BlockedApprovalRequest) -> Result<String> {
         let approval_id = self
-            .blocked_approvals
+            .integration
+            .blocked_approvals_mut()
             .create_at(request, current_unix_seconds())?;
         let approval = self
-            .blocked_approvals
+            .integration
+            .blocked_approvals()
             .get(&approval_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("blocked approval was not retained"))?;
@@ -244,7 +250,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn session_memory(&self) -> &SessionMemoryStore {
-        &self.session_memory
+        self.integration.session_memory()
     }
 
     /// Runs the session memory mut operation for this subsystem.
@@ -253,7 +259,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn session_memory_mut(&mut self) -> &mut SessionMemoryStore {
-        &mut self.session_memory
+        self.integration.session_memory_mut()
     }
 
     /// Runs the memory records operation for this subsystem.
@@ -262,7 +268,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn memory_records(&self) -> Vec<MemoryRecord> {
-        self.session_memory.export()
+        self.integration.session_memory().export()
     }
 
     /// Runs the upsert session memory operation for this subsystem.
@@ -272,7 +278,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn upsert_session_memory(&mut self, record: MemoryRecord) -> Result<()> {
         self.require_live()?;
-        self.session_memory.upsert(record)?;
+        self.integration.session_memory_mut().upsert(record)?;
         Ok(())
     }
 
@@ -283,6 +289,6 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn delete_session_memory(&mut self, id: &str) -> Result<bool> {
         self.require_live()?;
-        Ok(self.session_memory.delete(id))
+        Ok(self.integration.session_memory_mut().delete(id))
     }
 }

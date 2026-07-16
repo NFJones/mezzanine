@@ -150,7 +150,7 @@ impl RuntimeSessionService {
 
     /// Captures non-pending approval grants for a live snapshot.
     pub(super) fn live_snapshot_approval_grants(&self) -> Vec<SnapshotApprovalGrantMetadata> {
-        self.session_approvals
+        self.session_approvals()
             .grants()
             .map(runtime_snapshot_approval_grant)
             .collect()
@@ -158,7 +158,7 @@ impl RuntimeSessionService {
 
     /// Captures decided approval requests for a live snapshot.
     pub(super) fn live_snapshot_approval_requests(&self) -> Vec<SnapshotApprovalRequestMetadata> {
-        self.blocked_approvals
+        self.blocked_approvals()
             .requests()
             .filter(|request| request.state != BlockedApprovalState::Pending)
             .map(runtime_snapshot_approval_request)

@@ -1125,7 +1125,7 @@ impl RuntimeSessionService {
             .filter(|observer| observer.state == ObserverDecisionState::Pending)
             .count();
         let policy_mode =
-            Self::runtime_frame_policy_mode_name(self.permission_policy.approval_policy)
+            Self::runtime_frame_policy_mode_name(self.permission_policy().approval_policy)
                 .to_string();
         let shell_process_name = self
             .session

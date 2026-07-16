@@ -89,7 +89,7 @@ impl RuntimeSessionService {
                     action_id: result.action_id.clone(),
                 },
             );
-            if let Some(approval) = self.blocked_approvals.get(&approval_id).cloned() {
+            if let Some(approval) = self.blocked_approvals().get(&approval_id).cloned() {
                 let log_line = runtime_agent_pending_approval_log_line(&approval);
                 self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &log_line)?;
             }
@@ -115,22 +115,22 @@ impl RuntimeSessionService {
         previous: &PermissionPolicy,
         source: &str,
     ) -> Result<usize> {
-        if previous.preset == self.permission_policy.preset
-            && previous.approval_policy == self.permission_policy.approval_policy
-            && previous.approval_bypass() == self.permission_policy.approval_bypass()
-            && previous.rules() == self.permission_policy.rules()
+        if previous.preset == self.permission_policy().preset
+            && previous.approval_policy == self.permission_policy().approval_policy
+            && previous.approval_bypass() == self.permission_policy().approval_bypass()
+            && previous.rules() == self.permission_policy().rules()
         {
             return Ok(0);
         }
         let pending_ids = self
-            .blocked_approvals
+            .blocked_approvals()
             .pending()
             .into_iter()
             .map(|approval| approval.id.clone())
             .collect::<Vec<_>>();
         let mut resumed = 0usize;
         for approval_id in pending_ids {
-            let Some(approval) = self.blocked_approvals.get(&approval_id).cloned() else {
+            let Some(approval) = self.blocked_approvals().get(&approval_id).cloned() else {
                 continue;
             };
             if !self
@@ -147,7 +147,8 @@ impl RuntimeSessionService {
                     )
                 })?;
             let decided = self
-                .blocked_approvals
+                .integration
+                .blocked_approvals_mut()
                 .decide_with_client_at(
                     &approval_id,
                     mez_agent::permissions::ApprovalDecision::Approve,
@@ -242,7 +243,7 @@ impl RuntimeSessionService {
                 Ok(matches!(
                     permission_policy.evaluate_shell_command_with_approvals_scoped(
                         &plan.policy_command,
-                        &self.session_approvals,
+                        self.session_approvals(),
                         path_scopes.as_ref(),
                     ),
                     RuleDecision::Allow
@@ -262,7 +263,7 @@ impl RuntimeSessionService {
                 Ok(matches!(
                     permission_policy.evaluate_shell_command_with_approvals_scoped(
                         &plan.policy_command,
-                        &self.session_approvals,
+                        self.session_approvals(),
                         None,
                     ),
                     RuleDecision::Allow
@@ -408,7 +409,7 @@ impl RuntimeSessionService {
                 };
                 match permission_policy.evaluate_shell_command_with_approvals_scoped(
                     &plan.policy_command,
-                    &self.session_approvals,
+                    self.session_approvals(),
                     path_scopes.as_ref(),
                 ) {
                     RuleDecision::Allow => {}
@@ -467,7 +468,7 @@ impl RuntimeSessionService {
                 let permission_policy = self.permission_policy_for_turn(&turn);
                 match permission_policy.evaluate_shell_command_with_approvals_scoped(
                     &plan.policy_command,
-                    &self.session_approvals,
+                    self.session_approvals(),
                     None,
                 ) {
                     RuleDecision::Allow => {}

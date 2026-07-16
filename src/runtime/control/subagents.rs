@@ -346,7 +346,7 @@ impl RuntimeSessionService {
             spawn.write_scopes = profile.default_write_scopes.clone();
         }
         if let Some(preset) = profile.permission_preset
-            && compare_permission_preset_authority(self.permission_policy.preset, preset)
+            && compare_permission_preset_authority(self.permission_policy().preset, preset)
                 == mez_agent::permissions::PermissionAuthorityChange::Broadening
         {
             return Err(MezError::forbidden(

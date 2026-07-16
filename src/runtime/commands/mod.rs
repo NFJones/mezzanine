@@ -381,7 +381,7 @@ impl RuntimeSessionService {
         let args = slash.args.trim();
         let (selection, action_kind, action_summary) = {
             let pending = self
-                .blocked_approvals
+                .blocked_approvals()
                 .pending()
                 .into_iter()
                 .filter(|approval| approval.pane_id == pane_id)
@@ -394,7 +394,7 @@ impl RuntimeSessionService {
             }
             let selection = parse_agent_approve_selection(args, pane_id, &pending)?;
             let approval = self
-                .blocked_approvals
+                .blocked_approvals()
                 .get(&selection.approval_id)
                 .filter(|approval| {
                     approval.pane_id == pane_id && approval.state == BlockedApprovalState::Pending

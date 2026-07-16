@@ -514,10 +514,10 @@ impl RuntimeSessionService {
             tool_name: tool.clone(),
             arguments_json: arguments_json.clone(),
             timeout_ms: None,
-            approval_bypass: self.permission_policy.approval_bypass(),
+            approval_bypass: self.permission_policy().approval_bypass(),
         };
         let plan = self.mcp_registry.plan_tool_call(&request)?;
-        if plan.approval_required && !approved && !self.permission_policy.approval_bypass() {
+        if plan.approval_required && !approved && !self.permission_policy().approval_bypass() {
             return Ok(ActionResult::blocked(
                 turn,
                 action,
@@ -616,10 +616,10 @@ impl RuntimeSessionService {
             tool_name: tool.clone(),
             arguments_json: arguments_json.clone(),
             timeout_ms: None,
-            approval_bypass: self.permission_policy.approval_bypass(),
+            approval_bypass: self.permission_policy().approval_bypass(),
         };
         let plan = self.mcp_registry.plan_tool_call(&request)?;
-        if plan.approval_required && !approved && !self.permission_policy.approval_bypass() {
+        if plan.approval_required && !approved && !self.permission_policy().approval_bypass() {
             return Ok(ActionResult::blocked(
                 turn,
                 action,

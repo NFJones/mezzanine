@@ -27,37 +27,6 @@ pub struct RuntimeSessionService {
     pub(in crate::runtime) integration: RuntimeIntegrationComponent,
     /// Private owner for the mux session and application lifecycle metadata.
     pub(in crate::runtime) session: RuntimeSessionComponent,
-    /// Stores the permission policy value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) permission_policy: PermissionPolicy,
-    /// Stores an explicit live approval-bypass override selected by the user.
-    ///
-    /// Configuration is intentionally unable to enable approval bypass, so
-    /// explicit runtime activation must survive unrelated configuration
-    /// reloads without being encoded into normal config layers.
-    pub(in crate::runtime) live_approval_bypass_override: Option<bool>,
-    /// Stores an explicit live approval-policy override selected by the user.
-    ///
-    /// Runtime approval changes are session choices. They must survive unrelated
-    /// configuration reloads without being erased by persistent config changes.
-    pub(in crate::runtime) live_approval_policy_override: Option<mez_agent::ApprovalPolicy>,
-    /// Stores the blocked approvals value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) blocked_approvals: BlockedApprovalQueue,
-    /// Stores the session approvals value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) session_approvals: SessionApprovalStore,
-    /// Stores the session memory value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) session_memory: SessionMemoryStore,
     /// Stores the mcp registry value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

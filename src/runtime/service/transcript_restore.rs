@@ -287,7 +287,8 @@ impl RuntimeSessionService {
                     directive: session.directive.clone(),
                     routing_enabled: self.agent_routing_override(&session.pane_id),
                     approval_policy: self
-                        .live_approval_policy_override
+                        .integration
+                        .live_approval_policy_override()
                         .map(runtime_approval_policy_name)
                         .map(ToOwned::to_owned),
                     working_directory,
@@ -374,12 +375,12 @@ impl RuntimeSessionService {
             MezError::invalid_args("agent session metadata approval policy is invalid")
         })?;
         if matches!(
-            compare_approval_policy_authority(self.permission_policy.approval_policy, requested),
+            compare_approval_policy_authority(self.permission_policy().approval_policy, requested),
             PermissionAuthorityChange::Narrowing
         ) {
             return Ok(());
         }
-        let previous_permission_policy = self.permission_policy.clone();
+        let previous_permission_policy = self.permission_policy().clone();
         self.set_live_approval_policy_override(requested);
         self.reconcile_pending_agent_approvals_after_permission_change(
             None,

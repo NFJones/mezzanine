@@ -224,7 +224,7 @@ impl RuntimeSessionService {
                 model_profile: model_profile.clone(),
                 permissions: &crate::permissions::ProductPermissionPlanning::new(
                     &permission_policy,
-                    &self.session_approvals,
+                    self.session_approvals(),
                     path_scopes.as_ref(),
                 ),
                 subagent_scope: subagent_scope.as_ref(),
@@ -512,7 +512,7 @@ impl RuntimeSessionService {
                 model_profile: model_profile.clone(),
                 permissions: &crate::permissions::ProductPermissionPlanning::new(
                     &permission_policy,
-                    &self.session_approvals,
+                    self.session_approvals(),
                     path_scopes.as_ref(),
                 ),
                 subagent_scope: subagent_scope.as_ref(),
