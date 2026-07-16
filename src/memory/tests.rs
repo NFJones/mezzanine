@@ -1,10 +1,11 @@
 //! Unit tests for session and persistent memory behavior.
 
-use super::{
+use mez_agent::memory::{
     MemoryKind, MemoryRecord, MemoryRetentionPolicy, MemoryRetrievalRequest, MemoryScope,
-    MemorySearchRequest, MemorySource, MemoryState, PersistentMemoryStore, fs,
-    retrieve_persistent_memory,
+    MemorySearchRequest, MemorySource, MemoryState,
 };
+
+use super::{PersistentMemoryStore, fs, retrieve_persistent_memory};
 /// Runs the record operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

@@ -5,6 +5,43 @@
 //! filesystem access, and execution remain in the Mezzanine composition
 //! crate.
 
+use std::fmt;
+
+use crate::semantic_patch_planning::apply_patch_plan;
+use crate::shell::validate_agent_authored_shell_command;
+use crate::{AgentAction, AgentActionPayload};
+
+/// Provider-independent failure while lowering a local action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalActionPlanningError {
+    message: String,
+}
+
+impl LocalActionPlanningError {
+    /// Creates a local-action planning failure with a stable diagnostic.
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+        }
+    }
+
+    /// Returns the model-safe planning diagnostic.
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for LocalActionPlanningError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for LocalActionPlanningError {}
+
+/// Result returned while lowering a provider-authored local action.
+pub type LocalActionPlanningResult<T> = Result<T, LocalActionPlanningError>;
+
 /// Identifies the semantic local action implementation selected before the
 /// runtime chooses an execution transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,9 +74,54 @@ pub struct LocalActionPlan {
     pub display_output_after_completion: bool,
 }
 
+/// Returns the canonical shell plan for a provider-authored local action.
+pub fn local_action_plan(
+    action: &AgentAction,
+) -> LocalActionPlanningResult<Option<LocalActionPlan>> {
+    match &action.payload {
+        AgentActionPayload::ShellCommand {
+            summary,
+            command,
+            interactive,
+            stateful,
+            timeout_ms,
+        } => {
+            validate_agent_authored_shell_command(command)
+                .map_err(|error| LocalActionPlanningError::new(error.message()))?;
+            Ok(Some(LocalActionPlan {
+                kind: LocalActionKind::ShellCommand,
+                summary: summary.clone(),
+                command: command.clone(),
+                policy_command: command.clone(),
+                interactive: *interactive,
+                stateful: *stateful,
+                timeout_ms: *timeout_ms,
+                display_output_after_completion: false,
+            }))
+        }
+        AgentActionPayload::ApplyPatch { patch, strip } => apply_patch_plan(patch, *strip)
+            .map(Some)
+            .map_err(|error| LocalActionPlanningError::new(error.message())),
+        _ => Ok(None),
+    }
+}
+
+/// Returns the canonical summary for a shell-backed local action.
+pub fn local_action_summary(action: &AgentAction) -> LocalActionPlanningResult<Option<String>> {
+    Ok(local_action_plan(action)?.map(|plan| plan.summary))
+}
+
+/// Returns whether an action is implemented by a local shell transaction.
+pub fn action_is_local_shell_backed(action: &AgentAction) -> bool {
+    matches!(
+        action.payload,
+        AgentActionPayload::ShellCommand { .. } | AgentActionPayload::ApplyPatch { .. }
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{LocalActionKind, LocalActionPlan};
+    use super::*;
 
     /// Local-action plans preserve the transport-neutral execution fields
     /// consumed by product permission and pane-shell adapters.
@@ -59,5 +141,48 @@ mod tests {
         assert_eq!(plan.kind, LocalActionKind::ShellCommand);
         assert_eq!(plan.timeout_ms, Some(30_000));
         assert!(!plan.interactive);
+    }
+
+    #[test]
+    /// Verifies canonical lowering accepts a regular shell command, rejects a
+    /// provider-authored heredoc, and ignores non-local actions.
+    fn local_action_lowering_applies_shell_source_policy() {
+        let shell = AgentAction {
+            id: "shell".to_string(),
+            rationale: "Inspect files".to_string(),
+            payload: AgentActionPayload::ShellCommand {
+                summary: "Inspect files".to_string(),
+                command: "rg --files".to_string(),
+                interactive: false,
+                stateful: false,
+                timeout_ms: Some(1_000),
+            },
+        };
+        assert_eq!(
+            local_action_plan(&shell).unwrap().unwrap().kind,
+            LocalActionKind::ShellCommand
+        );
+
+        let mut heredoc = shell;
+        if let AgentActionPayload::ShellCommand { command, .. } = &mut heredoc.payload {
+            *command = "cat <<EOF\nunsafe\nEOF".to_string();
+        }
+        assert!(
+            local_action_plan(&heredoc)
+                .unwrap_err()
+                .message()
+                .contains("heredoc")
+        );
+
+        let say = AgentAction {
+            id: "say".to_string(),
+            rationale: "Report".to_string(),
+            payload: AgentActionPayload::Say {
+                text: "done".to_string(),
+                content_type: "text/plain".to_string(),
+                status: crate::SayStatus::Final,
+            },
+        };
+        assert!(local_action_plan(&say).unwrap().is_none());
     }
 }

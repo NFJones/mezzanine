@@ -551,6 +551,30 @@ pub struct MaapValidationContext<'a> {
 }
 
 impl MaapBatch {
+    /// Validates this batch with the canonical harness shell-source policy.
+    ///
+    /// Callers supply only active identity and the MCP manifest visible to the
+    /// request. Shell-command validation remains intrinsic to `mez-agent`.
+    pub fn validate_harness_contract(
+        &self,
+        turn_id: &str,
+        agent_id: &str,
+        available_mcp_servers: &[String],
+        available_mcp_tools: &[McpPromptTool],
+    ) -> MaapContractResult<()> {
+        let validate_shell_command = |command: &str| {
+            crate::validate_agent_authored_shell_command(command)
+                .map_err(|error| MaapContractError::invalid_args(error.message()))
+        };
+        self.validate_contract(&MaapValidationContext {
+            turn_id,
+            agent_id,
+            available_mcp_servers,
+            available_mcp_tools,
+            validate_shell_command: &validate_shell_command,
+        })
+    }
+
     /// Validates this batch against the active provider-independent context.
     ///
     /// Contract failures are deterministic and contain a model-facing repair
@@ -1742,6 +1766,33 @@ mod tests {
             .unwrap();
 
         assert!(callback_invoked.get());
+    }
+
+    #[test]
+    /// Verifies the canonical harness validation path rejects model-authored
+    /// heredocs before any product shell adapter can dispatch them.
+    fn harness_batch_validation_rejects_shell_heredocs() {
+        let batch = parse_maap_action_batch_json_for_turn(
+            r#"{
+                "rationale":"Write a file",
+                "actions":[{
+                    "type":"shell_command",
+                    "summary":"Write a file",
+                    "command":"cat > src/main.rs <<'EOF'\nfn main() {}\nEOF",
+                    "timeout_ms":null
+                }]
+            }"#,
+            "turn-1",
+            "agent-1",
+        )
+        .unwrap();
+
+        let error = batch
+            .validate_harness_contract("turn-1", "agent-1", &[], &[])
+            .unwrap_err();
+
+        assert!(error.message().contains("heredoc"));
+        assert!(error.message().contains("apply_patch"));
     }
 
     #[test]

@@ -28,9 +28,8 @@ use super::provider::{
     openai_provider_from_auth_store_with_options,
     openai_provider_from_auth_store_with_provider_options,
     openai_provider_from_auth_store_with_transport,
-    openai_responses_provider_from_auth_store_with_provider_options, parse_openai_models_http_body,
+    openai_responses_provider_from_auth_store_with_provider_options,
 };
-use super::semantic::local_action_plan;
 use super::slash::{
     AgentShellCommandOutcome, execute_agent_shell_command, execute_agent_shell_command_with_mcp,
     execute_agent_shell_command_with_permissions,
@@ -40,6 +39,7 @@ use crate::error::Result;
 use crate::test_support::agent::ActionBuilder;
 use crate::transcript::AgentTranscriptStore;
 use base64::Engine;
+use mez_agent::local_action_plan;
 use mez_agent::mcp::McpRegistry;
 use mez_agent::permissions::{PathScopes, PermissionPolicy, SessionApprovalStore};
 use mez_agent::transcript::TranscriptRole as DurableTranscriptRole;
@@ -52,10 +52,9 @@ use mez_agent::{
     ModelMessageRole, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
     OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT, ProviderHttpRequest, ProviderHttpResponse,
     TranscriptRole, action_result_context_content, action_result_transcript_content,
-    openai_models_endpoint_for_responses_endpoint, openai_prompt_cache_diagnostics_for_request,
-    openai_responses_endpoint_for_base_url, openai_responses_request_body,
-    openai_stable_prefix_material_for_request, provider_quota_usage_from_headers,
-    transcript_entries_for_execution,
+    openai_prompt_cache_diagnostics_for_request, openai_responses_endpoint_for_base_url,
+    openai_responses_request_body, openai_stable_prefix_material_for_request,
+    provider_quota_usage_from_headers, transcript_entries_for_execution,
 };
 use mez_agent::{
     DEEPSEEK_ACTIONS_MAAP_FUNCTION_TOOL_NAME, DEEPSEEK_CAPABILITY_MAAP_FUNCTION_TOOL_NAME,
@@ -900,7 +899,6 @@ mod action_results;
 mod agent_runtime;
 mod agent_shell;
 mod deepseek_provider;
-mod maap_protocol;
 mod mcp_runtime;
 mod model_context;
 mod network_actions;

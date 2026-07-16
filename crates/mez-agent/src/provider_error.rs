@@ -74,6 +74,50 @@ pub enum ProviderErrorRetryClass {
     NonRetryable,
 }
 
+/// Provider retry budget and bounded exponential-backoff policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProviderRetryPolicy {
+    /// Maximum retries accepted after the initial provider failure.
+    pub max_attempts: u32,
+    /// Initial delay used for the first accepted retry.
+    pub initial_delay_ms: u64,
+    /// Maximum delay applied after exponential growth.
+    pub max_delay_ms: u64,
+}
+
+impl ProviderRetryPolicy {
+    /// Returns whether a failure class remains eligible under the recorded
+    /// retry-attempt count.
+    pub const fn should_retry(
+        self,
+        recorded_attempts: u32,
+        retry_class: ProviderErrorRetryClass,
+    ) -> bool {
+        recorded_attempts < self.max_attempts
+            && matches!(
+                retry_class,
+                ProviderErrorRetryClass::ContextLimit
+                    | ProviderErrorRetryClass::OutputLimit
+                    | ProviderErrorRetryClass::RetryableTransport
+            )
+    }
+
+    /// Returns the bounded exponential delay for a one-based retry attempt.
+    pub fn delay_ms(self, attempt: u32) -> u64 {
+        let exponent = attempt.saturating_sub(1).min(10);
+        self.initial_delay_ms
+            .saturating_mul(2u64.saturating_pow(exponent))
+            .min(self.max_delay_ms)
+    }
+}
+
+/// Canonical runtime provider retry budget and backoff settings.
+pub const DEFAULT_PROVIDER_RETRY_POLICY: ProviderRetryPolicy = ProviderRetryPolicy {
+    max_attempts: 5,
+    initial_delay_ms: 1_000,
+    max_delay_ms: 30_000,
+};
+
 /// Classifies sanitized provider failure fields for recovery and retry policy.
 ///
 /// Context and output limits take precedence over generic transport retries.
@@ -288,7 +332,41 @@ fn provider_error_text_is_output_limit_exceeded(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ProviderErrorKind, ProviderErrorRetryClass, classify_provider_error_retry};
+    use super::{
+        DEFAULT_PROVIDER_RETRY_POLICY, ProviderErrorKind, ProviderErrorRetryClass,
+        classify_provider_error_retry,
+    };
+
+    /// Verifies retry eligibility accepts recoverable classes only while the
+    /// canonical budget remains available.
+    #[test]
+    fn provider_retry_policy_bounds_eligible_failures() {
+        assert!(
+            DEFAULT_PROVIDER_RETRY_POLICY
+                .should_retry(0, ProviderErrorRetryClass::RetryableTransport)
+        );
+        assert!(
+            DEFAULT_PROVIDER_RETRY_POLICY.should_retry(4, ProviderErrorRetryClass::ContextLimit)
+        );
+        assert!(
+            !DEFAULT_PROVIDER_RETRY_POLICY.should_retry(5, ProviderErrorRetryClass::OutputLimit)
+        );
+        assert!(
+            !DEFAULT_PROVIDER_RETRY_POLICY.should_retry(0, ProviderErrorRetryClass::NonRetryable)
+        );
+    }
+
+    /// Verifies exponential delays are one-based and saturate at the
+    /// canonical provider retry cap.
+    #[test]
+    fn provider_retry_policy_bounds_exponential_delay() {
+        assert_eq!(DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(0), 1_000);
+        assert_eq!(DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(1), 1_000);
+        assert_eq!(DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(2), 2_000);
+        assert_eq!(DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(5), 16_000);
+        assert_eq!(DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(6), 30_000);
+        assert_eq!(DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(u32::MAX), 30_000);
+    }
 
     /// Verifies provider worker event identifiers remain stable while legacy
     /// variant names continue to decode during rolling runtime transitions.

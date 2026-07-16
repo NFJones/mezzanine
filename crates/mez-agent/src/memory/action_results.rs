@@ -5,7 +5,9 @@
 //! Persistent search execution, ranking, clocks, and concrete storage remain
 //! in the product adapter.
 
-use super::MemoryRecord;
+use super::{
+    MemoryRecord, MemoryRecordResult, MemoryScope, MemorySource, parse_model_writable_kind,
+};
 use crate::{ActionResult, AgentAction, AgentTurnResultIdentity};
 
 /// Default number of records returned by a model-authored memory search.
@@ -14,7 +16,7 @@ pub const DEFAULT_MEMORY_ACTION_LIMIT: usize = 5;
 pub const MAX_MEMORY_ACTION_LIMIT: usize = 20;
 
 /// Product search result facts needed for canonical memory result projection.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct MemorySearchActionRecord<'a> {
     /// Canonical memory record returned by persistent retrieval.
     pub record: &'a MemoryRecord,
@@ -22,6 +24,31 @@ pub struct MemorySearchActionRecord<'a> {
     pub score: f64,
     /// Product retrieval reason shown to the model.
     pub reason: &'a str,
+}
+
+/// Deterministic facts needed to build one model-authored memory record.
+///
+/// The product supplies the resolved durable scope, current time, and
+/// configured default retention. This crate owns normalization and record
+/// construction so concrete stores do not duplicate agent policy.
+#[derive(Debug, Clone)]
+pub struct MemoryStoreRecordRequest<'a> {
+    /// Model-authored canonical memory kind name.
+    pub kind: &'a str,
+    /// Optional model-authored priority before canonical bounding.
+    pub priority: Option<u64>,
+    /// Product-resolved durable scope.
+    pub scope: MemoryScope,
+    /// Optional keyword anchors appended to durable content.
+    pub keywords: &'a [String],
+    /// Model-authored durable content.
+    pub content: &'a str,
+    /// Optional action-specific retention period in days.
+    pub expires_in_days: Option<u64>,
+    /// Product clock value used for creation, update, and expiry.
+    pub now_unix_seconds: u64,
+    /// Configured fallback retention period in days.
+    pub default_ttl_days: u64,
 }
 
 /// Returns the bounded search result limit for a memory action.
@@ -61,6 +88,58 @@ pub fn memory_action_record_id(
             }
         })
         .collect()
+}
+
+/// Builds one canonical persistent record from a model-authored store action.
+///
+/// Returns a validation error when the kind is not model-writable or an
+/// action-specific retention duration cannot be represented in seconds.
+pub fn memory_store_record(
+    turn: &(impl AgentTurnResultIdentity + ?Sized),
+    action: &AgentAction,
+    request: MemoryStoreRecordRequest<'_>,
+) -> MemoryRecordResult<MemoryRecord> {
+    let priority = request.priority.unwrap_or(50).min(100) as u8;
+    let mut record = MemoryRecord::new_with_defaults(
+        memory_action_record_id(turn, action),
+        request.scope,
+        request.now_unix_seconds,
+        request.now_unix_seconds,
+        MemorySource::Agent,
+        priority,
+        memory_action_content(request.content, request.keywords),
+    );
+    record.kind = parse_model_writable_kind(request.kind).map_err(|_| {
+        super::MemoryRecordError::invalid_args(
+            "memory_store kind must be preference, fact, procedure, documentation, research, or warning",
+        )
+    })?;
+    let expiration_seconds = if let Some(days) = request.expires_in_days {
+        Some(days.checked_mul(86_400).ok_or_else(|| {
+            super::MemoryRecordError::invalid_args("memory expires_in_days is too large to store")
+        })?)
+    } else {
+        request
+            .default_ttl_days
+            .checked_mul(86_400)
+            .filter(|seconds| *seconds > 0)
+    };
+    if let Some(seconds) = expiration_seconds {
+        record.expiration_duration_seconds = Some(seconds);
+        record.expires_at_unix_seconds = Some(
+            request
+                .now_unix_seconds
+                .checked_add(seconds)
+                .ok_or_else(|| {
+                    super::MemoryRecordError::invalid_args(if request.expires_in_days.is_some() {
+                        "memory expiration timestamp is too large to store"
+                    } else {
+                        "memory default_ttl_days is too large to store"
+                    })
+                })?,
+        );
+    }
+    Ok(record)
 }
 
 /// Returns a bounded single-line preview for memory action output.
@@ -225,6 +304,78 @@ mod tests {
         assert_eq!(
             memory_action_record_id(&turn(), &action()),
             "agent:turn-1:search-1"
+        );
+    }
+
+    /// Verifies memory-store planning applies canonical kind, priority,
+    /// content, scope, and configured-retention policy in the lower crate.
+    #[test]
+    fn memory_store_planning_builds_canonical_record() {
+        let action = action();
+        let record = memory_store_record(
+            &turn(),
+            &action,
+            MemoryStoreRecordRequest {
+                kind: "procedure",
+                priority: Some(500),
+                scope: MemoryScope::Project {
+                    root: "/repo".to_string(),
+                },
+                keywords: &[" release ".to_string()],
+                content: "Run the release checks",
+                expires_in_days: None,
+                now_unix_seconds: 10,
+                default_ttl_days: 2,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(record.id, "agent:turn-1:search-1");
+        assert_eq!(record.kind, MemoryKind::Procedure);
+        assert_eq!(record.priority, 100);
+        assert_eq!(
+            record.content,
+            "Run the release checks\n\nKeywords: release"
+        );
+        assert_eq!(record.expiration_duration_seconds, Some(172_800));
+        assert_eq!(record.expires_at_unix_seconds, Some(172_810));
+    }
+
+    /// Verifies malformed kinds and unrepresentable action retention are
+    /// rejected before the concrete store receives a record.
+    #[test]
+    fn memory_store_planning_rejects_invalid_model_inputs() {
+        let action = action();
+        let request = MemoryStoreRecordRequest {
+            kind: "episode",
+            priority: None,
+            scope: MemoryScope::Global,
+            keywords: &[],
+            content: "invalid",
+            expires_in_days: None,
+            now_unix_seconds: 10,
+            default_ttl_days: 0,
+        };
+        assert_eq!(
+            memory_store_record(&turn(), &action, request.clone())
+                .unwrap_err()
+                .message(),
+            "memory_store kind must be preference, fact, procedure, documentation, research, or warning"
+        );
+
+        assert_eq!(
+            memory_store_record(
+                &turn(),
+                &action,
+                MemoryStoreRecordRequest {
+                    kind: "fact",
+                    expires_in_days: Some(u64::MAX),
+                    ..request
+                },
+            )
+            .unwrap_err()
+            .message(),
+            "memory expires_in_days is too large to store"
         );
     }
 

@@ -1356,6 +1356,52 @@ where
     Ok(parsed)
 }
 
+/// Parses an OpenAI-compatible model catalog with canonical known-model
+/// context-window metadata.
+pub fn parse_openai_models_http_body(
+    body: &str,
+) -> Result<Vec<ProviderModelInfo>, ProviderModelCatalogParseError> {
+    parse_openai_models_http_body_with(body, known_model_context_window_tokens)
+}
+
+#[cfg(test)]
+mod model_catalog_parse_tests {
+    use super::parse_openai_models_http_body;
+
+    #[test]
+    /// Verifies canonical catalog parsing retains provider metadata and fills
+    /// known model reasoning and context-window defaults.
+    fn openai_models_catalog_parser_extracts_models_and_reasoning_levels() {
+        let models = parse_openai_models_http_body(
+            r#"{"object":"list","data":[{"id":"gpt-5.5"},{"id":"gpt-custom","display_name":"Custom","reasoning":{"efforts":["tiny","large"]},"context_length":262144},{"id":"lmstudio-local","capabilities":["tool_use"],"structured_output":true}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(models.len(), 3);
+        let custom = models
+            .iter()
+            .find(|model| model.id == "gpt-custom")
+            .unwrap();
+        assert_eq!(custom.display_name.as_deref(), Some("Custom"));
+        assert_eq!(custom.reasoning_levels, vec!["tiny", "large"]);
+        assert_eq!(custom.context_window_tokens, Some(262_144));
+        let local = models
+            .iter()
+            .find(|model| model.id == "lmstudio-local")
+            .unwrap();
+        assert_eq!(
+            local.capabilities,
+            vec!["tool_use".to_string(), "structured_output".to_string()]
+        );
+        let defaulted = models.iter().find(|model| model.id == "gpt-5.5").unwrap();
+        assert_eq!(defaulted.context_window_tokens, Some(1_050_000));
+        assert_eq!(
+            defaulted.reasoning_levels,
+            vec!["low", "medium", "high", "xhigh"]
+        );
+    }
+}
+
 /// Returns default reasoning levels for OpenAI reasoning-model families.
 pub fn openai_default_reasoning_levels_for_model(model_id: &str) -> Vec<String> {
     let lower = model_id.to_ascii_lowercase();

@@ -17,7 +17,7 @@ use super::{
     MemoryScope, MemorySource, MezError, ModelProfile, ModelProfileOverrides, PathBuf,
     RUNTIME_LATENCY_PREFERENCES, Result, RuntimeAgentCompactionDispatch,
     RuntimeAgentCompactionTask, RuntimeAgentPromptTurnStart, RuntimeAgentProviderDispatchProvider,
-    RuntimeAgentTurnSteering, RuntimeAgentTurnStop, RuntimeAutoSizingConfig, RuntimeModelPreset,
+    RuntimeAgentTurnStop, RuntimeAutoSizingConfig, RuntimeModelPreset,
     RuntimeModelProfileOverrideScope, RuntimeSessionService, RuntimeSideEffect, ScheduledWork,
     ScheduledWorkKind, SplitDirection, TranscriptEntry, TranscriptRole, TrustDecision,
     agent_shell_visibility_json_name, agent_subshell_enter_command, compose_effective_config,
@@ -55,11 +55,11 @@ use mez_agent::ModelResponse;
 use mez_agent::model_context_text_word_count;
 use mez_agent::transcript::ConversationSummary;
 use mez_agent::{
-    AgentActionPayload, AllowedActionSet, DEFAULT_PROVIDER_TIMEOUT_MS, ModelInteractionKind,
-    ModelMessage, ModelMessageRole, ModelRequest, ModelTokenUsage, ModelTokenUsageKey,
-    ProviderApiCompatibility, ProviderCapabilities, ProviderModelCatalog, ProviderModelInfo,
-    ProviderQuotaUsage, append_mcp_context, openai_default_reasoning_levels_for_model,
-    resolve_provider_api,
+    AgentActionPayload, AgentTurnSteering, AllowedActionSet, DEFAULT_PROVIDER_TIMEOUT_MS,
+    ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest, ModelTokenUsage,
+    ModelTokenUsageKey, ProviderApiCompatibility, ProviderCapabilities, ProviderModelCatalog,
+    ProviderModelInfo, ProviderQuotaUsage, append_mcp_context,
+    openai_default_reasoning_levels_for_model, resolve_provider_api,
 };
 use mez_mux::readline::ReadlineEdit;
 use std::fs;
@@ -968,7 +968,7 @@ impl RuntimeSessionService {
         self.agent_turn_pending_steering
             .entry(turn.turn_id.clone())
             .or_default()
-            .push(RuntimeAgentTurnSteering {
+            .push(AgentTurnSteering {
                 input: input.to_string(),
                 submitted_at_unix_seconds: current_unix_seconds(),
             });

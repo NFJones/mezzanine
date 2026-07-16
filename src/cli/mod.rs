@@ -38,7 +38,7 @@ use crate::config::{
 };
 use crate::control::{decode_control_frame, encode_control_body};
 use crate::error::{MezError, Result};
-use crate::memory::{MemoryRetentionPolicy, MemorySearchRequest, PersistentMemoryStore};
+use crate::memory::PersistentMemoryStore;
 use crate::project::{
     ProjectTrustRecord, ProjectTrustStore, TrustDecision, default_trust_database_path,
     discover_existing_overlays, discover_project_root,

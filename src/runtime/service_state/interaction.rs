@@ -291,20 +291,6 @@ pub struct RuntimeAgentPromptTurnStart {
     pub context_blocks: usize,
 }
 
-/// User-authored steering input submitted while an agent turn is running.
-///
-/// The runtime stores these records until the next provider request for the
-/// same turn. Keeping the original text separate from the templated model
-/// context lets the pane log remain copyable while still giving the model clear
-/// instructions about how to treat mid-turn input.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimeAgentTurnSteering {
-    /// Original user prompt text submitted through the pane-local agent shell.
-    pub input: String,
-    /// Unix timestamp in seconds when the steering prompt was accepted.
-    pub submitted_at_unix_seconds: u64,
-}
-
 /// Carries Runtime Agent Turn Stop state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -363,105 +349,6 @@ pub(in crate::runtime) struct RuntimeAgentModifiedFileSummary {
     pub(in crate::runtime) added: usize,
     /// Number of removed lines observed across successful patch diffs.
     pub(in crate::runtime) removed: usize,
-}
-
-/// Runtime-local shell dispatch history for one active agent turn.
-///
-/// The provider may require several shell continuations before it can complete
-/// a task, but the runtime must retain enough turn-local state to suppress
-/// exact command loops before they become unbounded pane input.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimeAgentShellDispatchHistory {
-    /// Stores the commands value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) commands: Vec<String>,
-    /// Shell commands that reached a successful transaction boundary.
-    pub(in crate::runtime) succeeded_commands: Vec<String>,
-    /// Consecutive model-authored `shell_command` dispatches in the current phase.
-    pub(in crate::runtime) consecutive_shell_dispatches: usize,
-    /// Consecutive successful model-authored `shell_command` actions in this turn.
-    pub(in crate::runtime) consecutive_successful_shell_commands: usize,
-    /// Whether a file mutation succeeded during this active turn.
-    pub(in crate::runtime) successful_file_mutation_this_turn: bool,
-    /// Whether a validation command succeeded after the latest file mutation.
-    pub(in crate::runtime) successful_validation_after_file_mutation: bool,
-}
-
-impl RuntimeAgentShellDispatchHistory {
-    /// Returns how many model-selected shell commands this turn dispatched.
-    pub(in crate::runtime) fn dispatched_count(&self) -> usize {
-        self.commands.len()
-    }
-
-    /// Returns how many times the exact command text succeeded this turn.
-    pub(in crate::runtime) fn exact_success_count(&self, command: &str) -> usize {
-        self.succeeded_commands
-            .iter()
-            .filter(|existing| existing.as_str() == command)
-            .count()
-    }
-
-    /// Records a dispatched shell command.
-    pub(in crate::runtime) fn record(&mut self, command: impl Into<String>) {
-        self.commands.push(command.into());
-        self.consecutive_shell_dispatches = self.consecutive_shell_dispatches.saturating_add(1);
-    }
-
-    /// Records a shell command that completed successfully.
-    pub(in crate::runtime) fn record_success(
-        &mut self,
-        command: impl Into<String>,
-        action: &AgentAction,
-        command_is_validation: bool,
-    ) {
-        self.succeeded_commands.push(command.into());
-        match action.payload {
-            AgentActionPayload::ShellCommand { .. } => {
-                if command_is_validation && self.successful_file_mutation_this_turn {
-                    self.consecutive_shell_dispatches = 0;
-                    self.consecutive_successful_shell_commands = 0;
-                    self.successful_validation_after_file_mutation = true;
-                } else {
-                    self.consecutive_successful_shell_commands =
-                        self.consecutive_successful_shell_commands.saturating_add(1);
-                }
-            }
-            AgentActionPayload::ApplyPatch { .. } => {
-                self.consecutive_shell_dispatches = 0;
-                self.consecutive_successful_shell_commands = 0;
-                self.successful_file_mutation_this_turn = true;
-                self.successful_validation_after_file_mutation = false;
-            }
-            _ => {}
-        }
-    }
-
-    /// Resets the successful inspection streak after a non-shell runtime effect.
-    pub(in crate::runtime) fn reset_successive_shell_commands(&mut self) {
-        self.consecutive_shell_dispatches = 0;
-        self.consecutive_successful_shell_commands = 0;
-    }
-}
-
-/// Runtime-local network action history for one active agent turn.
-///
-/// Network actions execute outside the pane shell, so this records the
-/// automatic network dispatches in one turn for traceability. Concrete network
-/// actions perform their own URL, policy, and response-size validation before
-/// returning results.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(in crate::runtime) struct RuntimeAgentNetworkActionHistory {
-    /// Network requests executed by this turn.
-    pub(in crate::runtime) requests: Vec<String>,
-}
-
-impl RuntimeAgentNetworkActionHistory {
-    /// Records an executed network request.
-    pub(in crate::runtime) fn record(&mut self, request: impl Into<String>) {
-        self.requests.push(request.into());
-    }
 }
 
 /// Runtime-local editable prompt and display state for one pane's agent shell.

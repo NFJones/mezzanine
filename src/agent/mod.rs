@@ -25,11 +25,6 @@ pub mod actions;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 pub mod context;
-/// Exposes the maap module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-pub mod maap;
 /// Exposes the network module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -45,19 +40,14 @@ pub mod prompt;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 pub mod provider;
-/// Exposes the semantic module boundary.
-///
-/// The nested module keeps its implementation details isolated while this
-/// declaration makes the boundary available to the crate.
-pub mod semantic;
 /// Exposes the slash module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 pub mod slash;
 use context::assemble_model_request;
-use maap::validate_non_empty;
 use mez_agent::action_text_content_blocks;
+use mez_agent::local_action_plan;
 use mez_agent::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentLogLevel,
     AgentShellStore, AgentShellVisibility, AgentTurnLedger, AgentTurnRecord, AgentTurnState,
@@ -72,7 +62,6 @@ use mez_agent::{
 };
 use provider::provider_error_retry_class;
 use provider::{AsyncModelProvider, AsyncProviderHttpTransport};
-use semantic::local_action_plan;
 
 /// Exposes the tests module boundary.
 ///

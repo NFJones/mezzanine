@@ -64,7 +64,7 @@ impl RuntimeSessionService {
                     index + 1,
                     turn.turn_id
                 ),
-                content: runtime_agent_turn_steering_context_content(&steering),
+                content: mez_agent::agent_turn_steering_context_content(&steering),
             });
         }
         self.append_agent_trace_turn_event(

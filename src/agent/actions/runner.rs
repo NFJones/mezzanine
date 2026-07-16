@@ -26,7 +26,6 @@ use super::recovery::{
 use super::recovery::{
     summarize_controller_failure_execution, summarize_provider_failure_execution,
 };
-use crate::agent::maap::MaapBatchProductValidation;
 #[cfg(test)]
 use crate::agent::provider::ModelProvider;
 #[cfg(test)]
@@ -118,11 +117,12 @@ impl<P: ModelProvider> AgentTurnEnvironment for SyncProductAgentTurnEnvironment<
         turn: &AgentTurnRecord,
         batch: &super::super::MaapBatch,
     ) -> Result<()> {
-        batch.validate(
-            turn,
+        Ok(batch.validate_harness_contract(
+            &turn.turn_id,
+            &turn.agent_id,
             &self.runner.available_mcp_servers,
             self.runner.available_mcp_tools,
-        )
+        )?)
     }
 
     fn plan_action_result(
@@ -417,11 +417,12 @@ impl<P: AsyncModelProvider> AgentTurnEnvironment for ProductAgentTurnEnvironment
         turn: &AgentTurnRecord,
         batch: &super::super::MaapBatch,
     ) -> Result<()> {
-        batch.validate(
-            turn,
+        Ok(batch.validate_harness_contract(
+            &turn.turn_id,
+            &turn.agent_id,
             &self.runner.available_mcp_servers,
             self.runner.available_mcp_tools,
-        )
+        )?)
     }
 
     fn plan_action_result(

@@ -10,12 +10,17 @@ mod action_results;
 mod context;
 mod encoding;
 mod error;
+mod retrieval;
 mod session_store;
 mod types;
 mod validation;
 
 pub use context::{MemoryContextRecord, MemoryContextScope};
 pub use error::{MemoryRecordError, MemoryRecordResult};
+pub use retrieval::{
+    MemoryRetentionPolicy, MemoryRetrievalRequest, MemoryRetrievalResult, MemorySearchRequest,
+    MemorySearchResult, compare_memory_search_results, complete_memory_retrieval,
+};
 pub use types::{
     MemoryKind, MemoryRecord, MemoryScope, MemorySource, MemoryState, SessionMemoryStore,
 };
@@ -37,6 +42,7 @@ pub use encoding::{
 mod tests;
 pub use action_results::{
     DEFAULT_MEMORY_ACTION_LIMIT, MAX_MEMORY_ACTION_LIMIT, MemorySearchActionRecord,
-    memory_action_content, memory_action_limit, memory_action_preview, memory_action_record_id,
-    memory_search_action_result, memory_store_action_result,
+    MemoryStoreRecordRequest, memory_action_content, memory_action_limit, memory_action_preview,
+    memory_action_record_id, memory_search_action_result, memory_store_action_result,
+    memory_store_record,
 };

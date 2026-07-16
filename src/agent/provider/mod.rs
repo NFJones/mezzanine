@@ -6,15 +6,22 @@
 
 use super::{
     BTreeMap, ExposeSecret, MaapBatch, MezError, ModelInteractionKind, Result, SecretString,
-    validate_non_empty,
 };
 use std::future::Future;
 use std::pin::Pin;
 
+/// Validates one required concrete provider-adapter field.
+fn validate_non_empty(field: &str, value: &str) -> Result<()> {
+    if value.is_empty() {
+        Err(MezError::invalid_args(format!("{field} must not be empty")))
+    } else {
+        Ok(())
+    }
+}
+
 // Model provider traits and OpenAI Responses adapter.
 
 mod anthropic;
-mod catalog;
 mod chat_completions;
 mod claude_code;
 mod deepseek;
@@ -22,7 +29,6 @@ mod errors;
 mod http;
 mod openai_chat_completions;
 use anthropic::AnthropicMessagesDialect;
-pub use catalog::parse_openai_models_http_body;
 pub use chat_completions::ChatCompletionsProvider;
 pub use claude_code::ClaudeCodeProvider;
 use deepseek::DeepSeekChatCompletionsDialect;
@@ -35,6 +41,7 @@ pub(crate) use errors::{
 #[cfg(test)]
 pub use http::ProviderHttpTransport;
 pub use http::{AsyncProviderHttpTransport, ReqwestProviderHttpTransport};
+use mez_agent::parse_openai_models_http_body;
 use mez_agent::provider_quota_usage_from_headers;
 use mez_agent::{
     DEFAULT_PROVIDER_TIMEOUT_MS, ModelRequest, ModelResponse, ModelTokenUsage,

@@ -7,7 +7,9 @@
 
 use super::*;
 use crate::runtime::service_state::RuntimeRecordBrowserOverlaySource;
-use mez_agent::memory::{kind_name, parse_kind, parse_state, source_name, state_name};
+use mez_agent::memory::{
+    MemorySearchRequest, kind_name, parse_kind, parse_state, source_name, state_name,
+};
 use mez_mux::record_browser::{
     RecordBrowser, RecordBrowserFilterChoice, RecordBrowserFilterField, RecordBrowserRecord,
 };
@@ -143,7 +145,7 @@ impl RuntimeSessionService {
             vec![store.inspect(id)?]
         } else {
             store
-                .search(&crate::memory::MemorySearchRequest {
+                .search(&MemorySearchRequest {
                     query: args.text.clone(),
                     scope: scope.clone(),
                     kind: args.kind,
@@ -263,7 +265,7 @@ impl RuntimeSessionService {
                 Ok(RecordBrowser::new(
                     "Memories",
                     store
-                        .search(&crate::memory::MemorySearchRequest {
+                        .search(&MemorySearchRequest {
                             query: text.clone(),
                             scope: scope.clone(),
                             kind: *kind,

@@ -147,6 +147,8 @@ pub mod surface;
 pub mod transcript;
 /// Provider-independent agent turn-ledger error contracts.
 pub mod turn;
+/// Provider-independent volatile turn activity and advisory guidance.
+pub mod turn_activity;
 /// Provider-independent agent turn records and ledger state machine.
 pub mod turn_ledger;
 /// Canonical provider-independent production turn orchestration.
@@ -273,7 +275,10 @@ pub use http::{
     ProviderHttpErrorKind, ProviderHttpRequest, ProviderHttpResponse, ProviderHttpResult,
     ProviderSseTerminalDetector, SseEvent, SseParseError, parse_sse_events, parse_sse_events_with,
 };
-pub use local_action::{LocalActionKind, LocalActionPlan};
+pub use local_action::{
+    LocalActionKind, LocalActionPlan, LocalActionPlanningError, LocalActionPlanningResult,
+    action_is_local_shell_backed, local_action_plan, local_action_summary,
+};
 pub use maap::{
     AGENT_OUTPUT_TEXT_DIFF_CONTENT_TYPE, AGENT_OUTPUT_TEXT_MARKDOWN_CONTENT_TYPE,
     AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, AgentAction, AgentActionPayload, MaapBatch,
@@ -365,8 +370,9 @@ pub use provider::{
     openai_models_endpoint_for_responses_endpoint, openai_prompt_cache_diagnostics,
     openai_prompt_cache_key, openai_render_messages, openai_request_options,
     openai_responses_endpoint_for_base_url, openai_service_tier_for_latency_preference,
-    openai_stable_prefix_material, parse_openai_models_http_body_with,
-    provider_catalog_reasoning_levels, resolve_provider_api, validate_provider_request_required,
+    openai_stable_prefix_material, parse_openai_models_http_body,
+    parse_openai_models_http_body_with, provider_catalog_reasoning_levels, resolve_provider_api,
+    validate_provider_request_required,
 };
 pub use provider_diagnostics::{
     ProviderMalformedOutputError, provider_error_detail, provider_failure_event_json,
@@ -374,7 +380,8 @@ pub use provider_diagnostics::{
     provider_malformed_output_hint,
 };
 pub use provider_error::{
-    ProviderErrorKind, ProviderErrorRetryClass, classify_provider_error_retry,
+    DEFAULT_PROVIDER_RETRY_POLICY, ProviderErrorKind, ProviderErrorRetryClass, ProviderRetryPolicy,
+    classify_provider_error_retry,
 };
 pub use provider_transcript::{PROVIDER_TRANSCRIPT_EVENT_MARKER, ProviderTranscriptEvent};
 pub use quota::{ProviderQuotaUsage, provider_quota_usage_from_headers};
@@ -436,6 +443,7 @@ pub use subagent::{
     DefaultSubagentScopeEnforcement, ScopeConflict, ScopeRegistry, SubagentContractError,
     SubagentContractErrorKind, SubagentContractResult, SubagentProfile, SubagentScopeDeclaration,
     SubagentScopeEnforcement, SubagentSpawnRequest, builtin_role_name, builtin_subagent_profiles,
+    normalize_subagent_spawn_role, subagent_action_scope_violation,
 };
 pub use subagent_output::subagent_task_output_for_execution;
 pub use surface::{AgentCapability, AllowedAction, AllowedActionSet, ModelInteractionKind};
@@ -445,6 +453,12 @@ pub use transcript::{
 pub use turn::{
     AgentTurnLedgerError, AgentTurnLedgerErrorKind, AgentTurnLedgerResult, AgentTurnState,
     AgentTurnTrigger, validate_turn_required,
+};
+pub use turn_activity::{
+    ActionPressurePhase, ActionPressureSeverity, AgentNetworkActionHistory,
+    AgentShellDispatchHistory, AgentTurnSteering, action_pressure_context_content,
+    action_pressure_phase, action_pressure_severity, agent_turn_steering_context_content,
+    shell_command_looks_like_validation,
 };
 pub use turn_ledger::{AgentTurnLedger, AgentTurnRecord};
 pub use turn_runner::{

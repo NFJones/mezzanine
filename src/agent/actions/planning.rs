@@ -10,7 +10,7 @@ use super::super::{
     local_action_plan,
 };
 use super::AgentTurnRunner;
-use mez_agent::{ActionPlanningInput, network_action_plan};
+use mez_agent::{ActionPlanningInput, network_action_plan, subagent_action_scope_violation};
 
 impl<'a, P> AgentTurnRunner<'a, P> {
     /// Plans one initial action result from product-owned policy facts.
@@ -22,12 +22,13 @@ impl<'a, P> AgentTurnRunner<'a, P> {
         let local_plan = local_action_plan(action)?;
         let network_plan = network_action_plan(action);
         let subagent_scope_violation = match (self.subagent_scope, local_plan.as_ref()) {
-            (Some(scope), Some(plan)) => subagent_scope_violation(
+            (Some(scope), Some(plan)) => subagent_action_scope_violation(
                 self.subagent_scope_enforcement,
                 scope,
                 action,
                 &plan.policy_command,
-            )?,
+            )
+            .map_err(MezError::invalid_args)?,
             _ => None,
         };
         let local_rule_decision = local_plan
@@ -67,22 +68,5 @@ impl<'a, P> AgentTurnRunner<'a, P> {
             .find(|available| available.server_id == server && available.tool_name == tool)
             .map(|available| available.approval_required)
             .unwrap_or(true)
-    }
-}
-
-/// Returns a delegated subagent scope violation for one local action.
-fn subagent_scope_violation(
-    enforcement: &dyn mez_agent::SubagentScopeEnforcement,
-    scope: &mez_agent::SubagentScopeDeclaration,
-    action: &AgentAction,
-    policy_command: &str,
-) -> Result<Option<String>> {
-    match &action.payload {
-        AgentActionPayload::ApplyPatch { patch, .. } => enforcement
-            .apply_patch_violation(scope, patch)
-            .map_err(MezError::invalid_args),
-        _ => enforcement
-            .shell_command_violation(scope, policy_command)
-            .map_err(MezError::invalid_args),
     }
 }

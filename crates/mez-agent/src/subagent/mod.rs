@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::PermissionPreset;
+use crate::{AgentAction, AgentActionPayload, PermissionPreset};
 
 mod scope;
 
@@ -84,6 +84,25 @@ pub trait SubagentScopeEnforcement: Send + Sync {
     ) -> Result<Option<String>, String>;
 }
 
+/// Routes one local action through canonical delegated-scope enforcement.
+///
+/// Semantic patches are checked as patches; every other shell-backed local
+/// action is checked through its already-lowered policy command. Classification
+/// failures are returned unchanged for the product error adapter to project.
+pub fn subagent_action_scope_violation(
+    enforcement: &dyn SubagentScopeEnforcement,
+    scope: &SubagentScopeDeclaration,
+    action: &AgentAction,
+    policy_command: &str,
+) -> Result<Option<String>, String> {
+    match &action.payload {
+        AgentActionPayload::ApplyPatch { patch, .. } => {
+            enforcement.apply_patch_violation(scope, patch)
+        }
+        _ => enforcement.shell_command_violation(scope, policy_command),
+    }
+}
+
 #[cfg(test)]
 mod scope_tests;
 
@@ -118,6 +137,39 @@ impl CooperationMode {
     pub const fn requires_explicit_user_approval(self) -> bool {
         matches!(self, Self::Unrestricted)
     }
+}
+
+/// Normalizes safe descriptive read-only roles onto the built-in explorer.
+///
+/// Configured roles remain exact. Aliasing occurs only for explore-only
+/// requests without write scopes so a provider's descriptive role cannot
+/// accidentally gain authority.
+pub fn normalize_subagent_spawn_role(
+    role: &str,
+    configured_role_exists: bool,
+    cooperation_mode: CooperationMode,
+    write_scopes: &[String],
+) -> String {
+    if configured_role_exists {
+        return role.to_string();
+    }
+    if cooperation_mode == CooperationMode::ExploreOnly
+        && write_scopes.is_empty()
+        && matches!(
+            role,
+            "repo-searcher"
+                | "repository-searcher"
+                | "searcher"
+                | "researcher"
+                | "inspector"
+                | "reader"
+                | "scanner"
+                | "finder"
+        )
+    {
+        return "explorer".to_string();
+    }
+    role.to_string()
 }
 
 /// Active scope restrictions inherited from a spawned subagent's parent.
@@ -449,7 +501,7 @@ fn scopes_overlap(left: &str, right: &str) -> bool {
 mod tests {
     use super::{
         CooperationMode, ScopeRegistry, SubagentContractErrorKind, SubagentScopeDeclaration,
-        SubagentSpawnRequest, builtin_subagent_profiles,
+        SubagentSpawnRequest, builtin_subagent_profiles, normalize_subagent_spawn_role,
     };
     use crate::PermissionPreset;
 
@@ -465,6 +517,34 @@ mod tests {
         );
         assert_eq!(CooperationMode::SerialWrite.as_str(), "serial-write");
         assert_eq!(CooperationMode::Unrestricted.as_str(), "unrestricted");
+    }
+
+    /// Verifies only unconfigured, read-only descriptive aliases normalize to
+    /// explorer while configured or write-capable roles remain exact.
+    #[test]
+    fn spawn_role_normalization_preserves_authority_boundaries() {
+        assert_eq!(
+            normalize_subagent_spawn_role(
+                "repo-searcher",
+                false,
+                CooperationMode::ExploreOnly,
+                &[],
+            ),
+            "explorer"
+        );
+        assert_eq!(
+            normalize_subagent_spawn_role("repo-searcher", true, CooperationMode::ExploreOnly, &[],),
+            "repo-searcher"
+        );
+        assert_eq!(
+            normalize_subagent_spawn_role(
+                "repo-searcher",
+                false,
+                CooperationMode::OwnedWrite,
+                &["src".to_string()],
+            ),
+            "repo-searcher"
+        );
     }
 
     /// Verifies unrestricted authority is the only cooperation mode requiring

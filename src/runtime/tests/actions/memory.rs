@@ -1,6 +1,7 @@
 //! Runtime tests for actions memory behavior.
 
 use super::*;
+use mez_agent::memory::MemorySearchRequest;
 
 /// Verifies runtime service owns session memory and clears it on kill.
 ///
@@ -868,7 +869,7 @@ fn runtime_memory_store_rejects_episode_and_scratch_kinds() {
     }
     let store = crate::memory::PersistentMemoryStore::under_config_root(config_root.clone());
     let records = store
-        .search(&crate::memory::MemorySearchRequest {
+        .search(&MemorySearchRequest {
             query: Some("temporary".to_string()),
             scope: None,
             kind: None,

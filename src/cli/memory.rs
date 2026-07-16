@@ -5,11 +5,12 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    Args, CliEnv, CliOutputFormat, MemoryKind, MemoryRecord, MemoryRetentionPolicy, MemoryScope,
-    MemorySearchRequest, MemorySource, MemoryState, MezError, PersistentMemoryStore, Result,
-    Serialize, Subcommand, Write, current_unix_seconds, load_primary_config_layers,
-    runtime_effective_config_value, serialize_json, write_json_or_plain,
+    Args, CliEnv, CliOutputFormat, MemoryKind, MemoryRecord, MemoryScope, MemorySource,
+    MemoryState, MezError, PersistentMemoryStore, Result, Serialize, Subcommand, Write,
+    current_unix_seconds, load_primary_config_layers, runtime_effective_config_value,
+    serialize_json, write_json_or_plain,
 };
+use mez_agent::memory::{MemoryRetentionPolicy, MemorySearchRequest};
 
 // Memory subcommands and output formatting.
 

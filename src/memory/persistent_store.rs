@@ -5,13 +5,16 @@
 
 use std::cmp::Ordering;
 
+use mez_agent::memory::{
+    MemoryRecord, MemoryRetentionPolicy, MemoryScope, MemorySearchRequest, MemorySearchResult,
+    MemoryState, compare_memory_search_results, decode_scope, encode_scope, kind_name, parse_kind,
+    parse_source, parse_state, source_name, state_name,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{
-    MemoryKind, MemoryRecord, MemoryScope, MemorySource, MemoryState, MezError, Path, PathBuf,
-    PersistentMemoryStore, Result, decode_scope, encode_scope, fs, kind_name, parse_kind,
-    parse_source, parse_state, set_private_dir_permissions, set_private_file_permissions,
-    source_name, state_name,
+    MezError, Path, PathBuf, PersistentMemoryStore, Result, fs, set_private_dir_permissions,
+    set_private_file_permissions,
 };
 
 const SCHEMA_VERSION: i64 = 4;
@@ -290,49 +293,6 @@ impl PersistentMemoryStore {
         transaction.commit()?;
         Ok(())
     }
-}
-
-/// Criteria used to search persistent memory records.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct MemorySearchRequest {
-    /// Optional FTS query. When omitted, records use deterministic fallback order.
-    pub query: Option<String>,
-    /// Optional exact scope filter.
-    pub scope: Option<MemoryScope>,
-    /// Optional memory kind filter.
-    pub kind: Option<MemoryKind>,
-    /// Optional lifecycle state filter.
-    pub state: Option<MemoryState>,
-    /// Optional source filter.
-    pub source: Option<MemorySource>,
-    /// Maximum number of results to return.
-    pub limit: usize,
-}
-
-/// One persistent memory search result with deterministic retrieval metadata.
-#[derive(Debug, Clone, PartialEq)]
-pub struct MemorySearchResult {
-    /// Matching persistent memory record.
-    pub record: MemoryRecord,
-    /// Combined deterministic score used for ordering.
-    pub score: f64,
-    /// SQLite FTS rank when a query was provided.
-    pub fts_rank: Option<f64>,
-    /// Human-readable reason for retrieval/debug views.
-    pub reason: String,
-}
-
-/// Retention policy applied to persistent memory records.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct MemoryRetentionPolicy {
-    /// Current time used for expiry checks and archival updates.
-    pub now_unix_seconds: u64,
-    /// Maximum retained record count, when configured.
-    pub max_records: Option<usize>,
-    /// Maximum retained memory content bytes, when configured.
-    pub max_bytes: Option<usize>,
-    /// Archive non-expired over-limit records instead of deleting them.
-    pub archive_before_prune: bool,
 }
 
 /// Creates the SQLite schema and FTS index for persistent memory.
@@ -792,7 +752,7 @@ fn search_records_with_query(
             reason: "fts query match plus deterministic metadata ranking".to_string(),
         });
     }
-    results.sort_by(compare_search_results);
+    results.sort_by(compare_memory_search_results);
     results.truncate(search_limit(request.limit) as usize);
     Ok(results)
 }
@@ -823,7 +783,7 @@ fn search_records_without_query(
             reason: "deterministic priority updated_at id fallback".to_string(),
         });
     }
-    results.sort_by(compare_search_results);
+    results.sort_by(compare_memory_search_results);
     results.truncate(search_limit(request.limit) as usize);
     Ok(results)
 }
@@ -854,24 +814,6 @@ fn deterministic_score(record: &MemoryRecord) -> f64 {
         + (record.updated_at_unix_seconds as f64 / 86_400.0).min(10_000.0)
         + (record.use_count as f64).min(1_000.0)
         + (record.confirmed_count as f64 * 2.0).min(1_000.0)
-}
-
-/// Orders search results by score, recency, and id.
-fn compare_search_results(
-    left: &MemorySearchResult,
-    right: &MemorySearchResult,
-) -> std::cmp::Ordering {
-    right
-        .score
-        .partial_cmp(&left.score)
-        .unwrap_or(std::cmp::Ordering::Equal)
-        .then_with(|| {
-            right
-                .record
-                .updated_at_unix_seconds
-                .cmp(&left.record.updated_at_unix_seconds)
-        })
-        .then_with(|| left.record.id.cmp(&right.record.id))
 }
 
 /// Selects records that exceed the configured retention policy.

@@ -549,22 +549,6 @@ pub(super) fn runtime_agent_action_rationale_repeats_visible_summary(action: &Ag
     )
 }
 
-/// Builds the model-facing wrapper for mid-turn user steering input.
-pub(super) fn runtime_agent_turn_steering_context_content(
-    steering: &RuntimeAgentTurnSteering,
-) -> String {
-    format!(
-        "[user steering input during active turn]\n\
-submitted_at_unix_seconds={}\n\
-The user added this instruction while the current turn was already in progress.\n\
-Incorporate it into the current task from this point forward. Do not restart\n\
-completed work unless necessary. If this conflicts with earlier instructions,\n\
-the newer user instruction takes precedence.\n\n\
-User input:\n{}",
-        steering.submitted_at_unix_seconds, steering.input
-    )
-}
-
 /// Builds a concise default-visible line for a runtime action that could not
 /// reach its usual visible execution path.
 pub(super) fn runtime_agent_action_outcome_line(

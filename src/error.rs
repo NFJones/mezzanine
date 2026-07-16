@@ -302,6 +302,12 @@ impl From<mez_agent::semantic_patch::SemanticPatchPlanningError> for MezError {
     }
 }
 
+impl From<mez_agent::LocalActionPlanningError> for MezError {
+    fn from(error: mez_agent::LocalActionPlanningError) -> Self {
+        Self::invalid_args(error.message())
+    }
+}
+
 impl From<mez_agent::instructions::InstructionDiscoveryError> for MezError {
     fn from(error: mez_agent::instructions::InstructionDiscoveryError) -> Self {
         Self::invalid_args(error.message())

@@ -5,7 +5,7 @@
 //! lifecycle coordination out of the main runtime agent facade.
 
 use super::*;
-use mez_agent::{MacroRunPhase, MacroStepTaskResult};
+use mez_agent::{MacroRunPhase, MacroStepTaskResult, normalize_subagent_spawn_role};
 
 impl RuntimeSessionService {
     /// Clears joined-subagent dependencies owned by or waiting on a turn.
@@ -212,8 +212,12 @@ impl RuntimeSessionService {
             ));
         };
         let normalized_cooperation_mode = runtime_cooperation_mode(cooperation_mode)?;
-        let normalized_role =
-            self.maap_spawn_role_for_action(role, normalized_cooperation_mode, write_scopes);
+        let normalized_role = normalize_subagent_spawn_role(
+            role,
+            self.subagent_profiles.contains_key(role),
+            normalized_cooperation_mode,
+            write_scopes,
+        );
         let prompt = if normalized_role != *role {
             format!(
                 "[requested role alias: {}; using built-in profile: {}]\n{}",
@@ -291,47 +295,6 @@ impl RuntimeSessionService {
                 json_escape(placement)
             )),
         ))
-    }
-
-    /// Normalizes common model-produced descriptive read-only roles to the
-    /// built-in explorer profile used by the runtime subagent harness.
-    ///
-    /// Provider models often describe a subagent's job as a role such as
-    /// `repo-searcher`. MAAP execution keeps configured custom roles exact, but
-    /// maps common read-only aliases onto `explorer` so safe delegation requests
-    /// do not fail after the model already emitted an otherwise valid action.
-    fn maap_spawn_role_for_action(
-        &self,
-        role: &str,
-        cooperation_mode: mez_agent::CooperationMode,
-        write_scopes: &[String],
-    ) -> String {
-        if self.subagent_profiles.contains_key(role) {
-            return role.to_string();
-        }
-        if cooperation_mode == mez_agent::CooperationMode::ExploreOnly
-            && write_scopes.is_empty()
-            && Self::maap_read_only_subagent_role_alias(role)
-        {
-            return "explorer".to_string();
-        }
-        role.to_string()
-    }
-
-    /// Reports whether a provider-produced descriptive role name is a safe
-    /// read-only alias for the built-in explorer profile.
-    fn maap_read_only_subagent_role_alias(role: &str) -> bool {
-        matches!(
-            role,
-            "repo-searcher"
-                | "repository-searcher"
-                | "searcher"
-                | "researcher"
-                | "inspector"
-                | "reader"
-                | "scanner"
-                | "finder"
-        )
     }
 
     /// Runs the append subagent spawn audit operation for this subsystem.

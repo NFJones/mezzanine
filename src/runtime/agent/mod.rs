@@ -7,9 +7,7 @@
 use super::agent_state::RuntimeAgentProviderClaim;
 #[cfg(test)]
 use super::runtime_execute_auto_sizing_with_provider;
-use super::service_state::{
-    RuntimeAgentPatchRecord, RuntimeAgentTurnSteering, RuntimeApplyPatchBatchState,
-};
+use super::service_state::{RuntimeAgentPatchRecord, RuntimeApplyPatchBatchState};
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentShellSession,
     AgentShellVisibility, AgentTurnExecution, AgentTurnRecord, AgentTurnState, AuditActor,
@@ -148,7 +146,6 @@ use outcome::{
     runtime_agent_action_summary, runtime_agent_context_command,
     runtime_agent_execution_failure_error, runtime_agent_finished_footer_line,
     runtime_agent_pending_approval_log_line, runtime_agent_shell_status,
-    runtime_agent_turn_steering_context_content,
 };
 use provider_events::runtime_provider_event_error;
 use subagents::runtime_agent_pane_id;

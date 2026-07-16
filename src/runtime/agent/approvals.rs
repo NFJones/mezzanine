@@ -385,8 +385,13 @@ impl RuntimeSessionService {
                 let subagent_scope = self.subagent_scope_declaration_for_turn(&turn);
                 let permission_policy = self.permission_policy_for_turn(&turn);
                 if let Some(scope) = subagent_scope.as_ref()
-                    && let Some(message) =
-                        runtime_subagent_scope_violation(scope, &action, &plan.policy_command)?
+                    && let Some(message) = mez_agent::subagent_action_scope_violation(
+                        &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
+                        scope,
+                        &action,
+                        &plan.policy_command,
+                    )
+                    .map_err(MezError::invalid_args)?
                 {
                     return Err(MezError::forbidden(message));
                 }
@@ -822,29 +827,5 @@ impl RuntimeSessionService {
             }
             mez_agent::permissions::ApprovalDecision::Approve => Ok(None),
         }
-    }
-}
-
-/// Returns a delegated subagent scope violation for one runtime local action.
-fn runtime_subagent_scope_violation(
-    scope: &mez_agent::SubagentScopeDeclaration,
-    action: &mez_agent::AgentAction,
-    policy_command: &str,
-) -> Result<Option<String>> {
-    match &action.payload {
-        mez_agent::AgentActionPayload::ApplyPatch { patch, .. } => {
-            mez_agent::SubagentScopeEnforcement::apply_patch_violation(
-                &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
-                scope,
-                patch,
-            )
-            .map_err(MezError::invalid_args)
-        }
-        _ => mez_agent::SubagentScopeEnforcement::shell_command_violation(
-            &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
-            scope,
-            policy_command,
-        )
-        .map_err(MezError::invalid_args),
     }
 }

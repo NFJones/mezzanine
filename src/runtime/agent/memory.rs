@@ -7,8 +7,9 @@
 
 use super::*;
 use mez_agent::memory::{
-    MemorySearchActionRecord, memory_action_content, memory_action_limit, memory_action_record_id,
-    memory_search_action_result, memory_store_action_result,
+    MemorySearchActionRecord, MemorySearchRequest, MemorySearchResult, MemoryStoreRecordRequest,
+    compare_memory_search_results, memory_action_limit, memory_search_action_result,
+    memory_store_action_result, memory_store_record,
 };
 
 impl RuntimeSessionService {
@@ -153,16 +154,21 @@ impl RuntimeSessionService {
                 content,
                 expires_in_days,
             } => {
-                let result = self.build_memory_store_record(
+                let result = memory_store_record(
                     turn,
                     action,
-                    kind,
-                    *priority,
-                    scope.as_deref(),
-                    keywords,
-                    content,
-                    *expires_in_days,
-                );
+                    MemoryStoreRecordRequest {
+                        kind,
+                        priority: *priority,
+                        scope: self.memory_action_scope(turn, scope.as_deref()),
+                        keywords,
+                        content,
+                        expires_in_days: *expires_in_days,
+                        now_unix_seconds: current_unix_seconds(),
+                        default_ttl_days: self.runtime_memory_default_ttl_days(),
+                    },
+                )
+                .map_err(MezError::from);
                 let record = match result {
                     Ok(record) => record,
                     Err(error) => {
@@ -190,58 +196,6 @@ impl RuntimeSessionService {
                 "memory execution requires a memory action",
             )),
         }
-    }
-
-    /// Builds one persistent memory record from a model-authored store action.
-    #[allow(clippy::too_many_arguments)]
-    fn build_memory_store_record(
-        &self,
-        turn: &AgentTurnRecord,
-        action: &AgentAction,
-        kind: &str,
-        priority: Option<u64>,
-        scope: Option<&str>,
-        keywords: &[String],
-        content: &str,
-        expires_in_days: Option<u64>,
-    ) -> Result<mez_agent::memory::MemoryRecord> {
-        let now = current_unix_seconds();
-        let priority = priority.unwrap_or(50).min(100) as u8;
-        let scope = self.memory_action_scope(turn, scope);
-        let body = memory_action_content(content, keywords);
-        let mut record = mez_agent::memory::MemoryRecord::new_with_defaults(
-            memory_action_record_id(turn, action),
-            scope,
-            now,
-            now,
-            mez_agent::memory::MemorySource::Agent,
-            priority,
-            body,
-        );
-        record.kind = mez_agent::memory::parse_model_writable_kind(kind).map_err(|_| {
-            MezError::invalid_args(
-                "memory_store kind must be preference, fact, procedure, documentation, research, or warning",
-            )
-        })?;
-        if let Some(days) = expires_in_days {
-            let seconds = days.checked_mul(86_400).ok_or_else(|| {
-                MezError::invalid_args("memory expires_in_days is too large to store")
-            })?;
-            record.expiration_duration_seconds = Some(seconds);
-            record.expires_at_unix_seconds = Some(now.checked_add(seconds).ok_or_else(|| {
-                MezError::invalid_args("memory expiration timestamp is too large to store")
-            })?);
-        } else if let Some(seconds) = self
-            .runtime_memory_default_ttl_days()
-            .checked_mul(86_400)
-            .filter(|seconds| *seconds > 0)
-        {
-            record.expiration_duration_seconds = Some(seconds);
-            record.expires_at_unix_seconds = Some(now.checked_add(seconds).ok_or_else(|| {
-                MezError::invalid_args("memory default_ttl_days is too large to store")
-            })?);
-        }
-        Ok(record)
     }
 
     /// Returns the runtime-visible persistent scopes for a memory search.
@@ -289,10 +243,10 @@ fn search_runtime_memory_scopes(
     query: &str,
     scopes: &[mez_agent::memory::MemoryScope],
     limit: usize,
-) -> Result<Vec<crate::memory::MemorySearchResult>> {
+) -> Result<Vec<MemorySearchResult>> {
     let mut results = Vec::new();
     for scope in scopes {
-        results.extend(store.search(&crate::memory::MemorySearchRequest {
+        results.extend(store.search(&MemorySearchRequest {
             query: Some(query.to_string()),
             scope: Some(scope.clone()),
             kind: None,
@@ -301,25 +255,7 @@ fn search_runtime_memory_scopes(
             limit,
         })?);
     }
-    results.sort_by(compare_runtime_memory_results);
+    results.sort_by(compare_memory_search_results);
     results.truncate(limit);
     Ok(results)
-}
-
-/// Orders runtime memory search results by score, recency, and id.
-fn compare_runtime_memory_results(
-    left: &crate::memory::MemorySearchResult,
-    right: &crate::memory::MemorySearchResult,
-) -> std::cmp::Ordering {
-    right
-        .score
-        .partial_cmp(&left.score)
-        .unwrap_or(std::cmp::Ordering::Equal)
-        .then_with(|| {
-            right
-                .record
-                .updated_at_unix_seconds
-                .cmp(&left.record.updated_at_unix_seconds)
-        })
-        .then_with(|| left.record.id.cmp(&right.record.id))
 }

@@ -8,17 +8,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{MezError, Result};
-use mez_agent::memory::{
-    MemoryKind, MemoryRecord, MemoryScope, MemorySource, MemoryState, decode_scope, encode_scope,
-    kind_name, parse_kind, parse_source, parse_state, source_name, state_name,
-};
-
 mod permissions;
 mod persistent_store;
 mod retrieval;
 
-pub use persistent_store::{MemoryRetentionPolicy, MemorySearchRequest, MemorySearchResult};
-pub use retrieval::{MemoryRetrievalRequest, MemoryRetrievalResult, retrieve_persistent_memory};
+pub use retrieval::retrieve_persistent_memory;
 
 use permissions::{set_private_dir_permissions, set_private_file_permissions};
 

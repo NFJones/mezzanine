@@ -548,8 +548,7 @@ pub struct RuntimeSessionService {
     /// request that has already been dispatched. These entries are drained into
     /// the next provider-bound context so the same turn can incorporate the new
     /// instruction before taking further action.
-    pub(in crate::runtime) agent_turn_pending_steering:
-        BTreeMap<String, Vec<RuntimeAgentTurnSteering>>,
+    pub(in crate::runtime) agent_turn_pending_steering: BTreeMap<String, Vec<AgentTurnSteering>>,
     /// Counts bounded model self-correction attempts after real action failures.
     ///
     /// Failure feedback is scoped to a turn so provider continuations can give
@@ -579,13 +578,13 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) agent_turn_shell_dispatch_history:
-        BTreeMap<String, RuntimeAgentShellDispatchHistory>,
+        BTreeMap<String, AgentShellDispatchHistory>,
     /// Stores the agent turn network action history value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) agent_turn_network_action_history:
-        BTreeMap<String, RuntimeAgentNetworkActionHistory>,
+        BTreeMap<String, AgentNetworkActionHistory>,
     /// Stores the agent pre shell hook completions value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

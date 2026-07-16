@@ -11,7 +11,6 @@ use super::super::{
     provider_error_retry_class,
 };
 use super::FAILURE_SUMMARY_RAW_TEXT_LIMIT_BYTES;
-use crate::agent::maap::MaapBatchProductValidation;
 #[cfg(test)]
 use crate::agent::provider::ModelProvider;
 use mez_agent::{
@@ -153,7 +152,12 @@ fn failure_summary_execution_from_response(
     })?;
     validate_batch_allowed_actions(batch, &request)
         .map_err(|error| MezError::invalid_args(error.message()))?;
-    batch.validate(turn, scope.available_mcp_servers, scope.available_mcp_tools)?;
+    batch.validate_harness_contract(
+        &turn.turn_id,
+        &turn.agent_id,
+        scope.available_mcp_servers,
+        scope.available_mcp_tools,
+    )?;
     if batch.actions.is_empty()
         || batch
             .actions

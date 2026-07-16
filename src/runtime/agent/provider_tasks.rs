@@ -11,14 +11,7 @@ use crate::agent::provider::{
     ClaudeCodeProvider, anthropic_provider_from_auth_store_with_provider_options,
 };
 use crate::runtime::{RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition};
-use mez_agent::ProviderErrorRetryClass;
-
-/// Maximum provider retries allowed for one turn.
-const PROVIDER_RETRY_MAX_ATTEMPTS: u32 = 5;
-/// Initial exponential provider retry delay.
-const PROVIDER_RETRY_INITIAL_DELAY_MS: u64 = 1_000;
-/// Maximum exponential provider retry delay.
-const PROVIDER_RETRY_MAX_DELAY_MS: u64 = 30_000;
+use mez_agent::{DEFAULT_PROVIDER_RETRY_POLICY, ProviderErrorRetryClass};
 
 impl RuntimeSessionService {
     /// Returns whether one provider failure remains eligible for retry.
@@ -27,26 +20,18 @@ impl RuntimeSessionService {
         turn_id: &str,
         retry_class: ProviderErrorRetryClass,
     ) -> bool {
-        self.agent_provider_retry_attempt(turn_id) < PROVIDER_RETRY_MAX_ATTEMPTS
-            && matches!(
-                retry_class,
-                ProviderErrorRetryClass::ContextLimit
-                    | ProviderErrorRetryClass::OutputLimit
-                    | ProviderErrorRetryClass::RetryableTransport
-            )
+        DEFAULT_PROVIDER_RETRY_POLICY
+            .should_retry(self.agent_provider_retry_attempt(turn_id), retry_class)
     }
 
     /// Returns the bounded exponential delay for one provider retry attempt.
     pub(crate) fn agent_provider_retry_delay_ms(attempt: u32) -> u64 {
-        let exponent = attempt.saturating_sub(1).min(10);
-        PROVIDER_RETRY_INITIAL_DELAY_MS
-            .saturating_mul(2u64.saturating_pow(exponent))
-            .min(PROVIDER_RETRY_MAX_DELAY_MS)
+        DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(attempt)
     }
 
     /// Returns the maximum provider retry attempts recorded in diagnostics.
     pub(crate) const fn agent_provider_retry_max_attempts() -> u32 {
-        PROVIDER_RETRY_MAX_ATTEMPTS
+        DEFAULT_PROVIDER_RETRY_POLICY.max_attempts
     }
 
     /// Returns the recorded retry attempt for one provider turn.

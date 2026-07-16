@@ -6,39 +6,14 @@
 //! execution orchestration out of the runtime agent facade while the low-level
 //! pane transaction writer remains in the facade for now.
 
-use super::super::service_state::RuntimeAgentShellDispatchHistory;
 use super::*;
+use mez_agent::{
+    action_pressure_context_content, action_pressure_phase, shell_command_looks_like_validation,
+};
 
 /// Label for the turn-volatile context block that nudges concrete action after
 /// repeated shell dispatch or successful mutation.
 const RUNTIME_ACTION_PRESSURE_LABEL: &str = "action pressure";
-
-/// Current action-pressure phase for one active turn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeActionPressurePhase {
-    /// Repeated shell dispatch has crossed the configured threshold.
-    InspectionStreak {
-        /// Consecutive `shell_command` dispatches in the current phase.
-        consecutive_shell_dispatches: usize,
-        /// Current staged severity for the shell-command streak.
-        severity: RuntimeActionPressureSeverity,
-    },
-    /// A file mutation succeeded and no validation command has succeeded yet.
-    MutationAwaitingValidation,
-    /// A file mutation and at least one validation command have succeeded.
-    MutationValidated,
-}
-
-/// Current inspection-streak severity for shell-command pressure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeActionPressureSeverity {
-    /// Early nudge after a short shell-command streak.
-    Gentle,
-    /// Stronger nudge after a longer shell-command streak.
-    Medium,
-    /// Highest pressure once the turn has stayed in shell inspection too long.
-    Strong,
-}
 
 impl RuntimeSessionService {
     /// Builds the state key for one batched shell-backed `apply_patch` action.
@@ -220,7 +195,7 @@ impl RuntimeSessionService {
             .record_success(
                 command.to_string(),
                 action,
-                runtime_shell_command_looks_like_validation(command),
+                shell_command_looks_like_validation(command),
             );
         self.refresh_agent_action_pressure_context(turn_id);
     }
@@ -262,7 +237,7 @@ impl RuntimeSessionService {
         let phase = self
             .agent_turn_shell_dispatch_history
             .get(turn_id)
-            .and_then(|history| runtime_action_pressure_phase(history, threshold));
+            .and_then(|history| action_pressure_phase(history, threshold));
         let Some(context) = self.agent_turn_contexts.get_mut(turn_id) else {
             return;
         };
@@ -274,7 +249,7 @@ impl RuntimeSessionService {
             context.blocks.push(ContextBlock {
                 source: ContextSourceKind::RuntimeHint,
                 label: RUNTIME_ACTION_PRESSURE_LABEL.to_string(),
-                content: runtime_action_pressure_context_content(phase),
+                content: action_pressure_context_content(phase),
             });
         }
     }
@@ -533,6 +508,7 @@ impl RuntimeSessionService {
                 Ok(Some(plan)) => plan,
                 Ok(None) => continue,
                 Err(error) => {
+                    let error = MezError::from(error);
                     let command = match &action.payload {
                         AgentActionPayload::ShellCommand { command, .. } => command.as_str(),
                         _ => "",
@@ -1125,105 +1101,4 @@ impl RuntimeSessionService {
         let _ = self.append_agent_shell_command_audit(turn, action, command, "failed");
         Ok(result)
     }
-}
-
-/// Returns the current action-pressure phase for one active turn.
-fn runtime_action_pressure_phase(
-    history: &RuntimeAgentShellDispatchHistory,
-    threshold: usize,
-) -> Option<RuntimeActionPressurePhase> {
-    if history.successful_file_mutation_this_turn
-        && history.successful_validation_after_file_mutation
-    {
-        return Some(RuntimeActionPressurePhase::MutationValidated);
-    }
-    if history.successful_file_mutation_this_turn {
-        return Some(RuntimeActionPressurePhase::MutationAwaitingValidation);
-    }
-    let consecutive_shell_dispatches = history.consecutive_shell_dispatches;
-    if consecutive_shell_dispatches >= threshold {
-        let severity = runtime_action_pressure_severity(consecutive_shell_dispatches, threshold);
-        return Some(RuntimeActionPressurePhase::InspectionStreak {
-            consecutive_shell_dispatches,
-            severity,
-        });
-    }
-    None
-}
-
-/// Returns the current shell-command inspection severity.
-fn runtime_action_pressure_severity(
-    consecutive_shell_dispatches: usize,
-    threshold: usize,
-) -> RuntimeActionPressureSeverity {
-    let medium_threshold = threshold.saturating_mul(2).max(6);
-    let strong_threshold = threshold.saturating_mul(3).max(10);
-    if consecutive_shell_dispatches >= strong_threshold {
-        RuntimeActionPressureSeverity::Strong
-    } else if consecutive_shell_dispatches >= medium_threshold {
-        RuntimeActionPressureSeverity::Medium
-    } else {
-        RuntimeActionPressureSeverity::Gentle
-    }
-}
-
-/// Builds the model-facing action-pressure hint for one active turn.
-fn runtime_action_pressure_context_content(phase: RuntimeActionPressurePhase) -> String {
-    let phase_message = match phase {
-        RuntimeActionPressurePhase::InspectionStreak {
-            consecutive_shell_dispatches,
-            severity,
-        } => {
-            let severity_message = match severity {
-                RuntimeActionPressureSeverity::Gentle => {
-                    "Apply gentle pressure now: stop broadening discovery unless one named missing fact still blocks the next implementation, validation, or report action."
-                }
-                RuntimeActionPressureSeverity::Medium => {
-                    "Apply medium pressure now: prefer the next implementation, focused regression test, execution-based validation, or final-report action instead of further shell discovery."
-                }
-                RuntimeActionPressureSeverity::Strong => {
-                    "Apply strong pressure now: do not continue shell discovery without a concrete justification from recent evidence for why another shell_command is required before acting."
-                }
-            };
-            format!(
-                "This turn has already dispatched {consecutive_shell_dispatches} consecutive shell_command actions. {severity_message}"
-            )
-        }
-        RuntimeActionPressurePhase::MutationAwaitingValidation => {
-            "A file mutation has already succeeded this turn. Prefer execution-based validation, required format/build/lint/test commands, focused diff/status review, or final report now.".to_string()
-        }
-        RuntimeActionPressurePhase::MutationValidated => {
-            "A file mutation and at least one validation command have already succeeded this turn. Run any remaining repository-required validation, commit or handoff step, or final report now.".to_string()
-        }
-    };
-    format!(
-        "{phase_message} \
-         Continue following active repository guidance, validation, documentation, and handoff requirements. \
-         Do not edit repository instruction or guidance files merely to satisfy this acceleration hint; change them only when the user explicitly requested guidance changes or they are part of the task. \
-         Use another shell_command only for one named missing fact that would make the next edit, execution-based validation, repair, commit, or report wrong. \
-         This is advisory context, not a failed action result, and it does not relax repository rules or permission/capability requirements."
-    )
-}
-
-/// Returns whether a shell command appears to be execution-based validation.
-fn runtime_shell_command_looks_like_validation(command: &str) -> bool {
-    let command = command.to_ascii_lowercase();
-    [
-        "cargo test",
-        "cargo check",
-        "cargo clippy",
-        "cargo fmt",
-        "just test",
-        "just check",
-        "just clippy",
-        "just fmt",
-        "npm test",
-        "pnpm test",
-        "yarn test",
-        "pytest",
-        "go test",
-        "git diff --check",
-    ]
-    .iter()
-    .any(|needle| command.contains(needle))
 }

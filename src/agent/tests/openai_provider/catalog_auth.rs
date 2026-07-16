@@ -5,66 +5,6 @@
 use super::*;
 
 #[test]
-/// Verifies that the OpenAI provider adapter can parse the provider's model
-/// catalog shape and carry provider-supplied reasoning metadata when it is
-/// present. The parser also fills known OpenAI reasoning defaults for model
-/// entries that do not include explicit reasoning metadata.
-fn openai_models_catalog_parser_extracts_models_and_reasoning_levels() {
-    let models = parse_openai_models_http_body(
-        r#"{"object":"list","data":[{"id":"gpt-5.5"},{"id":"gpt-custom","display_name":"Custom","reasoning":{"efforts":["tiny","large"]},"context_length":262144},{"id":"lmstudio-local","capabilities":["tool_use"],"structured_output":true}]}"#,
-    )
-    .unwrap();
-
-    assert_eq!(models.len(), 3);
-    let custom = models
-        .iter()
-        .find(|model| model.id == "gpt-custom")
-        .unwrap();
-    assert_eq!(custom.display_name.as_deref(), Some("Custom"));
-    assert_eq!(custom.reasoning_levels, vec!["tiny", "large"]);
-    assert_eq!(custom.context_window_tokens, Some(262_144));
-    let lmstudio = models
-        .iter()
-        .find(|model| model.id == "lmstudio-local")
-        .unwrap();
-    assert_eq!(
-        lmstudio.capabilities,
-        vec!["tool_use".to_string(), "structured_output".to_string()]
-    );
-    let defaulted = models.iter().find(|model| model.id == "gpt-5.5").unwrap();
-    assert_eq!(
-        defaulted.reasoning_levels,
-        vec!["low", "medium", "high", "xhigh"]
-    );
-    assert_eq!(defaulted.context_window_tokens, Some(1_050_000));
-}
-
-#[test]
-/// Verifies that model listing uses the sibling model-catalog endpoint for the
-/// direct API-key Responses endpoint and refuses to invent an equivalent
-/// endpoint for ChatGPT browser credentials. The ChatGPT Codex backend is not
-/// the public OpenAI Models API and should fall back to configured models.
-fn openai_models_endpoint_derives_from_responses_endpoint() {
-    assert_eq!(
-        openai_models_endpoint_for_responses_endpoint(OPENAI_RESPONSES_ENDPOINT).unwrap(),
-        OPENAI_MODELS_ENDPOINT
-    );
-    let chatgpt_error =
-        openai_models_endpoint_for_responses_endpoint(CHATGPT_RESPONSES_ENDPOINT).unwrap_err();
-    assert!(
-        chatgpt_error
-            .message()
-            .contains("ChatGPT browser credentials"),
-        "{}",
-        chatgpt_error.message()
-    );
-    assert_eq!(
-        openai_models_endpoint_for_responses_endpoint("https://example.test/v1/responses").unwrap(),
-        "https://example.test/v1/models"
-    );
-}
-
-#[test]
 /// Verifies openai provider can be constructed from auth store secret reference.
 ///
 /// This regression scenario documents the behavior being protected so a
