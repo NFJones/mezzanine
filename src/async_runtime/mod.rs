@@ -44,8 +44,8 @@ use crate::terminal::{
     MouseAction, TerminalClientLoopAction, TerminalClientLoopConfig,
     plan_attached_terminal_client_step, plan_attached_terminal_client_step_with_host_paste_buffer,
 };
+use mez_agent::AgentTurnLedger;
 use mez_agent::messaging::{DeliveryCursor, FanoutBatch, MessageConnection, delivery_batch_json};
-use mez_agent::{AgentTurnExecution, AgentTurnLedger};
 use mez_core::ids::{AgentId, ClientId};
 use mez_mux::layout::Size;
 use mez_mux::presentation::compose_client_presentation_with_styles;
