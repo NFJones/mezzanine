@@ -406,13 +406,6 @@ impl RuntimeSessionService {
         &self.presentation.settings.pane_frame_visible_fields
     }
 
-    /// Replaces pane statusline presentation selected by the agent command.
-    pub(crate) fn configure_pane_statusline(&mut self, fields: Vec<String>, template: String) {
-        self.presentation.settings.pane_frames_enabled = true;
-        self.presentation.settings.pane_frame_visible_fields = fields;
-        self.presentation.settings.pane_frame_template = template;
-    }
-
     /// Returns the active product UI theme.
     pub(crate) fn ui_theme(&self) -> &UiTheme {
         &self.presentation.settings.ui_theme

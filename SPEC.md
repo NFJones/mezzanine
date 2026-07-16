@@ -5259,7 +5259,6 @@ The baseline command capabilities are:
   token usage is reported.
 - `/debug-config`: Show effective configuration, layer order, and policy
   diagnostics.
-- `/statusline`: Configure agent shell status-line fields.
 - `/title`: Configure terminal window or tab title fields.
 - `/log-level`: Show or set the pane-local agent log level. Accepted levels
   MUST include `normal`, `verbose`, `debug`, and `trace`; implementations MAY

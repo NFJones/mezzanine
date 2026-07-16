@@ -808,7 +808,6 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "new" => "start a fresh conversation in this pane.",
         "status" => "show the current agent shell session status.",
         "stop" => "stop the active agent turn.",
-        "statusline" => "inspect or change pane agent statusline behavior.",
         "title" => "set or clear the pane title.",
         "log-level" => "inspect or change pane agent log verbosity.",
         "debug-config" => "inspect parsed slash-command config behavior.",

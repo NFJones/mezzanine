@@ -565,12 +565,13 @@ fn runtime_agent_shell_approval_command_survives_config_reload() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies that `/statusline` mutates the live pane status-line rendering
-/// fields. The command should configure existing frame state instead of
-/// returning a runtime-required slash placeholder.
+/// Verifies that the removed `/statusline` command is rejected without
+/// mutating the live pane status-line rendering fields.
 #[test]
-fn runtime_agent_shell_statusline_configures_pane_frame_fields() {
+fn runtime_agent_shell_statusline_is_rejected_without_mutating_pane_frame_fields() {
     let mut service = test_runtime_service();
+    let expected_frame_fields = service.pane_frame_visible_fields().to_vec();
+    let expected_frame_template = service.pane_frame_template().to_string();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
@@ -584,28 +585,11 @@ fn runtime_agent_shell_statusline_configures_pane_frame_fields() {
         &primary,
     );
 
-    assert!(response.contains(r#""kind":"mutated""#), "{response}");
-    assert!(response.contains(r#""command":"statusline""#), "{response}");
-    assert!(response.contains("enabled=true"), "{response}");
-    assert!(response.contains("agent.status"), "{response}");
-    assert!(response.contains("agent.model"), "{response}");
-    assert!(response.contains("pane.mode"), "{response}");
-    assert!(response.contains("changed=true"), "{response}");
-    assert!(response.contains("source=runtime-statusline"), "{response}");
-    assert!(!response.contains("requires_runtime"), "{response}");
+    assert!(response.contains("unknown slash command"), "{response}");
+    assert!(!response.contains(r#""kind":"mutated""#), "{response}");
     assert!(service.pane_frames_enabled());
-    assert_eq!(
-        service.pane_frame_visible_fields(),
-        vec![
-            "agent.status".to_string(),
-            "agent.model".to_string(),
-            "pane.mode".to_string()
-        ]
-    );
-    assert_eq!(
-        service.pane_frame_template(),
-        "#{agent.status} #{agent.model} #{pane.mode}"
-    );
+    assert_eq!(service.pane_frame_visible_fields(), expected_frame_fields);
+    assert_eq!(service.pane_frame_template(), expected_frame_template);
 }
 
 /// Verifies that `/title` reads and mutates the active runtime window title

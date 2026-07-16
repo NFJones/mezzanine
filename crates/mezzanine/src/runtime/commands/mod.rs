@@ -97,7 +97,7 @@ use remember::{
 use slash::{
     runtime_agent_init_scaffold, runtime_single_approval_invocation, runtime_single_mode_arg,
     runtime_single_permissions_invocation, runtime_single_rename_window_invocation,
-    runtime_statusline_fields, runtime_statusline_template, validate_agent_personality,
+    validate_agent_personality,
 };
 
 // Live terminal and agent shell command execution.

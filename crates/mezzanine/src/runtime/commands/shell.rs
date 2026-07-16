@@ -615,17 +615,6 @@ impl RuntimeSessionService {
                     )
                 } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
                     outcome.as_ref()
-                    && command == "statusline"
-                {
-                    let statusline_outcome =
-                        self.execute_agent_shell_statusline_command(&pane_id, input)?;
-                    runtime_agent_shell_command_response_json(
-                        &pane_id,
-                        input,
-                        Some(&statusline_outcome),
-                    )
-                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
-                    outcome.as_ref()
                     && command == "title"
                 {
                     let title_outcome =

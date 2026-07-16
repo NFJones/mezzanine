@@ -7,48 +7,6 @@
 
 use super::super::{CommandInvocation, MezError, Result, parse_command_sequence};
 
-/// Runs the runtime statusline fields operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn runtime_statusline_fields(args: &str) -> Result<Vec<String>> {
-    let fields = args
-        .split(|ch: char| ch == ',' || ch.is_whitespace())
-        .filter(|field| !field.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    if fields.is_empty() {
-        return Err(MezError::invalid_args(
-            "statusline slash command requires at least one field",
-        ));
-    }
-    for field in &fields {
-        if !RUNTIME_STATUSLINE_FIELDS
-            .iter()
-            .any(|allowed| allowed == field)
-        {
-            return Err(MezError::invalid_args(format!(
-                "unsupported statusline field `{field}`"
-            )));
-        }
-    }
-    Ok(fields)
-}
-
-/// Runs the runtime statusline template operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn runtime_statusline_template(fields: &[String]) -> String {
-    fields
-        .iter()
-        .map(|field| format!("#{{{field}}}"))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 /// Runs the runtime single mode arg operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -82,40 +40,6 @@ pub(super) fn validate_agent_personality(value: &str) -> Result<()> {
     }
     Ok(())
 }
-
-/// Defines the RUNTIME STATUSLINE FIELDS const used by this subsystem.
-///
-/// Keeping this value documented makes the contract explicit at the module
-/// boundary and avoids relying on call-site inference.
-const RUNTIME_STATUSLINE_FIELDS: &[&str] = &[
-    "session.id",
-    "window.id",
-    "window.index",
-    "window.list",
-    "window.title",
-    "window.name",
-    "window.active",
-    "window.pane_count",
-    "pane.id",
-    "pane.index",
-    "pane.title",
-    "pane.active",
-    "pane.size",
-    "pane.primary_pid",
-    "pane.process_name",
-    "pane.exit_status",
-    "pane.mode",
-    "agent.id",
-    "agent.name",
-    "agent.status",
-    "agent.model",
-    "agent.reasoning",
-    "agent.thinking",
-    "agent.context_usage",
-    "policy.mode",
-    "observer.pending_count",
-    "history.position",
-];
 
 /// Runs the runtime single permissions invocation operation for this subsystem.
 ///

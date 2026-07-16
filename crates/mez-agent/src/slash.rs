@@ -139,7 +139,6 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("new", &[], SlashCommandEffect::SessionMutation, false),
         slash("status", &[], SlashCommandEffect::ReadOnly, true),
         slash("debug-config", &[], SlashCommandEffect::ReadOnly, true),
-        slash("statusline", &[], SlashCommandEffect::SessionMutation, true),
         slash("title", &[], SlashCommandEffect::SessionMutation, true),
         slash("log-level", &[], SlashCommandEffect::SessionMutation, true),
     ]
@@ -263,13 +262,21 @@ mod tests {
             "new",
             "status",
             "debug-config",
-            "statusline",
             "title",
             "log-level",
         ] {
             assert!(commands.contains(required), "missing {required}");
         }
-        for removed in ["fast", "agent", "mention", "plan", "ps", "review", "apps"] {
+        for removed in [
+            "fast",
+            "agent",
+            "mention",
+            "plan",
+            "ps",
+            "review",
+            "apps",
+            "statusline",
+        ] {
             assert!(
                 !commands.contains(removed),
                 "removed command must stay absent: {removed}"

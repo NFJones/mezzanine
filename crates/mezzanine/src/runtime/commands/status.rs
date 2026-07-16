@@ -1,7 +1,7 @@
-//! Agent status, title, status-line, and debug display commands.
+//! Agent status, title, and debug display commands.
 //!
 //! This module owns read-mostly agent presentation commands and their display
-//! formatting helpers: `/statusline`, `/title`, `/status`, terminal-view
+//! formatting helpers: `/title`, `/status`, terminal-view
 //! clearing, and `/debug-config`. Keeping these report builders outside the
 //! command facade separates UI/status presentation from turn orchestration and
 //! policy mutation.
@@ -13,53 +13,9 @@ use super::{
     execute_command, json_escape, parse_slash_command, runtime_agent_turn_state_name,
     runtime_approval_policy_name, runtime_cooperation_mode_name, runtime_markdown_table,
     runtime_permission_preset_name, runtime_single_rename_window_invocation,
-    runtime_statusline_fields, runtime_statusline_template, runtime_string_array_json,
 };
 
 impl RuntimeSessionService {
-    /// Executes `/statusline` against live pane frame status-line settings.
-    pub(super) fn execute_agent_shell_statusline_command(
-        &mut self,
-        pane_id: &str,
-        input: &str,
-    ) -> Result<AgentShellCommandOutcome> {
-        let visibility = self
-            .agent_shell_store()
-            .get(pane_id)
-            .map(|session| session.visibility)
-            .ok_or_else(|| {
-                MezError::new(
-                    crate::error::MezErrorKind::NotFound,
-                    "agent shell session not found for pane",
-                )
-            })?;
-        let invocation = parse_slash_command(input)?
-            .ok_or_else(|| MezError::invalid_args("statusline command must be a slash command"))?;
-        if invocation.args.trim().is_empty() {
-            return Ok(AgentShellCommandOutcome::Display {
-                command: "statusline".to_string(),
-                body: self.runtime_agent_statusline_display(),
-            });
-        }
-        let fields = runtime_statusline_fields(&invocation.args)?;
-        self.configure_pane_statusline(fields.clone(), runtime_statusline_template(&fields));
-        Ok(AgentShellCommandOutcome::Mutated {
-            command: "statusline".to_string(),
-            body: format!("{} changed=true", self.runtime_agent_statusline_display()),
-            visibility,
-        })
-    }
-
-    /// Builds the live `/statusline` display from pane frame status settings.
-    pub(super) fn runtime_agent_statusline_display(&self) -> String {
-        format!(
-            "enabled={} fields={} template={} source=runtime-statusline",
-            self.pane_frames_enabled(),
-            runtime_string_array_json(self.pane_frame_visible_fields()),
-            json_escape(self.pane_frame_template())
-        )
-    }
-
     /// Executes `/title` against the active runtime window title.
     pub(super) fn execute_agent_shell_title_command(
         &mut self,

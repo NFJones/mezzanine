@@ -343,7 +343,6 @@ pub(super) fn agent_argument_candidates(
         "copy-context" => value_candidates(&["pane", "buffer", "clipboard"]),
         "copy-trace-log" => value_candidates(&["pane", "buffer", "clipboard"]),
         "copy-patches" => value_candidates(&["pane", "buffer", "clipboard"]),
-        "statusline" => value_candidates(&["on", "off", "toggle"]),
         "title" => value_candidates(&["default", "agent", "off"]),
         "debug-config" => value_candidates(&[
             "providers",
