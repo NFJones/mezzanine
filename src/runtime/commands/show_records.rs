@@ -5,7 +5,11 @@
 //! save-to-file behavior close to the live slash-command runtime while leaving
 //! the browser state itself backend-agnostic.
 
-use super::*;
+use super::{
+    AgentShellCommandOutcome, MezError, Result, RuntimeSessionService, json_escape,
+    parse_slash_command, runtime_remember_scope_display,
+};
+use crate::runtime::commands::issues;
 use crate::runtime::service_state::RuntimeRecordBrowserOverlaySource;
 use mez_agent::memory::{
     MemorySearchRequest, kind_name, parse_kind, parse_state, source_name, state_name,
@@ -13,6 +17,7 @@ use mez_agent::memory::{
 use mez_mux::record_browser::{
     RecordBrowser, RecordBrowserFilterChoice, RecordBrowserFilterField, RecordBrowserRecord,
 };
+use std::{fs, path::PathBuf};
 
 const DEFAULT_SHOW_RECORD_LIMIT: usize = 100;
 
