@@ -3,37 +3,35 @@
 //! This module keeps current-turn progress updates and investigative rationale
 //! compact and non-redundant before they are persisted back into
 //! model-visible context. It is pure text normalization and ledger logic;
-//! runtime service state changes remain in the parent agent module.
+//! product runtime state changes remain in the root adapter.
 
-use mez_agent::AgentTurnExecution;
-use mez_agent::{AgentActionPayload, SayStatus};
 use std::collections::BTreeSet;
 
+use crate::{AgentActionPayload, AgentTurnExecution, SayStatus};
+
 /// Label for ephemeral active-turn context that tracks visible progress output.
-pub(super) const RUNTIME_PROGRESS_SAY_LEDGER_LABEL: &str = "current-turn progress say ledger";
+pub const PROGRESS_SAY_LEDGER_LABEL: &str = "current-turn progress say ledger";
 /// Label for ephemeral active-turn context that tracks already-emitted
 /// investigative rationale.
-pub(super) const RUNTIME_RATIONALE_LEDGER_LABEL: &str = "current-turn rationale ledger";
+pub const RATIONALE_LEDGER_LABEL: &str = "current-turn rationale ledger";
 /// Maximum progress `say` entries retained for one active turn.
-pub(super) const RUNTIME_PROGRESS_SAY_LEDGER_ENTRY_LIMIT: usize = 3;
+pub const PROGRESS_SAY_LEDGER_ENTRY_LIMIT: usize = 3;
 /// Maximum rationale entries retained for one active turn.
-pub(super) const RUNTIME_RATIONALE_LEDGER_ENTRY_LIMIT: usize = 6;
+pub const RATIONALE_LEDGER_ENTRY_LIMIT: usize = 6;
 /// Maximum characters retained from one progress `say` entry.
-pub(super) const RUNTIME_PROGRESS_SAY_LEDGER_ENTRY_CHAR_LIMIT: usize = 512;
+pub const PROGRESS_SAY_LEDGER_ENTRY_CHAR_LIMIT: usize = 512;
 /// Maximum characters retained from one rationale entry.
-pub(super) const RUNTIME_RATIONALE_LEDGER_ENTRY_CHAR_LIMIT: usize = 256;
+pub const RATIONALE_LEDGER_ENTRY_CHAR_LIMIT: usize = 256;
 /// Minimum shared significant tokens for treating two progress updates as the
 /// same sequence point.
-pub(super) const RUNTIME_PROGRESS_SAY_REDUNDANT_SHARED_TOKEN_FLOOR: usize = 5;
+pub const PROGRESS_SAY_REDUNDANT_SHARED_TOKEN_FLOOR: usize = 5;
 
 /// Extracts normalized progress `say` text from one provider execution.
 ///
 /// # Parameters
 /// - `execution`: The provider execution whose MAAP actions may include visible
 ///   progress text.
-pub(super) fn runtime_progress_say_entries_for_execution(
-    execution: &AgentTurnExecution,
-) -> Vec<String> {
+pub fn progress_say_entries_for_execution(execution: &AgentTurnExecution) -> Vec<String> {
     let Some(batch) = execution.response.action_batch.as_ref() else {
         return Vec::new();
     };
@@ -45,7 +43,7 @@ pub(super) fn runtime_progress_say_entries_for_execution(
         if *status != SayStatus::Progress {
             continue;
         }
-        let Some(entry) = runtime_normalize_progress_say_entry(text) else {
+        let Some(entry) = normalize_progress_say_entry(text) else {
             continue;
         };
         if !entries.iter().any(|existing| existing == &entry) {
@@ -60,23 +58,21 @@ pub(super) fn runtime_progress_say_entries_for_execution(
 /// Batch rationale and action rationale are current-turn guidance only. The
 /// runtime uses this ledger to avoid rendering or replaying the same
 /// investigative intent repeatedly within one active turn.
-pub(super) fn runtime_rationale_entries_for_execution(
-    execution: &AgentTurnExecution,
-) -> Vec<String> {
+pub fn rationale_entries_for_execution(execution: &AgentTurnExecution) -> Vec<String> {
     let Some(batch) = execution.response.action_batch.as_ref() else {
         return Vec::new();
     };
     let mut entries = Vec::new();
-    if let Some(entry) = runtime_normalize_rationale_entry(&batch.rationale) {
+    if let Some(entry) = normalize_rationale_entry(&batch.rationale) {
         entries.push(entry);
     }
     for action in &batch.actions {
-        let Some(entry) = runtime_normalize_rationale_entry(action.rationale.as_str()) else {
+        let Some(entry) = normalize_rationale_entry(action.rationale.as_str()) else {
             continue;
         };
         if !entries
             .iter()
-            .any(|existing| runtime_rationale_entries_are_redundant(existing, &entry))
+            .any(|existing| rationale_entries_are_redundant(existing, &entry))
         {
             entries.push(entry);
         }
@@ -88,26 +84,26 @@ pub(super) fn runtime_rationale_entries_for_execution(
 ///
 /// # Parameters
 /// - `text`: The model-authored visible progress text.
-pub(super) fn runtime_normalize_progress_say_entry(text: &str) -> Option<String> {
+pub fn normalize_progress_say_entry(text: &str) -> Option<String> {
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if normalized.is_empty() {
         return None;
     }
-    Some(runtime_truncate_context_entry(
+    Some(truncate_context_entry(
         &normalized,
-        RUNTIME_PROGRESS_SAY_LEDGER_ENTRY_CHAR_LIMIT,
+        PROGRESS_SAY_LEDGER_ENTRY_CHAR_LIMIT,
     ))
 }
 
 /// Normalizes one rationale entry for compact same-turn reuse.
-pub(super) fn runtime_normalize_rationale_entry(text: &str) -> Option<String> {
+pub fn normalize_rationale_entry(text: &str) -> Option<String> {
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if normalized.is_empty() {
         return None;
     }
-    Some(runtime_truncate_context_entry(
+    Some(truncate_context_entry(
         &normalized,
-        RUNTIME_RATIONALE_LEDGER_ENTRY_CHAR_LIMIT,
+        RATIONALE_LEDGER_ENTRY_CHAR_LIMIT,
     ))
 }
 
@@ -117,7 +113,7 @@ pub(super) fn runtime_normalize_rationale_entry(text: &str) -> Option<String> {
 /// - `text`: The context entry to bound.
 /// - `limit`: The maximum number of Unicode scalar values to retain before
 ///   adding an ASCII truncation marker.
-pub(super) fn runtime_truncate_context_entry(text: &str, limit: usize) -> String {
+pub fn truncate_context_entry(text: &str, limit: usize) -> String {
     let mut output = text.chars().take(limit).collect::<String>();
     if text.chars().count() > limit {
         output.push_str("...");
@@ -129,20 +125,20 @@ pub(super) fn runtime_truncate_context_entry(text: &str, limit: usize) -> String
 ///
 /// # Parameters
 /// - `content`: The previous ledger block content.
-pub(super) fn runtime_progress_say_entries_from_ledger(content: &str) -> Vec<String> {
+pub fn progress_say_entries_from_ledger(content: &str) -> Vec<String> {
     content
         .lines()
         .filter_map(|line| line.strip_prefix("progress_say: "))
-        .filter_map(runtime_normalize_progress_say_entry)
+        .filter_map(normalize_progress_say_entry)
         .collect()
 }
 
 /// Parses rationale entries from an existing active-turn ledger block.
-pub(super) fn runtime_rationale_entries_from_ledger(content: &str) -> Vec<String> {
+pub fn rationale_entries_from_ledger(content: &str) -> Vec<String> {
     content
         .lines()
         .filter_map(|line| line.strip_prefix("rationale: "))
-        .filter_map(runtime_normalize_rationale_entry)
+        .filter_map(normalize_rationale_entry)
         .collect()
 }
 
@@ -152,57 +148,48 @@ pub(super) fn runtime_rationale_entries_from_ledger(content: &str) -> Vec<String
 /// - `previous`: The previous ledger entries.
 /// - `new_entries`: The progress entries emitted by the latest provider
 ///   execution.
-pub(super) fn runtime_merge_progress_say_entries(
-    previous: Vec<String>,
-    new_entries: Vec<String>,
-) -> Vec<String> {
+pub fn merge_progress_say_entries(previous: Vec<String>, new_entries: Vec<String>) -> Vec<String> {
     let mut entries = previous;
     for entry in new_entries {
         if let Some(position) = entries
             .iter()
-            .position(|existing| runtime_progress_say_entries_are_redundant(existing, &entry))
+            .position(|existing| progress_say_entries_are_redundant(existing, &entry))
         {
             entries.remove(position);
         }
         entries.push(entry);
     }
-    if entries.len() > RUNTIME_PROGRESS_SAY_LEDGER_ENTRY_LIMIT {
-        entries.split_off(entries.len() - RUNTIME_PROGRESS_SAY_LEDGER_ENTRY_LIMIT)
+    if entries.len() > PROGRESS_SAY_LEDGER_ENTRY_LIMIT {
+        entries.split_off(entries.len() - PROGRESS_SAY_LEDGER_ENTRY_LIMIT)
     } else {
         entries
     }
 }
 
 /// Merges previous and newly emitted rationale entries under the active-turn cap.
-pub(super) fn runtime_merge_rationale_entries(
-    previous: Vec<String>,
-    new_entries: Vec<String>,
-) -> Vec<String> {
+pub fn merge_rationale_entries(previous: Vec<String>, new_entries: Vec<String>) -> Vec<String> {
     let mut entries = previous;
     for entry in new_entries {
         if let Some(position) = entries
             .iter()
-            .position(|existing| runtime_rationale_entries_are_redundant(existing, &entry))
+            .position(|existing| rationale_entries_are_redundant(existing, &entry))
         {
             entries.remove(position);
         }
         entries.push(entry);
     }
-    if entries.len() > RUNTIME_RATIONALE_LEDGER_ENTRY_LIMIT {
-        entries.split_off(entries.len() - RUNTIME_RATIONALE_LEDGER_ENTRY_LIMIT)
+    if entries.len() > RATIONALE_LEDGER_ENTRY_LIMIT {
+        entries.split_off(entries.len() - RATIONALE_LEDGER_ENTRY_LIMIT)
     } else {
         entries
     }
 }
 
 /// Reports whether a rationale entry repeats one already visible in the turn.
-pub(super) fn runtime_rationale_entry_repeats_existing(
-    entry: &str,
-    existing_entries: &[String],
-) -> bool {
+pub fn rationale_entry_repeats_existing(entry: &str, existing_entries: &[String]) -> bool {
     existing_entries
         .iter()
-        .any(|existing| runtime_rationale_entries_are_redundant(existing, entry))
+        .any(|existing| rationale_entries_are_redundant(existing, entry))
 }
 
 /// Reports whether two progress entries communicate the same sequence point.
@@ -214,11 +201,11 @@ pub(super) fn runtime_rationale_entry_repeats_existing(
 /// # Parameters
 /// - `left`: Previously emitted progress text.
 /// - `right`: Candidate progress text.
-pub(super) fn runtime_progress_say_entries_are_redundant(left: &str, right: &str) -> bool {
-    let Some(left) = runtime_normalize_progress_say_entry(left) else {
+pub fn progress_say_entries_are_redundant(left: &str, right: &str) -> bool {
+    let Some(left) = normalize_progress_say_entry(left) else {
         return false;
     };
-    let Some(right) = runtime_normalize_progress_say_entry(right) else {
+    let Some(right) = normalize_progress_say_entry(right) else {
         return false;
     };
     let left = left.to_ascii_lowercase();
@@ -231,13 +218,13 @@ pub(super) fn runtime_progress_say_entries_are_redundant(left: &str, right: &str
     {
         return true;
     }
-    let left_tokens = runtime_progress_say_significant_tokens(&left);
-    let right_tokens = runtime_progress_say_significant_tokens(&right);
+    let left_tokens = progress_say_significant_tokens(&left);
+    let right_tokens = progress_say_significant_tokens(&right);
     if left_tokens.is_empty() || right_tokens.is_empty() {
         return false;
     }
     let shared = left_tokens.intersection(&right_tokens).count();
-    if shared < RUNTIME_PROGRESS_SAY_REDUNDANT_SHARED_TOKEN_FLOOR {
+    if shared < PROGRESS_SAY_REDUNDANT_SHARED_TOKEN_FLOOR {
         return false;
     }
     let smaller = left_tokens.len().min(right_tokens.len());
@@ -248,11 +235,11 @@ pub(super) fn runtime_progress_say_entries_are_redundant(left: &str, right: &str
 
 /// Reports whether two rationale entries communicate the same investigative
 /// intent.
-pub(super) fn runtime_rationale_entries_are_redundant(left: &str, right: &str) -> bool {
-    let Some(left) = runtime_normalize_rationale_entry(left) else {
+pub fn rationale_entries_are_redundant(left: &str, right: &str) -> bool {
+    let Some(left) = normalize_rationale_entry(left) else {
         return false;
     };
-    let Some(right) = runtime_normalize_rationale_entry(right) else {
+    let Some(right) = normalize_rationale_entry(right) else {
         return false;
     };
     let left = left.to_ascii_lowercase();
@@ -265,8 +252,8 @@ pub(super) fn runtime_rationale_entries_are_redundant(left: &str, right: &str) -
     {
         return true;
     }
-    let left_tokens = runtime_progress_say_significant_tokens(&left);
-    let right_tokens = runtime_progress_say_significant_tokens(&right);
+    let left_tokens = progress_say_significant_tokens(&left);
+    let right_tokens = progress_say_significant_tokens(&right);
     if left_tokens.is_empty() || right_tokens.is_empty() {
         return false;
     }
@@ -284,7 +271,7 @@ pub(super) fn runtime_rationale_entries_are_redundant(left: &str, right: &str) -
 ///
 /// # Parameters
 /// - `text`: Normalized progress text to tokenize.
-pub(super) fn runtime_progress_say_significant_tokens(text: &str) -> BTreeSet<String> {
+pub fn progress_say_significant_tokens(text: &str) -> BTreeSet<String> {
     let mut tokens = BTreeSet::new();
     let mut token = String::new();
     for character in text.chars() {
@@ -293,10 +280,10 @@ pub(super) fn runtime_progress_say_significant_tokens(text: &str) -> BTreeSet<St
                 token.push(lowered);
             }
         } else {
-            runtime_push_progress_say_token(&mut tokens, &mut token);
+            push_progress_say_token(&mut tokens, &mut token);
         }
     }
-    runtime_push_progress_say_token(&mut tokens, &mut token);
+    push_progress_say_token(&mut tokens, &mut token);
     tokens
 }
 
@@ -305,20 +292,20 @@ pub(super) fn runtime_progress_say_significant_tokens(text: &str) -> BTreeSet<St
 /// # Parameters
 /// - `tokens`: The token set being built.
 /// - `token`: The pending token buffer.
-pub(super) fn runtime_push_progress_say_token(tokens: &mut BTreeSet<String>, token: &mut String) {
+pub fn push_progress_say_token(tokens: &mut BTreeSet<String>, token: &mut String) {
     if token.is_empty() {
         return;
     }
-    let stemmed = runtime_progress_say_stem_token(token);
+    let stemmed = progress_say_stem_token(token);
     token.clear();
-    if stemmed.len() < 3 || runtime_progress_say_token_is_stopword(&stemmed) {
+    if stemmed.len() < 3 || progress_say_token_is_stopword(&stemmed) {
         return;
     }
     tokens.insert(stemmed);
 }
 
 /// Builds the provider-visible content for the active-turn rationale ledger.
-pub(super) fn runtime_rationale_ledger_content(entries: &[String]) -> String {
+pub fn rationale_ledger_content(entries: &[String]) -> String {
     let mut lines = vec![
         "Already-emitted same-turn investigative intent. Avoid repeating these rationale lines unless the next action batch materially changes the reason."
             .to_string(),
@@ -331,7 +318,7 @@ pub(super) fn runtime_rationale_ledger_content(entries: &[String]) -> String {
 ///
 /// # Parameters
 /// - `token`: Lowercase token extracted from progress text.
-pub(super) fn runtime_progress_say_stem_token(token: &str) -> String {
+pub fn progress_say_stem_token(token: &str) -> String {
     let mut stemmed = token.to_string();
     for suffix in ["ing", "ed", "es", "s"] {
         if stemmed.len() > suffix.len().saturating_add(4) && stemmed.ends_with(suffix) {
@@ -346,7 +333,7 @@ pub(super) fn runtime_progress_say_stem_token(token: &str) -> String {
 ///
 /// # Parameters
 /// - `token`: Lowercase token extracted from progress text.
-pub(super) fn runtime_progress_say_token_is_stopword(token: &str) -> bool {
+pub fn progress_say_token_is_stopword(token: &str) -> bool {
     matches!(
         token,
         "about"
@@ -397,11 +384,57 @@ pub(super) fn runtime_progress_say_token_is_stopword(token: &str) -> bool {
 ///
 /// # Parameters
 /// - `entries`: The bounded progress entries to include.
-pub(super) fn runtime_progress_say_ledger_content(entries: &[String]) -> String {
+pub fn progress_say_ledger_content(entries: &[String]) -> String {
     let mut content = vec![
         "This is a bounded ledger of user-visible progress say messages already emitted during the current turn.".to_string(),
         "It is not a user request. Before emitting another progress say, compare against these lines and omit progress if it would restate the same owner, diagnosis, direction, phase, blocker, or validation result.".to_string(),
     ];
     content.extend(entries.iter().map(|entry| format!("progress_say: {entry}")));
     content.join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies normalization collapses whitespace and bounds progress entries.
+    #[test]
+    fn progress_say_normalization_is_compact_and_bounded() {
+        let text = format!("  checking   {}  ", "x".repeat(600));
+        let normalized = normalize_progress_say_entry(&text).unwrap();
+        assert!(normalized.starts_with("checking "));
+        assert!(normalized.ends_with("..."));
+        assert_eq!(
+            normalized.chars().count(),
+            PROGRESS_SAY_LEDGER_ENTRY_CHAR_LIMIT + 3
+        );
+    }
+
+    /// Verifies semantically overlapping progress updates replace older entries.
+    #[test]
+    fn progress_say_merge_replaces_redundant_sequence_points() {
+        let previous = vec![
+            "Inspecting provider routing and model profile fallback behavior".to_string(),
+            "Checking unrelated terminal rendering".to_string(),
+        ];
+        let new_entries =
+            vec!["Inspected provider routing and model profile fallback behavior".to_string()];
+        let merged = merge_progress_say_entries(previous, new_entries);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(
+            merged.last().unwrap(),
+            "Inspected provider routing and model profile fallback behavior"
+        );
+    }
+
+    /// Verifies ledger parsing and formatting preserve bounded rationale entries.
+    #[test]
+    fn rationale_ledger_round_trip_preserves_entries() {
+        let entries = vec![
+            "Trace the state owner before changing the adapter".to_string(),
+            "Validate the lower contract directly".to_string(),
+        ];
+        let content = rationale_ledger_content(&entries);
+        assert_eq!(rationale_entries_from_ledger(&content), entries);
+    }
 }

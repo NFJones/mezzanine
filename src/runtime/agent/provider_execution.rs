@@ -696,9 +696,13 @@ impl RuntimeSessionService {
             );
             return Ok(true);
         };
-        if let Err(error) =
-            runtime_validate_provider_completion_identity(&turn, agent_id, turn_id, &execution)
-        {
+        if let Err(error) = runtime_validate_provider_completion_identity(
+            &turn,
+            agent_id.as_str(),
+            turn_id,
+            &execution,
+        ) {
+            let error = MezError::from(error);
             let provider_id = execution.response.provider.clone();
             self.fail_agent_turn_after_provider_completion_application_error(
                 &turn,
@@ -743,6 +747,7 @@ impl RuntimeSessionService {
             return Ok(true);
         }
         if let Err(error) = runtime_validate_provider_completion_execution(&turn, &mut execution) {
+            let error = MezError::from(error);
             let provider_id = execution.response.provider.clone();
             self.fail_agent_turn_after_provider_completion_application_error(
                 &turn,

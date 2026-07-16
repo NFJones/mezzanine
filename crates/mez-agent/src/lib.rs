@@ -26,6 +26,8 @@ pub mod agent_shell_session;
 pub mod anthropic;
 /// Provider authentication routing contracts.
 pub mod auth;
+/// Provider-independent automatic model-sizing policy.
+pub mod auto_sizing;
 /// Provider-independent Claude Code CLI policy.
 pub mod claude_code;
 /// Model-facing live configuration mutation contracts.
@@ -92,8 +94,12 @@ pub mod openai_request;
 pub mod openai_response;
 /// OpenAI request-specific MAAP schema construction.
 pub mod openai_schema;
+/// Provider-independent completion validation and failure recovery policy.
+pub mod outcome;
 /// Agent-facing permission identity contracts.
 pub mod permissions;
+/// Provider-independent current-turn progress and rationale ledgers.
+pub mod progress;
 /// Provider-neutral prompt profile contracts.
 pub mod prompt;
 /// Provider-neutral API compatibility contracts.
@@ -110,6 +116,7 @@ pub mod quota;
 pub mod readiness;
 /// Provider-response accounting across one agent turn.
 pub mod response_progress;
+pub mod routing;
 /// Provider-independent agent scheduling policy and queue state.
 pub mod scheduler;
 /// Provider-neutral MAAP action-batch schema construction.
@@ -120,6 +127,8 @@ pub mod semantic_patch;
 pub mod semantic_patch_planning;
 /// Provider-independent shell-source construction helpers.
 pub mod shell;
+/// Provider-independent shell-wrapper filtering and observation cleanup.
+pub mod shell_observation;
 /// Structured shell-read observation extraction.
 pub mod shell_read_observation;
 /// Provider-independent shell-output transport decoding.
@@ -128,6 +137,8 @@ pub mod shell_transport;
 pub mod slash;
 /// Provider-independent subagent cooperation and scope contracts.
 pub mod subagent;
+/// Provider-independent child-turn result shaping.
+pub mod subagent_output;
 /// Provider interaction and MAAP action-surface contracts.
 pub mod surface;
 /// Provider-independent transcript projection and persistence contracts.
@@ -178,6 +189,15 @@ pub use anthropic::{
     anthropic_request_requires_maap, parse_anthropic_messages_provider_body,
 };
 pub use auth::{ProviderAuthMetadata, ProviderCredentialKind, ProviderCredentialSource};
+pub use auto_sizing::{
+    AutoSizingConfig, AutoSizingDecision, AutoSizingDispatch, AutoSizingError,
+    AutoSizingFallbackPolicy, AutoSizingResult, AutoSizingSelection, AutoSizingTargetProfile,
+    DEFAULT_AUTO_SIZING_FALLBACK_POLICY, DEFAULT_AUTO_SIZING_LARGE_PROFILE,
+    DEFAULT_AUTO_SIZING_MEDIUM_PROFILE, DEFAULT_AUTO_SIZING_ROUTER_PROFILE,
+    DEFAULT_AUTO_SIZING_SMALL_PROFILE, apply_auto_sizing_execution_profile,
+    auto_sizing_fallback_selection, auto_sizing_reasoning_levels_for_profile, auto_sizing_request,
+    auto_sizing_selection_from_response,
+};
 pub use claude_code::{
     CLAUDE_CODE_EMPTY_OUTPUT_RETRY_INSTRUCTION, CLAUDE_CODE_MAAP_RETRY_INSTRUCTION,
     CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL, ClaudeCodeOutput, ClaudeCodeResponseError,
@@ -304,6 +324,18 @@ pub use openai_schema::openai_maap_current_action_batch_description;
 pub use permissions::{
     AgentShellPermissionSummary, ApprovalPolicy, PermissionPlanning, PermissionPreset, RuleDecision,
 };
+pub use progress::{
+    PROGRESS_SAY_LEDGER_ENTRY_CHAR_LIMIT, PROGRESS_SAY_LEDGER_ENTRY_LIMIT,
+    PROGRESS_SAY_LEDGER_LABEL, PROGRESS_SAY_REDUNDANT_SHARED_TOKEN_FLOOR,
+    RATIONALE_LEDGER_ENTRY_CHAR_LIMIT, RATIONALE_LEDGER_ENTRY_LIMIT, RATIONALE_LEDGER_LABEL,
+    merge_progress_say_entries, merge_rationale_entries, normalize_progress_say_entry,
+    normalize_rationale_entry, progress_say_entries_are_redundant,
+    progress_say_entries_for_execution, progress_say_entries_from_ledger,
+    progress_say_ledger_content, progress_say_significant_tokens, progress_say_stem_token,
+    progress_say_token_is_stopword, push_progress_say_token, rationale_entries_are_redundant,
+    rationale_entries_for_execution, rationale_entries_from_ledger,
+    rationale_entry_repeats_existing, rationale_ledger_content, truncate_context_entry,
+};
 pub use prompt::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptAssetSource,
     AgentPromptError, AgentPromptErrorKind, AgentPromptProfile, AgentPromptResult,
@@ -346,6 +378,10 @@ pub use readiness::{
     ReadinessResult, decide_bootstrap_before_user_prompt, readiness_decision,
 };
 pub use response_progress::ProviderResponseProgress;
+pub use routing::{
+    ModelPreset, PresetRegistry, ProviderConfig, ProviderRegistry, ProviderRoutingError,
+    ProviderRoutingResult,
+};
 pub use scheduler::{
     AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, RunningWork, ScheduledWork, ScheduledWorkKind,
     SchedulerCancellation, SchedulerError, SchedulerErrorKind, SchedulerResult, SchedulerSnapshot,
@@ -389,6 +425,7 @@ pub use subagent::{
     SubagentContractErrorKind, SubagentContractResult, SubagentProfile, SubagentScopeDeclaration,
     SubagentScopeEnforcement, SubagentSpawnRequest, builtin_role_name, builtin_subagent_profiles,
 };
+pub use subagent_output::subagent_task_output_for_execution;
 pub use surface::{AgentCapability, AllowedAction, AllowedActionSet, ModelInteractionKind};
 pub use transcript::{
     TranscriptContractError, TranscriptEntry, TranscriptPersistence, TranscriptRole,

@@ -4,12 +4,12 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+use super::RuntimeAutoSizingConfig;
 use super::agent_state::{
     RuntimeAgentCompactionTask, RuntimeAgentLoopState, RuntimeAgentLoopTurn,
-    RuntimeAgentProviderClaim, RuntimeAgentRememberTask, RuntimeAutoSizingConfig,
+    RuntimeAgentProviderClaim, RuntimeAgentRememberTask,
 };
 use super::pane_io::{ActivePanePipe, PaneExitRecord};
-use super::provider_registry::{RuntimePresetRegistry, RuntimeProviderRegistry};
 use super::{
     ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentScheduler, AgentShellStore,
     AgentShellVisibility, AgentTranscriptStore, AgentTurnExecution, AgentTurnLedger,
@@ -27,6 +27,7 @@ use super::{
     TerminalCursorStyle, TerminalScreen, ToolDiscoveryCache, WindowFrameAction, WindowId,
     execute_streamable_http_exchange, mcp_tools_call_operation,
 };
+use super::{RuntimePresetRegistry, RuntimeProviderRegistry};
 use crate::error::MezErrorKind;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
 use crate::runtime::record_browser::RuntimeRecordBrowser;
@@ -78,17 +79,6 @@ pub const DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT: usize = 5;
 pub const DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS: usize = 3;
 /// Default maximum number of work iterations a `/loop` command may run.
 pub const DEFAULT_AGENT_LOOP_LIMIT: usize = 8;
-/// Default router profile for automatic model and reasoning sizing.
-pub const DEFAULT_AUTO_SIZING_ROUTER_PROFILE: &str = "auto-size-router";
-/// Default small target profile for automatic model and reasoning sizing.
-pub const DEFAULT_AUTO_SIZING_SMALL_PROFILE: &str = "auto-size-small";
-/// Default medium target profile for automatic model and reasoning sizing.
-pub const DEFAULT_AUTO_SIZING_MEDIUM_PROFILE: &str = "auto-size-medium";
-/// Default large target profile for automatic model and reasoning sizing.
-pub const DEFAULT_AUTO_SIZING_LARGE_PROFILE: &str = "auto-size-large";
-/// Default fallback policy for failed automatic model sizing decisions.
-pub const DEFAULT_AUTO_SIZING_FALLBACK_POLICY: &str = "use-default-profile";
-
 /// Runtime-owned diagnostics for provider, prompt-cache, turn, and shell work.
 ///
 /// The async runtime actor records serialized actor activity separately. This

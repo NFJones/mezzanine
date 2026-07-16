@@ -139,13 +139,12 @@ use mez_agent::{
     ActionStatus, AgentAction, AgentActionPayload, AgentContext, AgentLogLevel, AgentShellSession,
     AgentShellStore, AgentShellVisibility, AgentTurnExecution, AgentTurnLedger, AgentTurnRecord,
     AgentTurnState, AgentTurnTrigger, ContextBlock, ContextSourceKind, McpExecutionRequest,
-    McpExecutionResponse, ModelMessage, ModelMessageRole, ModelProfile, ModelProfileOverrides,
-    ModelRequest, ModelResponse, ModelTokenUsage, ModelTokenUsageKey, PaneReadinessOverrideStore,
-    PaneReadinessState, ProviderQuotaUsage, ReadinessOverrideRevocation,
-    action_result_context_content, compact_model_context_for_budget_with_retained_tail_percent,
+    McpExecutionResponse, ModelProfile, ModelProfileOverrides, ModelRequest, ModelResponse,
+    ModelTokenUsage, ModelTokenUsageKey, PaneReadinessOverrideStore, PaneReadinessState,
+    ProviderQuotaUsage, ReadinessOverrideRevocation, action_result_context_content,
+    compact_model_context_for_budget_with_retained_tail_percent,
     decode_shell_output_transport_with_diagnostics, network_action_plan, network_action_summary,
-    openai_default_reasoning_levels_for_model, select_model_profile,
-    transcript_entries_for_execution,
+    select_model_profile, transcript_entries_for_execution,
 };
 use mez_agent::{AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ScheduledWork, ScheduledWorkKind};
 use mez_agent::{ApprovalPolicy, PermissionPreset, RuleDecision};
@@ -273,7 +272,6 @@ mod processes;
 ///
 /// The nested module keeps provider configuration records out of the central
 /// runtime service state.
-mod provider_registry;
 /// Exposes reusable pager state for record-oriented agent-shell browsers.
 ///
 /// The module keeps list/detail navigation, prompt state, and save payloads
@@ -313,8 +311,7 @@ pub use agent_state::{
     RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask, RuntimeAgentLoopState,
     RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
-    RuntimeAgentRememberTask, RuntimeAutoSizingConfig, RuntimeAutoSizingDecision,
-    RuntimeAutoSizingDispatch, RuntimeAutoSizingFallbackPolicy, RuntimeAutoSizingTargetProfile,
+    RuntimeAgentRememberTask,
 };
 pub use deferred::AttachedClientStepApplication;
 pub use env::{
@@ -328,20 +325,25 @@ pub use fanout::{
     flush_runtime_event_wakeup, flush_runtime_event_wakeups, flush_runtime_message_wakeup,
     flush_runtime_message_wakeups,
 };
+#[cfg(test)]
+use mez_agent::AutoSizingDecision as RuntimeAutoSizingDecision;
+use mez_agent::{
+    AutoSizingConfig as RuntimeAutoSizingConfig, AutoSizingDispatch as RuntimeAutoSizingDispatch,
+    AutoSizingFallbackPolicy as RuntimeAutoSizingFallbackPolicy,
+    AutoSizingTargetProfile as RuntimeAutoSizingTargetProfile, DEFAULT_AUTO_SIZING_FALLBACK_POLICY,
+    DEFAULT_AUTO_SIZING_ROUTER_PROFILE, ModelPreset as RuntimeModelPreset,
+    PresetRegistry as RuntimePresetRegistry, ProviderConfig as RuntimeProviderConfig,
+    ProviderRegistry as RuntimeProviderRegistry,
+};
 use mez_mux::process::PaneProcessEnvironment as PaneEnvironment;
 use pane_io::{ActivePanePipe, PaneExitRecord, StoppedPanePipe};
 pub use pane_io::{
     PaneExitUpdate, PaneInputDispatch, PaneOutputUpdate, PaneProcessStart, PaneResizeUpdate,
 };
-pub use provider_registry::{
-    RuntimeModelPreset, RuntimePresetRegistry, RuntimeProviderConfig, RuntimeProviderRegistry,
-};
 pub use service_state::{
     DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT, DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT,
     DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS, DEFAULT_AGENT_LOOP_LIMIT,
-    DEFAULT_AGENT_ROUTING, DEFAULT_AUTO_SIZING_FALLBACK_POLICY, DEFAULT_AUTO_SIZING_LARGE_PROFILE,
-    DEFAULT_AUTO_SIZING_MEDIUM_PROFILE, DEFAULT_AUTO_SIZING_ROUTER_PROFILE,
-    DEFAULT_AUTO_SIZING_SMALL_PROFILE, DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH,
+    DEFAULT_AGENT_ROUTING, DEFAULT_MAX_ROOT_SUBAGENTS, DEFAULT_MAX_SUBAGENT_DEPTH,
     DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW, DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT,
     DEFAULT_PTY_READ_LIMIT_BYTES, DEFAULT_SUBAGENT_WAIT_POLICY, RuntimeAgentPromptTurnStart,
     RuntimeAgentTurnStop, RuntimeConfigApplyReport, RuntimeLifecycleState,

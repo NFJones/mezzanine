@@ -349,6 +349,24 @@ impl From<mez_agent::mcp::McpError> for MezError {
     }
 }
 
+impl From<mez_agent::ProviderRoutingError> for MezError {
+    fn from(error: mez_agent::ProviderRoutingError) -> Self {
+        Self::config(error.message())
+    }
+}
+
+impl From<mez_agent::AutoSizingError> for MezError {
+    fn from(error: mez_agent::AutoSizingError) -> Self {
+        Self::invalid_state(error.message())
+    }
+}
+
+impl From<mez_agent::outcome::OutcomeError> for MezError {
+    fn from(error: mez_agent::outcome::OutcomeError) -> Self {
+        Self::invalid_state(error.message())
+    }
+}
+
 impl From<mez_mux::MuxError> for MezError {
     fn from(error: mez_mux::MuxError) -> Self {
         match error.kind() {

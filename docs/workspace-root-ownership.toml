@@ -3,8 +3,8 @@ status = "open"
 
 [[surface]]
 path = "src/agent"
-state = "temporary"
-role = "Concrete agent providers and product execution adapters; portable recovery and routing policy still requires extraction."
+state = "adapter"
+role = "Concrete agent providers, credentials, HTTP and process transports, product execution adapters, and embedded prompt assets."
 
 [[surface]]
 path = "src/async_runtime"

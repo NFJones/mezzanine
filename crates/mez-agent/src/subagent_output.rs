@@ -5,7 +5,7 @@
 //! completed child turn without exposing raw provider envelopes or unbounded
 //! terminal output.
 
-use super::*;
+use crate::{ActionResult, ActionStatus, AgentTurnExecution, AgentTurnState};
 
 /// Builds the message-delivered final output for a subagent task result.
 ///
@@ -13,7 +13,7 @@ use super::*;
 /// user-facing text. Parent agents should receive conversational `say` text on
 /// success, concrete action diagnostics on action failure, and provider error
 /// text when the failure happened before any action result existed.
-pub(super) fn subagent_task_output_for_execution(execution: &AgentTurnExecution) -> String {
+pub fn subagent_task_output_for_execution(execution: &AgentTurnExecution) -> String {
     let mut lines = Vec::new();
     for result in &execution.action_results {
         if let Some(error) = &result.error {
@@ -21,7 +21,7 @@ pub(super) fn subagent_task_output_for_execution(execution: &AgentTurnExecution)
                 "{} {} {}: {}",
                 result.action_type,
                 result.action_id,
-                runtime_action_status_name(result.status),
+                action_status_name(result.status),
                 error.message
             ));
             lines.extend(subagent_failed_action_diagnostic_lines(result));
@@ -46,6 +46,21 @@ pub(super) fn subagent_task_output_for_execution(execution: &AgentTurnExecution)
         execution.response.raw_text.trim().to_string()
     } else {
         "failed without action diagnostics".to_string()
+    }
+}
+
+/// Returns the stable status name included in child failure summaries.
+fn action_status_name(status: ActionStatus) -> &'static str {
+    match status {
+        ActionStatus::Rejected => "rejected",
+        ActionStatus::Blocked => "blocked",
+        ActionStatus::Denied => "denied",
+        ActionStatus::Running => "running",
+        ActionStatus::Succeeded => "succeeded",
+        ActionStatus::Failed => "failed",
+        ActionStatus::Cancelled => "cancelled",
+        ActionStatus::TimedOut => "timed_out",
+        ActionStatus::Interrupted => "interrupted",
     }
 }
 
@@ -118,4 +133,83 @@ fn subagent_bounded_diagnostic_text(value: &str) -> String {
         output.push_str("\n[truncated]");
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        AllowedActionSet, ModelInteractionKind, ModelRequest, ModelResponse, ModelTokenUsage,
+    };
+    use std::collections::BTreeMap;
+
+    /// Builds a result-free execution for testing terminal output fallbacks.
+    fn execution(terminal_state: AgentTurnState, raw_text: &str) -> AgentTurnExecution {
+        AgentTurnExecution {
+            request: ModelRequest {
+                provider: "test".to_string(),
+                model: "test-model".to_string(),
+                reasoning_effort: None,
+                thinking_enabled: None,
+                latency_preference: None,
+                prompt_cache_retention: None,
+                max_output_tokens: None,
+                temperature: None,
+                prompt_cache_session_id: None,
+                prompt_cache_lineage_id: None,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-1".to_string(),
+                available_mcp_tools: Vec::new(),
+                memory_actions_enabled: false,
+                issue_actions_enabled: false,
+                interaction_kind: ModelInteractionKind::ActionExecution,
+                allowed_actions: AllowedActionSet::say_only(),
+                stop: None,
+                messages: Vec::new(),
+            },
+            response: ModelResponse {
+                provider: "test".to_string(),
+                model: "test-model".to_string(),
+                raw_text: raw_text.to_string(),
+                usage: ModelTokenUsage::default(),
+                latest_request_usage: None,
+                quota_usage: Vec::new(),
+                action_batch: None,
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: ModelTokenUsage::default(),
+            routing_token_usage_by_model: BTreeMap::new(),
+            action_results: Vec::new(),
+            final_turn: true,
+            terminal_state,
+        }
+    }
+
+    /// Verifies successful child turns never expose a raw provider envelope.
+    #[test]
+    fn completed_child_without_say_uses_stable_fallback() {
+        let execution = execution(AgentTurnState::Completed, "raw MAAP envelope");
+        assert_eq!(
+            subagent_task_output_for_execution(&execution),
+            "completed without user-facing response"
+        );
+    }
+
+    /// Verifies pre-action provider failures preserve their bounded diagnostic.
+    #[test]
+    fn failed_child_without_action_results_uses_provider_diagnostic() {
+        let execution = execution(AgentTurnState::Failed, "  provider unavailable  ");
+        assert_eq!(
+            subagent_task_output_for_execution(&execution),
+            "provider unavailable"
+        );
+    }
+
+    /// Verifies child diagnostics are bounded before delivery to a parent turn.
+    #[test]
+    fn child_diagnostic_text_is_bounded() {
+        let output = subagent_bounded_diagnostic_text(&"x".repeat(4_001));
+        assert_eq!(output.chars().filter(|ch| *ch == 'x').count(), 4_000);
+        assert!(output.ends_with("\n[truncated]"));
+    }
 }

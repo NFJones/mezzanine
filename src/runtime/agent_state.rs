@@ -6,12 +6,10 @@
 //! describe queued or claimed work across async boundaries.
 
 use super::{
-    AgentContext, AgentTurnRecord, DEFAULT_AUTO_SIZING_FALLBACK_POLICY,
-    DEFAULT_AUTO_SIZING_LARGE_PROFILE, DEFAULT_AUTO_SIZING_MEDIUM_PROFILE,
-    DEFAULT_AUTO_SIZING_ROUTER_PROFILE, DEFAULT_AUTO_SIZING_SMALL_PROFILE,
-    DeepSeekChatCompletionsProvider, MemoryScope, ModelProfile, ModelRequest,
-    OpenAiCompatibleChatCompletionsProvider, OpenAiResponsesProvider, PathScopes, PermissionPolicy,
-    ReqwestProviderHttpTransport, SessionApprovalStore, SubagentScopeDeclaration,
+    AgentContext, AgentTurnRecord, DeepSeekChatCompletionsProvider, MemoryScope, ModelProfile,
+    ModelRequest, OpenAiCompatibleChatCompletionsProvider, OpenAiResponsesProvider, PathScopes,
+    PermissionPolicy, ReqwestProviderHttpTransport, RuntimeAutoSizingDispatch,
+    SessionApprovalStore, SubagentScopeDeclaration,
 };
 use crate::agent::provider::{AnthropicMessagesProvider, ClaudeCodeProvider};
 use mez_agent::McpPromptTool;
@@ -42,112 +40,6 @@ pub struct RuntimeAgentProviderTask {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub model_profile: ModelProfile,
-}
-
-/// Runtime fallback behavior for automatic turn model sizing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeAutoSizingFallbackPolicy {
-    /// Continue with the ordinary active profile when the router cannot produce
-    /// a valid decision.
-    UseDefaultProfile,
-}
-
-impl RuntimeAutoSizingFallbackPolicy {
-    /// Returns the stable configuration name for this fallback policy.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::UseDefaultProfile => DEFAULT_AUTO_SIZING_FALLBACK_POLICY,
-        }
-    }
-}
-
-/// Configured profile names used by automatic turn model sizing.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeAutoSizingConfig {
-    /// Model profile used for the internal routing decision.
-    pub router_model_profile: String,
-    /// Model profile used when the router chooses the small bucket.
-    pub small_model_profile: String,
-    /// Model profile used when the router chooses the medium bucket.
-    pub medium_model_profile: String,
-    /// Model profile used when the router chooses the large bucket.
-    pub large_model_profile: String,
-    /// Reasoning efforts the router may select.
-    pub allowed_reasoning_efforts: Vec<String>,
-    /// Fallback behavior used when routing fails.
-    pub fallback_policy: RuntimeAutoSizingFallbackPolicy,
-}
-
-impl Default for RuntimeAutoSizingConfig {
-    /// Returns the generated automatic sizing defaults.
-    fn default() -> Self {
-        Self {
-            router_model_profile: DEFAULT_AUTO_SIZING_ROUTER_PROFILE.to_string(),
-            small_model_profile: DEFAULT_AUTO_SIZING_SMALL_PROFILE.to_string(),
-            medium_model_profile: DEFAULT_AUTO_SIZING_MEDIUM_PROFILE.to_string(),
-            large_model_profile: DEFAULT_AUTO_SIZING_LARGE_PROFILE.to_string(),
-            allowed_reasoning_efforts: vec![
-                "low".to_string(),
-                "medium".to_string(),
-                "high".to_string(),
-                "xhigh".to_string(),
-            ],
-            fallback_policy: RuntimeAutoSizingFallbackPolicy::UseDefaultProfile,
-        }
-    }
-}
-
-/// Resolved target profile metadata included in an automatic sizing dispatch.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeAutoSizingTargetProfile {
-    /// Size bucket name visible to the router.
-    pub size: String,
-    /// Configured model profile identity for this bucket.
-    pub profile_name: String,
-    /// Resolved model profile copied when the bucket is chosen.
-    pub profile: ModelProfile,
-    /// Reasoning efforts known to be valid for this model, when configured.
-    pub supported_reasoning_efforts: Vec<String>,
-}
-
-/// Bounded internal routing context carried to the provider worker.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeAutoSizingDispatch {
-    /// Router profile identity.
-    pub router_profile_name: String,
-    /// Router model profile used for the internal decision request.
-    pub router_profile: ModelProfile,
-    /// Ordinary active profile identity to use when routing is disabled or
-    /// falls back.
-    pub default_profile_name: String,
-    /// Ordinary active model profile to use when routing is disabled or
-    /// falls back.
-    pub default_profile: ModelProfile,
-    /// Small target profile.
-    pub small: RuntimeAutoSizingTargetProfile,
-    /// Medium target profile.
-    pub medium: RuntimeAutoSizingTargetProfile,
-    /// Large target profile.
-    pub large: RuntimeAutoSizingTargetProfile,
-    /// Optional bounded turn metadata, such as subagent scope and lineage.
-    pub turn_metadata: Option<String>,
-    /// Reasoning efforts the router may select.
-    pub allowed_reasoning_efforts: Vec<String>,
-    /// Fallback behavior used when routing fails.
-    pub fallback_policy: RuntimeAutoSizingFallbackPolicy,
-}
-
-/// Parsed automatic sizing decision returned by the router model.
-#[derive(Debug, Clone, PartialEq)]
-pub struct RuntimeAutoSizingDecision {
-    /// Chosen size bucket.
-    pub size: String,
-    /// Chosen reasoning effort.
-    pub reasoning_effort: String,
-    /// Router confidence in the decision.
-    pub confidence: f64,
-    /// Short non-secret explanation suitable for logs.
-    pub rationale: String,
 }
 
 /// Tracks a provider task after the async actor has claimed it from the queue.

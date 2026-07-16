@@ -43,6 +43,7 @@ use mez_agent::AgentActionPayload;
 use mez_agent::semantic_patch_planning::{
     ApplyPatchTransactionPhase, apply_patch_transaction_phase,
 };
+use mez_agent::shell_observation::*;
 use mez_agent::{
     DEFAULT_BOOTSTRAP_TIMEOUT_MS, bootstrap_script_for_classification, parse_bootstrap_env_output,
     readiness_probe_command_for_classification,
@@ -50,7 +51,6 @@ use mez_agent::{
 use mez_mux::process::PaneProcess;
 use mez_terminal::TerminalStyledLine;
 
-use output_filter::*;
 use transactions::*;
 
 // Pane process lifecycle and PTY synchronization.
