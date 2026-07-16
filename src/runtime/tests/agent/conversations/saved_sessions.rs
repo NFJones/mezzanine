@@ -319,7 +319,7 @@ fn runtime_resume_picker_view_keeps_selected_link_styling_off_previous_cell() {
         .unwrap();
     assert_eq!(submitted.forwarded_bytes, 0);
     assert!(submitted.view_refresh_required);
-    assert!(service.primary_display_overlay.is_some());
+    assert!(service.primary_display_overlay().is_some());
 
     let moved = service
         .apply_attached_terminal_step_plan(
@@ -338,8 +338,7 @@ fn runtime_resume_picker_view_keeps_selected_link_styling_off_previous_cell() {
     assert!(moved.view_refresh_required);
     assert_eq!(
         service
-            .primary_display_overlay
-            .as_ref()
+            .primary_display_overlay()
             .and_then(|overlay| overlay.active_selection_index),
         Some(1)
     );

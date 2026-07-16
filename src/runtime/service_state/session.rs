@@ -584,31 +584,11 @@ pub struct RuntimeSessionService {
     /// current conversation without re-reading the working tree.
     pub(in crate::runtime) agent_modified_files:
         BTreeMap<String, BTreeMap<String, RuntimeAgentModifiedFileSummary>>,
-    /// Submitted primary command-prompt history retained across prompt openings.
-    ///
-    /// The `Ctrl+A :` command prompt uses this cache for readline navigation and
-    /// reverse search without mixing mux commands into agent prompt history.
-    pub(in crate::runtime) primary_command_prompt_history: Vec<String>,
-    /// Stores the primary prompt input value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) primary_prompt_input: Option<RuntimePrimaryPromptInput>,
-    /// Whether the primary client's next key should use the prefix table.
-    ///
-    /// This transient state is set by a lone escape key and consumed by the
-    /// next attached-terminal input action.
-    pub(in crate::runtime) primary_prefix_key_pending: bool,
     /// Stores the agent prompt inputs value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) agent_prompt_inputs: BTreeMap<String, RuntimeAgentPromptInput>,
-    /// Stores the primary display overlay value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) primary_display_overlay: Option<RuntimeDisplayOverlay>,
     /// Record-browser states waiting for the display-output presentation path
     /// to attach them to the primary overlay.
     ///

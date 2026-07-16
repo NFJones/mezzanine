@@ -93,7 +93,7 @@ impl RuntimeSessionService {
             return Ok(false);
         }
         let paste_bytes = runtime_readline_paste_bytes(source.content.as_str());
-        if self.primary_prompt_input.is_some() {
+        if self.presentation.primary_prompt_input.is_some() {
             return self.apply_primary_prompt_input(
                 primary_client_id,
                 &paste_bytes,

@@ -108,7 +108,7 @@ fn runtime_primary_display_overlay_renders_and_clears_via_terminal_step() {
 
     assert_eq!(quit.forwarded_bytes, 0);
     assert!(quit.view_refresh_required);
-    assert!(service.primary_display_overlay.is_none());
+    assert!(service.primary_display_overlay().is_none());
 }
 
 /// Verifies ordinary input that has no pager binding remains captured by the
@@ -139,7 +139,7 @@ fn runtime_primary_display_overlay_consumes_unbound_pane_input() {
 
     assert_eq!(report.forwarded_bytes, 0);
     assert!(!report.view_refresh_required);
-    assert!(service.primary_display_overlay.is_some());
+    assert!(service.primary_display_overlay().is_some());
 }
 
 /// Verifies plain pager output wraps at the terminal width instead of being
@@ -152,7 +152,7 @@ fn runtime_primary_display_overlay_wraps_plain_content_to_terminal_width() {
         .show_primary_display_overlay(vec!["alpha beta gamma".to_string()])
         .unwrap();
 
-    let overlay = service.primary_display_overlay.as_ref().unwrap();
+    let overlay = service.primary_display_overlay().unwrap();
     assert_eq!(overlay.lines, vec!["alpha beta", "gamma"]);
     assert!(
         overlay
@@ -183,8 +183,7 @@ fn runtime_primary_display_overlay_keyboard_navigation_requests_diff_refresh() {
         .unwrap();
     assert_eq!(
         service
-            .primary_display_overlay
-            .as_ref()
+            .primary_display_overlay()
             .and_then(|overlay| overlay.active_selection_index),
         Some(0)
     );
@@ -229,8 +228,7 @@ fn runtime_primary_display_overlay_keyboard_navigation_requests_diff_refresh() {
     assert!(!report.full_redraw_required);
     assert_eq!(
         service
-            .primary_display_overlay
-            .as_ref()
+            .primary_display_overlay()
             .and_then(|overlay| overlay.active_selection_index),
         Some(1)
     );
@@ -299,8 +297,7 @@ fn runtime_primary_display_overlay_mouse_scroll_requests_diff_refresh() {
     assert!(!report.full_redraw_required);
     assert_eq!(
         service
-            .primary_display_overlay
-            .as_ref()
+            .primary_display_overlay()
             .map(|overlay| overlay.scroll_offset),
         Some(2)
     );
@@ -347,18 +344,14 @@ fn runtime_primary_display_overlay_search_repeats_and_wraps() {
     assert!(!initial_search.full_redraw_required);
     assert_eq!(
         service
-            .primary_display_overlay
-            .as_ref()
+            .primary_display_overlay()
             .and_then(|overlay| overlay.search_query.as_deref()),
         Some("needle")
     );
     assert_eq!(
-        service
-            .primary_display_overlay
-            .as_ref()
-            .and_then(|overlay| overlay
-                .search_match
-                .map(|search_match| search_match.line_index)),
+        service.primary_display_overlay().and_then(|overlay| overlay
+            .search_match
+            .map(|search_match| search_match.line_index)),
         Some(1)
     );
 
@@ -382,18 +375,14 @@ fn runtime_primary_display_overlay_search_repeats_and_wraps() {
     assert_eq!(next_match.forwarded_bytes, 0);
     assert!(next_match.view_refresh_required);
     assert_eq!(
-        service
-            .primary_display_overlay
-            .as_ref()
-            .and_then(|overlay| overlay
-                .search_match
-                .map(|search_match| search_match.line_index)),
+        service.primary_display_overlay().and_then(|overlay| overlay
+            .search_match
+            .map(|search_match| search_match.line_index)),
         Some(3)
     );
     assert_eq!(
         service
-            .primary_display_overlay
-            .as_ref()
+            .primary_display_overlay()
             .and_then(|overlay| overlay.search_status.as_deref()),
         None
     );
@@ -416,18 +405,14 @@ fn runtime_primary_display_overlay_search_repeats_and_wraps() {
         .unwrap();
 
     assert_eq!(
-        service
-            .primary_display_overlay
-            .as_ref()
-            .and_then(|overlay| overlay
-                .search_match
-                .map(|search_match| search_match.line_index)),
+        service.primary_display_overlay().and_then(|overlay| overlay
+            .search_match
+            .map(|search_match| search_match.line_index)),
         Some(1)
     );
     assert_eq!(
         service
-            .primary_display_overlay
-            .as_ref()
+            .primary_display_overlay()
             .and_then(|overlay| overlay.search_status.as_deref()),
         None
     );
@@ -450,7 +435,7 @@ fn runtime_primary_display_overlay_search_repeats_and_wraps() {
         )
         .unwrap();
 
-    let overlay = service.primary_display_overlay.as_ref().unwrap();
+    let overlay = service.primary_display_overlay().unwrap();
     assert_eq!(
         overlay
             .search_match
@@ -481,8 +466,7 @@ fn runtime_primary_display_overlay_executes_selectable_command_rows() {
         .execute_attached_display_command(&primary, "choose-window")
         .unwrap();
     let overlay = service
-        .primary_display_overlay
-        .as_ref()
+        .primary_display_overlay()
         .expect("choose-window should open a command display overlay");
     let work_selection = overlay
         .selections
@@ -514,7 +498,7 @@ fn runtime_primary_display_overlay_executes_selectable_command_rows() {
         .unwrap();
 
     assert!(report.view_refresh_required);
-    assert!(service.primary_display_overlay.is_none());
+    assert!(service.primary_display_overlay().is_none());
     assert_eq!(service.session().active_window().unwrap().name, "work");
     service.pane_processes_mut().terminate_all().unwrap();
 }
@@ -536,7 +520,7 @@ fn runtime_primary_display_overlay_executes_keyboard_selected_command_rows() {
     service
         .execute_attached_display_command(&primary, "choose-window")
         .unwrap();
-    assert!(service.primary_display_overlay.is_some());
+    assert!(service.primary_display_overlay().is_some());
     assert_eq!(service.session().active_window().unwrap().name, "0");
 
     let report = service
@@ -559,7 +543,7 @@ fn runtime_primary_display_overlay_executes_keyboard_selected_command_rows() {
     assert_eq!(report.forwarded_bytes, 0);
     assert!(report.view_refresh_required);
     assert!(report.full_redraw_required);
-    assert!(service.primary_display_overlay.is_none());
+    assert!(service.primary_display_overlay().is_none());
     assert_eq!(service.session().active_window().unwrap().name, "work");
     service.pane_processes_mut().terminate_all().unwrap();
 }
@@ -584,8 +568,7 @@ fn runtime_primary_display_overlay_executes_multiple_action_chips() {
         .execute_attached_display_command(&primary, "choose-buffer")
         .unwrap();
     let overlay = service
-        .primary_display_overlay
-        .as_ref()
+        .primary_display_overlay()
         .expect("choose-buffer should open a command display overlay");
     let paste = overlay
         .selections
@@ -661,7 +644,7 @@ fn runtime_primary_display_overlay_executes_multiple_action_chips() {
     assert!(report.view_refresh_required);
     assert!(service.paste_buffers.get("main").is_none());
     assert_eq!(service.active_paste_buffer.as_deref(), None);
-    assert!(service.primary_display_overlay.is_none());
+    assert!(service.primary_display_overlay().is_none());
     service.pane_processes_mut().terminate_all().unwrap();
 }
 
@@ -684,8 +667,7 @@ fn runtime_primary_display_overlay_mouse_selects_action_chip() {
         .execute_attached_display_command(&primary, "choose-buffer")
         .unwrap();
     let (clicked_line, clicked_column) = service
-        .primary_display_overlay
-        .as_ref()
+        .primary_display_overlay()
         .and_then(|overlay| {
             overlay
                 .selections
@@ -778,6 +760,6 @@ fn runtime_primary_error_overlay_dismisses_on_any_input() {
     assert!(report.view_refresh_required);
     assert!(report.full_redraw_required);
     assert!(service.primary_error_status_overlay().is_none());
-    assert!(service.primary_display_overlay.is_none());
+    assert!(service.primary_display_overlay().is_none());
     service.pane_processes_mut().terminate_all().unwrap();
 }

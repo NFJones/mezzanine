@@ -958,8 +958,7 @@ fn runtime_agent_slash_markdown_display_opens_command_overlay() {
     assert_eq!(report.agent_prompt_inputs_applied, 1);
     assert!(report.full_redraw_required);
     let overlay = service
-        .primary_display_overlay
-        .as_ref()
+        .primary_display_overlay()
         .expect("/status should open the command display overlay");
     let heading_index = overlay
         .lines

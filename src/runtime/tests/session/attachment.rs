@@ -215,8 +215,7 @@ fn runtime_control_initialize_observer_logs_and_lists_pending_request() {
         .execute_attached_display_command(&primary, "list-observers")
         .unwrap();
     let overlay = service
-        .primary_display_overlay
-        .as_ref()
+        .primary_display_overlay()
         .expect("list-observers should open a command display overlay");
     assert!(
         overlay
@@ -405,8 +404,7 @@ fn runtime_primary_display_overlay_exposes_observer_action_chips() {
         .execute_attached_display_command(&primary, "choose-observer")
         .unwrap();
     let overlay = service
-        .primary_display_overlay
-        .as_ref()
+        .primary_display_overlay()
         .expect("choose-observer should open a command display overlay");
     assert!(
         overlay

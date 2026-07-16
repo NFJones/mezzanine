@@ -126,8 +126,8 @@ fn runtime_applies_lone_prefix_key_as_pending_state() {
         .unwrap();
 
     assert!(prefix_report.view_refresh_required);
-    assert!(service.primary_prefix_key_pending);
-    assert!(service.primary_prompt_input.is_none());
+    assert!(service.primary_prefix_key_pending());
+    assert!(service.primary_prompt_input().is_none());
     assert!(
         service
             .terminal_client_loop_config(TerminalClientLoopConfig::default())
@@ -151,8 +151,8 @@ fn runtime_applies_lone_prefix_key_as_pending_state() {
         )
         .unwrap();
 
-    assert!(!service.primary_prefix_key_pending);
-    assert!(service.primary_prompt_input.is_some());
+    assert!(!service.primary_prefix_key_pending());
+    assert!(service.primary_prompt_input().is_some());
     service.pane_processes_mut().terminate_all().unwrap();
 }
 

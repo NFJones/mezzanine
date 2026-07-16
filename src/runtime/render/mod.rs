@@ -61,6 +61,14 @@ const DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS: u64 = 500;
 /// reaching into the session coordinator's former shared field bag.
 #[derive(Debug, Default)]
 pub(in crate::runtime) struct RuntimePresentationComponent {
+    /// Submitted command-prompt history retained across prompt openings.
+    primary_command_prompt_history: Vec<String>,
+    /// Active primary-client readline prompt, when one is open.
+    primary_prompt_input: Option<RuntimePrimaryPromptInput>,
+    /// Whether the primary client's next key uses the prefix table.
+    primary_prefix_key_pending: bool,
+    /// Active primary-client modal display overlay.
+    primary_display_overlay: Option<RuntimeDisplayOverlay>,
     mouse_resize_drag_state: Option<MouseResizeDragState>,
     mouse_selection_drag_state: Option<MouseSelectionDragState>,
     last_mouse_click_state: Option<RuntimeMouseClickState>,
@@ -79,6 +87,44 @@ impl RuntimePresentationComponent {
 
 #[cfg(test)]
 impl RuntimeSessionService {
+    /// Returns retained primary command-prompt history for integration tests.
+    pub(in crate::runtime) fn primary_command_prompt_history(&self) -> &[String] {
+        &self.presentation.primary_command_prompt_history
+    }
+
+    /// Replaces retained command-prompt history for an integration fixture.
+    pub(in crate::runtime) fn set_primary_command_prompt_history_for_tests(
+        &mut self,
+        history: Vec<String>,
+    ) {
+        self.presentation.primary_command_prompt_history = history;
+    }
+
+    /// Adds one command-prompt history entry for an integration fixture.
+    pub(in crate::runtime) fn push_primary_command_prompt_history_for_tests(
+        &mut self,
+        command: String,
+    ) {
+        self.presentation
+            .primary_command_prompt_history
+            .push(command);
+    }
+
+    /// Returns the active primary prompt for product integration tests.
+    pub(in crate::runtime) fn primary_prompt_input(&self) -> Option<&RuntimePrimaryPromptInput> {
+        self.presentation.primary_prompt_input.as_ref()
+    }
+
+    /// Reports whether the primary client is waiting for a prefix-table key.
+    pub(in crate::runtime) fn primary_prefix_key_pending(&self) -> bool {
+        self.presentation.primary_prefix_key_pending
+    }
+
+    /// Returns the active primary display overlay for product integration tests.
+    pub(in crate::runtime) fn primary_display_overlay(&self) -> Option<&RuntimeDisplayOverlay> {
+        self.presentation.primary_display_overlay.as_ref()
+    }
+
     /// Returns the transient primary error status for product integration tests.
     pub(in crate::runtime) fn primary_error_status_overlay(&self) -> Option<&str> {
         self.presentation.primary_error_status_overlay.as_deref()

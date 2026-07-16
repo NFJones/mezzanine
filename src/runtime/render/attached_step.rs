@@ -233,7 +233,9 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     fn enter_primary_prompt(&mut self, kind: ReadlinePromptKind, prefill: &str) -> Result<()> {
         self.require_live()?;
-        if kind == ReadlinePromptKind::Command && self.primary_command_prompt_history.is_empty() {
+        if kind == ReadlinePromptKind::Command
+            && self.presentation.primary_command_prompt_history.is_empty()
+        {
             self.reload_primary_command_prompt_history()?;
         }
         let mut prompt_input = runtime_primary_prompt_input(kind, prefill);
@@ -241,12 +243,12 @@ impl RuntimeSessionService {
             prompt_input
                 .prompt
                 .buffer
-                .set_history(self.primary_command_prompt_history.clone());
+                .set_history(self.presentation.primary_command_prompt_history.clone());
             prompt_input
                 .prompt
                 .set_selector_extra_candidates(self.runtime_command_selector_extra_candidates());
         }
-        self.primary_prompt_input = Some(prompt_input);
+        self.presentation.primary_prompt_input = Some(prompt_input);
         Ok(())
     }
 
@@ -290,11 +292,11 @@ impl RuntimeSessionService {
 
         for action in &step.actions {
             if !matches!(action, TerminalClientLoopAction::EnterPrefixKeyMode) {
-                self.primary_prefix_key_pending = false;
+                self.presentation.primary_prefix_key_pending = false;
             }
             let primary_display_overlay_requires_full_redraw =
                 self.primary_display_overlay_action_requires_full_redraw(action);
-            if self.primary_display_overlay.is_some() {
+            if self.presentation.primary_display_overlay.is_some() {
                 if self.apply_primary_display_overlay_terminal_action(primary_client_id, action)? {
                     report.view_refresh_required = true;
                     if primary_display_overlay_requires_full_redraw {
@@ -332,21 +334,21 @@ impl RuntimeSessionService {
                 self.presentation.pane_agent_status_selector = None;
                 report.view_refresh_required = true;
             }
-            if self.primary_prompt_input.is_some()
+            if self.presentation.primary_prompt_input.is_some()
                 && matches!(
                     action,
                     TerminalClientLoopAction::ForwardToPane(_)
                         | TerminalClientLoopAction::ForwardMouseToPane { .. }
                 )
             {
-                let overlay_was_open = self.primary_display_overlay.is_some();
+                let overlay_was_open = self.presentation.primary_display_overlay.is_some();
                 if self.apply_primary_prompt_terminal_action(
                     primary_client_id,
                     action,
                     queue_external_effects,
                 )? {
                     report.view_refresh_required = true;
-                    if overlay_was_open != self.primary_display_overlay.is_some() {
+                    if overlay_was_open != self.presentation.primary_display_overlay.is_some() {
                         report.full_redraw_required = true;
                     }
                 }
@@ -355,14 +357,15 @@ impl RuntimeSessionService {
             match action {
                 TerminalClientLoopAction::ForwardToPane(input) => {
                     if self.active_agent_shell_visible()? {
-                        let overlay_was_open = self.primary_display_overlay.is_some();
+                        let overlay_was_open = self.presentation.primary_display_overlay.is_some();
                         if self.apply_attached_agent_prompt_input(primary_client_id, input)? {
                             self.sync_tracked_pty_sizes()?;
                             report.agent_prompt_inputs_applied =
                                 report.agent_prompt_inputs_applied.saturating_add(1);
                             report.view_refresh_required = true;
                             if !self.active_agent_shell_visible()?
-                                || overlay_was_open != self.primary_display_overlay.is_some()
+                                || overlay_was_open
+                                    != self.presentation.primary_display_overlay.is_some()
                             {
                                 report.full_redraw_required = true;
                             }
@@ -489,7 +492,7 @@ impl RuntimeSessionService {
                     }
                 }
                 TerminalClientLoopAction::HandleMouse(action) => {
-                    let overlay_was_open = self.primary_display_overlay.is_some();
+                    let overlay_was_open = self.presentation.primary_display_overlay.is_some();
                     match self.apply_attached_mouse_action(
                         primary_client_id,
                         action.clone(),
@@ -500,7 +503,8 @@ impl RuntimeSessionService {
                                 report.mouse_actions_reported.saturating_add(1);
                             report.view_refresh_required = true;
                             if Self::mouse_action_requires_full_redraw(action.clone())
-                                || overlay_was_open != self.primary_display_overlay.is_some()
+                                || overlay_was_open
+                                    != self.presentation.primary_display_overlay.is_some()
                             {
                                 report.full_redraw_required = true;
                             }
@@ -529,7 +533,7 @@ impl RuntimeSessionService {
                     }
                 }
                 TerminalClientLoopAction::EnterPrefixKeyMode => {
-                    self.primary_prefix_key_pending = true;
+                    self.presentation.primary_prefix_key_pending = true;
                     report.view_refresh_required = true;
                 }
                 TerminalClientLoopAction::ReportUnboundPrefix(chord) => report

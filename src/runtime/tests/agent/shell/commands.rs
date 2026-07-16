@@ -484,7 +484,7 @@ fn runtime_agent_shell_single_line_display_uses_transient_status_without_overlay
 
     assert_eq!(report.forwarded_bytes, 0);
     assert_eq!(report.agent_prompt_inputs_applied, 1);
-    assert!(service.primary_display_overlay.is_none());
+    assert!(service.primary_display_overlay().is_none());
     assert!(
         service
             .primary_error_status_overlay()

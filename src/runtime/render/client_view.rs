@@ -157,13 +157,13 @@ impl RuntimeSessionService {
         }
         if role == ClientViewRole::Primary
             && let Some(view) = view.as_mut()
-            && let Some(prompt_input) = self.primary_prompt_input.as_ref()
+            && let Some(prompt_input) = self.presentation.primary_prompt_input.as_ref()
         {
             self.overlay_primary_prompt_input(view, prompt_input);
         }
         if role == ClientViewRole::Primary
             && let Some(view) = view.as_mut()
-            && let Some(overlay) = self.primary_display_overlay.as_ref()
+            && let Some(overlay) = self.presentation.primary_display_overlay.as_ref()
         {
             self.overlay_primary_display_overlay(view, overlay);
         }
@@ -681,7 +681,7 @@ impl RuntimeSessionService {
             .iter()
             .map(|(chord, binding)| (*chord, binding.command.clone()))
             .collect();
-        config.prefix_key_pending = self.primary_prefix_key_pending;
+        config.prefix_key_pending = self.presentation.primary_prefix_key_pending;
         config.window_frames_enabled = self.window_frames_enabled;
         config.window_frame_template = self.window_frame_template.clone();
         config.window_frame_position = self.window_frame_position;
@@ -698,7 +698,7 @@ impl RuntimeSessionService {
         config.resize_debounce_ms = self.terminal_resize_debounce_ms;
         config.render_rate_limit_fps = self.terminal_render_rate_limit_fps;
         config.ui_theme = self.ui_theme.clone();
-        config.primary_display_overlay_active = self.primary_display_overlay.is_some();
+        config.primary_display_overlay_active = self.presentation.primary_display_overlay.is_some();
         let frame_context = self.terminal_frame_context();
         config.mouse_border_cells = self.active_window_mouse_border_cells();
         config.mouse_window_frame_cells = self.active_window_mouse_frame_cells(&frame_context);

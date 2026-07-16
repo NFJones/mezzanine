@@ -45,8 +45,7 @@ fn runtime_agent_shell_record_browser_display_retains_overlay_state() {
         .unwrap();
 
     let overlay = service
-        .primary_display_overlay
-        .as_ref()
+        .primary_display_overlay()
         .expect("record-browser display should open an overlay");
     let record_browser = overlay
         .record_browser
@@ -157,8 +156,7 @@ enabled = true
     assert_eq!(report.forwarded_bytes, 0);
     assert!(report.view_refresh_required);
     let overlay = service
-        .primary_display_overlay
-        .as_ref()
+        .primary_display_overlay()
         .expect("Enter should keep the detail overlay open");
     let record_browser = overlay
         .record_browser
@@ -246,8 +244,7 @@ fn runtime_agent_shell_record_browser_escape_restores_parent_view_stack() {
         .unwrap();
     assert_eq!(
         service
-            .primary_display_overlay
-            .as_ref()
+            .primary_display_overlay()
             .and_then(|overlay| overlay.record_browser.as_ref())
             .map(|record_browser| record_browser.browser.render_page().title),
         Some("First issue".to_string())
@@ -270,8 +267,7 @@ fn runtime_agent_shell_record_browser_escape_restores_parent_view_stack() {
     assert_eq!(report.forwarded_bytes, 0);
     assert!(report.view_refresh_required);
     let overlay = service
-        .primary_display_overlay
-        .as_ref()
+        .primary_display_overlay()
         .expect("Escape should keep the restored parent overlay open");
     let record_browser = overlay
         .record_browser

@@ -152,20 +152,21 @@ impl RuntimeSessionService {
     ) -> Result<bool> {
         if input == b"\x1b" {
             if self
+                .presentation
                 .primary_prompt_input
                 .as_ref()
                 .is_some_and(|prompt_input| prompt_input.prompt.reverse_search_active())
             {
                 // Let the prompt consume Escape to cancel incremental search.
             } else {
-                if self.primary_prompt_input.take().is_some() {
+                if self.presentation.primary_prompt_input.take().is_some() {
                     return Ok(true);
                 }
                 return Ok(false);
             }
         }
         if input == b"\x0c" {
-            if self.primary_prompt_input.is_some() {
+            if self.presentation.primary_prompt_input.is_some() {
                 let pane_id = self.active_pane_id()?;
                 self.clear_agent_shell_terminal_view(&pane_id)?;
                 return Ok(true);
@@ -177,7 +178,7 @@ impl RuntimeSessionService {
             .active_pane_id()
             .ok()
             .and_then(|pane_id| self.pane_current_working_directory(&pane_id));
-        let Some(prompt_input) = self.primary_prompt_input.as_mut() else {
+        let Some(prompt_input) = self.presentation.primary_prompt_input.as_mut() else {
             return Ok(false);
         };
         if prompt_input.prompt.kind == ReadlinePromptKind::Command {
@@ -201,7 +202,7 @@ impl RuntimeSessionService {
                 ReadlineOutcome::Submitted(command)
                 | ReadlineOutcome::SubmittedWithDisplay { text: command, .. } => {
                     let prompt_kind = prompt_input.prompt.kind;
-                    self.primary_prompt_input = None;
+                    self.presentation.primary_prompt_input = None;
                     changed = true;
                     if !command.trim().is_empty() {
                         if prompt_kind == ReadlinePromptKind::Command {
@@ -228,7 +229,7 @@ impl RuntimeSessionService {
                     return Ok(changed);
                 }
                 ReadlineOutcome::Cancelled | ReadlineOutcome::Eof => {
-                    self.primary_prompt_input = None;
+                    self.presentation.primary_prompt_input = None;
                     return Ok(true);
                 }
                 ReadlineOutcome::Edited => changed = true,
@@ -248,10 +249,13 @@ impl RuntimeSessionService {
         if command.trim().is_empty() {
             return Ok(());
         }
-        self.primary_command_prompt_history
+        self.presentation
+            .primary_command_prompt_history
             .push(command.to_string());
-        while self.primary_command_prompt_history.len() > DEFAULT_READLINE_HISTORY_LIMIT {
-            self.primary_command_prompt_history.remove(0);
+        while self.presentation.primary_command_prompt_history.len()
+            > DEFAULT_READLINE_HISTORY_LIMIT
+        {
+            self.presentation.primary_command_prompt_history.remove(0);
         }
         let Some(store) = self.agent_transcript_store.clone() else {
             return Ok(());
@@ -275,7 +279,7 @@ impl RuntimeSessionService {
         let Some(store) = self.agent_transcript_store.as_ref() else {
             return Ok(());
         };
-        self.primary_command_prompt_history = store.command_prompt_history()?;
+        self.presentation.primary_command_prompt_history = store.command_prompt_history()?;
         Ok(())
     }
 
@@ -783,9 +787,10 @@ impl RuntimeSessionService {
                         content.selections,
                         false,
                     )?;
-                    if let (Some(overlay), Some(record_browser)) =
-                        (self.primary_display_overlay.as_mut(), record_browser)
-                    {
+                    if let (Some(overlay), Some(record_browser)) = (
+                        self.presentation.primary_display_overlay.as_mut(),
+                        record_browser,
+                    ) {
                         overlay.record_browser = Some(record_browser);
                     }
                 } else {

@@ -110,7 +110,7 @@ fn runtime_primary_command_prompt_ctrl_l_clears_and_escape_exits() {
         .unwrap();
 
     assert_eq!(clear.forwarded_bytes, 0);
-    assert!(service.primary_prompt_input.is_some());
+    assert!(service.primary_prompt_input().is_some());
     assert!(
         !service
             .pane_screen("%1")
@@ -143,7 +143,7 @@ fn runtime_primary_command_prompt_ctrl_l_clears_and_escape_exits() {
         .unwrap();
 
     assert_eq!(escape.forwarded_bytes, 0);
-    assert!(service.primary_prompt_input.is_none());
+    assert!(service.primary_prompt_input().is_none());
 }
 
 /// Verifies that immediate terminal commands submitted through the command
@@ -179,8 +179,8 @@ fn runtime_primary_command_prompt_immediate_command_does_not_open_overlay() {
 
     assert_eq!(report.forwarded_bytes, 0);
     assert!(report.view_refresh_required);
-    assert!(service.primary_prompt_input.is_none());
-    assert!(service.primary_display_overlay.is_none());
+    assert!(service.primary_prompt_input().is_none());
+    assert!(service.primary_display_overlay().is_none());
     service.enter_primary_command_prompt("").unwrap();
 
     let create_buffer = service
@@ -201,8 +201,8 @@ fn runtime_primary_command_prompt_immediate_command_does_not_open_overlay() {
 
     assert_eq!(create_buffer.forwarded_bytes, 0);
     assert!(create_buffer.view_refresh_required);
-    assert!(service.primary_prompt_input.is_none());
-    assert!(service.primary_display_overlay.is_none());
+    assert!(service.primary_prompt_input().is_none());
+    assert!(service.primary_display_overlay().is_none());
     assert_eq!(service.paste_buffers.get("ack"), Some("hello"));
     assert!(
         service
@@ -255,7 +255,7 @@ fn runtime_primary_command_prompt_uses_readline_history_and_reverse_search() {
         )
         .unwrap();
     assert_eq!(first.forwarded_bytes, 0);
-    assert!(service.primary_prompt_input.is_none());
+    assert!(service.primary_prompt_input().is_none());
     service.clear_primary_display_overlay();
 
     service.enter_primary_command_prompt("").unwrap();
@@ -276,7 +276,7 @@ fn runtime_primary_command_prompt_uses_readline_history_and_reverse_search() {
         .unwrap();
     assert_eq!(second.forwarded_bytes, 0);
     assert_eq!(
-        service.primary_command_prompt_history,
+        service.primary_command_prompt_history(),
         vec![String::from("help"), String::from("list-buffers")]
     );
     assert_eq!(
@@ -285,9 +285,7 @@ fn runtime_primary_command_prompt_uses_readline_history_and_reverse_search() {
     );
     assert!(transcript_store.command_prompt_history_file().exists());
     service.clear_primary_display_overlay();
-    service
-        .primary_command_prompt_history
-        .push("show list-buffers".to_string());
+    service.push_primary_command_prompt_history_for_tests("show list-buffers".to_string());
 
     service.enter_primary_command_prompt("li").unwrap();
     let search = service
@@ -304,7 +302,7 @@ fn runtime_primary_command_prompt_uses_readline_history_and_reverse_search() {
         )
         .unwrap();
     assert_eq!(search.forwarded_bytes, 0);
-    let prompt = service.primary_prompt_input.as_ref().unwrap();
+    let prompt = service.primary_prompt_input().unwrap();
     assert_eq!(prompt.prompt.buffer.line(), "show list-buffers");
 
     let restore_draft = service
@@ -321,7 +319,7 @@ fn runtime_primary_command_prompt_uses_readline_history_and_reverse_search() {
         )
         .unwrap();
     assert_eq!(restore_draft.forwarded_bytes, 0);
-    let prompt = service.primary_prompt_input.as_ref().unwrap();
+    let prompt = service.primary_prompt_input().unwrap();
     assert_eq!(prompt.prompt.buffer.line(), "li");
     let _ = fs::remove_dir_all(transcript_root);
 }
@@ -365,13 +363,7 @@ fn runtime_primary_command_prompt_mcp_status_autocompletes_configured_server_id(
 
     assert_eq!(report.forwarded_bytes, 0);
     assert_eq!(
-        service
-            .primary_prompt_input
-            .as_ref()
-            .unwrap()
-            .prompt
-            .buffer
-            .line(),
+        service.primary_prompt_input().unwrap().prompt.buffer.line(),
         "mcp-status fixture "
     );
 }
@@ -388,8 +380,10 @@ fn runtime_primary_command_prompt_escape_cancels_reverse_search() {
     let primary = service
         .attach_primary("primary", true, Size::new(50, 8).unwrap(), 120)
         .unwrap();
-    service.primary_command_prompt_history =
-        vec!["list-buffers".to_string(), "show list-buffers".to_string()];
+    service.set_primary_command_prompt_history_for_tests(vec![
+        "list-buffers".to_string(),
+        "show list-buffers".to_string(),
+    ]);
 
     service.enter_primary_command_prompt("li").unwrap();
     service
@@ -407,8 +401,7 @@ fn runtime_primary_command_prompt_escape_cancels_reverse_search() {
         .unwrap();
     assert!(
         service
-            .primary_prompt_input
-            .as_ref()
+            .primary_prompt_input()
             .unwrap()
             .prompt
             .reverse_search_active()
@@ -429,7 +422,7 @@ fn runtime_primary_command_prompt_escape_cancels_reverse_search() {
         .unwrap();
 
     assert_eq!(escape.forwarded_bytes, 0);
-    let prompt = service.primary_prompt_input.as_ref().unwrap();
+    let prompt = service.primary_prompt_input().unwrap();
     assert!(!prompt.prompt.reverse_search_active());
     assert_eq!(prompt.prompt.buffer.line(), "li");
 }
@@ -447,8 +440,10 @@ fn runtime_primary_command_prompt_accepts_encoded_ctrl_r_history_search() {
     let primary = service
         .attach_primary("primary", true, Size::new(50, 8).unwrap(), 120)
         .unwrap();
-    service.primary_command_prompt_history =
-        vec!["list-buffers".to_string(), "show list-buffers".to_string()];
+    service.set_primary_command_prompt_history_for_tests(vec![
+        "list-buffers".to_string(),
+        "show list-buffers".to_string(),
+    ]);
 
     service.enter_primary_command_prompt("li").unwrap();
     let report = service
@@ -468,6 +463,6 @@ fn runtime_primary_command_prompt_accepts_encoded_ctrl_r_history_search() {
         .unwrap();
 
     assert_eq!(report.forwarded_bytes, 0);
-    let prompt = service.primary_prompt_input.as_ref().unwrap();
+    let prompt = service.primary_prompt_input().unwrap();
     assert_eq!(prompt.prompt.buffer.line(), "show list-buffers");
 }

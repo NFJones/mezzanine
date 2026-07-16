@@ -14,22 +14,26 @@ impl RuntimeSessionService {
     ) -> Result<bool> {
         if command.trim_start().starts_with('/') {
             let pane_id = self.active_pane_id()?.to_string();
-            let record_browser_stack = self.primary_display_overlay.as_ref().and_then(|overlay| {
-                let target_command = record_browser_command_name(command)?;
-                let record_browser = overlay.record_browser.as_ref()?;
-                let mut stack = record_browser.stack.clone();
-                stack.push(
-                    crate::runtime::service_state::RuntimeRecordBrowserOverlayFrame {
-                        command: record_browser.command.clone(),
-                        source: record_browser.source.clone(),
-                        browser: record_browser.browser.clone(),
-                        scroll_offset: overlay.scroll_offset,
-                        active_selection_index: overlay.active_selection_index,
-                    },
-                );
-                Some((target_command, stack))
-            });
-            self.primary_display_overlay = None;
+            let record_browser_stack =
+                self.presentation
+                    .primary_display_overlay
+                    .as_ref()
+                    .and_then(|overlay| {
+                        let target_command = record_browser_command_name(command)?;
+                        let record_browser = overlay.record_browser.as_ref()?;
+                        let mut stack = record_browser.stack.clone();
+                        stack.push(
+                            crate::runtime::service_state::RuntimeRecordBrowserOverlayFrame {
+                                command: record_browser.command.clone(),
+                                source: record_browser.source.clone(),
+                                browser: record_browser.browser.clone(),
+                                scroll_offset: overlay.scroll_offset,
+                                active_selection_index: overlay.active_selection_index,
+                            },
+                        );
+                        Some((target_command, stack))
+                    });
+            self.presentation.primary_display_overlay = None;
             let body = self.execute_agent_shell_command(primary_client_id, command)?;
             if let Some((target_command, stack)) = record_browser_stack {
                 self.pending_record_browser_overlay_stacks
@@ -42,7 +46,7 @@ impl RuntimeSessionService {
             }
             return Ok(true);
         }
-        self.primary_display_overlay = None;
+        self.presentation.primary_display_overlay = None;
         let content = self
             .execute_terminal_command(primary_client_id, command)
             .and_then(|body| runtime_command_display_overlay_content(&body, &self.ui_theme))?;
@@ -55,7 +59,7 @@ impl RuntimeSessionService {
         &mut self,
         lines: isize,
     ) -> Result<bool> {
-        let Some(overlay) = self.primary_display_overlay.as_mut() else {
+        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
             return Ok(false);
         };
         Ok(apply_overlay_scroll_delta(
@@ -68,7 +72,7 @@ impl RuntimeSessionService {
     /// Applies one input chunk to a retained record-browser overlay, when one
     /// is active.
     fn apply_primary_record_browser_overlay_input(&mut self, input: &[u8]) -> Result<Option<bool>> {
-        let Some(overlay) = self.primary_display_overlay.as_ref() else {
+        let Some(overlay) = self.presentation.primary_display_overlay.as_ref() else {
             return Ok(Some(false));
         };
         let Some(record_browser) = overlay.record_browser.as_ref() else {
@@ -79,7 +83,7 @@ impl RuntimeSessionService {
                 .apply_primary_record_browser_prompt_input(input)
                 .map(Some);
         }
-        let Some(overlay) = self.primary_display_overlay.as_mut() else {
+        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
             return Ok(Some(false));
         };
         let Some(record_browser) = overlay.record_browser.as_mut() else {
@@ -153,12 +157,14 @@ impl RuntimeSessionService {
     /// Applies editing keys while a retained record-browser modal prompt is open.
     fn apply_primary_record_browser_prompt_input(&mut self, input: &[u8]) -> Result<bool> {
         let prompt_has_selector = self
+            .presentation
             .primary_display_overlay
             .as_ref()
             .and_then(|overlay| overlay.record_browser.as_ref())
             .and_then(|record_browser| record_browser.browser.prompt_selection())
             .is_some();
         let prompt_text = self
+            .presentation
             .primary_display_overlay
             .as_ref()
             .and_then(|overlay| overlay.record_browser.as_ref())
@@ -218,7 +224,7 @@ impl RuntimeSessionService {
             }
         };
         let outcome = {
-            let Some(overlay) = self.primary_display_overlay.as_mut() else {
+            let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                 return Ok(false);
             };
             let Some(record_browser) = overlay.record_browser.as_mut() else {
@@ -230,6 +236,7 @@ impl RuntimeSessionService {
             mez_mux::record_browser::RecordBrowserOutcome::Ignored => Ok(false),
             mez_mux::record_browser::RecordBrowserOutcome::FilterSubmitted { field, value } => {
                 let source = self
+                    .presentation
                     .primary_display_overlay
                     .as_ref()
                     .and_then(|overlay| overlay.record_browser.as_ref())
@@ -237,7 +244,7 @@ impl RuntimeSessionService {
                 if let Some(source) = source {
                     let source = self.record_browser_source_with_filter(&source, field, &value)?;
                     let browser = self.refresh_record_browser_overlay_source(&source)?;
-                    let Some(overlay) = self.primary_display_overlay.as_mut() else {
+                    let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                         return Ok(false);
                     };
                     let Some(record_browser) = overlay.record_browser.as_mut() else {
@@ -246,13 +253,14 @@ impl RuntimeSessionService {
                     record_browser.source = Some(source);
                     record_browser.browser = browser;
                 }
-                let Some(overlay) = self.primary_display_overlay.as_mut() else {
+                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                     return Ok(false);
                 };
                 Ok(render_record_browser_overlay(overlay, &self.ui_theme))
             }
             mez_mux::record_browser::RecordBrowserOutcome::SaveSubmitted { path, markdown } => {
                 let pane_id = self
+                    .presentation
                     .primary_display_overlay
                     .as_ref()
                     .and_then(|overlay| overlay.record_browser.as_ref())
@@ -260,13 +268,13 @@ impl RuntimeSessionService {
                 if let Some(pane_id) = pane_id {
                     self.save_record_browser_overlay_markdown(&pane_id, &path, markdown)?;
                 }
-                let Some(overlay) = self.primary_display_overlay.as_mut() else {
+                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                     return Ok(false);
                 };
                 Ok(render_record_browser_overlay(overlay, &self.ui_theme))
             }
             _ => {
-                let Some(overlay) = self.primary_display_overlay.as_mut() else {
+                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                     return Ok(false);
                 };
                 Ok(render_record_browser_overlay(overlay, &self.ui_theme))
@@ -284,11 +292,11 @@ impl RuntimeSessionService {
         primary_client_id: &mez_core::ids::ClientId,
         input: &[u8],
     ) -> Result<bool> {
-        let Some(overlay) = self.primary_display_overlay.as_ref() else {
+        let Some(overlay) = self.presentation.primary_display_overlay.as_ref() else {
             return Ok(false);
         };
         if overlay.dismiss_on_any_input && !input.is_empty() {
-            self.primary_display_overlay = None;
+            self.presentation.primary_display_overlay = None;
             return Ok(true);
         }
         if overlay.search_input.is_some() {
@@ -299,11 +307,11 @@ impl RuntimeSessionService {
         }
         match runtime_display_overlay_input_action(input) {
             RuntimeDisplayOverlayInputAction::Exit => {
-                self.primary_display_overlay = None;
+                self.presentation.primary_display_overlay = None;
                 Ok(true)
             }
             RuntimeDisplayOverlayInputAction::StartSearch => {
-                let Some(overlay) = self.primary_display_overlay.as_mut() else {
+                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                     return Ok(false);
                 };
                 overlay.search_input = Some(String::new());
@@ -315,6 +323,7 @@ impl RuntimeSessionService {
             RuntimeDisplayOverlayInputAction::SelectActive => {
                 let size = self.session.authoritative_size;
                 let command = self
+                    .presentation
                     .primary_display_overlay
                     .as_ref()
                     .and_then(|overlay| {
@@ -343,7 +352,7 @@ impl RuntimeSessionService {
                 self.set_primary_display_overlay_selection_index(0)
             }
             RuntimeDisplayOverlayInputAction::SelectLast => {
-                let Some(overlay) = self.primary_display_overlay.as_ref() else {
+                let Some(overlay) = self.presentation.primary_display_overlay.as_ref() else {
                     return Ok(false);
                 };
                 self.set_primary_display_overlay_selection_index(
@@ -351,7 +360,7 @@ impl RuntimeSessionService {
                 )
             }
             RuntimeDisplayOverlayInputAction::ScrollBy(delta) if delta < 0 => {
-                let Some(overlay) = self.primary_display_overlay.as_mut() else {
+                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                     return Ok(false);
                 };
                 Ok(apply_overlay_scroll_delta(
@@ -361,7 +370,7 @@ impl RuntimeSessionService {
                 ))
             }
             RuntimeDisplayOverlayInputAction::ScrollBy(delta) => {
-                let Some(overlay) = self.primary_display_overlay.as_mut() else {
+                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                     return Ok(false);
                 };
                 Ok(apply_overlay_scroll_delta(
@@ -381,7 +390,7 @@ impl RuntimeSessionService {
     ) -> Result<bool> {
         match runtime_display_overlay_input_action(input) {
             RuntimeDisplayOverlayInputAction::Exit => {
-                let Some(overlay) = self.primary_display_overlay.as_mut() else {
+                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                     return Ok(false);
                 };
                 overlay.search_input = None;
@@ -392,7 +401,7 @@ impl RuntimeSessionService {
                 self.submit_primary_display_overlay_search()
             }
             RuntimeDisplayOverlayInputAction::EditSearchBackspace => {
-                let Some(overlay) = self.primary_display_overlay.as_mut() else {
+                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                     return Ok(false);
                 };
                 let Some(search_input) = overlay.search_input.as_mut() else {
@@ -405,7 +414,7 @@ impl RuntimeSessionService {
                 let Ok(text) = std::str::from_utf8(input) else {
                     return Ok(false);
                 };
-                let Some(overlay) = self.primary_display_overlay.as_mut() else {
+                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                     return Ok(false);
                 };
                 let Some(search_input) = overlay.search_input.as_mut() else {
@@ -428,7 +437,7 @@ impl RuntimeSessionService {
     pub(in crate::runtime::render) fn submit_primary_display_overlay_search(
         &mut self,
     ) -> Result<bool> {
-        let Some(overlay) = self.primary_display_overlay.as_mut() else {
+        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
             return Ok(false);
         };
         let submitted = overlay.search_input.take().unwrap_or_default();
@@ -463,7 +472,7 @@ impl RuntimeSessionService {
         &mut self,
         delta: isize,
     ) -> Result<bool> {
-        let Some(overlay) = self.primary_display_overlay.as_mut() else {
+        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
             return Ok(false);
         };
         if overlay.selections.is_empty() {
@@ -491,7 +500,7 @@ impl RuntimeSessionService {
         &mut self,
         index: usize,
     ) -> Result<bool> {
-        let Some(overlay) = self.primary_display_overlay.as_mut() else {
+        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
             return Ok(false);
         };
         if overlay.selections.is_empty() {
@@ -605,7 +614,7 @@ impl RuntimeSessionService {
         dismiss_on_any_input: bool,
     ) -> Result<()> {
         self.require_live()?;
-        self.primary_display_overlay = if lines.is_empty() {
+        self.presentation.primary_display_overlay = if lines.is_empty() {
             None
         } else {
             line_style_spans.truncate(lines.len());
@@ -633,7 +642,7 @@ impl RuntimeSessionService {
     ///
     /// Returns true when an overlay was active before the call.
     pub fn clear_primary_display_overlay(&mut self) -> bool {
-        self.primary_display_overlay.take().is_some()
+        self.presentation.primary_display_overlay.take().is_some()
     }
 
     /// Appends terminal-command display output to the active pane buffer.
@@ -740,6 +749,7 @@ impl RuntimeSessionService {
             TerminalClientLoopAction::ForwardToPane(input)
             | TerminalClientLoopAction::ForwardMouseToPane { input, .. } => {
                 if self
+                    .presentation
                     .primary_display_overlay
                     .as_ref()
                     .is_some_and(|overlay| overlay.dismiss_on_any_input && !input.is_empty())
@@ -751,6 +761,7 @@ impl RuntimeSessionService {
                     RuntimeDisplayOverlayInputAction::Exit
                         | RuntimeDisplayOverlayInputAction::SelectActive
                 ) && self
+                    .presentation
                     .primary_display_overlay
                     .as_ref()
                     .is_none_or(|overlay| overlay.search_input.is_none())
@@ -775,7 +786,7 @@ impl RuntimeSessionService {
         primary_client_id: &mez_core::ids::ClientId,
         position: CopyPosition,
     ) -> Result<bool> {
-        let Some(overlay) = self.primary_display_overlay.as_ref() else {
+        let Some(overlay) = self.presentation.primary_display_overlay.as_ref() else {
             return Ok(false);
         };
         if position.line == 0 {
@@ -792,7 +803,7 @@ impl RuntimeSessionService {
         else {
             return Ok(false);
         };
-        if let Some(overlay) = self.primary_display_overlay.as_mut() {
+        if let Some(overlay) = self.presentation.primary_display_overlay.as_mut() {
             overlay.active_selection_index = selection_index;
         }
         self.execute_primary_display_overlay_selection_command(primary_client_id, &command)
@@ -807,7 +818,7 @@ impl RuntimeSessionService {
         else {
             return Ok(false);
         };
-        if let Some(overlay) = self.primary_display_overlay.as_mut() {
+        if let Some(overlay) = self.presentation.primary_display_overlay.as_mut() {
             overlay.mouse_selection = Some((selection_position, selection_position));
         }
         Ok(true)
@@ -822,7 +833,7 @@ impl RuntimeSessionService {
         else {
             return Ok(false);
         };
-        if let Some(overlay) = self.primary_display_overlay.as_mut() {
+        if let Some(overlay) = self.presentation.primary_display_overlay.as_mut() {
             let start = overlay
                 .mouse_selection
                 .map(|(start, _)| start)
@@ -842,7 +853,7 @@ impl RuntimeSessionService {
         else {
             return Ok(false);
         };
-        let copied = if let Some(overlay) = self.primary_display_overlay.as_mut() {
+        let copied = if let Some(overlay) = self.presentation.primary_display_overlay.as_mut() {
             let start = overlay
                 .mouse_selection
                 .map(|(start, _)| start)
@@ -868,7 +879,7 @@ impl RuntimeSessionService {
         &self,
         position: CopyPosition,
     ) -> Option<CopyPosition> {
-        let overlay = self.primary_display_overlay.as_ref()?;
+        let overlay = self.presentation.primary_display_overlay.as_ref()?;
         let line = position.line.checked_sub(1)?;
         let line = overlay.scroll_offset.saturating_add(line);
         let text = overlay.lines.get(line)?;
