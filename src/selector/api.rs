@@ -1,6 +1,11 @@
 //! Public product selector adapter API and shadow-hint orchestration.
 
-use super::*;
+use super::{
+    ActiveSelector, Path, SelectorCandidate, SelectorCandidateKind, SelectorPlan,
+    SelectorShadowHint, SelectorTokenContext, agent_parameter_hint, canonical_agent_command,
+    filter_and_sort_selector_candidates, mezzanine_parameter_hint,
+    selector_candidate_prefix_suffix, selector_candidates, selector_token_context,
+};
 
 /// Interactive prompt surface requesting selector candidates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

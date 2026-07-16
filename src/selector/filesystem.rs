@@ -1,6 +1,9 @@
 //! Filesystem candidate discovery, path heuristics, escaping, and home expansion.
 
-use super::*;
+use super::{
+    Path, PathBuf, SelectorCandidate, SelectorCandidateKind, SelectorSurface, SelectorTokenContext,
+    canonical_agent_command, fs, unescape_selector_shell_token,
+};
 
 /// Builds filesystem path candidates for command arguments.
 pub(super) fn path_candidates(

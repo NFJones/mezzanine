@@ -1,8 +1,12 @@
 //! Durable line-oriented snapshot payload encoding.
 
-use super::helpers::*;
-use super::*;
-
+use super::helpers::{
+    encode_frame_settings, encode_terminal_modes, encode_terminal_saved_state, optional_i32_field,
+    optional_u32_field, snapshot_terminal_color_name,
+};
+use super::{
+    MezError, Result, SNAPSHOT_PAYLOAD_FORMAT_VERSION, SessionSnapshotPayload, escape_field,
+};
 impl SessionSnapshotPayload {
     /// Runs the encode operation for this subsystem.
     ///

@@ -1,6 +1,10 @@
 //! Mezzanine and agent command catalogs plus command-specific candidates.
 
-use super::*;
+use super::{
+    Path, SelectorCandidate, SelectorCandidateKind, SelectorExtraCandidate, SelectorSurface,
+    SelectorTokenContext, baseline_commands, baseline_slash_commands, dedupe_selector_candidates,
+    flag_candidates, path_candidates, value_candidates,
+};
 
 /// Builds command candidates for the Mezzanine prompt surface.
 pub(super) fn mezzanine_candidates(context: &SelectorTokenContext) -> Vec<SelectorCandidate> {

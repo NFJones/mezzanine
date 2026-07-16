@@ -1,6 +1,6 @@
 //! Command parameter hints and finite flag or value candidate builders.
 
-use super::*;
+use super::{SelectorCandidate, SelectorCandidateKind};
 
 /// Returns the parameter hint for a canonical Mezzanine command.
 pub(super) fn mezzanine_parameter_hint(command: &str) -> Option<&'static str> {

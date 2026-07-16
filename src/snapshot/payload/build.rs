@@ -1,8 +1,12 @@
 //! Snapshot payload construction from live session state and captures.
 
-use super::helpers::*;
-use super::*;
-
+use super::helpers::{default_pane_process_state, shell_metadata_from_session};
+use super::{
+    PaneSnapshotPayload, Session, SessionSnapshotPayload, SnapshotAgentSession,
+    SnapshotConfigLayerMetadata, SnapshotCreationContext, SnapshotFrameState, SnapshotLayoutNode,
+    SnapshotPaneCapture, SnapshotPaneGeometry, SnapshotSessionState, TerminalModeState,
+    TerminalSavedState, WindowGroupSnapshotPayload, WindowSnapshotPayload,
+};
 impl SessionSnapshotPayload {
     /// Runs the from session operation for this subsystem.
     ///
