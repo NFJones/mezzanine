@@ -25,7 +25,6 @@ mod interaction;
 mod lifecycle;
 mod mcp_transport;
 mod metrics;
-mod session;
 pub(in crate::runtime) use agent_state::{
     BlockedAgentApprovalRef, JoinedSubagentDependency, PaneDescriptor,
     PendingFocusedShellHookContinuation, PendingFocusedShellHookTransaction,
@@ -65,4 +64,3 @@ pub use metrics::{
     DEFAULT_PTY_READ_LIMIT_BYTES, DEFAULT_SUBAGENT_WAIT_POLICY,
 };
 pub(in crate::runtime) use metrics::{ProgramOwnedPaneTitle, RuntimeMetricsSnapshot};
-pub use session::RuntimeSessionService;

@@ -181,6 +181,30 @@ use mez_terminal::{
     DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, TerminalOscEvent, TerminalScreen,
 };
 
+/// Coordinates the seven private application runtime components.
+///
+/// The coordinator itself owns no domain state. Each field is private to this
+/// module and therefore visible only to runtime descendants under Rust's
+/// normal module privacy rules; external callers interact through typed
+/// service operations rather than a crate-visible state bag.
+#[derive(Debug)]
+pub struct RuntimeSessionService {
+    /// Terminal presentation and attached-client interaction ownership.
+    presentation: RuntimePresentationComponent,
+    /// Pane process, terminal state, and shell-transaction ownership.
+    process: RuntimeProcessComponent,
+    /// Application-side agent execution ownership.
+    agent: RuntimeAgentComponent,
+    /// Repository and deferred external-effect ownership.
+    persistence: RuntimePersistenceComponent,
+    /// Control replay, messaging, and event-fanout ownership.
+    control: RuntimeControlComponent,
+    /// Concrete config, security, provider, trust, and hook bindings.
+    integration: RuntimeIntegrationComponent,
+    /// Canonical mux session and application lifecycle metadata.
+    session: RuntimeSessionComponent,
+}
+
 /// Exposes the agent module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -356,8 +380,8 @@ pub use service_state::{
     DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW, DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT,
     DEFAULT_PTY_READ_LIMIT_BYTES, DEFAULT_SUBAGENT_WAIT_POLICY, RuntimeAgentPromptTurnStart,
     RuntimeAgentTurnStop, RuntimeConfigApplyReport, RuntimeLifecycleState,
-    RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeShellTransactionTimerKind,
-    RuntimeShellTransactionTimerRef, SubagentWaitPolicy,
+    RuntimeRegistryUpdatePlan, RuntimeShellTransactionTimerKind, RuntimeShellTransactionTimerRef,
+    SubagentWaitPolicy,
 };
 use service_state::{
     JoinedSubagentDependency, RuntimeAgentCopyOutput, RuntimeAgentModifiedFileSummary,
