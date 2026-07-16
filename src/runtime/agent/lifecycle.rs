@@ -123,7 +123,7 @@ impl RuntimeSessionService {
         self.append_agent_trace_turn_transition(&turn, previous_state, state, "finish_agent_turn")?;
         self.agent_turn_contexts.remove(turn_id);
         self.agent_turn_executions.remove(turn_id);
-        self.agent_turn_pending_steering.remove(turn_id);
+        self.clear_agent_turn_steering(turn_id);
         self.clear_agent_failure_feedback_attempts_for_turn(turn_id);
         self.agent.agent_turn_shell_dispatch_history.remove(turn_id);
         self.agent.agent_turn_network_action_history.remove(turn_id);
@@ -199,7 +199,7 @@ impl RuntimeSessionService {
         )?;
         self.agent_turn_contexts.remove(&turn.turn_id);
         self.agent_turn_executions.remove(&turn.turn_id);
-        self.agent_turn_pending_steering.remove(&turn.turn_id);
+        self.clear_agent_turn_steering(&turn.turn_id);
         self.clear_agent_failure_feedback_attempts_for_turn(&turn.turn_id);
         self.agent
             .agent_turn_shell_dispatch_history
@@ -393,7 +393,7 @@ impl RuntimeSessionService {
                 )?;
                 self.agent_turn_contexts.remove(&turn.turn_id);
                 self.agent_turn_executions.remove(&turn.turn_id);
-                self.agent_turn_pending_steering.remove(&turn.turn_id);
+                self.clear_agent_turn_steering(&turn.turn_id);
                 self.agent
                     .agent_turn_shell_dispatch_history
                     .remove(&turn.turn_id);

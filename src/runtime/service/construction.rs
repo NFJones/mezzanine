@@ -175,7 +175,6 @@ impl RuntimeSessionService {
             agent_turn_contexts: BTreeMap::new(),
             agent_turn_executions: BTreeMap::new(),
             apply_patch_batch_states: BTreeMap::new(),
-            agent_turn_pending_steering: BTreeMap::new(),
             agent_compacting_panes: BTreeMap::new(),
             pending_agent_compaction_tasks: BTreeMap::new(),
             claimed_agent_compaction_tasks: BTreeMap::new(),

@@ -559,7 +559,7 @@ impl RuntimeSessionService {
             };
             self.agent_turn_contexts.remove(&turn_id);
             self.agent_turn_executions.remove(&turn_id);
-            self.agent_turn_pending_steering.remove(&turn_id);
+            self.clear_agent_turn_steering(&turn_id);
             self.clear_agent_failure_feedback_attempts_for_turn(&turn_id);
             self.clear_agent_action_bookkeeping_for_turn(&turn_id);
             self.clear_joined_subagent_dependencies_for_turn(&turn_id);
@@ -944,13 +944,13 @@ impl RuntimeSessionService {
         else {
             return Ok(None);
         };
-        self.agent_turn_pending_steering
-            .entry(turn.turn_id.clone())
-            .or_default()
-            .push(AgentTurnSteering {
+        self.push_agent_turn_steering(
+            turn.turn_id.clone(),
+            AgentTurnSteering {
                 input: input.to_string(),
                 submitted_at_unix_seconds: current_unix_seconds(),
-            });
+            },
+        );
         self.append_agent_status_text_to_terminal_buffer(
             pane_id,
             &format!(

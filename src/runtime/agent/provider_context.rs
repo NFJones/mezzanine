@@ -48,7 +48,7 @@ impl RuntimeSessionService {
         &mut self,
         turn: &AgentTurnRecord,
     ) -> Result<usize> {
-        let Some(steering) = self.agent_turn_pending_steering.remove(&turn.turn_id) else {
+        let Some(steering) = self.take_agent_turn_steering(&turn.turn_id) else {
             return Ok(0);
         };
         let count = steering.len();
@@ -328,7 +328,7 @@ impl RuntimeSessionService {
         execution: &mut AgentTurnExecution,
     ) -> Result<bool> {
         if execution.terminal_state != AgentTurnState::Completed
-            || !self.agent_turn_pending_steering.contains_key(&turn.turn_id)
+            || !self.agent_turn_has_pending_steering(&turn.turn_id)
         {
             return Ok(false);
         }

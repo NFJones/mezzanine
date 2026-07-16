@@ -255,13 +255,6 @@ pub struct RuntimeSessionService {
     /// The key is `turn_id/action_id`, keeping the accumulator scoped to one
     /// running semantic action while successive read transactions complete.
     pub(in crate::runtime) apply_patch_batch_states: BTreeMap<String, RuntimeApplyPatchBatchState>,
-    /// User steering prompts waiting to be incorporated into an active turn.
-    ///
-    /// Input submitted while a turn is already running cannot alter a provider
-    /// request that has already been dispatched. These entries are drained into
-    /// the next provider-bound context so the same turn can incorporate the new
-    /// instruction before taking further action.
-    pub(in crate::runtime) agent_turn_pending_steering: BTreeMap<String, Vec<AgentTurnSteering>>,
     /// Panes currently running model-backed context compaction, keyed by start
     /// time for timer rendering.
     pub(in crate::runtime) agent_compacting_panes: BTreeMap<String, u64>,

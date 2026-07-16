@@ -69,9 +69,10 @@ use mez_agent::semantic_patch_planning::{
     apply_patch_write_plan_from_read_output, apply_patch_write_plan_from_read_outputs,
 };
 use mez_agent::{
-    AgentNetworkActionHistory, AgentShellDispatchHistory, DEFAULT_PROVIDER_TIMEOUT_MS, MaapBatch,
-    ModelTokenUsage, ModelTokenUsageKey, ProviderApiCompatibility, ProviderQuotaUsage, SayStatus,
-    append_mcp_context, assistant_context_content_for_execution, invoked_mcp_tools_for_context,
+    AgentNetworkActionHistory, AgentShellDispatchHistory, AgentTurnSteering,
+    DEFAULT_PROVIDER_TIMEOUT_MS, MaapBatch, ModelTokenUsage, ModelTokenUsageKey,
+    ProviderApiCompatibility, ProviderQuotaUsage, SayStatus, append_mcp_context,
+    assistant_context_content_for_execution, invoked_mcp_tools_for_context,
     set_project_guidance_context,
 };
 use mez_mux::command::CommandInvocation;
@@ -160,6 +161,8 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     pending_agent_provider_tasks: BTreeSet<String>,
     /// Provider turns claimed by workers but not yet settled.
     claimed_agent_provider_tasks: BTreeMap<String, RuntimeAgentProviderClaim>,
+    /// User steering prompts waiting for the next provider action boundary.
+    agent_turn_pending_steering: BTreeMap<String, Vec<AgentTurnSteering>>,
 }
 
 impl RuntimeAgentComponent {
@@ -185,6 +188,42 @@ impl RuntimeAgentComponent {
 }
 
 impl RuntimeSessionService {
+    /// Appends one steering prompt to an active turn.
+    pub(in crate::runtime) fn push_agent_turn_steering(
+        &mut self,
+        turn_id: impl Into<String>,
+        steering: AgentTurnSteering,
+    ) {
+        self.agent
+            .agent_turn_pending_steering
+            .entry(turn_id.into())
+            .or_default()
+            .push(steering);
+    }
+
+    /// Takes all steering prompts waiting for one turn.
+    pub(in crate::runtime) fn take_agent_turn_steering(
+        &mut self,
+        turn_id: &str,
+    ) -> Option<Vec<AgentTurnSteering>> {
+        self.agent.agent_turn_pending_steering.remove(turn_id)
+    }
+
+    /// Reports whether one turn has pending user steering.
+    pub(in crate::runtime) fn agent_turn_has_pending_steering(&self, turn_id: &str) -> bool {
+        self.agent.agent_turn_pending_steering.contains_key(turn_id)
+    }
+
+    /// Removes pending steering for one completed turn.
+    pub(in crate::runtime) fn clear_agent_turn_steering(&mut self, turn_id: &str) {
+        self.agent.agent_turn_pending_steering.remove(turn_id);
+    }
+
+    /// Clears all pending steering for session replacement.
+    pub(in crate::runtime) fn clear_all_agent_turn_steering(&mut self) {
+        self.agent.agent_turn_pending_steering.clear();
+    }
+
     /// Reports whether one provider turn is queued for dispatch.
     pub(in crate::runtime) fn agent_provider_task_is_pending(&self, turn_id: &str) -> bool {
         self.agent.pending_agent_provider_tasks.contains(turn_id)
