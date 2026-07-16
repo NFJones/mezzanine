@@ -106,7 +106,9 @@ impl RuntimeSessionService {
                         provider.provider_id(),
                         &error,
                     )?;
-                    self.runtime_metrics.record_provider_failure();
+                    self.integration
+                        .runtime_metrics_mut()
+                        .record_provider_failure();
                     self.fail_agent_turn_for_provider_error(
                         &turn,
                         provider.provider_id(),
@@ -334,7 +336,9 @@ impl RuntimeSessionService {
                             continue;
                         }
                     }
-                    self.runtime_metrics.record_provider_failure();
+                    self.integration
+                        .runtime_metrics_mut()
+                        .record_provider_failure();
                     self.fail_agent_turn_for_provider_error(
                         &turn,
                         provider.provider_id(),
@@ -424,7 +428,9 @@ impl RuntimeSessionService {
                         provider.provider_id(),
                         &error,
                     )?;
-                    self.runtime_metrics.record_provider_failure();
+                    self.integration
+                        .runtime_metrics_mut()
+                        .record_provider_failure();
                     self.fail_agent_turn_for_provider_error(
                         &turn,
                         provider.provider_id(),
@@ -618,7 +624,9 @@ impl RuntimeSessionService {
                             continue;
                         }
                     }
-                    self.runtime_metrics.record_provider_failure();
+                    self.integration
+                        .runtime_metrics_mut()
+                        .record_provider_failure();
                     self.fail_agent_turn_for_provider_error(
                         &turn,
                         provider.provider_id(),

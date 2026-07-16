@@ -106,7 +106,11 @@ impl RuntimeSessionService {
                 "issue actions require issues.enabled to be true".to_string(),
             )?);
         }
-        let Some(config_root) = self.config_root.clone() else {
+        let Some(config_root) = self
+            .integration
+            .config_root()
+            .map(|path| path.to_path_buf())
+        else {
             return Ok(ActionResult::failed(
                 turn,
                 action,
@@ -247,7 +251,7 @@ impl RuntimeSessionService {
 }
 
 pub(super) fn runtime_issues_enabled(service: &RuntimeSessionService) -> bool {
-    runtime_effective_config_value(&service.config_layers)
+    runtime_effective_config_value(service.integration.config_layers())
         .ok()
         .and_then(|root| {
             root.get("issues")
@@ -261,7 +265,7 @@ fn runtime_issue_database_path(
     service: &RuntimeSessionService,
     config_root: &PathBuf,
 ) -> crate::issues::IssueDatabasePath {
-    let configured = runtime_effective_config_value(&service.config_layers)
+    let configured = runtime_effective_config_value(service.integration.config_layers())
         .ok()
         .and_then(|root| {
             root.get("issues")

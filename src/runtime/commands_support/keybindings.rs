@@ -23,7 +23,7 @@ pub(in crate::runtime) fn runtime_command_help_display(
 pub(in crate::runtime) fn runtime_list_key_bindings_display(
     service: &RuntimeSessionService,
 ) -> Result<String> {
-    let effective = compose_effective_config(&service.config_layers)?;
+    let effective = compose_effective_config(service.integration.config_layers())?;
     let prefix = key_chord_notation(service.key_bindings().escape);
     let mut rows = Vec::new();
     runtime_push_optional_key_binding_row(

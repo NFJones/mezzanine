@@ -348,10 +348,10 @@ impl RuntimeSessionService {
 
     /// Builds the current-config snapshot appended to `$mez-reference`.
     fn runtime_mez_config_skill_current_config(&self) -> Result<String> {
-        let effective = compose_effective_config(&self.config_layers)?;
+        let effective = compose_effective_config(self.integration.config_layers())?;
         let mut lines = vec![format!(
             "layers={} applied_layers={} skipped_layers={} values={} diagnostics={}",
-            self.config_layers.len(),
+            self.integration.config_layers().len(),
             effective.applied_layers().len(),
             effective.skipped_layers().len(),
             effective.values().len(),

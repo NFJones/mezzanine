@@ -206,7 +206,8 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub(super) fn runtime_permission_summary_json(&self) -> String {
         let trusted_project = self
-            .config_layers
+            .integration
+            .config_layers()
             .iter()
             .any(|layer| layer.scope == ConfigScope::ProjectOverlay && layer.trusted);
         let trusted_directories = self

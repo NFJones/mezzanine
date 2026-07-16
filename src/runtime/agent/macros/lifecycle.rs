@@ -16,7 +16,7 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> MacroCatalog {
         let project_root = self.trusted_macro_project_root_for_pane(pane_id);
-        discover_macro_catalog(self.config_root.as_deref(), project_root.as_deref())
+        discover_macro_catalog(self.integration.config_root(), project_root.as_deref())
     }
 
     /// Returns the trusted project root whose macros may apply to one pane.

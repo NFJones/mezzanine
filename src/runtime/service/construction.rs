@@ -3,8 +3,8 @@
 use super::*;
 use crate::runtime::{
     RuntimeAgentComponent, RuntimeAutoSizingConfig, RuntimeControlComponent,
-    RuntimePersistenceComponent, RuntimePresentationComponent, RuntimeProcessComponent,
-    RuntimeSessionComponent,
+    RuntimeIntegrationComponent, RuntimePersistenceComponent, RuntimePresentationComponent,
+    RuntimeProcessComponent, RuntimeSessionComponent,
 };
 #[cfg(test)]
 use crate::terminal::HostClipboard;
@@ -126,6 +126,7 @@ impl RuntimeSessionService {
             ),
             persistence: RuntimePersistenceComponent::default(),
             control: RuntimeControlComponent::new(control_idempotency, message_service, event_log),
+            integration: RuntimeIntegrationComponent::default(),
             session: RuntimeSessionComponent::new(
                 session,
                 window_created_at_unix_seconds,
@@ -133,10 +134,6 @@ impl RuntimeSessionService {
                 socket_path,
                 created_at_unix_seconds,
             ),
-            config_layers: Vec::new(),
-            config_root: None,
-            async_runtime_metrics: None,
-            runtime_metrics: Default::default(),
             permission_policy: PermissionPolicy::default(),
             live_approval_bypass_override: None,
             live_approval_policy_override: None,

@@ -32,7 +32,7 @@ pub(in crate::runtime) fn runtime_show_options_command(
     service: &RuntimeSessionService,
     invocation: &CommandInvocation,
 ) -> Result<String> {
-    let effective = compose_effective_config(&service.config_layers)?;
+    let effective = compose_effective_config(service.integration.config_layers())?;
     let filter = runtime_positional_args(invocation).first().copied();
     let mut lines = vec![format!(
         "options={}:applied_layers={}:skipped_layers={}:source=runtime-config",
@@ -223,7 +223,7 @@ fn runtime_theme_definition_for_selection(
         return Ok(definition);
     }
 
-    let structured = runtime_effective_config_value(&service.config_layers)?;
+    let structured = runtime_effective_config_value(service.integration.config_layers())?;
     let Some(custom_theme) = structured
         .get("themes")
         .and_then(Value::as_object)
@@ -325,7 +325,8 @@ fn runtime_apply_theme_live_override(
     mutations: &[ConfigMutation],
 ) -> Result<RuntimeConfigMutationBatch> {
     let current_text = service
-        .config_layers
+        .integration
+        .config_layers()
         .iter()
         .find(|layer| {
             layer.name == TERMINAL_COMMAND_LIVE_OVERRIDE_LAYER
@@ -411,7 +412,8 @@ pub(in crate::runtime) fn runtime_apply_persisted_config_mutation_batch(
     }
     let format = ConfigFormat::from_path(&path)?;
     let current_text = service
-        .config_layers
+        .integration
+        .config_layers()
         .iter()
         .find(|layer| layer.scope == ConfigScope::Primary && layer.path.as_ref() == Some(&path))
         .map(|layer| Ok(layer.text.clone()))
@@ -422,7 +424,7 @@ pub(in crate::runtime) fn runtime_apply_persisted_config_mutation_batch(
         if !service.persistence.config_uses_adapter() {
             persist_config_text(&path, ConfigScope::Primary, &batch.text)?;
         }
-        let previous_layers = service.config_layers.clone();
+        let previous_layers = service.integration.config_layers().to_vec();
         runtime_store_primary_config_text(service, path.clone(), format, batch.text.clone());
         match service.apply_runtime_config_layers() {
             Ok(report) => {
@@ -443,7 +445,7 @@ pub(in crate::runtime) fn runtime_apply_persisted_config_mutation_batch(
                 service.session.advance_config_generation();
             }
             Err(error) => {
-                service.config_layers = previous_layers;
+                service.integration.replace_config_layers(previous_layers);
                 let _ = service.apply_runtime_config_layers();
                 return Err(error);
             }
@@ -461,17 +463,18 @@ pub(in crate::runtime) fn runtime_apply_persisted_config_mutation_batch(
 /// Finds or creates the primary config file used for persisted command changes.
 fn runtime_primary_config_path(service: &RuntimeSessionService) -> Result<Option<PathBuf>> {
     if let Some(path) = service
-        .config_layers
+        .integration
+        .config_layers()
         .iter()
         .find(|layer| layer.scope == ConfigScope::Primary && layer.path.is_some())
         .and_then(|layer| layer.path.clone())
     {
         return Ok(Some(path));
     }
-    let Some(root) = service.config_root.as_ref() else {
+    let Some(root) = service.integration.config_root() else {
         return Ok(None);
     };
-    ConfigPaths::from_root(root.clone())
+    ConfigPaths::from_root(root.to_path_buf())
         .ensure_default_config()
         .map(Some)
 }
@@ -484,7 +487,8 @@ fn runtime_store_primary_config_text(
     text: String,
 ) {
     if let Some(layer) = service
-        .config_layers
+        .integration
+        .config_layers_mut()
         .iter_mut()
         .find(|layer| layer.scope == ConfigScope::Primary && layer.path.as_ref() == Some(&path))
     {
@@ -492,7 +496,7 @@ fn runtime_store_primary_config_text(
         layer.format = format;
         return;
     }
-    service.config_layers.push(ConfigLayer {
+    service.integration.config_layers_mut().push(ConfigLayer {
         name: "primary".to_string(),
         path: Some(path),
         format,
@@ -534,7 +538,7 @@ fn runtime_theme_available(service: &RuntimeSessionService, theme: &str) -> Resu
     if BUILTIN_UI_THEME_NAMES.contains(&theme) {
         return Ok(true);
     }
-    let structured = runtime_effective_config_value(&service.config_layers)?;
+    let structured = runtime_effective_config_value(service.integration.config_layers())?;
     Ok(structured
         .get("themes")
         .and_then(|value| value.as_object())
@@ -550,7 +554,7 @@ fn runtime_theme_available(service: &RuntimeSessionService, theme: &str) -> Resu
 pub(in crate::runtime) fn runtime_list_themes_command(
     service: &RuntimeSessionService,
 ) -> Result<String> {
-    let structured = runtime_effective_config_value(&service.config_layers)?;
+    let structured = runtime_effective_config_value(service.integration.config_layers())?;
     let mut custom_theme_names = structured
         .get("themes")
         .and_then(|value| value.as_object())
@@ -618,7 +622,8 @@ pub(in crate::runtime) fn runtime_source_file_command(
     }
     let layer_name = format!("source-file:{}", path.display());
     if let Some(layer) = service
-        .config_layers
+        .integration
+        .config_layers_mut()
         .iter_mut()
         .find(|layer| layer.name == layer_name)
     {
@@ -628,7 +633,7 @@ pub(in crate::runtime) fn runtime_source_file_command(
         layer.scope = ConfigScope::LiveOverride;
         layer.trusted = true;
     } else {
-        service.config_layers.push(ConfigLayer {
+        service.integration.config_layers_mut().push(ConfigLayer {
             name: layer_name.clone(),
             path: Some(path.clone()),
             format,
@@ -688,7 +693,8 @@ pub(in crate::runtime) fn runtime_plan_live_override_mutation(
     mutation: ConfigMutation,
 ) -> Result<crate::config::ConfigMutationPlan> {
     let current_text = service
-        .config_layers
+        .integration
+        .config_layers()
         .iter()
         .find(|layer| {
             layer.name == TERMINAL_COMMAND_LIVE_OVERRIDE_LAYER
@@ -713,13 +719,18 @@ pub(in crate::runtime) fn runtime_store_live_override_plan(
     service: &mut RuntimeSessionService,
     text: &str,
 ) {
-    if let Some(layer) = service.config_layers.iter_mut().find(|layer| {
-        layer.name == TERMINAL_COMMAND_LIVE_OVERRIDE_LAYER
-            && layer.scope == ConfigScope::LiveOverride
-    }) {
+    if let Some(layer) = service
+        .integration
+        .config_layers_mut()
+        .iter_mut()
+        .find(|layer| {
+            layer.name == TERMINAL_COMMAND_LIVE_OVERRIDE_LAYER
+                && layer.scope == ConfigScope::LiveOverride
+        })
+    {
         layer.text = text.to_string();
     } else {
-        service.config_layers.push(ConfigLayer {
+        service.integration.config_layers_mut().push(ConfigLayer {
             name: TERMINAL_COMMAND_LIVE_OVERRIDE_LAYER.to_string(),
             path: None,
             format: ConfigFormat::Toml,

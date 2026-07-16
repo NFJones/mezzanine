@@ -30,7 +30,9 @@ impl RuntimeSessionService {
         }
 
         self.agent_turn_ledger_mut().start_turn(turn.clone())?;
-        self.runtime_metrics.record_agent_turn_started();
+        self.integration
+            .runtime_metrics_mut()
+            .record_agent_turn_started();
         self.agent_shell_store_mut()
             .start_turn(turn.pane_id.as_str(), turn.turn_id.clone())?;
         self.append_agent_trace_turn_transition(
@@ -118,7 +120,9 @@ impl RuntimeSessionService {
             self.append_agent_status_text_to_terminal_buffer(pane_id, &footer)?;
         }
         let previous_state = turn.state;
-        self.runtime_metrics.record_agent_turn_finished(state);
+        self.integration
+            .runtime_metrics_mut()
+            .record_agent_turn_finished(state);
         self.agent_turn_ledger_mut().finish_turn(turn_id, state)?;
         self.append_agent_trace_turn_transition(&turn, previous_state, state, "finish_agent_turn")?;
         self.agent_turn_contexts_mut().remove(turn_id);
@@ -188,7 +192,9 @@ impl RuntimeSessionService {
         if let Some(footer) = runtime_agent_finished_footer_line(turn, state) {
             self.append_agent_status_text_to_terminal_buffer(&turn.pane_id, &footer)?;
         }
-        self.runtime_metrics.record_agent_turn_finished(state);
+        self.integration
+            .runtime_metrics_mut()
+            .record_agent_turn_finished(state);
         self.agent_turn_ledger_mut()
             .finish_turn(&turn.turn_id, state)?;
         self.append_agent_trace_turn_transition(

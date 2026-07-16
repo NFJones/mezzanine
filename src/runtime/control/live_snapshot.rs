@@ -203,7 +203,8 @@ impl RuntimeSessionService {
 
     /// Captures active config layer metadata for a live snapshot.
     pub(super) fn live_snapshot_config_layers(&self) -> Vec<SnapshotConfigLayerMetadata> {
-        self.config_layers
+        self.integration
+            .config_layers()
             .iter()
             .enumerate()
             .map(|(precedence, layer)| {

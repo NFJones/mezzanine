@@ -167,23 +167,26 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
             cache_write_input_tokens: None,
         },
     );
-    service.runtime_metrics.record_provider_token_usage(
-        mez_agent::ModelTokenUsage {
-            input_tokens: 300,
-            output_tokens: 75,
-            reasoning_tokens: 15,
-            cached_input_tokens: Some(120),
-            cache_write_input_tokens: None,
-        },
-        mez_agent::ModelTokenUsage {
-            input_tokens: 300,
-            output_tokens: 75,
-            reasoning_tokens: 15,
-            cached_input_tokens: Some(120),
-            cache_write_input_tokens: None,
-        },
-        &mez_agent::ModelTokenUsageKey::new("runtime-metrics", "metrics-only"),
-    );
+    service
+        .integration
+        .runtime_metrics_mut()
+        .record_provider_token_usage(
+            mez_agent::ModelTokenUsage {
+                input_tokens: 300,
+                output_tokens: 75,
+                reasoning_tokens: 15,
+                cached_input_tokens: Some(120),
+                cache_write_input_tokens: None,
+            },
+            mez_agent::ModelTokenUsage {
+                input_tokens: 300,
+                output_tokens: 75,
+                reasoning_tokens: 15,
+                cached_input_tokens: Some(120),
+                cache_write_input_tokens: None,
+            },
+            &mez_agent::ModelTokenUsageKey::new("runtime-metrics", "metrics-only"),
+        );
     service
         .register_subagent_write_scopes_for_tests(
             "agent-%1",

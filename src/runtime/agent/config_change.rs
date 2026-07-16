@@ -477,14 +477,19 @@ impl RuntimeSessionService {
     /// under the configured Mezzanine config root.
     fn ensure_agent_config_change_persist_path(&mut self) -> Result<std::path::PathBuf> {
         if let Some(path) = self
-            .config_layers
+            .integration
+            .config_layers()
             .iter()
             .find(|layer| layer.scope == ConfigScope::Primary && layer.path.is_some())
             .and_then(|layer| layer.path.clone())
         {
             return Ok(path);
         }
-        let root = self.config_root.clone().ok_or_else(|| {
+        let root = self
+            .integration
+            .config_root()
+            .map(|path| path.to_path_buf())
+            .ok_or_else(|| {
             MezError::config(
                 "config_change persistence requires a configured config root or primary config file",
             )
@@ -492,7 +497,7 @@ impl RuntimeSessionService {
         let path = ConfigPaths::from_root(root).ensure_default_config()?;
         let format = ConfigFormat::from_path(&path)?;
         let text = fs::read_to_string(&path)?;
-        self.config_layers.push(ConfigLayer {
+        self.integration.config_layers_mut().push(ConfigLayer {
             name: "primary".to_string(),
             path: Some(path.clone()),
             format,

@@ -38,18 +38,21 @@ impl RuntimeSessionService {
         let token_usage_key =
             ModelTokenUsageKey::new(model_profile.provider.clone(), model_profile.model.clone());
         for (key, usage) in &execution.routing_token_usage_by_model {
-            self.runtime_metrics
+            self.integration
+                .runtime_metrics_mut()
                 .record_provider_token_usage(*usage, *usage, key);
         }
         self.record_agent_provider_token_usage_by_model(
             &turn.pane_id,
             &execution.routing_token_usage_by_model,
         );
-        self.runtime_metrics.record_provider_response(
-            &execution.response,
-            execution.latest_response_usage,
-            &token_usage_key,
-        );
+        self.integration
+            .runtime_metrics_mut()
+            .record_provider_response(
+                &execution.response,
+                execution.latest_response_usage,
+                &token_usage_key,
+            );
         self.record_agent_provider_token_usage_with_profile(
             &turn.pane_id,
             execution.response.usage,

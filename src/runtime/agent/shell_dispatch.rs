@@ -629,7 +629,9 @@ impl RuntimeSessionService {
                             ),
                         )?;
                     }
-                    self.runtime_metrics.record_shell_action_batch(dispatched);
+                    self.integration
+                        .runtime_metrics_mut()
+                        .record_shell_action_batch(dispatched);
                     return Ok(dispatched);
                 }
                 PaneReadinessState::Busy => {
@@ -713,7 +715,9 @@ impl RuntimeSessionService {
                             )?;
                         }
                     }
-                    self.runtime_metrics.record_shell_action_batch(dispatched);
+                    self.integration
+                        .runtime_metrics_mut()
+                        .record_shell_action_batch(dispatched);
                     return Ok(dispatched);
                 }
                 PaneReadinessState::Probing => {
@@ -728,7 +732,9 @@ impl RuntimeSessionService {
                             )
                         ),
                     )?;
-                    self.runtime_metrics.record_shell_action_batch(dispatched);
+                    self.integration
+                        .runtime_metrics_mut()
+                        .record_shell_action_batch(dispatched);
                     return Ok(dispatched);
                 }
                 state @ (PaneReadinessState::FullScreen
@@ -780,7 +786,9 @@ impl RuntimeSessionService {
                             ),
                         )?;
                     }
-                    self.runtime_metrics.record_shell_action_batch(dispatched);
+                    self.integration
+                        .runtime_metrics_mut()
+                        .record_shell_action_batch(dispatched);
                     return Ok(dispatched);
                 }
                 state => {
@@ -853,7 +861,9 @@ impl RuntimeSessionService {
                         &turn.turn_id,
                         &format!("action {} waiting reason=pre_shell_hook_pending", action.id),
                     )?;
-                    self.runtime_metrics.record_shell_action_batch(dispatched);
+                    self.integration
+                        .runtime_metrics_mut()
+                        .record_shell_action_batch(dispatched);
                     return Ok(dispatched);
                 }
                 RuntimeHookPipelineDecision::Block(block) => {
@@ -916,7 +926,9 @@ impl RuntimeSessionService {
             &execution.action_results,
             execution.final_turn,
         );
-        self.runtime_metrics.record_shell_action_batch(dispatched);
+        self.integration
+            .runtime_metrics_mut()
+            .record_shell_action_batch(dispatched);
         Ok(dispatched)
     }
 

@@ -285,7 +285,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn project_config_text_for_update(&self, config_path: &Path) -> Result<String> {
-        if let Some(layer) = self.config_layers.iter().rev().find(|layer| {
+        if let Some(layer) = self.integration.config_layers().iter().rev().find(|layer| {
             layer
                 .path
                 .as_ref()
@@ -334,18 +334,23 @@ impl RuntimeSessionService {
             .as_ref()
             .and_then(|store| store.get(&project_root))
             .is_none_or(|record| record.state == TrustDecision::Trusted);
-        if let Some(layer) = self.config_layers.iter_mut().find(|layer| {
-            layer
-                .path
-                .as_ref()
-                .is_some_and(|layer_path| paths_equivalent(layer_path, &path))
-        }) {
+        if let Some(layer) = self
+            .integration
+            .config_layers_mut()
+            .iter_mut()
+            .find(|layer| {
+                layer
+                    .path
+                    .as_ref()
+                    .is_some_and(|layer_path| paths_equivalent(layer_path, &path))
+            })
+        {
             layer.format = ConfigFormat::Toml;
             layer.scope = ConfigScope::ProjectOverlay;
             layer.trusted = trusted;
             layer.text = text;
         } else {
-            self.config_layers.push(ConfigLayer {
+            self.integration.config_layers_mut().push(ConfigLayer {
                 name: "project".to_string(),
                 path: Some(path),
                 format: ConfigFormat::Toml,

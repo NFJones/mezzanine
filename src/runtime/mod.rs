@@ -248,11 +248,14 @@ mod hook_support;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod hooks;
+/// Exposes concrete product integration state ownership.
+mod integration;
 /// Exposes the json module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod json;
+pub(in crate::runtime) use integration::RuntimeIntegrationComponent;
 /// Exposes the lifecycle module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this

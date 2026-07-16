@@ -30,7 +30,11 @@ impl RuntimeSessionService {
                 "show-issues requires issues.enabled to be true",
             ));
         }
-        let Some(config_root) = self.config_root.clone() else {
+        let Some(config_root) = self
+            .integration
+            .config_root()
+            .map(|path| path.to_path_buf())
+        else {
             return Err(MezError::config(
                 "show-issues requires a configured config root",
             ));
@@ -110,7 +114,11 @@ impl RuntimeSessionService {
                 "show-memories requires persistent memory to be enabled; run /memory on first",
             ));
         }
-        let Some(config_root) = self.config_root.clone() else {
+        let Some(config_root) = self
+            .integration
+            .config_root()
+            .map(|path| path.to_path_buf())
+        else {
             return Err(MezError::invalid_state(
                 "show-memories requires a configured Mezzanine config root",
             ));
@@ -214,7 +222,11 @@ impl RuntimeSessionService {
                 text,
                 limit,
             } => {
-                let Some(config_root) = self.config_root.clone() else {
+                let Some(config_root) = self
+                    .integration
+                    .config_root()
+                    .map(|path| path.to_path_buf())
+                else {
                     return Err(MezError::config(
                         "show-issues requires a configured config root",
                     ));
@@ -246,7 +258,11 @@ impl RuntimeSessionService {
                 text,
                 limit,
             } => {
-                let Some(config_root) = self.config_root.clone() else {
+                let Some(config_root) = self
+                    .integration
+                    .config_root()
+                    .map(|path| path.to_path_buf())
+                else {
                     return Err(MezError::invalid_state(
                         "show-memories requires a configured Mezzanine config root",
                     ));

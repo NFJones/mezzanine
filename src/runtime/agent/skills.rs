@@ -26,7 +26,7 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> SkillCatalog {
         let project_root = self.trusted_skill_project_root_for_pane(pane_id);
-        discover_skill_catalog(self.config_root.as_deref(), project_root.as_deref())
+        discover_skill_catalog(self.integration.config_root(), project_root.as_deref())
     }
 
     /// Returns the trusted project root whose skills may apply to one pane.

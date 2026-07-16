@@ -2,8 +2,9 @@
 
 use super::*;
 use crate::runtime::{
-    RuntimeAgentComponent, RuntimeControlComponent, RuntimePersistenceComponent,
-    RuntimePresentationComponent, RuntimeProcessComponent, RuntimeSessionComponent,
+    RuntimeAgentComponent, RuntimeControlComponent, RuntimeIntegrationComponent,
+    RuntimePersistenceComponent, RuntimePresentationComponent, RuntimeProcessComponent,
+    RuntimeSessionComponent,
 };
 
 /// Carries Runtime Session Service state for this subsystem.
@@ -22,32 +23,10 @@ pub struct RuntimeSessionService {
     pub(in crate::runtime) persistence: RuntimePersistenceComponent,
     /// Private state owner for control replay, messaging, and event fanout.
     pub(in crate::runtime) control: RuntimeControlComponent,
+    /// Private state owner for concrete application integration bindings.
+    pub(in crate::runtime) integration: RuntimeIntegrationComponent,
     /// Private owner for the mux session and application lifecycle metadata.
     pub(in crate::runtime) session: RuntimeSessionComponent,
-    /// Stores the config layers value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) config_layers: Vec<ConfigLayer>,
-    /// Stores the config root value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) config_root: Option<PathBuf>,
-    /// Stores the latest async runtime actor metrics snapshot when available.
-    ///
-    /// The actor-owned command path updates this snapshot before rendering
-    /// `show-metrics` so runtime display helpers can present metrics without
-    /// taking a direct dependency on actor internals.
-    pub(in crate::runtime) async_runtime_metrics:
-        Option<crate::async_runtime::AsyncRuntimeActorMetrics>,
-    /// Stores runtime-owned agent, provider, and shell diagnostics.
-    ///
-    /// These counters and histograms are updated from the serialized runtime
-    /// service path so `show-metrics` can expose prompt-cache shape, provider
-    /// usage, turn lifecycle, and shell-transaction behavior without parsing
-    /// trace logs.
-    pub(in crate::runtime) runtime_metrics: RuntimeMetricsSnapshot,
     /// Stores the permission policy value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

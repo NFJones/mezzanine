@@ -189,11 +189,9 @@ impl RuntimeSessionService {
         } else {
             (None, false)
         };
-        self.runtime_metrics.record_provider_request_shape(
-            &request,
-            diagnostics.as_ref(),
-            diagnostics_failed,
-        );
+        self.integration
+            .runtime_metrics_mut()
+            .record_provider_request_shape(&request, diagnostics.as_ref(), diagnostics_failed);
     }
 
     /// Appends the model response returned for one agent turn to trace output.

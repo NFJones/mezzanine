@@ -420,10 +420,10 @@ impl RuntimeSessionService {
 
     /// Builds the live `/debug-config` display from effective runtime config state.
     pub(super) fn runtime_debug_config_display(&self, filter: Option<&str>) -> Result<String> {
-        let effective = compose_effective_config(&self.config_layers)?;
+        let effective = compose_effective_config(self.integration.config_layers())?;
         let mut lines = vec![format!(
             "layers={} applied_layers={} skipped_layers={} values={} diagnostics={} permission_preset={} approval_policy={} bypass={} providers={} model_profiles={} mcp_servers={} hooks={} source=runtime-config",
-            self.config_layers.len(),
+            self.integration.config_layers().len(),
             effective.applied_layers().len(),
             effective.skipped_layers().len(),
             effective.values().len(),
@@ -436,7 +436,7 @@ impl RuntimeSessionService {
             self.mcp_registry.list_servers().len(),
             self.hook_definitions.len()
         )];
-        for (index, layer) in self.config_layers.iter().enumerate() {
+        for (index, layer) in self.integration.config_layers().iter().enumerate() {
             lines.push(format!(
                 "layer={} index={} scope={} trusted={} applied={} skipped={} format={} path={}",
                 json_escape(&layer.name),

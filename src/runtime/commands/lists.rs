@@ -73,7 +73,7 @@ impl RuntimeSessionService {
     pub(super) fn execute_agent_shell_sync_builtin_skills_command(
         &mut self,
     ) -> Result<AgentShellCommandOutcome> {
-        let Some(config_root) = self.config_root.as_ref() else {
+        let Some(config_root) = self.integration.config_root() else {
             return Err(MezError::invalid_state(
                 "sync-builtin-skills requires a configured config root",
             ));

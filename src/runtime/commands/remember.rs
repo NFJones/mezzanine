@@ -502,7 +502,7 @@ impl RuntimeSessionService {
             ));
         }
         let visibility = self.agent_shell_visibility_for_pane(pane_id)?;
-        let Some(_) = self.config_root.as_ref() else {
+        let Some(_) = self.integration.config_root() else {
             return Err(MezError::invalid_state(
                 "remember requires a configured Mezzanine config root",
             ));
@@ -608,7 +608,11 @@ impl RuntimeSessionService {
         );
         self.record_agent_provider_quota_usage(pane_id, &response.quota_usage);
         let candidates = runtime_remember_candidates_from_response(&response)?;
-        let Some(config_root) = self.config_root.clone() else {
+        let Some(config_root) = self
+            .integration
+            .config_root()
+            .map(|path| path.to_path_buf())
+        else {
             return Err(MezError::invalid_state(
                 "remember requires a configured Mezzanine config root",
             ));
@@ -815,7 +819,7 @@ impl RuntimeSessionService {
 
     /// Returns whether persistent memory is enabled in the live effective config.
     pub(in crate::runtime) fn runtime_persistent_memory_enabled(&self) -> bool {
-        runtime_effective_config_value(&self.config_layers)
+        runtime_effective_config_value(self.integration.config_layers())
             .ok()
             .and_then(|root| {
                 root.get("memory")
@@ -827,7 +831,7 @@ impl RuntimeSessionService {
 
     /// Returns the configured default memory TTL in days.
     pub(in crate::runtime) fn runtime_memory_default_ttl_days(&self) -> u64 {
-        runtime_effective_config_value(&self.config_layers)
+        runtime_effective_config_value(self.integration.config_layers())
             .ok()
             .and_then(|root| {
                 root.get("memory")
@@ -845,7 +849,11 @@ impl RuntimeSessionService {
         if !self.runtime_persistent_memory_enabled() {
             return 0;
         }
-        let Some(config_root) = self.config_root.clone() else {
+        let Some(config_root) = self
+            .integration
+            .config_root()
+            .map(|path| path.to_path_buf())
+        else {
             return 0;
         };
         let store = crate::memory::PersistentMemoryStore::under_config_root(&config_root);
@@ -879,29 +887,36 @@ impl RuntimeSessionService {
     /// Finds or creates the private primary config file for slash-command persistence.
     pub(super) fn runtime_primary_config_path_for_agent_command(&mut self) -> Result<PathBuf> {
         if let Some(path) = self
-            .config_layers
+            .integration
+            .config_layers()
             .iter()
             .find(|layer| layer.scope == ConfigScope::Primary && layer.path.is_some())
             .and_then(|layer| layer.path.clone())
         {
             return Ok(path);
         }
-        let root = self.config_root.clone().ok_or_else(|| {
-            MezError::config(
-                "memory slash command requires a configured config root or primary config file",
-            )
-        })?;
+        let root = self
+            .integration
+            .config_root()
+            .map(|path| path.to_path_buf())
+            .ok_or_else(|| {
+                MezError::config(
+                    "memory slash command requires a configured config root or primary config file",
+                )
+            })?;
         let path = ConfigPaths::from_root(root).ensure_default_config()?;
         let format = ConfigFormat::from_path(&path)?;
         let text = fs::read_to_string(&path)?;
-        self.config_layers.push(crate::config::ConfigLayer {
-            name: "primary".to_string(),
-            path: Some(path.clone()),
-            format,
-            scope: ConfigScope::Primary,
-            trusted: true,
-            text,
-        });
+        self.integration
+            .config_layers_mut()
+            .push(crate::config::ConfigLayer {
+                name: "primary".to_string(),
+                path: Some(path.clone()),
+                format,
+                scope: ConfigScope::Primary,
+                trusted: true,
+                text,
+            });
         Ok(path)
     }
 }

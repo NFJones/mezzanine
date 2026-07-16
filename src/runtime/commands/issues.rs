@@ -20,7 +20,11 @@ pub(super) fn execute_agent_shell_issue_command(
             "issue commands require issues.enabled to be true",
         ));
     }
-    let Some(config_root) = service.config_root.clone() else {
+    let Some(config_root) = service
+        .integration
+        .config_root()
+        .map(|path| path.to_path_buf())
+    else {
         return Err(MezError::config(
             "issue slash command requires a configured config root",
         ));
@@ -407,7 +411,7 @@ fn runtime_issue_depends_on_display(depends_on: &[String]) -> String {
 }
 
 pub(super) fn runtime_issues_enabled(service: &RuntimeSessionService) -> bool {
-    runtime_effective_config_value(&service.config_layers)
+    runtime_effective_config_value(service.integration.config_layers())
         .ok()
         .and_then(|root| {
             root.get("issues")
@@ -421,7 +425,7 @@ pub(super) fn runtime_issue_database_path(
     service: &RuntimeSessionService,
     config_root: &PathBuf,
 ) -> crate::issues::IssueDatabasePath {
-    let configured = runtime_effective_config_value(&service.config_layers)
+    let configured = runtime_effective_config_value(service.integration.config_layers())
         .ok()
         .and_then(|root| {
             root.get("issues")

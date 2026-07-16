@@ -13,7 +13,8 @@ impl RuntimeSessionService {
         message: impl Into<String>,
     ) -> Result<usize> {
         let message = message.into();
-        self.runtime_metrics
+        self.integration
+            .runtime_metrics_mut()
             .record_shell_transaction_protocol_violation();
         self.process.running_shell_transactions.remove(marker);
         self.clear_shell_transaction_protocol_state(marker);

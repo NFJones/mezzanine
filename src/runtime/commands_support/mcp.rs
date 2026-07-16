@@ -141,8 +141,8 @@ fn runtime_mcp_primary_config_path(service: &RuntimeSessionService) -> Result<Pa
         return Ok(path);
     }
     let root = service
-        .config_root
-        .as_ref()
+        .integration
+        .config_root()
         .ok_or_else(|| MezError::invalid_state("mcp config command requires a config root"))?;
     ConfigPaths::from_root(root.to_path_buf()).ensure_default_config()
 }

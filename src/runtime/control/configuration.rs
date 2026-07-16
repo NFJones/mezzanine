@@ -38,7 +38,7 @@ impl RuntimeSessionService {
                 body,
                 &mut self.session,
                 caller_client_id,
-                &self.config_layers,
+                self.integration.config_layers(),
                 self.control.idempotency_mut(),
                 audit_log,
             )
@@ -47,7 +47,7 @@ impl RuntimeSessionService {
                 body,
                 &mut self.session,
                 caller_client_id,
-                &self.config_layers,
+                self.integration.config_layers(),
                 self.control.idempotency_mut(),
             )
         };
@@ -126,7 +126,7 @@ impl RuntimeSessionService {
         let Some(path) = target.path.as_ref() else {
             return Ok(());
         };
-        if self.config_layers.iter().any(|layer| {
+        if self.integration.config_layers().iter().any(|layer| {
             layer.scope == ConfigScope::Primary
                 && layer
                     .path
@@ -136,8 +136,8 @@ impl RuntimeSessionService {
             return Ok(());
         }
         if self
-            .config_root
-            .as_ref()
+            .integration
+            .config_root()
             .is_some_and(|root| runtime_path_under_project_root(path, root))
         {
             return Ok(());
@@ -482,7 +482,8 @@ impl RuntimeSessionService {
         };
         let mutation = ConfigMutation { path, operation };
         let current_text = self
-            .config_layers
+            .integration
+            .config_layers()
             .iter()
             .find(|layer| {
                 layer.name == RUNTIME_CONTROL_LIVE_OVERRIDE_LAYER
@@ -497,7 +498,7 @@ impl RuntimeSessionService {
             mutation,
         )?;
         if plan.changed {
-            let previous_layers = self.config_layers.clone();
+            let previous_layers = self.integration.config_layers().to_vec();
             let previous_permission_policy = self.permission_policy.clone();
             self.store_runtime_control_live_override_plan(&plan.text);
             match self.apply_runtime_config_layers() {
@@ -515,7 +516,7 @@ impl RuntimeSessionService {
                     )?;
                 }
                 Err(error) => {
-                    self.config_layers = previous_layers;
+                    self.integration.replace_config_layers(previous_layers);
                     let _ = self.apply_runtime_config_layers();
                     return Err(error);
                 }
@@ -554,7 +555,7 @@ impl RuntimeSessionService {
         let current_text = self.config_file_text_for_update(target_path, target.scope)?;
         let plan = plan_config_mutation(format, &current_text, target.scope, mutation)?;
         if plan.changed {
-            let previous_layers = self.config_layers.clone();
+            let previous_layers = self.integration.config_layers().to_vec();
             let previous_permission_policy = self.permission_policy.clone();
             self.store_runtime_config_file_plan(
                 target_path.clone(),
@@ -591,7 +592,7 @@ impl RuntimeSessionService {
                     });
                 }
                 Err(error) => {
-                    self.config_layers = previous_layers;
+                    self.integration.replace_config_layers(previous_layers);
                     let _ = self.apply_runtime_config_layers();
                     return Err(error);
                 }
@@ -606,13 +607,18 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn store_runtime_control_live_override_plan(&mut self, text: &str) {
-        if let Some(layer) = self.config_layers.iter_mut().find(|layer| {
-            layer.name == RUNTIME_CONTROL_LIVE_OVERRIDE_LAYER
-                && layer.scope == ConfigScope::LiveOverride
-        }) {
+        if let Some(layer) = self
+            .integration
+            .config_layers_mut()
+            .iter_mut()
+            .find(|layer| {
+                layer.name == RUNTIME_CONTROL_LIVE_OVERRIDE_LAYER
+                    && layer.scope == ConfigScope::LiveOverride
+            })
+        {
             layer.text = text.to_string();
         } else {
-            self.config_layers.push(ConfigLayer {
+            self.integration.config_layers_mut().push(ConfigLayer {
                 name: RUNTIME_CONTROL_LIVE_OVERRIDE_LAYER.to_string(),
                 path: None,
                 format: ConfigFormat::Toml,
@@ -629,7 +635,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn config_file_text_for_update(&self, path: &Path, scope: ConfigScope) -> Result<String> {
-        if let Some(text) = self.config_layers.iter().find_map(|layer| {
+        if let Some(text) = self.integration.config_layers().iter().find_map(|layer| {
             (layer.scope == scope
                 && layer
                     .path
@@ -661,18 +667,23 @@ impl RuntimeSessionService {
                         && runtime_path_under_project_root(&path, &record.project_root)
                 })
             });
-        if let Some(layer) = self.config_layers.iter_mut().find(|layer| {
-            layer.scope == scope
-                && layer
-                    .path
-                    .as_ref()
-                    .is_some_and(|layer_path| paths_equivalent(layer_path, &path))
-        }) {
+        if let Some(layer) = self
+            .integration
+            .config_layers_mut()
+            .iter_mut()
+            .find(|layer| {
+                layer.scope == scope
+                    && layer
+                        .path
+                        .as_ref()
+                        .is_some_and(|layer_path| paths_equivalent(layer_path, &path))
+            })
+        {
             layer.format = format;
             layer.trusted = trusted;
             layer.text = text.to_string();
         } else {
-            self.config_layers.push(ConfigLayer {
+            self.integration.config_layers_mut().push(ConfigLayer {
                 name: match scope {
                     ConfigScope::Primary => "primary",
                     ConfigScope::ProjectOverlay => "project",
@@ -832,7 +843,9 @@ impl RuntimeSessionService {
                 let projects = store
                     .records()
                     .filter(|record| state.is_none_or(|state| record.state == state))
-                    .map(|record| runtime_project_trust_record_json(record, &self.config_layers))
+                    .map(|record| {
+                        runtime_project_trust_record_json(record, self.integration.config_layers())
+                    })
                     .collect::<Vec<_>>()
                     .join(",");
                 Ok(format!(r#"{{"projects":[{projects}]}}"#))
@@ -848,7 +861,7 @@ impl RuntimeSessionService {
                 })?;
                 Ok(format!(
                     r#"{{"project":{}}}"#,
-                    runtime_project_trust_record_json(record, &self.config_layers)
+                    runtime_project_trust_record_json(record, self.integration.config_layers())
                 ))
             }
             _ => Err(MezError::invalid_state(
@@ -881,8 +894,8 @@ impl RuntimeSessionService {
         };
         let record = {
             let database_path = self.project_trust_database_path.clone().or_else(|| {
-                self.config_root
-                    .as_ref()
+                self.integration
+                    .config_root()
                     .map(|root| default_trust_database_path(root))
             });
             if self.project_trust_database_path.is_none() {
@@ -929,7 +942,7 @@ impl RuntimeSessionService {
         }
         Ok(format!(
             r#"{{"project":{},"changed_layers":{},"config":{}}}"#,
-            runtime_project_trust_record_json(&record, &self.config_layers),
+            runtime_project_trust_record_json(&record, self.integration.config_layers()),
             runtime_string_array_json(&changed_layers),
             runtime_config_apply_event_payload(method, &report)
         ))
@@ -969,7 +982,7 @@ impl RuntimeSessionService {
     ) -> Vec<String> {
         let trusted = matches!(decision, TrustDecision::Trusted);
         let mut changed = Vec::new();
-        for layer in &mut self.config_layers {
+        for layer in self.integration.config_layers_mut() {
             if layer.scope != ConfigScope::ProjectOverlay {
                 continue;
             }

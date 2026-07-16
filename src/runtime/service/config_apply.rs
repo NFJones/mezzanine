@@ -13,7 +13,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn config_layers(&self) -> &[ConfigLayer] {
-        &self.config_layers
+        self.integration.config_layers()
     }
 
     /// Runs the set config root operation for this subsystem.
@@ -23,7 +23,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     pub fn set_config_root(&mut self, root: PathBuf) {
         let _ = crate::skills::sync_managed_builtin_skills(&root);
-        self.config_root = Some(root);
+        self.integration.set_config_root(Some(root));
     }
 
     /// Sets the snapshot repository used by live terminal snapshot commands.
@@ -40,7 +40,7 @@ impl RuntimeSessionService {
         &mut self,
         layers: Vec<ConfigLayer>,
     ) -> Result<RuntimeConfigApplyReport> {
-        self.config_layers = layers;
+        self.integration.replace_config_layers(layers);
         self.apply_runtime_config_layers()
     }
 
@@ -53,7 +53,7 @@ impl RuntimeSessionService {
         &mut self,
         layers: Vec<ConfigLayer>,
     ) -> Result<RuntimeConfigApplyReport> {
-        self.config_layers = layers;
+        self.integration.replace_config_layers(layers);
         self.apply_runtime_config_layers_async().await
     }
 
@@ -86,8 +86,8 @@ impl RuntimeSessionService {
             .and_then(|store| store.get(&project_root))
             .is_some_and(|record| record.state == TrustDecision::Trusted);
         let selected = overlay_files.iter().cloned().collect::<BTreeSet<_>>();
-        let before = self.config_layers.clone();
-        self.config_layers.retain(|layer| {
+        let before = self.integration.config_layers().to_vec();
+        self.integration.config_layers_mut().retain(|layer| {
             layer.scope != ConfigScope::ProjectOverlay
                 || layer
                     .path
@@ -110,17 +110,22 @@ impl RuntimeSessionService {
                 trusted,
                 text: fs::read_to_string(&overlay_path)?,
             };
-            if let Some(existing) = self.config_layers.iter_mut().find(|layer| {
-                layer.scope == ConfigScope::ProjectOverlay
-                    && layer.path.as_ref() == Some(&overlay_path)
-            }) {
+            if let Some(existing) = self
+                .integration
+                .config_layers_mut()
+                .iter_mut()
+                .find(|layer| {
+                    layer.scope == ConfigScope::ProjectOverlay
+                        && layer.path.as_ref() == Some(&overlay_path)
+                })
+            {
                 *existing = refreshed;
             } else {
-                self.config_layers.push(refreshed);
+                self.integration.config_layers_mut().push(refreshed);
             }
         }
 
-        if self.config_layers == before {
+        if self.integration.config_layers() == before {
             return Ok(0);
         }
         let report = self.apply_runtime_config_layers()?;
@@ -136,10 +141,11 @@ impl RuntimeSessionService {
         &mut self,
         _project_root: &Path,
     ) -> Result<usize> {
-        let before_len = self.config_layers.len();
-        self.config_layers
+        let before_len = self.integration.config_layers().len();
+        self.integration
+            .config_layers_mut()
             .retain(|layer| layer.scope != ConfigScope::ProjectOverlay);
-        let removed = before_len.saturating_sub(self.config_layers.len());
+        let removed = before_len.saturating_sub(self.integration.config_layers().len());
         if removed > 0 {
             self.apply_runtime_config_layers()?;
         }
@@ -152,7 +158,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn reload_config_layers_from_disk(&mut self) -> Result<RuntimeConfigApplyReport> {
-        for layer in &mut self.config_layers {
+        for layer in self.integration.config_layers_mut() {
             let Some(path) = layer.path.as_ref() else {
                 continue;
             };
@@ -170,7 +176,7 @@ impl RuntimeSessionService {
     pub async fn reload_config_layers_from_disk_async(
         &mut self,
     ) -> Result<RuntimeConfigApplyReport> {
-        for layer in &mut self.config_layers {
+        for layer in self.integration.config_layers_mut() {
             let Some(path) = layer.path.as_ref() else {
                 continue;
             };
@@ -222,8 +228,8 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn apply_runtime_config_layers(&mut self) -> Result<RuntimeConfigApplyReport> {
-        let effective = compose_effective_config(&self.config_layers)?;
-        let structured = runtime_effective_config_value(&self.config_layers)?;
+        let effective = compose_effective_config(self.integration.config_layers())?;
+        let structured = runtime_effective_config_value(self.integration.config_layers())?;
         let terminal_history_limit = runtime_history_limit_from_config(&structured)?;
         let terminal_history_rotate_lines = runtime_history_rotate_lines_from_config(&structured)?;
         let saved_agent_session_limit = runtime_saved_agent_session_limit_from_config(&structured)?;
@@ -237,7 +243,7 @@ impl RuntimeSessionService {
         let audit_log = if runtime_audit_config_present(&structured) {
             Some(runtime_audit_log_from_config(
                 &structured,
-                self.config_root.as_deref(),
+                self.integration.config_root(),
             )?)
         } else {
             None
@@ -472,7 +478,7 @@ impl RuntimeSessionService {
     /// session memory store so agents can benefit from user-stored context
     /// loaded through the CLI.
     pub(in crate::runtime) fn load_persistent_memory_into_session(&mut self) -> Result<()> {
-        let Some(ref config_root) = self.config_root else {
+        let Some(config_root) = self.integration.config_root() else {
             return Ok(());
         };
         let store = crate::memory::PersistentMemoryStore::under_config_root(config_root);
@@ -496,7 +502,7 @@ impl RuntimeSessionService {
     /// Persists global and project-scoped session memory records to the
     /// persistent store so they survive beyond this session.
     pub(in crate::runtime) fn persist_session_memory_to_disk(&mut self) {
-        let Some(ref config_root) = self.config_root else {
+        let Some(config_root) = self.integration.config_root() else {
             return;
         };
         let store = crate::memory::PersistentMemoryStore::under_config_root(config_root);
@@ -522,7 +528,7 @@ impl RuntimeSessionService {
         &mut self,
     ) -> Result<usize> {
         let mut overlays_by_root: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
-        for layer in &self.config_layers {
+        for layer in self.integration.config_layers() {
             if layer.scope != ConfigScope::ProjectOverlay || layer.trusted {
                 continue;
             }

@@ -245,18 +245,18 @@ impl RuntimeSessionService {
         &mut self,
         metrics: crate::async_runtime::AsyncRuntimeActorMetrics,
     ) {
-        self.async_runtime_metrics = Some(metrics);
+        self.integration.set_async_runtime_metrics(Some(metrics));
     }
     /// Returns the cached async runtime metrics snapshot when the actor provided one.
     pub(in crate::runtime) fn async_runtime_metrics(
         &self,
     ) -> Option<&crate::async_runtime::AsyncRuntimeActorMetrics> {
-        self.async_runtime_metrics.as_ref()
+        self.integration.async_runtime_metrics()
     }
     /// Returns runtime-owned agent, provider, prompt-cache, and shell metrics.
     pub(in crate::runtime) fn runtime_metrics(
         &self,
     ) -> &crate::runtime::service_state::RuntimeMetricsSnapshot {
-        &self.runtime_metrics
+        self.integration.runtime_metrics()
     }
 }

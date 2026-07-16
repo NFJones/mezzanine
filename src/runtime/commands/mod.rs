@@ -1140,7 +1140,7 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     fn pending_project_trust_requests_for_agent_work(&self) -> Vec<AgentProjectTrustRequest> {
         let mut requests: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
-        for layer in &self.config_layers {
+        for layer in self.integration.config_layers() {
             if layer.scope != ConfigScope::ProjectOverlay || layer.trusted {
                 continue;
             }

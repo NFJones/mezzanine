@@ -404,12 +404,14 @@ impl RuntimeSessionService {
                 local_plan.display_output_after_completion,
             )
         };
-        self.runtime_metrics.record_shell_transaction_completion(
-            transaction_ref.started_at_unix_ms,
-            current_unix_millis(),
-            transaction_ref.observed_output_bytes,
-            exit_code,
-        );
+        self.integration
+            .runtime_metrics_mut()
+            .record_shell_transaction_completion(
+                transaction_ref.started_at_unix_ms,
+                current_unix_millis(),
+                transaction_ref.observed_output_bytes,
+                exit_code,
+            );
         if exit_code == 0 {
             self.record_shell_dispatch_success(turn_id, &transaction_ref.command, &observed_action);
         }

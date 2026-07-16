@@ -44,40 +44,46 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
-    service.runtime_metrics.record_provider_token_usage(
-        mez_agent::ModelTokenUsage {
-            input_tokens: 120,
-            output_tokens: 34,
-            reasoning_tokens: 9,
-            cached_input_tokens: Some(80),
-            cache_write_input_tokens: None,
-        },
-        mez_agent::ModelTokenUsage {
-            input_tokens: 120,
-            output_tokens: 34,
-            reasoning_tokens: 9,
-            cached_input_tokens: Some(80),
-            cache_write_input_tokens: None,
-        },
-        &mez_agent::ModelTokenUsageKey::new("openai", "gpt-fast"),
-    );
-    service.runtime_metrics.record_provider_token_usage(
-        mez_agent::ModelTokenUsage {
-            input_tokens: 200,
-            output_tokens: 50,
-            reasoning_tokens: 20,
-            cached_input_tokens: Some(100),
-            cache_write_input_tokens: None,
-        },
-        mez_agent::ModelTokenUsage {
-            input_tokens: 200,
-            output_tokens: 50,
-            reasoning_tokens: 20,
-            cached_input_tokens: Some(100),
-            cache_write_input_tokens: None,
-        },
-        &mez_agent::ModelTokenUsageKey::new("deepseek", "deepseek-chat"),
-    );
+    service
+        .integration
+        .runtime_metrics_mut()
+        .record_provider_token_usage(
+            mez_agent::ModelTokenUsage {
+                input_tokens: 120,
+                output_tokens: 34,
+                reasoning_tokens: 9,
+                cached_input_tokens: Some(80),
+                cache_write_input_tokens: None,
+            },
+            mez_agent::ModelTokenUsage {
+                input_tokens: 120,
+                output_tokens: 34,
+                reasoning_tokens: 9,
+                cached_input_tokens: Some(80),
+                cache_write_input_tokens: None,
+            },
+            &mez_agent::ModelTokenUsageKey::new("openai", "gpt-fast"),
+        );
+    service
+        .integration
+        .runtime_metrics_mut()
+        .record_provider_token_usage(
+            mez_agent::ModelTokenUsage {
+                input_tokens: 200,
+                output_tokens: 50,
+                reasoning_tokens: 20,
+                cached_input_tokens: Some(100),
+                cache_write_input_tokens: None,
+            },
+            mez_agent::ModelTokenUsage {
+                input_tokens: 200,
+                output_tokens: 50,
+                reasoning_tokens: 20,
+                cached_input_tokens: Some(100),
+                cache_write_input_tokens: None,
+            },
+            &mez_agent::ModelTokenUsageKey::new("deepseek", "deepseek-chat"),
+        );
     let mut request = runtime_model_request_fixture("turn-output-budget");
     request.max_output_tokens = Some(16_384);
     request.messages.push(mez_agent::ModelMessage {
@@ -86,7 +92,8 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
         content: "[ephemeral provider output-limit retry] max_output_tokens=16384".to_string(),
     });
     service
-        .runtime_metrics
+        .integration
+        .runtime_metrics_mut()
         .record_provider_request_shape(&request, None, false);
 
     let response = service.dispatch_runtime_control_body(

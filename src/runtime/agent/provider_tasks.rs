@@ -624,7 +624,9 @@ impl RuntimeSessionService {
             &model_profile,
             error,
         )?;
-        self.runtime_metrics.record_provider_failure();
+        self.integration
+            .runtime_metrics_mut()
+            .record_provider_failure();
         self.fail_agent_turn_for_provider_error(
             &turn,
             &model_profile.provider,

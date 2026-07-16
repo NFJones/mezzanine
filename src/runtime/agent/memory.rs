@@ -107,7 +107,11 @@ impl RuntimeSessionService {
                 "memory actions require memory.enabled to be true; continue with current action results, MCP, shell, web, or a bounded report instead of retrying memory actions".to_string(),
             )?);
         }
-        let Some(config_root) = self.config_root.clone() else {
+        let Some(config_root) = self
+            .integration
+            .config_root()
+            .map(|path| path.to_path_buf())
+        else {
             return Ok(ActionResult::failed(
                 turn,
                 action,
