@@ -203,7 +203,7 @@ impl RuntimeSessionService {
         {
             return;
         }
-        let Some(store) = self.agent_transcript_store.as_ref() else {
+        let Some(store) = self.persistence.transcript_store() else {
             return;
         };
         let Some(session) = self.agent_shell_store().get(pane_id) else {

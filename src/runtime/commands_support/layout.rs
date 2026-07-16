@@ -29,14 +29,14 @@ pub(super) fn resolve_runtime_layout_command_outcome(
 ) -> Result<CommandOutcome> {
     match outcome {
         CommandOutcome::LayoutSave { command, name } => {
-            let Some(snapshots) = service.snapshot_repository.clone() else {
+            let Some(snapshots) = service.persistence.cloned_snapshot_repository() else {
                 return Ok(CommandOutcome::LayoutSave { command, name });
             };
             let body = runtime_layout_save_command(service, active_client_id, &snapshots, name)?;
             Ok(CommandOutcome::Display { command, body })
         }
         CommandOutcome::LayoutLoad { command, selector } => {
-            let Some(snapshots) = service.snapshot_repository.clone() else {
+            let Some(snapshots) = service.persistence.cloned_snapshot_repository() else {
                 return Ok(CommandOutcome::LayoutLoad { command, selector });
             };
             let body =

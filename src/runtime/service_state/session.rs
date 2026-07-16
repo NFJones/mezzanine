@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::runtime::{
-    RuntimeAgentComponent, RuntimePresentationComponent, RuntimeProcessComponent,
+    RuntimeAgentComponent, RuntimePersistenceComponent, RuntimePresentationComponent,
+    RuntimeProcessComponent,
 };
 
 /// Carries Runtime Session Service state for this subsystem.
@@ -17,6 +18,8 @@ pub struct RuntimeSessionService {
     pub(in crate::runtime) process: RuntimeProcessComponent,
     /// Private state owner for application-side agent execution.
     pub(in crate::runtime) agent: RuntimeAgentComponent,
+    /// Private state owner for repositories and deferred external effects.
+    pub(in crate::runtime) persistence: RuntimePersistenceComponent,
     /// Stores the session value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -37,12 +40,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) config_root: Option<PathBuf>,
-    /// Stores the snapshot repository used by live terminal snapshot commands.
-    ///
-    /// The field is optional so tests and embedded runtimes that do not provide
-    /// persistent snapshot storage continue to report an explicit runtime
-    /// repository requirement instead of silently writing to an implicit path.
-    pub(in crate::runtime) snapshot_repository: Option<SnapshotRepository>,
     /// Stores the control idempotency value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -67,70 +64,6 @@ pub struct RuntimeSessionService {
     /// usage, turn lifecycle, and shell-transaction behavior without parsing
     /// trace logs.
     pub(in crate::runtime) runtime_metrics: RuntimeMetricsSnapshot,
-    /// Stores the deferred pane inputs value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) queued_pane_input_effects: Vec<RuntimeSideEffect>,
-    /// Stores the deferred pane resizes value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) queued_pane_resize_effects: BTreeMap<String, RuntimeSideEffect>,
-    /// Stores the deferred pane terminations value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) queued_pane_termination_effects: BTreeMap<String, RuntimeSideEffect>,
-    /// Stores the deferred pane pipe writes value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) queued_pane_pipe_effects: Vec<(String, RuntimeSideEffect)>,
-    /// Stores audit persistence effects awaiting adapter execution.
-    ///
-    /// The runtime retains canonical effects rather than audit-specific
-    /// compatibility records after the audit writer encodes each record.
-    pub(in crate::runtime) queued_audit_effects: Vec<RuntimeSideEffect>,
-    /// Stores transcript and prompt-history effects awaiting adapter execution.
-    ///
-    /// Producers retain canonical persistence effects rather than
-    /// transcript-specific compatibility records.
-    pub(in crate::runtime) queued_transcript_effects: Vec<RuntimeSideEffect>,
-    /// Stores the deferred config file writes value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    /// Stores the deferred project instruction writes value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) queued_config_effects: Vec<RuntimeSideEffect>,
-    /// Stores the deferred transcript next sequences value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) deferred_transcript_next_sequences: BTreeMap<String, u64>,
-    /// Whether audit writes are emitted for an adapter instead of written inline.
-    ///
-    /// This ownership is explicit because config reloads may replace the writer
-    /// after the async actor has started.
-    pub(in crate::runtime) audit_effects_use_adapter: bool,
-    /// Whether pane-pipe process and persistence work is owned by adapters.
-    pub(in crate::runtime) pane_pipe_effects_use_adapter: bool,
-    /// Whether agent transcript entries are persisted by an adapter.
-    pub(in crate::runtime) transcript_effects_use_adapter: bool,
-    /// Whether session-registry updates are persisted by an adapter.
-    pub(in crate::runtime) registry_effects_use_adapter: bool,
-    /// Whether configuration writes are persisted by an adapter.
-    pub(in crate::runtime) config_effects_use_adapter: bool,
-    /// Whether non-blocking program hooks execute through an adapter.
-    pub(in crate::runtime) hook_effects_use_adapter: bool,
-    /// Stores the pane transcript refs value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_transcript_refs: BTreeMap<String, Vec<String>>,
     /// Stores the permission policy value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -225,11 +158,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) audit_log: Option<AuditLog>,
-    /// Stores the agent transcript store value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) agent_transcript_store: Option<AgentTranscriptStore>,
     /// Stores the project trust store value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -250,11 +178,6 @@ pub struct RuntimeSessionService {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) hook_definitions: Vec<HookDefinition>,
-    /// Stores program-hook side effects awaiting adapter execution.
-    ///
-    /// Runtime transitions queue the canonical effect directly so the async
-    /// actor does not need a hook-specific compatibility record.
-    pub(in crate::runtime) queued_program_hook_effects: Vec<RuntimeSideEffect>,
     /// Stores the focused shell hooks value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
@@ -286,11 +209,6 @@ pub struct RuntimeSessionService {
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(in crate::runtime) lifecycle_state: RuntimeLifecycleState,
-    /// Stores the session registry value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) session_registry: Option<SessionRegistry>,
     /// Stores the socket path value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

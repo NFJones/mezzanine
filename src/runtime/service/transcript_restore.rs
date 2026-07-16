@@ -44,10 +44,12 @@ impl RuntimeSessionService {
     pub fn set_audit_log(&mut self, mut audit_log: AuditLog) {
         if let Some(existing) = self.audit_log.as_mut() {
             let pending = existing.drain_deferred_writes();
-            self.queued_audit_effects
-                .extend(pending.into_iter().map(audit_persistence_effect));
+            for write in pending {
+                self.persistence
+                    .queue_audit(audit_persistence_effect(write));
+            }
         }
-        audit_log.set_defer_writes(self.audit_effects_use_adapter);
+        audit_log.set_defer_writes(self.persistence.audit_uses_adapter());
         self.audit_log = Some(audit_log);
     }
 
@@ -55,8 +57,10 @@ impl RuntimeSessionService {
     pub(super) fn clear_audit_log(&mut self) {
         if let Some(existing) = self.audit_log.as_mut() {
             let pending = existing.drain_deferred_writes();
-            self.queued_audit_effects
-                .extend(pending.into_iter().map(audit_persistence_effect));
+            for write in pending {
+                self.persistence
+                    .queue_audit(audit_persistence_effect(write));
+            }
         }
         self.audit_log = None;
     }
@@ -74,12 +78,14 @@ impl RuntimeSessionService {
     pub(crate) fn drain_audit_persistence_transition(&mut self) -> RuntimeTransition {
         if let Some(audit_log) = self.audit_log.as_mut() {
             let pending = audit_log.drain_deferred_writes();
-            self.queued_audit_effects
-                .extend(pending.into_iter().map(audit_persistence_effect));
+            for write in pending {
+                self.persistence
+                    .queue_audit(audit_persistence_effect(write));
+            }
         }
         RuntimeTransition {
             applied: false,
-            side_effects: std::mem::take(&mut self.queued_audit_effects),
+            side_effects: self.persistence.take_audit_effects(),
         }
     }
 
@@ -89,7 +95,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn agent_transcript_store(&self) -> Option<&AgentTranscriptStore> {
-        self.agent_transcript_store.as_ref()
+        self.persistence.transcript_store()
     }
 
     /// Runs the set agent transcript store operation for this subsystem.
@@ -98,7 +104,7 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn set_agent_transcript_store(&mut self, store: AgentTranscriptStore) {
-        self.agent_transcript_store = Some(store);
+        self.persistence.set_transcript_store(store);
     }
 
     /// Restores pane-scoped active agent shell metadata for this live session.
@@ -109,7 +115,7 @@ impl RuntimeSessionService {
     /// session id so a fresh daemon or different pane cannot inherit another
     /// session's context automatically.
     pub fn restore_agent_sessions_from_transcript_store(&mut self) -> Result<usize> {
-        let Some(store) = self.agent_transcript_store.clone() else {
+        let Some(store) = self.persistence.cloned_transcript_store() else {
             return Ok(0);
         };
         let session_id = self.session.id.as_str().to_string();
@@ -219,7 +225,7 @@ impl RuntimeSessionService {
     /// which pane should point at which conversation when the same Mezzanine
     /// session is restored.
     pub(in crate::runtime) fn checkpoint_agent_session_metadata(&mut self) -> Result<usize> {
-        let Some(store) = self.agent_transcript_store.clone() else {
+        let Some(store) = self.persistence.cloned_transcript_store() else {
             return Ok(0);
         };
         let mezzanine_session_id = self.session.id.as_str().to_string();
@@ -308,7 +314,7 @@ impl RuntimeSessionService {
         pane_id: &str,
         conversation_id: &str,
     ) -> Result<()> {
-        let Some(store) = self.agent_transcript_store.clone() else {
+        let Some(store) = self.persistence.cloned_transcript_store() else {
             return Ok(());
         };
         let mezzanine_session_id = self.session.id.as_str().to_string();
@@ -387,7 +393,7 @@ impl RuntimeSessionService {
     pub(crate) fn drain_transcript_persistence_transition(&mut self) -> RuntimeTransition {
         RuntimeTransition {
             applied: false,
-            side_effects: std::mem::take(&mut self.queued_transcript_effects),
+            side_effects: self.persistence.take_transcript_effects(),
         }
     }
 
@@ -395,9 +401,9 @@ impl RuntimeSessionService {
     pub(crate) fn drain_config_persistence_transition(&mut self) -> RuntimeTransition {
         RuntimeTransition {
             applied: false,
-            side_effects: coalesce_config_persistence_effects(std::mem::take(
-                &mut self.queued_config_effects,
-            )),
+            side_effects: coalesce_config_persistence_effects(
+                self.persistence.take_config_effects(),
+            ),
         }
     }
 

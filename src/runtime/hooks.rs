@@ -54,7 +54,7 @@ impl RuntimeSessionService {
     pub(crate) fn drain_program_hook_transition(&mut self) -> RuntimeTransition {
         RuntimeTransition {
             applied: false,
-            side_effects: std::mem::take(&mut self.queued_program_hook_effects),
+            side_effects: self.persistence.take_program_hook_effects(),
         }
     }
 
@@ -126,8 +126,8 @@ impl RuntimeSessionService {
         plan: HookExecutionPlan,
         triggering_event_completed: bool,
     ) {
-        self.queued_program_hook_effects
-            .push(RuntimeSideEffect::RunProgramHook {
+        self.persistence
+            .queue_program_hook(RuntimeSideEffect::RunProgramHook {
                 plan: Box::new(plan),
                 triggering_event_completed,
             });

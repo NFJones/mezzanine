@@ -147,7 +147,7 @@ impl RuntimeSessionService {
         }
 
         if let Some(session) = self.agent_shell_store().get(pane_id)
-            && let Some(store) = self.agent_transcript_store.as_ref()
+            && let Some(store) = self.persistence.transcript_store()
         {
             let transcript_conversation_id = session
                 .ephemeral_transcript_source_conversation_id
@@ -443,7 +443,7 @@ impl RuntimeSessionService {
         }
 
         let mut refreshed_blocks = Vec::new();
-        if let Some(store) = self.agent_transcript_store.as_ref() {
+        if let Some(store) = self.persistence.transcript_store() {
             let transcript_conversation_id = session
                 .ephemeral_transcript_source_conversation_id
                 .as_deref()

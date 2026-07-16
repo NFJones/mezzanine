@@ -258,7 +258,7 @@ impl RuntimeSessionService {
         self.clear_pane_screens();
         self.clear_pane_transaction_parsers();
         self.clear_pane_process_lifecycle_tracking();
-        self.pane_transcript_refs.clear();
+        self.persistence.clear_pane_transcript_refs();
         *self.agent_shell_store_mut() = AgentShellStore::default();
         *self.agent_turn_ledger_mut() = AgentTurnLedger::new(false);
         self.agent_turn_contexts_mut().clear();

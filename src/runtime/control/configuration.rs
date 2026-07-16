@@ -244,7 +244,7 @@ impl RuntimeSessionService {
         request: &crate::control::JsonRpcRequest,
         caller_client_id: &mez_core::ids::ClientId,
     ) -> Option<String> {
-        if !self.config_effects_use_adapter {
+        if !self.persistence.config_uses_adapter() {
             return None;
         }
         if !matches!(request.method.as_str(), "config/set" | "config/unset") {
@@ -581,7 +581,7 @@ impl RuntimeSessionService {
                             crate::runtime::PersistenceTarget::ProjectConfig
                         }
                     };
-                    self.queued_config_effects.push(RuntimeSideEffect::Persist {
+                    self.persistence.queue_config(RuntimeSideEffect::Persist {
                         target: persistence_target,
                         path: target_path.clone(),
                         bytes: plan.text.clone().into_bytes(),

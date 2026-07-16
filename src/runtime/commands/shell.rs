@@ -1060,15 +1060,15 @@ impl RuntimeSessionService {
         if input.trim().is_empty() {
             return Ok(());
         }
-        let Some(store) = self.agent_transcript_store.clone() else {
+        let Some(store) = self.persistence.cloned_transcript_store() else {
             return Ok(());
         };
         let Some(session) = self.agent_shell_store().get(pane_id) else {
             return Ok(());
         };
         if queue_for_adapter {
-            self.queued_transcript_effects
-                .push(RuntimeSideEffect::PersistPromptHistory {
+            self.persistence
+                .queue_transcript(RuntimeSideEffect::PersistPromptHistory {
                     path: store.prompt_history_file(),
                     store,
                     conversation_id: session.session_id.clone(),

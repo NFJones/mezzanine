@@ -285,8 +285,8 @@ fn runtime_provider_execution_completes_running_prompt_turn() {
             .any(|entry| entry.content.contains("summarize the pane"))
     );
     assert_eq!(
-        service.pane_transcript_refs.get("%1"),
-        Some(&vec![format!("transcript:%1:{conversation_id}")])
+        service.persistence.pane_transcript_refs("%1"),
+        vec![format!("transcript:%1:{conversation_id}")]
     );
     let tasks = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"tasks","method":"agent/task/list","params":{"target":{"pane_id":"%1"}}}"#,

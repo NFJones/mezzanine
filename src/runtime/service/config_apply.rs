@@ -28,7 +28,7 @@ impl RuntimeSessionService {
 
     /// Sets the snapshot repository used by live terminal snapshot commands.
     pub fn set_snapshot_repository(&mut self, snapshots: SnapshotRepository) {
-        self.snapshot_repository = Some(snapshots);
+        self.persistence.set_snapshot_repository(snapshots);
     }
 
     /// Runs the replace config layers operation for this subsystem.
@@ -242,7 +242,7 @@ impl RuntimeSessionService {
         } else {
             None
         };
-        if let Some(store) = self.agent_transcript_store.as_mut() {
+        if let Some(store) = self.persistence.transcript_store_mut() {
             store.set_saved_sessions_limit(saved_agent_session_limit)?;
         }
         self.apply_process_terminal_settings(

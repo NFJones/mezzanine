@@ -31,17 +31,16 @@ impl RuntimeSessionService {
         {
             return Ok(0);
         }
-        let Some(store) = self.agent_transcript_store.clone() else {
+        let Some(store) = self.persistence.cloned_transcript_store() else {
             return Ok(0);
         };
         let conversation_id = conversation_id
             .ok_or_else(|| MezError::invalid_state("agent shell session missing for transcript"))?;
         let created_at_unix_seconds = current_unix_seconds().max(1);
-        let entries = if self.transcript_effects_use_adapter {
+        let entries = if self.persistence.transcript_uses_adapter() {
             let first_sequence = self
-                .deferred_transcript_next_sequences
-                .get(&conversation_id)
-                .copied()
+                .persistence
+                .deferred_transcript_next_sequence(&conversation_id)
                 .map(Ok)
                 .unwrap_or_else(|| next_transcript_sequence(&store, &conversation_id))?;
             let entries = self.runtime_transcript_entries_for_execution(
@@ -54,11 +53,11 @@ impl RuntimeSessionService {
             if let Some(next_sequence) =
                 entries.last().map(|entry| entry.sequence.saturating_add(1))
             {
-                self.deferred_transcript_next_sequences
-                    .insert(conversation_id.clone(), next_sequence);
+                self.persistence
+                    .set_deferred_transcript_next_sequence(conversation_id.clone(), next_sequence);
             }
-            self.queued_transcript_effects
-                .push(RuntimeSideEffect::PersistTranscriptEntries {
+            self.persistence
+                .queue_transcript(RuntimeSideEffect::PersistTranscriptEntries {
                     path: store.transcript_path(&conversation_id)?,
                     store,
                     entries: entries.clone(),

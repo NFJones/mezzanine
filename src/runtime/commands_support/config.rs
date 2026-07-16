@@ -419,7 +419,7 @@ pub(in crate::runtime) fn runtime_apply_persisted_config_mutation_batch(
     let batch =
         runtime_plan_config_mutations(format, &current_text, ConfigScope::Primary, mutations)?;
     if batch.changed {
-        if !service.config_effects_use_adapter {
+        if !service.persistence.config_uses_adapter() {
             persist_config_text(&path, ConfigScope::Primary, &batch.text)?;
         }
         let previous_layers = service.config_layers.clone();
@@ -430,10 +430,10 @@ pub(in crate::runtime) fn runtime_apply_persisted_config_mutation_batch(
                     EventKind::ConfigChanged,
                     runtime_config_apply_event_payload(event_source, &report),
                 )?;
-                if service.config_effects_use_adapter {
+                if service.persistence.config_uses_adapter() {
                     service
-                        .queued_config_effects
-                        .push(RuntimeSideEffect::Persist {
+                        .persistence
+                        .queue_config(RuntimeSideEffect::Persist {
                             target: crate::runtime::PersistenceTarget::Config,
                             path: path.clone(),
                             bytes: batch.text.clone().into_bytes(),
@@ -454,7 +454,7 @@ pub(in crate::runtime) fn runtime_apply_persisted_config_mutation_batch(
         changed: batch.changed,
         reload_required: batch.reload_required,
         mutation_count: mutations.len(),
-        deferred: service.config_effects_use_adapter,
+        deferred: service.persistence.config_uses_adapter(),
     })
 }
 

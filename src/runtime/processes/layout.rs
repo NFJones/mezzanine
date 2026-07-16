@@ -679,7 +679,7 @@ impl RuntimeSessionService {
                     .pane_processes
                     .resize_pane(pane_id, process_size)?;
             } else if self.pane_process_is_adapter_owned(pane_id) {
-                self.queued_pane_resize_effects.insert(
+                self.persistence.queue_pane_resize(
                     pane_id.to_string(),
                     RuntimeSideEffect::ResizePane {
                         pane_id: pane_id.to_string(),

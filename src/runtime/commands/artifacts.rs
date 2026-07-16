@@ -191,7 +191,7 @@ impl RuntimeSessionService {
         }
         let scaffold = runtime_agent_init_scaffold().as_bytes().to_vec();
         if queue_for_adapter {
-            self.queued_config_effects.push(RuntimeSideEffect::Persist {
+            self.persistence.queue_config(RuntimeSideEffect::Persist {
                 target: crate::runtime::PersistenceTarget::ProjectInstruction,
                 path: target.clone(),
                 bytes: scaffold,

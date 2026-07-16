@@ -21,13 +21,13 @@ impl RuntimeSessionService {
         if bytes.is_empty() {
             return Ok(());
         }
-        let use_external_effect_adapter = self.pane_pipe_effects_use_adapter;
+        let use_external_effect_adapter = self.persistence.pane_pipe_uses_adapter();
         let Some(pipe) = self.process.active_pane_pipes.get_mut(pane_id) else {
             return Ok(());
         };
         if use_external_effect_adapter && let Some(path) = pipe.file_target_path() {
             pipe.record_deferred_output(bytes.len());
-            self.queued_pane_pipe_effects.push((
+            self.persistence.queue_pane_pipe(
                 pane_id.to_string(),
                 RuntimeSideEffect::Persist {
                     target: PersistenceTarget::PanePipe,
@@ -35,7 +35,7 @@ impl RuntimeSessionService {
                     bytes: bytes.to_vec(),
                     mode: PersistenceWriteMode::Append,
                 },
-            ));
+            );
             return Ok(());
         }
         let Err(error) = pipe.write_output(bytes) else {
@@ -67,7 +67,7 @@ impl RuntimeSessionService {
         path: PathBuf,
     ) -> Result<String> {
         let _ = self.stop_active_pane_pipe(pane_id.as_str());
-        let pipe = if self.pane_pipe_effects_use_adapter {
+        let pipe = if self.persistence.pane_pipe_uses_adapter() {
             ActivePanePipe::deferred_file(pane_id.clone(), path)
         } else {
             ActivePanePipe::file(pane_id.clone(), path)?
@@ -94,7 +94,7 @@ impl RuntimeSessionService {
         command: String,
     ) -> Result<String> {
         let _ = self.stop_active_pane_pipe(pane_id.as_str());
-        let pipe = if self.pane_pipe_effects_use_adapter {
+        let pipe = if self.persistence.pane_pipe_uses_adapter() {
             ActivePanePipe::deferred_command(pane_id.clone(), self.session.shell.path(), command)?
         } else {
             ActivePanePipe::command(pane_id.clone(), self.session.shell.path(), command)?
@@ -307,10 +307,7 @@ impl RuntimeSessionService {
     pub(crate) fn drain_pane_pipe_persistence_transition(&mut self) -> RuntimeTransition {
         RuntimeTransition {
             applied: false,
-            side_effects: std::mem::take(&mut self.queued_pane_pipe_effects)
-                .into_iter()
-                .map(|(_, effect)| effect)
-                .collect(),
+            side_effects: self.persistence.take_pane_pipe_effects(),
         }
     }
 

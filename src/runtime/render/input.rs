@@ -260,12 +260,12 @@ impl RuntimeSessionService {
         {
             self.presentation.primary_command_prompt_history.remove(0);
         }
-        let Some(store) = self.agent_transcript_store.clone() else {
+        let Some(store) = self.persistence.cloned_transcript_store() else {
             return Ok(());
         };
         if queue_for_adapter {
-            self.queued_transcript_effects
-                .push(RuntimeSideEffect::PersistCommandPromptHistory {
+            self.persistence
+                .queue_transcript(RuntimeSideEffect::PersistCommandPromptHistory {
                     path: store.command_prompt_history_file(),
                     store,
                     command: command.to_string(),
@@ -279,7 +279,7 @@ impl RuntimeSessionService {
     /// Reloads persisted primary command prompt history into the live prompt
     /// cache.
     pub(super) fn reload_primary_command_prompt_history(&mut self) -> Result<()> {
-        let Some(store) = self.agent_transcript_store.as_ref() else {
+        let Some(store) = self.persistence.transcript_store() else {
             return Ok(());
         };
         self.presentation.primary_command_prompt_history = store.command_prompt_history()?;
@@ -665,7 +665,7 @@ impl RuntimeSessionService {
                 )
             }));
         }
-        let Some(store) = self.agent_transcript_store.as_ref() else {
+        let Some(store) = self.persistence.transcript_store() else {
             return candidates;
         };
         candidates.extend(store.list().unwrap_or_default().into_iter().map(|summary| {
@@ -702,7 +702,7 @@ impl RuntimeSessionService {
         else {
             return Ok(());
         };
-        let history = match self.agent_transcript_store.as_ref() {
+        let history = match self.persistence.transcript_store() {
             Some(store) => match store.prompt_history(&session_id) {
                 Ok(history) => history,
                 Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),

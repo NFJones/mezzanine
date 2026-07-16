@@ -265,8 +265,8 @@ impl RuntimeSessionService {
         })?;
         let text = self.project_config_text_for_update(&config_path)?;
         let updated = append_project_command_rule_text(&text, rule)?;
-        if self.config_effects_use_adapter {
-            self.queued_config_effects.push(RuntimeSideEffect::Persist {
+        if self.persistence.config_uses_adapter() {
+            self.persistence.queue_config(RuntimeSideEffect::Persist {
                 target: crate::runtime::PersistenceTarget::ProjectConfig,
                 path: config_path.clone(),
                 bytes: updated.clone().into_bytes(),

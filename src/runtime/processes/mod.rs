@@ -1358,10 +1358,7 @@ impl RuntimeSessionService {
 
     /// Drains pane-worker I/O through the transport-neutral transition contract.
     pub(crate) fn drain_pane_io_transition(&mut self) -> RuntimeTransition {
-        let mut side_effects = std::mem::take(&mut self.queued_pane_input_effects);
-        side_effects.extend(std::mem::take(&mut self.queued_pane_resize_effects).into_values());
-        side_effects
-            .extend(std::mem::take(&mut self.queued_pane_termination_effects).into_values());
+        let side_effects = self.persistence.take_pane_io_effects();
         RuntimeTransition {
             applied: false,
             side_effects,
@@ -1416,7 +1413,7 @@ impl RuntimeSessionService {
                 .write_pane_input(pane_id, input)?);
         }
         if self.pane_process_is_adapter_owned(pane_id) {
-            self.queued_pane_input_effects.push(if priority {
+            self.persistence.queue_pane_input(if priority {
                 RuntimeSideEffect::WritePaneInputPriority {
                     pane_id: pane_id.to_string(),
                     bytes: input.to_vec(),
@@ -1465,7 +1462,7 @@ impl RuntimeSessionService {
             .remove(pane_id)
             .is_some()
         {
-            self.queued_pane_termination_effects.insert(
+            self.persistence.queue_pane_termination(
                 pane_id.to_string(),
                 RuntimeSideEffect::TerminatePane {
                     pane_id: pane_id.to_string(),
@@ -1520,21 +1517,7 @@ impl RuntimeSessionService {
             .remove(pane_id);
         self.process.pane_foreground_process_groups.remove(pane_id);
         self.process.program_owned_pane_titles.remove(pane_id);
-        self.queued_pane_input_effects
-            .retain(|effect| match effect {
-                RuntimeSideEffect::WritePaneInput {
-                    pane_id: target_pane_id,
-                    ..
-                }
-                | RuntimeSideEffect::WritePaneInputPriority {
-                    pane_id: target_pane_id,
-                    ..
-                } => target_pane_id != pane_id,
-                _ => true,
-            });
-        self.queued_pane_resize_effects.remove(pane_id);
-        self.queued_pane_pipe_effects
-            .retain(|(queued_pane_id, _)| queued_pane_id != pane_id);
+        self.persistence.cleanup_pane_io(pane_id);
         self.process.pane_screens.remove(pane_id);
         self.process.pane_transaction_osc_screens.remove(pane_id);
         self.process.pane_transaction_osc_pending.remove(pane_id);
@@ -1550,7 +1533,7 @@ impl RuntimeSessionService {
             .remove(pane_id);
         self.process.pane_exit_records.remove(pane_id);
         self.process.active_pane_pipes.remove(pane_id);
-        self.pane_transcript_refs.remove(pane_id);
+        self.persistence.remove_pane_transcript_refs(pane_id);
         self.process.pane_readiness_states.remove(pane_id);
         self.process
             .pane_readiness_overrides

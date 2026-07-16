@@ -108,10 +108,8 @@ impl RuntimeSessionService {
                 "pane transcript reference contains reserved separator",
             ));
         }
-        let refs = self.pane_transcript_refs.entry(pane_id).or_default();
-        if !refs.iter().any(|existing| existing == &transcript_ref) {
-            refs.push(transcript_ref);
-        }
+        self.persistence
+            .record_pane_transcript_ref(pane_id, transcript_ref);
         Ok(())
     }
 

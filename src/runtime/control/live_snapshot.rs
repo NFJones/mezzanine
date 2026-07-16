@@ -93,11 +93,7 @@ impl RuntimeSessionService {
 
     /// Returns durable transcript references for one live pane snapshot.
     fn snapshot_transcript_refs_for_pane(&self, pane_id: &str) -> Vec<String> {
-        let mut refs = self
-            .pane_transcript_refs
-            .get(pane_id)
-            .cloned()
-            .unwrap_or_default();
+        let mut refs = self.persistence.pane_transcript_refs(pane_id);
         if let Some(session) = self.agent_shell_store().get(pane_id) {
             let transcript_ref = format!("transcript:{pane_id}:{}", session.session_id);
             if !refs.iter().any(|existing| existing == &transcript_ref) {

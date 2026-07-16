@@ -20,7 +20,7 @@ impl RuntimeSessionService {
     /// registry unset unless the test needs to verify persisted discovery
     /// state.
     pub fn set_session_registry(&mut self, registry: SessionRegistry) {
-        self.session_registry = Some(registry);
+        self.persistence.set_session_registry(registry);
     }
 
     /// Assigns audit persistence to the external effect adapter.
@@ -28,7 +28,7 @@ impl RuntimeSessionService {
     /// Actor owners call this explicitly so writers installed by later config
     /// reloads retain adapter ownership without consulting the global mode.
     pub(crate) fn use_audit_effect_adapter(&mut self) {
-        self.audit_effects_use_adapter = true;
+        self.persistence.enable_audit_adapter();
         if let Some(audit_log) = self.audit_log.as_mut() {
             audit_log.set_defer_writes(true);
         }
@@ -36,27 +36,27 @@ impl RuntimeSessionService {
 
     /// Assigns pane-pipe process and persistence work to external adapters.
     pub(crate) fn use_pane_pipe_effect_adapter(&mut self) {
-        self.pane_pipe_effects_use_adapter = true;
+        self.persistence.enable_pane_pipe_adapter();
     }
 
     /// Assigns agent transcript persistence to the external effect adapter.
     pub(crate) fn use_transcript_effect_adapter(&mut self) {
-        self.transcript_effects_use_adapter = true;
+        self.persistence.enable_transcript_adapter();
     }
 
     /// Assigns session-registry persistence to the external effect adapter.
     pub(crate) fn use_registry_effect_adapter(&mut self) {
-        self.registry_effects_use_adapter = true;
+        self.persistence.enable_registry_adapter();
     }
 
     /// Assigns configuration persistence to the external effect adapter.
     pub(crate) fn use_config_effect_adapter(&mut self) {
-        self.config_effects_use_adapter = true;
+        self.persistence.enable_config_adapter();
     }
 
     /// Assigns non-blocking program-hook execution to the external effect adapter.
     pub(crate) fn use_hook_effect_adapter(&mut self) {
-        self.hook_effects_use_adapter = true;
+        self.persistence.enable_hook_adapter();
     }
 
     /// Applies a resize-debounce timer after the adapter validates its key.
@@ -195,10 +195,10 @@ impl RuntimeSessionService {
         &mut self,
         update: RuntimeRegistryUpdatePlan,
     ) -> Result<bool> {
-        if self.session_registry.is_none() {
+        if self.persistence.session_registry().is_none() {
             return Ok(false);
         }
-        if self.registry_effects_use_adapter {
+        if self.persistence.registry_uses_adapter() {
             return Ok(true);
         }
         self.persist_registry_update_plan(&update)
@@ -212,7 +212,7 @@ impl RuntimeSessionService {
     pub(crate) fn registry_update_for_async_persistence(
         &self,
     ) -> Option<(SessionRegistry, RuntimeRegistryUpdatePlan)> {
-        let registry = self.session_registry.clone()?;
+        let registry = self.persistence.cloned_session_registry()?;
         Some((registry, self.registry_update_plan()))
     }
 
@@ -235,7 +235,7 @@ impl RuntimeSessionService {
         &self,
         update: &RuntimeRegistryUpdatePlan,
     ) -> Result<bool> {
-        let Some(registry) = self.session_registry.as_ref() else {
+        let Some(registry) = self.persistence.session_registry() else {
             return Ok(false);
         };
         apply_registry_update(registry, update)

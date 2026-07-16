@@ -89,7 +89,7 @@ impl RuntimeSessionService {
         if conversation_arg.is_none() {
             return self.execute_agent_shell_list_sessions_command(pane_id);
         }
-        let Some(store) = self.agent_transcript_store.clone() else {
+        let Some(store) = self.persistence.cloned_transcript_store() else {
             return Ok(AgentShellCommandOutcome::Display {
                 command: "resume".to_string(),
                 body: "conversations=0 source=unavailable".to_string(),
@@ -253,7 +253,7 @@ impl RuntimeSessionService {
             .pane_screen(pane_id)
             .map(|screen| usize::from(screen.size().columns))
             .unwrap_or(120);
-        if let Some(store) = self.agent_transcript_store.as_ref() {
+        if let Some(store) = self.persistence.transcript_store() {
             return Ok(Self::runtime_agent_saved_sessions_display(
                 &store.list()?,
                 width,
@@ -541,7 +541,7 @@ impl RuntimeSessionService {
             )
         })?;
         let source_start_directory = self.pane_current_working_directory(pane_id);
-        let Some(store) = self.agent_transcript_store.clone() else {
+        let Some(store) = self.persistence.cloned_transcript_store() else {
             return Ok(AgentShellCommandOutcome::Display {
                 command: "fork".to_string(),
                 body: format!(

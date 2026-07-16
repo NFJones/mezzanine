@@ -555,7 +555,7 @@ impl RuntimeSessionService {
         &self,
         conversation_id: &str,
     ) -> Result<Vec<TranscriptEntry>> {
-        let Some(store) = self.agent_transcript_store.as_ref() else {
+        let Some(store) = self.persistence.transcript_store() else {
             return Ok(Vec::new());
         };
         match store.inspect(conversation_id) {

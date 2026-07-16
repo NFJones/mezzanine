@@ -262,6 +262,8 @@ mod lifecycle;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod pane_io;
+mod persistence;
+pub(in crate::runtime) use persistence::RuntimePersistenceComponent;
 /// Exposes the processes module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
