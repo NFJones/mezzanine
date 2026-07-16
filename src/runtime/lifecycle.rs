@@ -4,13 +4,16 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+#[cfg(test)]
+use super::Path;
 use super::{
-    EventKind, EventLog, HookEvent, Path, Result, RuntimeLifecycleState, RuntimeSessionService,
-    Size, json_escape,
+    EventKind, EventLog, HookEvent, Result, RuntimeLifecycleState, RuntimeSessionService, Size,
+    json_escape,
 };
 use crate::runtime::{
     ClientEvent, RenderInvalidationReason, RuntimeSideEffect, RuntimeTransition, ShutdownEvent,
 };
+#[cfg(test)]
 use mez_mux::session::ClientTerminalDescriptor;
 
 // Session lifecycle, primary attachment, and kill handling.
@@ -39,6 +42,11 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn socket_path(&self) -> &Path {
         self.session.socket_path()
     }
@@ -57,6 +65,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn attach_primary(
         &mut self,
         name: impl Into<String>,

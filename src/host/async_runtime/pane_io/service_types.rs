@@ -4,6 +4,7 @@ use super::{Duration, MezError, Result, RuntimeLifecycleState};
 
 /// Configuration for one pane I/O side-effect worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub struct AsyncPaneIoSideEffectServiceConfig {
     /// Maximum side-effect polls before the service returns.
     pub max_polls: u64,
@@ -13,6 +14,7 @@ pub struct AsyncPaneIoSideEffectServiceConfig {
     pub idle_interval: Duration,
 }
 
+#[cfg(test)]
 impl Default for AsyncPaneIoSideEffectServiceConfig {
     /// Runs the default operation for this subsystem.
     ///
@@ -28,8 +30,10 @@ impl Default for AsyncPaneIoSideEffectServiceConfig {
     }
 }
 
+#[cfg(test)]
 impl AsyncPaneIoSideEffectServiceConfig {
     /// Validates pane side-effect worker bounds.
+    #[cfg(test)]
     pub fn validate(self) -> Result<()> {
         if self.max_polls == 0 {
             return Err(MezError::invalid_args(
@@ -52,6 +56,7 @@ impl AsyncPaneIoSideEffectServiceConfig {
 
 /// Report returned by one pane I/O side-effect worker.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub struct AsyncPaneIoSideEffectServiceReport {
     /// Number of side-effect polls attempted.
     pub polls: u64,

@@ -7,16 +7,23 @@
 use super::{
     AuditRecord, ClientId, ConfigDiagnostic, ConfigFormat, ConfigLayer, ConfigMutation,
     ConfigMutationOperation, ConfigMutationPlan, ConfigMutationValue, ConfigScope,
-    ConfigValidation, ControlIdempotencyCache, JsonRpcRequest, MezError, PathBuf,
-    ProjectTrustStore, RequestedRole, Result, Session, TrustDecision, client_descriptor_from_json,
-    client_json, compose_effective_config, control_audit_actor,
-    ensure_client_descriptor_role_matches, error_code, field_value, json_escape, json_null_field,
-    json_object_field, json_optional_string, json_raw_field, json_rpc_error, json_rpc_success,
-    json_string_array_field, json_string_field, mezzanine_error_code, parse_json_rpc_request,
-    parse_trust_decision, persist_config_mutation, project_trust_json,
-    project_trust_state_filter_from_params, reject_unknown_json_fields, require_idempotency_key,
-    validate_config_file, validate_control_method_params_schema,
+    ConfigValidation, ControlIdempotencyCache, JsonRpcRequest, MezError, PathBuf, Result, Session,
+    compose_effective_config, control_audit_actor, error_code, field_value, json_escape,
+    json_null_field, json_object_field, json_optional_string, json_raw_field, json_rpc_error,
+    json_rpc_success, json_string_array_field, json_string_field, mezzanine_error_code,
+    persist_config_mutation, reject_unknown_json_fields, require_idempotency_key,
+    validate_config_file,
 };
+#[cfg(test)]
+use super::{
+    RequestedRole, TrustDecision, client_descriptor_from_json, client_json,
+    ensure_client_descriptor_role_matches, parse_json_rpc_request, parse_trust_decision,
+    project_trust_json, project_trust_state_filter_from_params,
+    validate_control_method_params_schema,
+};
+#[cfg(test)]
+use crate::security::project::ProjectTrustStore;
+#[cfg(test)]
 use mez_mux::session::ClientTerminalDescriptor;
 
 // Project-trust and configuration control methods.
@@ -26,6 +33,7 @@ use mez_mux::session::ClientTerminalDescriptor;
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 fn client_terminal_descriptor_from_control(
     terminal: Option<&super::TerminalDescriptor>,
 ) -> Option<ClientTerminalDescriptor> {
@@ -42,6 +50,7 @@ fn client_terminal_descriptor_from_control(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn dispatch_session_attach_request(body: &str, session: &mut Session) -> String {
     let request = match parse_json_rpc_request(body) {
         Ok(request) => request,
@@ -136,6 +145,7 @@ pub fn dispatch_session_attach_request(body: &str, session: &mut Session) -> Str
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn dispatch_project_trust_request(body: &str, trust_store: &mut ProjectTrustStore) -> String {
     let request = match parse_json_rpc_request(body) {
         Ok(request) => request,
@@ -247,6 +257,11 @@ pub fn dispatch_project_trust_request(body: &str, trust_store: &mut ProjectTrust
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn dispatch_config_request(body: &str, layers: &[ConfigLayer]) -> String {
     let request = match parse_json_rpc_request(body) {
         Ok(request) => request,
@@ -262,6 +277,11 @@ pub fn dispatch_config_request(body: &str, layers: &[ConfigLayer]) -> String {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn dispatch_config_request_cached(
     body: &str,
     caller_client_id: &ClientId,

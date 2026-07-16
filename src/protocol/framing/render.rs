@@ -36,6 +36,7 @@ pub fn render_frame_template(
 }
 
 /// Renders a compact status line for observers waiting on task completion.
+#[cfg(test)]
 pub fn render_pending_observer_status(observers: &[(String, String)], width: usize) -> String {
     if observers.is_empty() {
         return String::new();

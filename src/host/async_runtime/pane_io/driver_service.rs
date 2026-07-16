@@ -30,6 +30,7 @@ impl Default for AsyncPaneProcessDriverServiceConfig {
 
 impl AsyncPaneProcessDriverServiceConfig {
     /// Validates service loop bounds.
+    #[cfg(test)]
     pub fn validate(self) -> Result<()> {
         if self.max_polls == 0 {
             return Err(MezError::invalid_args(
@@ -57,6 +58,7 @@ pub struct AsyncPaneProcessDriverServiceReport {
 }
 
 /// Runs one pane driver until stopped, submitting output events to the actor.
+#[cfg(test)]
 pub async fn run_async_pane_process_driver_service<B, F>(
     handle: &AsyncRuntimeSessionHandle,
     driver: &mut AsyncPaneProcessDriver<B>,

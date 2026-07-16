@@ -39,9 +39,9 @@ pub use discovery::{
 pub use discovery::{
     discover_project_trust_prompt, select_overlay_for_directory, summarize_overlay_capabilities,
 };
-pub use types::{
-    OVERLAY_FILENAMES, ProjectTrustPrompt, ProjectTrustRecord, ProjectTrustStore, TrustDecision,
-};
+#[cfg(test)]
+pub use types::ProjectTrustPrompt;
+pub use types::{OVERLAY_FILENAMES, ProjectTrustRecord, ProjectTrustStore, TrustDecision};
 
 use encoding::{
     canonicalize_existing_or_original, parse_record_line, set_private_file_permissions,

@@ -69,6 +69,10 @@ pub enum GrantedRole {
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
+    #[allow(
+        dead_code,
+        reason = "wire role retained for complete control negotiation"
+    )]
     Observer,
     /// Represents the Agent case for this enumeration.
     ///
@@ -134,6 +138,7 @@ impl AuthenticationMaterial {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn none() -> Self {
         Self {
             mechanism: AuthenticationMechanism::None,
@@ -146,6 +151,7 @@ impl AuthenticationMaterial {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn bearer(token: impl Into<String>) -> Self {
         Self {
             mechanism: AuthenticationMechanism::BearerToken,
@@ -158,6 +164,7 @@ impl AuthenticationMaterial {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn peer_credentials() -> Self {
         Self {
             mechanism: AuthenticationMechanism::PeerCredentials,
@@ -664,6 +671,11 @@ impl PaneCaptureSource {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn visible(pane_id: impl Into<String>, lines: Vec<String>) -> Self {
         Self {
             pane_id: pane_id.into(),
@@ -847,6 +859,7 @@ impl Capabilities {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn observer() -> Self {
         let mut capabilities = Self::with_methods(OBSERVER_CONTROL_METHODS.to_vec());
         capabilities.features.mcp = false;

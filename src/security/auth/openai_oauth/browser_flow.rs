@@ -18,6 +18,11 @@ use mez_mux::theme::UiTheme;
 use std::net::TcpListener;
 use tokio::io::AsyncReadExt;
 
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub async fn run_openai_browser_login_async() -> Result<OpenAiProviderCredential> {
     run_openai_browser_login_with_theme_async(&UiTheme::default()).await
 }

@@ -652,6 +652,7 @@ impl RuntimeSessionService {
     /// control path. While detached, the action therefore remains running in
     /// its retained execution instead of failing the agent turn. Reattachment
     /// supplies the primary identity required to finish that work.
+    #[cfg(test)]
     pub(crate) fn resume_detached_config_change_actions(&mut self) -> Result<()> {
         let turns = self
             .agent_turn_ledger()

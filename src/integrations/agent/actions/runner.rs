@@ -491,6 +491,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
     ///
     /// Callers receive a typed result or error with context from the underlying
     /// runtime operation.
+    #[cfg(test)]
     pub async fn run_turn_async(
         &self,
         ledger: &mut AgentTurnLedger,
@@ -504,6 +505,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
     ///
     /// Provider workers use this entry point so queued dispatches do not clone
     /// large prompt contexts again immediately before request assembly.
+    #[cfg(test)]
     pub async fn run_turn_async_ref(
         &self,
         ledger: &mut AgentTurnLedger,

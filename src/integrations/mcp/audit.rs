@@ -17,6 +17,7 @@ use mez_agent::mcp::{McpStartupPlan, McpToolCallPlan, McpToolCallResponse};
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub async fn call_stdio_mcp_tool_with_audit(
     connection: &mut McpStdioConnection,
     plan: &McpToolCallPlan,
@@ -87,6 +88,7 @@ pub struct McpToolAuditCallContext<'a> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub async fn call_streamable_http_mcp_tool_with_audit(
     plan: &McpStartupPlan,
     environment: &BTreeMap<String, String>,

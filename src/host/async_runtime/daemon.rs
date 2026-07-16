@@ -7,13 +7,15 @@
 use super::provider::build_async_agent_provider_service;
 use super::{
     AsyncRuntimeDaemonConfig, AsyncRuntimeDaemonListeners, AsyncRuntimeMessageConnectionConfig,
-    AsyncRuntimeService, AsyncRuntimeServiceExit, AsyncRuntimeSessionHandle,
-    AsyncRuntimeSupervisionReport, Future, MezError, Result, RuntimeLifecycleState,
-    build_async_hook_side_effect_service, build_async_pane_process_supervisor_service,
-    build_async_persistence_side_effect_service, build_async_runtime_timer_side_effect_service,
+    AsyncRuntimeService, AsyncRuntimeServiceExit, AsyncRuntimeSessionHandle, MezError, Result,
+    RuntimeLifecycleState, build_async_hook_side_effect_service,
+    build_async_pane_process_supervisor_service, build_async_persistence_side_effect_service,
+    build_async_runtime_timer_side_effect_service,
     serve_async_runtime_control_listener_with_snapshots, serve_async_runtime_event_listener,
-    serve_async_runtime_message_listener_concurrent, supervise_async_runtime_services,
+    serve_async_runtime_message_listener_concurrent,
 };
+#[cfg(test)]
+use super::{AsyncRuntimeSupervisionReport, Future, supervise_async_runtime_services};
 
 // Daemon service construction and socket listener orchestration.
 
@@ -147,6 +149,7 @@ fn is_terminal_daemon_state(state: RuntimeLifecycleState) -> bool {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub async fn run_async_runtime_daemon<C>(
     handle: AsyncRuntimeSessionHandle,
     listeners: AsyncRuntimeDaemonListeners,

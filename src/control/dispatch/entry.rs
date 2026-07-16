@@ -1,30 +1,35 @@
 //! Control-dispatch entry points and compatibility context assembly.
 
+#[cfg(test)]
+use super::method_dispatch::control_error_response;
+#[cfg(test)]
+use super::method_dispatch::invalid_control_request_response;
 use super::method_dispatch::{
-    control_error_response, dispatch_control_request_internal, dispatch_parsed_request,
-    dispatch_parsed_to_response, invalid_control_request_response,
+    dispatch_control_request_internal, dispatch_parsed_request, dispatch_parsed_to_response,
 };
 use super::schema_validation::control_current_unix_seconds;
 use super::{
     AgentShellStore, AgentTurnLedger, AuditLog, BlockedApprovalQueue, ClientId, ConfigLayer,
-    ControlIdempotencyCache, EventLog, McpRegistry, MezError, PaneCaptureSource, Session,
-    SnapshotRepository, TerminalDescriptor, approval_audit_record,
-    approval_decide_scope_persistence, approval_json, approvals_json_for_params,
-    authorize_control_request, config_audit_outcome, config_audit_plan, config_request_cache_key,
-    config_response_advances_generation, dispatch_agent_list_with_store_and_model_profiles,
-    dispatch_agent_shell_command_with_store, dispatch_agent_shell_visibility_with_store,
-    dispatch_agent_task_list_with_ledger, dispatch_config_parsed_to_response_cached,
-    dispatch_event_list_request, dispatch_pane_capture_request, dispatch_snapshot_request,
+    ControlIdempotencyCache, McpRegistry, MezError, PaneCaptureSource, Session, SnapshotRepository,
+    TerminalDescriptor, approval_audit_record, approval_decide_scope_persistence, approval_json,
+    approvals_json_for_params, authorize_control_request, config_audit_outcome, config_audit_plan,
+    config_request_cache_key, config_response_advances_generation,
+    dispatch_agent_list_with_store_and_model_profiles, dispatch_agent_shell_command_with_store,
+    dispatch_agent_shell_visibility_with_store, dispatch_agent_task_list_with_ledger,
+    dispatch_config_parsed_to_response_cached, dispatch_pane_capture_request,
     dispatch_snapshot_request_with_context, error_code, is_config_control_method, json_rpc_error,
     json_rpc_success, json_string_field, mezzanine_error_code, parse_approval_decision,
     parse_json_rpc_request, require_idempotency_key, validate_control_method_params_schema,
 };
+#[cfg(test)]
+use super::{EventLog, dispatch_event_list_request, dispatch_snapshot_request};
 use mez_mux::session::ClientTerminalDescriptor;
 /// Runs the dispatch control request operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn dispatch_control_request(
     body: &str,
     session: &mut Session,
@@ -68,6 +73,7 @@ pub fn dispatch_control_request_with_mcp(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn dispatch_control_request_with_snapshots(
     body: &str,
     session: &mut Session,
@@ -102,6 +108,11 @@ pub fn dispatch_control_request_with_snapshots(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn dispatch_control_request_for_client_with_snapshots(
     body: &str,
     session: &mut Session,
@@ -122,6 +133,11 @@ pub fn dispatch_control_request_for_client_with_snapshots(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn dispatch_control_request_for_client_with_snapshot_captures(
     body: &str,
     session: &mut Session,
@@ -144,6 +160,11 @@ pub fn dispatch_control_request_for_client_with_snapshot_captures(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn dispatch_control_request_for_client_with_snapshot_captures_and_config_layers(
     body: &str,
     session: &mut Session,
@@ -168,6 +189,11 @@ pub fn dispatch_control_request_for_client_with_snapshot_captures_and_config_lay
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn dispatch_control_request_for_client_with_snapshot_captures_config_layers_and_frame_state(
     body: &str,
     session: &mut Session,
@@ -239,6 +265,7 @@ pub fn dispatch_control_request_for_client_with_snapshot_context(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn dispatch_control_request_for_client(
     body: &str,
     session: &mut Session,
@@ -461,6 +488,7 @@ pub fn dispatch_control_request_for_client_with_config_and_audit(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn dispatch_control_request_for_client_with_events(
     body: &str,
     session: &mut Session,

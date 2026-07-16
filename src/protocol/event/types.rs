@@ -23,6 +23,10 @@ pub enum EventKind {
     /// Agent status changed.
     AgentStatus,
     /// A message was created or changed.
+    #[allow(
+        dead_code,
+        reason = "event taxonomy is retained for protocol encoding and filtering"
+    )]
     Message,
     /// Configuration changed.
     ConfigChanged,
@@ -48,8 +52,16 @@ pub enum EventVisibility {
     /// Visible only to one pending observer request.
     PendingObserverRequest(String),
     /// Visible only to one agent.
+    #[allow(
+        dead_code,
+        reason = "visibility taxonomy is retained for protocol audience filtering"
+    )]
     Agent(String),
     /// Visible to automation clients.
+    #[allow(
+        dead_code,
+        reason = "visibility taxonomy is retained for protocol audience filtering"
+    )]
     Automation,
 }
 

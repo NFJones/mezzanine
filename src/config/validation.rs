@@ -4,6 +4,8 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+#[cfg(test)]
+use super::write_private_config_file_async;
 use super::{
     BASELINE_TOP_LEVEL_KEYS, BTreeMap, CURRENT_CONFIG_SCHEMA_VERSION, ConfigDiagnostic,
     ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation, ConfigMutationPlan,
@@ -13,7 +15,7 @@ use super::{
     mutate_toml_text, mutate_yaml_text, parse_config_schema_version, parse_mutation_path,
     reject_container_target, reject_unsupported_mutation_path, validate_command_rule_examples,
     validate_known_schema_path, validate_mcp_server_path, validate_permission_value,
-    validate_permissions_path, write_private_config_file, write_private_config_file_async,
+    validate_permissions_path, write_private_config_file,
 };
 use mez_mux::theme::{parse_hex_color, valid_color_alias_name};
 
@@ -37,6 +39,7 @@ pub fn validate_config_file(path: &Path, scope: ConfigScope) -> Result<ConfigVal
 }
 
 /// Validate a config file read through Tokio filesystem APIs.
+#[cfg(test)]
 pub async fn validate_config_file_async(
     path: &Path,
     scope: ConfigScope,
@@ -138,6 +141,7 @@ pub fn persist_config_text(path: &Path, scope: ConfigScope, text: &str) -> Resul
 }
 
 /// Apply a validated config mutation using Tokio filesystem APIs.
+#[cfg(test)]
 pub async fn persist_config_mutation_async(
     path: &Path,
     scope: ConfigScope,

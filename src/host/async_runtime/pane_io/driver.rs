@@ -147,6 +147,7 @@ impl<B> AsyncPaneProcessDriver<B> {
     }
 
     /// Returns the wrapped backend after test or migration use.
+    #[cfg(test)]
     pub fn into_backend(self) -> B {
         self.backend
     }

@@ -10,6 +10,7 @@ use super::{
 };
 use std::io::ErrorKind;
 use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(test)]
 use tokio::io::AsyncWriteExt;
 
 // Config path discovery and private file/directory helpers.
@@ -116,6 +117,7 @@ impl ConfigPaths {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub async fn select_primary_file_async(&self) -> Result<Option<PathBuf>> {
         let mut existing = Vec::new();
         for path in self.supported_primary_files() {
@@ -170,6 +172,7 @@ impl ConfigPaths {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub async fn ensure_default_config_async(&self) -> Result<PathBuf> {
         ensure_private_dir_async(&self.root).await?;
 
@@ -230,6 +233,7 @@ pub(super) fn ensure_private_dir(path: &Path) -> Result<()> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub(super) async fn ensure_private_dir_async(path: &Path) -> Result<()> {
     if let Ok(metadata) = tokio::fs::symlink_metadata(path).await {
         if metadata.file_type().is_symlink() {
@@ -278,6 +282,7 @@ pub(super) fn set_private_dir_permissions(path: &Path) -> Result<()> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub(super) async fn set_private_dir_permissions_async(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
@@ -320,6 +325,7 @@ pub(super) fn set_private_file_permissions(path: &Path) -> Result<()> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub(super) async fn set_private_file_permissions_async(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
@@ -390,6 +396,7 @@ fn write_private_config_file_atomic(path: &Path, text: &str) -> Result<()> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub(super) async fn write_private_config_file_async(path: &Path, text: &str) -> Result<()> {
     if let Ok(metadata) = tokio::fs::symlink_metadata(path).await
         && metadata.file_type().is_symlink()
@@ -412,6 +419,7 @@ pub(super) async fn write_private_config_file_async(path: &Path, text: &str) -> 
 /// # Parameters
 /// - `path`: Destination config file.
 /// - `text`: Complete file contents to persist.
+#[cfg(test)]
 async fn write_private_config_file_atomic_async(path: &Path, text: &str) -> Result<()> {
     let temp_path = private_config_temp_path(path);
     let mut file = tokio::fs::OpenOptions::new()
@@ -471,6 +479,7 @@ fn sync_parent_directory(path: &Path) {
 ///
 /// # Parameters
 /// - `path`: File whose parent directory should be synchronized.
+#[cfg(test)]
 async fn sync_parent_directory_async(path: &Path) {
     if let Some(parent) = path.parent()
         && let Ok(directory) = tokio::fs::File::open(parent).await

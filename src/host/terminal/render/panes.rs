@@ -7,16 +7,20 @@
 
 use std::collections::BTreeMap;
 
+#[cfg(test)]
 use super::{
-    DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_WINDOW_FRAME_TEMPLATE, MezError, PaneRenderInput, Result,
-    TerminalClientLoopConfig, TerminalFrameContext, TerminalFramePosition,
-    TerminalFrameRenderOptions, TerminalScreen, TerminalStyledLine, fit_width, group_frame_text,
-    pane_border_rendition, pane_divider_rendition, place_group_frame, place_window_frame,
-    plan_window_render, render_pane_lines, render_styled_pane_lines, render_window_frame_text,
-    rendered_window_body_size, styled_group_frame_line, styled_window_frame_line,
-    window_with_group_frame_space, write_merged_pane_frames_on_dividers,
-    write_styled_merged_pane_frames_on_dividers,
+    DEFAULT_PANE_FRAME_TEMPLATE, DEFAULT_WINDOW_FRAME_TEMPLATE, PaneRenderInput,
+    TerminalFramePosition, fit_width, render_window_frame_text,
 };
+use super::{
+    MezError, Result, TerminalClientLoopConfig, TerminalFrameContext, TerminalFrameRenderOptions,
+    TerminalScreen, TerminalStyledLine, pane_border_rendition, pane_divider_rendition,
+    place_group_frame, place_window_frame, plan_window_render, render_styled_pane_lines,
+    rendered_window_body_size, styled_group_frame_line, styled_window_frame_line,
+    window_with_group_frame_space, write_styled_merged_pane_frames_on_dividers,
+};
+#[cfg(test)]
+use super::{group_frame_text, render_pane_lines, write_merged_pane_frames_on_dividers};
 use mez_mux::layout::{PaneGeometry, Size, Window};
 use mez_mux::theme::UiTheme;
 /// Runs the draw window from screens operation for this subsystem.
@@ -24,6 +28,7 @@ use mez_mux::theme::UiTheme;
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn draw_window_from_screens(
     window: &Window,
     screens: &BTreeMap<String, TerminalScreen>,
@@ -118,6 +123,7 @@ pub fn draw_styled_window_from_screens(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn render_window(
     window: &Window,
     pane_inputs: &[PaneRenderInput],
@@ -145,6 +151,7 @@ pub fn render_window(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn render_window_with_pane_frame_template(
     window: &Window,
     pane_inputs: &[PaneRenderInput],
@@ -327,6 +334,7 @@ pub fn rendered_pane_geometries(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub(super) fn render_panes_by_geometry(
     size: Size,
     geometries: &[PaneGeometry],

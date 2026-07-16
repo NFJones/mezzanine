@@ -1,10 +1,12 @@
 //! Pane ownership for terminal frame rendering.
 
+#[cfg(test)]
+use super::super::fit_width;
 use super::super::{
     AgentPromptBlock, DEFAULT_PANE_FRAME_RIGHT_ALIGNED, DEFAULT_PANE_FRAME_TEMPLATE,
     FrameStatusSegment, FrameStatusValue, RenderedFrameStatus, TerminalFrameContext,
     TerminalFramePosition, TerminalFrameRenderOptions, TerminalPaneFrameContext,
-    TerminalStyledLine, UiTheme, Window, compose_pane_frame_row, fit_styled_width, fit_width,
+    TerminalStyledLine, UiTheme, Window, compose_pane_frame_row, fit_styled_width,
     overlay_agent_display_lines, render_agent_prompt_block, render_frame_status,
 };
 use super::{pane_frame_field_value, styled_pane_frame_line};
@@ -110,6 +112,7 @@ pub(in crate::host::terminal::render) fn render_styled_pane_lines(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub(in crate::host::terminal::render) fn render_pane_lines(
     window: &Window,
     pane: &mez_mux::layout::Pane,
@@ -211,6 +214,7 @@ pub(in crate::host::terminal::render) fn render_pane_frame_template(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub(in crate::host::terminal::render) fn render_pane_frame_text(
     window: &Window,
     pane: &mez_mux::layout::Pane,

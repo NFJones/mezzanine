@@ -6,28 +6,40 @@
 //! I/O details out of turn negotiation.
 
 use super::super::{
-    ActionResult, AgentAction, AgentTurnRecord, DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS,
-    EnvironmentSignature, MarkerToken, McpExecutionRequest, MezError, Path, Result,
-    ShellTransaction, ShellTransactionOutputTransport, ToolDiscoveryCache, ToolInventory,
-    local_action_plan, tool_discovery_script,
+    ActionResult, AgentAction, AgentTurnRecord, McpExecutionRequest, MezError, Result,
 };
+#[cfg(test)]
+use super::super::{
+    DEFAULT_TOOL_DISCOVERY_TIMEOUT_MS, EnvironmentSignature, MarkerToken, ToolDiscoveryCache,
+    ToolInventory, tool_discovery_script,
+};
+#[cfg(test)]
+use super::super::{Path, ShellTransaction, ShellTransactionOutputTransport};
+use mez_agent::{AsyncMcpActionExecutor, McpActionExecutor, mcp_response_to_action_result};
+#[cfg(test)]
 use mez_agent::{
-    AsyncMcpActionExecutor, LocalActionExecutor, LocalExecutionOutput, LocalExecutionRequest,
-    LocalExecutionTransport, McpActionExecutor, PaneShellExecutor, ShellExecutionRequest,
-    local_execution_output_to_action_result, mcp_response_to_action_result,
-    postprocess_local_shell_output,
+    LocalActionExecutor, LocalExecutionOutput, LocalExecutionRequest, LocalExecutionTransport,
+    PaneShellExecutor, ShellExecutionRequest,
 };
+#[cfg(test)]
+use mez_agent::{
+    local_action_plan, local_execution_output_to_action_result, postprocess_local_shell_output,
+};
+#[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Adapts the existing pane shell executor to the transport-neutral executor
 /// contract.
+#[cfg(test)]
 pub struct PaneShellLocalExecutor<'a, E> {
     shell_path: &'a Path,
     pane_executor: &'a mut E,
 }
 
+#[cfg(test)]
 impl<'a, E> PaneShellLocalExecutor<'a, E> {
     /// Builds an adapter around a pane shell executor and shell path.
+    #[cfg(test)]
     pub fn new(shell_path: &'a Path, pane_executor: &'a mut E) -> Self {
         Self {
             shell_path,
@@ -36,6 +48,7 @@ impl<'a, E> PaneShellLocalExecutor<'a, E> {
     }
 }
 
+#[cfg(test)]
 impl<E> LocalActionExecutor for PaneShellLocalExecutor<'_, E>
 where
     E: PaneShellExecutor<Error = MezError>,
@@ -76,6 +89,7 @@ where
 ///
 /// Callers receive a typed result or error with context from the underlying
 /// runtime operation.
+#[cfg(test)]
 pub fn execute_shell_action_through_pane(
     turn: &AgentTurnRecord,
     action: &AgentAction,
@@ -91,6 +105,7 @@ pub fn execute_shell_action_through_pane(
 ///
 /// Callers receive the same `ActionResult` shape regardless of the transport
 /// that ran the planned local action.
+#[cfg(test)]
 pub fn execute_local_action(
     turn: &AgentTurnRecord,
     action: &AgentAction,
@@ -166,6 +181,7 @@ pub async fn execute_mcp_action_through_runtime_async(
 ///
 /// Callers receive a typed result or error with context from the underlying
 /// runtime operation.
+#[cfg(test)]
 pub fn discover_tools_through_pane_shell(
     cache: &mut ToolDiscoveryCache,
     signature: EnvironmentSignature,

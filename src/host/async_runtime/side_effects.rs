@@ -6,12 +6,13 @@
 
 use super::{
     AsyncAttachedTerminalIo, AsyncHookEvent, AsyncRuntimeService, AsyncRuntimeServiceExit,
-    AsyncRuntimeSessionHandle, AttachedTerminalFdRole, ClientId, ClientStatusLine,
+    AsyncRuntimeSessionHandle, AttachedTerminalFdRole, ClientId,
     DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES, Duration, MezError, PersistenceEvent,
     PersistenceTarget, PersistenceWriteMode, Result, RuntimeEvent, RuntimeEventBatch,
-    RuntimeLifecycleState, RuntimeSideEffect, RuntimeTimerKey, TerminalClientLoopConfig,
-    TimerEvent, sleep,
+    RuntimeLifecycleState, RuntimeSideEffect, RuntimeTimerKey, TimerEvent, sleep,
 };
+#[cfg(test)]
+use super::{ClientStatusLine, TerminalClientLoopConfig};
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -83,6 +84,7 @@ impl AsyncRuntimeSideEffectServiceConfig {
 
 /// Report returned by the side-effect drain service.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub struct AsyncRuntimeSideEffectServiceReport {
     /// Number of actor drain polls attempted.
     pub polls: u64,
@@ -208,6 +210,7 @@ pub struct AsyncHookSideEffectServiceReport {
 /// provider, hook, and persistence workers are split out. The callback is
 /// synchronous by design: it should enqueue into a specific worker or update a
 /// fake test sink, not perform blocking I/O inline.
+#[cfg(test)]
 pub async fn run_async_runtime_side_effect_service<A, S>(
     handle: &AsyncRuntimeSessionHandle,
     config: AsyncRuntimeSideEffectServiceConfig,
@@ -268,6 +271,11 @@ where
 }
 
 /// Builds an auxiliary supervised service for draining runtime side effects.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn build_async_runtime_side_effect_service<A>(
     name: impl Into<String>,
     handle: AsyncRuntimeSessionHandle,
@@ -756,6 +764,7 @@ pub fn build_async_persistence_side_effect_service(
 /// This service is the Phase 6 render boundary. It deliberately drains only
 /// `RenderClient` effects, leaving provider, pane I/O, timer, persistence, and
 /// other side-effect families queued for their own workers.
+#[cfg(test)]
 pub async fn run_async_render_side_effect_service<A, P, S>(
     handle: &AsyncRuntimeSessionHandle,
     config: AsyncRuntimeSideEffectServiceConfig,
@@ -832,6 +841,11 @@ where
 }
 
 /// Builds an auxiliary supervised service for render side effects.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn build_async_render_side_effect_service<A, P>(
     name: impl Into<String>,
     handle: AsyncRuntimeSessionHandle,
@@ -977,6 +991,11 @@ where
 }
 
 /// Builds an auxiliary supervised service for client output flushes.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn build_async_client_output_flush_service<I>(
     name: impl Into<String>,
     handle: AsyncRuntimeSessionHandle,

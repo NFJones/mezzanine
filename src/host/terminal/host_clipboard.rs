@@ -66,6 +66,7 @@ impl HostClipboard {
     }
 
     /// Returns a strategy that silently ignores copy and paste requests.
+    #[cfg(test)]
     pub fn disabled() -> Self {
         Self {
             copy: HostClipboardCopyBackend::Function(disabled_host_clipboard_copy),
@@ -78,6 +79,11 @@ impl HostClipboard {
     /// # Parameters
     /// - `copy`: The ordered copy commands that receive clipboard content on stdin.
     /// - `read`: The ordered paste commands whose stdout is read as clipboard text.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn commands(copy: Vec<HostClipboardCommand>, read: Vec<HostClipboardCommand>) -> Self {
         Self {
             copy: HostClipboardCopyBackend::Commands(copy),
@@ -167,6 +173,7 @@ impl fmt::Debug for HostClipboard {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 fn disabled_host_clipboard_copy(_: &str) -> bool {
     false
 }
@@ -176,6 +183,7 @@ fn disabled_host_clipboard_copy(_: &str) -> bool {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 fn disabled_host_clipboard_read() -> Option<String> {
     None
 }

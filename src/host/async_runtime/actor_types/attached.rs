@@ -3,14 +3,16 @@
 use super::{
     AsyncRuntimeSessionHandle, AttachedClientStepApplication, AttachedTerminalClientStepPlan,
     AttachedTerminalFdReadiness, ClientId, ClientStatusLine, ClientViewRole, Result, Size,
-    TerminalClientLoopConfig, plan_attached_terminal_client_step,
+    TerminalClientLoopConfig,
 };
+use crate::host::terminal::plan_attached_terminal_client_step;
 
 /// Runs the plan async attached terminal client step operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub async fn plan_async_attached_terminal_client_step(
     handle: &AsyncRuntimeSessionHandle,
     role: ClientViewRole,
@@ -31,6 +33,7 @@ pub async fn plan_async_attached_terminal_client_step(
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone)]
+#[cfg(test)]
 pub struct AsyncAttachedTerminalStepRequest<'a> {
     /// Stores the primary client id value for this data structure.
     ///
@@ -74,6 +77,7 @@ pub struct AsyncAttachedTerminalStepRequest<'a> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub async fn plan_and_apply_async_attached_terminal_client_step(
     handle: &AsyncRuntimeSessionHandle,
     request: AsyncAttachedTerminalStepRequest<'_>,

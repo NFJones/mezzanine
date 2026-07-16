@@ -94,6 +94,7 @@ pub fn execute_agent_shell_command(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn execute_agent_shell_command_with_mcp(
     store: &mut AgentShellStore,
     pane_id: &str,
@@ -130,6 +131,7 @@ pub fn execute_agent_shell_command_with_runtime_context(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn execute_agent_shell_command_with_permissions(
     store: &mut AgentShellStore,
     pane_id: &str,

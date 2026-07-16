@@ -30,6 +30,7 @@ use std::time::Instant;
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub struct PaneRenderInput {
     /// Stores the pane id value for this data structure.
     ///
@@ -365,6 +366,7 @@ impl AttachedTerminalFdRole {
     ///
     /// Keeping this value documented makes the contract explicit at the module
     /// boundary and avoids relying on call-site inference.
+    #[cfg(test)]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Input => "input",
@@ -416,6 +418,7 @@ impl TerminalFdInterest {
     ///
     /// Keeping this value documented makes the contract explicit at the module
     /// boundary and avoids relying on call-site inference.
+    #[cfg(test)]
     pub const fn is_empty(self) -> bool {
         !self.read && !self.write
     }
@@ -490,6 +493,7 @@ impl Drop for TerminalRawModeGuard {
 
 /// A validated descriptor that the attached-terminal client loop may poll.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub struct AttachedTerminalFd {
     /// Stores the role value for this data structure.
     ///
@@ -508,12 +512,14 @@ pub struct AttachedTerminalFd {
     pub(super) interest: TerminalFdInterest,
 }
 
+#[cfg(test)]
 impl AttachedTerminalFd {
     /// Runs the new operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn new(
         role: AttachedTerminalFdRole,
         fd: RawFd,
@@ -528,6 +534,7 @@ impl AttachedTerminalFd {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn input(fd: RawFd, interest: TerminalFdInterest) -> Result<Self> {
         Self::new(AttachedTerminalFdRole::Input, fd, interest)
     }
@@ -537,6 +544,7 @@ impl AttachedTerminalFd {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn output(fd: RawFd, interest: TerminalFdInterest) -> Result<Self> {
         Self::new(AttachedTerminalFdRole::Output, fd, interest)
     }
@@ -546,6 +554,7 @@ impl AttachedTerminalFd {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn control(fd: RawFd, interest: TerminalFdInterest) -> Result<Self> {
         Self::new(AttachedTerminalFdRole::Control, fd, interest)
     }
@@ -554,6 +563,11 @@ impl AttachedTerminalFd {
     ///
     /// Keeping this value documented makes the contract explicit at the module
     /// boundary and avoids relying on call-site inference.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub const fn role(self) -> AttachedTerminalFdRole {
         self.role
     }
@@ -562,6 +576,11 @@ impl AttachedTerminalFd {
     ///
     /// Keeping this value documented makes the contract explicit at the module
     /// boundary and avoids relying on call-site inference.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub const fn raw_fd(self) -> RawFd {
         self.fd
     }
@@ -570,6 +589,11 @@ impl AttachedTerminalFd {
     ///
     /// Keeping this value documented makes the contract explicit at the module
     /// boundary and avoids relying on call-site inference.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub const fn interest(self) -> TerminalFdInterest {
         self.interest
     }
@@ -620,6 +644,7 @@ impl AttachedTerminalFdReadiness {
     ///
     /// Keeping this value documented makes the contract explicit at the module
     /// boundary and avoids relying on call-site inference.
+    #[cfg(test)]
     pub const fn is_ready(self) -> bool {
         self.readable || self.writable || self.hangup || self.error
     }
@@ -692,6 +717,7 @@ fn validate_terminal_size_fd(fd: RawFd) -> Result<()> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub(super) fn validate_attached_terminal_fd(
     role: AttachedTerminalFdRole,
     fd: RawFd,
@@ -719,6 +745,7 @@ pub(super) fn validate_attached_terminal_fd(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub(super) fn invalid_attached_terminal_fd_error(role: AttachedTerminalFdRole) -> MezError {
     MezError::invalid_args(format!(
         "attached terminal {} file descriptor is invalid",

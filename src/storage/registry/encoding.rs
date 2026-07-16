@@ -77,6 +77,11 @@ impl SessionRecord {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn to_json(&self) -> String {
         self.to_json_with_index_alias(None)
     }

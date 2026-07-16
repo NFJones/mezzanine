@@ -6,11 +6,13 @@
 //! models, product labels, configured themes, animation timing, and hit actions
 //! into those lower plans.
 
+#[cfg(test)]
+use super::PaneRenderInput;
 use super::{
     AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, BTreeMap, GraphicRendition, MezError,
-    MousePaneAgentStatusCell, MouseWindowActionFrameCell, PaneAgentStatusField, PaneRenderInput,
-    Result, TerminalClientLoopConfig, TerminalFrameContext, TerminalPaneFrameContext,
-    TerminalScreen, TerminalStyleSpan, TerminalStyledLine, WindowFrameAction,
+    MousePaneAgentStatusCell, MouseWindowActionFrameCell, PaneAgentStatusField, Result,
+    TerminalClientLoopConfig, TerminalFrameContext, TerminalPaneFrameContext, TerminalScreen,
+    TerminalStyleSpan, TerminalStyledLine, WindowFrameAction,
 };
 use mez_mux::input::{MouseWindowFrameCell, MouseWindowGroupFrameCell};
 use mez_mux::layout::{PaneGeometry, Size, Window};
@@ -24,14 +26,16 @@ use mez_mux::render::{
     FramePillboxEntry, FramePillboxSegment, FrameStatusSegment, FrameStatusValue,
     PositionedFrameStatus, RenderedFrameStatus, TerminalRenderCell, compose_frame_pillbox_row,
     compose_frame_text_row, compose_pane_frame_row,
-    display_overlay_targets as agent_display_overlay_targets, fit_styled_width, fit_width,
-    fitted_text_width, frame_pillbox_segment_columns, frame_style_rendition,
+    display_overlay_targets as agent_display_overlay_targets, fit_styled_width, fitted_text_width,
+    frame_pillbox_segment_columns, frame_style_rendition,
     overlay_display_lines as overlay_agent_display_lines, overlay_fixed_column_style_spans,
     position_frame_status, render_frame_pillbox_segments, render_frame_pillbox_text,
     render_frame_status, sanitize_frame_text, style_span_overlaps_columns,
     style_span_segments_outside_range, styled_frame_line_with_rendition,
     write_text_cells_with_width as write_frame_text_cells,
 };
+#[cfg(test)]
+use mez_mux::render::{fit_width, normalize_overlay_style_spans};
 use mez_mux::theme::{UiColorPair, UiTheme};
 
 // Client view composition and pane/window rendering.
@@ -45,47 +49,55 @@ mod text;
 
 use dividers::{merged_pane_frame_boundary_style_spans, pane_divider_rendition};
 use frame::{
-    AGENT_STATUS_SCAN_BAND_WIDTH, group_frame_text, pane_agent_prompt_space_reserved,
-    pane_agent_prompt_transparent, pane_agent_shell_visible, pane_border_rendition,
-    render_pane_lines, render_styled_pane_lines, render_window_frame_text, styled_group_frame_line,
-    styled_window_frame_line, write_merged_pane_frames_on_dividers,
-    write_styled_merged_pane_frames_on_dividers,
+    AGENT_STATUS_SCAN_BAND_WIDTH, pane_agent_prompt_space_reserved, pane_agent_prompt_transparent,
+    pane_agent_shell_visible, pane_border_rendition, render_styled_pane_lines,
+    styled_group_frame_line, styled_window_frame_line, write_styled_merged_pane_frames_on_dividers,
+};
+#[cfg(test)]
+use frame::{
+    group_frame_text, render_pane_lines, render_window_frame_text,
+    write_merged_pane_frames_on_dividers,
 };
 pub use frame::{
     pane_frame_agent_status_pillbox_cells, window_frame_action_pillbox_cells,
     window_frame_pillbox_cells, window_group_frame_pillbox_cells,
 };
+#[cfg(test)]
+use mez_mux::presentation::compose_client_presentation_with_styles;
 use mez_mux::presentation::{
-    compose_client_presentation_with_styles, pane_content_size_for_geometry,
-    pane_frame_merges_into_divider, pane_render_region_size_for_geometry, place_group_frame,
-    place_window_frame, rendered_window_body_size,
+    pane_content_size_for_geometry, pane_frame_merges_into_divider,
+    pane_render_region_size_for_geometry, place_group_frame, place_window_frame,
+    rendered_window_body_size,
 };
 use mez_mux::render::{
     agent_status_running_gradient_palette, animated_scan_background, blend_terminal_color,
     contrasting_binary_foreground, gradient_highlight_for_offset, neutral_surface_step,
-    normalize_overlay_canvas, normalize_overlay_style_spans, overlay_text_style_width,
-    push_or_extend_style_span,
+    normalize_overlay_canvas, overlay_text_style_width, push_or_extend_style_span,
 };
 use mez_mux::render::{clipped_prompt_region, write_line_segment};
+pub use overlay::compose_modal_display_overlay_lines;
+#[cfg(test)]
 pub use overlay::{
     compose_display_overlay_line_style_spans, compose_modal_display_overlay_line_style_spans,
-    compose_modal_display_overlay_lines,
 };
-pub use panes::{
-    draw_styled_window_from_screens, draw_window_from_screens, render_window,
-    render_window_with_pane_frame_template, rendered_pane_geometries,
-};
+pub use panes::{draw_styled_window_from_screens, rendered_pane_geometries};
+#[cfg(test)]
+pub use panes::{draw_window_from_screens, render_window, render_window_with_pane_frame_template};
+#[cfg(test)]
+use prompt::agent_live_footer_style_spans;
 pub(crate) use prompt::agent_prompt_input_rendition;
 use prompt::{
-    AgentPromptBlock, agent_live_footer_state_label, agent_live_footer_style_spans,
-    display_overlay_text_rendition, render_agent_prompt_block,
+    AgentPromptBlock, agent_live_footer_state_label, display_overlay_text_rendition,
+    render_agent_prompt_block,
 };
 pub use prompt::{
-    agent_prompt_reserved_line_count, compose_display_region_overlay_line_style_spans,
-    compose_display_region_overlay_lines, compose_prompt_overlay_lines,
-    compose_prompt_overlay_presentation, compose_prompt_overlay_presentation_with_styles,
-    compose_prompt_region_presentation_with_styles, compose_readline_prompt_client_presentation,
-    render_readline_prompt_status_row,
+    agent_prompt_reserved_line_count, compose_prompt_overlay_presentation_with_styles,
+};
+#[cfg(test)]
+pub use prompt::{
+    compose_display_region_overlay_line_style_spans, compose_display_region_overlay_lines,
+    compose_prompt_overlay_presentation, compose_prompt_region_presentation_with_styles,
+    compose_readline_prompt_client_presentation, render_readline_prompt_status_row,
 };
 pub(crate) use text::{
     DEFAULT_AGENT_WRAP_COLUMN_CAP, agent_log_wrap_width, agent_wrap_column_cap,
@@ -178,6 +190,7 @@ pub struct TerminalFrameRenderOptions<'a> {
 
 impl<'a> TerminalFrameRenderOptions<'a> {
     /// Builds frame options with default styling for plain text rendering.
+    #[cfg(test)]
     pub const fn plain(enabled: bool, template: &'a str, position: TerminalFramePosition) -> Self {
         Self {
             enabled,

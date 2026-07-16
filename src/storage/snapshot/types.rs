@@ -830,10 +830,22 @@ pub struct SnapshotCreationContext<'a> {
     /// Terminal and transcript capture state by pane.
     pub pane_captures: &'a [SnapshotPaneCapture],
     /// Active configuration layer metadata.
+    #[allow(
+        dead_code,
+        reason = "snapshot context preserves compatibility metadata for encoders"
+    )]
     pub active_config_layers: &'a [SnapshotConfigLayerMetadata],
     /// Window and pane frame state.
+    #[allow(
+        dead_code,
+        reason = "snapshot context preserves compatibility metadata for encoders"
+    )]
     pub frame_state: &'a SnapshotFrameState,
     /// Agent shell session metadata.
+    #[allow(
+        dead_code,
+        reason = "snapshot context preserves compatibility metadata for encoders"
+    )]
     pub agent_sessions: &'a [SnapshotAgentSession],
     /// Approval grant metadata retained for audit history.
     pub approval_grants: &'a [SnapshotApprovalGrantMetadata],

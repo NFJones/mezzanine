@@ -4,11 +4,11 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+#[cfg(test)]
 use super::dispatch::{ControlConnectionState, dispatch_control_request_for_connection};
-use super::{
-    CONTROL_CONTENT_TYPE, ControlIdempotencyCache, MezError, ProtocolFrame, Result, Session,
-    decode_frame, encode_frame,
-};
+use super::{CONTROL_CONTENT_TYPE, MezError, ProtocolFrame, Result, decode_frame, encode_frame};
+#[cfg(test)]
+use super::{ControlIdempotencyCache, Session};
 
 // Control content-length framing helpers.
 
@@ -41,6 +41,7 @@ pub fn decode_control_frame(input: &[u8], max_content_length: usize) -> Result<(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn handle_control_frame(
     input: &[u8],
     max_content_length: usize,
@@ -58,6 +59,7 @@ pub fn handle_control_frame(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn handle_control_frames(
     input: &[u8],
     max_content_length: usize,

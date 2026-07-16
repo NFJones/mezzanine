@@ -4,13 +4,15 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+#[cfg(test)]
+use super::DEFAULT_PANE_TERM;
 use super::{
-    AsRawFd, AuxiliarySocketKind, BorrowedFd, Component, DEFAULT_PANE_TERM, DirBuilder,
-    DirBuilderExt, FileTypeExt, MEZ_ENV_FIELD_SEPARATOR, MIN_PANE_COLUMNS, MIN_PANE_ROWS,
-    MetadataExt, MezError, OsString, PaneEnvironment, PaneId, Path, PathBuf, PermissionsExt, RawFd,
-    Result, RuntimeEnv, RuntimeLifecycleState, RuntimeRegistryUpdatePlan, SessionId,
-    SessionRegistry, Size, SocketDirectory, SocketDirectorySource, UnixListener, UnixStream,
-    WindowId, fs, geteuid, socket_peercred,
+    AsRawFd, AuxiliarySocketKind, BorrowedFd, Component, DirBuilder, DirBuilderExt, FileTypeExt,
+    MEZ_ENV_FIELD_SEPARATOR, MIN_PANE_COLUMNS, MIN_PANE_ROWS, MetadataExt, MezError, OsString,
+    PaneEnvironment, PaneId, Path, PathBuf, PermissionsExt, RawFd, Result, RuntimeEnv,
+    RuntimeLifecycleState, RuntimeRegistryUpdatePlan, SessionId, SessionRegistry, Size,
+    SocketDirectory, SocketDirectorySource, UnixListener, UnixStream, WindowId, fs, geteuid,
+    socket_peercred,
 };
 #[cfg(test)]
 use super::{
@@ -357,6 +359,7 @@ pub fn authorize_unix_peer_raw_fd(raw_fd: RawFd, owner_uid: u32) -> Result<()> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn authorize_unix_peer(stream: &UnixStream, owner_uid: u32) -> Result<()> {
     authorize_unix_peer_raw_fd(stream.as_raw_fd(), owner_uid)
 }
@@ -367,6 +370,10 @@ pub fn authorize_unix_peer(stream: &UnixStream, owner_uid: u32) -> Result<()> {
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 #[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn serve_control_connection(
     stream: &mut UnixStream,
     max_content_length: usize,
@@ -399,6 +406,10 @@ pub fn serve_control_connection(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 #[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn serve_runtime_control_connection(
     stream: &mut UnixStream,
     max_content_length: usize,
@@ -420,6 +431,10 @@ pub fn serve_runtime_control_connection(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 #[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn serve_runtime_control_connection_with_state(
     stream: &mut UnixStream,
     max_content_length: usize,
@@ -445,6 +460,7 @@ pub fn serve_runtime_control_connection_with_state(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn pane_environment(
     socket_path: &Path,
     session_id: &SessionId,

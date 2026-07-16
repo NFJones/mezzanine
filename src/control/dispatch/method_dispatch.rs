@@ -86,6 +86,7 @@ pub(super) fn control_error_response(request: &JsonRpcRequest, error: &MezError)
 }
 
 /// Converts a malformed control envelope into the standard invalid request response.
+#[cfg(test)]
 pub(super) fn invalid_control_request_response(error: &MezError) -> String {
     json_rpc_error("null", -32600, error.message(), "invalid_request")
 }

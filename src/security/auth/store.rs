@@ -25,12 +25,15 @@ use super::metadata::{
 use super::openai_oauth::{OpenAiProviderCredential, refresh_openai_provider_credential_async};
 use super::secret_service::NativeSecretServiceCredentialStore;
 use super::types::{
-    AuthCredentialKind, AuthCredentialState, AuthFlowPlan, AuthInteractivePromptPlan, AuthMetadata,
-    AuthMethod, AuthPaths, AuthPromptAction, AuthStatus, CredentialStore,
+    AuthCredentialKind, AuthCredentialState, AuthMetadata, AuthPaths, AuthStatus, CredentialStore,
     CredentialStoreAvailability, CredentialStoreKind, CredentialStorePlan,
     FileCredentialFallbackReason, McpAuthMetadata, McpAuthStatus, McpCredentialKind,
-    McpOAuthCredential, ProviderBrowserFlowPlan, ProviderEntitlementPersistence,
-    ProviderEntitlementPlan, ProviderEntitlementValidation,
+    McpOAuthCredential,
+};
+#[cfg(test)]
+use super::types::{
+    AuthFlowPlan, AuthInteractivePromptPlan, AuthMethod, AuthPromptAction, ProviderBrowserFlowPlan,
+    ProviderEntitlementPersistence, ProviderEntitlementPlan, ProviderEntitlementValidation,
 };
 
 /// Defines the OPENAI PROVIDER const used by this subsystem.
@@ -77,6 +80,7 @@ impl AuthStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn paths(&self) -> &AuthPaths {
         &self.paths
     }
@@ -86,6 +90,11 @@ impl AuthStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn plan_openai_flow(&self, method: AuthMethod) -> AuthFlowPlan {
         let os_store = CommandBackedCredentialStore::secret_tool();
         let mut plan = self.plan_openai_flow_with_os_store(method, &os_store);
@@ -98,6 +107,11 @@ impl AuthStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn plan_provider_flow(&self, provider: &str, method: AuthMethod) -> AuthFlowPlan {
         let credential_store = self.credential_store_plan(provider);
         AuthFlowPlan {
@@ -128,6 +142,7 @@ impl AuthStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub(super) fn plan_openai_flow_with_os_store<R: CredentialCommandRunner>(
         &self,
         method: AuthMethod,
@@ -356,6 +371,7 @@ impl AuthStore {
     /// Runs the read metadata operation for this subsystem.
     ///
     /// Returns metadata for the first available provider.
+    #[cfg(test)]
     pub fn read_metadata(&self) -> Result<Option<AuthMetadata>> {
         Ok(self.read_all_metadata()?.into_values().next())
     }
@@ -417,6 +433,7 @@ impl AuthStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn write_file_secret(&self, provider: &str, secret: &str) -> Result<String> {
         ensure_private_dir(self.paths.root())?;
         ensure_private_dir(self.paths.secret_directory())?;
@@ -813,6 +830,7 @@ impl AuthStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn login_openai_api_key(
         &self,
         selected_model_profile: &str,
@@ -827,6 +845,11 @@ impl AuthStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn login_openai_api_key_with_default_os_store(
         &self,
         selected_model_profile: &str,
@@ -849,6 +872,11 @@ impl AuthStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn login_openai_api_key_with_preferred_store(
         &self,
         selected_model_profile: &str,
@@ -980,6 +1008,7 @@ impl AuthStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn openai_refresh_needed_soon(&self) -> Result<bool> {
         self.openai_refresh_needed_with_leeway(DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS)
     }
@@ -1005,6 +1034,11 @@ impl AuthStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub async fn refresh_openai_provider_credential_if_needed_async(&self) -> Result<bool> {
         self.refresh_openai_provider_credential_if_needed_with_leeway_async(
             DEFAULT_PROVIDER_AUTH_REFRESH_LEEWAY_SECONDS,
@@ -1124,6 +1158,7 @@ impl AuthStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn read_file_secret(&self, reference: &str) -> Result<Option<SecretString>> {
         self.file_store_for_reference(reference)?
             .load_secret(reference)

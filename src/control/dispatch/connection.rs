@@ -6,11 +6,13 @@ use super::{
     AuthenticationMaterial, AuthenticationMechanism, Capabilities, ClientId, ClientRole,
     ControlIdempotencyCache, GrantedRole, InitializeContext, InitializeResult, JsonRpcRequest,
     MezError, ObserverRequestSummary, RequestedRole, Result, ServerIdentity, Session,
-    authorize_control_request, decode_control_frame, encode_control_body, error_code, initialize,
-    initialize_params_from_json, initialize_result_json, json_rpc_error, json_rpc_success,
-    json_string_field, mezzanine_error_code, negotiate_protocol_version, observer_json,
-    parse_json_rpc_request, require_session_target_matches_value, session_summary_json,
+    authorize_control_request, error_code, initialize, initialize_params_from_json,
+    initialize_result_json, json_rpc_error, json_rpc_success, json_string_field,
+    mezzanine_error_code, negotiate_protocol_version, observer_json, parse_json_rpc_request,
+    require_session_target_matches_value, session_summary_json,
 };
+#[cfg(test)]
+use super::{decode_control_frame, encode_control_body};
 /// Carries Control Connection State state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -89,6 +91,11 @@ impl ControlConnectionState {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn rebind_caller_client(&mut self, caller_client_id: ClientId) {
         self.initialized = true;
         self.caller_client_id = Some(caller_client_id);
@@ -114,6 +121,7 @@ impl ControlConnectionState {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn handle_control_frames_for_connection(
     input: &[u8],
     max_content_length: usize,

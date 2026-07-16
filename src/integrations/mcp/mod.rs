@@ -5,12 +5,14 @@
 //! HTTP exchange, environment/credential resolution, persisted configuration
 //! commands, runtime transport ownership, and audit emission.
 
+#[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Exposes the audit module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
+#[cfg(test)]
 mod audit;
 /// Exposes the config commands module boundary.
 ///
@@ -52,6 +54,7 @@ pub use streamable_http::{
 };
 
 /// Returns the product clock value supplied to deterministic MCP transitions.
+#[cfg(test)]
 pub(crate) fn current_mcp_unix_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

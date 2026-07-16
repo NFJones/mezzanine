@@ -30,10 +30,18 @@ pub struct ProtocolFrameCodec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameOverflow {
     /// Cut text at the requested width.
+    #[allow(
+        dead_code,
+        reason = "supported frame overflow policy is selected by protocol callers"
+    )]
     Truncate,
     /// Replace the last visible characters with an ellipsis.
     Elide,
     /// Insert line breaks at the requested width.
+    #[allow(
+        dead_code,
+        reason = "supported frame overflow policy is selected by protocol callers"
+    )]
     Wrap,
 }
 
@@ -106,6 +114,11 @@ impl ProtocolFrameCodec {
     }
 
     /// Returns the maximum configured body length for this codec.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn max_content_length(self) -> usize {
         self.max_content_length
     }

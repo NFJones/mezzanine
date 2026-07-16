@@ -145,6 +145,7 @@ fn deepseek_required_maap_response(
 }
 
 /// Builds a DeepSeek Chat Completions HTTP request.
+#[cfg(test)]
 pub fn build_deepseek_chat_completions_http_request(
     request: &ModelRequest,
     api_key: &str,

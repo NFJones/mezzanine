@@ -2,17 +2,19 @@
 
 use super::helpers::{default_pane_process_state, shell_metadata_from_session};
 use super::{
-    PaneSnapshotPayload, Session, SessionSnapshotPayload, SnapshotAgentSession,
-    SnapshotConfigLayerMetadata, SnapshotCreationContext, SnapshotFrameState, SnapshotLayoutNode,
-    SnapshotPaneCapture, SnapshotPaneGeometry, SnapshotSessionState, TerminalModeState,
-    TerminalSavedState, WindowGroupSnapshotPayload, WindowSnapshotPayload,
+    PaneSnapshotPayload, Session, SessionSnapshotPayload, SnapshotCreationContext,
+    SnapshotFrameState, SnapshotLayoutNode, SnapshotPaneGeometry, SnapshotSessionState,
+    TerminalModeState, TerminalSavedState, WindowGroupSnapshotPayload, WindowSnapshotPayload,
 };
+#[cfg(test)]
+use super::{SnapshotAgentSession, SnapshotConfigLayerMetadata, SnapshotPaneCapture};
 impl SessionSnapshotPayload {
     /// Runs the from session operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn from_session(session: &Session) -> Self {
         Self::from_session_with_captures(session, &[])
     }
@@ -22,6 +24,7 @@ impl SessionSnapshotPayload {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn from_session_with_captures(
         session: &Session,
         pane_captures: &[SnapshotPaneCapture],
@@ -34,6 +37,7 @@ impl SessionSnapshotPayload {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn from_session_with_captures_and_config_layers(
         session: &Session,
         pane_captures: &[SnapshotPaneCapture],
@@ -52,6 +56,7 @@ impl SessionSnapshotPayload {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn from_session_with_captures_and_config_layers_and_frame_state(
         session: &Session,
         pane_captures: &[SnapshotPaneCapture],
@@ -72,6 +77,7 @@ impl SessionSnapshotPayload {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn from_session_with_captures_config_layers_frame_state_and_agent_sessions(
         session: &Session,
         pane_captures: &[SnapshotPaneCapture],

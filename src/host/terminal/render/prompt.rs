@@ -11,13 +11,16 @@ use crate::host::terminal::{
 };
 use crate::ui::readline::{ReadlinePrompt, ReadlinePromptKind};
 use mez_mux::layout::Size;
-use mez_mux::presentation::{
-    ClientStatusKind, ClientStatusLine, ReadlinePromptRegion, RenderedClientView,
+use mez_mux::presentation::{ClientStatusKind, ClientStatusLine};
+#[cfg(test)]
+use mez_mux::presentation::{ReadlinePromptRegion, RenderedClientView};
+#[cfg(test)]
+use mez_mux::render::{
+    PromptRegionRenderOptions, clipped_prompt_region, compose_prompt_region, write_line_segment,
 };
 use mez_mux::render::{
-    PromptRegionRenderOptions, PromptShadowSpan, WrappedPromptLayout, char_count,
-    clipped_prompt_region, compose_prompt_region, fit_width, layout_wrapped_prompt,
-    offset_style_span, write_line_segment,
+    PromptShadowSpan, WrappedPromptLayout, char_count, fit_width, layout_wrapped_prompt,
+    offset_style_span,
 };
 use mez_mux::theme::{UiColorPair, UiTheme};
 use mez_terminal::{
@@ -28,10 +31,11 @@ use mez_terminal::{
 
 use super::super::AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS;
 use super::{
-    AGENT_STATUS_SCAN_BAND_WIDTH, compose_client_presentation_with_styles,
-    normalize_overlay_canvas, normalize_overlay_style_spans, overlay_text_style_width,
+    AGENT_STATUS_SCAN_BAND_WIDTH, normalize_overlay_canvas, overlay_text_style_width,
     pane_agent_prompt_space_reserved,
 };
+#[cfg(test)]
+use super::{compose_client_presentation_with_styles, normalize_overlay_style_spans};
 use mez_mux::render::{
     animated_scan_background, gradient_highlight_for_offset, push_or_extend_style_span,
     terminal_color_contrast_ratio, terminal_color_luminance, terminal_color_relative_luminance,
@@ -75,6 +79,7 @@ pub fn render_readline_prompt_status_row(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn compose_readline_prompt_client_presentation(
     view: &RenderedClientView,
     prompt: &ReadlinePrompt,
@@ -116,6 +121,11 @@ pub fn compose_readline_prompt_client_presentation(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn compose_prompt_overlay_lines(
     base_lines: &[String],
     prompt: &ReadlinePrompt,
@@ -134,6 +144,7 @@ pub fn compose_prompt_overlay_lines(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn compose_prompt_overlay_presentation(
     base_lines: &[String],
     prompt: &ReadlinePrompt,
@@ -196,6 +207,7 @@ pub fn compose_prompt_overlay_presentation_with_styles(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn compose_prompt_region_presentation_with_styles(
     base_lines: &[String],
     base_line_style_spans: &[Vec<TerminalStyleSpan>],
@@ -369,6 +381,7 @@ fn prompt_shadow_hint_style_span(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn compose_display_region_overlay_lines(
     base_lines: &[String],
     display_lines: &[String],
@@ -407,6 +420,7 @@ pub fn compose_display_region_overlay_lines(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn compose_display_region_overlay_line_style_spans(
     base_line_style_spans: &[Vec<TerminalStyleSpan>],
     display_lines: &[String],
@@ -646,11 +660,13 @@ impl AgentPromptBlock {
     }
 
     /// Returns plain transient display lines for the prompt block.
+    #[cfg(test)]
     pub(super) fn display_plain_lines(&self) -> Vec<String> {
         self.display_lines.clone()
     }
 
     /// Returns plain persistent prompt-input lines for the prompt block.
+    #[cfg(test)]
     pub(super) fn prompt_plain_lines(&self) -> Vec<String> {
         self.prompt_lines.clone()
     }
@@ -660,6 +676,7 @@ impl AgentPromptBlock {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub(super) fn transparent_prompt_plain_lines(&self, width: usize) -> Vec<String> {
         (0..self.reserved_line_count())
             .map(|_| " ".repeat(width))

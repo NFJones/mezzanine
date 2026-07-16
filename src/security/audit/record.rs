@@ -55,6 +55,7 @@ impl AuditRecord {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn with_window_id(mut self, window_id: impl Into<String>) -> Self {
         self.window_id = Some(window_id.into());
         self
@@ -187,6 +188,7 @@ impl AuditRecord {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn auth_change(
         session_id: impl Into<String>,
         actor: AuditActor,

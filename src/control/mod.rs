@@ -21,7 +21,9 @@ use crate::protocol::framing::{
     FrameContext, FrameOverflow, ProtocolFrame, decode_frame, encode_frame, render_frame_template,
 };
 use crate::security::audit::{AuditActor, AuditLog, AuditRecord};
-use crate::security::project::{ProjectTrustRecord, ProjectTrustStore, TrustDecision};
+#[cfg(test)]
+use crate::security::project::ProjectTrustRecord;
+use crate::security::project::TrustDecision;
 use crate::storage::snapshot::{LayoutLoadPlan, SnapshotKind, SnapshotRepository, SnapshotState};
 use mez_agent::mcp::{McpRegistry, McpServerKind, McpServerStatus};
 use mez_agent::permissions::{
@@ -102,10 +104,7 @@ mod types;
 
 pub use authz::authorize_control_request;
 #[cfg(test)]
-pub use config::{
-    dispatch_config_request, dispatch_config_request_cached, dispatch_project_trust_request,
-    dispatch_session_attach_request,
-};
+pub use config::{dispatch_project_trust_request, dispatch_session_attach_request};
 pub(crate) use dispatch::validate_control_method_params_schema;
 pub use dispatch::{
     ControlConnectionState, dispatch_control_request_cached,
@@ -121,18 +120,12 @@ pub use dispatch::{
 #[cfg(test)]
 pub use dispatch::{
     dispatch_control_request, dispatch_control_request_for_client,
-    dispatch_control_request_for_client_with_events,
-    dispatch_control_request_for_client_with_snapshot_captures,
-    dispatch_control_request_for_client_with_snapshot_captures_and_config_layers,
-    dispatch_control_request_for_client_with_snapshot_captures_config_layers_and_frame_state,
-    dispatch_control_request_for_client_with_snapshots, dispatch_control_request_with_snapshots,
+    dispatch_control_request_for_client_with_events, dispatch_control_request_with_snapshots,
     handle_control_frames_for_connection,
 };
 pub use framing::{decode_control_frame, encode_control_body};
 #[cfg(test)]
 pub use framing::{handle_control_frame, handle_control_frames};
-#[cfg(test)]
-pub use idempotency::CachedControlResponse;
 pub use idempotency::{ControlIdempotencyCache, JsonRpcRequest, parse_json_rpc_request};
 pub use initialize::initialize;
 pub(crate) use snapshot::dispatch_snapshot_request_with_context_async;
@@ -151,8 +144,6 @@ pub use types::{
     InitializeResult, MAX_EVENT_REPLAY_RETENTION, ObserverRequestSummary, PaneCaptureSource,
     RequestedRole, ServerIdentity, TerminalDescriptor,
 };
-#[cfg(test)]
-pub use types::{CapabilityFeatures, CapabilityLimits};
 
 use authz::require_idempotency_key;
 use capture::dispatch_pane_capture_request;
@@ -173,8 +164,12 @@ use json::{
     json_null_field, json_object_field, json_raw_field, json_rpc_error, json_rpc_success,
     json_string_array_field, json_string_field, mezzanine_error_code, reject_unknown_json_fields,
 };
+#[cfg(test)]
+use snapshot::dispatch_snapshot_request;
+use snapshot::dispatch_snapshot_request_with_context;
 pub(crate) use snapshot::snapshot_id_for_idempotency_key;
-use snapshot::{dispatch_snapshot_request, dispatch_snapshot_request_with_context};
+#[cfg(test)]
+use state_json::project_trust_json;
 pub(crate) use state_json::{ApprovalDecisionScopePersistence, approval_decide_scope_persistence};
 use state_json::{
     agent_shell_command_response_json, agent_state_json, agents_json_for_params,
@@ -184,10 +179,9 @@ use state_json::{
     dispatch_agent_shell_visibility_with_store, dispatch_agent_task_list_with_ledger,
     frame_read_json, granted_role_name, json_optional_string, mcp_servers_json, mcp_tools_json,
     observers_json_for_params, pane_state_json, pane_state_json_with_capture,
-    panes_json_for_params, parse_approval_decision, parse_trust_decision, project_trust_json,
-    resume_plan_json, session_state_json_for_params, session_summary_json, snapshot_state_json,
-    snapshots_json, string_array_json, validate_agent_task_list_params, window_state_json,
-    windows_json_for_params,
+    panes_json_for_params, parse_approval_decision, parse_trust_decision, resume_plan_json,
+    session_state_json_for_params, session_summary_json, snapshot_state_json, snapshots_json,
+    string_array_json, validate_agent_task_list_params, window_state_json, windows_json_for_params,
 };
 pub(crate) use state_json::{
     dispatch_event_list_request, frame_read_json_with_context, layout_state_json,

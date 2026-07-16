@@ -170,6 +170,11 @@ impl RuntimeIntegrationComponent {
     }
 
     /// Returns session-scoped approval grants for decision mutation.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub(crate) fn session_approvals_mut(&mut self) -> &mut SessionApprovalStore {
         self.security.session_approvals_mut()
     }
@@ -374,6 +379,7 @@ impl RuntimeIntegrationComponent {
     }
 
     /// Returns the focused-shell hook queue.
+    #[cfg(test)]
     pub(crate) fn focused_shell_hook_queue(&self) -> &FocusedShellHookQueue {
         self.hooks.focused_shell_queue()
     }
@@ -384,6 +390,11 @@ impl RuntimeIntegrationComponent {
     }
 
     /// Replaces the focused-shell hook queue after transactional execution.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub(crate) fn replace_focused_shell_hook_queue(&mut self, queue: FocusedShellHookQueue) {
         self.hooks.replace_focused_shell_queue(queue);
     }

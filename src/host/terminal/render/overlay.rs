@@ -5,16 +5,21 @@
 //! style-span construction together so the parent renderer only chooses when to
 //! apply overlays.
 
+#[cfg(test)]
 use super::{
-    Size, TerminalStyleSpan, UiTheme, agent_live_footer_style_spans, display_overlay_text_rendition,
+    TerminalStyleSpan, UiTheme, agent_live_footer_style_spans, display_overlay_text_rendition,
 };
+#[cfg(test)]
 use mez_mux::render::{normalize_overlay_style_spans, overlay_text_style_width};
+
+use super::Size;
 
 /// Runs the compose display overlay line style spans operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn compose_display_overlay_line_style_spans(
     base_line_style_spans: &[Vec<TerminalStyleSpan>],
     display_lines: &[String],
@@ -74,6 +79,7 @@ pub fn compose_modal_display_overlay_lines(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn compose_modal_display_overlay_line_style_spans(
     display_lines: &[String],
     client_size: Size,

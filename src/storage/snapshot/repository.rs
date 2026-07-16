@@ -19,10 +19,11 @@ use super::encoding::{
     set_private_file_permissions_async, validate_snapshot_id,
 };
 use super::types::{
-    SessionSnapshotPayload, SnapshotConfigLayerMetadata, SnapshotCreationContext,
-    SnapshotFrameState, SnapshotKind, SnapshotManifest, SnapshotPaneCapture, SnapshotRepository,
-    SnapshotState,
+    SessionSnapshotPayload, SnapshotCreationContext, SnapshotKind, SnapshotManifest,
+    SnapshotRepository, SnapshotState,
 };
+#[cfg(test)]
+use super::types::{SnapshotConfigLayerMetadata, SnapshotFrameState, SnapshotPaneCapture};
 
 impl SnapshotRepository {
     /// Runs the new operation for this subsystem.
@@ -39,6 +40,11 @@ impl SnapshotRepository {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -251,6 +257,7 @@ impl SnapshotRepository {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn create_from_session(
         &self,
         snapshot_id: &str,
@@ -265,6 +272,7 @@ impl SnapshotRepository {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn create_from_session_with_captures(
         &self,
         snapshot_id: &str,
@@ -286,6 +294,7 @@ impl SnapshotRepository {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn create_from_session_with_captures_and_config_layers(
         &self,
         snapshot_id: &str,
@@ -308,6 +317,11 @@ impl SnapshotRepository {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn create_from_session_with_captures_and_config_layers_and_frame_state(
         &self,
         snapshot_id: &str,

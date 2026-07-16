@@ -61,6 +61,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn replace_config_layers(
         &mut self,
         layers: Vec<ConfigLayer>,
@@ -198,6 +199,11 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub async fn reload_config_layers_from_disk_async(
         &mut self,
     ) -> Result<RuntimeConfigApplyReport> {

@@ -294,6 +294,10 @@ pub struct AsyncRuntimeSessionHandle {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
+    #[allow(
+        dead_code,
+        reason = "handle notification port is retained for typed host services"
+    )]
     pub(super) side_effect_delivery_notify: Arc<Notify>,
     /// Stores the side effect delivery revision rx value for this data structure.
     ///
@@ -322,11 +326,19 @@ pub struct AsyncRuntimeActorExit {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
+    #[allow(
+        dead_code,
+        reason = "actor exit report is consumed by service owners and tests"
+    )]
     pub commands_processed: u64,
     /// Stores the metrics value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
+    #[allow(
+        dead_code,
+        reason = "actor exit report is consumed by service owners and tests"
+    )]
     pub metrics: AsyncRuntimeActorMetrics,
 }
 
@@ -457,6 +469,7 @@ impl AsyncAgentProviderServiceConfig {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn new(max_tasks_per_poll: usize) -> Result<Self> {
         let config = Self {
             max_tasks_per_poll,
@@ -475,6 +488,7 @@ impl AsyncAgentProviderServiceConfig {
     /// # Errors
     /// Returns an error when the interval is zero or another config invariant
     /// no longer holds after the update.
+    #[cfg(test)]
     pub fn with_idle_interval(mut self, idle_interval: Duration) -> Result<Self> {
         self.idle_interval = idle_interval;
         self.validate()?;
@@ -655,6 +669,7 @@ impl AsyncRuntimeEventConnectionConfig {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn new(limit_per_connection: usize, owner_uid: u32) -> Result<Self> {
         if limit_per_connection == 0 {
             return Err(MezError::invalid_args(
@@ -711,6 +726,7 @@ impl AsyncRuntimeDaemonListeners {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn control_only(listener: UnixListener) -> Self {
         Self {
             control: Some(listener),

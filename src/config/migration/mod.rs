@@ -16,7 +16,7 @@ mod v01_v06;
 mod v07_v12;
 mod v13_v19;
 
+#[cfg(test)]
+pub use driver::migrate_config_text;
 pub(in crate::config) use driver::parse_config_schema_version;
-pub use driver::{
-    CURRENT_CONFIG_SCHEMA_VERSION, ConfigMigrationPlan, migrate_config_file, migrate_config_text,
-};
+pub use driver::{CURRENT_CONFIG_SCHEMA_VERSION, migrate_config_file};

@@ -43,6 +43,7 @@ impl SelectorExtraCandidate {
 }
 
 /// Starts active selection from one product-authored plan.
+#[cfg(test)]
 pub fn start_active_selector(
     surface: SelectorSurface,
     line: &str,
@@ -72,11 +73,13 @@ pub fn start_active_selector_with_extra_in_working_directory(
 }
 
 /// Builds a selector plan for the token at `cursor`.
+#[cfg(test)]
 pub fn plan_selector(surface: SelectorSurface, line: &str, cursor: usize) -> Option<SelectorPlan> {
     plan_selector_with_extra(surface, line, cursor, &[])
 }
 
 /// Builds a selector plan for the token at `cursor` with runtime candidates.
+#[cfg(test)]
 pub fn plan_selector_with_extra(
     surface: SelectorSurface,
     line: &str,
@@ -107,6 +110,7 @@ pub fn plan_selector_with_extra_in_working_directory(
 }
 
 /// Builds the current prefix or parameter shadow hint without editing `line`.
+#[cfg(test)]
 pub fn shadow_hint(
     surface: SelectorSurface,
     line: &str,
@@ -116,6 +120,7 @@ pub fn shadow_hint(
 }
 
 /// Builds the current prefix or parameter shadow hint with runtime candidates.
+#[cfg(test)]
 pub fn shadow_hint_with_extra(
     surface: SelectorSurface,
     line: &str,

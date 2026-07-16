@@ -74,21 +74,27 @@ use crate::integrations::agent::slash::{
 };
 use crate::integrations::agent::subagent::SUBAGENT_FRIENDLY_NAMES;
 use crate::integrations::hooks::{
-    FocusedShellExecutor, FocusedShellHookDispatch, FocusedShellHookDispatchStatus,
-    FocusedShellHookOutput, HookDefinition, HookEvent, HookExecutionPlan, HookExecutionResult,
-    HookExecutionStatus, HookFailure, HookFailureDecision, HookFailureKind, HookOnFailure,
-    decide_hook_failure, execute_focused_shell_hook, execute_program_hook,
+    FocusedShellExecutor, FocusedShellHookOutput, HookEvent, HookExecutionPlan,
+    HookExecutionResult, HookExecutionStatus, HookFailure, HookFailureDecision, HookFailureKind,
+    HookOnFailure, decide_hook_failure, execute_focused_shell_hook, execute_program_hook,
     hook_execution_audit_record, plan_event,
+};
+#[cfg(test)]
+use crate::integrations::hooks::{
+    FocusedShellHookDispatch, FocusedShellHookDispatchStatus, HookDefinition,
 };
 use crate::integrations::mcp::{
     McpStdioConnection, discover_streamable_http_mcp_server_with_auth_token,
     execute_streamable_http_exchange, spawn_stdio_mcp_connection,
 };
+#[cfg(test)]
+use crate::protocol::event::encode_event_notification;
 use crate::protocol::event::{
-    EventAudience, EventKind, EventLog, EventVisibility, VisibleEvent, encode_event_notification,
-    event_type_name,
+    EventAudience, EventKind, EventLog, EventVisibility, VisibleEvent, event_type_name,
 };
-use crate::protocol::message::{decode_mmp_frame, encode_mmp_body, handle_mmp_frame};
+#[cfg(test)]
+use crate::protocol::message::encode_mmp_body;
+use crate::protocol::message::{decode_mmp_frame, handle_mmp_frame};
 use crate::security::audit::{AuditActor, AuditDeferredWrite, AuditLog, AuditRecord};
 use crate::security::auth::AuthStore;
 use crate::security::project::{
@@ -96,12 +102,14 @@ use crate::security::project::{
     discover_project_root,
 };
 use crate::storage::registry::{SessionRecord, SessionRegistry};
+#[cfg(test)]
+use crate::storage::snapshot::SnapshotState;
 use crate::storage::snapshot::{
     SessionSnapshotPayload, SnapshotAgentSession, SnapshotApprovalGrantMetadata,
     SnapshotApprovalRequestMetadata, SnapshotConfigDiagnostic, SnapshotConfigLayerMetadata,
     SnapshotCreationContext, SnapshotFrameSettings, SnapshotFrameState,
     SnapshotMcpExternalCapability, SnapshotMcpServerState, SnapshotMcpToolEffects,
-    SnapshotMcpToolState, SnapshotPaneCapture, SnapshotRepository, SnapshotState,
+    SnapshotMcpToolState, SnapshotPaneCapture, SnapshotRepository,
 };
 use crate::storage::transcript::AgentTranscriptStore;
 use crate::ui::command::{
@@ -115,10 +123,11 @@ use mez_agent::mcp::{
     McpToolCallResponse, McpToolEffects, McpToolState, mcp_tools_call_operation,
 };
 use mez_agent::memory::{MemoryRecord, MemoryScope, MemorySource, SessionMemoryStore};
+#[cfg(test)]
+use mez_agent::messaging::delivery_batch_json;
 use mez_agent::messaging::{
     Envelope, MessageConnection, MessageService, MessageServiceSnapshot, Recipient, SenderIdentity,
-    TaskResultPayload, TaskState, TaskStatusPayload, delivery_batch_json,
-    validate_mmp_payload_metadata,
+    TaskResultPayload, TaskState, TaskStatusPayload, validate_mmp_payload_metadata,
 };
 use mez_agent::parse_slash_command;
 use mez_agent::permissions::{
@@ -172,6 +181,7 @@ use mez_mux::process::{
 use mez_mux::readline::ReadlineOutcome;
 use mez_mux::session::{ClientRole, ClientState, ObserverDecisionState, Session};
 use mez_mux::theme::{UiThemeDefinition, builtin_ui_theme_definition, resolve_ui_theme};
+#[cfg(test)]
 use mez_terminal::DEFAULT_PANE_TERM;
 use mez_terminal::{TerminalOscEvent, TerminalScreen};
 
@@ -345,14 +355,9 @@ pub use env::{
     AuxiliarySocketKind, DEFAULT_SOCKET_NAME, MEZ_ENV_FIELD_SEPARATOR, RuntimeEnv, SocketDirectory,
     SocketDirectorySource,
 };
+pub use fanout::{RuntimeEventConnectionTable, RuntimeEventWakeup};
 #[cfg(test)]
-pub use fanout::{
-    RuntimeEventConnection, RuntimeEventFanoutSink, RuntimeMessageConnection,
-    RuntimeMessageConnectionTable, RuntimeMessageFanoutSink, RuntimeMessageWakeup,
-    flush_runtime_event_wakeup, flush_runtime_event_wakeups, flush_runtime_message_wakeup,
-    flush_runtime_message_wakeups,
-};
-pub use fanout::{RuntimeEventConnectionTable, RuntimeEventWakeup, RuntimeFocusedShellHookRun};
+pub use fanout::{RuntimeEventFanoutSink, RuntimeFocusedShellHookRun, flush_runtime_event_wakeups};
 #[cfg(test)]
 use mez_agent::AutoSizingDecision as RuntimeAutoSizingDecision;
 use mez_agent::{
@@ -388,11 +393,7 @@ pub use sockets::{
     prune_stale_socket_files_in_directory, socket_path_for_name,
 };
 #[cfg(test)]
-pub use sockets::{
-    authorize_unix_peer, authorize_unix_peer_uid, pane_environment,
-    remove_stale_socket_file_if_unserved, serve_control_connection,
-    serve_runtime_control_connection, serve_runtime_control_connection_with_state,
-};
+pub use sockets::{authorize_unix_peer, authorize_unix_peer_uid, pane_environment};
 use status_pills::{
     RuntimeStatusPillCache, RuntimeStatusPillDefinition,
     runtime_status_pill_definitions_from_config,

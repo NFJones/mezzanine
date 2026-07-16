@@ -14,6 +14,7 @@ mod output_adapter;
 mod runtime_step;
 mod types;
 
+#[cfg(test)]
 pub use input_adapter::route_client_input;
 pub(crate) use input_adapter::route_client_input_actions;
 #[cfg(test)]

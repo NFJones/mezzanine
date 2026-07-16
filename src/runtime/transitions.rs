@@ -44,6 +44,10 @@ pub enum RuntimeEvent {
     /// A runtime-owned timer fired.
     Timer(TimerEvent),
     /// The supervisor requested runtime shutdown.
+    #[allow(
+        dead_code,
+        reason = "transition taxonomy is consumed by the serialized runtime actor"
+    )]
     Shutdown(ShutdownEvent),
 }
 
@@ -69,6 +73,10 @@ impl RuntimeEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientEvent {
     /// Raw input bytes received from a client terminal.
+    #[allow(
+        dead_code,
+        reason = "transition taxonomy is consumed by the serialized runtime actor"
+    )]
     Input {
         /// Attached client identity.
         client_id: ClientId,
@@ -76,6 +84,10 @@ pub enum ClientEvent {
         bytes: Vec<u8>,
     },
     /// Client terminal size changed.
+    #[allow(
+        dead_code,
+        reason = "transition taxonomy is consumed by the serialized runtime actor"
+    )]
     Resize {
         /// Attached client identity.
         client_id: ClientId,
@@ -88,6 +100,10 @@ pub enum ClientEvent {
         client_id: ClientId,
     },
     /// Client output became writable after prior backpressure.
+    #[allow(
+        dead_code,
+        reason = "transition taxonomy is consumed by the serialized runtime actor"
+    )]
     OutputReady {
         /// Attached client identity.
         client_id: ClientId,
@@ -149,6 +165,10 @@ pub enum PaneEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProcessEvent {
     /// A pane process started.
+    #[allow(
+        dead_code,
+        reason = "transition taxonomy is consumed by the serialized runtime actor"
+    )]
     Spawned {
         /// Pane identity.
         pane_id: String,
@@ -191,6 +211,10 @@ pub enum AgentProviderEvent {
     },
     /// A native local action produced a bounded output preview while still
     /// running in an async provider worker.
+    #[allow(
+        dead_code,
+        reason = "transition taxonomy is consumed by the serialized runtime actor"
+    )]
     OutputProgress {
         /// Agent identity.
         agent_id: AgentId,
@@ -283,6 +307,10 @@ pub enum AsyncHookEvent {
         triggering_event_completed: bool,
     },
     /// Hook execution completed.
+    #[allow(
+        dead_code,
+        reason = "transition taxonomy is consumed by the serialized runtime actor"
+    )]
     Completed {
         /// Hook run identity.
         hook_id: String,
@@ -603,6 +631,10 @@ pub enum RenderInvalidationReason {
     /// Command, help, or copy-mode overlay changed.
     Overlay,
     /// Runtime theme or presentation settings changed.
+    #[allow(
+        dead_code,
+        reason = "render invalidation taxonomy is handled by presentation workers"
+    )]
     Configuration,
     /// Cursor blink phase changed and clients should repaint the cursor.
     CursorBlink,
@@ -620,6 +652,10 @@ pub enum PersistenceTarget {
     /// Agent transcript storage.
     Transcript,
     /// Snapshot repository.
+    #[allow(
+        dead_code,
+        reason = "persistence taxonomy is handled by effect workers"
+    )]
     Snapshot,
     /// Configuration file.
     Config,

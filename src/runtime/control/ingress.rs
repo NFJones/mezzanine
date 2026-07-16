@@ -6,9 +6,11 @@
 //! the main dispatcher keeps `control::mod` focused on method dispatch and live
 //! state shaping.
 
+#[cfg(test)]
+use super::super::MezError;
 use super::super::{
-    ControlConnectionState, EventKind, MezError, Result, RuntimeLifecycleState,
-    RuntimeSessionService, RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
+    ControlConnectionState, EventKind, Result, RuntimeLifecycleState, RuntimeSessionService,
+    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
     RuntimeSnapshotControlAsyncWorkKind, RuntimeSnapshotOwnedCreationContext, RuntimeTransition,
     SnapshotRepository, decode_control_frame, encode_control_body, parse_json_rpc_request,
     runtime_json_rpc_error,
@@ -22,6 +24,11 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn handle_control_input(
         &mut self,
         input: &[u8],
@@ -93,6 +100,11 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn handle_control_input_for_connection_with_snapshots(
         &mut self,
         input: &[u8],

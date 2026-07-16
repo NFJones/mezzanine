@@ -188,6 +188,7 @@ impl<T> OpenAiResponsesProvider<T> {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn new(api_key: impl Into<String>, transport: T) -> Result<Self> {
         let api_key = SecretString::from(api_key.into());
         Self::new_secret(api_key, transport)
@@ -198,6 +199,7 @@ impl<T> OpenAiResponsesProvider<T> {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn new_secret(api_key: SecretString, transport: T) -> Result<Self> {
         Self::with_endpoint(
             api_key,
@@ -211,6 +213,11 @@ impl<T> OpenAiResponsesProvider<T> {
     ///
     /// The account id is sent as a provider header and must come from non-secret
     /// auth metadata parsed during browser or device-code login.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn new_chatgpt_secret(
         access_token: SecretString,
         account_id: impl Into<String>,
@@ -234,6 +241,7 @@ impl<T> OpenAiResponsesProvider<T> {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn with_endpoint(
         api_key: impl Into<SecretString>,
         endpoint: impl Into<String>,
@@ -377,6 +385,7 @@ pub fn openai_provider_from_auth_store_with_transport<T>(
 /// API-key credentials use the direct OpenAI Responses endpoint derived from
 /// the configured provider base URL. ChatGPT browser/device credentials use the
 /// ChatGPT backend and carry the persisted ChatGPT account id header.
+#[cfg(test)]
 pub fn openai_provider_from_auth_store_with_options<T>(
     auth_store: &dyn ProviderCredentialSource<Error = MezError, Credential = SecretString>,
     base_url_override: Option<&str>,
@@ -408,6 +417,7 @@ pub type OpenAiCompatibleChatCompletionsProvider<T> =
 /// include documented organization/project routing headers from provider
 /// options. Browser/device credentials continue to target the ChatGPT backend
 /// and do not expose the OpenAI-compatible model catalog.
+#[cfg(test)]
 pub fn openai_provider_from_auth_store_with_provider_options<T>(
     auth_store: &dyn ProviderCredentialSource<Error = MezError, Credential = SecretString>,
     base_url_override: Option<&str>,
@@ -498,6 +508,11 @@ pub fn openai_responses_provider_from_auth_store_with_provider_options<T>(
 ///
 /// DeepSeek only supports direct API-key authentication. Endpoint overrides
 /// are expanded to the provider's documented Chat Completions endpoint.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn deepseek_provider_from_auth_store_with_provider_options<T>(
     auth_store: &dyn ProviderCredentialSource<Error = MezError, Credential = SecretString>,
     base_url_override: Option<&str>,
@@ -883,6 +898,11 @@ impl<T: AsyncProviderHttpTransport> AsyncModelProvider for OpenAiResponsesProvid
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn build_openai_responses_http_request(
     request: &ModelRequest,
     api_key: &str,
@@ -958,6 +978,11 @@ pub fn build_openai_responses_http_request_with_headers(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn build_openai_models_http_request(
     api_key: &str,
     responses_endpoint: &str,

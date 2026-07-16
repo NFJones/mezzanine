@@ -1,9 +1,11 @@
 //! Control, diagnostics, process, terminal, permission, approval, and memory stores.
 
+#[cfg(test)]
+use super::ControlIdempotencyCache;
 use super::{
-    AuditActor, AuditRecord, BlockedApprovalQueue, BlockedApprovalRequest, ControlIdempotencyCache,
-    EventKind, MEZ_ENV_FIELD_SEPARATOR, MemoryRecord, MessageService, MezError, PermissionPolicy,
-    Result, RuntimeSessionService, SessionApprovalStore, SessionMemoryStore, current_unix_seconds,
+    AuditActor, AuditRecord, BlockedApprovalQueue, BlockedApprovalRequest, EventKind,
+    MEZ_ENV_FIELD_SEPARATOR, MemoryRecord, MessageService, MezError, PermissionPolicy, Result,
+    RuntimeSessionService, SessionApprovalStore, SessionMemoryStore, current_unix_seconds,
     json_escape,
 };
 
@@ -13,6 +15,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn control_idempotency(&self) -> &ControlIdempotencyCache {
         self.control.idempotency()
     }
@@ -181,6 +184,11 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn session_approvals_mut(&mut self) -> &mut SessionApprovalStore {
         self.integration.session_approvals_mut()
     }
@@ -254,6 +262,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn session_memory(&self) -> &SessionMemoryStore {
         self.integration.session_memory()
     }
@@ -292,6 +301,11 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn delete_session_memory(&mut self, id: &str) -> Result<bool> {
         self.require_live()?;
         Ok(self.integration.session_memory_mut().delete(id))

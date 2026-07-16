@@ -28,6 +28,7 @@ use tokio::time::{Instant, sleep, timeout};
 const PANE_INPUT_WRITE_READY_TIMEOUT: Duration = Duration::from_secs(10);
 
 mod driver;
+#[cfg(test)]
 mod driver_service;
 #[cfg(test)]
 mod fake;
@@ -35,6 +36,7 @@ mod helpers;
 mod process_service;
 mod pty;
 mod service_types;
+#[cfg(test)]
 mod side_effects;
 mod supervisor;
 
@@ -43,26 +45,25 @@ pub use driver::{
     AsyncPaneForegroundProcess, AsyncPaneIoFuture, AsyncPaneProcessDriver,
     AsyncPaneProcessDriverConfig, AsyncPaneProcessIo,
 };
+#[cfg(test)]
 pub use driver_service::{
-    AsyncPaneProcessDriverServiceConfig, AsyncPaneProcessDriverServiceReport,
-    run_async_pane_process_driver_service,
+    AsyncPaneProcessDriverServiceConfig, run_async_pane_process_driver_service,
 };
 #[cfg(test)]
 pub use fake::AsyncFakePaneProcessIo;
 pub use process_service::run_async_pane_process_service;
 pub use pty::AsyncPtyPaneProcessIo;
+#[cfg(test)]
+pub use service_types::{AsyncPaneIoSideEffectServiceConfig, AsyncPaneIoSideEffectServiceReport};
 pub use service_types::{
-    AsyncPaneIoSideEffectServiceConfig, AsyncPaneIoSideEffectServiceReport,
     AsyncPaneProcessServiceConfig, AsyncPaneProcessServiceReport,
     AsyncPaneProcessSupervisorServiceConfig, AsyncPaneProcessSupervisorServiceReport,
 };
-pub use side_effects::{
-    build_async_pane_io_side_effect_service, run_async_pane_io_side_effect_service,
-};
-pub use supervisor::{
-    build_async_pane_process_service, build_async_pane_process_supervisor_service,
-    run_async_pane_process_supervisor_service,
-};
+#[cfg(test)]
+pub use side_effects::run_async_pane_io_side_effect_service;
+pub use supervisor::build_async_pane_process_supervisor_service;
+#[cfg(test)]
+pub use supervisor::run_async_pane_process_supervisor_service;
 
 #[cfg(test)]
 mod tests;

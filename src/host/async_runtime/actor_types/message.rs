@@ -11,6 +11,7 @@ use super::{
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub async fn serve_async_runtime_message_connection(
     stream: &mut UnixStream,
     handle: &AsyncRuntimeSessionHandle,
@@ -197,6 +198,7 @@ where
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub async fn serve_async_runtime_message_listener<F>(
     listener: &UnixListener,
     handle: &AsyncRuntimeSessionHandle,

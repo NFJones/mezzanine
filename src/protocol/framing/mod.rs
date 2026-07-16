@@ -28,7 +28,7 @@ mod wire;
 
 pub use render::render_frame_template;
 #[cfg(test)]
-pub use render::{render_pending_observer_status, sanitize_frame_text};
+pub use render::render_pending_observer_status;
 pub use types::{FrameContext, FrameOverflow, ProtocolFrame, ProtocolFrameCodec};
 pub use wire::{decode_frame, encode_frame};
 

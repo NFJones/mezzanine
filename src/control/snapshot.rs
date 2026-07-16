@@ -18,6 +18,7 @@ use super::{
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub(super) fn dispatch_snapshot_request(
     request: &JsonRpcRequest,
     session: &Session,
@@ -31,6 +32,7 @@ pub(super) fn dispatch_snapshot_request(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub(super) fn dispatch_snapshot_request_with_captures(
     request: &JsonRpcRequest,
     session: &Session,
@@ -51,6 +53,7 @@ pub(super) fn dispatch_snapshot_request_with_captures(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub(super) fn dispatch_snapshot_request_with_captures_and_config_layers(
     request: &JsonRpcRequest,
     session: &Session,
@@ -73,6 +76,7 @@ pub(super) fn dispatch_snapshot_request_with_captures_and_config_layers(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub(super) fn dispatch_snapshot_request_with_captures_and_config_layers_and_frame_state(
     request: &JsonRpcRequest,
     session: &Session,

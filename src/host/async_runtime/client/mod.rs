@@ -7,11 +7,10 @@
 use super::{
     AgentCompactionEvent, AgentProviderEvent, AgentRememberEvent, AgentTurnLedger, AgentTurnRunner,
     AsyncAgentProviderPollReport, AsyncAgentProviderServiceConfig, AsyncAttachedTerminalIo,
-    AsyncAttachedTerminalLoopRequest, AsyncRuntimeService, AsyncRuntimeServiceExit,
-    AsyncRuntimeSessionHandle, AsyncTerminalIoFuture, AsyncTerminalOutputWriteReport,
-    AttachedTerminalClientLoopReport, AttachedTerminalFdReadiness, AttachedTerminalFdRole,
-    AttachedTerminalOutputModes, ClientId, ClientStatusLine, ClientViewRole,
-    DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,
+    AsyncAttachedTerminalLoopRequest, AsyncRuntimeSessionHandle, AsyncTerminalIoFuture,
+    AsyncTerminalOutputWriteReport, AttachedTerminalClientLoopReport, AttachedTerminalFdReadiness,
+    AttachedTerminalFdRole, AttachedTerminalOutputModes, ClientId, ClientStatusLine,
+    ClientViewRole, DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,
     DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES, MezError, MouseAction, Result,
     RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentRememberDispatch, RuntimeEvent,
@@ -20,6 +19,8 @@ use super::{
     is_terminal_runtime_lifecycle_state, merge_attached_terminal_loop_report,
     run_async_attached_terminal_client_loop, sleep,
 };
+#[cfg(test)]
+use super::{AsyncRuntimeService, AsyncRuntimeServiceExit};
 use crate::error::MezErrorKind;
 use crate::host::async_runtime::RenderInvalidationReason;
 use crate::host::terminal::TerminalFdInterest;
@@ -45,7 +46,8 @@ mod terminal_service;
 #[cfg(test)]
 pub(in crate::host::async_runtime) use provider_service::execute_provider_worker_network_actions;
 pub use provider_service::run_async_agent_provider_service;
+#[cfg(test)]
+pub use terminal_service::build_async_attached_terminal_client_service;
 pub use terminal_service::{
-    AsyncAttachedTerminalClientServiceConfig, AsyncAttachedTerminalClientServiceReport,
-    build_async_attached_terminal_client_service, run_async_attached_terminal_client_service,
+    AsyncAttachedTerminalClientServiceConfig, run_async_attached_terminal_client_service,
 };

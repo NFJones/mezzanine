@@ -5,10 +5,11 @@
 
 use crate::error::{MezError, Result};
 
-use super::execution::execute_focused_shell_hook;
-use super::types::{
+use super::types::{FocusedShellHookQueue, FocusedShellHookQueueEntry, HookExecutionPlan};
+#[cfg(test)]
+use super::{
     FocusedShellExecutor, FocusedShellHookDispatch, FocusedShellHookDispatchStatus,
-    FocusedShellHookQueue, FocusedShellHookQueueEntry, HookExecutionPlan,
+    execute_focused_shell_hook,
 };
 
 impl FocusedShellHookQueue {
@@ -38,6 +39,7 @@ impl FocusedShellHookQueue {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn dispatch_next(
         &mut self,
         shell_available: bool,
@@ -72,6 +74,7 @@ impl FocusedShellHookQueue {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.pending.len()
     }
@@ -81,6 +84,7 @@ impl FocusedShellHookQueue {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.pending.is_empty()
     }
@@ -90,6 +94,11 @@ impl FocusedShellHookQueue {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn front_plan(&self) -> Option<&HookExecutionPlan> {
         self.pending.front().map(|entry| &entry.plan)
     }

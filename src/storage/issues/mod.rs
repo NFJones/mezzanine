@@ -39,6 +39,11 @@ impl IssueDatabasePath {
     }
 
     /// Returns the SQLite database path.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -80,6 +85,11 @@ pub fn issue_database_location(
 /// Empty paths use the standard `issues.sqlite` sibling under the config root.
 /// Relative configured paths are resolved under the same root so local state
 /// stays inside Mezzanine's private configuration directory by default.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn issue_database_path(config_root: impl AsRef<Path>, configured: Option<&str>) -> PathBuf {
     issue_database_location(config_root, configured).into_path()
 }

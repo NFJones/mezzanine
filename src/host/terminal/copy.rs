@@ -12,6 +12,7 @@ use mez_mux::copy::{
     COPY_SOURCE_LINE_PREFIX as AGENT_COPY_SOURCE_LINE_PREFIX, CopyPosition, StyledCopyMode,
     normalize_selection, validate_position,
 };
+#[cfg(test)]
 use mez_mux::paste::PasteBuffers;
 use mez_mux::render::{char_count, line_slice};
 
@@ -177,6 +178,7 @@ impl CopyMode {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn copy_selection_to_buffer(
         &self,
         buffers: &mut PasteBuffers,

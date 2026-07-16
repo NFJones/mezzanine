@@ -60,6 +60,11 @@ impl RuntimeSecurityState {
         &self.session_approvals
     }
 
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub(super) fn session_approvals_mut(&mut self) -> &mut SessionApprovalStore {
         &mut self.session_approvals
     }

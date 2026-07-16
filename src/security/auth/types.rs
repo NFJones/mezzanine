@@ -328,6 +328,11 @@ pub enum AuthMethod {
 
 impl AuthMethod {
     /// Returns the stable command-line display name for this auth method.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::ApiKey => "api-key",
@@ -442,6 +447,7 @@ impl CredentialStorePlan {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn selected_store(&self) -> CredentialStoreKind {
         match self {
             Self::OperatingSystem { .. } => CredentialStoreKind::OperatingSystem,
@@ -468,6 +474,7 @@ pub enum FileCredentialFallbackReason {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub struct AuthFlowPlan {
     /// Stores the provider value for this data structure.
     ///
@@ -519,6 +526,7 @@ pub struct AuthFlowPlan {
 /// provider exchange path so the existing credential-store boundary owns
 /// persistence.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub struct AuthInteractivePromptPlan {
     /// Stores the prompt id value for this data structure.
     ///
@@ -557,6 +565,7 @@ pub struct AuthInteractivePromptPlan {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub enum AuthPromptAction {
     /// Represents the Open Browser case for this enumeration.
     ///
@@ -576,6 +585,7 @@ pub enum AuthPromptAction {
 /// provider exchange separately, but this structure must not carry callback
 /// codes, OAuth tokens, provider bearer credentials, or refresh tokens.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub struct ProviderBrowserFlowPlan {
     /// Stores the requires network value for this data structure.
     ///
@@ -605,6 +615,7 @@ pub struct ProviderBrowserFlowPlan {
 /// known locally without a provider exchange, so the plan records the deferred
 /// check instead of claiming access.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub struct ProviderEntitlementPlan {
     /// Stores the validation value for this data structure.
     ///
@@ -628,6 +639,7 @@ pub struct ProviderEntitlementPlan {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub enum ProviderEntitlementValidation {
     /// Represents the Deferred Until Browser Exchange case for this enumeration.
     ///
@@ -646,11 +658,16 @@ pub enum ProviderEntitlementValidation {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub enum ProviderEntitlementPersistence {
     /// Represents the Non Secret Metadata Only case for this enumeration.
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     NonSecretMetadataOnly,
     /// Represents the Credential Store Reference Only case for this enumeration.
     ///
@@ -743,6 +760,10 @@ pub trait CredentialStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[allow(
+        dead_code,
+        reason = "credential backends expose their selected storage kind"
+    )]
     fn kind(&self) -> CredentialStoreKind;
     /// Runs the store secret operation for this subsystem.
     ///

@@ -32,6 +32,10 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
+    #[allow(
+        dead_code,
+        reason = "typed actor request retained for complete host service API"
+    )]
     Metrics {
         /// Stores the reply value for this data structure.
         ///
@@ -43,6 +47,10 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
+    #[allow(
+        dead_code,
+        reason = "typed actor request retained for complete host service API"
+    )]
     RenderClientView {
         /// Stores the role value for this data structure.
         ///
@@ -100,6 +108,10 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
+    #[allow(
+        dead_code,
+        reason = "typed actor request retained for complete host service API"
+    )]
     RenderClientSideEffect {
         /// Stores the client id value for this data structure.
         ///
@@ -387,6 +399,10 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
+    #[allow(
+        dead_code,
+        reason = "typed actor request retained for complete host service API"
+    )]
     ExecuteTerminalCommand {
         /// Stores the primary client id value for this data structure.
         ///
@@ -419,6 +435,10 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
+    #[allow(
+        dead_code,
+        reason = "typed actor request retained for complete host service API"
+    )]
     ShowPrimaryDisplayOverlay {
         /// Stores the lines value for this data structure.
         ///
@@ -451,6 +471,10 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
+    #[allow(
+        dead_code,
+        reason = "typed actor request retained for complete host service API"
+    )]
     ExecuteAgentShellCommand {
         /// Stores the primary client id value for this data structure.
         ///
@@ -472,6 +496,10 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
+    #[allow(
+        dead_code,
+        reason = "typed actor request retained for complete host service API"
+    )]
     PendingAgentProviderTasks {
         /// Stores the reply value for this data structure.
         ///
@@ -575,6 +603,10 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
+    #[allow(
+        dead_code,
+        reason = "typed actor request retained for complete host service API"
+    )]
     DrainRuntimeSideEffects {
         /// Stores the limit value for this data structure.
         ///
@@ -623,6 +655,10 @@ pub(in crate::host::async_runtime) enum AsyncRuntimeRequest {
     ///
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
+    #[allow(
+        dead_code,
+        reason = "typed actor request retained for complete host service API"
+    )]
     DrainRenderSideEffects {
         /// Stores the limit value for this data structure.
         ///

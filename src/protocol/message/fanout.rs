@@ -7,9 +7,8 @@
 use mez_agent::messaging::{MessageService, delivery_batch_json};
 use mez_core::ids::AgentId;
 
-use crate::error::Result;
-
 use super::framing::encode_mmp_body;
+use crate::error::Result;
 
 /// Product sink for one framed MMP delivery batch.
 pub trait MessageFanoutSink {
@@ -18,6 +17,7 @@ pub trait MessageFanoutSink {
 }
 
 /// Writes all currently ready subscriber batches and acknowledges each success.
+#[cfg(test)]
 pub fn flush_message_fanout(
     service: &mut MessageService,
     now_ms: u64,
@@ -37,6 +37,7 @@ pub fn flush_message_fanout(
 }
 
 /// Writes the ready batch for one recipient and acknowledges a successful write.
+#[cfg(test)]
 pub fn flush_message_fanout_for(
     service: &mut MessageService,
     recipient: &AgentId,

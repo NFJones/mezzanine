@@ -132,6 +132,7 @@ pub(in crate::host::terminal::render) fn optional_u32_frame_value(value: Option<
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub(in crate::host::terminal::render) fn write_merged_pane_frames_on_dividers(
     canvas: &mut [Vec<TerminalRenderCell>],
     geometries: &[PaneGeometry],

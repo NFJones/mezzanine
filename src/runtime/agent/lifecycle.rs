@@ -18,6 +18,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn start_agent_turn(&mut self, turn: AgentTurnRecord) -> Result<AgentShellSession> {
         self.require_live()?;
         runtime_pane_by_id(&self.session, &turn.pane_id)?;

@@ -3,13 +3,17 @@
 //! This module owns registry loading, persistence, lifecycle mutation, and
 //! private runtime-directory handling.
 
+#[cfg(test)]
+use super::Path;
 use super::{
-    BTreeMap, MezError, OpenOptions, Path, PathBuf, REGISTRY_FILE_NAME, Read, Result,
-    SessionRecord, SessionRegistry, Write, decode_records, ensure_private_socket_directory, fs,
+    BTreeMap, MezError, OpenOptions, PathBuf, REGISTRY_FILE_NAME, Read, Result, SessionRecord,
+    SessionRegistry, Write, decode_records, ensure_private_socket_directory, fs,
     set_private_file_permissions,
 };
 use rustix::fs::{FlockOperation, flock};
+#[cfg(test)]
 use tokio::fs as tokio_fs;
+#[cfg(test)]
 use tokio::io::AsyncReadExt;
 
 /// Defines the REGISTRY LOCK FILE NAME const used by this subsystem.
@@ -64,6 +68,11 @@ impl SessionRegistry {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -109,6 +118,7 @@ impl SessionRegistry {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub async fn list_async(&self) -> Result<Vec<SessionRecord>> {
         let path = self.registry_file();
         let mut data = String::new();
@@ -131,6 +141,11 @@ impl SessionRegistry {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn get(&self, session_id: &str) -> Result<Option<SessionRecord>> {
         Ok(self
             .list()?

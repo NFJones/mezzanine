@@ -38,11 +38,13 @@ pub use planning::{decide_hook_failure, plan_event};
 #[cfg(test)]
 pub use planning::{plan_hook, plan_hook_with_payload};
 pub use types::{
-    FocusedShellExecutor, FocusedShellHookDispatch, FocusedShellHookDispatchStatus,
-    FocusedShellHookOutput, FocusedShellHookQueue, HookDefinition, HookEvent, HookExecutionPlan,
-    HookExecutionResult, HookExecutionStatus, HookFailure, HookFailureDecision, HookFailureKind,
-    HookInvocation, HookMatcherGroup, HookMatcherOperator, HookMatcherPredicate, HookOnFailure,
+    FocusedShellExecutor, FocusedShellHookOutput, FocusedShellHookQueue, HookDefinition, HookEvent,
+    HookExecutionPlan, HookExecutionResult, HookExecutionStatus, HookFailure, HookFailureDecision,
+    HookFailureKind, HookInvocation, HookMatcherGroup, HookMatcherOperator, HookMatcherPredicate,
+    HookOnFailure,
 };
+#[cfg(test)]
+pub use types::{FocusedShellHookDispatch, FocusedShellHookDispatchStatus};
 
 /// Exposes the tests module boundary.
 ///

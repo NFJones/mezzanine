@@ -176,6 +176,10 @@ impl Default for AttachedTerminalClientLoopConfig {
 /// Result of one bounded attached-terminal output write attempt.
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub struct AttachedTerminalOutputWriteReport {
     /// Bytes written during this attempt.
     pub bytes_written: usize,
@@ -188,6 +192,10 @@ pub struct AttachedTerminalOutputWriteReport {
 #[cfg(test)]
 impl AttachedTerminalOutputWriteReport {
     /// Returns a completed write report.
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub const fn completed(bytes_written: usize) -> Self {
         Self {
             bytes_written,
@@ -197,6 +205,10 @@ impl AttachedTerminalOutputWriteReport {
     }
 
     /// Returns whether this write left bytes pending.
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub const fn is_partial(self) -> bool {
         !self.completed || self.pending_bytes > 0
     }
@@ -292,11 +304,19 @@ pub trait AttachedTerminalClientLoopIo {
     fn write_output(&mut self, lines: &[String]) -> Result<usize>;
 
     /// Returns retained output bytes awaiting a later writable terminal pass.
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     fn pending_output_bytes(&self) -> usize {
         0
     }
 
     /// Flushes retained output bytes without accepting a new rendered frame.
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     fn flush_pending_output(
         &mut self,
         _max_bytes: usize,
@@ -350,6 +370,10 @@ pub trait AttachedTerminalClientLoopIo {
     }
 
     /// Writes at most `max_bytes` of one styled terminal frame.
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     fn write_styled_output_with_modes_bounded(
         &mut self,
         lines: &[String],

@@ -5,27 +5,37 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AuditLog, AuthStore, ClientId, CommandInvocation, CommandOutcome, ConfigMutation,
-    ConfigMutationOperation, ConfigPaths, ConfigScope, KeyChord, MezError, PaneNavigationDirection,
-    PaneReadinessOverrideStore, PaneReadinessState, PathBuf, Result, Session, auth_status_display,
-    auth_status_store_display, bind_key_args, binding_config_key, capture_pane_display,
+    AuditLog, AuthStore, ClientId, CommandInvocation, CommandOutcome, KeyChord, MezError,
+    PaneNavigationDirection, PaneReadinessOverrideStore, PaneReadinessState, Result, Session,
+    auth_status_display, auth_status_store_display, bind_key_args, capture_pane_display,
     choose_buffer_display, clear_history_display, command_help_display, command_target_pane_id,
-    config_set_string, config_unset, copy_mode_display, copy_selection_display,
-    create_buffer_display, export_history_display, key_chord_notation, list_baseline_commands,
-    list_buffers_display, list_default_key_bindings, list_default_themes, load_layout_selector,
-    mark_pane_ready_audit_record, mark_pane_ready_warning_display, mcp_server_id,
-    mcp_status_plan_display, mcp_status_store_display, mutated_pane_command_outcome,
-    pane_readiness_state_name, parse_command_sequence, parse_config_command_value,
-    paste_buffer_display, paste_clipboard_display, persist_command_config_mutation,
-    persist_command_theme_config, persist_config_text, pipe_pane_display, save_buffer_display,
+    copy_mode_display, copy_selection_display, create_buffer_display, export_history_display,
+    key_chord_notation, list_baseline_commands, list_buffers_display, list_default_key_bindings,
+    list_default_themes, load_layout_selector, mark_pane_ready_audit_record,
+    mark_pane_ready_warning_display, mcp_server_id, mcp_status_plan_display,
+    mcp_status_store_display, mutated_pane_command_outcome, pane_readiness_state_name,
+    paste_buffer_display, paste_clipboard_display, pipe_pane_display, save_buffer_display,
     save_layout_name, search_history_display, set_option_args, set_theme_arg, show_default_options,
-    show_messages_display, show_metrics_display, validate_config_file,
+    show_messages_display, show_metrics_display,
 };
-
+#[cfg(test)]
+use super::{
+    ConfigMutation, ConfigMutationOperation, ConfigPaths, ConfigScope, PathBuf, binding_config_key,
+    parse_command_sequence, persist_config_text, validate_config_file,
+};
+#[cfg(test)]
+use super::{
+    config_set_string, config_unset, parse_config_command_value, persist_command_config_mutation,
+    persist_command_theme_config,
+};
+#[cfg(test)]
 use crate::integrations::mcp::{
     mcp_config_command_display, mcp_config_command_from_words, mcp_config_command_report,
     persist_mcp_config_command,
 };
+#[cfg(test)]
+use std::fs;
+
 use mez_mux::command::plans::{
     CommandPlan, PaneSelectionPlan, ResizePanePlan, SwapPaneNeighbor, SwapPanePlan,
     SynchronizePanesMode, command_plan_from_invocation,
@@ -35,7 +45,6 @@ use mez_mux::command::presentation::{
     choose_window_display, display_panes, list_clients, list_current_session, list_groups,
     list_observers, list_panes, list_windows,
 };
-use std::fs;
 
 // In-memory command execution entry points.
 
@@ -44,6 +53,7 @@ use std::fs;
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn execute_command_sequence(
     session: &mut Session,
     primary_client_id: &ClientId,
@@ -151,6 +161,7 @@ fn swap_pane_neighbor_target(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn execute_config_store_command(
     paths: &ConfigPaths,
     invocation: &CommandInvocation,

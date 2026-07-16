@@ -36,6 +36,7 @@ enum AsyncRuntimeEventFlush {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub async fn flush_async_runtime_event_wakeups_to_stream(
     stream: &mut UnixStream,
     handle: &AsyncRuntimeSessionHandle,

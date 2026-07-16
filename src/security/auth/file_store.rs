@@ -5,7 +5,9 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 
 use secrecy::{ExposeSecret, SecretString};
 use zeroize::Zeroizing;
@@ -46,6 +48,7 @@ impl PrivateFileCredentialStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn directory(&self) -> &Path {
         &self.directory
     }

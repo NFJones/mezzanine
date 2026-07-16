@@ -73,6 +73,10 @@ impl AsyncFakePaneProcessIo {
     }
 
     /// Queues one output read failure.
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn push_output_error(&mut self, message: impl Into<String>) {
         self.output_batches
             .push_back(Err(MezError::invalid_state(message.into())));

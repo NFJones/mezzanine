@@ -31,7 +31,7 @@ use crate::host::terminal::{
     AttachedTerminalClientLoopConfig, AttachedTerminalClientLoopReport,
     AttachedTerminalClientStepPlan, AttachedTerminalFdReadiness, AttachedTerminalFdRole,
     MouseAction, TerminalClientLoopAction, TerminalClientLoopConfig,
-    plan_attached_terminal_client_step, plan_attached_terminal_client_step_with_host_paste_buffer,
+    plan_attached_terminal_client_step_with_host_paste_buffer,
 };
 use crate::integrations::agent::actions::AgentTurnRunner;
 use crate::protocol::event::{EventAudience, encode_event_notification};
@@ -125,9 +125,7 @@ pub use crate::runtime::{
 pub use actor_types::{
     AsyncAttachedTerminalStepRequest, plan_and_apply_async_attached_terminal_client_step,
     plan_async_attached_terminal_client_step, serve_async_runtime_control_connection,
-    serve_async_runtime_control_connection_loop,
-    serve_async_runtime_control_connection_loop_with_snapshots,
-    serve_async_runtime_control_connection_with_snapshots, serve_async_runtime_control_listener,
+    serve_async_runtime_control_connection_loop, serve_async_runtime_control_listener,
     serve_async_runtime_message_connection, serve_async_runtime_message_connection_loop,
     serve_async_runtime_message_listener,
 };
@@ -136,16 +134,12 @@ pub use actor_types::{
     serve_async_runtime_control_listener_with_snapshots,
     serve_async_runtime_message_listener_concurrent,
 };
+#[cfg(test)]
+pub use client::build_async_attached_terminal_client_service;
 pub use client::{
     AsyncAttachedTerminalClientServiceConfig, run_async_agent_provider_service,
     run_async_attached_terminal_client_service,
 };
-#[cfg(test)]
-pub use client::{
-    AsyncAttachedTerminalClientServiceReport, build_async_attached_terminal_client_service,
-};
-#[cfg(test)]
-pub use config::RuntimeHistogramBucket;
 pub use config::{
     AsyncAgentProviderPollReport, AsyncAgentProviderServiceConfig, AsyncControlInputResult,
     AsyncMessageFanout, AsyncMessageInputResult, AsyncRuntimeActorConfig, AsyncRuntimeActorExit,
@@ -167,18 +161,12 @@ pub use pane_io::AsyncFakePaneProcessIo;
 pub use pane_io::build_async_pane_process_supervisor_service;
 #[cfg(test)]
 pub use pane_io::{
-    AsyncPaneForegroundProcess, AsyncPaneIoFuture, AsyncPaneIoSideEffectServiceConfig,
-    AsyncPaneIoSideEffectServiceReport, AsyncPaneProcessDriver, AsyncPaneProcessDriverConfig,
-    AsyncPaneProcessDriverServiceConfig, AsyncPaneProcessDriverServiceReport, AsyncPaneProcessIo,
-    AsyncPaneProcessServiceConfig, AsyncPaneProcessServiceReport,
-    AsyncPaneProcessSupervisorServiceConfig, AsyncPaneProcessSupervisorServiceReport,
-    AsyncPtyPaneProcessIo, build_async_pane_io_side_effect_service,
-    build_async_pane_process_service, run_async_pane_io_side_effect_service,
-    run_async_pane_process_driver_service, run_async_pane_process_service,
-    run_async_pane_process_supervisor_service,
+    AsyncPaneForegroundProcess, AsyncPaneIoSideEffectServiceConfig, AsyncPaneProcessDriver,
+    AsyncPaneProcessDriverConfig, AsyncPaneProcessDriverServiceConfig, AsyncPaneProcessIo,
+    AsyncPaneProcessServiceConfig, AsyncPaneProcessSupervisorServiceConfig, AsyncPtyPaneProcessIo,
+    run_async_pane_io_side_effect_service, run_async_pane_process_driver_service,
+    run_async_pane_process_service, run_async_pane_process_supervisor_service,
 };
-#[cfg(test)]
-pub use provider::build_async_agent_provider_service;
 pub use side_effects::{
     AsyncClientOutputFlushServiceReport, AsyncRuntimeSideEffectServiceConfig,
     build_async_hook_side_effect_service, build_async_persistence_side_effect_service,
@@ -186,34 +174,31 @@ pub use side_effects::{
 };
 #[cfg(test)]
 pub use side_effects::{
-    AsyncHookSideEffectServiceReport, AsyncPersistenceSideEffectServiceReport,
-    AsyncRuntimeSideEffectServiceReport, AsyncRuntimeTimerServiceReport,
-    build_async_client_output_flush_service, build_async_render_side_effect_service,
-    build_async_runtime_side_effect_service, run_async_hook_side_effect_service,
-    run_async_persistence_side_effect_service, run_async_render_side_effect_service,
-    run_async_runtime_side_effect_service, run_async_runtime_timer_side_effect_service,
-};
-pub use supervisor::{
-    AsyncRuntimeService, AsyncRuntimeServiceExit, AsyncRuntimeSupervisionReport,
-    DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT, DEFAULT_ASYNC_CONTROL_MAX_CONTENT_LENGTH,
-    DEFAULT_ASYNC_EVENT_LIMIT_PER_CONNECTION, DEFAULT_ASYNC_IDLE_CLEANUP_INTERVAL,
-    DEFAULT_ASYNC_RUNTIME_COMMAND_BUFFER, supervise_async_runtime_services,
+    run_async_hook_side_effect_service, run_async_persistence_side_effect_service,
+    run_async_render_side_effect_service, run_async_runtime_side_effect_service,
+    run_async_runtime_timer_side_effect_service,
 };
 #[cfg(test)]
+pub use supervisor::AsyncRuntimeSupervisionReport;
 pub use supervisor::{
-    AsyncRuntimeServiceExitKind, AsyncRuntimeServiceReport, AsyncRuntimeServiceSupervisor,
+    AsyncRuntimeService, AsyncRuntimeServiceExit, DEFAULT_ASYNC_ATTACHED_TERMINAL_POLL_TIMEOUT,
+    DEFAULT_ASYNC_CONTROL_MAX_CONTENT_LENGTH, DEFAULT_ASYNC_EVENT_LIMIT_PER_CONNECTION,
+    DEFAULT_ASYNC_IDLE_CLEANUP_INTERVAL, DEFAULT_ASYNC_RUNTIME_COMMAND_BUFFER,
+    supervise_async_runtime_services,
 };
+#[cfg(test)]
+pub use supervisor::{AsyncRuntimeServiceReport, AsyncRuntimeServiceSupervisor};
 pub use terminal::{AsyncAttachedTerminalLoopRequest, run_async_attached_terminal_client_loop};
 #[cfg(test)]
 pub use terminal_io::AsyncAttachedTerminalFdLoopIo;
+#[cfg(test)]
+pub use terminal_io::AsyncFakeAttachedTerminalIo;
 #[cfg(test)]
 pub use terminal_io::SyncAttachedTerminalIoAdapter;
 pub use terminal_io::{
     AsyncAttachedTerminalIo, AsyncAttachedTerminalPresentationGuard, AsyncTerminalIoFuture,
     AsyncTerminalOutputWriteReport, DEFAULT_ATTACHED_TERMINAL_OUTPUT_WRITE_LIMIT_BYTES,
 };
-#[cfg(test)]
-pub use terminal_io::{AsyncFakeAttachedTerminalIo, AsyncFakeTerminalFrame};
 
 use actor_types::AsyncRuntimeRequest;
 use provider::{

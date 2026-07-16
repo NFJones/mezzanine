@@ -16,11 +16,12 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use crate::error::{MezError, Result};
 
 use mez_agent::mcp::{
-    DEFAULT_MCP_MAX_MESSAGE_BYTES, McpInitializeResponse, McpRegistry, McpStartupPlan,
-    McpStartupTransportPlan, McpStdioDiscovery, McpToolCallPlan, McpToolCallResponse,
-    McpToolListPagination, McpToolsListResponse, build_mcp_initialized_notification,
+    DEFAULT_MCP_MAX_MESSAGE_BYTES, McpInitializeResponse, McpStartupPlan, McpStartupTransportPlan,
+    McpToolCallPlan, McpToolCallResponse, McpToolsListResponse, build_mcp_initialized_notification,
     json_id_matches, mcp_initialize_operation, mcp_tools_call_operation, mcp_tools_list_operation,
 };
+#[cfg(test)]
+use mez_agent::mcp::{McpRegistry, McpStdioDiscovery, McpToolListPagination};
 
 /// Carries Mcp Stdio Read Event state for this subsystem.
 ///
@@ -78,6 +79,11 @@ impl McpStdioConnection {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn server_id(&self) -> &str {
         &self.server_id
     }
@@ -316,6 +322,7 @@ pub async fn spawn_stdio_mcp_connection_with_limit(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub async fn discover_stdio_mcp_server(
     plan: &McpStartupPlan,
     environment: &BTreeMap<String, String>,
@@ -351,6 +358,7 @@ pub async fn discover_stdio_mcp_server(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub async fn discover_stdio_mcp_server_into_registry(
     registry: &mut McpRegistry,
     server_id: &str,

@@ -307,8 +307,8 @@ mod platform_browser;
 use claims::{deserialize_device_interval, deserialize_optional_u64};
 
 pub use browser_flow::{
-    refresh_openai_provider_credential_async, run_openai_browser_login_async,
-    run_openai_browser_login_with_theme_async, run_openai_device_code_login_async,
+    refresh_openai_provider_credential_async, run_openai_browser_login_with_theme_async,
+    run_openai_device_code_login_async,
 };
 
 #[cfg(test)]

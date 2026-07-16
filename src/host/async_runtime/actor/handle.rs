@@ -2,13 +2,16 @@
 
 use super::{
     AgentId, AsyncControlInputResult, AsyncMessageFanout, AsyncMessageInputResult,
-    AsyncRenderedClientFlush, AsyncRenderedClientFrame, AsyncRuntimeRequest,
-    AsyncRuntimeSessionHandle, AttachedClientStepApplication, AttachedTerminalClientStepPlan,
-    ClientId, ClientStatusLine, ClientViewRole, ControlConnectionState, DeliveryCursor,
-    FanoutBatch, MessageConnection, MezError, PaneResizeUpdate, RenderedClientView, Result,
-    RuntimeAgentProviderDispatch, RuntimeAgentProviderTask, RuntimeEventBatch,
+    AsyncRenderedClientFrame, AsyncRuntimeRequest, AsyncRuntimeSessionHandle,
+    AttachedClientStepApplication, AttachedTerminalClientStepPlan, ClientId, ClientViewRole,
+    ControlConnectionState, DeliveryCursor, FanoutBatch, MessageConnection, MezError,
+    PaneResizeUpdate, Result, RuntimeAgentProviderDispatch, RuntimeEventBatch,
     RuntimeEventConnectionTable, RuntimeEventIngressReport, RuntimeEventWakeup,
     RuntimeLifecycleState, RuntimeSideEffect, Size, TerminalClientLoopConfig, oneshot, watch,
+};
+#[cfg(test)]
+use super::{
+    AsyncRenderedClientFlush, ClientStatusLine, RenderedClientView, RuntimeAgentProviderTask,
 };
 
 impl AsyncRuntimeSessionHandle {
@@ -32,6 +35,7 @@ impl AsyncRuntimeSessionHandle {
     }
 
     /// Returns actor metrics captured at the serialized runtime boundary.
+    #[cfg(test)]
     pub async fn metrics(&self) -> Result<crate::host::async_runtime::AsyncRuntimeActorMetrics> {
         self.request(|reply| AsyncRuntimeRequest::Metrics { reply })
             .await
@@ -42,6 +46,7 @@ impl AsyncRuntimeSessionHandle {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub async fn render_client_view(
         &self,
         role: ClientViewRole,
@@ -84,6 +89,7 @@ impl AsyncRuntimeSessionHandle {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub async fn render_client_side_effect(
         &self,
         client_id: ClientId,
@@ -239,6 +245,7 @@ impl AsyncRuntimeSessionHandle {
     }
 
     /// Waits until the actor queues at least one runtime side effect.
+    #[cfg(test)]
     pub async fn wait_for_runtime_side_effects(&self) {
         self.side_effect_delivery_notify.notified().await;
     }
@@ -307,6 +314,7 @@ impl AsyncRuntimeSessionHandle {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub async fn execute_terminal_command(
         &self,
         primary_client_id: ClientId,
@@ -326,6 +334,11 @@ impl AsyncRuntimeSessionHandle {
     }
 
     /// Shows a primary-client modal display overlay through actor-owned state.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub async fn show_primary_display_overlay(&self, lines: Vec<String>) -> Result<()> {
         self.request(|reply| AsyncRuntimeRequest::ShowPrimaryDisplayOverlay { lines, reply })
             .await?
@@ -342,6 +355,7 @@ impl AsyncRuntimeSessionHandle {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub async fn execute_agent_shell_command(
         &self,
         primary_client_id: ClientId,
@@ -360,6 +374,7 @@ impl AsyncRuntimeSessionHandle {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub async fn pending_agent_provider_tasks(&self) -> Result<Vec<RuntimeAgentProviderTask>> {
         self.request(|reply| AsyncRuntimeRequest::PendingAgentProviderTasks { reply })
             .await?
@@ -445,6 +460,7 @@ impl AsyncRuntimeSessionHandle {
     /// The returned effects are already ordered by the runtime events that
     /// produced them. A zero limit is rejected so callers cannot accidentally
     /// spin while making no progress.
+    #[cfg(test)]
     pub async fn drain_runtime_side_effects(&self, limit: usize) -> Result<Vec<RuntimeSideEffect>> {
         self.request(|reply| AsyncRuntimeRequest::DrainRuntimeSideEffects { limit, reply })
             .await?
@@ -486,6 +502,7 @@ impl AsyncRuntimeSessionHandle {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub async fn drain_render_side_effects(&self, limit: usize) -> Result<Vec<RuntimeSideEffect>> {
         self.request(|reply| AsyncRuntimeRequest::DrainRenderSideEffects { limit, reply })
             .await?

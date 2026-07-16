@@ -97,6 +97,7 @@ pub struct ProjectTrustRecord {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
 pub struct ProjectTrustPrompt {
     /// Stores the project root value for this data structure.
     ///

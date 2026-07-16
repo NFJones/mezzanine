@@ -6,7 +6,9 @@
 use std::collections::BTreeSet;
 use std::fs::{self as std_fs, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 
 use tokio::fs::{self as tokio_fs, OpenOptions as TokioOpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -106,6 +108,7 @@ impl AgentTranscriptStore {
     }
 
     /// Creates a store rooted at a specific directory.
+    #[cfg(test)]
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),
@@ -114,6 +117,7 @@ impl AgentTranscriptStore {
     }
 
     /// Returns this store with a configured saved-conversation retention limit.
+    #[cfg(test)]
     pub fn with_saved_sessions_limit(mut self, limit: usize) -> Result<Self> {
         if limit == 0 {
             return Err(MezError::invalid_args(
@@ -136,6 +140,7 @@ impl AgentTranscriptStore {
     }
 
     /// Returns the root directory used by this store.
+    #[cfg(test)]
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -865,11 +870,13 @@ impl AgentTranscriptStore {
     }
 
     /// Returns the durable active agent-session metadata file path.
+    #[cfg(test)]
     pub fn agent_session_metadata_file(&self) -> PathBuf {
         self.agent_session_metadata_path()
     }
 
     /// Returns the directory for one persisted agent session.
+    #[cfg(test)]
     pub fn session_dir(&self, conversation_id: &str) -> Result<PathBuf> {
         self.session_dir_for(conversation_id)
     }
@@ -880,11 +887,13 @@ impl AgentTranscriptStore {
     }
 
     /// Returns the presentation path for one persisted agent session.
+    #[cfg(test)]
     pub fn presentation_path(&self, conversation_id: &str) -> Result<PathBuf> {
         self.presentation_path_for(conversation_id)
     }
 
     /// Returns the compressed presentation-history path for one persisted agent session.
+    #[cfg(test)]
     pub fn presentation_compressed_path(&self, conversation_id: &str) -> Result<PathBuf> {
         self.presentation_compressed_path_for(conversation_id)
     }

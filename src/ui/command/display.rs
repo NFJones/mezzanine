@@ -4,9 +4,11 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+#[cfg(test)]
+use super::ConfigMutationValue;
 use super::{
-    CommandInvocation, CommandOutcome, ConfigMutationValue, KeyBindings, KeyChord, KeyCode,
-    KeyValueLine, LayoutLoadSelector, MezError, Result, baseline_commands, mcp_server_id,
+    CommandInvocation, CommandOutcome, KeyBindings, KeyChord, KeyCode, KeyValueLine,
+    LayoutLoadSelector, MezError, Result, baseline_commands, mcp_server_id,
 };
 
 /// Returns the user-facing command guide rendered by the in-pane `help`
@@ -762,6 +764,7 @@ pub(super) fn set_theme_arg(invocation: &CommandInvocation) -> Result<&str> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub(super) fn parse_config_command_value(value: &str) -> ConfigMutationValue {
     match value {
         "true" => ConfigMutationValue::Boolean(true),

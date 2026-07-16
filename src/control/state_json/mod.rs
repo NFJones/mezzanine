@@ -4,14 +4,16 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
+#[cfg(test)]
+use super::ProjectTrustRecord;
 use super::{
     AgentShellSession, AgentShellStore, AgentShellVisibility, AgentTurnLedger, AgentTurnState,
     ApprovalDecision, AuditActor, AuditRecord, BlockedApprovalQueue, BlockedApprovalRequest,
     BlockedApprovalState, ClientId, ClientRole, ClientState, EventAudience, EventKind, EventLog,
     FrameContext, FrameOverflow, GrantedRole, JsonRpcRequest, LayoutLoadPlan,
     MAX_EVENT_REPLAY_RETENTION, McpRegistry, McpServerKind, McpServerStatus, MezError,
-    ObserverDecisionState, PaneCaptureSource, ProjectTrustRecord, Result, Session, SessionState,
-    SnapshotKind, SnapshotState, TrustDecision, VisibleEvent, Window, json_escape, json_raw_field,
+    ObserverDecisionState, PaneCaptureSource, Result, Session, SessionState, SnapshotKind,
+    SnapshotState, TrustDecision, VisibleEvent, Window, json_escape, json_raw_field,
     json_string_field, pane_by_id, pane_target_checked_resolved, parse_json_object_value,
     reject_unknown_json_fields, render_frame_template, require_idempotency_key,
     require_session_target_matches_value, resolve_pane_target_value, resolve_window_target_value,
@@ -44,13 +46,15 @@ pub(in crate::control) use agents::{
     dispatch_agent_shell_visibility_with_store, dispatch_agent_task_list_with_ledger,
     validate_agent_task_list_params,
 };
+#[cfg(test)]
+pub(in crate::control) use approvals::project_trust_json;
 pub(crate) use approvals::{
     ApprovalDecisionScopePersistence, approval_decide_scope_persistence,
     project_trust_state_filter_from_params,
 };
 pub(in crate::control) use approvals::{
     approval_audit_record, approval_json, approvals_json_for_params, control_audit_actor,
-    parse_approval_decision, parse_trust_decision, project_trust_json,
+    parse_approval_decision, parse_trust_decision,
 };
 pub(in crate::control) use clients::client_json;
 pub(crate) use clients::observers_json;

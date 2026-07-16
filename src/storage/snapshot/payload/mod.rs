@@ -17,13 +17,15 @@ use super::encoding::{
     escape_field, non_empty_string, parse_bool, parse_u16, parse_u32, parse_u64, parse_usize,
     split_fields,
 };
+#[cfg(test)]
+use super::types::SnapshotPaneCapture;
 use super::types::{
     LayoutLoadPlan, PaneSnapshotPayload, SessionSnapshotPayload, SnapshotAgentSession,
     SnapshotApprovalGrantMetadata, SnapshotApprovalRequestMetadata, SnapshotConfigDiagnostic,
     SnapshotConfigLayerMetadata, SnapshotCreationContext, SnapshotFrameSettings,
     SnapshotFrameState, SnapshotLayoutNode, SnapshotMcpExternalCapability, SnapshotMcpServerState,
-    SnapshotMcpToolEffects, SnapshotMcpToolState, SnapshotPaneCapture, SnapshotPaneGeometry,
-    SnapshotSessionState, SnapshotShellMetadata, WindowGroupSnapshotPayload, WindowSnapshotPayload,
+    SnapshotMcpToolEffects, SnapshotMcpToolState, SnapshotPaneGeometry, SnapshotSessionState,
+    SnapshotShellMetadata, WindowGroupSnapshotPayload, WindowSnapshotPayload,
 };
 
 /// Defines the SNAPSHOT PAYLOAD FORMAT VERSION const used by this subsystem.

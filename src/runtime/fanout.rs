@@ -6,17 +6,23 @@
 //! delivery boundary explicit while preserving the existing message and control
 //! framing contracts.
 
+#[cfg(test)]
 use super::{
-    AgentId, EventAudience, EventLog, FocusedShellHookDispatch, MessageService, MezError, Result,
-    VisibleEvent, delivery_batch_json, encode_control_body, encode_event_notification,
-    encode_mmp_body,
+    AgentId, FocusedShellHookDispatch, MessageService, delivery_batch_json, encode_control_body,
+    encode_event_notification, encode_mmp_body,
 };
+use super::{EventAudience, EventLog, MezError, Result, VisibleEvent};
 
 /// Carries Runtime Message Connection state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub struct RuntimeMessageConnection {
     /// Stores the connection id value for this data structure.
     ///
@@ -40,6 +46,11 @@ pub struct RuntimeMessageConnection {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub struct RuntimeMessageWakeup {
     /// Stores the connection id value for this data structure.
     ///
@@ -62,6 +73,11 @@ pub struct RuntimeMessageWakeup {
 ///
 /// Implementors provide the concrete I/O or state transition boundary
 /// consumed by higher-level orchestration code.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub trait RuntimeMessageFanoutSink {
     /// Runs the send frame operation for this subsystem.
     ///
@@ -121,6 +137,7 @@ pub struct RuntimeEventWakeup {
 ///
 /// Implementors provide the concrete I/O or state transition boundary
 /// consumed by higher-level orchestration code.
+#[cfg(test)]
 pub trait RuntimeEventFanoutSink {
     /// Runs the send frame operation for this subsystem.
     ///
@@ -135,6 +152,11 @@ pub trait RuntimeEventFanoutSink {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub struct RuntimeFocusedShellHookRun {
     /// Stores the enqueued value for this data structure.
     ///
@@ -158,6 +180,11 @@ pub struct RuntimeFocusedShellHookRun {
 /// The type keeps related data explicit so callers can inspect and move
 /// structured runtime state without parsing display text.
 #[derive(Debug, Default)]
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub struct RuntimeMessageConnectionTable {
     /// Stores the connections value for this data structure.
     ///
@@ -166,12 +193,18 @@ pub struct RuntimeMessageConnectionTable {
     pub(super) connections: Vec<RuntimeMessageConnection>,
 }
 
+#[cfg(test)]
 impl RuntimeMessageConnectionTable {
     /// Runs the attach operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn attach(
         &mut self,
         connection_id: impl Into<String>,
@@ -204,6 +237,11 @@ impl RuntimeMessageConnectionTable {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn detach(&mut self, connection_id: &str) -> bool {
         let before = self.connections.len();
         self.connections
@@ -216,6 +254,11 @@ impl RuntimeMessageConnectionTable {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn set_writable(&mut self, connection_id: &str, writable: bool) -> Result<()> {
         let connection = self
             .connections
@@ -236,6 +279,11 @@ impl RuntimeMessageConnectionTable {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn wakeups(
         &self,
         service: &MessageService,
@@ -263,6 +311,11 @@ impl RuntimeMessageConnectionTable {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn len(&self) -> usize {
         self.connections.len()
     }
@@ -272,6 +325,11 @@ impl RuntimeMessageConnectionTable {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn is_empty(&self) -> bool {
         self.connections.is_empty()
     }
@@ -282,6 +340,11 @@ impl RuntimeMessageConnectionTable {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn flush_runtime_message_wakeup<S>(
     service: &mut MessageService,
     wakeup: &RuntimeMessageWakeup,
@@ -307,6 +370,11 @@ where
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn flush_runtime_message_wakeups<S>(
     service: &mut MessageService,
     wakeups: &[RuntimeMessageWakeup],
@@ -343,6 +411,10 @@ pub struct RuntimeEventConnectionTable {
     pub(super) connections: Vec<RuntimeEventConnection>,
 }
 
+#[allow(
+    dead_code,
+    reason = "event connection lifecycle operations form one typed table API"
+)]
 impl RuntimeEventConnectionTable {
     /// Runs the attach operation for this subsystem.
     ///
@@ -493,6 +565,7 @@ impl RuntimeEventConnectionTable {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn flush_runtime_event_wakeup<S>(
     connections: &mut RuntimeEventConnectionTable,
     wakeup: &RuntimeEventWakeup,
@@ -523,6 +596,7 @@ where
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn flush_runtime_event_wakeups<S>(
     connections: &mut RuntimeEventConnectionTable,
     wakeups: &[RuntimeEventWakeup],

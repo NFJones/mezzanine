@@ -193,6 +193,10 @@ pub struct RuntimeAgentProviderDispatch {
     /// Whether local issue-tracking actions are enabled for this provider turn.
     pub issue_actions_enabled: bool,
     /// Optional `/loop` controller metadata for this provider turn.
+    #[allow(
+        dead_code,
+        reason = "provider dispatch carries loop context across worker ownership"
+    )]
     pub loop_turn: Option<RuntimeAgentLoopTurn>,
 }
 

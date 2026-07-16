@@ -114,6 +114,11 @@ impl From<mez_mux::session::SessionShell> for ResolvedShell {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn resolve_shell_from_process() -> Result<ResolvedShell> {
     resolve_shell(std::env::var_os("SHELL"))
 }

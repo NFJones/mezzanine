@@ -6,12 +6,13 @@
 //! keeps the main control adapter focused on protocol method routing.
 
 use super::super::{
-    BlockedApprovalState, ConfigScope, MessageServiceSnapshot, Result, RuntimeSessionService,
+    BlockedApprovalState, ConfigScope, MessageServiceSnapshot, RuntimeSessionService,
     SnapshotAgentSession, SnapshotApprovalGrantMetadata, SnapshotApprovalRequestMetadata,
-    SnapshotConfigDiagnostic, SnapshotConfigLayerMetadata, SnapshotCreationContext,
-    SnapshotFrameSettings, SnapshotFrameState, SnapshotMcpServerState, SnapshotPaneCapture,
-    SnapshotRepository, SnapshotState, validate_config_text,
+    SnapshotConfigDiagnostic, SnapshotConfigLayerMetadata, SnapshotFrameSettings,
+    SnapshotFrameState, SnapshotMcpServerState, SnapshotPaneCapture, validate_config_text,
 };
+#[cfg(test)]
+use super::super::{Result, SnapshotCreationContext, SnapshotRepository, SnapshotState};
 use super::snapshot::{
     runtime_snapshot_agent_visibility_name, runtime_snapshot_approval_grant,
     runtime_snapshot_approval_request, runtime_snapshot_config_scope_name,
@@ -104,6 +105,11 @@ impl RuntimeSessionService {
     }
 
     /// Creates a durable snapshot from the current live runtime state.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn create_live_snapshot(
         &self,
         snapshots: &SnapshotRepository,

@@ -3,10 +3,9 @@
 //! Discovery keeps filesystem probing separate from trust-record storage so
 //! callers can inspect projects without mutating the trust database.
 
-use super::{
-    BTreeMap, MezError, OVERLAY_FILENAMES, Path, PathBuf, ProjectTrustPrompt, ProjectTrustStore,
-    Result, TrustDecision, fs,
-};
+use super::{BTreeMap, MezError, OVERLAY_FILENAMES, Path, PathBuf, Result};
+#[cfg(test)]
+use super::{ProjectTrustPrompt, ProjectTrustStore, TrustDecision, fs};
 
 /// Runs the discover project root operation for this subsystem.
 ///
@@ -96,6 +95,7 @@ pub fn select_overlay_for_directory(existing_files: &[PathBuf]) -> Result<Option
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn summarize_overlay_capabilities(overlay_files: &[PathBuf]) -> Result<Vec<String>> {
     let mut capabilities = Vec::new();
     for path in overlay_files {
@@ -148,6 +148,7 @@ pub fn summarize_overlay_capabilities(overlay_files: &[PathBuf]) -> Result<Vec<S
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn discover_project_trust_prompt(
     trust_store: &ProjectTrustStore,
     current_dir: &Path,
@@ -173,6 +174,7 @@ pub fn discover_project_trust_prompt(
 }
 
 /// Returns the repository marker path for a discovered project root.
+#[cfg(test)]
 fn git_marker_path_for_project(project_root: &Path) -> Option<PathBuf> {
     let marker = project_root.join(".git");
     if marker.exists() { Some(marker) } else { None }
@@ -211,6 +213,7 @@ pub fn discover_existing_overlays(project_root: &Path, current_dir: &Path) -> Re
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 fn push_capability_if(capabilities: &mut Vec<String>, present: bool, capability: &str) {
     if present {
         capabilities.push(capability.to_string());

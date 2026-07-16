@@ -8,9 +8,11 @@ use std::collections::BTreeSet;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+#[cfg(test)]
+use super::Path;
 use super::{
     DeleteIssueResult, IssueBrowserQuery, IssueDatabasePath, IssueKind, IssueQuery, IssueRecord,
-    IssueState, IssueUpdate, MezError, NewIssueRecord, Path, PathBuf, Result, UpdateIssueResult,
+    IssueState, IssueUpdate, MezError, NewIssueRecord, PathBuf, Result, UpdateIssueResult,
     ensure_private_parent, generate_issue_id, set_private_issue_file_permissions,
 };
 
@@ -23,6 +25,7 @@ pub struct IssueStore {
 
 impl IssueStore {
     /// Returns an issue store using the default database under a config root.
+    #[cfg(test)]
     pub fn under_config_root(config_root: impl Into<PathBuf>) -> Self {
         Self {
             path: super::default_issue_database_path(config_root.into()),
@@ -31,6 +34,7 @@ impl IssueStore {
     }
 
     /// Builds an issue store at an explicit SQLite database path.
+    #[cfg(test)]
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
@@ -47,11 +51,17 @@ impl IssueStore {
     }
 
     /// Returns the SQLite database path used by this store.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
     /// Adds one issue record and returns the persisted value.
+    #[cfg(test)]
     pub fn add_issue(
         &self,
         project: String,

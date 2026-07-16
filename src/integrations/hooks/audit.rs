@@ -3,13 +3,17 @@
 //! Audit helpers translate hook plans and execution results into sanitized audit
 //! records while keeping execution code independent from audit-log persistence.
 
+#[cfg(test)]
+use super::{FocusedShellExecutor, execute_focused_shell_hook, execute_program_hook};
+#[cfg(test)]
 use crate::error::Result;
-use crate::security::audit::{AuditActor, AuditLog, AuditRecord};
+#[cfg(test)]
+use crate::security::audit::AuditLog;
 
-use super::execution::{execute_focused_shell_hook, execute_program_hook};
+use crate::security::audit::{AuditActor, AuditRecord};
+
 use super::types::{
-    FocusedShellExecutor, HookEvent, HookExecutionPlan, HookExecutionResult, HookExecutionStatus,
-    HookFailureKind,
+    HookEvent, HookExecutionPlan, HookExecutionResult, HookExecutionStatus, HookFailureKind,
 };
 
 /// Runs the execute program hook with audit operation for this subsystem.
@@ -17,6 +21,7 @@ use super::types::{
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn execute_program_hook_with_audit(
     plan: &HookExecutionPlan,
     audit_log: &mut AuditLog,
@@ -34,6 +39,7 @@ pub fn execute_program_hook_with_audit(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn execute_focused_shell_hook_with_audit(
     plan: &HookExecutionPlan,
     executor: &mut impl FocusedShellExecutor,

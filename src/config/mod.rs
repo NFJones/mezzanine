@@ -60,9 +60,9 @@ mod types;
 mod validation;
 
 pub use defaults::{DEFAULT_CONFIG_TOML, DEFAULT_PROJECT_CONFIG_TOML};
-pub use migration::{CURRENT_CONFIG_SCHEMA_VERSION, migrate_config_file};
 #[cfg(test)]
-pub use migration::{ConfigMigrationPlan, migrate_config_text};
+pub use migration::migrate_config_text;
+pub use migration::{CURRENT_CONFIG_SCHEMA_VERSION, migrate_config_file};
 pub use paths::ConfigPaths;
 pub use schema::{
     BASELINE_TOP_LEVEL_KEYS, PRIMARY_CONFIG_FILENAMES,
@@ -91,11 +91,14 @@ use mutation::{
     mutate_json_text, mutate_toml_text, mutate_yaml_text, parse_mutation_path,
     reject_container_target, reject_unsupported_mutation_path,
 };
+#[cfg(test)]
 pub(crate) use parsers::parse_config_json_value;
 use parsers::{
     JsonPathParser, JsonValueParser, parse_config_json_object, parse_config_json_value_best_effort,
 };
-use paths::{format_diagnostics, write_private_config_file, write_private_config_file_async};
+#[cfg(test)]
+use paths::write_private_config_file_async;
+use paths::{format_diagnostics, write_private_config_file};
 use schema::{
     AGENT_AUTO_SIZING_KEYS, AGENT_KEYS, AUDIT_KEYS, AUTH_KEYS, COMMAND_RULE_KEYS, CONTROL_KEYS,
     HISTORY_KEYS, HOOK_KEYS, INSTRUCTION_KEYS, ISSUE_KEYS, KEY_BINDING_KEYS, LAYOUT_KEYS,

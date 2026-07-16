@@ -11,15 +11,17 @@ use super::{
     AttachedTerminalOutputModes, ClientEvent, ClientId, ClientState, ClientStatusLine,
     ClientViewRole, ControlConnectionState, DEFAULT_ASYNC_IDLE_CLEANUP_INTERVAL, DeliveryCursor,
     FanoutBatch, MessageConnection, MezError, Notify, PaneEvent, PersistenceEvent,
-    RenderInvalidationReason, RenderedClientView, Result, RuntimeAgentProviderDispatch,
-    RuntimeAgentProviderTask, RuntimeEvent, RuntimeEventBatch, RuntimeEventConnectionTable,
-    RuntimeEventIngressReport, RuntimeEventWakeup, RuntimeLifecycleState, RuntimeSessionService,
-    RuntimeSideEffect, RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
+    RenderInvalidationReason, Result, RuntimeAgentProviderDispatch, RuntimeEvent,
+    RuntimeEventBatch, RuntimeEventConnectionTable, RuntimeEventIngressReport, RuntimeEventWakeup,
+    RuntimeLifecycleState, RuntimeSessionService, RuntimeSideEffect,
+    RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,
     RuntimeSnapshotControlAsyncWorkKind, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition,
     ShutdownEvent, Size, TerminalClientLoopConfig, TimerEvent, VecDeque,
     compose_client_presentation_with_styles, delivery_batch_json, encode_mmp_body, mpsc, oneshot,
     watch,
 };
+#[cfg(test)]
+use super::{RenderedClientView, RuntimeAgentProviderTask};
 use crate::control::{decode_control_frame, encode_control_body};
 use crate::integrations::agent::provider::{
     provider_error_retry_class_from_parts, provider_event_error_from_parts,

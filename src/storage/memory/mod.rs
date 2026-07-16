@@ -5,7 +5,9 @@
 //! configured paths, private filesystem permissions, and retrieval I/O.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 
 use crate::error::{MezError, Result};
 mod permissions;

@@ -52,8 +52,7 @@ mod types;
 
 #[cfg(test)]
 pub use command_store::{
-    CommandBackedCredentialStore, CommandCredentialBackend, CredentialCommandOutput,
-    CredentialCommandRunner, SystemCredentialCommandRunner,
+    CommandBackedCredentialStore, CredentialCommandOutput, CredentialCommandRunner,
 };
 #[cfg(test)]
 pub use file_store::PrivateFileCredentialStore;

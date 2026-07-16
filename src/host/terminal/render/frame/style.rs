@@ -1,22 +1,26 @@
 //! Style ownership for terminal frame rendering.
 
+#[cfg(test)]
+use super::super::fit_width;
 use super::super::{
     AGENT_STATUS_ANIMATION_REFRESH_INTERVAL_MS, DEFAULT_WINDOW_FRAME_TEMPLATE, GraphicRendition,
     TerminalFrameContext, TerminalFrameStyle, TerminalStyleSpan, TerminalStyledLine, UiColorPair,
     UiTheme, Window, agent_status_running_gradient_palette, animated_scan_background,
-    blend_terminal_color, compose_frame_pillbox_row, contrasting_binary_foreground, fit_width,
+    blend_terminal_color, compose_frame_pillbox_row, contrasting_binary_foreground,
     frame_style_rendition, gradient_highlight_for_offset, group_frame_visible,
     neutral_surface_step, push_or_extend_style_span, styled_frame_line_with_rendition,
 };
+#[cfg(test)]
+use super::window_frame_pillbox_text_from_entries;
 use super::{
     PaneFrameRightStatusSegment, WindowStatusSegmentKind, group_frame_pillbox_entries,
     pane_frame_row_layout, render_window_frame_text, render_window_status_template,
-    window_frame_pillbox_entries, window_frame_pillbox_text_from_entries,
-    window_right_status_layout, window_status_style_spans,
+    window_frame_pillbox_entries, window_right_status_layout, window_status_style_spans,
 };
 use mez_mux::render::PaneFrameRowLayout;
 
 /// Renders the unstyled top group bar when more than one group exists.
+#[cfg(test)]
 pub(in crate::host::terminal::render) fn group_frame_text(
     frame_context: &TerminalFrameContext,
     width: usize,

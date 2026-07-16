@@ -30,6 +30,7 @@ impl RuntimeControlComponent {
     }
 
     /// Returns the idempotency cache for read-only diagnostics.
+    #[cfg(test)]
     pub(crate) fn idempotency(&self) -> &ControlIdempotencyCache {
         &self.idempotency
     }

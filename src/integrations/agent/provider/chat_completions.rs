@@ -181,6 +181,7 @@ where
     }
 
     /// Enables or disables streaming for this provider.
+    #[cfg(test)]
     pub fn with_stream(mut self, stream: bool) -> Self {
         self.stream = stream;
         self

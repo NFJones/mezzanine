@@ -261,6 +261,11 @@ impl SnapshotRepository {
     }
 
     /// Restores one loaded snapshot payload after synchronously inspecting its manifest.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn restore_session_from_payload(
         &self,
         snapshot_id: &str,
@@ -283,6 +288,11 @@ impl SnapshotRepository {
     }
 
     /// Restores one snapshot through Tokio filesystem APIs.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub async fn restore_session_async(
         &self,
         snapshot_id: &str,

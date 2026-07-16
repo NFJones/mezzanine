@@ -79,6 +79,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn audit_log(&self) -> Option<&AuditLog> {
         self.persistence.audit_log()
     }
@@ -103,6 +104,11 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn agent_transcript_store(&self) -> Option<&AgentTranscriptStore> {
         self.persistence.transcript_store()
     }

@@ -10,6 +10,7 @@ use super::{
 
 /// Drains pane I/O side effects for one pane and executes them through that
 /// pane's async driver.
+#[cfg(test)]
 pub async fn run_async_pane_io_side_effect_service<B, F>(
     handle: &AsyncRuntimeSessionHandle,
     driver: &mut AsyncPaneProcessDriver<B>,
@@ -90,6 +91,7 @@ where
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub(super) async fn wait_for_pane_side_effects_or_bounded_idle(
     lifecycle_watcher: &mut watch::Receiver<RuntimeLifecycleState>,
     side_effect_watcher: &mut watch::Receiver<u64>,
@@ -118,6 +120,11 @@ pub(super) async fn wait_for_pane_side_effects_or_bounded_idle(
 }
 
 /// Builds an auxiliary service for one pane's side-effect-driven I/O path.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn build_async_pane_io_side_effect_service<B>(
     name: impl Into<String>,
     handle: AsyncRuntimeSessionHandle,

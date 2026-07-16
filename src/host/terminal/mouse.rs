@@ -97,6 +97,11 @@ impl WindowFrameAction {
     }
 
     /// Returns the stable action name used in render metadata and tests.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn name(&self) -> &str {
         match self {
             Self::NewPane => "new-pane",
@@ -304,6 +309,10 @@ pub enum MouseAction {
         position: CopyPosition,
     },
     /// Selects a line in the primary command-output overlay.
+    #[allow(
+        dead_code,
+        reason = "product mouse action is handled by runtime input projection"
+    )]
     SelectDisplayOverlay {
         /// Zero-based terminal position clicked by the user.
         position: CopyPosition,
@@ -371,6 +380,10 @@ pub enum MouseAction {
     /// without relying on stringly typed status values.
     CopySelectionStart(CopyPosition),
     /// Selects and copies the readline-style word segment under the pointer.
+    #[allow(
+        dead_code,
+        reason = "product mouse action is handled by runtime input projection"
+    )]
     CopyWord(CopyPosition),
     /// Represents the Copy Selection Update case for this enumeration.
     ///

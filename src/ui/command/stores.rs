@@ -5,16 +5,19 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AuthStatus, CommandInvocation, ConfigFormat, ConfigMutation, ConfigMutationOperation,
-    ConfigMutationPlan, ConfigMutationValue, ConfigPaths, ConfigScope, KeyValueLine, MezError,
-    Result, credential_store_kind_name, fs, persist_config_mutation, persist_config_text,
-    plan_config_mutation, validate_command_identifier,
+    AuthStatus, CommandInvocation, KeyValueLine, MezError, Result, credential_store_kind_name,
+    validate_command_identifier,
 };
-use crate::config::parse_config_json_value;
-use mez_mux::theme::{
-    UI_COLOR_SLOT_NAMES, UiThemeDefinition, builtin_ui_theme_definition, resolve_ui_theme,
+#[cfg(test)]
+use super::{
+    ConfigFormat, ConfigMutation, ConfigMutationOperation, ConfigMutationPlan, ConfigMutationValue,
+    ConfigPaths, ConfigScope, UI_COLOR_SLOT_NAMES, UiThemeDefinition, builtin_ui_theme_definition,
+    fs, parse_config_json_value, persist_config_mutation, persist_config_text,
+    plan_config_mutation, resolve_ui_theme,
 };
+#[cfg(test)]
 use serde_json::Value;
+#[cfg(test)]
 use std::collections::BTreeMap;
 
 // Store-backed auth, config, and project-trust helpers.
@@ -24,6 +27,7 @@ use std::collections::BTreeMap;
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub(super) fn persist_command_config_mutation(
     paths: &ConfigPaths,
     mutation: ConfigMutation,
@@ -33,6 +37,7 @@ pub(super) fn persist_command_config_mutation(
 }
 
 /// Summary of a complete config-store theme update.
+#[cfg(test)]
 pub(super) struct CommandThemeConfigPlan {
     /// Whether the generated theme table changed the primary config text.
     pub(super) changed: bool,
@@ -45,6 +50,7 @@ pub(super) struct CommandThemeConfigPlan {
 }
 
 /// Persists a complete selected theme table into the primary config file.
+#[cfg(test)]
 pub(super) fn persist_command_theme_config(
     paths: &ConfigPaths,
     theme: &str,
@@ -68,6 +74,7 @@ pub(super) fn persist_command_theme_config(
 
 /// Returns the full selected theme definition available to config-store
 /// commands from the primary config file.
+#[cfg(test)]
 fn command_theme_definition_from_text(
     format: ConfigFormat,
     text: &str,
@@ -98,11 +105,13 @@ fn command_theme_definition_from_text(
 }
 
 /// Parses primary config text into a structured JSON value for theme lookup.
+#[cfg(test)]
 fn command_config_value_from_text(format: ConfigFormat, text: &str) -> Result<Value> {
     parse_config_json_value(format, text)
 }
 
 /// Extracts a string-based theme definition from structured config JSON.
+#[cfg(test)]
 fn command_theme_definition_from_json(value: &Value, path: &str) -> Result<UiThemeDefinition> {
     let object = value
         .as_object()
@@ -114,6 +123,7 @@ fn command_theme_definition_from_json(value: &Value, path: &str) -> Result<UiThe
 }
 
 /// Extracts a string-to-string map from a structured config object.
+#[cfg(test)]
 fn command_string_map_from_json(
     value: Option<&Value>,
     path: &str,
@@ -136,6 +146,7 @@ fn command_string_map_from_json(
 }
 
 /// Builds scalar config mutations for a complete selected theme table.
+#[cfg(test)]
 fn command_theme_config_mutations(
     theme: &str,
     definition: &UiThemeDefinition,
@@ -168,6 +179,7 @@ fn command_theme_config_mutations(
 }
 
 /// Final text and metadata for a batch of config mutations.
+#[cfg(test)]
 struct CommandConfigMutationBatch {
     /// Final config text after all mutations are applied.
     text: String,
@@ -178,6 +190,7 @@ struct CommandConfigMutationBatch {
 }
 
 /// Applies a validated sequence of scalar config mutations to config text.
+#[cfg(test)]
 fn command_plan_config_mutations(
     format: ConfigFormat,
     text: &str,
@@ -205,6 +218,7 @@ fn command_plan_config_mutations(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub(super) fn config_set_string(
     path: impl Into<String>,
     value: impl Into<String>,
@@ -220,6 +234,7 @@ pub(super) fn config_set_string(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub(super) fn config_unset(path: impl Into<String>) -> ConfigMutation {
     ConfigMutation {
         path: path.into(),

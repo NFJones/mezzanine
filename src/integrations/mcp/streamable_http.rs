@@ -9,11 +9,12 @@ use std::time::Duration;
 use crate::error::{MezError, Result};
 use mez_agent::mcp::{
     DEFAULT_MCP_MAX_MESSAGE_BYTES, DEFAULT_MCP_PROTOCOL_VERSION, McpInitializeResponse,
-    McpRegistry, McpStartupPlan, McpStartupTransportPlan, McpStreamableHttpDiscovery,
-    McpStreamableHttpResponse, McpToolCallPlan, McpToolCallResponse, McpToolListPagination,
-    build_mcp_initialized_notification, json_id_matches, mcp_initialize_operation,
-    mcp_tools_call_operation, mcp_tools_list_operation, object_field, parse_mcp_json, string_field,
+    McpStartupPlan, McpStartupTransportPlan, McpStreamableHttpDiscovery, McpStreamableHttpResponse,
+    McpToolListPagination, build_mcp_initialized_notification, json_id_matches,
+    mcp_initialize_operation, mcp_tools_list_operation, object_field, parse_mcp_json, string_field,
 };
+#[cfg(test)]
+use mez_agent::mcp::{McpRegistry, McpToolCallPlan, McpToolCallResponse, mcp_tools_call_operation};
 use mez_agent::parse_sse_events;
 
 /// Runs the execute streamable http exchange operation for this subsystem.
@@ -111,6 +112,7 @@ pub async fn execute_streamable_http_exchange(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub async fn initialize_streamable_http_mcp_server(
     plan: &McpStartupPlan,
     environment: &BTreeMap<String, String>,
@@ -159,6 +161,7 @@ pub async fn initialize_streamable_http_mcp_server_with_auth_token(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub async fn discover_streamable_http_mcp_server(
     plan: &McpStartupPlan,
     environment: &BTreeMap<String, String>,
@@ -253,6 +256,7 @@ pub async fn discover_streamable_http_mcp_server_with_auth_token(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub async fn discover_streamable_http_mcp_server_into_registry(
     registry: &mut McpRegistry,
     server_id: &str,
@@ -285,6 +289,7 @@ pub async fn discover_streamable_http_mcp_server_into_registry(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub async fn call_streamable_http_mcp_tool(
     plan: &McpStartupPlan,
     environment: &BTreeMap<String, String>,

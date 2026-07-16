@@ -12,8 +12,10 @@ use mez_agent::memory::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
+#[cfg(test)]
+use super::Path;
 use super::{
-    MezError, Path, PathBuf, PersistentMemoryStore, Result, fs, set_private_dir_permissions,
+    MezError, PathBuf, PersistentMemoryStore, Result, fs, set_private_dir_permissions,
     set_private_file_permissions,
 };
 
@@ -38,6 +40,11 @@ impl PersistentMemoryStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
@@ -56,6 +63,7 @@ impl PersistentMemoryStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -115,6 +123,7 @@ impl PersistentMemoryStore {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn edit_content(
         &self,
         id: &str,

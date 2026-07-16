@@ -36,6 +36,7 @@ impl RuntimeHookState {
         self.definitions = definitions;
     }
 
+    #[cfg(test)]
     pub(super) fn focused_shell_queue(&self) -> &FocusedShellHookQueue {
         &self.focused_shell_queue
     }
@@ -44,6 +45,11 @@ impl RuntimeHookState {
         &mut self.focused_shell_queue
     }
 
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub(super) fn replace_focused_shell_queue(&mut self, queue: FocusedShellHookQueue) {
         self.focused_shell_queue = queue;
     }

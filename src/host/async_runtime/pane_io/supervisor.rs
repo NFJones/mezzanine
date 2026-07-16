@@ -6,15 +6,23 @@ use super::helpers::{
     record_joined_pane_process_worker, spawn_owned_pane_process_worker,
     wait_for_pane_process_supervisor_wakeup,
 };
+#[cfg(test)]
 use super::{
     AsyncPaneProcessDriver, AsyncPaneProcessIo, AsyncPaneProcessServiceConfig,
+    run_async_pane_process_service,
+};
+use super::{
     AsyncPaneProcessSupervisorServiceConfig, AsyncPaneProcessSupervisorServiceReport,
     AsyncRuntimeService, AsyncRuntimeServiceExit, AsyncRuntimeSessionHandle, HashSet, JoinSet,
     Result, RuntimeLifecycleState, is_terminal_runtime_lifecycle_state,
-    run_async_pane_process_service,
 };
 
 /// Builds an auxiliary service for the combined async pane process path.
+#[cfg(test)]
+#[allow(
+    dead_code,
+    reason = "test-only adapter retained for focused boundary coverage"
+)]
 pub fn build_async_pane_process_service<B>(
     name: impl Into<String>,
     handle: AsyncRuntimeSessionHandle,

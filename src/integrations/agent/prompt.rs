@@ -6,10 +6,9 @@
 
 use include_dir::{Dir, include_dir};
 
-use mez_agent::{
-    AgentPromptAssetSource, AgentPromptError, AgentPromptProfile, AgentPromptResult,
-    assemble_agent_system_prompt,
-};
+use mez_agent::{AgentPromptAssetSource, AgentPromptError, AgentPromptResult};
+#[cfg(test)]
+use mez_agent::{AgentPromptProfile, assemble_agent_system_prompt};
 
 /// Embedded static system-prompt fragments owned by this module.
 static SYSTEM_PROMPTS: Dir<'_> =
@@ -39,6 +38,7 @@ impl AgentPromptAssetSource for EmbeddedPromptAssets {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub fn build_agent_system_prompt(profile: &AgentPromptProfile) -> AgentPromptResult<String> {
     build_agent_system_prompt_with_repository_instructions(profile, &[])
 }
@@ -50,6 +50,7 @@ pub fn build_agent_system_prompt(profile: &AgentPromptProfile) -> AgentPromptRes
 ///   context.
 /// - `repository_instruction_blocks`: The already discovered repository
 ///   instruction contents to embed directly into the system prompt.
+#[cfg(test)]
 pub fn build_agent_system_prompt_with_repository_instructions(
     profile: &AgentPromptProfile,
     repository_instruction_blocks: &[String],

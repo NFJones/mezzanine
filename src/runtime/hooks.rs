@@ -5,10 +5,13 @@
 //! interact through typed APIs instead of duplicating subsystem details.
 
 use super::{
-    AuditActor, AuditRecord, ClientId, EventKind, FocusedShellExecutor, FocusedShellHookDispatch,
-    FocusedShellHookDispatchStatus, HookDefinition, HookEvent, HookExecutionPlan,
-    HookExecutionResult, Result, RuntimeFocusedShellHookRun, RuntimeFocusedShellPaneExecutor,
-    RuntimeSessionService, json_escape, plan_event, runtime_hook_execution_status_name,
+    AuditActor, AuditRecord, ClientId, EventKind, HookExecutionPlan, HookExecutionResult, Result,
+    RuntimeSessionService, json_escape, runtime_hook_execution_status_name,
+};
+#[cfg(test)]
+use super::{
+    FocusedShellExecutor, FocusedShellHookDispatch, FocusedShellHookDispatchStatus, HookDefinition,
+    HookEvent, RuntimeFocusedShellHookRun, RuntimeFocusedShellPaneExecutor, plan_event,
     runtime_hook_target_pane_id,
 };
 use crate::runtime::{AsyncHookEvent, RuntimeSideEffect, RuntimeTransition};
@@ -63,6 +66,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn focused_shell_hook_queue_len(&self) -> usize {
         self.integration.focused_shell_hook_queue().len()
     }
@@ -111,6 +115,11 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn enqueue_focused_shell_hook(&mut self, plan: HookExecutionPlan) -> Result<u64> {
         self.require_live()?;
         self.integration
@@ -160,6 +169,11 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn dispatch_focused_shell_hooks(
         &mut self,
         executor: &mut impl FocusedShellExecutor,
@@ -252,6 +266,11 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn dispatch_focused_shell_hooks_to_active_pane(
         &mut self,
         primary_client_id: &ClientId,
@@ -334,6 +353,11 @@ impl RuntimeSessionService {
 
     /// Emits an audit record when a focused-shell hook is queued for
     /// asynchronous pane execution, before the marker transaction completes.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub(super) fn append_focused_shell_hook_start_audit(
         &mut self,
         primary_client_id: &ClientId,
@@ -363,6 +387,11 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn apply_focused_shell_hooks_for_event(
         &mut self,
         definitions: &[HookDefinition],

@@ -603,6 +603,7 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn poll_pane_processes(&mut self) -> Result<Vec<PaneExitUpdate>> {
         self.require_live()?;
         let exited = self.process.pane_processes.poll_exited()?;
@@ -1320,6 +1321,7 @@ impl RuntimeSessionService {
 
     /// Restores a pane process to synchronous manager ownership after a
     /// cancelled external adapter handoff.
+    #[cfg(test)]
     pub fn restore_running_pane_process_from_adapter(
         &mut self,
         pane_id: impl Into<String>,

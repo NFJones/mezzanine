@@ -12,6 +12,7 @@ impl ReadlineInputDecoder {
     }
 
     /// Number of bytes retained because they might complete on a later read.
+    #[cfg(test)]
     pub fn pending_len(&self) -> usize {
         self.inner.pending_len()
     }

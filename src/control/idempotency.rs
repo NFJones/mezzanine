@@ -125,6 +125,7 @@ impl ControlIdempotencyCache {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.completed.len()
     }
@@ -134,6 +135,7 @@ impl ControlIdempotencyCache {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.completed.is_empty()
     }
@@ -143,6 +145,7 @@ impl ControlIdempotencyCache {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
+    #[cfg(test)]
     pub fn retained_bytes(&self) -> usize {
         self.retained_bytes
     }

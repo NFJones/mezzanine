@@ -13,6 +13,7 @@ use super::{
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub async fn serve_async_runtime_control_connection(
     stream: &mut UnixStream,
     handle: &AsyncRuntimeSessionHandle,
@@ -28,6 +29,7 @@ pub async fn serve_async_runtime_control_connection(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub async fn serve_async_runtime_control_connection_with_snapshots(
     stream: &mut UnixStream,
     handle: &AsyncRuntimeSessionHandle,
@@ -60,6 +62,7 @@ pub async fn serve_async_runtime_control_connection_with_snapshots(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub async fn serve_async_runtime_control_connection_loop<F>(
     stream: &mut UnixStream,
     handle: &AsyncRuntimeSessionHandle,
@@ -167,6 +170,7 @@ async fn submit_control_connection_disconnect_event(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
+#[cfg(test)]
 pub async fn serve_async_runtime_control_listener<F>(
     listener: &UnixListener,
     handle: &AsyncRuntimeSessionHandle,

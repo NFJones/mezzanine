@@ -75,9 +75,11 @@ pub use copy::CopyMode;
 #[cfg(test)]
 pub use fd::AttachedTerminalFd;
 #[cfg(test)]
+pub use fd::PaneRenderInput;
+#[cfg(test)]
 pub use fd::poll_attached_terminal_fd_readiness;
 pub use fd::{
-    AttachedTerminalFdReadiness, AttachedTerminalFdRole, PaneRenderInput, TerminalClientLoopConfig,
+    AttachedTerminalFdReadiness, AttachedTerminalFdRole, TerminalClientLoopConfig,
     TerminalFdInterest, TerminalFrameContext, TerminalPaneFrameContext, TerminalRawModeGuard,
     read_attached_terminal_size,
 };
@@ -99,10 +101,10 @@ pub use render::{
 pub use render::{
     TerminalFrameRenderOptions, compose_display_overlay_line_style_spans,
     compose_display_region_overlay_line_style_spans, compose_display_region_overlay_lines,
-    compose_modal_display_overlay_line_style_spans, compose_prompt_overlay_lines,
-    compose_prompt_overlay_presentation, compose_prompt_region_presentation_with_styles,
-    compose_readline_prompt_client_presentation, draw_window_from_screens,
-    render_readline_prompt_status_row, render_window, render_window_with_pane_frame_template,
+    compose_modal_display_overlay_line_style_spans, compose_prompt_overlay_presentation,
+    compose_prompt_region_presentation_with_styles, compose_readline_prompt_client_presentation,
+    draw_window_from_screens, render_readline_prompt_status_row, render_window,
+    render_window_with_pane_frame_template,
 };
 pub(crate) use screen::parse_mez_shell_transaction_osc;
 

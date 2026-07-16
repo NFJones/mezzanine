@@ -187,6 +187,7 @@ pub(crate) struct RuntimeMetricsSnapshot {
 
 impl RuntimeMetricsSnapshot {
     /// Records that one runtime-owned agent turn started execution.
+    #[cfg(test)]
     pub(crate) fn record_agent_turn_started(&mut self) {
         self.agent_turns_started = self.agent_turns_started.saturating_add(1);
     }

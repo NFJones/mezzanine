@@ -112,11 +112,17 @@ impl EventLog {
     }
 
     /// Returns the number of retained events.
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.events.len()
     }
 
     /// Returns true when no events are retained.
+    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "test-only adapter retained for focused boundary coverage"
+    )]
     pub fn is_empty(&self) -> bool {
         self.events.is_empty()
     }

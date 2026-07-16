@@ -655,6 +655,7 @@ impl RuntimeSessionService {
     /// Clears the primary-client command display overlay.
     ///
     /// Returns true when an overlay was active before the call.
+    #[cfg(test)]
     pub fn clear_primary_display_overlay(&mut self) -> bool {
         self.presentation.primary_display_overlay.take().is_some()
     }

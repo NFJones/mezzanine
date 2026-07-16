@@ -5,6 +5,7 @@
 //! concrete fanout writes because those operations depend on product errors
 //! and the root protocol transport.
 
+#[cfg(test)]
 mod fanout;
 mod framing;
 
