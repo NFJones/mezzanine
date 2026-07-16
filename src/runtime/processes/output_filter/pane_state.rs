@@ -217,7 +217,7 @@ impl RuntimeSessionService {
         }
         self.apply_terminal_osc_events(&osc_events)?;
         if alternate_active {
-            self.pane_readiness_overrides.revoke(
+            self.process.pane_readiness_overrides.revoke(
                 output.pane_id.as_str(),
                 ReadinessOverrideRevocation::AlternateScreenEntry,
             );

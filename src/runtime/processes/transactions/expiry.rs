@@ -184,6 +184,7 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         self.interrupt_shell_transaction_pane(&transaction.pane_id)?;
         if !self
+            .process
             .pane_readiness_overrides
             .clear_pending_probe_if_matches(&transaction.pane_id, marker)
         {
@@ -265,7 +266,9 @@ impl RuntimeSessionService {
         elapsed_ms: u64,
     ) -> Result<()> {
         self.interrupt_shell_transaction_pane(&transaction.pane_id)?;
-        self.pane_bootstrap_pending.remove(&transaction.pane_id);
+        self.process
+            .pane_bootstrap_pending
+            .remove(&transaction.pane_id);
         let previous = self.pane_readiness_state(&transaction.pane_id);
         self.set_pane_readiness(&transaction.pane_id, PaneReadinessState::Degraded);
         self.append_lifecycle_event(

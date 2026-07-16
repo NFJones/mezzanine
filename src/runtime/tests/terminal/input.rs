@@ -22,8 +22,7 @@ fn runtime_osc_command_start_while_turn_waiting_marks_pane_busy() {
     assert_eq!(started.state, AgentTurnState::Running);
     service.set_pane_readiness("%1", PaneReadinessState::Ready);
     service
-        .pane_readiness_overrides
-        .mark_ready_for_epoch("%1", 7, "test override", true)
+        .mark_pane_readiness_override_for_tests("%1", 7, "test override", true)
         .unwrap();
 
     let observed = service
@@ -32,7 +31,7 @@ fn runtime_osc_command_start_while_turn_waiting_marks_pane_busy() {
 
     assert_eq!(observed, 1);
     assert_eq!(service.pane_readiness_state("%1"), PaneReadinessState::Busy);
-    assert!(!service.pane_readiness_overrides.allows_epoch("%1", 7));
+    assert!(!service.pane_readiness_override_allows_epoch_for_tests("%1", 7));
 }
 
 /// Verifies that the async terminal command path refreshes provider metadata

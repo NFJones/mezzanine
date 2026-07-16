@@ -19,9 +19,9 @@ use super::{
     HookExecutionStatus, KeyChord, KeyCode, MezError, ObserverDecisionState, PaneReadinessState,
     PasteBuffer, PathBuf, Result, RuntimeSessionService, SearchDirection, Session, TerminalScreen,
     agent_shell_visibility_json_name, bind_key_args, binding_config_key, compose_effective_config,
-    current_unix_seconds, event_type_name, execute_auth_command, execute_command,
-    execute_mark_pane_ready_command, fs, json_escape, key_chord_input_bytes, key_chord_notation,
-    parse_command_sequence, runtime_config_apply_event_payload, runtime_hook_event_name,
+    current_unix_seconds, event_type_name, execute_auth_command, execute_command, fs, json_escape,
+    key_chord_input_bytes, key_chord_notation, parse_command_sequence,
+    runtime_config_apply_event_payload, runtime_hook_event_name,
     runtime_hook_execution_status_name, runtime_pane_readiness_state_name,
 };
 use crate::terminal::wrap_agent_log_lines;
@@ -730,14 +730,11 @@ pub(super) fn runtime_mark_pane_ready_command(
     let pane_id = runtime_mark_pane_ready_target_pane_id(&service.session, invocation)?;
     let current_state = service.pane_readiness_state(&pane_id);
     let current_epoch = current_unix_seconds().max(1);
-    let outcome = execute_mark_pane_ready_command(
-        &service.session,
+    let outcome = service.execute_pane_readiness_override_command(
         primary_client_id,
-        &mut service.pane_readiness_overrides,
         invocation,
         current_state,
         current_epoch,
-        service.audit_log.as_mut(),
     )?;
     let CommandOutcome::Display { body, .. } = outcome else {
         return Err(MezError::invalid_state(

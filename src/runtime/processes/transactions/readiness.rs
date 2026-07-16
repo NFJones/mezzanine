@@ -115,6 +115,7 @@ impl RuntimeSessionService {
             return Ok(0);
         }
         let revoked = self
+            .process
             .pane_readiness_overrides
             .revoke(pane_id, ReadinessOverrideRevocation::CommandStartMetadata)
             .is_some();
@@ -201,7 +202,8 @@ impl RuntimeSessionService {
         }
         self.remember_mez_wrapper_filter_command(&turn.pane_id, probe_command);
         self.write_runtime_pane_input(&turn.pane_id, wrapper.as_bytes())?;
-        self.pane_readiness_overrides
+        self.process
+            .pane_readiness_overrides
             .record_pending_probe(&turn.pane_id, &marker_id)?;
         self.set_pane_readiness(&turn.pane_id, PaneReadinessState::Probing);
         self.append_agent_trace_turn_event(
@@ -269,6 +271,7 @@ impl RuntimeSessionService {
             ));
         }
         if !self
+            .process
             .pane_readiness_overrides
             .clear_pending_probe_if_matches(pane_id, marker)
         {
@@ -332,7 +335,8 @@ impl RuntimeSessionService {
                 )?;
             }
         } else {
-            self.pane_readiness_overrides
+            self.process
+                .pane_readiness_overrides
                 .revoke(pane_id, ReadinessOverrideRevocation::ReadinessProbeFailed);
             let previous_readiness = self.pane_readiness_state(pane_id);
             self.set_pane_readiness(pane_id, PaneReadinessState::Degraded);

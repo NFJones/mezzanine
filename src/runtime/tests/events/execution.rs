@@ -251,10 +251,10 @@ tool\tsed\t1\t/usr/bin/sed\tGNU sed 4.9\tcommand -v sed\t0\t/usr/bin/sed --versi
 
     assert_eq!(observed, 1);
     assert!(
-        !service.pane_bootstrap_pending.contains("%1"),
+        !service.pane_bootstrap_is_pending_for_tests("%1"),
         "bootstrap pending should be cleared after one completed attempt"
     );
-    let signature = service.pane_environment_signatures.get("%1").unwrap();
+    let signature = service.pane_environment_signature("%1").unwrap();
     assert_eq!(signature.working_directory, "/home/me/project");
     assert_eq!(signature.project_root.as_deref(), Some("/home/me/project"));
     assert!(

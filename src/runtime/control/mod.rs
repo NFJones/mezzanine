@@ -22,17 +22,17 @@ use super::{
     CommandRuleScope, ConfigFormat, ConfigLayer, ConfigMutation, ConfigMutationOperation,
     ConfigScope, ContextBlock, ContextSourceKind, ControlConnectionState,
     DEFAULT_COMMAND_SHELL_CLASSIFICATION, Envelope, EventKind, EventVisibility, HookEvent,
-    MemoryRecord, MezError, PaneCaptureSource, PaneId, PaneProcessStart,
-    PaneReadinessOverrideStore, PaneReadinessState, Path, PathBuf, ProjectTrustStore, Recipient,
-    Result, RuleDecision, RuleMatch, RuntimeAutoSizingConfig, RuntimeLifecycleState,
-    RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSideEffect, RuntimeSubagentLineage,
-    RuntimeSubagentPlacement, SUBAGENT_FRIENDLY_NAMES, ScopeRegistry, SenderIdentity,
-    SessionRecord, SnapshotCreationContext, SnapshotRepository, SplitDirection,
-    SubagentScopeDeclaration, SubagentSpawnRequest, TaskState, TaskStatusPayload,
-    TerminalClientLoopAction, TerminalClientLoopConfig, TrustDecision, agent_state_control_method,
-    approval_decide_scope_persistence, compare_permission_preset_authority, current_unix_seconds,
-    default_trust_database_path, destination_target_checked_resolved, discover_project_root,
-    dispatch_control_request_cached, dispatch_control_request_for_client_with_agent_state,
+    MemoryRecord, MezError, PaneCaptureSource, PaneId, PaneProcessStart, PaneReadinessState, Path,
+    PathBuf, ProjectTrustStore, Recipient, Result, RuleDecision, RuleMatch,
+    RuntimeAutoSizingConfig, RuntimeLifecycleState, RuntimeRegistryUpdatePlan,
+    RuntimeSessionService, RuntimeSideEffect, RuntimeSubagentLineage, RuntimeSubagentPlacement,
+    SUBAGENT_FRIENDLY_NAMES, ScopeRegistry, SenderIdentity, SessionRecord, SnapshotCreationContext,
+    SnapshotRepository, SplitDirection, SubagentScopeDeclaration, SubagentSpawnRequest, TaskState,
+    TaskStatusPayload, TerminalClientLoopAction, TerminalClientLoopConfig, TrustDecision,
+    agent_state_control_method, approval_decide_scope_persistence,
+    compare_permission_preset_authority, current_unix_seconds, default_trust_database_path,
+    destination_target_checked_resolved, discover_project_root, dispatch_control_request_cached,
+    dispatch_control_request_for_client_with_agent_state,
     dispatch_control_request_for_client_with_agent_state_and_model_profiles,
     dispatch_control_request_for_client_with_config,
     dispatch_control_request_for_client_with_config_and_audit,
@@ -219,7 +219,7 @@ impl RuntimeSessionService {
                 },
             );
         }
-        if let Some(signature) = self.pane_environment_signatures.get(pane_id) {
+        if let Some(signature) = self.pane_environment_signature(pane_id) {
             let mut env_lines = signature.model_context_fields();
             if let Some(inventory) = self.tool_discovery_cache.get(signature) {
                 env_lines.push(format!(

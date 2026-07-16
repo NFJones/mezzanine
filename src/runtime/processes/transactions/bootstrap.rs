@@ -80,7 +80,7 @@ impl RuntimeSessionService {
         observed_output_preview: &str,
         observed_output_truncated: bool,
     ) -> Result<usize> {
-        self.pane_bootstrap_pending.remove(pane_id);
+        self.process.pane_bootstrap_pending.remove(pane_id);
         let mut bootstrap_parsed = false;
         if exit_code == 0 {
             let all_output = if observed_output_preview.trim().is_empty() {
@@ -100,7 +100,8 @@ impl RuntimeSessionService {
 
             if let Some(sig) = signature.clone() {
                 bootstrap_parsed = true;
-                self.pane_environment_signatures
+                self.process
+                    .pane_environment_signatures
                     .insert(pane_id.to_string(), sig.clone());
                 if let Some(inv) = inventory.clone() {
                     self.tool_discovery_cache.record(sig, inv);
@@ -169,10 +170,11 @@ impl RuntimeSessionService {
     /// prompt-like readiness.
     pub(crate) fn maybe_bootstrap_ready_panes(&mut self) -> Result<usize> {
         let ready_panes: Vec<String> = self
+            .process
             .pane_readiness_states
             .iter()
             .filter(|(k, v)| {
-                self.pane_bootstrap_pending.contains(k.as_str())
+                self.process.pane_bootstrap_pending.contains(k.as_str())
                     && !self
                         .running_shell_transactions
                         .values()

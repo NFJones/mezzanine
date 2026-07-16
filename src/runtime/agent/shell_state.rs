@@ -94,7 +94,7 @@ impl RuntimeSessionService {
         self.remember_mez_wrapper_filter_command(&turn.pane_id, command);
         let wrapper_bytes = wrapper.len().saturating_add(payload_len);
         self.write_runtime_pane_input(&turn.pane_id, wrapper.as_bytes())?;
-        self.pane_readiness_overrides.revoke(
+        self.revoke_pane_readiness_override(
             &turn.pane_id,
             ReadinessOverrideRevocation::HarnessOwnedCommand,
         );
@@ -182,7 +182,7 @@ impl RuntimeSessionService {
     /// through the pane shell, so the resolution status is `Unresolved`, which
     /// fails closed on scoped path decisions.
     pub(in crate::runtime) fn path_scopes_for_pane(&self, pane_id: &str) -> Option<PathScopes> {
-        let signature = self.pane_environment_signatures.get(pane_id)?;
+        let signature = self.pane_environment_signature(pane_id)?;
         Some(PathScopes::unresolved(
             signature.working_directory.clone(),
             Vec::new(),
@@ -217,7 +217,7 @@ impl RuntimeSessionService {
             .subagent_scope_declarations
             .get(&turn.agent_id)
             .cloned()?;
-        if let Some(signature) = self.pane_environment_signatures.get(&turn.pane_id) {
+        if let Some(signature) = self.pane_environment_signature(&turn.pane_id) {
             declaration.current_directory = signature.working_directory.clone();
         }
         Some(declaration)
@@ -242,32 +242,6 @@ impl RuntimeSessionService {
         policy
     }
 
-    /// Runs the pane readiness state operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn pane_readiness_state(&self, pane_id: &str) -> PaneReadinessState {
-        self.pane_readiness_states
-            .get(pane_id)
-            .copied()
-            .unwrap_or(PaneReadinessState::Unknown)
-    }
-
-    /// Runs the set pane readiness operation for this subsystem.
-    ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
-    pub(in crate::runtime) fn set_pane_readiness(
-        &mut self,
-        pane_id: &str,
-        state: PaneReadinessState,
-    ) {
-        self.pane_readiness_states
-            .insert(pane_id.to_string(), state);
-    }
-
     /// Queues provider continuation for the running turn in a pane when its
     /// stored execution has no running or blocked action results left.
     ///
@@ -280,7 +254,7 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> usize {
         if self.pane_readiness_state(pane_id) != PaneReadinessState::Ready
-            || self.pane_readiness_overrides.has_pending_probe(pane_id)
+            || self.pane_readiness_override_has_pending_probe(pane_id)
         {
             return 0;
         }

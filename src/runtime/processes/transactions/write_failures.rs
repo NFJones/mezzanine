@@ -53,6 +53,7 @@ impl RuntimeSessionService {
             }
             RunningShellTransactionKind::ReadinessProbe => {
                 if !self
+                    .process
                     .pane_readiness_overrides
                     .clear_pending_probe_if_matches(&transaction.pane_id, marker)
                 {
@@ -95,7 +96,9 @@ impl RuntimeSessionService {
                 }
             }
             RunningShellTransactionKind::Bootstrap => {
-                self.pane_bootstrap_pending.remove(&transaction.pane_id);
+                self.process
+                    .pane_bootstrap_pending
+                    .remove(&transaction.pane_id);
                 self.append_agent_error_text_to_terminal_buffer(
                     &transaction.pane_id,
                     &format!("agent: shell bootstrap protocol violation: {message}"),
@@ -202,6 +205,7 @@ impl RuntimeSessionService {
         error: &str,
     ) -> Result<()> {
         if !self
+            .process
             .pane_readiness_overrides
             .clear_pending_probe_if_matches(&transaction.pane_id, marker)
         {
@@ -271,7 +275,9 @@ impl RuntimeSessionService {
         transaction: RunningShellTransactionRef,
         error: &str,
     ) -> Result<()> {
-        self.pane_bootstrap_pending.remove(&transaction.pane_id);
+        self.process
+            .pane_bootstrap_pending
+            .remove(&transaction.pane_id);
         let previous = self.pane_readiness_state(&transaction.pane_id);
         self.set_pane_readiness(&transaction.pane_id, PaneReadinessState::Degraded);
         self.append_lifecycle_event(

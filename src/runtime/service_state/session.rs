@@ -543,26 +543,6 @@ pub struct RuntimeSessionService {
     /// stateful commands have no deferred payload but still must emit exactly
     /// one wrapper start marker before they can complete.
     pub(in crate::runtime) shell_transaction_started_markers: BTreeSet<String>,
-    /// Stores the pane readiness states value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_readiness_states: BTreeMap<String, PaneReadinessState>,
-    /// Stores the pane readiness overrides value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_readiness_overrides: PaneReadinessOverrideStore,
-    /// Stores the pane environment signatures value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_environment_signatures: BTreeMap<String, EnvironmentSignature>,
-    /// Stores the pane bootstrap pending value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_bootstrap_pending: BTreeSet<String>,
     /// Stores the tool discovery cache value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module

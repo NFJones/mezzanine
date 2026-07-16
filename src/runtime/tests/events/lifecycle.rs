@@ -366,8 +366,8 @@ fn runtime_bootstrap_unparsed_output_does_not_retry_forever() {
         .unwrap();
 
     assert_eq!(observed, 1);
-    assert!(!service.pane_bootstrap_pending.contains("%1"));
-    assert!(!service.pane_environment_signatures.contains_key("%1"));
+    assert!(!service.pane_bootstrap_is_pending_for_tests("%1"));
+    assert!(service.pane_environment_signature("%1").is_none());
     assert_eq!(
         service.pane_readiness_state("%1"),
         PaneReadinessState::Ready

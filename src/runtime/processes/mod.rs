@@ -14,18 +14,19 @@ use mez_mux::presentation::{pane_content_size_for_geometry, rendered_window_body
 
 use super::{
     ActionContentBlock, ActionResult, ActionStatus, ActivePanePipe, AgentId, AgentTurnRecord,
-    AgentTurnState, AuditActor, BTreeSet, ContextBlock, ContextSourceKind, EventKind,
-    ExitedPaneProcess, HookEvent, HookExecutionResult, HookExecutionStatus, HookFailure,
-    HookFailureKind, MezError, PaneDescriptor, PaneExitRecord, PaneExitStatus, PaneExitUpdate,
-    PaneId, PaneOutputUpdate, PaneProcessManager, PaneProcessOutput, PaneProcessStart,
-    PaneReadinessState, PaneResizeUpdate, PaneSizeSpec, Path, PathBuf, ReadinessOverrideRevocation,
-    ResizeAxis, ResizeDirection, Result, RunningShellTransactionKind, RunningShellTransactionRef,
-    RuntimeHookPipelineBlock, RuntimeLifecycleState, RuntimeSessionService,
-    RuntimeShellTransactionActionFailure, RuntimeShellTransactionTimerKind,
-    RuntimeShellTransactionTimerRef, SessionSnapshotPayload, ShellClassification, ShellTransaction,
-    Size, SplitDirection, StoppedPanePipe, TerminalOscEvent, TerminalScreen, WindowId,
-    action_result_context_content, current_unix_millis, current_unix_seconds,
-    decode_shell_output_transport_with_diagnostics, focused_shell_pre_action_timeout_result,
+    AgentTurnState, AuditActor, BTreeSet, CommandInvocation, CommandOutcome, ContextBlock,
+    ContextSourceKind, EnvironmentSignature, EventKind, ExitedPaneProcess, HookEvent,
+    HookExecutionResult, HookExecutionStatus, HookFailure, HookFailureKind, MezError,
+    PaneDescriptor, PaneExitRecord, PaneExitStatus, PaneExitUpdate, PaneId, PaneOutputUpdate,
+    PaneProcessManager, PaneProcessOutput, PaneProcessStart, PaneReadinessState, PaneResizeUpdate,
+    PaneSizeSpec, Path, PathBuf, ReadinessOverrideRevocation, ResizeAxis, ResizeDirection, Result,
+    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeHookPipelineBlock,
+    RuntimeLifecycleState, RuntimeSessionService, RuntimeShellTransactionActionFailure,
+    RuntimeShellTransactionTimerKind, RuntimeShellTransactionTimerRef, SessionSnapshotPayload,
+    ShellClassification, ShellTransaction, Size, SplitDirection, StoppedPanePipe, TerminalOscEvent,
+    TerminalScreen, WindowId, action_result_context_content, current_unix_millis,
+    current_unix_seconds, decode_shell_output_transport_with_diagnostics,
+    execute_mark_pane_ready_command, focused_shell_pre_action_timeout_result,
     hook_execution_audit_record, json_escape, local_action_plan, optional_i32_json,
     pane_environment_with_term, postprocess_shell_action_success_output,
     runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
@@ -75,6 +76,14 @@ pub(in crate::runtime) struct RuntimeProcessComponent {
     pane_processes: PaneProcessManager,
     /// Best-known current working directory for each pane process.
     pane_current_working_directories: std::collections::BTreeMap<String, PathBuf>,
+    /// Latest readiness state observed for each pane shell.
+    pane_readiness_states: std::collections::BTreeMap<String, PaneReadinessState>,
+    /// Explicit readiness overrides and pending probe epochs.
+    pane_readiness_overrides: mez_agent::PaneReadinessOverrideStore,
+    /// Bootstrap-derived environment signatures keyed by pane id.
+    pane_environment_signatures: std::collections::BTreeMap<String, EnvironmentSignature>,
+    /// Panes with an in-flight bootstrap transaction.
+    pane_bootstrap_pending: BTreeSet<String>,
     /// Primary process ids for panes whose handles are adapter-owned.
     detached_pane_primary_pids: std::collections::BTreeMap<String, u32>,
     /// Latest foreground process groups observed by pane workers.
@@ -112,6 +121,80 @@ impl RuntimeProcessComponent {
 }
 
 impl RuntimeSessionService {
+    /// Returns the last readiness state observed for a pane shell.
+    pub(in crate::runtime) fn pane_readiness_state(&self, pane_id: &str) -> PaneReadinessState {
+        self.process
+            .pane_readiness_states
+            .get(pane_id)
+            .copied()
+            .unwrap_or(PaneReadinessState::Unknown)
+    }
+
+    /// Records the current readiness state for one pane shell.
+    pub(in crate::runtime) fn set_pane_readiness(
+        &mut self,
+        pane_id: &str,
+        state: PaneReadinessState,
+    ) {
+        self.process
+            .pane_readiness_states
+            .insert(pane_id.to_string(), state);
+    }
+
+    /// Revokes readiness authority for one pane after a shell lifecycle event.
+    pub(in crate::runtime) fn revoke_pane_readiness_override(
+        &mut self,
+        pane_id: &str,
+        reason: ReadinessOverrideRevocation,
+    ) {
+        self.process
+            .pane_readiness_overrides
+            .revoke(pane_id, reason);
+    }
+
+    /// Reports whether one pane still has a readiness probe in flight.
+    pub(in crate::runtime) fn pane_readiness_override_has_pending_probe(
+        &self,
+        pane_id: &str,
+    ) -> bool {
+        self.process
+            .pane_readiness_overrides
+            .has_pending_probe(pane_id)
+    }
+
+    /// Executes the readiness override command against process-owned state.
+    pub(in crate::runtime) fn execute_pane_readiness_override_command(
+        &mut self,
+        primary_client_id: &mez_core::ids::ClientId,
+        invocation: &CommandInvocation,
+        current_state: PaneReadinessState,
+        current_epoch: u64,
+    ) -> Result<CommandOutcome> {
+        execute_mark_pane_ready_command(
+            &self.session,
+            primary_client_id,
+            &mut self.process.pane_readiness_overrides,
+            invocation,
+            current_state,
+            current_epoch,
+            self.audit_log.as_mut(),
+        )
+    }
+
+    /// Returns the bootstrap-derived environment signature for one pane.
+    pub(in crate::runtime) fn pane_environment_signature(
+        &self,
+        pane_id: &str,
+    ) -> Option<&EnvironmentSignature> {
+        self.process.pane_environment_signatures.get(pane_id)
+    }
+
+    /// Clears pane readiness states and manual overrides for session replacement.
+    pub(in crate::runtime) fn clear_pane_readiness_state_and_overrides(&mut self) {
+        self.process.pane_readiness_states.clear();
+        self.process.pane_readiness_overrides = Default::default();
+    }
+
     /// Records the best-known current working directory for one pane process.
     pub(in crate::runtime) fn set_pane_current_working_directory(
         &mut self,
@@ -193,6 +276,35 @@ impl RuntimeSessionService {
 
 #[cfg(test)]
 impl RuntimeSessionService {
+    /// Installs a manual readiness override for a test epoch.
+    pub(in crate::runtime) fn mark_pane_readiness_override_for_tests(
+        &mut self,
+        pane_id: &str,
+        epoch: u64,
+        reason: &str,
+        one_shot: bool,
+    ) -> Result<()> {
+        self.process
+            .pane_readiness_overrides
+            .mark_ready_for_epoch(pane_id, epoch, reason, one_shot)?;
+        Ok(())
+    }
+
+    /// Reports whether a manual readiness override allows a test epoch.
+    pub(in crate::runtime) fn pane_readiness_override_allows_epoch_for_tests(
+        &self,
+        pane_id: &str,
+        epoch: u64,
+    ) -> bool {
+        self.process
+            .pane_readiness_overrides
+            .allows_epoch(pane_id, epoch)
+    }
+
+    /// Reports whether bootstrap remains pending for a process fixture.
+    pub(in crate::runtime) fn pane_bootstrap_is_pending_for_tests(&self, pane_id: &str) -> bool {
+        self.process.pane_bootstrap_pending.contains(pane_id)
+    }
     /// Returns the process manager for integration-test observation.
     pub(crate) fn pane_processes(&self) -> &PaneProcessManager {
         &self.process.pane_processes
@@ -245,7 +357,8 @@ impl RuntimeSessionService {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub(super) fn shell_classification_for_pane(&self, pane_id: &str) -> ShellClassification {
-        self.pane_environment_signatures
+        self.process
+            .pane_environment_signatures
             .get(pane_id)
             .map(|signature| signature.shell_classification)
             .unwrap_or_else(|| ShellClassification::classify(self.session.shell.path()))
@@ -390,9 +503,11 @@ impl RuntimeSessionService {
                 self.terminal_history_rotate_lines,
             )?,
         );
-        self.pane_readiness_states
+        self.process
+            .pane_readiness_states
             .insert(descriptor.pane_id.to_string(), PaneReadinessState::Unknown);
-        self.pane_bootstrap_pending
+        self.process
+            .pane_bootstrap_pending
             .insert(descriptor.pane_id.to_string());
 
         let update = PaneProcessStart {
@@ -857,9 +972,11 @@ impl RuntimeSessionService {
                 self.terminal_history_rotate_lines,
             )?,
         );
-        self.pane_readiness_states
+        self.process
+            .pane_readiness_states
             .insert(descriptor.pane_id.to_string(), PaneReadinessState::Unknown);
-        self.pane_bootstrap_pending
+        self.process
+            .pane_bootstrap_pending
             .insert(descriptor.pane_id.to_string());
         if let Some(start_directory) = start_directory {
             self.process.pane_current_working_directories.insert(
@@ -1174,12 +1291,15 @@ impl RuntimeSessionService {
         self.process.pane_exit_records.remove(pane_id);
         self.active_pane_pipes.remove(pane_id);
         self.pane_transcript_refs.remove(pane_id);
-        self.pane_readiness_states.remove(pane_id);
-        self.pane_readiness_overrides.clear_pending_probe(pane_id);
-        self.pane_readiness_overrides
+        self.process.pane_readiness_states.remove(pane_id);
+        self.process
+            .pane_readiness_overrides
+            .clear_pending_probe(pane_id);
+        self.process
+            .pane_readiness_overrides
             .revoke(pane_id, ReadinessOverrideRevocation::PaneClosed);
-        self.pane_environment_signatures.remove(pane_id);
-        self.pane_bootstrap_pending.remove(pane_id);
+        self.process.pane_environment_signatures.remove(pane_id);
+        self.process.pane_bootstrap_pending.remove(pane_id);
         self.pane_instruction_files.remove(pane_id);
         self.process.pane_closing.remove(pane_id);
         self.pending_terminal_subagent_pane_closes.remove(pane_id);

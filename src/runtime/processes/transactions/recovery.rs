@@ -59,7 +59,8 @@ impl RuntimeSessionService {
                 }
                 PaneReadinessState::Probing => {
                     if !self.turn_has_running_readiness_probe(&turn.turn_id) {
-                        self.pane_readiness_overrides
+                        self.process
+                            .pane_readiness_overrides
                             .clear_pending_probe(&turn.pane_id);
                         self.set_pane_readiness(&turn.pane_id, PaneReadinessState::Degraded);
                         if self
