@@ -259,8 +259,7 @@ tool\tsed\t1\t/usr/bin/sed\tGNU sed 4.9\tcommand -v sed\t0\t/usr/bin/sed --versi
     assert_eq!(signature.project_root.as_deref(), Some("/home/me/project"));
     assert!(
         service
-            .tool_discovery_cache
-            .get(signature)
+            .agent_tool_inventory(signature)
             .is_some_and(|inventory| inventory.sed)
     );
     assert_eq!(

@@ -153,7 +153,7 @@ use mez_agent::{
 };
 use mez_agent::{
     EnvironmentSignature, MarkerToken, ShellClassification, ShellTransaction,
-    ShellTransactionOutputTransport, ToolDiscoveryCache, agent_subshell_enter_command,
+    ShellTransactionOutputTransport, agent_subshell_enter_command,
 };
 use mez_core::ids::{AgentId, ClientId, PaneId, SessionId, WindowId};
 use mez_mux::command::{CommandInvocation, parse_command_sequence};

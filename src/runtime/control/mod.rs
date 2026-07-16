@@ -220,7 +220,7 @@ impl RuntimeSessionService {
         }
         if let Some(signature) = self.pane_environment_signature(pane_id) {
             let mut env_lines = signature.model_context_fields();
-            if let Some(inventory) = self.tool_discovery_cache.get(signature) {
+            if let Some(inventory) = self.agent_tool_inventory(signature) {
                 env_lines.push(format!(
                     "available_tools={} sed={} grep={} python={} rg={}",
                     inventory.tools.len(),
@@ -246,7 +246,7 @@ impl RuntimeSessionService {
                 },
             );
         }
-        if let Some(instruction_files) = self.pane_instruction_files.get(pane_id)
+        if let Some(instruction_files) = self.pane_agent_instruction_files(pane_id)
             && !instruction_files.is_empty()
         {
             let context = AgentContext::new(blocks)?;

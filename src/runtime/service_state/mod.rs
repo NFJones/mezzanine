@@ -13,14 +13,13 @@ use super::{
     McpToolCallResponse, MessageService, MezError, ModelRequest, ModelResponse, ModelTokenUsage,
     ModelTokenUsageKey, PaneGeometry, PaneId, PathBuf, PermissionPolicy, ProjectTrustStore, Result,
     RuntimeSideEffect, Session, SessionApprovalStore, SessionMemoryStore, SessionRecord,
-    SessionRegistry, Size, SnapshotRepository, SplitDirection, SubagentProfile, ToolDiscoveryCache,
-    WindowId, execute_streamable_http_exchange, mcp_tools_call_operation,
+    SessionRegistry, Size, SnapshotRepository, SplitDirection, SubagentProfile, WindowId,
+    execute_streamable_http_exchange, mcp_tools_call_operation,
 };
 use super::{RuntimePresetRegistry, RuntimeProviderRegistry};
 use crate::error::MezErrorKind;
 use crate::readline::{ReadlineInputDecoder, ReadlinePrompt};
 use crate::terminal::PaneAgentStatusField;
-use mez_agent::instructions::DiscoveredInstructionFile;
 use mez_mux::copy::CopyPosition;
 use mez_mux::layout::PaneTitleSource;
 use secrecy::ExposeSecret;

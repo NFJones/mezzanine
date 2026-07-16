@@ -106,11 +106,10 @@ impl RuntimeSessionService {
                     .pane_environment_signatures
                     .insert(pane_id.to_string(), sig.clone());
                 if let Some(inv) = inventory.clone() {
-                    self.tool_discovery_cache.record(sig, inv);
+                    self.record_agent_tool_inventory(sig, inv);
                 }
                 if !instruction_files.is_empty() {
-                    self.pane_instruction_files
-                        .insert(pane_id.to_string(), instruction_files);
+                    self.set_pane_agent_instruction_files(pane_id, instruction_files);
                 }
                 self.append_lifecycle_event(
                     EventKind::AgentStatus,

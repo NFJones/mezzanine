@@ -1560,7 +1560,7 @@ impl RuntimeSessionService {
             .revoke(pane_id, ReadinessOverrideRevocation::PaneClosed);
         self.process.pane_environment_signatures.remove(pane_id);
         self.process.pane_bootstrap_pending.remove(pane_id);
-        self.pane_instruction_files.remove(pane_id);
+        self.clear_pane_agent_instruction_files(pane_id);
         self.process.pane_closing.remove(pane_id);
         self.clear_terminal_subagent_pane_close(pane_id);
         self.model_profile_overrides.pane_profiles.remove(pane_id);

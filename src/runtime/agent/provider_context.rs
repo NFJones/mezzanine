@@ -20,9 +20,8 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
     ) -> Result<()> {
         let Some(instruction_files) = self
-            .pane_instruction_files
-            .get(&turn.pane_id)
-            .cloned()
+            .pane_agent_instruction_files(&turn.pane_id)
+            .map(<[_]>::to_vec)
             .filter(|files| !files.is_empty())
         else {
             return Ok(());

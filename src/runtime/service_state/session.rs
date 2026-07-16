@@ -250,16 +250,6 @@ pub struct RuntimeSessionService {
     /// The key is `turn_id/action_id`, keeping the accumulator scoped to one
     /// running semantic action while successive read transactions complete.
     pub(in crate::runtime) apply_patch_batch_states: BTreeMap<String, RuntimeApplyPatchBatchState>,
-    /// Stores the tool discovery cache value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) tool_discovery_cache: ToolDiscoveryCache,
-    /// Stores the pane instruction files value for this data structure.
-    ///
-    /// The field is part of the structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(in crate::runtime) pane_instruction_files: BTreeMap<String, Vec<DiscoveredInstructionFile>>,
     /// Stores the agent transcript store value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

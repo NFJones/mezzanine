@@ -73,9 +73,10 @@ use mez_agent::semantic_patch_planning::{
 };
 use mez_agent::{
     ActiveWriteScope, AgentNetworkActionHistory, AgentShellDispatchHistory, AgentTurnSteering,
-    DEFAULT_PROVIDER_TIMEOUT_MS, MaapBatch, MacroManagedSubagent, MacroRunState, ModelTokenUsage,
-    ModelTokenUsageKey, ProviderApiCompatibility, ProviderQuotaUsage, SayStatus,
-    append_mcp_context, assistant_context_content_for_execution, invoked_mcp_tools_for_context,
+    DEFAULT_PROVIDER_TIMEOUT_MS, EnvironmentSignature, MaapBatch, MacroManagedSubagent,
+    MacroRunState, ModelTokenUsage, ModelTokenUsageKey, ProviderApiCompatibility,
+    ProviderQuotaUsage, SayStatus, ToolDiscoveryCache, ToolInventory, append_mcp_context,
+    assistant_context_content_for_execution, invoked_mcp_tools_for_context,
     set_project_guidance_context,
 };
 #[cfg(test)]
@@ -228,6 +229,11 @@ pub(in crate::runtime) struct RuntimeAgentComponent {
     subagent_lineage: BTreeMap<String, RuntimeSubagentLineage>,
     /// Canonical active write-scope ownership registry.
     subagent_scopes: mez_agent::ScopeRegistry,
+    /// Tool inventory cache keyed by pane environment signature.
+    tool_discovery_cache: ToolDiscoveryCache,
+    /// Project instruction files discovered for each pane.
+    pane_instruction_files:
+        BTreeMap<String, Vec<mez_agent::instructions::DiscoveredInstructionFile>>,
 }
 
 /// State removed when a compaction worker reports failure.
@@ -279,6 +285,53 @@ impl RuntimeAgentComponent {
 }
 
 impl RuntimeSessionService {
+    /// Returns the discovered tool inventory for one environment signature.
+    pub(in crate::runtime) fn agent_tool_inventory(
+        &self,
+        signature: &EnvironmentSignature,
+    ) -> Option<&ToolInventory> {
+        self.agent.tool_discovery_cache.get(signature)
+    }
+
+    /// Records a discovered tool inventory for one environment signature.
+    pub(in crate::runtime) fn record_agent_tool_inventory(
+        &mut self,
+        signature: EnvironmentSignature,
+        inventory: ToolInventory,
+    ) {
+        self.agent.tool_discovery_cache.record(signature, inventory);
+    }
+
+    /// Returns project instruction files discovered for one pane.
+    pub(in crate::runtime) fn pane_agent_instruction_files(
+        &self,
+        pane_id: &str,
+    ) -> Option<&[mez_agent::instructions::DiscoveredInstructionFile]> {
+        self.agent
+            .pane_instruction_files
+            .get(pane_id)
+            .map(Vec::as_slice)
+    }
+
+    /// Replaces project instruction files discovered for one pane.
+    pub(in crate::runtime) fn set_pane_agent_instruction_files(
+        &mut self,
+        pane_id: impl Into<String>,
+        files: Vec<mez_agent::instructions::DiscoveredInstructionFile>,
+    ) {
+        let pane_id = pane_id.into();
+        if files.is_empty() {
+            self.agent.pane_instruction_files.remove(&pane_id);
+        } else {
+            self.agent.pane_instruction_files.insert(pane_id, files);
+        }
+    }
+
+    /// Clears pane-scoped instruction discovery during pane teardown.
+    pub(in crate::runtime) fn clear_pane_agent_instruction_files(&mut self, pane_id: &str) {
+        self.agent.pane_instruction_files.remove(pane_id);
+    }
+
     /// Returns runtime lineage metadata for one child agent.
     pub(in crate::runtime) fn subagent_lineage(
         &self,

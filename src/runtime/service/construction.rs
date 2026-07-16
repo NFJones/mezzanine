@@ -174,8 +174,6 @@ impl RuntimeSessionService {
             agent_turn_contexts: BTreeMap::new(),
             agent_turn_executions: BTreeMap::new(),
             apply_patch_batch_states: BTreeMap::new(),
-            tool_discovery_cache: ToolDiscoveryCache::default(),
-            pane_instruction_files: BTreeMap::new(),
             agent_transcript_store: None,
             project_trust_store: None,
             project_trust_database_path: None,
