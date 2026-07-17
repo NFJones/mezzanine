@@ -939,11 +939,23 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
         serde_json::from_str(&openai_responses_request_body(&stable_b).unwrap()).unwrap();
     let stable_a_diagnostics = openai_prompt_cache_diagnostics_for_request(&stable_a).unwrap();
     let stable_b_diagnostics = openai_prompt_cache_diagnostics_for_request(&stable_b).unwrap();
+    let stable_a_instructions = stable_a_value["instructions"].as_str().unwrap();
+    let stable_b_instructions = stable_b_value["instructions"].as_str().unwrap();
+    let repository_suffix_marker = "\n\nActive Repository Instructions\n";
+    let stable_a_invariant = stable_a_instructions
+        .split_once(repository_suffix_marker)
+        .unwrap()
+        .0;
+    let stable_b_invariant = stable_b_instructions
+        .split_once(repository_suffix_marker)
+        .unwrap()
+        .0;
 
     assert_eq!(
         openai_stable_projection_material_for_request(&stable_a).unwrap(),
         openai_stable_projection_material_for_request(&stable_a_different_user).unwrap()
     );
+    assert_eq!(stable_a_invariant, stable_b_invariant);
     assert_ne!(
         openai_stable_projection_material_for_request(&stable_a).unwrap(),
         openai_stable_projection_material_for_request(&stable_b).unwrap()

@@ -2935,10 +2935,12 @@ permission and scheduler state, compacted prior task context, and explicit
 action results.
 
 Every provider request for a running agent turn MUST include the current
-discovered project guidance as embedded system-prompt repository instruction
-content when present. Provider continuations after actions, local messages, or
-approval decisions MUST refresh the embedded project-guidance content from the
-discovered instruction files and MUST NOT omit or duplicate it.
+discovered project guidance as a final stable system-prompt suffix after
+invariant built-in and provider-specific policy when present. The earlier
+repository section MUST retain the authority, precedence, and security contract
+without embedding the active file contents there. Provider continuations after
+actions, local messages, or approval decisions MUST refresh the active guidance
+from the discovered instruction files and MUST NOT omit or duplicate it.
 
 Command output, file contents, directory listings, search results, web content,
 and similar external observations MUST enter model context only as results of
@@ -6356,7 +6358,9 @@ sections:
 13. Response formatting rules.
 
 The emitted prompt MAY use compact section labels when those labels preserve
-the same ordering and required content.
+the same ordering and required content. Active repository instruction contents
+MUST be appended once after all invariant built-in and provider-specific policy,
+while the numbered repository section retains the early authority contract.
 
 After the built-in prompt sections, Mezzanine MUST append any configured
 `agents.custom_system_prompt` and selected personality `system_prompt` or

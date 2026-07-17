@@ -127,8 +127,8 @@ pub trait AgentPromptAssetSource {
 /// Assembles one provider-facing system prompt from injected product assets.
 ///
 /// Repository instruction blocks must already be discovered and ordered by the
-/// product adapter. This function embeds them verbatim under the repository
-/// instruction contract without performing filesystem access.
+/// product adapter. This function appends them verbatim after invariant policy
+/// without performing filesystem access.
 pub fn assemble_agent_system_prompt(
     profile: &AgentPromptProfile,
     repository_instruction_blocks: &[String],
@@ -147,7 +147,7 @@ pub fn assemble_agent_system_prompt(
     push_section(
         &mut prompt,
         "3. Repository Instructions",
-        &repository_instructions_prompt(repository_instruction_blocks, assets)?,
+        assets.system_fragment("repository_instructions.md")?,
     );
     push_section(
         &mut prompt,
@@ -201,6 +201,7 @@ pub fn assemble_agent_system_prompt(
     if let Some((title, path)) = provider_fragment {
         push_section(&mut prompt, title, assets.provider_fragment(path)?);
     }
+    append_repository_instructions(&mut prompt, repository_instruction_blocks);
     Ok(prompt)
 }
 
@@ -215,22 +216,17 @@ fn identity_prompt(assets: &impl AgentPromptAssetSource) -> AgentPromptResult<St
         ))
 }
 
-/// Builds the repository-instruction section with injected active contents.
-fn repository_instructions_prompt(
-    repository_instruction_blocks: &[String],
-    assets: &impl AgentPromptAssetSource,
-) -> AgentPromptResult<String> {
-    let mut prompt = assets
-        .system_fragment("repository_instructions.md")?
-        .to_string();
-    if !repository_instruction_blocks.is_empty() {
-        prompt.push_str("\n\nEmbedded active repository instruction contents:");
-        for block in repository_instruction_blocks {
-            prompt.push_str("\n\n");
-            prompt.push_str(block);
-        }
+/// Appends active repository contents after all invariant prompt policy.
+fn append_repository_instructions(prompt: &mut String, repository_instruction_blocks: &[String]) {
+    if repository_instruction_blocks.is_empty() {
+        return;
     }
-    Ok(prompt)
+    prompt.push_str("\n\nActive Repository Instructions\n");
+    prompt.push_str("Embedded active repository instruction contents:");
+    for block in repository_instruction_blocks {
+        prompt.push_str("\n\n");
+        prompt.push_str(block);
+    }
 }
 
 /// Builds the subagent section with optional scope details.
@@ -322,7 +318,11 @@ mod tests {
         assert!(prompt.contains("3. Repository Instructions\nrepository contract"));
         assert!(prompt.contains("Embedded active repository instruction contents:"));
         assert!(prompt.contains("first repository rule\n\nsecond rule"));
-        assert!(prompt.find("2. Autonomy").unwrap() < prompt.find("14. MCP").unwrap());
+        let repository_contract = prompt.find("3. Repository Instructions").unwrap();
+        let mcp_policy = prompt.find("14. MCP").unwrap();
+        let active_repository = prompt.find("Active Repository Instructions").unwrap();
+        assert!(repository_contract < mcp_policy);
+        assert!(mcp_policy < active_repository);
         assert!(!prompt.contains("15. "));
     }
 
