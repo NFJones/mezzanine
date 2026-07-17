@@ -16,7 +16,9 @@ fn terminal_screen_repeated_alternate_screen_decset_is_idempotent() {
         let leave = format!("\x1b[?{mode}l");
 
         screen.feed(b"normal");
+        assert_eq!(screen.alternate_screen_generation(), 0);
         screen.feed(enter.as_bytes());
+        assert_eq!(screen.alternate_screen_generation(), 1, "mode {mode}");
         screen.feed(b"\x1b[2;3Halt");
         let before_lines = screen.visible_lines();
         let before_cursor = screen.cursor_state();
@@ -24,13 +26,29 @@ fn terminal_screen_repeated_alternate_screen_decset_is_idempotent() {
         screen.feed(enter.as_bytes());
 
         assert!(screen.alternate_screen_active(), "mode {mode}");
+        assert_eq!(screen.alternate_screen_generation(), 1, "mode {mode}");
         assert_eq!(screen.visible_lines(), before_lines, "mode {mode}");
         assert_eq!(screen.cursor_state(), before_cursor, "mode {mode}");
 
         screen.feed(leave.as_bytes());
+        assert_eq!(screen.alternate_screen_generation(), 2, "mode {mode}");
         assert_eq!(screen.visible_lines()[0], "normal", "mode {mode}");
         assert!(!screen.alternate_screen_active(), "mode {mode}");
+        screen.feed(leave.as_bytes());
+        assert_eq!(screen.alternate_screen_generation(), 2, "mode {mode}");
     }
+}
+
+/// Verifies same-feed screen-buffer switches remain observable even when the
+/// final alternate-screen boolean matches the initial state.
+#[test]
+fn terminal_screen_generation_tracks_multiple_switches_in_one_feed() {
+    let mut screen = TerminalScreen::new(Size::new(12, 3).unwrap(), 10).unwrap();
+
+    screen.feed(b"\x1b[?1049halternate\x1b[?1049l");
+
+    assert!(!screen.alternate_screen_active());
+    assert_eq!(screen.alternate_screen_generation(), 2);
 }
 
 /// Verifies alternate-screen exit restores normal DEC origin and scroll-region state.

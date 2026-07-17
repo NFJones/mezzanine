@@ -60,6 +60,7 @@ impl TerminalScreen {
             saved_dec_private_modes: BTreeMap::new(),
             scroll_region: None,
             alternate: AlternateScreenState::new(),
+            alternate_screen_generation: 0,
             history: HistoryBuffer::new_with_rotation(history_limit, history_rotate_lines)?,
             normal_viewport_detached_from_history: false,
             activity_events: 0,

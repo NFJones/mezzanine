@@ -221,14 +221,14 @@ fn runtime_shell_transaction_osc_parser_preserves_fragmented_markers() {
     let mut service = test_runtime_service();
     let size = Size::new(80, 24).unwrap();
 
-    let (first_events, _) = service
+    let (first_events, _, _) = service
         .terminal_osc_events_for_pane_bytes(
             "%1",
             size,
             b"file-a\n\x1b]133;D;0;mez_marker=marker-1;mez_turn=turn-1;mez_agent=agent-%1;mez",
         )
         .unwrap();
-    let (second_events, _) = service
+    let (second_events, _, _) = service
         .terminal_osc_events_for_pane_bytes("%1", size, b"_pane=%1\x1b\\")
         .unwrap();
 

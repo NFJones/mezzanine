@@ -149,10 +149,8 @@ async fn async_actor_honors_cancel_then_reschedule_timer_order() {
     let ((), _) = tokio::join!(client, actor.run());
 }
 
-/// Verifies alternate-screen exit pane output is promoted to a full redraw
-/// invalidation instead of an ordinary pane-output update. This ensures the
-/// attached-terminal client discards retained differential frame state before
-/// repainting the restored primary buffer.
+/// Verifies every effective alternate-screen switch is promoted to a full
+/// redraw, including multiple switches whose final mode is unchanged.
 #[tokio::test(flavor = "current_thread")]
 async fn async_actor_uses_full_redraw_invalidation_for_alternate_screen_exit_output() {
     let mut service = test_service();
@@ -179,7 +177,23 @@ async fn async_actor_uses_full_redraw_invalidation_for_alternate_screen_exit_out
             handle.drain_render_side_effects(8).await.unwrap(),
             vec![RuntimeSideEffect::RenderClient {
                 client_id: primary.clone(),
-                reason: RenderInvalidationReason::PaneOutput,
+                reason: RenderInvalidationReason::FullRedraw,
+            }]
+        );
+
+        let mut same_mode_batch = RuntimeEventBatch::new();
+        same_mode_batch.push(RuntimeEvent::Pane(PaneEvent::Output {
+            pane_id: "%1".to_string(),
+            bytes: b"\x1b[?1049lback\x1b[?1049halt-again".to_vec(),
+        }));
+        let report = handle.submit_runtime_events(same_mode_batch).await.unwrap();
+        assert_eq!(report.accepted, 1);
+        assert_eq!(report.applied, 1);
+        assert_eq!(
+            handle.drain_render_side_effects(8).await.unwrap(),
+            vec![RuntimeSideEffect::RenderClient {
+                client_id: primary.clone(),
+                reason: RenderInvalidationReason::FullRedraw,
             }]
         );
 

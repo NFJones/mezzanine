@@ -472,8 +472,12 @@ impl TerminalScreen {
                     }
                     let state = self.saved_normal_screen_state();
                     self.alternate.enter_with_saved_normal_screen(state);
+                    self.alternate_screen_generation =
+                        self.alternate_screen_generation.wrapping_add(1);
                     self.clear_screen();
                 } else if let Some(state) = self.alternate.leave() {
+                    self.alternate_screen_generation =
+                        self.alternate_screen_generation.wrapping_add(1);
                     self.restore_saved_normal_screen_state(state);
                     if mode == 1049 {
                         self.restore_cursor();

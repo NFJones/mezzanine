@@ -96,6 +96,14 @@ impl TerminalScreen {
         self.alternate.active()
     }
 
+    /// Returns the generation of the active normal/alternate screen buffer.
+    ///
+    /// The generation advances on each effective alternate-screen entry or
+    /// exit, including multiple switches observed during one input feed.
+    pub fn alternate_screen_generation(&self) -> u64 {
+        self.alternate_screen_generation
+    }
+
     /// Returns whether the pane application requested a visible cursor.
     pub fn cursor_visible(&self) -> bool {
         self.cursor_visible

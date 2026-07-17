@@ -174,7 +174,7 @@ fn runtime_hidden_agent_shell_osc_parser_skips_large_command_bodies() {
         b"\x1b]133;D;0;mez_marker=marker-1;mez_turn=turn-1;mez_agent=agent-%1;mez_pane=%1\x1b\\",
     );
 
-    let (events, alternate_active) = service
+    let (events, alternate_active, _) = service
         .terminal_osc_events_for_pane_bytes("%1", size, &output)
         .unwrap();
 
@@ -231,14 +231,14 @@ fn runtime_hidden_agent_shell_osc_parser_preserves_fragmented_markers() {
         },
     );
 
-    let (first_events, _) = service
+    let (first_events, _, _) = service
         .terminal_osc_events_for_pane_bytes(
             "%1",
             size,
             b"large body\n\x1b]133;D;0;mez_marker=marker-1;mez_turn=turn-1;mez_agent=agent-%1;mez",
         )
         .unwrap();
-    let (second_events, _) = service
+    let (second_events, _, _) = service
         .terminal_osc_events_for_pane_bytes("%1", size, b"_pane=%1\x1b\\")
         .unwrap();
 

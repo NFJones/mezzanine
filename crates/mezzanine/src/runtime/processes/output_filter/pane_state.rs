@@ -161,17 +161,19 @@ impl RuntimeSessionService {
             .pane_transaction_osc_screens
             .get(output.pane_id.as_str())
             .is_some_and(TerminalScreen::alternate_screen_active);
-        let (osc_events, transaction_alternate_active) = self.terminal_osc_events_for_pane_bytes(
-            output.pane_id.as_str(),
-            descriptor_size,
-            &transaction_bytes,
-        )?;
+        let (osc_events, transaction_alternate_active, transaction_screen_switched) = self
+            .terminal_osc_events_for_pane_bytes(
+                output.pane_id.as_str(),
+                descriptor_size,
+                &transaction_bytes,
+            )?;
         let (
             title,
             activity_events,
             bell_events,
             previous_render_alternate_active,
             render_alternate_active,
+            render_screen_switched,
             terminal_response_bytes,
         ) = {
             let screen = self
@@ -186,6 +188,7 @@ impl RuntimeSessionService {
             let previous_activity_events = screen.activity_events();
             let previous_bell_events = screen.bell_events();
             let previous_alternate_active = screen.alternate_screen_active();
+            let previous_alternate_generation = screen.alternate_screen_generation();
             screen.feed(&render_bytes);
             let _ = screen.drain_osc_events();
             let terminal_response_bytes = screen.drain_terminal_response_bytes();
@@ -197,6 +200,7 @@ impl RuntimeSessionService {
                 screen.bell_events().saturating_sub(previous_bell_events),
                 previous_alternate_active,
                 screen.alternate_screen_active(),
+                screen.alternate_screen_generation() != previous_alternate_generation,
                 terminal_response_bytes,
             )
         };
@@ -210,6 +214,7 @@ impl RuntimeSessionService {
             previous_transaction_alternate_active || previous_render_alternate_active;
         let alternate_active = transaction_alternate_active || render_alternate_active;
         let alternate_screen_exited = previous_alternate_active && !alternate_active;
+        let alternate_screen_switched = transaction_screen_switched || render_screen_switched;
         let terminal_title = osc_events.iter().rev().find_map(|event| match event {
             TerminalOscEvent::TitleChanged { title } => Some(title.clone()),
             _ => None,
@@ -269,7 +274,7 @@ impl RuntimeSessionService {
             activity_events,
             bell_events,
             background,
-            invalidate_output_frame: alternate_screen_exited,
+            invalidate_output_frame: alternate_screen_switched,
         };
         self.append_pane_output_event(&update)?;
         if title_changed {
@@ -667,9 +672,9 @@ impl RuntimeSessionService {
         pane_id: &str,
         size: Size,
         bytes: &[u8],
-    ) -> Result<(Vec<TerminalOscEvent>, bool)> {
+    ) -> Result<(Vec<TerminalOscEvent>, bool, bool)> {
         if bytes.is_empty() {
-            return Ok((Vec::new(), false));
+            return Ok((Vec::new(), false, false));
         }
         if matches!(
             self.pane_output_render_mode(pane_id),
@@ -678,6 +683,7 @@ impl RuntimeSessionService {
         ) {
             return Ok((
                 self.hidden_agent_shell_osc_events_for_pane_bytes(pane_id, bytes),
+                false,
                 false,
             ));
         }
@@ -701,7 +707,10 @@ impl RuntimeSessionService {
                         MezError::invalid_state("transaction OSC parser was not retained for pane")
                     })?
             };
+        let previous_alternate_generation = screen.alternate_screen_generation();
         screen.feed(bytes);
+        let alternate_screen_switched =
+            screen.alternate_screen_generation() != previous_alternate_generation;
         let _ = screen.drain_terminal_response_bytes();
         let events = screen
             .drain_osc_events()
@@ -713,7 +722,11 @@ impl RuntimeSessionService {
                 event => Some(event),
             })
             .collect();
-        Ok((events, screen.alternate_screen_active()))
+        Ok((
+            events,
+            screen.alternate_screen_active(),
+            alternate_screen_switched,
+        ))
     }
 
     /// Scans hidden agent-shell bytes for Mezzanine-owned OSC transaction

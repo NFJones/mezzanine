@@ -660,6 +660,11 @@ pub struct TerminalScreen {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) alternate: AlternateScreenState,
+    /// Monotonic generation advanced by every effective screen-buffer switch.
+    ///
+    /// Retained renderers use this value to reject diffs whose baseline came
+    /// from a different normal or alternate screen generation.
+    pub(super) alternate_screen_generation: u64,
     /// Stores the history value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module
