@@ -7,12 +7,11 @@
 //! assets without exposing runtime records or filesystem access.
 
 use crate::{
-    AgentContext, AgentContextError, AgentPromptAssetSource, AgentPromptProfile,
-    AgentRequestAssemblyResult, AllowedActionSet, ContextBlock, ContextPlacement,
-    ContextSourceKind, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile,
-    ModelRequest, ProviderTranscriptEvent, assemble_agent_system_prompt,
-    constrain_skill_actions_for_loaded_context, model_context_block_header,
-    validate_model_profile_request,
+    AgentContext, AgentPromptAssetSource, AgentPromptProfile, AgentRequestAssemblyResult,
+    AllowedActionSet, ContextBlock, ContextPlacement, ContextSourceKind, ModelInteractionKind,
+    ModelMessage, ModelMessageRole, ModelProfile, ModelRequest, ProviderTranscriptEvent,
+    assemble_agent_system_prompt, constrain_skill_actions_for_loaded_context,
+    model_context_block_header, validate_context_placement_order, validate_model_profile_request,
 };
 
 /// Stable product identity required to assemble one provider request.
@@ -138,22 +137,6 @@ pub fn assemble_model_request_from_context(
     };
     constrain_skill_actions_for_loaded_context(&mut request);
     Ok(request)
-}
-
-/// Rejects cache-lifecycle regressions without changing producer order.
-fn validate_context_placement_order(blocks: &[ContextBlock]) -> AgentRequestAssemblyResult<()> {
-    let mut entered_phase = ContextPlacement::StablePrefix;
-    for (index, block) in blocks.iter().enumerate() {
-        if block.placement < entered_phase {
-            return Err(AgentContextError::new(format!(
-                "context lifecycle regression at block index {index}: label={:?} source={:?} placement={:?} entered_phase={entered_phase:?}",
-                block.label, block.source, block.placement
-            ))
-            .into());
-        }
-        entered_phase = block.placement;
-    }
-    Ok(())
 }
 
 /// Maps context provenance to provider-neutral message roles.

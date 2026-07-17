@@ -228,8 +228,9 @@ pub use context::{
     AgentContext, AgentContextError, AgentContextResult, AgentRequestAssemblyError,
     AgentRequestAssemblyErrorKind, AgentRequestAssemblyResult, ContextBlock, ContextCachePolicy,
     ContextPlacement, ContextSourceKind, ContextStability, ModelContextCompactionReport,
-    ModelMessage, ModelMessageRole, ModelRequest, TrustDomain, model_context_block_header,
-    validate_context_required,
+    ModelMessage, ModelMessageRole, ModelRequest, TrustDomain, context_placement_insertion_index,
+    insert_context_block_by_placement, model_context_block_header,
+    validate_context_placement_order, validate_context_required,
 };
 pub use context_appenders::{
     append_mcp_context, append_memory_context, append_permission_policy_context,

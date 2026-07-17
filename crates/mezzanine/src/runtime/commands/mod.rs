@@ -643,43 +643,52 @@ impl RuntimeSessionService {
         mut context: AgentContext,
     ) -> Result<AgentContext> {
         if let Some(prompt) = self.integration.custom_agent_system_prompt() {
-            context.blocks.push(ContextBlock {
-                source: ContextSourceKind::System,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                label: "configured agent system prompt".to_string(),
-                content: prompt.to_string(),
-            });
+            mez_agent::insert_context_block_by_placement(
+                &mut context.blocks,
+                ContextBlock {
+                    source: ContextSourceKind::System,
+                    placement: mez_agent::ContextPlacement::StablePrefix,
+                    label: "configured agent system prompt".to_string(),
+                    content: prompt.to_string(),
+                },
+            );
         }
         if let Some(profile) = self.agent_selected_personality_profile(pane_id)
             && let Some(prompt) = profile.system_prompt.as_ref()
         {
-            context.blocks.push(ContextBlock {
-                source: ContextSourceKind::System,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                label: "agent personality system prompt".to_string(),
-                content: prompt.clone(),
-            });
+            mez_agent::insert_context_block_by_placement(
+                &mut context.blocks,
+                ContextBlock {
+                    source: ContextSourceKind::System,
+                    placement: mez_agent::ContextPlacement::StablePrefix,
+                    label: "agent personality system prompt".to_string(),
+                    content: prompt.clone(),
+                },
+            );
         }
         if let Some(directive) = self
             .agent_shell_store()
             .get(pane_id)
             .and_then(|session| session.directive.as_deref())
         {
-            context.blocks.push(ContextBlock {
-                source: ContextSourceKind::DeveloperInstruction,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                label: "agent shell directive".to_string(),
-                content: format!(
-                    "Pane-local /directive instruction for this session. Append it to the existing developer instructions for future turns:\n{}",
-                    directive
-                ),
-            });
+            mez_agent::insert_context_block_by_placement(
+                &mut context.blocks,
+                ContextBlock {
+                    source: ContextSourceKind::DeveloperInstruction,
+                    placement: mez_agent::ContextPlacement::StablePrefix,
+                    label: "agent shell directive".to_string(),
+                    content: format!(
+                        "Pane-local /directive instruction for this session. Append it to the existing developer instructions for future turns:\n{}",
+                        directive
+                    ),
+                },
+            );
         }
         let selected_profile = self.agent_selected_personality_profile(pane_id);
         let planning_enabled = self.agent_planning_enabled(pane_id)
             || selected_profile.is_some_and(|profile| profile.planning_enabled == Some(true));
         if planning_enabled {
-            context.blocks.push(ContextBlock {
+            mez_agent::insert_context_block_by_placement(&mut context.blocks, ContextBlock {
                 source: ContextSourceKind::Configuration,
                 placement: mez_agent::ContextPlacement::StablePrefix,
                 label: "agent shell plan mode".to_string(),
@@ -689,12 +698,15 @@ impl RuntimeSessionService {
         }
         let profile_style = selected_profile.and_then(|profile| profile.response_style.as_deref());
         if let Some(style) = self.agent_response_style(pane_id).or(profile_style) {
-            context.blocks.push(ContextBlock {
-                source: ContextSourceKind::Configuration,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                label: "agent shell personality".to_string(),
-                content: format!("Response style preference for this pane: {style}."),
-            });
+            mez_agent::insert_context_block_by_placement(
+                &mut context.blocks,
+                ContextBlock {
+                    source: ContextSourceKind::Configuration,
+                    placement: mez_agent::ContextPlacement::StablePrefix,
+                    label: "agent shell personality".to_string(),
+                    content: format!("Response style preference for this pane: {style}."),
+                },
+            );
         }
         Ok(AgentContext::new(context.blocks)?)
     }
@@ -1045,6 +1057,7 @@ impl RuntimeSessionService {
         }
         let context = self.agent_context_for_pane_prompt(pane_id, prompt, 100)?;
         let context = self.apply_agent_shell_preference_context(pane_id, context)?;
+        context.validate_placement_order()?;
         let turn_id = self.next_agent_turn_id();
         let agent_id = format!("agent-{pane_id}");
         let context_blocks = context.blocks.len();

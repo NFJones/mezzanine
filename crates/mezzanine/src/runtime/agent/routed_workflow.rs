@@ -625,12 +625,15 @@ impl RuntimeSessionService {
                     self.agent.subagent_task_routes.remove(&turn.turn_id);
                     return Ok(true);
                 };
-                handoff_context.blocks.push(ContextBlock {
-                    source: ContextSourceKind::RoutedHandoff,
-                    placement: mez_agent::ContextPlacement::ConversationAppend,
-                    label: "routed worker exact final result".to_string(),
-                    content: output.clone(),
-                });
+                mez_agent::insert_context_block_by_placement(
+                    &mut handoff_context.blocks,
+                    ContextBlock {
+                        source: ContextSourceKind::RoutedHandoff,
+                        placement: mez_agent::ContextPlacement::ConversationAppend,
+                        label: "routed worker exact final result".to_string(),
+                        content: output.clone(),
+                    },
+                );
                 self.agent
                     .routed_child_contexts_by_parent_turn
                     .insert(parent_turn_id.clone(), handoff_context.clone());
@@ -674,13 +677,13 @@ impl RuntimeSessionService {
             {
                 let final_result = state.worker_final_result.as_deref().unwrap_or_default();
                 if let Some(block) = routed_handoff_failure_output_block(&output) {
-                    self.agent_turn_contexts_mut()
+                    let context = self
+                        .agent_turn_contexts_mut()
                         .get_mut(&parent_turn.turn_id)
                         .ok_or_else(|| {
                             MezError::invalid_state("routed parent context is unavailable")
-                        })?
-                        .blocks
-                        .push(block);
+                        })?;
+                    mez_agent::insert_context_block_by_placement(&mut context.blocks, block);
                 }
                 self.ready_routed_parent_for_error_explanation(
                     &parent_turn,
@@ -734,20 +737,21 @@ impl RuntimeSessionService {
                                 .cloned()
                         })
                         .unwrap_or(AgentContext { blocks: Vec::new() });
-                    repair_context.blocks.extend([
+                    mez_agent::insert_context_block_by_placement(
+                        &mut repair_context.blocks,
                         ContextBlock {
                             source: ContextSourceKind::RoutedHandoff,
                             placement: mez_agent::ContextPlacement::ConversationAppend,
                             label: "invalid routed handoff output".to_string(),
                             content: output.clone(),
                         },
-                        ContextBlock {
-                            source: ContextSourceKind::RuntimeHint,
-                            placement: mez_agent::ContextPlacement::EphemeralTail,
-                            label: "routed handoff validation feedback".to_string(),
-                            content: diagnostic.clone(),
-                        },
-                    ]);
+                    );
+                    repair_context.blocks.push(ContextBlock {
+                        source: ContextSourceKind::RuntimeHint,
+                        placement: mez_agent::ContextPlacement::EphemeralTail,
+                        label: "routed handoff validation feedback".to_string(),
+                        content: diagnostic.clone(),
+                    });
                     let repair_turn = match self.queue_routed_child_turn(RoutedChildTurnRequest {
                         parent_turn: &parent_turn,
                         child_agent_id: &child_agent_id,
@@ -984,19 +988,25 @@ impl RuntimeSessionService {
             .get_mut(&parent_turn.turn_id)
             .ok_or_else(|| MezError::invalid_state("routed parent context is unavailable"))?;
         if !child_output.is_empty() {
-            context.blocks.push(ContextBlock {
+            mez_agent::insert_context_block_by_placement(
+                &mut context.blocks,
+                ContextBlock {
+                    source: ContextSourceKind::RoutedHandoff,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
+                    label: "routed worker exact final result".to_string(),
+                    content: child_output.to_string(),
+                },
+            );
+        }
+        mez_agent::insert_context_block_by_placement(
+            &mut context.blocks,
+            ContextBlock {
                 source: ContextSourceKind::RoutedHandoff,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
-                label: "routed worker exact final result".to_string(),
-                content: child_output.to_string(),
-            });
-        }
-        context.blocks.push(ContextBlock {
-            source: ContextSourceKind::RoutedHandoff,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "routed workflow failure".to_string(),
-            content: format!("stage={stage}\ndiagnostic={diagnostic}"),
-        });
+                label: "routed workflow failure".to_string(),
+                content: format!("stage={stage}\ndiagnostic={diagnostic}"),
+            },
+        );
         context.blocks.push(ContextBlock {
             source: ContextSourceKind::RuntimeHint,
             placement: mez_agent::ContextPlacement::EphemeralTail,
@@ -1050,12 +1060,15 @@ impl RuntimeSessionService {
             .agent_turn_contexts_mut()
             .get_mut(&parent_turn.turn_id)
             .ok_or_else(|| MezError::invalid_state("routed parent context is unavailable"))?;
-        context.blocks.push(ContextBlock {
-            source: ContextSourceKind::RoutedHandoff,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "routed worker exact final result".to_string(),
-            content: final_result.to_string(),
-        });
+        mez_agent::insert_context_block_by_placement(
+            &mut context.blocks,
+            ContextBlock {
+                source: ContextSourceKind::RoutedHandoff,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "routed worker exact final result".to_string(),
+                content: final_result.to_string(),
+            },
+        );
         let handoff_content = match handoff {
             Some(handoff) => serde_json::to_string(handoff).map_err(|error| {
                 MezError::invalid_state(format!("failed to encode routed handoff: {error}"))
@@ -1065,12 +1078,15 @@ impl RuntimeSessionService {
                 diagnostic.unwrap_or("worker did not provide valid handoff context")
             ),
         };
-        context.blocks.push(ContextBlock {
-            source: ContextSourceKind::RoutedHandoff,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "routed worker handoff context".to_string(),
-            content: handoff_content,
-        });
+        mez_agent::insert_context_block_by_placement(
+            &mut context.blocks,
+            ContextBlock {
+                source: ContextSourceKind::RoutedHandoff,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "routed worker handoff context".to_string(),
+                content: handoff_content,
+            },
+        );
         context.blocks.push(ContextBlock {
             source: ContextSourceKind::RuntimeHint,
             placement: mez_agent::ContextPlacement::EphemeralTail,
@@ -1175,12 +1191,15 @@ impl RuntimeSessionService {
                 .agent_turn_contexts_mut()
                 .get_mut(turn_id)
                 .ok_or_else(|| MezError::invalid_state("routed parent context is unavailable"))?;
-            context.blocks.push(ContextBlock {
-                source: ContextSourceKind::RoutedHandoff,
-                placement: mez_agent::ContextPlacement::ConversationAppend,
-                label: "routed workflow failure".to_string(),
-                content: format!("stage=parent presentation\ndiagnostic={diagnostic}"),
-            });
+            mez_agent::insert_context_block_by_placement(
+                &mut context.blocks,
+                ContextBlock {
+                    source: ContextSourceKind::RoutedHandoff,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
+                    label: "routed workflow failure".to_string(),
+                    content: format!("stage=parent presentation\ndiagnostic={diagnostic}"),
+                },
+            );
             context.blocks.push(ContextBlock {
                 source: ContextSourceKind::RuntimeHint,
                 placement: mez_agent::ContextPlacement::EphemeralTail,
@@ -1249,6 +1268,7 @@ impl RuntimeSessionService {
                 self.apply_agent_shell_preference_context(child_pane_id, context)?
             }
         };
+        context.validate_placement_order()?;
         let turn_id = self.next_agent_turn_id();
         let turn = AgentTurnRecord {
             turn_id: turn_id.clone(),

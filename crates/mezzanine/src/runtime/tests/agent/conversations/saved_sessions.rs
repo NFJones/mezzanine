@@ -185,6 +185,39 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
         block.source == mez_agent::ContextSourceKind::TranscriptUser
             && block.content.contains("saved prompt")
     }));
+    context.validate_placement_order().unwrap();
+    let (_, profile) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    let turn = mez_agent::AgentTurnRecord {
+        turn_id: "saved-context-validation".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 3,
+        policy_profile: "runtime".to_string(),
+        model_profile: "test".to_string(),
+        parent_turn_id: None,
+        state: AgentTurnState::Running,
+        cooperation_mode: None,
+        initial_capability: None,
+    };
+    let request =
+        crate::integrations::agent::context::assemble_model_request(&profile, &turn, &context)
+            .unwrap();
+    let replayed_user_messages = request
+        .messages
+        .iter()
+        .filter(|message| message.source == ContextSourceKind::TranscriptUser)
+        .map(|message| (message.role, message.content.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(replayed_user_messages.len(), 2);
+    assert_eq!(
+        replayed_user_messages[0].0,
+        mez_agent::ModelMessageRole::User
+    );
+    assert!(replayed_user_messages[0].1.contains("saved prompt"));
+    assert!(replayed_user_messages[1].1.contains("latest saved prompt"));
 
     let forked = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"fork","method":"agent/shell/command","params":{"idempotency_key":"fork","input":"/fork saved-fork"}}"#,

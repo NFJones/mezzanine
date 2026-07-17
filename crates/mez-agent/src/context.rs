@@ -234,6 +234,53 @@ impl AgentContext {
         }
         Ok(Self { blocks })
     }
+
+    /// Validates that blocks advance monotonically through cache lifecycle phases.
+    ///
+    /// This check remains separate from [`AgentContext::new`] because low-level
+    /// tests and a small number of builders need to represent an intermediate
+    /// context before it reaches a finalized runtime boundary. Production
+    /// prompt submission and provider assembly must validate before side effects.
+    pub fn validate_placement_order(&self) -> AgentContextResult<()> {
+        validate_context_placement_order(&self.blocks)
+    }
+}
+
+/// Returns the stable insertion boundary for one lifecycle placement.
+///
+/// New stable blocks are placed after the existing stable prefix, new
+/// conversation blocks after existing immutable chronology, and new ephemeral
+/// blocks at the end. This preserves producer order within each phase without
+/// globally sorting context and changing transcript semantics.
+pub fn context_placement_insertion_index(
+    blocks: &[ContextBlock],
+    placement: ContextPlacement,
+) -> usize {
+    blocks
+        .iter()
+        .position(|block| block.placement > placement)
+        .unwrap_or(blocks.len())
+}
+
+/// Inserts one context block at its lifecycle phase boundary.
+pub fn insert_context_block_by_placement(blocks: &mut Vec<ContextBlock>, block: ContextBlock) {
+    let insertion_index = context_placement_insertion_index(blocks, block.placement);
+    blocks.insert(insertion_index, block);
+}
+
+/// Rejects cache-lifecycle regressions without changing producer order.
+pub fn validate_context_placement_order(blocks: &[ContextBlock]) -> AgentContextResult<()> {
+    let mut entered_phase = ContextPlacement::StablePrefix;
+    for (index, block) in blocks.iter().enumerate() {
+        if block.placement < entered_phase {
+            return Err(AgentContextError::new(format!(
+                "context lifecycle regression at block index {index}: label={:?} source={:?} placement={:?} entered_phase={entered_phase:?}",
+                block.label, block.source, block.placement
+            )));
+        }
+        entered_phase = block.placement;
+    }
+    Ok(())
 }
 
 /// Counts deterministic compaction performed on provider-bound context.

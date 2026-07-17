@@ -76,8 +76,8 @@ use context::{
 };
 use mez_agent::{
     SkillDocument, append_memory_context, append_permission_policy_context,
-    append_scheduler_context, is_valid_skill_name, parse_skill_prompt_invocation,
-    set_project_guidance_context, skill_context_text,
+    append_scheduler_context, insert_context_block_by_placement, is_valid_skill_name,
+    parse_skill_prompt_invocation, set_project_guidance_context, skill_context_text,
 };
 use protocol::{
     pane_id_from_runtime_agent_id, paths_equivalent, runtime_project_trust_read_method,
@@ -116,39 +116,48 @@ impl RuntimeSessionService {
             .map(|session| session.prompt_cache_lineage_id.clone())
             .filter(|lineage_id| !lineage_id.trim().is_empty())
         {
-            blocks.push(ContextBlock {
-                source: ContextSourceKind::Configuration,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                label: "prompt cache lineage".to_string(),
-                content: lineage_id,
-            });
+            insert_context_block_by_placement(
+                &mut blocks,
+                ContextBlock {
+                    source: ContextSourceKind::Configuration,
+                    placement: mez_agent::ContextPlacement::StablePrefix,
+                    label: "prompt cache lineage".to_string(),
+                    content: lineage_id,
+                },
+            );
         }
-        blocks.push(ContextBlock {
-            source: ContextSourceKind::Configuration,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
-            label: "session identity".to_string(),
-            content: format!(
-                "session_id={} session_name={}",
-                self.session.id, self.session.name
-            ),
-        });
+        insert_context_block_by_placement(
+            &mut blocks,
+            ContextBlock {
+                source: ContextSourceKind::Configuration,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
+                label: "session identity".to_string(),
+                content: format!(
+                    "session_id={} session_name={}",
+                    self.session.id, self.session.name
+                ),
+            },
+        );
 
         let readiness_state = self.pane_readiness_state(pane_id);
         let window_name = runtime_pane_by_id(&self.session, pane_id)
             .map(|(window, _pane)| window.name.clone())?;
-        blocks.push(ContextBlock {
-            source: ContextSourceKind::Configuration,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
-            label: "pane identity".to_string(),
-            content: format!(
-                "pane_id={pane_id} window_name={window_name} readiness_state={}",
-                runtime_pane_readiness_state_name(readiness_state)
-            ),
-        });
+        insert_context_block_by_placement(
+            &mut blocks,
+            ContextBlock {
+                source: ContextSourceKind::Configuration,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
+                label: "pane identity".to_string(),
+                content: format!(
+                    "pane_id={pane_id} window_name={window_name} readiness_state={}",
+                    runtime_pane_readiness_state_name(readiness_state)
+                ),
+            },
+        );
         if let Some(readiness_hint) =
             runtime_agent_pane_readiness_context_block(pane_id, readiness_state)
         {
-            blocks.push(readiness_hint);
+            insert_context_block_by_placement(&mut blocks, readiness_hint);
         }
 
         if let Some(session) = self.agent_shell_store().get(pane_id)
@@ -174,7 +183,9 @@ impl RuntimeSessionService {
                             let first_active = entries.len().saturating_sub(active_entries);
                             entries.drain(..first_active);
                         }
-                        blocks.extend(runtime_agent_transcript_context_blocks(pane_id, &entries));
+                        for block in runtime_agent_transcript_context_blocks(pane_id, &entries) {
+                            insert_context_block_by_placement(&mut blocks, block);
+                        }
                     }
                     Ok(_) => {}
                     Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {}
@@ -193,21 +204,20 @@ impl RuntimeSessionService {
                 .iter()
                 .map(runtime_local_message_context_content)
                 .collect();
-            blocks.push(ContextBlock {
-                source: ContextSourceKind::LocalMessage,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
-                label: format!("pending local messages for agent {agent_id}"),
-                content: message_lines.join("\n\n"),
-            });
+            insert_context_block_by_placement(
+                &mut blocks,
+                ContextBlock {
+                    source: ContextSourceKind::LocalMessage,
+                    placement: mez_agent::ContextPlacement::EphemeralTail,
+                    label: format!("pending local messages for agent {agent_id}"),
+                    content: message_lines.join("\n\n"),
+                },
+            );
         }
         let active_subagent_scopes = self.active_subagent_write_scopes();
         if !active_subagent_scopes.is_empty() {
-            let insert_at = blocks
-                .iter()
-                .position(|block| block.source == ContextSourceKind::UserInstruction)
-                .unwrap_or(blocks.len());
-            blocks.insert(
-                insert_at,
+            insert_context_block_by_placement(
+                &mut blocks,
                 ContextBlock {
                     source: ContextSourceKind::Policy,
                     placement: mez_agent::ContextPlacement::EphemeralTail,
@@ -243,12 +253,8 @@ impl RuntimeSessionService {
                     env_lines.push(format!("tools={}", inventory.modern_tools.join(",")));
                 }
             }
-            let insert_at = blocks
-                .iter()
-                .position(|block| block.source == ContextSourceKind::Configuration)
-                .unwrap_or(blocks.len());
-            blocks.insert(
-                insert_at,
+            insert_context_block_by_placement(
+                &mut blocks,
                 ContextBlock {
                     source: ContextSourceKind::Configuration,
                     placement: mez_agent::ContextPlacement::EphemeralTail,
@@ -298,39 +304,48 @@ impl RuntimeSessionService {
                 )));
             };
             let document = load_skill_document(summary)?;
-            blocks.push(ContextBlock {
-                source: ContextSourceKind::SkillInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
-                label: format!("explicit skill {}", invocation.name),
-                content: self.runtime_skill_context_text(
-                    document,
-                    invocation.additional_context.as_deref(),
-                )?,
-            });
-            blocks.push(ContextBlock {
-                source: ContextSourceKind::RuntimeHint,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
-                label: format!("explicit skill invocation {}", invocation.name),
-                content: format!(
-                    "[explicit skill invocation resolved]\n\
+            insert_context_block_by_placement(
+                &mut blocks,
+                ContextBlock {
+                    source: ContextSourceKind::SkillInstruction,
+                    placement: mez_agent::ContextPlacement::EphemeralTail,
+                    label: format!("explicit skill {}", invocation.name),
+                    content: self.runtime_skill_context_text(
+                        document,
+                        invocation.additional_context.as_deref(),
+                    )?,
+                },
+            );
+            insert_context_block_by_placement(
+                &mut blocks,
+                ContextBlock {
+                    source: ContextSourceKind::RuntimeHint,
+                    placement: mez_agent::ContextPlacement::EphemeralTail,
+                    label: format!("explicit skill invocation {}", invocation.name),
+                    content: format!(
+                        "[explicit skill invocation resolved]\n\
                      skill={}\n\
                      The selected skill context has already been loaded above. Treat the text after the `$<skill-name>` token as the user's task-specific instruction. Do not call request_skills or call_skill to load this skill again; use the loaded skill guidance and request the missing action capability needed for the next concrete step.",
-                    invocation.name
-                ),
-            });
+                        invocation.name
+                    ),
+                },
+            );
         }
         let context_memory_records = self.model_context_memory_records_for_pane(pane_id);
         if let Some(block) =
             Self::runtime_agent_compaction_notice_context_block(&context_memory_records)
         {
-            blocks.push(block);
+            insert_context_block_by_placement(&mut blocks, block);
         }
-        blocks.push(ContextBlock {
-            source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
-            label: "user prompt".to_string(),
-            content: prompt.to_string(),
-        });
+        insert_context_block_by_placement(
+            &mut blocks,
+            ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
+                label: "user prompt".to_string(),
+                content: prompt.to_string(),
+            },
+        );
         let context = AgentContext::new(blocks)?;
         let context = append_permission_policy_context(context)?;
         let context = append_scheduler_context(context, self.agent_scheduler())?;

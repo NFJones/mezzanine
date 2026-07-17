@@ -65,6 +65,44 @@ fn project_guidance_context_is_inserted_before_user_prompt() {
 }
 
 #[test]
+/// Verifies stable project guidance is inserted before existing volatile state.
+///
+/// Runtime prompt construction discovers repository instructions after pane and
+/// environment state. The shared appender must use the stable-phase boundary so
+/// that discovery order cannot create an ephemeral-to-stable regression.
+fn project_guidance_context_precedes_existing_volatile_configuration() {
+    let context = AgentContext::new(vec![
+        ContextBlock {
+            source: ContextSourceKind::Configuration,
+            placement: crate::ContextPlacement::EphemeralTail,
+            label: "environment signature".to_string(),
+            content: "os=linux".to_string(),
+        },
+        ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::EphemeralTail,
+            label: "user".to_string(),
+            content: "change the code".to_string(),
+        },
+    ])
+    .unwrap();
+    let files = vec![DiscoveredInstructionFile {
+        path: "./AGENTS.md".to_string(),
+        scope_root: ".".to_string(),
+        bytes: 13,
+        truncated: false,
+        content: "run all tests".to_string(),
+    }];
+
+    let context = append_project_guidance_context(context, &files, 1).unwrap();
+
+    assert_eq!(context.blocks[0].source, ContextSourceKind::ProjectGuidance);
+    assert_eq!(context.blocks[1].label, "environment signature");
+    assert_eq!(context.blocks[2].source, ContextSourceKind::UserInstruction);
+    context.validate_placement_order().unwrap();
+}
+
+#[test]
 /// Verifies project guidance replacement removes stale instruction blocks.
 ///
 /// Provider continuations refresh stored turn context before each request, so
@@ -284,13 +322,13 @@ fn scheduler_context_omits_unrelated_idle_state() {
 }
 
 #[test]
-/// Verifies scheduler context precedes project and user context while
-/// permission policy stays runtime-owned.
+/// Verifies scheduler context remains in the ephemeral phase before the current
+/// user prompt while permission policy stays runtime-owned.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
-fn scheduler_context_precedes_project_and_user_context_without_permission_context() {
+fn scheduler_context_follows_stable_project_context_and_precedes_user_context() {
     let context = AgentContext::new(vec![
         ContextBlock {
             source: ContextSourceKind::ProjectGuidance,
@@ -319,14 +357,16 @@ fn scheduler_context_precedes_project_and_user_context_without_permission_contex
     let context = append_permission_policy_context(context).unwrap();
     let context = append_scheduler_context(context, &scheduler).unwrap();
 
-    assert_eq!(context.blocks[0].label, "scheduler state");
-    assert_eq!(context.blocks[1].source, ContextSourceKind::ProjectGuidance);
+    assert_eq!(context.blocks[0].source, ContextSourceKind::ProjectGuidance);
+    assert_eq!(context.blocks[1].label, "scheduler state");
+    assert_eq!(context.blocks[2].source, ContextSourceKind::UserInstruction);
+    context.validate_placement_order().unwrap();
     assert!(
         context
             .blocks
             .iter()
             .all(|block| block.label != "permission policy")
     );
-    assert!(context.blocks[0].content.contains("queued=1"));
-    assert!(context.blocks[0].content.contains("agent-queued"));
+    assert!(context.blocks[1].content.contains("queued=1"));
+    assert!(context.blocks[1].content.contains("agent-queued"));
 }

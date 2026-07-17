@@ -9,7 +9,8 @@ use crate::instructions::DiscoveredInstructionFile;
 use crate::{
     AgentContext, AgentContextResult, AgentScheduler, ContextBlock, ContextSourceKind,
     McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer,
-    MemoryContextRecord, runnable_agent_ids, validate_context_required,
+    MemoryContextRecord, context_placement_insertion_index, insert_context_block_by_placement,
+    runnable_agent_ids, validate_context_required,
 };
 
 /// Appends selected memory records to provider-bound context.
@@ -38,11 +39,6 @@ pub fn append_memory_context(
             })
             .then_with(|| left.id.cmp(&right.id))
     });
-    let insertion_index = context
-        .blocks
-        .iter()
-        .position(|block| block.placement == crate::ContextPlacement::EphemeralTail)
-        .unwrap_or(context.blocks.len());
     let memory_blocks = selected
         .iter()
         .take(max_records)
@@ -52,9 +48,9 @@ pub fn append_memory_context(
             label: format!("memory {} ({})", record.id, record.scope.summary()),
             content: record.content.clone(),
         });
-    context
-        .blocks
-        .splice(insertion_index..insertion_index, memory_blocks);
+    for block in memory_blocks {
+        insert_context_block_by_placement(&mut context.blocks, block);
+    }
     AgentContext::new(context.blocks)
 }
 
@@ -158,8 +154,16 @@ fn append_filtered_mcp_context(
     let insert_at = context
         .blocks
         .iter()
-        .position(|block| block.source == ContextSourceKind::UserInstruction)
-        .unwrap_or(context.blocks.len());
+        .position(|block| {
+            block.placement == crate::ContextPlacement::EphemeralTail
+                && block.source == ContextSourceKind::UserInstruction
+        })
+        .unwrap_or_else(|| {
+            context_placement_insertion_index(
+                &context.blocks,
+                crate::ContextPlacement::EphemeralTail,
+            )
+        });
     context.blocks.insert(
         insert_at,
         ContextBlock {
@@ -542,11 +546,6 @@ pub fn append_project_guidance_context(
         return Ok(context);
     }
 
-    let insert_at = context
-        .blocks
-        .iter()
-        .position(|block| !block_should_precede_project_guidance(block.source))
-        .unwrap_or(context.blocks.len());
     let mut guidance_blocks = Vec::new();
     let mut selected_files = files.to_vec();
     selected_files.sort_by(|left, right| {
@@ -572,7 +571,9 @@ pub fn append_project_guidance_context(
             content: project_guidance_context_content(file),
         });
     }
-    context.blocks.splice(insert_at..insert_at, guidance_blocks);
+    for block in guidance_blocks {
+        insert_context_block_by_placement(&mut context.blocks, block);
+    }
     AgentContext::new(context.blocks)
 }
 
@@ -712,7 +713,7 @@ pub fn append_scheduler_context(
         label: "scheduler state".to_string(),
         content,
     };
-    insert_policy_context_block(&mut context.blocks, block);
+    insert_ephemeral_context_before_current_user(&mut context.blocks, block);
     AgentContext::new(context.blocks)
 }
 
@@ -746,34 +747,21 @@ fn scheduler_context_text_is_relevant(content: &str) -> bool {
     .any(|needle| normalized.contains(needle))
 }
 
-/// Inserts a policy block after other policy-preceding context.
-fn insert_policy_context_block(blocks: &mut Vec<ContextBlock>, block: ContextBlock) {
+/// Inserts turn-local controller state before the current user prompt.
+fn insert_ephemeral_context_before_current_user(
+    blocks: &mut Vec<ContextBlock>,
+    block: ContextBlock,
+) {
     let insert_at = blocks
         .iter()
-        .position(|existing| !block_should_precede_policy(existing.source))
-        .unwrap_or(blocks.len());
+        .position(|existing| {
+            existing.placement == crate::ContextPlacement::EphemeralTail
+                && existing.source == ContextSourceKind::UserInstruction
+        })
+        .unwrap_or_else(|| {
+            context_placement_insertion_index(blocks, crate::ContextPlacement::EphemeralTail)
+        });
     blocks.insert(insert_at, block);
-}
-
-/// Returns whether a source must appear before generated policy context.
-fn block_should_precede_policy(source: ContextSourceKind) -> bool {
-    matches!(
-        source,
-        ContextSourceKind::DeveloperInstruction
-            | ContextSourceKind::Policy
-            | ContextSourceKind::Configuration
-    )
-}
-
-/// Returns whether a source must appear before project-guidance context.
-fn block_should_precede_project_guidance(source: ContextSourceKind) -> bool {
-    matches!(
-        source,
-        ContextSourceKind::DeveloperInstruction
-            | ContextSourceKind::Policy
-            | ContextSourceKind::Configuration
-            | ContextSourceKind::ProjectGuidance
-    )
 }
 
 #[cfg(test)]
