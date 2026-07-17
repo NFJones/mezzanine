@@ -53,8 +53,6 @@ pub fn append_memory_context(
 /// MCP server metadata is injected only when the submitted prompt or an already
 /// loaded skill names a server with `@<server-id>`. The injected block is
 /// model-visible turn context, not a durable prompt catalog.
-const MCP_CONTEXT_MAX_TOOL_DETAIL_LINES: usize = 8;
-
 const MCP_INTEGRATIONS_CONTEXT_LABEL: &str = "mcp integrations";
 
 pub fn append_mcp_context(
@@ -132,34 +130,23 @@ fn append_filtered_mcp_context(
             )
         ));
     }
-    let available_tool_count = available_tools.len();
     let detailed_tools = mcp_context_selected_tool_details(
         &context,
         &available_servers,
         &available_tools,
-        MCP_CONTEXT_MAX_TOOL_DETAIL_LINES,
+        usize::MAX,
     );
     for server in &available_servers {
         lines.push(mcp_available_server_line(server));
     }
     for tool in &detailed_tools {
         lines.push(format!(
-            "available_tool={}/{} route=mcp_call callable=true required_arguments={} description={}",
+            "available_tool={}/{} route=mcp_call callable=true required_arguments={} input_schema={} description={}",
             tool.server_id,
             tool.tool_name,
             mcp_context_quoted_value(&mcp_required_argument_summary(tool)),
+            mcp_context_complete_input_schema(&tool.input_schema_json),
             mcp_context_quoted_value(&tool.description)
-        ));
-    }
-    let omitted_tool_count = available_tool_count.saturating_sub(detailed_tools.len());
-    if omitted_tool_count > 0 {
-        lines.push(format!(
-            "available_tool_inventory=deferred_until_explicit_mcp_relevance omitted={} detail_limit={} reason={}",
-            omitted_tool_count,
-            MCP_CONTEXT_MAX_TOOL_DETAIL_LINES,
-            mcp_context_quoted_value(
-                "Tool descriptions are omitted unless the current task explicitly asks about MCP, an MCP server, or an MCP tool; callable mcp_call schemas remain authoritative."
-            )
         ));
     }
     for server in &unavailable_servers {
@@ -528,6 +515,14 @@ fn mcp_required_argument_summary(tool: &McpPromptTool) -> String {
         })
         .filter(|required| !required.is_empty())
         .unwrap_or_else(|| "none".to_string())
+}
+
+/// Canonicalizes a callable tool schema without dropping nested call metadata.
+fn mcp_context_complete_input_schema(input_schema_json: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(input_schema_json)
+        .ok()
+        .and_then(|schema| serde_json::to_string(&schema).ok())
+        .unwrap_or_else(|| input_schema_json.to_string())
 }
 
 /// Quotes one MCP prompt-context value without exposing raw newlines.

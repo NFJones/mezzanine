@@ -223,6 +223,58 @@ fn mcp_context_includes_all_tools_for_explicit_server_invocation() {
 }
 
 #[test]
+/// Verifies an explicitly selected server exposes each complete tool contract
+/// so cache-stable generic MCP actions can be constructed without a volatile
+/// provider schema.
+fn mcp_context_preserves_complete_selected_tool_schema_and_descriptions() {
+    let context = AgentContext::new(vec![ContextBlock {
+        source: ContextSourceKind::UserInstruction,
+        label: "user".to_string(),
+        content: "use @catalog to inspect an item".to_string(),
+    }])
+    .unwrap();
+    let long_description = format!("Catalog item lookup {}", "detail ".repeat(300));
+    let schema = r#"{"type":"object","description":"Lookup request","properties":{"item":{"type":"object","description":"Item selector","properties":{"id":{"type":"string","description":"Stable item id","minLength":3},"tags":{"type":"array","description":"Optional tags","items":{"type":"string","enum":["featured","archived"]},"minItems":1}},"required":["id"],"additionalProperties":false}},"required":["item"],"additionalProperties":false}"#;
+    let context = append_mcp_context(
+        context,
+        &McpPromptSummary {
+            available_servers: vec![McpPromptServer {
+                server_id: "catalog".to_string(),
+                display_name: "Catalog".to_string(),
+                purpose: "Look up catalog records".to_string(),
+                usage_instructions: "Use item selectors for catalog operations.".to_string(),
+                tool_count: 1,
+                approval_required_tool_count: 0,
+            }],
+            available_tools: vec![McpPromptTool {
+                server_id: "catalog".to_string(),
+                tool_name: "lookup_item".to_string(),
+                description: long_description.clone(),
+                approval_required: false,
+                input_schema_json: schema.to_string(),
+            }],
+            unavailable_servers: Vec::new(),
+        },
+    )
+    .unwrap();
+    let content = &context.blocks[0].content;
+
+    assert!(
+        content.contains("available_tool=catalog/lookup_item"),
+        "{content}"
+    );
+    let canonical_schema = serde_json::from_str::<serde_json::Value>(schema)
+        .and_then(|schema| serde_json::to_string(&schema))
+        .unwrap();
+    assert!(content.contains(&canonical_schema), "{content}");
+    let normalized_long_description = long_description
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(content.contains(&normalized_long_description), "{content}");
+}
+
+#[test]
 /// Verifies configured MCP servers are not globally injected without `@server`.
 ///
 /// Ordinary turns should not receive a server/tool catalog merely because MCP

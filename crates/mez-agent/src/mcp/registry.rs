@@ -16,20 +16,13 @@ use super::types::{
 };
 use super::{McpError as MezError, McpResult as Result, validate_mcp_tool_input_schema};
 
-/// Collapses and bounds model-visible MCP discovery metadata.
-fn bounded_mcp_prompt_text(value: &str, max_bytes: usize) -> Option<String> {
+/// Normalizes model-visible MCP metadata without omitting call-relevant text.
+fn normalized_mcp_prompt_text(value: &str) -> Option<String> {
     let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
     if collapsed.is_empty() {
         return None;
     }
-    if collapsed.len() <= max_bytes {
-        return Some(collapsed);
-    }
-    let mut end = max_bytes;
-    while !collapsed.is_char_boundary(end) {
-        end = end.saturating_sub(1);
-    }
-    Some(collapsed[..end].trim_end().to_string())
+    Some(collapsed)
 }
 
 /// Carries Mcp Registry state for this subsystem.
@@ -158,7 +151,7 @@ impl McpRegistry {
             .collect();
         self.mark_available(server_id, tool_states, checked_at_unix_seconds)?;
         self.server_mut(server_id)?.discovered_instructions =
-            bounded_mcp_prompt_text(instructions.unwrap_or_default(), 1_024);
+            normalized_mcp_prompt_text(instructions.unwrap_or_default());
         Ok(())
     }
 
@@ -690,16 +683,15 @@ fn mcp_prompt_tool_description(server: &McpServerState, tool: &McpToolState) -> 
     parts.join(" ")
 }
 
-/// Returns configured purpose or a bounded fallback derived from discovered tools.
+/// Returns configured purpose or a complete fallback derived from discovered tools.
 fn mcp_prompt_server_purpose(server: &McpServerState, tools: &[&McpToolState]) -> String {
     if let Some(configured) =
-        bounded_mcp_prompt_text(&server.configured.external_capability.purpose, 1_024)
+        normalized_mcp_prompt_text(&server.configured.external_capability.purpose)
     {
         return configured;
     }
     let fallback = tools
         .iter()
-        .take(8)
         .map(|tool| {
             let description = tool
                 .description
@@ -714,15 +706,13 @@ fn mcp_prompt_server_purpose(server: &McpServerState, tools: &[&McpToolState]) -
         })
         .collect::<Vec<_>>()
         .join("; ");
-    bounded_mcp_prompt_text(&fallback, 1_024).unwrap_or_default()
+    normalized_mcp_prompt_text(&fallback).unwrap_or_default()
 }
 
 /// Combines higher-priority configured guidance with discovered instructions.
 fn mcp_prompt_server_usage_instructions(server: &McpServerState) -> String {
-    let configured = bounded_mcp_prompt_text(
-        &server.configured.external_capability.usage_instructions,
-        1_024,
-    );
+    let configured =
+        normalized_mcp_prompt_text(&server.configured.external_capability.usage_instructions);
     let discovered = server.discovered_instructions.as_deref();
     match (configured, discovered) {
         (Some(configured), Some(discovered)) => format!(
