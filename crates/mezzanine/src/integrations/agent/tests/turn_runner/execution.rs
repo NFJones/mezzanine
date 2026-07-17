@@ -67,6 +67,7 @@ fn turn_runner_accepts_config_change_with_full_access_and_bypass() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "change my theme to kanagawa".to_string(),
             }])
@@ -172,6 +173,7 @@ fn turn_runner_accepts_multiple_capability_requests_in_one_batch() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "compare mezzanine to codex using agents".to_string(),
             }])
@@ -283,6 +285,7 @@ fn turn_runner_accepts_say_with_capability_request() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "where am I".to_string(),
             }])
@@ -391,11 +394,13 @@ fn turn_runner_keeps_skill_actions_suppressed_after_capability_request() {
             AgentContext::new(vec![
                 ContextBlock {
                     source: ContextSourceKind::UserInstruction,
+                    placement: mez_agent::ContextPlacement::EphemeralTail,
                     label: "explicit skill create-skill".to_string(),
                     content: "# Skill: create-skill\n\nCreate or update skills.".to_string(),
                 },
                 ContextBlock {
                     source: ContextSourceKind::UserInstruction,
+                    placement: mez_agent::ContextPlacement::EphemeralTail,
                     label: "user prompt".to_string(),
                     content: "$create-skill create a review skill".to_string(),
                 },
@@ -518,6 +523,7 @@ fn turn_runner_plans_codex_style_apply_patch_after_capability_request() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "edit a file".to_string(),
             }])

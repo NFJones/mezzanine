@@ -6,7 +6,7 @@
 //! credentials, HTTP metadata, transport, quota attachment, and error
 //! projection.
 
-use crate::context::ContextCacheDisposition;
+use crate::context::ContextPlacement;
 use crate::{
     MAAP_ACTION_BATCH_TOOL_NAME, MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME,
     MaapBatch, ModelMessageRole, ModelRequest, ModelTokenUsage, ProviderEndpointError,
@@ -155,7 +155,7 @@ fn parse_bool_option(label: &str, value: &str) -> ProviderRequestAssemblyResult<
 struct AnthropicRenderedMessage {
     role: &'static str,
     content: String,
-    cache_disposition: ContextCacheDisposition,
+    placement: ContextPlacement,
 }
 
 /// Builds one Anthropic-compliant Messages API JSON body.
@@ -183,7 +183,7 @@ pub fn anthropic_messages_request_body(
         let cache_disposition = message.cache_disposition();
         if let Some(last) = rendered_messages.last_mut()
             && last.role == role
-            && last.cache_disposition == cache_disposition
+            && last.placement == cache_disposition
         {
             last.content.push_str("\n\n");
             last.content.push_str(&message.content);
@@ -192,7 +192,7 @@ pub fn anthropic_messages_request_body(
         rendered_messages.push(AnthropicRenderedMessage {
             role,
             content: message.content.clone(),
-            cache_disposition,
+            placement: cache_disposition,
         });
     }
     if rendered_messages.is_empty() {
@@ -203,7 +203,7 @@ pub fn anthropic_messages_request_body(
     let latest_immutable_message = options.prompt_caching.then(|| {
         rendered_messages
             .iter()
-            .rposition(|message| message.cache_disposition == ContextCacheDisposition::Immutable)
+            .rposition(|message| message.placement == ContextPlacement::ConversationAppend)
     });
     let latest_immutable_message = latest_immutable_message.flatten();
     let messages = rendered_messages
@@ -246,7 +246,7 @@ pub fn anthropic_messages_request_body(
         body["system"] = if options.prompt_caching {
             let final_static_part = system_parts
                 .iter()
-                .rposition(|(_, disposition)| *disposition == ContextCacheDisposition::Static);
+                .rposition(|(_, disposition)| *disposition == ContextPlacement::StablePrefix);
             serde_json::Value::Array(
                 system_parts
                     .into_iter()
@@ -1060,16 +1060,19 @@ mod tests {
                 crate::ModelMessage {
                     role: ModelMessageRole::System,
                     source: crate::ContextSourceKind::System,
+                    placement: crate::ContextPlacement::StablePrefix,
                     content: "stable system prompt".to_string(),
                 },
                 crate::ModelMessage {
                     role: ModelMessageRole::Developer,
                     source: crate::ContextSourceKind::RuntimeHint,
+                    placement: crate::ContextPlacement::EphemeralTail,
                     content: format!("[progress ledger]\n{ledger}"),
                 },
                 crate::ModelMessage {
                     role: ModelMessageRole::User,
                     source: crate::ContextSourceKind::UserInstruction,
+                    placement: crate::ContextPlacement::EphemeralTail,
                     content: "continue".to_string(),
                 },
             ])
@@ -1120,21 +1123,25 @@ mod tests {
             crate::ModelMessage {
                 role: ModelMessageRole::System,
                 source: crate::ContextSourceKind::System,
+                placement: crate::ContextPlacement::StablePrefix,
                 content: "stable system prompt".to_string(),
             },
             crate::ModelMessage {
                 role: ModelMessageRole::User,
                 source: crate::ContextSourceKind::TranscriptUser,
+                placement: crate::ContextPlacement::ConversationAppend,
                 content: "historical request".to_string(),
             },
             crate::ModelMessage {
                 role: ModelMessageRole::Assistant,
                 source: crate::ContextSourceKind::TranscriptAssistant,
+                placement: crate::ContextPlacement::ConversationAppend,
                 content: "historical answer".to_string(),
             },
             crate::ModelMessage {
                 role: ModelMessageRole::User,
                 source: crate::ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::EphemeralTail,
                 content: "current request".to_string(),
             },
         ]);

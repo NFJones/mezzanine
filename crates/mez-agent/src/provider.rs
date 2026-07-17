@@ -13,9 +13,6 @@ use crate::{
     ProviderTranscriptEvent,
 };
 
-/// Prefix used by local provider-context compaction summaries.
-const OPENAI_CONTEXT_COMPACTED_PREFIX: &str = "[context compacted]";
-
 /// Result type returned while assembling one provider request.
 pub type ProviderRequestAssemblyResult<T> = Result<T, ProviderRequestAssemblyError>;
 
@@ -96,6 +93,7 @@ pub fn openai_allowed_action_surface_message(
     Some(ModelMessage {
         role: ModelMessageRole::Developer,
         source: ContextSourceKind::RuntimeHint,
+        placement: crate::ContextPlacement::EphemeralTail,
         content: format!(
             "[allowed action surface]\n\
              interaction_kind={}\n\
@@ -193,32 +191,7 @@ fn openai_context_entry_body(content: &str) -> &str {
 
 /// Returns whether a rendered input message belongs in the reusable prefix.
 fn openai_message_stable_prefix_eligible(message: &ModelMessage) -> bool {
-    message.cache_disposition() != crate::context::ContextCacheDisposition::Volatile
-        && !openai_message_is_volatile_controller_state(message)
-}
-
-/// Returns true for late controller state excluded from the stable prefix.
-fn openai_message_is_volatile_controller_state(message: &ModelMessage) -> bool {
-    if openai_message_is_volatile_configuration_state(message) {
-        return true;
-    }
-    let content = message.content.trim_start();
-    content.starts_with("[capability ")
-        || content.starts_with("[capability decisions]")
-        || content.starts_with("[controller failure summary]")
-        || content.starts_with(OPENAI_CONTEXT_COMPACTED_PREFIX)
-}
-
-/// Returns true when configuration context contains volatile runtime identity.
-fn openai_message_is_volatile_configuration_state(message: &ModelMessage) -> bool {
-    if message.source != ContextSourceKind::Configuration {
-        return false;
-    }
-    let content = message.content.trim_start();
-    content.starts_with("[session identity]")
-        || content.starts_with("[pane identity]")
-        || content.starts_with("[provider output-limit retry guidance]")
-        || content.starts_with("[environment signature for pane ")
+    message.placement != crate::context::ContextPlacement::EphemeralTail
 }
 
 /// Stable categories for provider request-assembly failures.

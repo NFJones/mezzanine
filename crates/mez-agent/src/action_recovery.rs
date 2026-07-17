@@ -174,6 +174,7 @@ pub fn disallowed_action_capability_continuation_request(
     request.messages.push(ModelMessage {
         role: ModelMessageRole::Developer,
         source: ContextSourceKind::DeveloperInstruction,
+        placement: crate::ContextPlacement::StablePrefix,
         content: format!(
             "[disallowed action capability recovery]\n\
              The previous provider response used an action type outside the current allowed action surface. \
@@ -219,6 +220,7 @@ pub fn mixed_capability_continuation_request(
     request.messages.push(ModelMessage {
         role: ModelMessageRole::Developer,
         source: ContextSourceKind::DeveloperInstruction,
+        placement: crate::ContextPlacement::StablePrefix,
         content: format!(
             "[mixed capability batch recovery]\n\
              The previous provider response combined request_capability with non-say actions: {}. \
@@ -280,6 +282,7 @@ pub fn capability_continuation_request(
     request.messages.push(ModelMessage {
         role: ModelMessageRole::Developer,
         source: ContextSourceKind::DeveloperInstruction,
+        placement: crate::ContextPlacement::StablePrefix,
         content,
     });
     request
@@ -309,6 +312,7 @@ pub fn maap_repair_request(
     request.messages.push(ModelMessage {
         role: ModelMessageRole::Developer,
         source: ContextSourceKind::Configuration,
+        placement: crate::ContextPlacement::StablePrefix,
         content: format!(
             "[ephemeral maap repair]\n\
              The previous provider response failed Mezzanine MAAP validation before any action was executed. \

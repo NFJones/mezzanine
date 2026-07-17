@@ -248,6 +248,7 @@ fn bulk_compacted_model_context_block(
     );
     ContextBlock {
         source: ContextSourceKind::Memory,
+        placement: crate::ContextPlacement::ConversationAppend,
         label: "context compaction summary".to_string(),
         content: lines.join("\n"),
     }
@@ -298,6 +299,7 @@ mod tests {
         for index in 0..20 {
             blocks.push(ContextBlock {
                 source: ContextSourceKind::Transcript,
+                placement: crate::ContextPlacement::ConversationAppend,
                 label: format!("transcript {index}"),
                 content: format!("transcript-{index} {}", "history-word ".repeat(7_000)),
             });
@@ -335,11 +337,13 @@ mod tests {
         let mut blocks = vec![
             ContextBlock {
                 source: ContextSourceKind::ProjectGuidance,
+                placement: crate::ContextPlacement::StablePrefix,
                 label: "project guidance".to_string(),
                 content: "run just test before handoff".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
+                placement: crate::ContextPlacement::EphemeralTail,
                 label: "action result".to_string(),
                 content: format!(
                     "[action_result a1 shell_command succeeded]\ncommand: rg cache\noutput: fresh evidence large-action-marker {}",
@@ -350,6 +354,7 @@ mod tests {
         for index in 0..40 {
             blocks.push(ContextBlock {
                 source: ContextSourceKind::Memory,
+                placement: crate::ContextPlacement::ConversationAppend,
                 label: format!("old memory {index}"),
                 content: "old unrelated context ".repeat(20),
             });
@@ -388,6 +393,7 @@ mod tests {
         let (context, report) = compact_model_context_for_budget_with_retained_tail_percent(
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::Transcript,
+                placement: crate::ContextPlacement::ConversationAppend,
                 label: "older transcript".to_string(),
                 content: "x".repeat(2 * 1024 * 1024),
             }])
@@ -417,6 +423,7 @@ mod tests {
         let blocks = (0..24)
             .map(|index| ContextBlock {
                 source: ContextSourceKind::Transcript,
+                placement: crate::ContextPlacement::ConversationAppend,
                 label: format!("transcript {index}"),
                 content: format!("entry-{index} {}", "history word ".repeat(80)),
             })
@@ -438,6 +445,7 @@ mod tests {
         for index in 24..32 {
             first.blocks.push(ContextBlock {
                 source: ContextSourceKind::Transcript,
+                placement: crate::ContextPlacement::ConversationAppend,
                 label: format!("transcript {index}"),
                 content: format!("entry-{index} {}", "new history word ".repeat(80)),
             });

@@ -112,6 +112,7 @@ impl RuntimeSessionService {
 
         blocks.push(ContextBlock {
             source: ContextSourceKind::Configuration,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "session identity".to_string(),
             content: format!(
                 "session_id={} session_name={}",
@@ -126,6 +127,7 @@ impl RuntimeSessionService {
         {
             blocks.push(ContextBlock {
                 source: ContextSourceKind::Configuration,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 label: "prompt cache lineage".to_string(),
                 content: lineage_id,
             });
@@ -136,6 +138,7 @@ impl RuntimeSessionService {
             .map(|(window, _pane)| window.name.clone())?;
         blocks.push(ContextBlock {
             source: ContextSourceKind::Configuration,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "pane identity".to_string(),
             content: format!(
                 "pane_id={pane_id} window_name={window_name} readiness_state={}",
@@ -192,6 +195,7 @@ impl RuntimeSessionService {
                 .collect();
             blocks.push(ContextBlock {
                 source: ContextSourceKind::LocalMessage,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: format!("pending local messages for agent {agent_id}"),
                 content: message_lines.join("\n\n"),
             });
@@ -206,6 +210,7 @@ impl RuntimeSessionService {
                 insert_at,
                 ContextBlock {
                     source: ContextSourceKind::Policy,
+                    placement: mez_agent::ContextPlacement::EphemeralTail,
                     label: "active subagent write scopes".to_string(),
                     content: active_subagent_scopes
                         .iter()
@@ -246,6 +251,7 @@ impl RuntimeSessionService {
                 insert_at,
                 ContextBlock {
                     source: ContextSourceKind::Configuration,
+                    placement: mez_agent::ContextPlacement::EphemeralTail,
                     label: format!("environment signature for pane {pane_id}"),
                     content: env_lines.join("\n"),
                 },
@@ -294,6 +300,7 @@ impl RuntimeSessionService {
             let document = load_skill_document(summary)?;
             blocks.push(ContextBlock {
                 source: ContextSourceKind::SkillInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: format!("explicit skill {}", invocation.name),
                 content: self.runtime_skill_context_text(
                     document,
@@ -302,6 +309,7 @@ impl RuntimeSessionService {
             });
             blocks.push(ContextBlock {
                 source: ContextSourceKind::RuntimeHint,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: format!("explicit skill invocation {}", invocation.name),
                 content: format!(
                     "[explicit skill invocation resolved]\n\
@@ -319,6 +327,7 @@ impl RuntimeSessionService {
         }
         blocks.push(ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user prompt".to_string(),
             content: prompt.to_string(),
         });
@@ -412,6 +421,7 @@ impl RuntimeSessionService {
         }
         Some(ContextBlock {
             source: ContextSourceKind::Memory,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "conversation compaction notice".to_string(),
             content: "Conversation compaction occurred before this turn. Older durable transcript entries were summarized into compact memory, and only the retained recent raw tail remains exact. Treat the summary as lossy; use targeted shell, search, or capture actions if older exact details are needed."
                 .to_string(),
@@ -1187,6 +1197,7 @@ fn runtime_agent_pane_readiness_context_block(
     };
     Some(ContextBlock {
         source: ContextSourceKind::RuntimeHint,
+        placement: mez_agent::ContextPlacement::EphemeralTail,
         label: "pane readiness".to_string(),
         content,
     })

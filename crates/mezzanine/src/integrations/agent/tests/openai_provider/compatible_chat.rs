@@ -95,6 +95,7 @@ fn openai_compatible_chat_completions_duplicate_maap_tool_calls_are_malformed_ou
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "say hello".to_string(),
         }])
@@ -216,6 +217,7 @@ fn openai_compatible_chat_completions_length_finish_reason_is_output_limit_error
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "say hello".to_string(),
         }])
@@ -306,6 +308,7 @@ fn openai_compatible_chat_completions_provider_describes_callable_mcp_tools() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "use GitLab issue operations".to_string(),
         }])
@@ -440,6 +443,7 @@ fn openai_compatible_chat_completions_provider_honors_generic_maap_options() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "say hello".to_string(),
         }])
@@ -560,6 +564,7 @@ fn openai_compatible_chat_completions_provider_recovers_structured_maap_from_rea
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "say hello".to_string(),
         }])
@@ -654,6 +659,7 @@ fn openai_compatible_chat_completions_provider_supports_structured_maap_output()
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "say hello".to_string(),
         }])
@@ -770,6 +776,7 @@ fn openai_compatible_chat_completions_provider_uses_generic_tool_surface() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "say hello".to_string(),
         }])

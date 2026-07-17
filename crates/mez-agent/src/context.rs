@@ -136,15 +136,15 @@ pub enum ContextCachePolicy {
     ProviderBreakpoint,
 }
 
-/// Provider-neutral lifecycle disposition used to build cache-monotonic requests.
+/// Explicit provider-neutral placement for model-visible context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ContextCacheDisposition {
-    /// Product and repository instructions that remain stable across turns.
-    Static,
-    /// Completed conversation material whose model-visible bytes are immutable.
-    Immutable,
-    /// Active-turn or runtime state that may change between continuations.
-    Volatile,
+pub enum ContextPlacement {
+    /// Invariant instructions and configuration that form the reusable prefix.
+    StablePrefix,
+    /// Immutable chronological conversation material appended after the prefix.
+    ConversationAppend,
+    /// Regenerated controller and current-turn state kept outside the prefix.
+    EphemeralTail,
 }
 
 /// One ordered unit of model-visible context.
@@ -152,6 +152,8 @@ pub enum ContextCacheDisposition {
 pub struct ContextBlock {
     /// Provenance and role class for the block.
     pub source: ContextSourceKind,
+    /// Explicit cache and ordering lifecycle chosen by the block producer.
+    pub placement: ContextPlacement,
     /// Human-readable block label used in provider message framing.
     pub label: String,
     /// Exact model-visible block contents.
@@ -164,67 +166,22 @@ impl ContextBlock {
         TrustDomain::for_source(self.source)
     }
 
-    /// Returns the provider-cache stability class for this block.
+    /// Returns the compatibility stability class for this block's placement.
     pub fn stability(&self) -> ContextStability {
-        if self.source == ContextSourceKind::Policy && self.label == "scheduler state" {
-            return ContextStability::TurnVolatile;
-        }
-        if self.source == ContextSourceKind::Configuration
-            && configuration_context_is_turn_volatile(&self.label)
-        {
-            return ContextStability::TurnVolatile;
-        }
-        match self.source {
-            ContextSourceKind::System
-            | ContextSourceKind::DeveloperInstruction
-            | ContextSourceKind::Policy
-            | ContextSourceKind::Configuration => ContextStability::Static,
-            ContextSourceKind::ProjectGuidance => ContextStability::RepoScoped,
-            ContextSourceKind::Memory
-            | ContextSourceKind::Transcript
-            | ContextSourceKind::TranscriptUser
-            | ContextSourceKind::TranscriptAssistant
-            | ContextSourceKind::TranscriptTool
-            | ContextSourceKind::CommittedEvidence
-            | ContextSourceKind::RoutedHandoff => ContextStability::SessionStable,
-            ContextSourceKind::UserInstruction
-            | ContextSourceKind::SkillInstruction
-            | ContextSourceKind::LocalMessage
-            | ContextSourceKind::RuntimeHint
-            | ContextSourceKind::EvidenceLedger
-            | ContextSourceKind::ActionResult => ContextStability::TurnVolatile,
+        match self.placement {
+            ContextPlacement::StablePrefix => ContextStability::Static,
+            ContextPlacement::ConversationAppend => ContextStability::SessionStable,
+            ContextPlacement::EphemeralTail => ContextStability::TurnVolatile,
         }
     }
 
     /// Returns the provider-cache policy for this block.
     pub fn cache_policy(&self) -> ContextCachePolicy {
-        match self.source {
-            ContextSourceKind::System
-            | ContextSourceKind::DeveloperInstruction
-            | ContextSourceKind::Policy
-            | ContextSourceKind::Configuration
-            | ContextSourceKind::ProjectGuidance
-            | ContextSourceKind::Memory
-            | ContextSourceKind::Transcript
-            | ContextSourceKind::TranscriptUser
-            | ContextSourceKind::TranscriptAssistant
-            | ContextSourceKind::TranscriptTool
-            | ContextSourceKind::CommittedEvidence
-            | ContextSourceKind::RoutedHandoff => {
-                if self.stability() == ContextStability::TurnVolatile {
-                    ContextCachePolicy::Ineligible
-                } else if self.source == ContextSourceKind::ProjectGuidance {
-                    ContextCachePolicy::ProviderBreakpoint
-                } else {
-                    ContextCachePolicy::Eligible
-                }
+        match self.placement {
+            ContextPlacement::StablePrefix | ContextPlacement::ConversationAppend => {
+                ContextCachePolicy::Eligible
             }
-            ContextSourceKind::UserInstruction
-            | ContextSourceKind::SkillInstruction
-            | ContextSourceKind::LocalMessage
-            | ContextSourceKind::RuntimeHint
-            | ContextSourceKind::EvidenceLedger
-            | ContextSourceKind::ActionResult => ContextCachePolicy::Ineligible,
+            ContextPlacement::EphemeralTail => ContextCachePolicy::Ineligible,
         }
     }
 
@@ -234,15 +191,9 @@ impl ContextBlock {
             && self.stability() != ContextStability::TurnVolatile
     }
 
-    /// Returns the cache lifecycle disposition used for request ordering.
-    pub fn cache_disposition(&self) -> ContextCacheDisposition {
-        match self.stability() {
-            ContextStability::Static | ContextStability::RepoScoped => {
-                ContextCacheDisposition::Static
-            }
-            ContextStability::SessionStable => ContextCacheDisposition::Immutable,
-            ContextStability::TurnVolatile => ContextCacheDisposition::Volatile,
-        }
+    /// Returns the explicit cache lifecycle placement used for request ordering.
+    pub fn cache_disposition(&self) -> ContextPlacement {
+        self.placement
     }
 
     /// Returns whether exact content can be recovered outside model context.
@@ -314,14 +265,6 @@ pub fn model_context_block_header(block: &ContextBlock) -> String {
     format!("[{}{}]\n", block.label, domain_annotation)
 }
 
-/// Returns whether a configuration value is turn-volatile cache material.
-fn configuration_context_is_turn_volatile(label: &str) -> bool {
-    label == "session identity"
-        || label == "pane identity"
-        || label == "provider output-limit retry guidance"
-        || label.starts_with("environment signature for pane ")
-}
-
 /// Provider-independent role of one model message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelMessageRole {
@@ -344,29 +287,17 @@ pub struct ModelMessage {
     pub role: ModelMessageRole,
     /// Provenance and stability class of the message.
     pub source: ContextSourceKind,
+    /// Explicit cache and ordering lifecycle carried from the context producer.
+    pub placement: ContextPlacement,
     /// Model-visible message content.
     pub content: String,
 }
 
 impl ModelMessage {
     /// Returns the provider-neutral cache lifecycle disposition for this message.
-    pub fn cache_disposition(&self) -> ContextCacheDisposition {
-        let block = ContextBlock {
-            source: self.source,
-            label: model_message_context_label(&self.content),
-            content: String::new(),
-        };
-        block.cache_disposition()
+    pub fn cache_disposition(&self) -> ContextPlacement {
+        self.placement
     }
-}
-
-/// Recovers the framing label used by lifecycle exceptions from one message.
-fn model_message_context_label(content: &str) -> String {
-    content
-        .trim_start()
-        .strip_prefix('[')
-        .and_then(|content| content.split_once(']'))
-        .map_or_else(String::new, |(label, _)| label.to_string())
 }
 
 /// One complete provider-independent model request.
@@ -530,41 +461,46 @@ mod tests {
     fn context_block_cache_metadata_classifies_stable_and_volatile_sources() {
         let project = ContextBlock {
             source: ContextSourceKind::ProjectGuidance,
+            placement: crate::ContextPlacement::StablePrefix,
             label: "project guidance".to_string(),
             content: "follow repo guidance".to_string(),
         };
         let scheduler = ContextBlock {
             source: ContextSourceKind::Policy,
+            placement: crate::ContextPlacement::EphemeralTail,
             label: "scheduler state".to_string(),
             content: "state=idle".to_string(),
         };
         let action = ContextBlock {
             source: ContextSourceKind::ActionResult,
+            placement: crate::ContextPlacement::EphemeralTail,
             label: "action result".to_string(),
             content: "command output".to_string(),
         };
         let transcript_tool = ContextBlock {
             source: ContextSourceKind::TranscriptTool,
+            placement: crate::ContextPlacement::ConversationAppend,
             label: "historical tool result".to_string(),
             content: "prior command output".to_string(),
         };
         let committed_evidence = ContextBlock {
             source: ContextSourceKind::CommittedEvidence,
+            placement: crate::ContextPlacement::ConversationAppend,
             label: "committed evidence".to_string(),
             content: "compact prior action evidence".to_string(),
         };
         let pane_identity = ContextBlock {
             source: ContextSourceKind::Configuration,
+            placement: crate::ContextPlacement::EphemeralTail,
             label: "pane identity".to_string(),
             content: "pane_id=%1 window_name=0".to_string(),
         };
 
-        assert_eq!(project.stability(), ContextStability::RepoScoped);
-        assert_eq!(
-            project.cache_policy(),
-            ContextCachePolicy::ProviderBreakpoint
-        );
+        assert_eq!(project.placement, crate::ContextPlacement::StablePrefix);
+        assert_eq!(project.stability(), ContextStability::Static);
+        assert_eq!(project.cache_policy(), ContextCachePolicy::Eligible);
         assert!(project.stable_prefix_eligible());
+        assert_eq!(scheduler.placement, crate::ContextPlacement::EphemeralTail);
         assert_eq!(scheduler.stability(), ContextStability::TurnVolatile);
         assert_eq!(scheduler.cache_policy(), ContextCachePolicy::Ineligible);
         assert!(!scheduler.stable_prefix_eligible());

@@ -783,6 +783,7 @@ mod tests {
             messages: vec![ModelMessage {
                 role: ModelMessageRole::Developer,
                 source: ContextSourceKind::DeveloperInstruction,
+                placement: crate::ContextPlacement::StablePrefix,
                 content: "Follow developer authority.".to_string(),
             }],
         };

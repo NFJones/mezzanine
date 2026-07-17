@@ -227,8 +227,8 @@ pub use config_change::{
 pub use context::{
     AgentContext, AgentContextError, AgentContextResult, AgentRequestAssemblyError,
     AgentRequestAssemblyErrorKind, AgentRequestAssemblyResult, ContextBlock, ContextCachePolicy,
-    ContextSourceKind, ContextStability, ModelContextCompactionReport, ModelMessage,
-    ModelMessageRole, ModelRequest, TrustDomain, model_context_block_header,
+    ContextPlacement, ContextSourceKind, ContextStability, ModelContextCompactionReport,
+    ModelMessage, ModelMessageRole, ModelRequest, TrustDomain, model_context_block_header,
     validate_context_required,
 };
 pub use context_appenders::{

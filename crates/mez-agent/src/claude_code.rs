@@ -1051,31 +1051,37 @@ mod tests {
             ModelMessage {
                 role: ModelMessageRole::System,
                 source: ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::EphemeralTail,
                 content: "System authority.".to_string(),
             },
             ModelMessage {
                 role: ModelMessageRole::Developer,
                 source: ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::EphemeralTail,
                 content: "Developer authority.".to_string(),
             },
             ModelMessage {
                 role: ModelMessageRole::User,
                 source: ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::EphemeralTail,
                 content: "Earlier user turn.".to_string(),
             },
             ModelMessage {
                 role: ModelMessageRole::Assistant,
                 source: ContextSourceKind::RuntimeHint,
+                placement: crate::ContextPlacement::EphemeralTail,
                 content: "Earlier assistant turn.".to_string(),
             },
             ModelMessage {
                 role: ModelMessageRole::Tool,
                 source: ContextSourceKind::ActionResult,
+                placement: crate::ContextPlacement::EphemeralTail,
                 content: "Prior tool result.".to_string(),
             },
             ModelMessage {
                 role: ModelMessageRole::User,
                 source: ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::EphemeralTail,
                 content: "Final user request.".to_string(),
             },
         ];
@@ -1114,16 +1120,19 @@ mod tests {
             ModelMessage {
                 role: ModelMessageRole::User,
                 source: ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::EphemeralTail,
                 content: "Earlier user turn.".to_string(),
             },
             ModelMessage {
                 role: ModelMessageRole::Assistant,
                 source: ContextSourceKind::RuntimeHint,
+                placement: crate::ContextPlacement::EphemeralTail,
                 content: "Earlier assistant turn.".to_string(),
             },
             ModelMessage {
                 role: ModelMessageRole::User,
                 source: ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::EphemeralTail,
                 content: "Implement the runtime change.".to_string(),
             },
         ];
@@ -1398,6 +1407,7 @@ mod tests {
             messages: vec![ModelMessage {
                 role: ModelMessageRole::Developer,
                 source: ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::EphemeralTail,
                 content: "Return a final say action.".to_string(),
             }],
         }

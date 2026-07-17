@@ -418,6 +418,7 @@ mod tests {
                 messages: vec![ModelMessage {
                     role: ModelMessageRole::User,
                     source: ContextSourceKind::UserInstruction,
+                    placement: crate::ContextPlacement::EphemeralTail,
                     content: "finish the task".to_string(),
                 }],
             })
@@ -566,6 +567,7 @@ mod tests {
         };
         let context = AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::EphemeralTail,
             label: "request".to_string(),
             content: "finish the task".to_string(),
         }])

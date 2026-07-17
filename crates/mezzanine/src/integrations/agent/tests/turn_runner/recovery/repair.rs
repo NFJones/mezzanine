@@ -78,6 +78,7 @@ async fn turn_runner_repairs_malformed_failure_summary_response() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "hello".to_string(),
             }])
@@ -205,6 +206,7 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "inspect the workspace".to_string(),
             }])
@@ -347,6 +349,7 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
             turn.clone(),
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "write a short Rust program".to_string(),
             }])
@@ -496,6 +499,7 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
             turn.clone(),
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "inspect missing mcp state".to_string(),
             }])

@@ -235,6 +235,7 @@ mod tests {
     fn context_without_prior_searches() -> AgentContext {
         AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "continue the task".to_string(),
         }])
@@ -249,11 +250,13 @@ mod tests {
         let context = AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
+                placement: crate::ContextPlacement::EphemeralTail,
                 label: "first".to_string(),
                 content: "[action_result memory-1 memory_search succeeded]".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
+                placement: crate::ContextPlacement::EphemeralTail,
                 label: "second".to_string(),
                 content: "[action_result memory-2 memory_search succeeded]".to_string(),
             },

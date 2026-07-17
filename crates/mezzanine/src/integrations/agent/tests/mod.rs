@@ -853,6 +853,7 @@ fn openai_prompt_cache_retention_test_request(model: &str) -> ModelRequest {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "debug this failing test".to_string(),
         }])

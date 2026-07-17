@@ -23,6 +23,7 @@ fn openai_provider_diagnoses_bare_command_actions_as_malformed_model_output() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "list files".to_string(),
         }])
@@ -93,6 +94,7 @@ fn openai_provider_diagnoses_bare_command_json_as_malformed_model_output() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "list files".to_string(),
         }])
@@ -150,6 +152,7 @@ fn openai_provider_parses_fenced_maap_action_batch_from_text() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "say hello".to_string(),
         }])
@@ -225,6 +228,7 @@ fn openai_provider_parses_maap_function_call_arguments() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "list files".to_string(),
         }])
@@ -312,6 +316,7 @@ fn openai_provider_parses_native_structured_maap_action_batch() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "say hello".to_string(),
         }])
@@ -380,6 +385,7 @@ fn openai_provider_rejects_malformed_native_structured_maap_action_batch() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "say hello".to_string(),
         }])
@@ -453,6 +459,7 @@ fn openai_provider_stream_parses_maap_function_call_arguments() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "list files".to_string(),
         }])
@@ -560,6 +567,7 @@ fn openai_provider_stream_replaces_cumulative_function_call_argument_snapshots()
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "list files".to_string(),
         }])

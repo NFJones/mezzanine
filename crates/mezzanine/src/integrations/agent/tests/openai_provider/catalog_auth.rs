@@ -31,6 +31,7 @@ fn openai_provider_can_be_constructed_from_auth_store_secret_reference() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "hello".to_string(),
         }])
@@ -90,6 +91,7 @@ fn openai_provider_from_auth_store_expands_configured_base_url() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "hello".to_string(),
         }])
@@ -158,6 +160,7 @@ fn openai_provider_from_auth_store_routes_chatgpt_credentials_to_codex_backend()
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "hello".to_string(),
         }])
@@ -368,6 +371,7 @@ fn openai_responses_compatible_provider_omits_auth_when_metadata_is_absent() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "hello".to_string(),
         }])

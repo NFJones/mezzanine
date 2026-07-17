@@ -64,6 +64,7 @@ fn turn_runner_accepts_allowed_shell_actions() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "where am I".to_string(),
             }])
@@ -154,6 +155,7 @@ fn turn_runner_accepts_ls_declared_as_current_directory_read() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "list the files in the current directory".to_string(),
             }])
@@ -240,6 +242,7 @@ fn turn_runner_auto_allows_prompted_shell_actions_from_rationale() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "check changes".to_string(),
             }])
@@ -328,6 +331,7 @@ fn turn_runner_blocks_shell_actions_requiring_approval() {
             turn.clone(),
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "check changes".to_string(),
             }])
@@ -420,6 +424,7 @@ fn turn_runner_blocks_shell_actions_with_canonical_scope_escape() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "read file".to_string(),
             }])
@@ -506,6 +511,7 @@ fn turn_runner_blocks_unknown_classified_shell_actions_without_declared_effect_f
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "run script".to_string(),
             }])
@@ -598,6 +604,7 @@ fn turn_runner_executes_allowed_shell_actions_and_records_output() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "where am I".to_string(),
             }])
@@ -694,6 +701,7 @@ fn turn_runner_full_access_denies_out_of_scope_subagent_apply_patch() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "patch a file".to_string(),
             }])
@@ -789,6 +797,7 @@ fn turn_runner_full_access_denies_out_of_scope_subagent_shell_command() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "summarize local instructions".to_string(),
             }])
@@ -864,6 +873,7 @@ fn turn_runner_keeps_final_shell_action_running_until_observed() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "where am I".to_string(),
             }])
@@ -946,6 +956,7 @@ fn turn_runner_routes_shell_actions_through_approval_policy_without_model_effect
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "inspect environment".to_string(),
             }])
@@ -1039,6 +1050,7 @@ fn turn_runner_routes_subagent_unknown_shell_actions_through_approval_policy() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "search local repositories".to_string(),
             }])
@@ -1119,6 +1131,7 @@ fn turn_runner_runs_prompted_shell_actions_with_auto_allow_assertion() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "check changes".to_string(),
             }])

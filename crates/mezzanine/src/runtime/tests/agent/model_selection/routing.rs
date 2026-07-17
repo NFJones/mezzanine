@@ -428,21 +428,25 @@ reasoning_profile = "high"
         .extend([
             mez_agent::ContextBlock {
                 source: ContextSourceKind::TranscriptAssistant,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "old minified assistant context for pane %1".to_string(),
                 content: format!("minified-context:{}", "x".repeat(200 * 1024)),
             },
             mez_agent::ContextBlock {
                 source: ContextSourceKind::TranscriptAssistant,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "transcript assistant entry 2 for pane %1".to_string(),
                 content: "Recommended next tasks:\n1. Document the model picker.\n2. Clean up stale quota UI.\n3. Implement multi-file runtime auto-sizing.".to_string(),
             },
             mez_agent::ContextBlock {
                 source: ContextSourceKind::TranscriptTool,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "previous tool output for pane %1".to_string(),
                 content: "tool-only output should not reach the router".to_string(),
             },
             mez_agent::ContextBlock {
                 source: ContextSourceKind::Policy,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 label: "policy context".to_string(),
                 content: "policy-only context should not reach the router".to_string(),
             },

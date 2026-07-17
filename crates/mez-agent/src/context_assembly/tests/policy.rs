@@ -77,11 +77,13 @@ fn assemble_model_request_points_deepseek_system_prompt_to_user_repository_instr
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::ProjectGuidance,
+                placement: crate::ContextPlacement::StablePrefix,
                 label: "active repository instructions".to_string(),
                 content: "Run just test before handoff.".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "fix the prompt".to_string(),
             },
@@ -135,6 +137,7 @@ fn assemble_model_request_keeps_deepseek_repository_guidance_without_user_prompt
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::ProjectGuidance,
+            placement: crate::ContextPlacement::StablePrefix,
             label: "active repository instructions".to_string(),
             content: "Run just test before handoff.".to_string(),
         }])
@@ -184,11 +187,13 @@ fn assemble_model_request_preserves_hidden_provider_transcript_events_without_la
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::Transcript,
+                placement: crate::ContextPlacement::ConversationAppend,
                 label: "previous provider-native event".to_string(),
                 content: event_content.clone(),
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "continue".to_string(),
             },
@@ -225,6 +230,7 @@ fn assemble_model_request_preserves_hidden_provider_transcript_events_without_la
 fn assemble_model_request_system_prompt_uses_mcp_context_availability() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::EphemeralTail,
         label: "user".to_string(),
         content: "use @gitlab to inspect an issue".to_string(),
     }])
@@ -294,12 +300,14 @@ fn assemble_model_request_system_prompt_uses_mcp_context_availability() {
 fn model_request_does_not_generate_evidence_ledger_block() {
     let mut blocks = vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::EphemeralTail,
         label: "user".to_string(),
         content: "Continue from the existing command history.".to_string(),
     }];
     for index in 0..8 {
         blocks.push(ContextBlock {
             source: ContextSourceKind::ActionResult,
+            placement: crate::ContextPlacement::EphemeralTail,
             label: format!("action result {index}"),
             content: format!(
                 "[action_result action-{index} shell_command succeeded]\ncommand: git status --short path-{index}\noutput:\nhistory evidence {index}"
@@ -351,21 +359,25 @@ fn model_request_keeps_context_sources_distinct() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::Policy,
+                placement: crate::ContextPlacement::StablePrefix,
                 label: "policy".to_string(),
                 content: "approval_policy=ask".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::LocalMessage,
+                placement: crate::ContextPlacement::EphemeralTail,
                 label: "local message".to_string(),
                 content: "from=agent-%2".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::RuntimeHint,
+                placement: crate::ContextPlacement::EphemeralTail,
                 label: "runtime hint".to_string(),
                 content: "[action pressure]\nPrefer validation now.".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::Transcript,
+                placement: crate::ContextPlacement::ConversationAppend,
                 label: "history".to_string(),
                 content: "previous output".to_string(),
             },
@@ -425,6 +437,7 @@ fn model_request_keeps_skill_actions_disabled_after_skill_catalog_result() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::ActionResult,
+            placement: crate::ContextPlacement::EphemeralTail,
             label: "action result skill-catalog".to_string(),
             content: "[action_result skill-catalog request_skills succeeded]\n- create-skill"
                 .to_string(),
@@ -451,12 +464,14 @@ fn model_request_preserves_action_results_before_provider_feedback() {
     for index in 0..6 {
         blocks.push(ContextBlock {
             source: ContextSourceKind::ActionResult,
+            placement: crate::ContextPlacement::EphemeralTail,
             label: format!("action result {index}"),
             content: format!("result-{index} {}", "action-result-word ".repeat(12_000)),
         });
     }
     blocks.push(ContextBlock {
         source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::EphemeralTail,
         label: "user".to_string(),
         content: "recent instruction must remain exact".to_string(),
     });
@@ -525,16 +540,19 @@ fn model_request_preserves_context_observation_order() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
+                placement: crate::ContextPlacement::EphemeralTail,
                 label: "action result".to_string(),
                 content: "volatile result".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::ProjectGuidance,
+                placement: crate::ContextPlacement::StablePrefix,
                 label: "project guidance".to_string(),
                 content: "stable guidance".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "latest request".to_string(),
             },
@@ -578,16 +596,19 @@ fn model_request_preserves_context_observation_order() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::ProjectGuidance,
+                placement: crate::ContextPlacement::StablePrefix,
                 label: "project guidance".to_string(),
                 content: "stable guidance".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "verify the file exists".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
+                placement: crate::ContextPlacement::EphemeralTail,
                 label: "action result".to_string(),
                 content: "test -s file && git status succeeded".to_string(),
             },
@@ -640,6 +661,7 @@ fn model_request_preserves_oversized_context_until_provider_feedback() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::ActionResult,
+            placement: crate::ContextPlacement::EphemeralTail,
             label: "action result".to_string(),
             content: huge_content,
         }])
@@ -682,6 +704,7 @@ fn model_request_suppresses_skill_actions_when_skill_context_loaded() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::EphemeralTail,
             label: "explicit skill create-skill".to_string(),
             content: "# Skill: create-skill\n\nCreate or update skills.".to_string(),
         }])

@@ -192,6 +192,7 @@ context_window_tokens = 40000
         .blocks
         .push(ContextBlock {
             source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "synthetic provider-context-window action result".to_string(),
             content: format!("provider-context-window- {}", "cw ".repeat(10_000)),
         });

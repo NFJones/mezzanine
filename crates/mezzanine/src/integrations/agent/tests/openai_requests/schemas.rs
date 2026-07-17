@@ -23,6 +23,7 @@ fn openai_available_mcp_keeps_memory_on_default_surface() {
     let context = mez_agent::append_mcp_context(
         AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "use @githubcopilot to pull the latest CI results".to_string(),
         }])
@@ -135,6 +136,7 @@ fn openai_maap_schema_is_stable_across_non_mcp_action_surfaces() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "inspect the repo".to_string(),
         }])
@@ -215,6 +217,7 @@ fn openai_memory_search_schema_disallows_startup_rituals_and_repeat_searches() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "remember durable context".to_string(),
         }])
@@ -281,6 +284,7 @@ fn openai_memory_store_schema_excludes_episode_and_scratch_kinds() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "remember durable context".to_string(),
         }])
@@ -356,6 +360,7 @@ fn openai_responses_request_body_describes_apply_patch_format() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "edit a file".to_string(),
         }])
@@ -493,6 +498,7 @@ fn openai_responses_request_body_describes_config_change_schema() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "change the active theme".to_string(),
         }])
@@ -585,6 +591,7 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "Create random test data".to_string(),
         }])
@@ -713,6 +720,7 @@ fn openai_responses_request_body_uses_auto_sizing_schema_for_router() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "classify this task".to_string(),
         }])
@@ -772,6 +780,7 @@ fn openai_responses_request_body_uses_current_schema_for_composite_action_surfac
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "inspect locally and fetch a URL".to_string(),
         }])
@@ -823,6 +832,7 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "read a file".to_string(),
         }])

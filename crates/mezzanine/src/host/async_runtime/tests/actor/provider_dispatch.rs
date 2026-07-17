@@ -195,6 +195,7 @@ async fn async_actor_queues_shell_transaction_timer_after_provider_completion() 
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 content: "print a marker".to_string(),
             }],
         },

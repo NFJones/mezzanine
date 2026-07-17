@@ -574,6 +574,7 @@ mod tests {
         ModelMessage {
             role: ModelMessageRole::User,
             source,
+            placement: crate::ContextPlacement::EphemeralTail,
             content: format!("[{label}]\n{content}"),
         }
     }

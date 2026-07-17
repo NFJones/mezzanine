@@ -22,6 +22,7 @@ async fn openai_provider_async_posts_responses_request_and_parses_output_text() 
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "hello".to_string(),
         }])
@@ -81,6 +82,7 @@ fn openai_provider_posts_responses_request_and_parses_output_text() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "hello".to_string(),
         }])

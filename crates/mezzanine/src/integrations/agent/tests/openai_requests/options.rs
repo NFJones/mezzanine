@@ -23,6 +23,7 @@ fn openai_responses_request_body_includes_reasoning_effort() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "debug this failing test".to_string(),
         }])
@@ -60,6 +61,7 @@ fn openai_responses_request_body_omits_configured_max_output_tokens() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "keep the response compact".to_string(),
         }])

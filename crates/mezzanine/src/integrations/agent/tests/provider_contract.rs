@@ -25,6 +25,7 @@ fn model_provider_trait_returns_model_response() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "hello".to_string(),
         }])

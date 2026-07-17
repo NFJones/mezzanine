@@ -42,6 +42,7 @@ impl RuntimeSessionService {
         }
         context.blocks.push(ContextBlock {
             source: ContextSourceKind::TranscriptAssistant,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label,
             content,
         });
@@ -82,6 +83,7 @@ impl RuntimeSessionService {
         }
         context.blocks.push(ContextBlock {
             source: ContextSourceKind::RuntimeHint,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: RUNTIME_PROGRESS_SAY_LEDGER_LABEL.to_string(),
             content: runtime_progress_say_ledger_content(&entries),
         });
@@ -161,6 +163,7 @@ impl RuntimeSessionService {
         }
         context.blocks.push(ContextBlock {
             source: ContextSourceKind::RuntimeHint,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: RUNTIME_RATIONALE_LEDGER_LABEL.to_string(),
             content: runtime_rationale_ledger_content(&entries),
         });

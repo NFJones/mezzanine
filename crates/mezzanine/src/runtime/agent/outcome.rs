@@ -106,6 +106,7 @@ impl RuntimeSessionService {
             {
                 context.blocks.push(ContextBlock {
                     source: ContextSourceKind::ActionResult,
+                    placement: mez_agent::ContextPlacement::EphemeralTail,
                     label,
                     content,
                 });
@@ -133,6 +134,7 @@ impl RuntimeSessionService {
         };
         context.blocks.push(ContextBlock {
             source: ContextSourceKind::RuntimeHint,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "action failure feedback".to_string(),
             content: format!(
                 "[ephemeral action failure feedback]\n\
@@ -252,6 +254,7 @@ impl RuntimeSessionService {
         {
             context.blocks.push(ContextBlock {
                 source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label,
                 content,
             });

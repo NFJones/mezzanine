@@ -38,6 +38,7 @@ fn mcp_summary_for_server_ids(server_ids: &[&str]) -> McpPromptSummary {
 fn mcp_context_resolves_exact_mixed_case_configured_server_id() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::EphemeralTail,
         label: "user".to_string(),
         content: "use @GitHub_2 to inspect the issue".to_string(),
     }])
@@ -64,6 +65,7 @@ fn mcp_context_resolves_exact_mixed_case_configured_server_id() {
 fn mcp_context_resolves_unambiguous_case_insensitive_server_id() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::EphemeralTail,
         label: "user".to_string(),
         content: "use @github_2 to inspect the issue".to_string(),
     }])
@@ -82,6 +84,7 @@ fn mcp_context_resolves_unambiguous_case_insensitive_server_id() {
 fn mcp_context_reports_unresolved_and_ambiguous_server_mentions() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::EphemeralTail,
         label: "user".to_string(),
         content: "compare @missing with @GITHUB".to_string(),
     }])
@@ -109,6 +112,7 @@ fn mcp_context_reports_unresolved_and_ambiguous_server_mentions() {
 fn mcp_context_prefers_exact_server_id_over_case_ambiguous_matches() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::EphemeralTail,
         label: "user".to_string(),
         content: "use @GitHub now".to_string(),
     }])
@@ -131,6 +135,7 @@ fn mcp_context_prefers_exact_server_id_over_case_ambiguous_matches() {
 fn mcp_context_does_not_emit_routing_match_for_verbatim_server_purpose() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::EphemeralTail,
         label: "user".to_string(),
         content: "@gitlab GitLab issue and merge request operations".to_string(),
     }])
@@ -182,6 +187,7 @@ fn mcp_context_does_not_emit_routing_match_for_verbatim_server_purpose() {
 fn mcp_context_includes_all_tools_for_explicit_server_invocation() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::EphemeralTail,
         label: "user".to_string(),
         content: "use @fs to choose the right tool".to_string(),
     }])
@@ -229,6 +235,7 @@ fn mcp_context_includes_all_tools_for_explicit_server_invocation() {
 fn mcp_context_preserves_complete_selected_tool_schema_and_descriptions() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::EphemeralTail,
         label: "user".to_string(),
         content: "use @catalog to inspect an item".to_string(),
     }])
@@ -283,6 +290,7 @@ fn mcp_context_preserves_complete_selected_tool_schema_and_descriptions() {
 fn mcp_context_omits_integrations_without_explicit_server_invocation() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::EphemeralTail,
         label: "user".to_string(),
         content: "call a tool".to_string(),
     }])
@@ -328,6 +336,7 @@ fn mcp_context_omits_integrations_without_explicit_server_invocation() {
 fn mcp_context_quotes_and_normalizes_tool_descriptions() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::EphemeralTail,
         label: "user".to_string(),
         content: "use @fs for the fs/read_file MCP tool".to_string(),
     }])
@@ -376,6 +385,7 @@ fn mcp_context_quotes_and_normalizes_tool_descriptions() {
 fn mcp_context_refresh_replaces_previous_integration_block() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::EphemeralTail,
         label: "user".to_string(),
         content: "call @fs and then @git".to_string(),
     }])
@@ -452,6 +462,7 @@ fn mcp_context_refresh_replaces_previous_integration_block() {
 fn memory_context_accepts_sensitive_records_without_heuristic_rejection() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::EphemeralTail,
         label: "user".to_string(),
         content: "do the task".to_string(),
     }])
@@ -478,6 +489,7 @@ fn memory_context_accepts_sensitive_records_without_heuristic_rejection() {
 fn memory_context_appends_after_active_context_in_priority_order() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::EphemeralTail,
         label: "user".to_string(),
         content: "do the task".to_string(),
     }])
@@ -521,6 +533,7 @@ fn memory_context_appends_after_active_context_in_priority_order() {
 fn permission_context_is_not_model_visible() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::EphemeralTail,
         label: "user".to_string(),
         content: "edit the file".to_string(),
     }])

@@ -644,6 +644,7 @@ impl RuntimeSessionService {
         if let Some(prompt) = self.integration.custom_agent_system_prompt() {
             context.blocks.push(ContextBlock {
                 source: ContextSourceKind::System,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 label: "configured agent system prompt".to_string(),
                 content: prompt.to_string(),
             });
@@ -653,6 +654,7 @@ impl RuntimeSessionService {
         {
             context.blocks.push(ContextBlock {
                 source: ContextSourceKind::System,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 label: "agent personality system prompt".to_string(),
                 content: prompt.clone(),
             });
@@ -664,6 +666,7 @@ impl RuntimeSessionService {
         {
             context.blocks.push(ContextBlock {
                 source: ContextSourceKind::DeveloperInstruction,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 label: "agent shell directive".to_string(),
                 content: format!(
                     "Pane-local /directive instruction for this session. Append it to the existing developer instructions for future turns:\n{}",
@@ -677,6 +680,7 @@ impl RuntimeSessionService {
         if planning_enabled {
             context.blocks.push(ContextBlock {
                 source: ContextSourceKind::Configuration,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 label: "agent shell plan mode".to_string(),
                 content: "Planning mode is active. For broad or ambiguous work, briefly state the execution approach before acting. Do not use a visible plan when the next safe inspection, edit, validation, or repair action is clear."
                     .to_string(),
@@ -686,6 +690,7 @@ impl RuntimeSessionService {
         if let Some(style) = self.agent_response_style(pane_id).or(profile_style) {
             context.blocks.push(ContextBlock {
                 source: ContextSourceKind::Configuration,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 label: "agent shell personality".to_string(),
                 content: format!("Response style preference for this pane: {style}."),
             });
@@ -1281,6 +1286,7 @@ mod tests {
 
         let context = AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user prompt".to_string(),
             content: "Need a compact summary".to_string(),
         }])

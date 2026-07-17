@@ -22,6 +22,7 @@ fn openai_provider_http_error_includes_provider_message() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "hello".to_string(),
         }])
@@ -83,6 +84,7 @@ fn openai_provider_http_error_redacts_secret_like_generic_values() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "hello".to_string(),
         }])
@@ -136,6 +138,7 @@ fn openai_provider_stream_failure_includes_provider_failure_object() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "hello".to_string(),
         }])
@@ -210,6 +213,7 @@ fn openai_provider_stream_incomplete_output_limit_is_recoverable() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "hello".to_string(),
         }])

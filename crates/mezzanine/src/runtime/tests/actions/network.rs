@@ -169,6 +169,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 content: "research docs".to_string(),
             }],
         },

@@ -81,6 +81,7 @@ fn turn_runner_accepts_mcp_actions_matching_input_schema_arguments() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "read file".to_string(),
             }])
@@ -178,6 +179,7 @@ fn turn_runner_accepts_mcp_actions_without_required_approval() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "list state".to_string(),
             }])
@@ -272,6 +274,7 @@ fn turn_runner_auto_allows_mcp_actions_with_model_assertion() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "read file".to_string(),
             }])
@@ -366,6 +369,7 @@ fn turn_runner_blocks_mcp_actions_requiring_approval() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "read file".to_string(),
             }])
@@ -459,6 +463,7 @@ fn turn_runner_executes_accepted_mcp_actions() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "list state".to_string(),
             }])
@@ -551,6 +556,7 @@ fn turn_runner_full_access_accepts_mcp_actions_requiring_approval() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "read file".to_string(),
             }])
@@ -639,6 +645,7 @@ fn turn_runner_passes_mcp_tool_schemas_to_provider_request() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "finish".to_string(),
             }])
@@ -727,6 +734,7 @@ fn turn_runner_rejects_mcp_actions_for_unavailable_tools_before_planning() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "write state".to_string(),
             }])
@@ -832,6 +840,7 @@ fn turn_runner_rejects_mcp_actions_missing_required_schema_arguments_before_plan
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "read file".to_string(),
             }])

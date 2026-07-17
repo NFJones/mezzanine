@@ -63,6 +63,7 @@ fn turn_runner_retries_malformed_provider_maap_output() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "reply".to_string(),
             }])
@@ -165,6 +166,7 @@ fn turn_runner_retries_missing_provider_action_batch() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "reply".to_string(),
             }])
@@ -261,6 +263,7 @@ fn turn_runner_retries_retryable_failure_summary_provider_call() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "hello".to_string(),
             }])
@@ -368,6 +371,7 @@ fn turn_runner_routes_repair_disallowed_shell_action_through_capability_recovery
             turn.clone(),
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "inspect the workspace".to_string(),
             }])
@@ -480,6 +484,7 @@ fn turn_runner_summarizes_terminal_provider_failure_with_say_only_request() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "hello".to_string(),
             }])

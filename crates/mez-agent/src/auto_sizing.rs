@@ -274,12 +274,14 @@ pub fn auto_sizing_request(
         ModelMessage {
             role: ModelMessageRole::System,
             source: ContextSourceKind::System,
+            placement: crate::ContextPlacement::StablePrefix,
             content: "You are Mezzanine's internal auto-sizing router. You receive router instructions plus a filtered, role-preserving copy of the relevant user, assistant, and compacted-memory conversation context that the main agent can use. Resolve referential prompts from that context, return only the JSON object that matches the requested schema, and do not call tools, request capabilities, or answer the user's task."
                 .to_string(),
         },
         ModelMessage {
             role: ModelMessageRole::Developer,
             source: ContextSourceKind::DeveloperInstruction,
+            placement: crate::ContextPlacement::StablePrefix,
             content: auto_sizing_policy(auto_sizing, turn),
         },
     ];
@@ -287,6 +289,7 @@ pub fn auto_sizing_request(
     messages.push(ModelMessage {
         role: ModelMessageRole::Developer,
         source: ContextSourceKind::DeveloperInstruction,
+        placement: crate::ContextPlacement::StablePrefix,
         content: auto_sizing_task_metadata(auto_sizing, turn, context),
     });
 
@@ -509,6 +512,7 @@ fn auto_sizing_conversation_messages(context: &AgentContext) -> Vec<ModelMessage
         messages.push(ModelMessage {
             role: auto_sizing_role_for_source(block.source),
             source: block.source,
+            placement: block.placement,
             content: message_content,
         });
     }

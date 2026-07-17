@@ -301,6 +301,7 @@ impl RuntimeSessionService {
                 };
                 handoff_context.blocks.push(ContextBlock {
                     source: ContextSourceKind::RoutedHandoff,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
                     label: "routed worker exact final result".to_string(),
                     content: output.clone(),
                 });
@@ -462,17 +463,20 @@ impl RuntimeSessionService {
         if !child_output.is_empty() {
             context.blocks.push(ContextBlock {
                 source: ContextSourceKind::RoutedHandoff,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "routed worker exact final result".to_string(),
                 content: child_output.to_string(),
             });
         }
         context.blocks.push(ContextBlock {
             source: ContextSourceKind::RoutedHandoff,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "routed workflow failure".to_string(),
             content: format!("stage={stage}\ndiagnostic={diagnostic}"),
         });
         context.blocks.push(ContextBlock {
             source: ContextSourceKind::RuntimeHint,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "routed failure explanation".to_string(),
             content: "Explain why the routed operation failed. Use the stored diagnostic and any exact worker output as evidence, do not claim the routed operation succeeded, and respond only without executing actions.".to_string(),
         });
@@ -521,6 +525,7 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("routed parent context is unavailable"))?;
         context.blocks.push(ContextBlock {
             source: ContextSourceKind::RoutedHandoff,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "routed worker exact final result".to_string(),
             content: final_result.to_string(),
         });
@@ -535,11 +540,13 @@ impl RuntimeSessionService {
         };
         context.blocks.push(ContextBlock {
             source: ContextSourceKind::RoutedHandoff,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "routed worker handoff context".to_string(),
             content: handoff_content,
         });
         context.blocks.push(ContextBlock {
             source: ContextSourceKind::RuntimeHint,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "routed result presentation".to_string(),
             content: "Present the routed worker result to the user. Preserve material caveats, validation status, and unresolved risks. Do not claim unsupported work. Respond only; do not execute actions.".to_string(),
         });
@@ -637,11 +644,13 @@ impl RuntimeSessionService {
                 .ok_or_else(|| MezError::invalid_state("routed parent context is unavailable"))?;
             context.blocks.push(ContextBlock {
                 source: ContextSourceKind::RoutedHandoff,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "routed workflow failure".to_string(),
                 content: format!("stage=parent presentation\ndiagnostic={diagnostic}"),
             });
             context.blocks.push(ContextBlock {
                 source: ContextSourceKind::RuntimeHint,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "routed failure explanation".to_string(),
                 content: "Explain why routed result presentation failed. Use the stored diagnostic as evidence, do not claim success, and respond only without executing actions.".to_string(),
             });
@@ -696,6 +705,7 @@ impl RuntimeSessionService {
             Some(mut context) => {
                 context.blocks.push(ContextBlock {
                     source: ContextSourceKind::UserInstruction,
+                    placement: mez_agent::ContextPlacement::EphemeralTail,
                     label: "routed workflow prompt".to_string(),
                     content: prompt.to_string(),
                 });

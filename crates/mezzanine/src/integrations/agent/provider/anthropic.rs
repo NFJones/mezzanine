@@ -402,11 +402,13 @@ mod tests {
                 mez_agent::ModelMessage {
                     role: mez_agent::ModelMessageRole::System,
                     source: mez_agent::ContextSourceKind::System,
+                    placement: mez_agent::ContextPlacement::StablePrefix,
                     content: "stable system prompt".to_string(),
                 },
                 mez_agent::ModelMessage {
                     role: mez_agent::ModelMessageRole::User,
                     source: mez_agent::ContextSourceKind::UserInstruction,
+                    placement: mez_agent::ContextPlacement::EphemeralTail,
                     content: "summarize this conversation".to_string(),
                 },
             ],
@@ -460,6 +462,7 @@ mod tests {
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 content: "summarize this conversation".to_string(),
             }],
         };
@@ -505,16 +508,19 @@ mod tests {
                 mez_agent::ModelMessage {
                     role: mez_agent::ModelMessageRole::System,
                     source: mez_agent::ContextSourceKind::System,
+                    placement: mez_agent::ContextPlacement::StablePrefix,
                     content: String::new(),
                 },
                 mez_agent::ModelMessage {
                     role: mez_agent::ModelMessageRole::Developer,
                     source: mez_agent::ContextSourceKind::DeveloperInstruction,
+                    placement: mez_agent::ContextPlacement::StablePrefix,
                     content: String::new(),
                 },
                 mez_agent::ModelMessage {
                     role: mez_agent::ModelMessageRole::User,
                     source: mez_agent::ContextSourceKind::UserInstruction,
+                    placement: mez_agent::ContextPlacement::EphemeralTail,
                     content: "summarize this conversation".to_string(),
                 },
             ],
@@ -562,11 +568,13 @@ mod tests {
                 mez_agent::ModelMessage {
                     role: mez_agent::ModelMessageRole::System,
                     source: mez_agent::ContextSourceKind::System,
+                    placement: mez_agent::ContextPlacement::StablePrefix,
                     content: "stable system prompt".to_string(),
                 },
                 mez_agent::ModelMessage {
                     role: mez_agent::ModelMessageRole::User,
                     source: mez_agent::ContextSourceKind::UserInstruction,
+                    placement: mez_agent::ContextPlacement::EphemeralTail,
                     content: "summarize this conversation".to_string(),
                 },
             ],
@@ -605,6 +613,7 @@ mod tests {
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 content: "summarize this conversation".to_string(),
             }],
         };
@@ -655,6 +664,7 @@ mod tests {
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 content: "pick the best provider".to_string(),
             }],
         };

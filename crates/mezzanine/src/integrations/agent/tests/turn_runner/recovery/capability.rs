@@ -50,6 +50,7 @@ fn turn_runner_fails_response_without_action_batch() {
             turn.clone(),
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "summarize".to_string(),
             }])
@@ -145,6 +146,7 @@ fn turn_runner_recovers_mixed_capability_and_execution_batch_without_effects() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "inspect the repository".to_string(),
             }])
@@ -271,6 +273,7 @@ fn turn_runner_recovers_mixed_capability_batch_before_heredoc_validation() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "write a short Rust program".to_string(),
             }])
@@ -419,6 +422,7 @@ fn turn_runner_repairs_legacy_complete_during_capability_decision() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "inspect the workspace".to_string(),
             }])

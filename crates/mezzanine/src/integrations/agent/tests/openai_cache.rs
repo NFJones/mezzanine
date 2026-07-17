@@ -29,16 +29,19 @@ fn openai_current_action_results_remain_volatile_suffix() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::TranscriptTool,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "historical tool result".to_string(),
                 content: "action_id=action-3\noutput: cached evidence".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "use the prior output".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "action result".to_string(),
                 content: "action_id=action-4\noutput: fresh evidence".to_string(),
             },
@@ -111,11 +114,13 @@ fn openai_promoted_conversation_entries_keep_complete_input_bytes() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "inspect cache continuity".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "action result".to_string(),
                 content: "action_id=action-1\noutput: continuity evidence".to_string(),
             },
@@ -129,21 +134,25 @@ fn openai_promoted_conversation_entries_keep_complete_input_bytes() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::TranscriptUser,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "transcript user".to_string(),
                 content: "inspect cache continuity".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::TranscriptTool,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "transcript tool".to_string(),
                 content: "action_id=action-1\noutput: continuity evidence".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::TranscriptAssistant,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "transcript assistant".to_string(),
                 content: "the prior evidence is complete".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "continue".to_string(),
             },
@@ -197,6 +206,7 @@ fn openai_dynamic_controller_state_is_late_developer_input() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "inspect the repo".to_string(),
         }])
@@ -206,6 +216,7 @@ fn openai_dynamic_controller_state_is_late_developer_input() {
     request.messages.push(super::ModelMessage {
         role: ModelMessageRole::Developer,
         source: ContextSourceKind::DeveloperInstruction,
+        placement: mez_agent::ContextPlacement::StablePrefix,
         content: "[capability shell]\ncapability=shell\nallowed_actions=say,shell_command"
             .to_string(),
     });
@@ -250,22 +261,26 @@ fn openai_historical_tool_results_replay_outside_stable_prefix() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::TranscriptUser,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "transcript user".to_string(),
                 content: "previous request".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::TranscriptAssistant,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "transcript assistant".to_string(),
                 content: "previous answer".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::TranscriptTool,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "historical tool result".to_string(),
                 content: "action_id=action-7\ncommand: rg cache\noutput: stable evidence"
                     .to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "first follow-up".to_string(),
             },
@@ -279,22 +294,26 @@ fn openai_historical_tool_results_replay_outside_stable_prefix() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::TranscriptUser,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "transcript user".to_string(),
                 content: "previous request".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::TranscriptAssistant,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "transcript assistant".to_string(),
                 content: "previous answer".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::TranscriptTool,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "historical tool result".to_string(),
                 content: "action_id=action-7\ncommand: rg cache\noutput: stable evidence"
                     .to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "second follow-up".to_string(),
             },
@@ -360,16 +379,19 @@ fn openai_long_session_keeps_observed_action_results_raw_without_committed_evide
         let stable_seed = format!("provider-doc-{index}-title");
         blocks.push(ContextBlock {
             source: ContextSourceKind::TranscriptUser,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: format!("historical user {index}"),
             content: format!("Read provider document {index}."),
         });
         blocks.push(ContextBlock {
             source: ContextSourceKind::TranscriptAssistant,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: format!("historical assistant plan {index}"),
             content: format!("I will fetch provider document {index}."),
         });
         blocks.push(ContextBlock {
             source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: format!("fetch result {index}"),
             content: format!(
                 "[action_result fetch-{index} fetch_url succeeded]\n\
@@ -381,17 +403,20 @@ fn openai_long_session_keeps_observed_action_results_raw_without_committed_evide
         });
         blocks.push(ContextBlock {
             source: ContextSourceKind::TranscriptAssistant,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: format!("historical assistant observed {index}"),
             content: format!("I observed fetch-{index} and can use {stable_seed}."),
         });
     }
     blocks.push(ContextBlock {
         source: ContextSourceKind::UserInstruction,
+        placement: mez_agent::ContextPlacement::EphemeralTail,
         label: "user".to_string(),
         content: "Compare the provider evidence and continue from the current fetch.".to_string(),
     });
     blocks.push(ContextBlock {
         source: ContextSourceKind::ActionResult,
+        placement: mez_agent::ContextPlacement::EphemeralTail,
         label: "current fetch result".to_string(),
         content: "[action_result fetch-current fetch_url succeeded]\ncontent:\nCURRENT_RAW_RESULT_MUST_REMAIN_VOLATILE".to_string(),
     });
@@ -495,11 +520,13 @@ fn openai_long_session_stable_prefix_is_append_only_until_compaction() {
         let mut blocks = vec![
             ContextBlock {
                 source: ContextSourceKind::Configuration,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 label: "session identity".to_string(),
                 content: "session_id=session-cache-continuity session_name=cache-test".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::ProjectGuidance,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 label: "project guidance".to_string(),
                 content: "keep provider request prefixes byte stable".to_string(),
             },
@@ -507,6 +534,7 @@ fn openai_long_session_stable_prefix_is_append_only_until_compaction() {
         blocks.extend(transcript.clone());
         blocks.push(ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: current_user.clone(),
         });
@@ -587,11 +615,13 @@ fn openai_long_session_stable_prefix_is_append_only_until_compaction() {
         previous_diagnostics = Some(diagnostics);
         transcript.push(ContextBlock {
             source: ContextSourceKind::TranscriptUser,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "transcript user".to_string(),
             content: current_user,
         });
         transcript.push(ContextBlock {
             source: ContextSourceKind::TranscriptAssistant,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "transcript assistant".to_string(),
             content: format!(
                 "assistant-output-turn-{turn_index}: cache continuity finding {}",
@@ -623,11 +653,13 @@ fn openai_prompt_cache_diagnostics_fingerprint_provider_prefix_parts() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::ProjectGuidance,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 label: "active repository instructions".to_string(),
                 content: "run just test".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "fix cache hits".to_string(),
             },
@@ -712,11 +744,13 @@ fn openai_prompt_cache_key_uses_lineage_provider_and_model_namespace() {
         let mut blocks = vec![
             ContextBlock {
                 source: ContextSourceKind::Configuration,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 label: "session identity".to_string(),
                 content: format!("session_id={session_id} session_name=default"),
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "inspect the repo".to_string(),
             },
@@ -726,6 +760,7 @@ fn openai_prompt_cache_key_uses_lineage_provider_and_model_namespace() {
                 1,
                 ContextBlock {
                     source: ContextSourceKind::Configuration,
+                    placement: mez_agent::ContextPlacement::StablePrefix,
                     label: "prompt cache lineage".to_string(),
                     content: lineage_id.to_string(),
                 },
@@ -855,11 +890,13 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::ProjectGuidance,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 label: "project guidance".to_string(),
                 content: "use style a".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "first prompt".to_string(),
             },
@@ -873,11 +910,13 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::ProjectGuidance,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 label: "project guidance".to_string(),
                 content: "use style a".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "second prompt".to_string(),
             },
@@ -891,11 +930,13 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::ProjectGuidance,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 label: "project guidance".to_string(),
                 content: "use style b".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "first prompt".to_string(),
             },
@@ -946,11 +987,13 @@ fn openai_prompt_cache_key_uses_unknown_lineage_without_session_identity() {
         AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::Configuration,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 label: "session identity".to_string(),
                 content: format!("session_id={session_id} session_name=default"),
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "inspect the repo".to_string(),
             },
@@ -1023,21 +1066,25 @@ fn openai_replays_current_turn_read_results_without_synthetic_ledger() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "Patch the overlay style helper.".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "action result read-1".to_string(),
                 content: "[action_result read-1 shell_command succeeded]\ncommand: sed -n '300,420p' src/runtime/render/overlay.rs\noutput:\nowner body".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "action result read-2".to_string(),
                 content: "[action_result read-2 shell_command succeeded]\ncommand: sed -n '1148,1238p' src/runtime/render/overlay.rs\noutput:\nhelper body".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "action result read-3".to_string(),
                 content: "[action_result read-3 shell_command succeeded]\ncommand: rg -n \"overlay style\" \"docs/reference/issue backlog.md\"\nread_observation_json: {\"kind\":\"search\",\"target\":\"docs/reference/issue backlog.md\",\"ranges\":[],\"query\":\"overlay style\"}\noutput:\n120: overlay style".to_string(),
             },
@@ -1099,21 +1146,25 @@ fn openai_stable_prefix_excludes_injected_mcp_integration_context() {
     let context = AgentContext::new(vec![
         ContextBlock {
             source: ContextSourceKind::ProjectGuidance,
+            placement: mez_agent::ContextPlacement::StablePrefix,
             label: "project guidance".to_string(),
             content: "use stable project style".to_string(),
         },
         ContextBlock {
             source: ContextSourceKind::RuntimeHint,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "mcp integrations".to_string(),
             content: "available_servers=1 available_tools=1 unavailable_servers=0".to_string(),
         },
         ContextBlock {
             source: ContextSourceKind::TranscriptAssistant,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "assistant".to_string(),
             content: "durable assistant context after mcp".to_string(),
         },
         ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "inspect cache reuse".to_string(),
         },

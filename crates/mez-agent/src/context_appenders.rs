@@ -41,6 +41,7 @@ pub fn append_memory_context(
     for record in selected.iter().take(max_records) {
         context.blocks.push(ContextBlock {
             source: ContextSourceKind::Memory,
+            placement: crate::ContextPlacement::ConversationAppend,
             label: format!("memory {} ({})", record.id, record.scope.summary()),
             content: record.content.clone(),
         });
@@ -168,6 +169,7 @@ fn append_filtered_mcp_context(
         insert_at,
         ContextBlock {
             source: ContextSourceKind::RuntimeHint,
+            placement: crate::ContextPlacement::EphemeralTail,
             label: MCP_INTEGRATIONS_CONTEXT_LABEL.to_string(),
             content: lines.join("\n"),
         },
@@ -567,6 +569,7 @@ pub fn append_project_guidance_context(
         let truncated = if file.truncated { " truncated" } else { "" };
         guidance_blocks.push(ContextBlock {
             source: ContextSourceKind::ProjectGuidance,
+            placement: crate::ContextPlacement::StablePrefix,
             label: format!(
                 "active repository instructions (scope {}, {} bytes{})",
                 file.scope_root, file.bytes, truncated
@@ -710,6 +713,7 @@ pub fn append_scheduler_context(
     };
     let block = ContextBlock {
         source: ContextSourceKind::Policy,
+        placement: crate::ContextPlacement::EphemeralTail,
         label: "scheduler state".to_string(),
         content,
     };

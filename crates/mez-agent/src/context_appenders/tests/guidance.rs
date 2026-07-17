@@ -14,11 +14,13 @@ fn project_guidance_context_is_inserted_before_user_prompt() {
     let context = AgentContext::new(vec![
         ContextBlock {
             source: ContextSourceKind::Policy,
+            placement: crate::ContextPlacement::StablePrefix,
             label: "policy".to_string(),
             content: "stay safe".to_string(),
         },
         ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "change the code".to_string(),
         },
@@ -72,16 +74,19 @@ fn project_guidance_context_replaces_existing_guidance_blocks() {
     let context = AgentContext::new(vec![
         ContextBlock {
             source: ContextSourceKind::Policy,
+            placement: crate::ContextPlacement::StablePrefix,
             label: "permission policy".to_string(),
             content: "approval_policy=Ask".to_string(),
         },
         ContextBlock {
             source: ContextSourceKind::ProjectGuidance,
+            placement: crate::ContextPlacement::StablePrefix,
             label: "project guidance".to_string(),
             content: "stale guidance".to_string(),
         },
         ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "do the task".to_string(),
         },
@@ -123,6 +128,7 @@ fn project_guidance_context_replaces_existing_guidance_blocks() {
 fn project_guidance_context_respects_file_limit_and_skips_empty_content() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::EphemeralTail,
         label: "user".to_string(),
         content: "do the task".to_string(),
     }])
@@ -190,6 +196,7 @@ fn project_guidance_is_templated_into_system_prompt() {
     let context = append_project_guidance_context(
         AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "fix the bug".to_string(),
         }])
@@ -229,6 +236,7 @@ fn project_guidance_is_templated_into_system_prompt() {
 fn scheduler_context_keeps_relevant_idle_state_compact() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::EphemeralTail,
         label: "user".to_string(),
         content: "spawn subagents for this task".to_string(),
     }])
@@ -258,6 +266,7 @@ fn scheduler_context_keeps_relevant_idle_state_compact() {
 fn scheduler_context_omits_unrelated_idle_state() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::EphemeralTail,
         label: "user".to_string(),
         content: "do the task".to_string(),
     }])
@@ -285,11 +294,13 @@ fn scheduler_context_precedes_project_and_user_context_without_permission_contex
     let context = AgentContext::new(vec![
         ContextBlock {
             source: ContextSourceKind::ProjectGuidance,
+            placement: crate::ContextPlacement::StablePrefix,
             label: "project".to_string(),
             content: "follow style".to_string(),
         },
         ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: crate::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "do the task".to_string(),
         },

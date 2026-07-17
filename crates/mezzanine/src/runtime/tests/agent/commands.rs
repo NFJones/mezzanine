@@ -89,6 +89,7 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
     request.messages.push(mez_agent::ModelMessage {
         role: mez_agent::ModelMessageRole::Developer,
         source: ContextSourceKind::Configuration,
+        placement: mez_agent::ContextPlacement::StablePrefix,
         content: "[ephemeral provider output-limit retry] max_output_tokens=16384".to_string(),
     });
     service

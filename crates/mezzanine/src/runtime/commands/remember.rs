@@ -137,17 +137,20 @@ pub(super) fn runtime_model_remember_request(
             ModelMessage {
                 role: ModelMessageRole::System,
                 source: ContextSourceKind::System,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 content: "You are Mezzanine's durable memory generator. Extract only stable, reusable memories and omit credentials, secrets, tokens, sensitive personal data, and transient terminal noise unless the user explicitly supplied the exact statement to remember."
                     .to_string(),
             },
             ModelMessage {
                 role: ModelMessageRole::Developer,
                 source: ContextSourceKind::DeveloperInstruction,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 content: format!("Return exactly one final say action whose text is strict JSON with a top-level `memories` array. Each memory object must contain: `kind` (`preference`, `fact`, `procedure`, `episode`, `warning`, or `scratch`), `priority` (1-255), `summary`, `keywords` array, `cues` array, and `content`. Include optional `expires_in_days` only when the source implies a more appropriate retention period; otherwise omit it and Mezzanine will use the configured default of {default_ttl_days} days. Include only durable information that will help future turns. Make `content` self-contained and retrieval-friendly. For statement mode, use only the supplied statement as source. For context mode, return at most six high-value memories.")
             },
             ModelMessage {
                 role: ModelMessageRole::User,
                 source: ContextSourceKind::Transcript,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: format!("Remember mode: {mode}\n\n{source_text}"),
             },
         ],

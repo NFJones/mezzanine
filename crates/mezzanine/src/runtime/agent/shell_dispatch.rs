@@ -268,6 +268,7 @@ impl RuntimeSessionService {
         if let Some(phase) = phase {
             context.blocks.push(ContextBlock {
                 source: ContextSourceKind::RuntimeHint,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: RUNTIME_ACTION_PRESSURE_LABEL.to_string(),
                 content: action_pressure_context_content(phase),
             });

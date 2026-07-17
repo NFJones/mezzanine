@@ -65,6 +65,7 @@ impl RuntimeSessionService {
         for (index, steering) in steering.into_iter().enumerate() {
             context.blocks.push(ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: format!(
                     "user steering input {} for active turn {}",
                     index + 1,
@@ -290,6 +291,7 @@ impl RuntimeSessionService {
         };
         context.blocks.push(ContextBlock {
             source: ContextSourceKind::Configuration,
+            placement: mez_agent::ContextPlacement::StablePrefix,
             label: RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LABEL.to_string(),
             content: guidance,
         });

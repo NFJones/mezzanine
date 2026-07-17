@@ -25,11 +25,13 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::Policy,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 label: "policy".to_string(),
                 content: "approval_policy=ask".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "hello".to_string(),
             },
@@ -379,11 +381,13 @@ fn openai_responses_request_body_marks_action_results_as_execution_evidence() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "verify the plan file exists".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "action result shell".to_string(),
                 content: "[action_result action-1 shell_command succeeded]\ncommand output marker"
                     .to_string(),
@@ -455,11 +459,13 @@ fn openai_responses_request_body_marks_prior_user_history_inactive() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::TranscriptUser,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "previous user message".to_string(),
                 content: "Output a large multiline JSON object".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user prompt".to_string(),
                 content: "Patch the prompt context manager".to_string(),
             },
@@ -518,11 +524,13 @@ fn openai_responses_request_body_preserves_assistant_history_role() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::TranscriptAssistant,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "transcript assistant entry 2 for pane %1".to_string(),
                 content: "Suggested changes:\n1. A\n2. B".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user prompt".to_string(),
                 content: "Do item 2".to_string(),
             },

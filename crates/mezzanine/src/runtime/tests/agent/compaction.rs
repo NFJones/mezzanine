@@ -326,6 +326,7 @@ context_window_tokens = 40000
         .blocks
         .push(ContextBlock {
             source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "synthetic provider-rejected action result".to_string(),
             content: format!("provider-context-limit- {}", "cp ".repeat(10_000)),
         });
@@ -444,21 +445,25 @@ context_window_tokens = 40000
         .blocks = vec![
         ContextBlock {
             source: ContextSourceKind::Memory,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "synthetic post-first-pass summary".to_string(),
             content: format!("[context compacted]\n{}", "summary ".repeat(8_000)),
         },
         ContextBlock {
             source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "synthetic retained tail action result one".to_string(),
             content: format!("provider-context-limit-tail-one- {}", "tail ".repeat(5_000)),
         },
         ContextBlock {
             source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "synthetic retained tail action result two".to_string(),
             content: format!("provider-context-limit-tail-two- {}", "tail ".repeat(5_000)),
         },
         ContextBlock {
             source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "synthetic retained tail action result three".to_string(),
             content: format!(
                 "provider-context-limit-tail-three- {}",
@@ -587,16 +592,19 @@ context_window_tokens = 40000
         .blocks = vec![
         ContextBlock {
             source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "synthetic retained action result one".to_string(),
             content: format!("provider-context-limit-tail-one- {}", "tail ".repeat(5_000)),
         },
         ContextBlock {
             source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "synthetic retained action result two".to_string(),
             content: format!("provider-context-limit-tail-two- {}", "tail ".repeat(5_000)),
         },
         ContextBlock {
             source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "synthetic retained action result three".to_string(),
             content: format!(
                 "provider-context-limit-tail-three- {}",
@@ -701,6 +709,7 @@ max_output_tokens = 4096
         .blocks
         .push(ContextBlock {
             source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "synthetic retained action result".to_string(),
             content: "output-limit-retained-context".to_string(),
         });
@@ -863,6 +872,7 @@ context_window_tokens = 128000
         .blocks
         .push(ContextBlock {
             source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "synthetic same-turn result".to_string(),
             content: "same-turn result must survive compaction refresh".to_string(),
         });
@@ -1030,6 +1040,7 @@ context_window_tokens = 100000
         .blocks
         .push(ContextBlock {
             source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "synthetic routing action result".to_string(),
             content: format!(
                 "routing-context-pressure- {}",

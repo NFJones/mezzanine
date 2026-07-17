@@ -147,16 +147,19 @@ mod tests {
                 ModelMessage {
                     role: ModelMessageRole::System,
                     source: ContextSourceKind::System,
+                    placement: crate::ContextPlacement::StablePrefix,
                     content: "system prompt".to_string(),
                 },
                 ModelMessage {
                     role: ModelMessageRole::System,
                     source: ContextSourceKind::Transcript,
+                    placement: crate::ContextPlacement::ConversationAppend,
                     content: event.to_transcript_content(),
                 },
                 ModelMessage {
                     role: ModelMessageRole::User,
                     source: ContextSourceKind::UserInstruction,
+                    placement: crate::ContextPlacement::EphemeralTail,
                     content: "continue".to_string(),
                 },
             ],

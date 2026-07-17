@@ -957,6 +957,7 @@ async fn runtime_send_compaction_request_with_output_limit_retry<P: AsyncModelPr
             request.messages.push(ModelMessage {
                 role: ModelMessageRole::Developer,
                 source: ContextSourceKind::Configuration,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 content: "[ephemeral compaction output-limit retry]\n\
                     The previous compaction response was incomplete because generation hit max_output_tokens. \
                     Return exactly one final say action containing a compact durable summary. \

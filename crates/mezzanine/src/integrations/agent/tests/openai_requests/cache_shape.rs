@@ -30,11 +30,13 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::ProjectGuidance,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 label: "active repository instructions".to_string(),
                 content: "Prefer deterministic request shapes.".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "Inspect cache stability.".to_string(),
             },
@@ -135,6 +137,7 @@ fn openai_responses_request_body_excludes_large_mcp_catalog_from_tools() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "use an MCP server".to_string(),
         }])
@@ -188,6 +191,7 @@ fn openai_responses_request_body_uses_stable_derived_prompt_cache_key() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "first prompt".to_string(),
         }])
@@ -199,6 +203,7 @@ fn openai_responses_request_body_uses_stable_derived_prompt_cache_key() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "different prompt".to_string(),
         }])

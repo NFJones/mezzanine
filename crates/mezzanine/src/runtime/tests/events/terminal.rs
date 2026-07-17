@@ -495,6 +495,7 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
         turn.turn_id.clone(),
         mez_agent::AgentContext::new(vec![mez_agent::ContextBlock {
             source: ContextSourceKind::Configuration,
+            placement: mez_agent::ContextPlacement::StablePrefix,
             label: "test context".to_string(),
             content: "present".to_string(),
         }])

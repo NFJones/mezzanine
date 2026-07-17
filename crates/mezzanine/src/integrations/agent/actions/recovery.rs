@@ -83,6 +83,7 @@ fn failure_summary_request(
     request.messages.push(ModelMessage {
         role: ModelMessageRole::Developer,
         source: ContextSourceKind::Configuration,
+        placement: mez_agent::ContextPlacement::StablePrefix,
         content: format!(
             "[controller failure summary]\n\
              Mezzanine has already failed this turn at the controller/provider boundary. \

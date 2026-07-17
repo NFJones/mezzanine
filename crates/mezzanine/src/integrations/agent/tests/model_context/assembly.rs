@@ -26,6 +26,7 @@ fn model_request_assembly_adapts_product_turn_and_prompt_assets() {
         &turn,
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "continue".to_string(),
         }])

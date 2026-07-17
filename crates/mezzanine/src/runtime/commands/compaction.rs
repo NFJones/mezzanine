@@ -610,18 +610,21 @@ pub(super) fn runtime_model_compaction_request(
             ModelMessage {
                 role: ModelMessageRole::System,
                 source: ContextSourceKind::System,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 content: "You are Mezzanine's conversation compactor. Produce durable, concise summaries that preserve task-critical context and omit secrets."
                     .to_string(),
             },
             ModelMessage {
                 role: ModelMessageRole::Developer,
                 source: ContextSourceKind::DeveloperInstruction,
+                placement: mez_agent::ContextPlacement::StablePrefix,
                 content: "Return exactly one `say` action with `status` set to `final` and `content_type` set to `text/markdown; charset=utf-8`. The text must summarize the conversation for a future agent turn. Preserve user goals, current plan, decisions, file paths, commands, test results, blockers, and pending follow-up. Do not claim work was completed unless the transcript proves it. Redact credentials and secrets."
                     .to_string(),
             },
             ModelMessage {
                 role: ModelMessageRole::User,
                 source: ContextSourceKind::Transcript,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: runtime_model_compaction_source(
                     pane_id,
                     conversation_id,

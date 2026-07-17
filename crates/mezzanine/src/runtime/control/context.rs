@@ -30,6 +30,7 @@ pub(super) fn runtime_agent_transcript_context_blocks(
         };
         blocks.push(ContextBlock {
             source: runtime_transcript_context_source_kind(entry.role),
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: format!(
                 "previous {} message for pane {pane_id}",
                 runtime_context_transcript_role_name(entry.role)

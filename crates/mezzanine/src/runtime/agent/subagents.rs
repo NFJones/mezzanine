@@ -192,6 +192,7 @@ impl RuntimeSessionService {
                     .blocks
                     .push(ContextBlock {
                         source: ContextSourceKind::ActionResult,
+                        placement: mez_agent::ContextPlacement::EphemeralTail,
                         label: format!("action result {}", result.action_id),
                         content: action_result_context_content(result),
                     });
@@ -894,6 +895,7 @@ impl RuntimeSessionService {
         {
             context.blocks.push(ContextBlock {
                 source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 label: format!("action result {}", observed_result.action_id),
                 content: action_result_context_content(&observed_result),
             });

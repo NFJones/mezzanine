@@ -2799,6 +2799,21 @@ Static invariant agent behavior SHOULD remain in the front-loaded OpenAI
 repair hints, compaction notices, and current action eligibility SHOULD be
 rendered as later role-preserving model input rather than mutating the static
 instructions prefix.
+Every model-visible context producer MUST explicitly select a provider-neutral
+placement independent of provenance, trust, provider role, labels, and rendered
+text. `StablePrefix` is reserved for invariant instructions and configuration;
+`ConversationAppend` contains immutable chronological transcript, committed
+evidence, and compaction-summary epochs; and `EphemeralTail` contains regenerated
+controller and current-turn state. Assembly MUST preserve producer order within
+each class while ordering the classes as stable prefix, conversation append,
+then ephemeral tail. Mutable policy and runtime state, including scheduler state,
+active subagent write scopes, pane readiness and identity, environment state,
+pending local messages, capability eligibility, and repair or retry hints, MUST
+use `EphemeralTail`. Provider cache diagnostics and cache breakpoints MUST consume
+this explicit placement directly and MUST NOT infer cache lifecycle from source
+kinds, labels, or message text. Late developer-role content retains developer
+authority; placement changes cache and ordering lifecycle, not instruction
+priority.
 OpenAI request diagnostics MUST fingerprint the provider-visible request shape
 after unsupported local profile options are omitted. Local
 `provider_options.prompt_cache_retention` values MUST NOT affect the emitted

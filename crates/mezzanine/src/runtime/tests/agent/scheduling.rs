@@ -487,6 +487,7 @@ context_window_tokens = 64000
         .blocks
         .push(ContextBlock {
             source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "synthetic in-turn action result".to_string(),
             content: format!(
                 "turn-context-pressure- {}",

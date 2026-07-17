@@ -602,6 +602,7 @@ pub fn macro_step_model_request(parent_turn: &AgentTurnRecord) -> ModelRequest {
         messages: vec![ModelMessage {
             role: ModelMessageRole::User,
             source: ContextSourceKind::TranscriptUser,
+            placement: crate::ContextPlacement::ConversationAppend,
             content: "runtime-owned macro first step".to_string(),
         }],
     }
@@ -712,11 +713,13 @@ pub fn macro_judge_model_request(
             ModelMessage {
                 role: ModelMessageRole::System,
                 source: ContextSourceKind::RuntimeHint,
+                placement: crate::ContextPlacement::EphemeralTail,
                 content: macro_judge_policy(),
             },
             ModelMessage {
                 role: ModelMessageRole::User,
                 source: ContextSourceKind::RuntimeHint,
+                placement: crate::ContextPlacement::EphemeralTail,
                 content: macro_judge_task(run, step, result, next_step),
             },
         ],

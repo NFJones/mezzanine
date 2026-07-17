@@ -223,6 +223,7 @@ fn runtime_hidden_model_shell_command_shows_transient_latest_output_line() {
                 messages: vec![mez_agent::ModelMessage {
                     role: mez_agent::ModelMessageRole::User,
                     source: ContextSourceKind::UserInstruction,
+                    placement: mez_agent::ContextPlacement::EphemeralTail,
                     content: "run a command".to_string(),
                 }],
             },

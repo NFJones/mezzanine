@@ -837,6 +837,7 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
     request.messages = vec![mez_agent::ModelMessage {
         role: mez_agent::ModelMessageRole::User,
         source: ContextSourceKind::UserInstruction,
+        placement: mez_agent::ContextPlacement::EphemeralTail,
         content: "research provider docs".to_string(),
     }];
     let execution = mez_agent::AgentTurnExecution {

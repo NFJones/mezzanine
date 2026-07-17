@@ -8,9 +8,9 @@
 
 use crate::{
     AgentContext, AgentPromptAssetSource, AgentPromptProfile, AgentRequestAssemblyResult,
-    AllowedActionSet, ContextBlock, ContextSourceKind, McpPromptServer, McpPromptSummary,
-    McpPromptTool, McpPromptUnavailableServer, ModelInteractionKind, ModelMessage,
-    ModelMessageRole, ModelProfile, ModelRequest, ProviderTranscriptEvent,
+    AllowedActionSet, ContextBlock, ContextPlacement, ContextSourceKind, McpPromptServer,
+    McpPromptSummary, McpPromptTool, McpPromptUnavailableServer, ModelInteractionKind,
+    ModelMessage, ModelMessageRole, ModelProfile, ModelRequest, ProviderTranscriptEvent,
     assemble_agent_system_prompt, constrain_skill_actions_for_loaded_context,
     model_context_block_header, validate_model_profile_request,
 };
@@ -54,6 +54,7 @@ pub fn assemble_model_request_from_context(
     messages.push(ModelMessage {
         role: ModelMessageRole::System,
         source: ContextSourceKind::System,
+        placement: ContextPlacement::StablePrefix,
         content: assemble_agent_system_prompt(
             &prompt_profile,
             &repo_instructions_for_prompt,
@@ -72,6 +73,7 @@ pub fn assemble_model_request_from_context(
             messages.push(ModelMessage {
                 role: ModelMessageRole::System,
                 source: block.source,
+                placement: block.placement,
                 content: block.content.clone(),
             });
             continue;
@@ -90,6 +92,7 @@ pub fn assemble_model_request_from_context(
         messages.push(ModelMessage {
             role: role_for_context_source(block.source),
             source: block.source,
+            placement: block.placement,
             content: format!("{}{}", model_context_block_header(block), block.content),
         });
     }
@@ -346,6 +349,7 @@ fn deepseek_repository_instructions_message(
     ModelMessage {
         role: ModelMessageRole::User,
         source: ContextSourceKind::ProjectGuidance,
+        placement: ContextPlacement::StablePrefix,
         content,
     }
 }
@@ -380,6 +384,7 @@ mod tests {
     fn mcp_prompt_summary_accepts_runtime_hint_blocks() {
         let summary = mcp_prompt_summary_from_context_blocks(&[ContextBlock {
             source: ContextSourceKind::RuntimeHint,
+            placement: crate::ContextPlacement::EphemeralTail,
             label: "mcp integrations".to_string(),
             content: concat!(
                 "available_servers=1 available_tools=1\n",
@@ -407,6 +412,7 @@ mod tests {
     fn mcp_prompt_summary_ignores_non_mcp_blocks() {
         let summary = mcp_prompt_summary_from_context_blocks(&[ContextBlock {
             source: ContextSourceKind::Configuration,
+            placement: crate::ContextPlacement::StablePrefix,
             label: "session identity".to_string(),
             content: "session_id=test-session".to_string(),
         }]);
@@ -428,16 +434,19 @@ mod tests {
         let context = AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::Configuration,
+                placement: crate::ContextPlacement::StablePrefix,
                 label: "session identity".to_string(),
                 content: "session_id=session-1".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::Transcript,
+                placement: crate::ContextPlacement::ConversationAppend,
                 label: "provider event".to_string(),
                 content: event.clone(),
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::EphemeralTail,
                 label: "user".to_string(),
                 content: "continue".to_string(),
             },

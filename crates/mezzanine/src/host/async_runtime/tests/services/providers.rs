@@ -235,6 +235,7 @@ async fn async_provider_completed_shell_dispatch_error_fails_turn_without_exitin
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 content: "list files".to_string(),
             }],
         },
@@ -415,6 +416,7 @@ async fn async_provider_completion_application_error_fails_turn_without_exiting_
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 content: "research patch behavior".to_string(),
             }],
         },
@@ -543,6 +545,7 @@ async fn async_provider_worker_executes_network_actions_before_actor_completion(
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
                 content: "research provider docs".to_string(),
             }],
         },
