@@ -2,12 +2,12 @@
 
 use super::*;
 
-/// Verifies cancelling managed worker and handoff turns resumes the blocked
-/// parent exactly once with phase-specific evidence and releases child state.
+/// Verifies routed child cancellation resumes the parent exactly once and
+/// routed parent cancellation terminates its active managed child.
 ///
-/// Both phases use the normal routed selection and pane stop paths so this
-/// regression covers the integration boundary that previously bypassed the
-/// routed state machine in favor of generic subagent cancellation.
+/// Worker, handoff, and parent interruption use the normal routed selection
+/// and pane stop paths. Late child settlement after parent cancellation must
+/// be a handled no-op rather than reviving the interrupted workflow.
 #[test]
 fn runtime_routed_child_cancellation_resumes_parent_once() {
     let setup = || {
@@ -265,6 +265,49 @@ reasoning_profile = "high"
             .unwrap()
     );
     assert_eq!(handoff_service.pending_agent_provider_tasks().len(), 1);
+
+    let (mut parent_service, _parent_primary, child_turn_id) = setup();
+    let child_turn = parent_service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == child_turn_id)
+        .cloned()
+        .expect("managed worker turn should exist before parent cancellation");
+    parent_service.stop_agent_turn_for_pane("%1").unwrap();
+    assert_eq!(
+        parent_service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == "turn-1")
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Interrupted)
+    );
+    assert_eq!(
+        parent_service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == child_turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Interrupted)
+    );
+    assert!(parent_service.routed_workflow_for_tests("turn-1").is_none());
+    assert_eq!(parent_service.subagent_task_parent(&child_turn_id), None);
+    assert!(parent_service.pending_agent_provider_tasks().is_empty());
+    let late_execution = completed_execution(&child_turn, "late worker result");
+    assert!(
+        parent_service
+            .handle_routed_child_execution_result(&child_turn, &late_execution)
+            .unwrap()
+    );
+    assert!(
+        parent_service
+            .handle_routed_child_execution_result(&child_turn, &late_execution)
+            .unwrap()
+    );
+    assert!(parent_service.pending_agent_provider_tasks().is_empty());
 }
 
 /// Verifies subagents inherit the live parent pane routing decision.

@@ -305,7 +305,7 @@ impl RuntimeSessionService {
             .get(&turn.turn_id)
             .cloned()
         else {
-            return Ok(false);
+            return Ok(turn.cooperation_mode.as_deref() == Some("routed-worker"));
         };
         let state = self
             .agent
@@ -631,6 +631,83 @@ impl RuntimeSessionService {
         )?;
         self.clear_routed_workflow_runtime_state(&parent_turn_id);
         self.agent.subagent_task_routes.remove(&turn.turn_id);
+        Ok(true)
+    }
+
+    /// Cancels the active managed child when its blocked routed parent stops.
+    ///
+    /// Parent interruption is terminal for the whole managed workflow. The
+    /// child is settled through its ordinary lifecycle cleanup while routed
+    /// ownership still identifies it, then all join and presentation state is
+    /// removed so late provider results become handled no-ops.
+    pub(crate) fn cancel_routed_workflow_for_parent(
+        &mut self,
+        parent_turn_id: &str,
+    ) -> Result<bool> {
+        let Some(state) = self
+            .agent
+            .routed_workflows_by_parent_turn
+            .get(parent_turn_id)
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        if let Some(child_agent_id) = state.child_agent_id.as_deref() {
+            self.remove_subagent_authority_state(child_agent_id);
+            self.integration
+                .model_profile_overrides_mut()
+                .agent_profiles
+                .remove(child_agent_id);
+        }
+        if let Some(child_turn_id) = state.child_turn_id.as_deref() {
+            let _ = self.cancel_agent_work(child_turn_id);
+            self.cancel_live_shell_transactions_for_turn(child_turn_id)?;
+            self.remove_pending_agent_provider_task(child_turn_id);
+            self.remove_claimed_agent_provider_task(child_turn_id);
+            self.clear_blocked_agent_approvals_for_turn(child_turn_id);
+            if let Some(child_turn) = self
+                .agent_turn_ledger()
+                .turns()
+                .iter()
+                .find(|turn| turn.turn_id == child_turn_id)
+                .cloned()
+            {
+                let child_is_terminal = matches!(
+                    child_turn.state,
+                    AgentTurnState::Completed
+                        | AgentTurnState::Failed
+                        | AgentTurnState::Interrupted
+                );
+                if !child_is_terminal {
+                    self.agent
+                        .pending_terminal_subagent_pane_closes
+                        .insert(child_turn.pane_id.clone());
+                    if self
+                        .agent_shell_store()
+                        .get(&child_turn.pane_id)
+                        .and_then(|session| session.running_turn_id.as_deref())
+                        == Some(child_turn_id)
+                    {
+                        self.finish_agent_turn(
+                            &child_turn.pane_id,
+                            child_turn_id,
+                            AgentTurnState::Interrupted,
+                        )?;
+                    } else {
+                        self.finish_agent_turn_without_shell_session(
+                            &child_turn,
+                            AgentTurnState::Interrupted,
+                        )?;
+                    }
+                }
+            }
+            self.agent.subagent_task_routes.remove(child_turn_id);
+        }
+        self.agent.routed_presentation_turns.remove(parent_turn_id);
+        self.agent
+            .routed_workflows_by_parent_turn
+            .remove(parent_turn_id);
+        self.clear_routed_workflow_runtime_state(parent_turn_id);
         Ok(true)
     }
 

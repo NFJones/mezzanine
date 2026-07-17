@@ -530,6 +530,7 @@ impl RuntimeSessionService {
             turn.state,
             AgentTurnState::Completed | AgentTurnState::Failed | AgentTurnState::Interrupted
         );
+        self.cancel_routed_workflow_for_parent(&turn_id)?;
         let session = if turn_was_already_terminal {
             let running_in_shell = self
                 .agent_shell_store()
