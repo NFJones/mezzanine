@@ -111,20 +111,12 @@ fn openai_promoted_conversation_entries_keep_complete_input_bytes() {
     let first = assemble_model_request(
         &profile,
         &turn(),
-        &AgentContext::new(vec![
-            ContextBlock {
-                source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
-                label: "user".to_string(),
-                content: "inspect cache continuity".to_string(),
-            },
-            ContextBlock {
-                source: ContextSourceKind::ActionResult,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
-                label: "action result".to_string(),
-                content: "action_id=action-1\noutput: continuity evidence".to_string(),
-            },
-        ])
+        &AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
+            label: "user".to_string(),
+            content: "inspect cache continuity".to_string(),
+        }])
         .unwrap(),
     )
     .unwrap();
@@ -133,28 +125,22 @@ fn openai_promoted_conversation_entries_keep_complete_input_bytes() {
         &turn(),
         &AgentContext::new(vec![
             ContextBlock {
-                source: ContextSourceKind::TranscriptUser,
-                placement: mez_agent::ContextPlacement::ConversationAppend,
-                label: "transcript user".to_string(),
+                source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
+                label: "user".to_string(),
                 content: "inspect cache continuity".to_string(),
-            },
-            ContextBlock {
-                source: ContextSourceKind::TranscriptTool,
-                placement: mez_agent::ContextPlacement::ConversationAppend,
-                label: "transcript tool".to_string(),
-                content: "action_id=action-1\noutput: continuity evidence".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::TranscriptAssistant,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
-                label: "transcript assistant".to_string(),
-                content: "the prior evidence is complete".to_string(),
+                label: "active assistant response".to_string(),
+                content: "I inspected the cache state.".to_string(),
             },
             ContextBlock {
-                source: ContextSourceKind::UserInstruction,
+                source: ContextSourceKind::ActionResult,
                 placement: mez_agent::ContextPlacement::EphemeralTail,
-                label: "user".to_string(),
-                content: "continue".to_string(),
+                label: "action result".to_string(),
+                content: "action_id=action-1\noutput: continuity evidence".to_string(),
             },
         ])
         .unwrap(),
@@ -168,8 +154,7 @@ fn openai_promoted_conversation_entries_keep_complete_input_bytes() {
     let first_input = first_body["input"].as_array().unwrap();
     let second_input = second_body["input"].as_array().unwrap();
 
-    assert_eq!(first_input[0], second_input[0]);
-    assert_eq!(first_input[1], second_input[1]);
+    assert_eq!(second_input[..first_input.len()], first_input[..]);
 
     let first_diagnostics = openai_prompt_cache_diagnostics_for_request(&first).unwrap();
     let second_diagnostics = openai_prompt_cache_diagnostics_for_request(&second).unwrap();
@@ -178,9 +163,9 @@ fn openai_promoted_conversation_entries_keep_complete_input_bytes() {
         &second_diagnostics.continuity_snapshot,
     );
     assert_eq!(continuity.category, "messages");
-    assert_eq!(continuity.message_index, Some(2));
-    assert_eq!(continuity.common_message_prefix, 2);
-    assert!(!continuity.messages_append_only);
+    assert_eq!(continuity.message_index, Some(first_input.len()));
+    assert_eq!(continuity.common_message_prefix, first_input.len());
+    assert!(continuity.messages_append_only);
 }
 
 #[test]
@@ -1151,12 +1136,6 @@ fn openai_stable_prefix_excludes_injected_mcp_integration_context() {
             content: "use stable project style".to_string(),
         },
         ContextBlock {
-            source: ContextSourceKind::RuntimeHint,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
-            label: "mcp integrations".to_string(),
-            content: "available_servers=1 available_tools=1 unavailable_servers=0".to_string(),
-        },
-        ContextBlock {
             source: ContextSourceKind::TranscriptAssistant,
             placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "assistant".to_string(),
@@ -1167,6 +1146,12 @@ fn openai_stable_prefix_excludes_injected_mcp_integration_context() {
             placement: mez_agent::ContextPlacement::EphemeralTail,
             label: "user".to_string(),
             content: "inspect cache reuse".to_string(),
+        },
+        ContextBlock {
+            source: ContextSourceKind::RuntimeHint,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
+            label: "mcp integrations".to_string(),
+            content: "available_servers=1 available_tools=1 unavailable_servers=0".to_string(),
         },
     ])
     .unwrap();

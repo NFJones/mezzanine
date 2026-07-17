@@ -43,7 +43,12 @@ pub fn openai_render_messages(
     let mut stable_input = Vec::new();
     let mut volatile_input = Vec::new();
     let mut stable_input_open = true;
-    for message in messages {
+    let appended_after = appended_message.and_then(|_| {
+        messages
+            .iter()
+            .rposition(|message| message.source == ContextSourceKind::UserInstruction)
+    });
+    for (index, message) in messages.iter().enumerate() {
         if ProviderTranscriptEvent::from_transcript_content(&message.content).is_some() {
             continue;
         }
@@ -58,8 +63,19 @@ pub fn openai_render_messages(
             &mut volatile_input,
             &mut stable_input_open,
         );
+        if appended_after == Some(index) {
+            openai_push_input_message(
+                appended_message.expect("appended message index requires a message"),
+                &mut input,
+                &mut stable_input,
+                &mut volatile_input,
+                &mut stable_input_open,
+            );
+        }
     }
-    if let Some(message) = appended_message {
+    if appended_after.is_none()
+        && let Some(message) = appended_message
+    {
         openai_push_input_message(
             message,
             &mut input,
