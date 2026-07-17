@@ -199,17 +199,26 @@ impl RuntimeSessionService {
         let Some(parent_turn_id) = self
             .agent
             .routed_workflow_by_child_turn
-            .remove(&turn.turn_id)
+            .get(&turn.turn_id)
+            .cloned()
         else {
             return Ok(false);
         };
-        self.agent.subagent_task_routes.remove(&turn.turn_id);
         let state = self
             .agent
             .routed_workflows_by_parent_turn
             .get(&parent_turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("routed workflow state is unavailable"))?;
+        if state.child_turn_id.as_deref() != Some(turn.turn_id.as_str())
+            || !matches!(
+                state.phase,
+                RoutedWorkflowPhase::WaitingForWorkerResult
+                    | RoutedWorkflowPhase::WaitingForHandoff
+            )
+        {
+            return Ok(true);
+        }
         let parent_turn = self
             .agent_turn_ledger()
             .turns()
@@ -251,6 +260,7 @@ impl RuntimeSessionService {
                         None,
                         Some("routed worker failed before handoff"),
                     )?;
+                    self.agent.subagent_task_routes.remove(&turn.turn_id);
                     return Ok(true);
                 }
                 let mut handoff_context = self
@@ -347,6 +357,7 @@ impl RuntimeSessionService {
                 ));
             }
         }
+        self.agent.subagent_task_routes.remove(&turn.turn_id);
         Ok(true)
     }
 

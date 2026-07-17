@@ -615,6 +615,25 @@ reasoning_profile = "high"
         .cloned()
         .expect("managed worker turn should remain recorded");
     let exact_worker_result = "Implemented the routed fix and verified its regression test.";
+    let worker_context = service
+        .agent_turn_contexts_mut()
+        .remove(&worker_turn.turn_id)
+        .expect("managed worker context should be available before the failure injection");
+    let transition_error = service
+        .handle_routed_child_execution_result(
+            &worker_turn,
+            &completed_say_execution(&worker_turn, exact_worker_result),
+        )
+        .expect_err("missing worker context should fail before the handoff is queued");
+    assert!(
+        transition_error
+            .message()
+            .contains("routed worker context is unavailable"),
+        "{transition_error}"
+    );
+    service
+        .agent_turn_contexts_mut()
+        .insert(worker_turn.turn_id.clone(), worker_context);
     assert!(
         service
             .handle_routed_child_execution_result(
