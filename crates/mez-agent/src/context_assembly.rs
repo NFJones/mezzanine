@@ -1,7 +1,7 @@
 //! Provider-independent model-request assembly from canonical context.
 //!
 //! This module owns context-to-message projection, repository-guidance
-//! placement, provider transcript preservation, MCP summary recovery, prompt
+//! placement, provider transcript preservation, prompt
 //! cache identity extraction, default action surfaces, and provider-specific
 //! request defaults. Product code supplies stable turn identity and prompt
 //! assets without exposing runtime records or filesystem access.
@@ -9,8 +9,7 @@
 use crate::{
     AgentContext, AgentContextError, AgentPromptAssetSource, AgentPromptProfile,
     AgentRequestAssemblyResult, AllowedActionSet, ContextBlock, ContextPlacement,
-    ContextSourceKind, McpPromptServer, McpPromptSummary, McpPromptTool,
-    McpPromptUnavailableServer, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile,
+    ContextSourceKind, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile,
     ModelRequest, ProviderTranscriptEvent, assemble_agent_system_prompt,
     constrain_skill_actions_for_loaded_context, model_context_block_header,
     validate_model_profile_request,
@@ -50,8 +49,7 @@ pub fn assemble_model_request_from_context(
         repository_instruction_blocks.clone()
     };
     let prompt_profile = AgentPromptProfile::default_for(identity.agent_id, identity.pane_id)
-        .with_provider(&profile.provider)
-        .with_mcp_summary(mcp_prompt_summary_from_context_blocks(&blocks));
+        .with_provider(&profile.provider);
     let mut messages = Vec::with_capacity(blocks.len() + 1);
     messages.push(ModelMessage {
         role: ModelMessageRole::System,
@@ -183,141 +181,6 @@ pub fn role_for_context_source(source: ContextSourceKind) -> ModelMessageRole {
     }
 }
 
-/// Recovers an MCP prompt summary from the canonical integration block.
-fn mcp_prompt_summary_from_context_blocks(blocks: &[ContextBlock]) -> McpPromptSummary {
-    let Some(block) = blocks.iter().find(|block| {
-        matches!(
-            block.source,
-            ContextSourceKind::Configuration | ContextSourceKind::RuntimeHint
-        ) && block.label == "mcp integrations"
-    }) else {
-        return empty_mcp_prompt_summary();
-    };
-    let mut unavailable_servers = Vec::new();
-    let mut available_servers = Vec::new();
-    let mut available_tools = Vec::new();
-    for line in block.content.lines() {
-        if mcp_availability_counts_from_line(line).is_some() {
-            continue;
-        }
-        if let Some(server) = mcp_available_server_from_line(line) {
-            available_servers.push(server);
-            continue;
-        }
-        if let Some(tool) = mcp_available_tool_from_line(line) {
-            available_tools.push(tool);
-            continue;
-        }
-        if let Some(server) = mcp_unavailable_server_from_line(line) {
-            unavailable_servers.push(server);
-        }
-    }
-    McpPromptSummary {
-        available_servers,
-        available_tools,
-        unavailable_servers,
-    }
-}
-
-/// Returns an empty MCP prompt summary.
-fn empty_mcp_prompt_summary() -> McpPromptSummary {
-    McpPromptSummary {
-        available_servers: Vec::new(),
-        available_tools: Vec::new(),
-        unavailable_servers: Vec::new(),
-    }
-}
-
-/// Parses the MCP availability count line emitted by the product adapter.
-fn mcp_availability_counts_from_line(line: &str) -> Option<(usize, usize)> {
-    Some((
-        mcp_usize_field(line, "available_servers=")?,
-        mcp_usize_field(line, "available_tools=")?,
-    ))
-}
-
-/// Parses one unsigned integer field from an MCP context line.
-fn mcp_usize_field(line: &str, prefix: &str) -> Option<usize> {
-    line.split_whitespace()
-        .find_map(|field| field.strip_prefix(prefix))
-        .and_then(|value| value.parse::<usize>().ok())
-}
-
-/// Parses one unavailable-server context line.
-fn mcp_unavailable_server_from_line(line: &str) -> Option<McpPromptUnavailableServer> {
-    line.strip_prefix("unavailable_server=")?;
-    Some(McpPromptUnavailableServer {
-        server_id: mcp_raw_field(line, "unavailable_server=")?.to_string(),
-        purpose: mcp_quoted_field(line, "purpose=").unwrap_or_default(),
-        usage_instructions: mcp_quoted_field(line, "usage_instructions=").unwrap_or_default(),
-        reason: mcp_quoted_field(line, "reason=").unwrap_or_default(),
-        retryable: mcp_raw_field(line, "retryable=").is_some_and(|value| value == "true"),
-    })
-}
-
-/// Parses one available-server context line.
-fn mcp_available_server_from_line(line: &str) -> Option<McpPromptServer> {
-    if !line.starts_with("server=") || !line.contains("status=available") {
-        return None;
-    }
-    Some(McpPromptServer {
-        server_id: mcp_raw_field(line, "server=")?.to_string(),
-        display_name: mcp_quoted_field(line, "name=").unwrap_or_default(),
-        purpose: mcp_quoted_field(line, "purpose=").unwrap_or_default(),
-        usage_instructions: mcp_quoted_field(line, "usage_instructions=").unwrap_or_default(),
-        tool_count: mcp_usize_field(line, "tools=").unwrap_or(0),
-        approval_required_tool_count: 0,
-    })
-}
-
-/// Parses one available-tool context line.
-fn mcp_available_tool_from_line(line: &str) -> Option<McpPromptTool> {
-    if !line.starts_with("available_tool=") || !line.contains("callable=true") {
-        return None;
-    }
-    let combined = mcp_raw_field(line, "available_tool=")?;
-    let (server_id, tool_name) = combined.split_once('/')?;
-    if server_id.is_empty() || tool_name.is_empty() {
-        return None;
-    }
-    Some(McpPromptTool {
-        server_id: server_id.to_string(),
-        tool_name: tool_name.to_string(),
-        description: mcp_quoted_field(line, "description=").unwrap_or_default(),
-        approval_required: false,
-        input_schema_json: "{}".to_string(),
-    })
-}
-
-/// Parses one whitespace-delimited raw MCP field.
-fn mcp_raw_field<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
-    line.split_whitespace()
-        .find_map(|field| field.strip_prefix(prefix))
-        .filter(|value| !value.is_empty())
-}
-
-/// Parses one JSON-style quoted MCP field.
-fn mcp_quoted_field(line: &str, prefix: &str) -> Option<String> {
-    let start = line.find(prefix)? + prefix.len();
-    let quoted = line.get(start..)?.trim_start().strip_prefix('"')?;
-    let mut escaped = false;
-    for (index, character) in quoted.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if character == '\\' {
-            escaped = true;
-            continue;
-        }
-        if character == '"' {
-            let literal = format!("\"{}\"", &quoted[..index]);
-            return serde_json::from_str::<String>(&literal).ok();
-        }
-    }
-    None
-}
-
 /// Extracts the live Mezzanine session id from hidden identity context.
 fn prompt_cache_session_id_from_blocks(blocks: &[ContextBlock]) -> Option<String> {
     blocks
@@ -392,50 +255,6 @@ mod tests {
         fn provider_fragment<'a>(&'a self, _path: &str) -> crate::AgentPromptResult<&'a str> {
             Ok("provider contract")
         }
-    }
-
-    /// Verifies runtime-injected MCP context rebuilds the structured summary
-    /// consumed by lower prompt assembly.
-    #[test]
-    fn mcp_prompt_summary_accepts_runtime_hint_blocks() {
-        let summary = mcp_prompt_summary_from_context_blocks(&[ContextBlock {
-            source: ContextSourceKind::RuntimeHint,
-            placement: crate::ContextPlacement::EphemeralTail,
-            label: "mcp integrations".to_string(),
-            content: concat!(
-                "available_servers=1 available_tools=1\n",
-                "server=test status=available route=mcp_call name=\"Test\" purpose=\"purpose\" usage_instructions=\"usage\" tools=1\n",
-                "available_tool=test/run route=mcp_call callable=true description=\"Run tool\"\n",
-                "unavailable_server=offline purpose=\"offline purpose\" usage_instructions=\"offline usage\" retryable=true reason=\"auth failed\"\n",
-            )
-            .to_string(),
-        }]);
-
-        assert_eq!(summary.available_servers[0].server_id, "test");
-        assert_eq!(summary.available_tools[0].tool_name, "run");
-        assert_eq!(summary.unavailable_servers[0].server_id, "offline");
-        assert_eq!(summary.unavailable_servers[0].purpose, "offline purpose");
-        assert_eq!(
-            summary.unavailable_servers[0].usage_instructions,
-            "offline usage"
-        );
-        assert_eq!(summary.unavailable_servers[0].reason, "auth failed");
-        assert!(summary.unavailable_servers[0].retryable);
-    }
-
-    /// Verifies unrelated context does not fabricate MCP availability.
-    #[test]
-    fn mcp_prompt_summary_ignores_non_mcp_blocks() {
-        let summary = mcp_prompt_summary_from_context_blocks(&[ContextBlock {
-            source: ContextSourceKind::Configuration,
-            placement: crate::ContextPlacement::StablePrefix,
-            label: "session identity".to_string(),
-            content: "session_id=test-session".to_string(),
-        }]);
-
-        assert!(summary.available_servers.is_empty());
-        assert!(summary.available_tools.is_empty());
-        assert!(summary.unavailable_servers.is_empty());
     }
 
     /// Verifies lower request assembly preserves hidden provider events and

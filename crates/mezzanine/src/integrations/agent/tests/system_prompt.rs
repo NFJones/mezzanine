@@ -441,12 +441,12 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
 }
 
 #[test]
-/// Verifies system prompt keeps MCP awareness abstract in ordinary turns.
+/// Verifies system prompt keeps MCP awareness abstract and profile-independent.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
-fn system_prompt_summarizes_mcp_without_listing_tools() {
+fn system_prompt_keeps_mcp_awareness_abstract() {
     let prompt = build_agent_system_prompt(&AgentPromptProfile {
         agent_id: "agent-1".to_string(),
         pane_id: "%1".to_string(),
@@ -454,32 +454,6 @@ fn system_prompt_summarizes_mcp_without_listing_tools() {
         cooperation_mode: Some("isolated".to_string()),
         read_scopes: vec!["src".to_string()],
         write_scopes: vec!["src/agent.rs".to_string()],
-        mcp_summary: mez_agent::McpPromptSummary {
-            available_servers: vec![mez_agent::McpPromptServer {
-                server_id: "fs".to_string(),
-                display_name: "Filesystem".to_string(),
-                purpose: "Read project files through MCP".to_string(),
-                usage_instructions: "Use read_file only when the task needs file contents."
-                    .to_string(),
-                tool_count: 1,
-                approval_required_tool_count: 1,
-            }],
-            available_tools: vec![mez_agent::McpPromptTool {
-                server_id: "fs".to_string(),
-                tool_name: "read_file".to_string(),
-                description: "Read files".to_string(),
-                approval_required: true,
-                input_schema_json: r#"{"type":"object","properties":{"path":{"type":"string"}}}"#
-                    .to_string(),
-            }],
-            unavailable_servers: vec![mez_agent::McpPromptUnavailableServer {
-                server_id: "gitlab".to_string(),
-                purpose: "GitLab issue and merge request operations".to_string(),
-                usage_instructions: "Use for GitLab issue and merge request tasks.".to_string(),
-                reason: "authentication failed".to_string(),
-                retryable: true,
-            }],
-        },
     })
     .unwrap();
 

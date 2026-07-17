@@ -99,9 +99,7 @@ fn append_filtered_mcp_context(
     {
         return AgentContext::new(context.blocks);
     }
-    let mut lines = vec![
-        "MCP servers are external integrations. Use them only when the user task matches a listed server purpose or an exposed tool description; otherwise prefer local shell/repo work.".to_string(),
-        format!(
+    let mut lines = vec![format!(
         "available_servers={} available_tools={} unavailable_servers={}",
         summary.available_servers.len(),
         summary.available_tools.len(),
@@ -124,20 +122,8 @@ fn append_filtered_mcp_context(
             .collect::<Vec<_>>()
             .join(",");
         lines.push(format!(
-            "explicit_invocation={} action=mcp_call directive={}",
-            mcp_context_quoted_value(&invoked_servers),
-            mcp_context_quoted_value(
-                "The user explicitly invoked these MCP servers. Use a matching callable mcp_call action now when it can advance the request; memory search and unrelated discovery are not substitutes for the requested integration."
-            )
-        ));
-        lines.push(format!(
-            "call_shape={} argument_contract={}",
-            mcp_context_quoted_value(
-                r#"{"type":"mcp_call","server":"<listed server>","tool":"<listed tool>","arguments":{...}}"#
-            ),
-            mcp_context_quoted_value(
-                "Fill arguments according to the selected mcp_call action schema; gather only missing task-local values that are not already present in the prompt or current results."
-            )
+            "explicit_invocation={} action=mcp_call",
+            mcp_context_quoted_value(&invoked_servers)
         ));
     }
     let detailed_tools = mcp_context_selected_tool_details(

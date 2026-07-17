@@ -3,7 +3,10 @@
 //! This bounded leaf owns the named behavioral scenarios.
 
 use super::*;
-use crate::{AgentPromptResult, AgentRequestAssemblyErrorKind, ModelRequest, append_mcp_context};
+use crate::{
+    AgentPromptResult, AgentRequestAssemblyErrorKind, McpPromptServer, McpPromptSummary,
+    McpPromptTool, ModelRequest, append_mcp_context,
+};
 
 /// Synthetic root-turn identity retained by moved exact-name tests.
 struct TestTurnIdentity;
@@ -220,14 +223,12 @@ fn assemble_model_request_preserves_hidden_provider_transcript_events_without_la
 }
 
 #[test]
-/// Verifies provider request assembly carries runtime MCP availability into
-/// the system prompt instead of leaving the prompt profile at its empty
-/// defaults.
+/// Verifies runtime MCP availability does not mutate stable system instructions.
 ///
 /// The selected model reads both the system prompt and the `[mcp integrations]`
 /// context block. If these disagree, the model can treat MCP as unavailable
 /// even though concrete `mcp_call` schemas are exposed later by the runner.
-fn assemble_model_request_system_prompt_uses_mcp_context_availability() {
+fn assemble_model_request_keeps_mcp_availability_out_of_system_prompt() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
         placement: crate::ContextPlacement::EphemeralTail,

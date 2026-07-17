@@ -75,7 +75,7 @@ fn openai_available_mcp_keeps_memory_on_default_surface() {
     assert!(body.contains("action=mcp_call"), "{body}");
     assert!(body.contains("required_arguments=\\\"repo\\\""), "{body}");
     assert!(
-        body.contains("memory search and unrelated discovery are not substitutes"),
+        !body.contains("memory search and unrelated discovery are not substitutes"),
         "{body}"
     );
     let mcp_actions = openai_tool_action_schemas(mcp_tool_schema)
