@@ -7,9 +7,8 @@
 
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnExecution,
-    AgentTurnRecord, AgentTurnState, AuditActor, BTreeMap, ContextBlock, ContextSourceKind,
-    HookEvent, McpToolCallRequest, MezError, ReqwestProviderHttpTransport, Result,
-    RuntimeMcpActionExecutor, RuntimeSessionService, action_result_context_content,
+    AgentTurnRecord, AgentTurnState, AuditActor, BTreeMap, HookEvent, McpToolCallRequest, MezError,
+    ReqwestProviderHttpTransport, Result, RuntimeMcpActionExecutor, RuntimeSessionService,
     current_unix_seconds, execute_mcp_action_through_runtime,
     execute_mcp_action_through_runtime_async, execute_network_action_with_transport_async,
     json_escape, network_action_plan, runtime_action_status_name, runtime_agent_action_summary,
@@ -89,18 +88,7 @@ impl RuntimeSessionService {
                 .iter()
                 .filter(|result| result.action_type == "mcp_call")
             {
-                self.agent_turn_contexts_mut()
-                    .get_mut(&turn.turn_id)
-                    .ok_or_else(|| {
-                        MezError::invalid_state("running agent turn context is unavailable")
-                    })?
-                    .blocks
-                    .push(ContextBlock {
-                        source: ContextSourceKind::ActionResult,
-                        placement: mez_agent::ContextPlacement::EphemeralTail,
-                        label: format!("action result {}", result.action_id),
-                        content: action_result_context_content(result),
-                    });
+                self.append_action_result_context_if_absent(&turn.turn_id, result)?;
             }
         }
         Ok(executed)
@@ -175,18 +163,7 @@ impl RuntimeSessionService {
                 .iter()
                 .filter(|result| result.action_type == "mcp_call")
             {
-                self.agent_turn_contexts_mut()
-                    .get_mut(&turn.turn_id)
-                    .ok_or_else(|| {
-                        MezError::invalid_state("running agent turn context is unavailable")
-                    })?
-                    .blocks
-                    .push(ContextBlock {
-                        source: ContextSourceKind::ActionResult,
-                        placement: mez_agent::ContextPlacement::EphemeralTail,
-                        label: format!("action result {}", result.action_id),
-                        content: action_result_context_content(result),
-                    });
+                self.append_action_result_context_if_absent(&turn.turn_id, result)?;
             }
         }
         Ok(executed)
@@ -327,18 +304,7 @@ impl RuntimeSessionService {
                 .iter()
                 .filter(|result| matches!(result.action_type, "web_search" | "fetch_url"))
             {
-                self.agent_turn_contexts_mut()
-                    .get_mut(&turn.turn_id)
-                    .ok_or_else(|| {
-                        MezError::invalid_state("running agent turn context is unavailable")
-                    })?
-                    .blocks
-                    .push(ContextBlock {
-                        source: ContextSourceKind::ActionResult,
-                        placement: mez_agent::ContextPlacement::EphemeralTail,
-                        label: format!("action result {}", result.action_id),
-                        content: action_result_context_content(result),
-                    });
+                self.append_action_result_context_if_absent(&turn.turn_id, result)?;
             }
             self.agent
                 .pending_agent_provider_tasks

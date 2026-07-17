@@ -252,12 +252,20 @@ impl RuntimeSessionService {
             .iter()
             .any(|block| block.label == label && block.content == content)
         {
-            context.blocks.push(ContextBlock {
-                source: ContextSourceKind::ActionResult,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
-                label,
-                content,
-            });
+            let insertion_index = context
+                .blocks
+                .iter()
+                .position(|block| block.placement == mez_agent::ContextPlacement::EphemeralTail)
+                .unwrap_or(context.blocks.len());
+            context.blocks.insert(
+                insertion_index,
+                ContextBlock {
+                    source: ContextSourceKind::ActionResult,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
+                    label,
+                    content,
+                },
+            );
         }
         Ok(())
     }

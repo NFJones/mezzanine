@@ -184,18 +184,7 @@ impl RuntimeSessionService {
                 .iter()
                 .filter(|result| result.action_type == "spawn_agent")
             {
-                self.agent_turn_contexts_mut()
-                    .get_mut(&turn.turn_id)
-                    .ok_or_else(|| {
-                        MezError::invalid_state("running agent turn context is unavailable")
-                    })?
-                    .blocks
-                    .push(ContextBlock {
-                        source: ContextSourceKind::ActionResult,
-                        placement: mez_agent::ContextPlacement::EphemeralTail,
-                        label: format!("action result {}", result.action_id),
-                        content: action_result_context_content(result),
-                    });
+                self.append_action_result_context_if_absent(&turn.turn_id, result)?;
             }
             self.agent
                 .pending_agent_provider_tasks
