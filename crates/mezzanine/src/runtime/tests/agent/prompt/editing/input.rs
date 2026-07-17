@@ -81,6 +81,80 @@ fn runtime_attached_input_submits_visible_agent_prompt_non_modally() {
     );
 }
 
+/// Verifies a below-threshold bracketed paste retains exact multiline text.
+///
+/// Small pastes stay directly editable rather than becoming collapsed paste
+/// blocks, but their newlines, blank lines, tabs, and surrounding whitespace
+/// must remain literal and must not submit the prompt before a later Enter.
+#[test]
+fn runtime_agent_prompt_preserves_below_threshold_split_paste_fidelity() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_pane_screen(
+        "%1".to_string(),
+        TerminalScreen::new(Size::new(80, 24).unwrap(), 10).unwrap(),
+    );
+
+    let payload = "\nfirst\n\n\tsecond  \n";
+    for input in [
+        format!("prefix \u{1b}[200~{}", &payload[..8]).into_bytes(),
+        format!("{}\u{1b}[201~ suffix", &payload[8..]).into_bytes(),
+    ] {
+        service
+            .apply_attached_terminal_step_plan(
+                &primary,
+                &AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(input)],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .unwrap();
+    }
+
+    let expected = format!("prefix {payload} suffix");
+    let prompt_state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
+    assert_eq!(prompt_state.prompt.buffer.line(), expected);
+    assert!(prompt_state.prompt.buffer.history().is_empty());
+    assert!(service.pending_agent_provider_tasks().is_empty());
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"\r".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+
+    let prompt_state = service.agent_prompt_inputs_for_tests().get("%1").unwrap();
+    assert_eq!(
+        prompt_state.prompt.buffer.history(),
+        std::slice::from_ref(&expected)
+    );
+    let context = service.agent_turn_contexts().get("turn-1").unwrap();
+    assert!(
+        context
+            .blocks
+            .iter()
+            .any(|block| block.content.contains(&expected))
+    );
+}
+
 /// Verifies large prompt paste blocks can exceed the visible pane area.
 ///
 /// Bracketed paste payloads may arrive split across terminal reads and contain
