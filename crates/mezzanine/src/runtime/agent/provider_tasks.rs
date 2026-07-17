@@ -1111,6 +1111,66 @@ impl RuntimeSessionService {
                         provider.provider_id()
                     ),
                 )?;
+                if !self.routed_presentation_turn(&turn_id)
+                    && let Some(auto_sizing) =
+                        self.runtime_auto_sizing_dispatch_for_turn(&turn, &model_profile)?
+                {
+                    let context = self
+                        .agent_turn_contexts()
+                        .get(&turn_id)
+                        .cloned()
+                        .ok_or_else(|| {
+                            MezError::invalid_state("runtime agent turn context is unavailable")
+                        })?;
+                    let auto_sizing_execution =
+                        match crate::runtime::runtime_execute_auto_sizing_with_provider(
+                            provider,
+                            &auto_sizing,
+                            &turn,
+                            &context,
+                        ) {
+                            Ok(execution) => execution,
+                            Err(error) => {
+                                self.append_agent_trace_provider_error(
+                                    &turn,
+                                    provider.provider_id(),
+                                    &auto_sizing.router_profile,
+                                    &error,
+                                )?;
+                                self.append_provider_request_failure_audit(
+                                    &turn,
+                                    &auto_sizing.router_profile,
+                                    provider.provider_id(),
+                                    &error,
+                                )?;
+                                self.integration
+                                    .runtime_metrics_mut()
+                                    .record_provider_failure();
+                                self.fail_agent_turn_for_provider_error(
+                                    &turn,
+                                    provider.provider_id(),
+                                    &auto_sizing.router_profile,
+                                    &error,
+                                )?;
+                                return Err(error);
+                            }
+                        };
+                    self.record_auto_sizing_outcome(
+                        &turn,
+                        &auto_sizing_execution.selected_profile,
+                        auto_sizing_execution.decision.as_ref(),
+                        auto_sizing_execution.fallback.as_deref(),
+                    )?;
+                    let agent_id = AgentId::opaque(turn.agent_id.clone()).ok_or_else(|| {
+                        MezError::invalid_state("runtime agent turn has an invalid agent id")
+                    })?;
+                    self.apply_routed_worker_selected_transition(
+                        &agent_id,
+                        &turn_id,
+                        auto_sizing_execution.into_routed_worker_selection(),
+                    )?;
+                    continue;
+                }
             }
             executions.push(self.execute_agent_turn_with_provider(
                 &turn_id,

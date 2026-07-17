@@ -454,9 +454,9 @@ reasoning_profile = "high"
     let executions = service
         .poll_agent_provider_tasks_with_provider(&provider, 1)
         .unwrap();
-    assert_eq!(executions.len(), 1);
+    assert!(executions.is_empty());
     let requests = provider.requests.borrow();
-    assert_eq!(requests.len(), 2);
+    assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].interaction_kind,
         mez_agent::ModelInteractionKind::AutoSizing
@@ -505,37 +505,53 @@ reasoning_profile = "high"
         !router_context.contains("policy-only context should not reach the router"),
         "{router_context}"
     );
+    let workflow = service
+        .routed_workflow_for_tests("turn-1")
+        .expect("routing should create a managed worker workflow");
     assert_eq!(
-        requests[1].interaction_kind,
-        mez_agent::ModelInteractionKind::CapabilityDecision
+        workflow.phase,
+        mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult
     );
-    assert_eq!(requests[1].model, "gpt-5.5");
-    assert_eq!(requests[1].reasoning_effort.as_deref(), Some("high"));
-    assert_eq!(executions[0].request.model, "gpt-5.5");
+    assert_eq!(workflow.main_model_profile, "default");
+    assert_eq!(workflow.worker_model_profile.as_deref(), Some("gpt-5.5"));
+    assert_eq!(workflow.original_user_prompt, "implement this");
+    let child_turn_id = workflow
+        .child_turn_id
+        .as_deref()
+        .expect("managed worker turn should be queued");
+    let child_profile = service
+        .agent_turn_model_profile(child_turn_id)
+        .expect("managed worker profile should be pinned");
+    assert_eq!(child_profile.model, "gpt-5.5");
+    assert_eq!(child_profile.reasoning_profile.as_deref(), Some("high"));
+    let child_context = service
+        .agent_turn_contexts()
+        .get(child_turn_id)
+        .expect("managed worker context should exist");
     assert_eq!(
-        executions[0].request.reasoning_effort.as_deref(),
-        Some("high")
+        child_context
+            .blocks
+            .iter()
+            .filter(|block| block.content == "implement this")
+            .count(),
+        1
     );
-    let router_usage_key = mez_agent::ModelTokenUsageKey::new("runtime-batch", "gpt-router");
     assert_eq!(
-        executions[0]
-            .routing_token_usage_by_model
-            .get(&router_usage_key)
-            .copied(),
-        Some(mez_agent::ModelTokenUsage {
-            input_tokens: 90,
-            output_tokens: 10,
-            reasoning_tokens: 3,
-            cached_input_tokens: Some(30),
-            cache_write_input_tokens: None,
-        })
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == "turn-1")
+            .map(|turn| turn.state),
+        Some(mez_agent::AgentTurnState::Blocked)
     );
+    drop(requests);
     let status = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"auto-sizing-token-status","method":"agent/shell/command","params":{"idempotency_key":"auto-sizing-token-status","input":"/status"}}"#,
         &primary,
     );
     assert!(
-        status.contains("| Pane agent tokens | 2 models; see Pane Agent Token Usage |"),
+        status.contains("| Pane agent tokens | gpt-router via runtime-batch:"),
         "{status}"
     );
     assert!(status.contains("### Mez Session Token Usage"), "{status}");
@@ -543,18 +559,7 @@ reasoning_profile = "high"
         status.contains("| runtime-batch | gpt-router | 60 | 30 | 10 | 3 | 33.33% |"),
         "{status}"
     );
-    assert!(
-        status.contains("| runtime-batch | gpt-5.5 | 100 | 50 | 40 | 12 | 33.33% |"),
-        "{status}"
-    );
-    let normal_request_context = requests[1]
-        .messages
-        .iter()
-        .map(|message| message.content.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(!normal_request_context.contains(":auto-sizing"));
-    assert!(!normal_request_context.contains("multi-file feature work"));
+    assert!(!status.contains("| runtime-batch | gpt-5.5 |"), "{status}");
 }
 
 /// Verifies that an inaccessible routing model fails the turn instead of

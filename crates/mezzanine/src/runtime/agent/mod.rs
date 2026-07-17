@@ -579,6 +579,17 @@ impl RuntimeSessionService {
             .contains_key(parent_turn_id)
     }
 
+    /// Returns one active routed workflow to crate-local regression tests.
+    #[cfg(test)]
+    pub(crate) fn routed_workflow_for_tests(
+        &self,
+        parent_turn_id: &str,
+    ) -> Option<&RoutedWorkflowState> {
+        self.agent
+            .routed_workflows_by_parent_turn
+            .get(parent_turn_id)
+    }
+
     /// Returns the parent macro turn for one child step turn.
     #[cfg(test)]
     pub(crate) fn macro_parent_turn_for_child(&self, child_turn_id: &str) -> Option<&String> {
