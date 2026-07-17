@@ -2,6 +2,271 @@
 
 use super::*;
 
+/// Verifies cancelling managed worker and handoff turns resumes the blocked
+/// parent exactly once with phase-specific evidence and releases child state.
+///
+/// Both phases use the normal routed selection and pane stop paths so this
+/// regression covers the integration boundary that previously bypassed the
+/// routed state machine in favor of generic subagent cancellation.
+#[test]
+fn runtime_routed_child_cancellation_resumes_parent_once() {
+    let setup = || {
+        let mut service = test_runtime_service();
+        service
+            .replace_config_layers(vec![ConfigLayer {
+                name: "primary".to_string(),
+                path: None,
+                format: ConfigFormat::Toml,
+                scope: ConfigScope::Primary,
+                trusted: true,
+                text: r#"
+[agents]
+default_provider = "runtime-batch"
+default_model_profile = "default"
+routing = true
+
+[agents.auto_sizing]
+router_model_profile = "router"
+small_model_profile = "small"
+medium_model_profile = "medium"
+large_model_profile = "large"
+allowed_reasoning_efforts = ["low", "medium", "high", "xhigh"]
+fallback_policy = "use-default-profile"
+
+[providers.runtime-batch]
+kind = "openai"
+models = ["gpt-router", "gpt-default", "gpt-5.3-codex", "gpt-5.4", "gpt-5.5"]
+default_model = "gpt-default"
+
+[model_profiles.default]
+provider = "runtime-batch"
+model = "gpt-default"
+reasoning_profile = "medium"
+
+[model_profiles.router]
+provider = "runtime-batch"
+model = "gpt-router"
+reasoning_profile = "low"
+
+[model_profiles.small]
+provider = "runtime-batch"
+model = "gpt-5.3-codex"
+reasoning_profile = "medium"
+
+[model_profiles.medium]
+provider = "runtime-batch"
+model = "gpt-5.4"
+reasoning_profile = "medium"
+
+[model_profiles.large]
+provider = "runtime-batch"
+model = "gpt-5.5"
+reasoning_profile = "high"
+"#
+                .to_string(),
+            }])
+            .unwrap();
+        let primary = service
+            .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+            .unwrap();
+        let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+        screen.feed(b"ready\n");
+        service.set_pane_screen("%1".to_string(), screen);
+        service
+            .agent_shell_store_mut()
+            .enter_or_resume("%1")
+            .unwrap();
+        let prompt = service.dispatch_runtime_control_body(
+            r#"{"jsonrpc":"2.0","id":"routed-cancel","method":"agent/shell/command","params":{"idempotency_key":"routed-cancel","input":"implement this"}}"#,
+            &primary,
+        );
+        assert!(prompt.contains(r#""state":"running""#), "{prompt}");
+        let provider = RuntimeAutoSizingProvider {
+            requests: RefCell::new(Vec::new()),
+        };
+        assert!(
+            service
+                .poll_agent_provider_tasks_with_provider(&provider, 1)
+                .unwrap()
+                .is_empty()
+        );
+        let child_turn_id = service
+            .routed_workflow_for_tests("turn-1")
+            .and_then(|workflow| workflow.child_turn_id.clone())
+            .expect("routing should queue a managed worker");
+        (service, primary, child_turn_id)
+    };
+    let completed_execution = |turn: &mez_agent::AgentTurnRecord, text: &str| {
+        let action = mez_agent::AgentAction {
+            id: format!("say-{}", turn.turn_id),
+            rationale: "return the routed result".to_string(),
+            payload: mez_agent::AgentActionPayload::Say {
+                status: mez_agent::SayStatus::Final,
+                text: text.to_string(),
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+            },
+        };
+        mez_agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+            response: mez_agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: text.to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: None,
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![mez_agent::ActionResult::succeeded(
+                turn,
+                &action,
+                vec![text.to_string()],
+                None,
+            )],
+            final_turn: true,
+            terminal_state: AgentTurnState::Completed,
+        }
+    };
+
+    let (mut worker_service, _worker_primary, worker_turn_id) = setup();
+    let worker_turn = worker_service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == worker_turn_id)
+        .cloned()
+        .expect("managed worker turn should exist");
+    let worker_pane_id = worker_turn
+        .agent_id
+        .strip_prefix("agent-")
+        .expect("managed child agent should identify its pane")
+        .to_string();
+    worker_service
+        .stop_agent_turn_for_pane(&worker_pane_id)
+        .unwrap();
+    let worker_workflow = worker_service
+        .routed_workflow_for_tests("turn-1")
+        .expect("cancelled worker should retain parent recovery state");
+    assert_eq!(
+        worker_workflow.phase,
+        mez_agent::routed_workflow::RoutedWorkflowPhase::ReadyForErrorExplanation
+    );
+    assert!(worker_workflow.error_explanation_attempted);
+    assert_eq!(worker_service.pending_agent_provider_tasks().len(), 1);
+    assert_eq!(worker_service.subagent_task_parent(&worker_turn_id), None);
+    let worker_failure_count = worker_service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .expect("parent context should remain available")
+        .blocks
+        .iter()
+        .filter(|block| {
+            block.label == "routed workflow failure"
+                && block.content.contains("routed worker was cancelled")
+        })
+        .count();
+    assert_eq!(worker_failure_count, 1);
+    assert!(
+        worker_service
+            .handle_routed_child_cancellation(&worker_turn)
+            .unwrap()
+    );
+    assert_eq!(worker_service.pending_agent_provider_tasks().len(), 1);
+
+    let (mut handoff_service, _handoff_primary, worker_turn_id) = setup();
+    let worker_turn = handoff_service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == worker_turn_id)
+        .cloned()
+        .expect("managed worker turn should exist");
+    let worker_pane_id = worker_turn
+        .agent_id
+        .strip_prefix("agent-")
+        .expect("managed child agent should identify its pane")
+        .to_string();
+    let exact_result = "worker completed before handoff cancellation";
+    let worker_profile = handoff_service
+        .agent_turn_model_profile(&worker_turn.turn_id)
+        .expect("managed worker profile should remain pinned")
+        .clone();
+    handoff_service
+        .apply_agent_provider_execution(
+            &worker_turn,
+            &worker_profile,
+            "runtime-batch",
+            completed_execution(&worker_turn, exact_result),
+        )
+        .unwrap();
+    let handoff_turn_id = handoff_service
+        .routed_workflow_for_tests("turn-1")
+        .and_then(|workflow| workflow.child_turn_id.clone())
+        .expect("worker completion should queue a handoff turn");
+    let handoff_turn = handoff_service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == handoff_turn_id)
+        .cloned()
+        .expect("managed handoff turn should exist");
+    handoff_service.start_ready_agent_turns().unwrap();
+    assert_eq!(
+        handoff_service
+            .agent_shell_store()
+            .get(&worker_pane_id)
+            .and_then(|session| session.running_turn_id.as_deref()),
+        Some(handoff_turn_id.as_str())
+    );
+    handoff_service
+        .stop_agent_turn_for_pane(&worker_pane_id)
+        .unwrap();
+    let handoff_workflow = handoff_service
+        .routed_workflow_for_tests("turn-1")
+        .expect("cancelled handoff should retain parent recovery state");
+    assert_eq!(
+        handoff_workflow.phase,
+        mez_agent::routed_workflow::RoutedWorkflowPhase::ReadyForErrorExplanation
+    );
+    assert!(handoff_workflow.error_explanation_attempted);
+    assert_eq!(handoff_service.pending_agent_provider_tasks().len(), 1);
+    assert_eq!(handoff_service.subagent_task_parent(&handoff_turn_id), None);
+    let parent_context = handoff_service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .expect("parent context should remain available");
+    assert_eq!(
+        parent_context
+            .blocks
+            .iter()
+            .filter(|block| {
+                block.label == "routed worker exact final result" && block.content == exact_result
+            })
+            .count(),
+        1
+    );
+    assert_eq!(
+        parent_context
+            .blocks
+            .iter()
+            .filter(|block| {
+                block.label == "routed workflow failure"
+                    && block.content.contains("routed handoff was cancelled")
+            })
+            .count(),
+        1
+    );
+    assert!(
+        handoff_service
+            .handle_routed_child_cancellation(&handoff_turn)
+            .unwrap()
+    );
+    assert_eq!(handoff_service.pending_agent_provider_tasks().len(), 1);
+}
+
 /// Verifies subagents inherit the live parent pane routing decision.
 ///
 /// Auto-reasoning is a pane-local agent behavior, not just a global default.

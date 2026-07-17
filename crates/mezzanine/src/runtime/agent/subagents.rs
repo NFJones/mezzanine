@@ -411,6 +411,9 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         state: AgentTurnState,
     ) -> Result<()> {
+        if turn.cooperation_mode.as_deref() == Some("routed-worker") {
+            return Ok(());
+        }
         let loop_dependency = self.take_agent_loop_dependency_for_turn(&turn.turn_id);
         match state {
             AgentTurnState::Completed => self.emit_subagent_task_result_with_dependency(
