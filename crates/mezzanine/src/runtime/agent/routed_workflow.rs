@@ -253,13 +253,25 @@ impl RuntimeSessionService {
                     )?;
                     return Ok(true);
                 }
+                let mut handoff_context = self
+                    .agent_turn_contexts()
+                    .get(&turn.turn_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        MezError::invalid_state("routed worker context is unavailable")
+                    })?;
+                handoff_context.blocks.push(ContextBlock {
+                    source: ContextSourceKind::RoutedHandoff,
+                    label: "routed worker exact final result".to_string(),
+                    content: output.clone(),
+                });
                 let handoff_turn = self.queue_routed_child_turn(RoutedChildTurnRequest {
                     parent_turn: &parent_turn,
                     child_agent_id: &child_agent_id,
                     child_pane_id: &child_pane_id,
                     prompt: ROUTED_HANDOFF_PROMPT,
                     model_profile: child_profile,
-                    seed_context: self.agent_turn_contexts().get(&turn.turn_id).cloned(),
+                    seed_context: Some(handoff_context),
                     initial_capability: Some(mez_agent::AgentCapability::RespondOnly),
                     reason: "routed_worker_handoff",
                 })?;
@@ -352,7 +364,7 @@ impl RuntimeSessionService {
             .ok_or_else(|| MezError::invalid_state("routed parent context is unavailable"))?;
         context.blocks.push(ContextBlock {
             source: ContextSourceKind::RoutedHandoff,
-            label: "routed worker final result".to_string(),
+            label: "routed worker exact final result".to_string(),
             content: final_result.to_string(),
         });
         let handoff_content = match handoff {

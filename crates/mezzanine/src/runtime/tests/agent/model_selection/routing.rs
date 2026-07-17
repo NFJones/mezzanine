@@ -517,16 +517,16 @@ reasoning_profile = "high"
     assert_eq!(workflow.original_user_prompt, "implement this");
     let child_turn_id = workflow
         .child_turn_id
-        .as_deref()
+        .clone()
         .expect("managed worker turn should be queued");
     let child_profile = service
-        .agent_turn_model_profile(child_turn_id)
+        .agent_turn_model_profile(&child_turn_id)
         .expect("managed worker profile should be pinned");
     assert_eq!(child_profile.model, "gpt-5.5");
     assert_eq!(child_profile.reasoning_profile.as_deref(), Some("high"));
     let child_context = service
         .agent_turn_contexts()
-        .get(child_turn_id)
+        .get(&child_turn_id)
         .expect("managed worker context should exist");
     assert_eq!(
         child_context
@@ -560,6 +560,163 @@ reasoning_profile = "high"
         "{status}"
     );
     assert!(!status.contains("| runtime-batch | gpt-5.5 |"), "{status}");
+
+    let completed_say_execution = |turn: &mez_agent::AgentTurnRecord, text: &str| {
+        let action = mez_agent::AgentAction {
+            id: format!("say-{}", turn.turn_id),
+            rationale: "return the routed result".to_string(),
+            payload: mez_agent::AgentActionPayload::Say {
+                status: mez_agent::SayStatus::Final,
+                text: text.to_string(),
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+            },
+        };
+        mez_agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+            response: mez_agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: "completed routed response".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: None,
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![mez_agent::ActionResult::succeeded(
+                turn,
+                &action,
+                vec![text.to_string()],
+                None,
+            )],
+            final_turn: true,
+            terminal_state: AgentTurnState::Completed,
+        }
+    };
+    let worker_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == child_turn_id)
+        .cloned()
+        .expect("managed worker turn should remain recorded");
+    let exact_worker_result = "Implemented the routed fix and verified its regression test.";
+    assert!(
+        service
+            .handle_routed_child_execution_result(
+                &worker_turn,
+                &completed_say_execution(&worker_turn, exact_worker_result),
+            )
+            .unwrap()
+    );
+
+    let workflow = service
+        .routed_workflow_for_tests("turn-1")
+        .expect("worker completion should advance the routed workflow");
+    assert_eq!(
+        workflow.phase,
+        mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForHandoff
+    );
+    assert_eq!(
+        workflow.worker_final_result.as_deref(),
+        Some(exact_worker_result)
+    );
+    let handoff_turn_id = workflow
+        .child_turn_id
+        .as_deref()
+        .expect("worker completion should queue a handoff turn");
+    let handoff_context = service
+        .agent_turn_contexts()
+        .get(handoff_turn_id)
+        .expect("handoff context should be recorded");
+    assert!(handoff_context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::RoutedHandoff
+            && block.label == "routed worker exact final result"
+            && block.content == exact_worker_result
+    }));
+
+    let handoff_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == handoff_turn_id)
+        .cloned()
+        .expect("handoff turn should remain recorded");
+    assert!(
+        service
+            .handle_routed_child_execution_result(
+                &handoff_turn,
+                &completed_say_execution(&handoff_turn, "invalid handoff"),
+            )
+            .unwrap()
+    );
+
+    let workflow = service
+        .routed_workflow_for_tests("turn-1")
+        .expect("invalid handoff should retain the routed workflow");
+    assert_eq!(workflow.handoff_repair_attempts, 1);
+    let repair_turn_id = workflow
+        .child_turn_id
+        .as_deref()
+        .expect("invalid handoff should queue one repair turn");
+    let repair_context = service
+        .agent_turn_contexts()
+        .get(repair_turn_id)
+        .expect("repair context should be recorded");
+    assert_eq!(
+        repair_context
+            .blocks
+            .iter()
+            .filter(|block| {
+                block.source == ContextSourceKind::RoutedHandoff
+                    && block.label == "routed worker exact final result"
+                    && block.content == exact_worker_result
+            })
+            .count(),
+        1
+    );
+
+    let repair_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == repair_turn_id)
+        .cloned()
+        .expect("repair turn should remain recorded");
+    let valid_handoff = r#"{"version":1,"result_summary":"Routing fix complete","decisions":["preserve exact output"],"evidence":["regression passed"],"changes":["added routed result context"],"validation":["focused test"],"assumptions":[],"unresolved_risks":[],"follow_up_context":[]}"#;
+    assert!(
+        service
+            .handle_routed_child_execution_result(
+                &repair_turn,
+                &completed_say_execution(&repair_turn, valid_handoff),
+            )
+            .unwrap()
+    );
+
+    let parent_context = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .expect("parent context should remain recorded");
+    assert!(parent_context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::RoutedHandoff
+            && block.label == "routed worker exact final result"
+            && block.content == exact_worker_result
+    }));
+    assert!(parent_context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::RoutedHandoff
+            && block.label == "routed worker handoff context"
+            && block
+                .content
+                .contains("\"result_summary\":\"Routing fix complete\"")
+    }));
+    assert_eq!(
+        service
+            .routed_workflow_for_tests("turn-1")
+            .map(|workflow| workflow.phase.clone()),
+        Some(mez_agent::routed_workflow::RoutedWorkflowPhase::ReadyForPresentation)
+    );
 }
 
 /// Verifies that an inaccessible routing model fails the turn instead of
