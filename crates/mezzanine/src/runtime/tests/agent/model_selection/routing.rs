@@ -102,6 +102,135 @@ fn runtime_routed_selection_setup_failure_recovers_once() {
     assert_eq!(replay_diagnostic_count, 1);
 }
 
+/// Verifies post-spawn routed setup failure removes the unregistered worker.
+///
+/// A successful idle spawn acquires a pane, shell session, and subagent
+/// authority before routed turn registration. Failure at that boundary must
+/// tear those resources down directly instead of relying on child-turn lookup.
+#[test]
+fn runtime_routed_selection_post_spawn_failure_removes_worker() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.set_pane_screen("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let prompt = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"routed-post-spawn-failure","method":"agent/shell/command","params":{"idempotency_key":"routed-post-spawn-failure","input":"implement this"}}"#,
+        &primary,
+    );
+    assert!(prompt.contains(r#""state":"running""#), "{prompt}");
+    let parent_profile = service
+        .agent_turn_model_profile("turn-1")
+        .expect("parent profile should exist")
+        .clone();
+    service.fail_next_routed_worker_after_spawn_for_tests();
+    let selection = RuntimeRoutedWorkerSelection {
+        worker_profile: parent_profile,
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        decision_summary: Some("large/high".to_string()),
+        fallback: None,
+    };
+    let parent_agent = AgentId::opaque("agent-%1").unwrap();
+
+    service
+        .apply_routed_worker_selected_transition(&parent_agent, "turn-1", selection)
+        .unwrap();
+
+    assert!(service.agent_shell_store().get("%2").is_none());
+    assert!(service.find_pane_descriptor("%2").is_none());
+    assert!(!service.has_subagent_authority_state("agent-%2"));
+    assert!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .all(|turn| turn.parent_turn_id.as_deref() != Some("turn-1"))
+    );
+    let workflow = service
+        .routed_workflow_for_tests("turn-1")
+        .expect("setup failure should retain recovery state");
+    assert_eq!(
+        workflow.phase,
+        mez_agent::routed_workflow::RoutedWorkflowPhase::ReadyForErrorExplanation
+    );
+    assert!(
+        workflow
+            .diagnostic
+            .as_deref()
+            .is_some_and(|value| value.contains("post-spawn setup failure"))
+    );
+}
+
+/// Verifies routed selection recovery terminates cleanly without parent context.
+///
+/// Losing the complete parent context makes a model-authored explanation
+/// impossible. Recovery must preserve the original setup diagnostic, fail the
+/// parent through normal lifecycle cleanup, and avoid propagating a second
+/// invalid-state error or leaving provider work queued.
+#[test]
+fn runtime_routed_selection_missing_parent_context_fails_cleanly() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.set_pane_screen("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let prompt = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"routed-missing-context","method":"agent/shell/command","params":{"idempotency_key":"routed-missing-context","input":"implement this"}}"#,
+        &primary,
+    );
+    assert!(prompt.contains(r#""state":"running""#), "{prompt}");
+    let parent_profile = service
+        .agent_turn_model_profile("turn-1")
+        .expect("parent profile should exist")
+        .clone();
+    service.agent_turn_contexts_mut().remove("turn-1");
+    let selection = RuntimeRoutedWorkerSelection {
+        worker_profile: parent_profile,
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        decision_summary: Some("large/high".to_string()),
+        fallback: None,
+    };
+    let parent_agent = AgentId::opaque("agent-%1").unwrap();
+
+    service
+        .apply_routed_worker_selected_transition(&parent_agent, "turn-1", selection)
+        .unwrap();
+
+    let parent_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .expect("parent turn should remain in the ledger");
+    assert_eq!(parent_turn.state, mez_agent::AgentTurnState::Failed);
+    assert!(service.pending_agent_provider_tasks().is_empty());
+    let workflow = service
+        .routed_workflow_for_tests("turn-1")
+        .expect("failed workflow should retain its diagnostic");
+    assert_eq!(
+        workflow.phase,
+        mez_agent::routed_workflow::RoutedWorkflowPhase::Failed
+    );
+    assert!(
+        workflow
+            .diagnostic
+            .as_deref()
+            .is_some_and(|value| value.contains("routed parent context is unavailable"))
+    );
+}
+
 /// Verifies routed child cancellation resumes the parent exactly once and
 /// routed parent cancellation terminates its active managed child.
 ///

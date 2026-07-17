@@ -236,115 +236,132 @@ impl RuntimeSessionService {
         let spawn_json = self.spawn_runtime_subagent_session_owned(spawn, placement)?;
         let (child_agent_id, _child_display_name, child_turn_id) =
             runtime_spawn_json_agent_and_turn(&spawn_json)?;
-        if child_turn_id.is_some() {
-            return Err(MezError::invalid_state(
-                "routed worker idle spawn unexpectedly created a turn",
-            ));
-        }
         let child_pane_id = child_agent_id
             .strip_prefix("agent-")
             .ok_or_else(|| MezError::invalid_state("routed worker agent id is invalid"))?
             .to_string();
-        let child_conversation_id = format!("routed-{turn_id}-worker");
-        self.agent_shell_store_mut()
-            .bind_ephemeral_conversation_with_lineage_and_transcript_source(
-                &child_pane_id,
-                child_conversation_id.clone(),
-                0,
-                Some(parent_session.prompt_cache_lineage_id.clone()),
-                Some(parent_session.session_id.clone()),
-                parent_session.transcript_entries,
-            )?;
-        self.set_agent_routing_override(&child_pane_id, Some(false));
+        let setup_result = (|| {
+            #[cfg(test)]
+            if std::mem::take(&mut self.agent.fail_routed_worker_after_spawn) {
+                return Err(MezError::invalid_state(
+                    "injected routed worker post-spawn setup failure",
+                ));
+            }
+            if child_turn_id.is_some() {
+                return Err(MezError::invalid_state(
+                    "routed worker idle spawn unexpectedly created a turn",
+                ));
+            }
+            let child_conversation_id = format!("routed-{turn_id}-worker");
+            self.agent_shell_store_mut()
+                .bind_ephemeral_conversation_with_lineage_and_transcript_source(
+                    &child_pane_id,
+                    child_conversation_id.clone(),
+                    0,
+                    Some(parent_session.prompt_cache_lineage_id.clone()),
+                    Some(parent_session.session_id.clone()),
+                    parent_session.transcript_entries,
+                )?;
+            self.set_agent_routing_override(&child_pane_id, Some(false));
 
-        let child_turn = self.queue_routed_child_turn(RoutedChildTurnRequest {
-            parent_turn: &turn,
-            child_agent_id: &child_agent_id,
-            child_pane_id: &child_pane_id,
-            prompt: &original_user_prompt,
-            model_profile: selection.worker_profile.clone(),
-            seed_context: Some(worker_seed_context),
-            initial_capability: None,
-            reason: "routed_worker_execute",
-        })?;
-        self.agent
-            .routed_workflow_by_child_turn
-            .insert(child_turn.turn_id.clone(), turn.turn_id.clone());
-        let child_context = self
-            .agent_turn_contexts()
-            .get(&child_turn.turn_id)
-            .cloned()
-            .ok_or_else(|| MezError::invalid_state("routed child context was not recorded"))?;
-        self.agent
-            .routed_child_contexts_by_parent_turn
-            .insert(turn.turn_id.clone(), child_context);
-        self.agent
-            .routed_child_profiles_by_parent_turn
-            .insert(turn.turn_id.clone(), selection.worker_profile.clone());
-        self.agent.routed_workflows_by_parent_turn.insert(
-            turn.turn_id.clone(),
-            RoutedWorkflowState {
-                run_id: turn.turn_id.clone(),
-                parent_agent_id: turn.agent_id.clone(),
-                parent_pane_id: turn.pane_id.clone(),
-                parent_conversation_id: parent_session.session_id,
-                parent_transcript_entries: parent_session.transcript_entries,
-                original_user_prompt,
-                main_model_profile: turn.model_profile.clone(),
-                worker_model_profile: Some(selection.worker_profile.model.clone()),
-                child_agent_id: Some(child_agent_id.clone()),
-                child_conversation_id: Some(child_conversation_id),
-                child_turn_id: Some(child_turn.turn_id.clone()),
-                worker_final_result: None,
-                handoff: None,
-                handoff_repair_attempts: 0,
-                error_explanation_attempted: false,
-                phase: RoutedWorkflowPhase::WaitingForWorkerResult,
-                diagnostic: selection.fallback.clone(),
-            },
-        );
-        for (key, usage) in &selection.routing_token_usage_by_model {
-            self.integration
-                .runtime_metrics_mut()
-                .record_provider_token_usage(*usage, *usage, key);
-        }
-        self.record_agent_provider_token_usage_by_model(
-            &turn.pane_id,
-            &selection.routing_token_usage_by_model,
-        );
-        if let Some(summary) = selection.decision_summary.as_deref() {
-            self.append_agent_status_text_to_terminal_buffer(
+            let child_turn = self.queue_routed_child_turn(RoutedChildTurnRequest {
+                parent_turn: &turn,
+                child_agent_id: &child_agent_id,
+                child_pane_id: &child_pane_id,
+                prompt: &original_user_prompt,
+                model_profile: selection.worker_profile.clone(),
+                seed_context: Some(worker_seed_context),
+                initial_capability: None,
+                reason: "routed_worker_execute",
+            })?;
+            self.agent
+                .routed_workflow_by_child_turn
+                .insert(child_turn.turn_id.clone(), turn.turn_id.clone());
+            let child_context = self
+                .agent_turn_contexts()
+                .get(&child_turn.turn_id)
+                .cloned()
+                .ok_or_else(|| MezError::invalid_state("routed child context was not recorded"))?;
+            self.agent
+                .routed_child_contexts_by_parent_turn
+                .insert(turn.turn_id.clone(), child_context);
+            self.agent
+                .routed_child_profiles_by_parent_turn
+                .insert(turn.turn_id.clone(), selection.worker_profile.clone());
+            self.agent.routed_workflows_by_parent_turn.insert(
+                turn.turn_id.clone(),
+                RoutedWorkflowState {
+                    run_id: turn.turn_id.clone(),
+                    parent_agent_id: turn.agent_id.clone(),
+                    parent_pane_id: turn.pane_id.clone(),
+                    parent_conversation_id: parent_session.session_id,
+                    parent_transcript_entries: parent_session.transcript_entries,
+                    original_user_prompt,
+                    main_model_profile: turn.model_profile.clone(),
+                    worker_model_profile: Some(selection.worker_profile.model.clone()),
+                    child_agent_id: Some(child_agent_id.clone()),
+                    child_conversation_id: Some(child_conversation_id),
+                    child_turn_id: Some(child_turn.turn_id.clone()),
+                    worker_final_result: None,
+                    handoff: None,
+                    handoff_repair_attempts: 0,
+                    error_explanation_attempted: false,
+                    phase: RoutedWorkflowPhase::WaitingForWorkerResult,
+                    diagnostic: selection.fallback.clone(),
+                },
+            );
+            for (key, usage) in &selection.routing_token_usage_by_model {
+                self.integration
+                    .runtime_metrics_mut()
+                    .record_provider_token_usage(*usage, *usage, key);
+            }
+            self.record_agent_provider_token_usage_by_model(
                 &turn.pane_id,
-                &format!("agent: routing selected {summary}"),
-            )?;
-        } else if let Some(fallback) = selection.fallback.as_deref() {
-            self.append_agent_status_text_to_terminal_buffer(
+                &selection.routing_token_usage_by_model,
+            );
+            if let Some(summary) = selection.decision_summary.as_deref() {
+                self.append_agent_status_text_to_terminal_buffer(
+                    &turn.pane_id,
+                    &format!("agent: routing selected {summary}"),
+                )?;
+            } else if let Some(fallback) = selection.fallback.as_deref() {
+                self.append_agent_status_text_to_terminal_buffer(
+                    &turn.pane_id,
+                    &format!(
+                        "agent: routing fallback worker {}: {fallback}",
+                        selection.worker_profile.model
+                    ),
+                )?;
+            }
+            self.agent.agent_scheduler.block_running(turn_id)?;
+            self.agent_turn_ledger_mut()
+                .finish_turn(turn_id, AgentTurnState::Blocked)?;
+            self.append_agent_trace_turn_event(
                 &turn.pane_id,
+                turn_id,
                 &format!(
-                    "agent: routing fallback worker {}: {fallback}",
-                    selection.worker_profile.model
+                    "routed_worker selected provider={} model={} child_agent={} child_turn={}",
+                    selection.worker_profile.provider,
+                    selection.worker_profile.model,
+                    child_agent_id,
+                    child_turn.turn_id
                 ),
             )?;
+            self.start_ready_agent_turns()?;
+            Ok(self.runtime_transition_with_render(
+                true,
+                Some(crate::runtime::RenderInvalidationReason::FullRedraw),
+            ))
+        })();
+        if setup_result.is_err() {
+            self.cleanup_failed_subagent_spawn(
+                None,
+                &child_pane_id,
+                &child_agent_id,
+                child_turn_id.as_deref(),
+            );
         }
-        self.agent.agent_scheduler.block_running(turn_id)?;
-        self.agent_turn_ledger_mut()
-            .finish_turn(turn_id, AgentTurnState::Blocked)?;
-        self.append_agent_trace_turn_event(
-            &turn.pane_id,
-            turn_id,
-            &format!(
-                "routed_worker selected provider={} model={} child_agent={} child_turn={}",
-                selection.worker_profile.provider,
-                selection.worker_profile.model,
-                child_agent_id,
-                child_turn.turn_id
-            ),
-        )?;
-        self.start_ready_agent_turns()?;
-        Ok(self.runtime_transition_with_render(
-            true,
-            Some(crate::runtime::RenderInvalidationReason::FullRedraw),
-        ))
+        setup_result
     }
 
     /// Rolls back partial routed-child setup and queues one bounded explanation.
@@ -875,6 +892,36 @@ impl RuntimeSessionService {
         child_output: &str,
         diagnostic: &str,
     ) -> Result<()> {
+        if !self
+            .agent_turn_contexts()
+            .contains_key(&parent_turn.turn_id)
+        {
+            if let Some(workflow) = self
+                .agent
+                .routed_workflows_by_parent_turn
+                .get_mut(&parent_turn.turn_id)
+            {
+                workflow.phase = RoutedWorkflowPhase::Failed;
+                workflow.error_explanation_attempted = true;
+                workflow.diagnostic = Some(format!(
+                    "{stage}: {diagnostic}; routed parent context is unavailable"
+                ));
+            }
+            self.agent
+                .routed_presentation_turns
+                .remove(&parent_turn.turn_id);
+            self.append_agent_status_text_to_terminal_buffer(
+                &parent_turn.pane_id,
+                "agent: routed workflow failed without parent context",
+            )?;
+            self.release_routed_child_for_close(parent_turn)?;
+            self.finish_agent_turn(
+                &parent_turn.pane_id,
+                &parent_turn.turn_id,
+                AgentTurnState::Failed,
+            )?;
+            return Ok(());
+        }
         let context = self
             .agent_turn_contexts_mut()
             .get_mut(&parent_turn.turn_id)

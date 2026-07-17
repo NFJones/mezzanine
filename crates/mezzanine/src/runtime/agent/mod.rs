@@ -227,6 +227,9 @@ pub(crate) struct RuntimeAgentComponent {
     routed_child_profiles_by_parent_turn: BTreeMap<String, ModelProfile>,
     /// Parent turns whose next provider request is respond-only presentation.
     routed_presentation_turns: BTreeSet<String>,
+    /// Test-only one-shot failure injected after a routed worker spawn succeeds.
+    #[cfg(test)]
+    fail_routed_worker_after_spawn: bool,
     /// Approval continuation metadata keyed by blocked approval id.
     blocked_agent_approval_refs: BTreeMap<String, BlockedAgentApprovalRef>,
     /// Spawned child turns currently joined by parent agent actions.
@@ -603,6 +606,12 @@ impl RuntimeSessionService {
         self.agent
             .routed_workflows_by_parent_turn
             .get(parent_turn_id)
+    }
+
+    /// Injects one routed setup failure immediately after worker spawn.
+    #[cfg(test)]
+    pub(crate) fn fail_next_routed_worker_after_spawn_for_tests(&mut self) {
+        self.agent.fail_routed_worker_after_spawn = true;
     }
 
     /// Returns the parent macro turn for one child step turn.

@@ -865,7 +865,7 @@ impl RuntimeSessionService {
 
     /// Rolls back the pane, model override, turn state, and write scope created
     /// before a subagent spawn setup step failed.
-    fn cleanup_failed_subagent_spawn(
+    pub(crate) fn cleanup_failed_subagent_spawn(
         &mut self,
         controller: Option<&mez_core::ids::ClientId>,
         pane_id: &str,
