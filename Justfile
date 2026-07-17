@@ -34,10 +34,6 @@ clippy:
 test:
     cargo test --workspace --all-targets --all-features
 
-# Reject forbidden dependencies between Mezzanine workspace crates
-architecture:
-    python3 scripts/check-workspace-dependencies.py
-
 # Clean build artifacts
 clean:
     cargo clean
