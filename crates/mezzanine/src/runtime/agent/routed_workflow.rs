@@ -477,6 +477,7 @@ impl RuntimeSessionService {
                     )?;
                 }
                 Err(error) if state.can_repair_handoff() => {
+                    let diagnostic = error.to_string();
                     let Some(child_profile) = self
                         .agent
                         .routed_child_profiles_by_parent_turn
@@ -492,17 +493,38 @@ impl RuntimeSessionService {
                         self.agent.subagent_task_routes.remove(&turn.turn_id);
                         return Ok(true);
                     };
+                    let mut repair_context = self
+                        .agent_turn_contexts()
+                        .get(&turn.turn_id)
+                        .cloned()
+                        .or_else(|| {
+                            self.agent
+                                .routed_child_contexts_by_parent_turn
+                                .get(&parent_turn_id)
+                                .cloned()
+                        })
+                        .unwrap_or(AgentContext { blocks: Vec::new() });
+                    repair_context.blocks.extend([
+                        ContextBlock {
+                            source: ContextSourceKind::RoutedHandoff,
+                            placement: mez_agent::ContextPlacement::ConversationAppend,
+                            label: "invalid routed handoff output".to_string(),
+                            content: output.clone(),
+                        },
+                        ContextBlock {
+                            source: ContextSourceKind::RuntimeHint,
+                            placement: mez_agent::ContextPlacement::EphemeralTail,
+                            label: "routed handoff validation feedback".to_string(),
+                            content: diagnostic.clone(),
+                        },
+                    ]);
                     let repair_turn = match self.queue_routed_child_turn(RoutedChildTurnRequest {
                         parent_turn: &parent_turn,
                         child_agent_id: &child_agent_id,
                         child_pane_id: &child_pane_id,
                         prompt: ROUTED_HANDOFF_REPAIR_PROMPT,
                         model_profile: child_profile,
-                        seed_context: self
-                            .agent
-                            .routed_child_contexts_by_parent_turn
-                            .get(&parent_turn_id)
-                            .cloned(),
+                        seed_context: Some(repair_context),
                         initial_capability: Some(mez_agent::AgentCapability::RespondOnly),
                         reason: "routed_worker_handoff_repair",
                     }) {
@@ -529,7 +551,7 @@ impl RuntimeSessionService {
                         workflow.handoff_repair_attempts =
                             workflow.handoff_repair_attempts.saturating_add(1);
                         workflow.child_turn_id = Some(repair_turn.turn_id);
-                        workflow.diagnostic = Some(error.to_string());
+                        workflow.diagnostic = Some(diagnostic);
                     }
                 }
                 Err(error) => {

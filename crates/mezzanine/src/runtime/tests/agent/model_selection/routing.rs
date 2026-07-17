@@ -823,6 +823,18 @@ reasoning_profile = "high"
             .count(),
         1
     );
+    assert!(repair_context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::RoutedHandoff
+            && block.label == "invalid routed handoff output"
+            && block.content == "invalid handoff"
+    }));
+    assert!(repair_context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::RuntimeHint
+            && block.label == "routed handoff validation feedback"
+            && block
+                .content
+                .contains("invalid routed handoff JSON: expected value")
+    }));
 
     let repair_turn = service
         .agent_turn_ledger()
