@@ -615,25 +615,10 @@ reasoning_profile = "high"
         .cloned()
         .expect("managed worker turn should remain recorded");
     let exact_worker_result = "Implemented the routed fix and verified its regression test.";
-    let worker_context = service
+    let _worker_context = service
         .agent_turn_contexts_mut()
         .remove(&worker_turn.turn_id)
         .expect("managed worker context should be available before the failure injection");
-    let transition_error = service
-        .handle_routed_child_execution_result(
-            &worker_turn,
-            &completed_say_execution(&worker_turn, exact_worker_result),
-        )
-        .expect_err("missing worker context should fail before the handoff is queued");
-    assert!(
-        transition_error
-            .message()
-            .contains("routed worker context is unavailable"),
-        "{transition_error}"
-    );
-    service
-        .agent_turn_contexts_mut()
-        .insert(worker_turn.turn_id.clone(), worker_context);
     assert!(
         service
             .handle_routed_child_execution_result(
@@ -748,25 +733,36 @@ reasoning_profile = "high"
             .map(|workflow| workflow.phase.clone()),
         Some(mez_agent::routed_workflow::RoutedWorkflowPhase::ReadyForPresentation)
     );
-    service.complete_routed_presentation("turn-1", AgentTurnState::Failed);
+    assert!(
+        service
+            .complete_routed_presentation("turn-1", AgentTurnState::Failed)
+            .unwrap(),
+        "failed presentation should queue one main-model explanation"
+    );
     let failed_workflow = service
         .routed_workflow_for_tests("turn-1")
         .expect("failed parent presentation should remain observable");
     assert_eq!(
         failed_workflow.phase,
-        mez_agent::routed_workflow::RoutedWorkflowPhase::Failed
+        mez_agent::routed_workflow::RoutedWorkflowPhase::ExplainingError
     );
     assert_eq!(
         failed_workflow.diagnostic.as_deref(),
         Some("routed parent presentation failed")
     );
-    service.complete_routed_presentation("turn-1", AgentTurnState::Completed);
+    assert!(failed_workflow.error_explanation_attempted);
+    assert!(
+        !service
+            .complete_routed_presentation("turn-1", AgentTurnState::Failed)
+            .unwrap(),
+        "failed error explanation must terminate without another retry"
+    );
     assert_eq!(
         service
             .routed_workflow_for_tests("turn-1")
             .map(|workflow| workflow.phase.clone()),
         Some(mez_agent::routed_workflow::RoutedWorkflowPhase::Failed),
-        "duplicate presentation completion must not overwrite a retained failure"
+        "the one allowed error explanation failure must remain observable"
     );
 }
 

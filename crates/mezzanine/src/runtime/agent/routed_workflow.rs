@@ -18,9 +18,9 @@ use mez_agent::routed_workflow::{
 
 const ROUTED_HANDOFF_MAX_BYTES: usize = 16 * 1024;
 
-const ROUTED_HANDOFF_PROMPT: &str = r#"Return all context needed for the main model to present your completed result safely. Respond only with one JSON object matching this schema: {"version":1,"result_summary":"...","decisions":["..."],"evidence":["..."],"changes":["..."],"validation":["..."],"assumptions":["..."],"unresolved_risks":["..."],"follow_up_context":["..."]}. Do not perform more work or call tools."#;
+const ROUTED_HANDOFF_PROMPT: &str = r#"Return all context needed for the main model to present your completed result safely. Emit one final MAAP say action whose text is exactly one JSON object matching this schema: {"version":1,"result_summary":"...","decisions":["..."],"evidence":["..."],"changes":["..."],"validation":["..."],"assumptions":["..."],"unresolved_risks":["..."],"follow_up_context":["..."]}. Do not perform more work or call tools."#;
 
-const ROUTED_HANDOFF_REPAIR_PROMPT: &str = r#"Your previous handoff was invalid. Return only one valid JSON object with version 1 and string-array fields decisions, evidence, changes, validation, assumptions, unresolved_risks, and follow_up_context, plus string result_summary. Do not use Markdown fences or call tools."#;
+const ROUTED_HANDOFF_REPAIR_PROMPT: &str = r#"Your previous handoff was invalid. Emit one final MAAP say action whose text is exactly one valid JSON object with version 1 and string-array fields decisions, evidence, changes, validation, assumptions, unresolved_risks, and follow_up_context, plus string result_summary. Do not use Markdown fences or call tools."#;
 
 /// Inputs for one runtime-owned child turn in a routed workflow.
 struct RoutedChildTurnRequest<'a> {
@@ -125,6 +125,17 @@ impl RuntimeSessionService {
         self.agent
             .routed_workflow_by_child_turn
             .insert(child_turn.turn_id.clone(), turn.turn_id.clone());
+        let child_context = self
+            .agent_turn_contexts()
+            .get(&child_turn.turn_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("routed child context was not recorded"))?;
+        self.agent
+            .routed_child_contexts_by_parent_turn
+            .insert(turn.turn_id.clone(), child_context);
+        self.agent
+            .routed_child_profiles_by_parent_turn
+            .insert(turn.turn_id.clone(), selection.worker_profile.clone());
         self.agent.routed_workflows_by_parent_turn.insert(
             turn.turn_id.clone(),
             RoutedWorkflowState {
@@ -142,6 +153,7 @@ impl RuntimeSessionService {
                 worker_final_result: None,
                 handoff: None,
                 handoff_repair_attempts: 0,
+                error_explanation_attempted: false,
                 phase: RoutedWorkflowPhase::WaitingForWorkerResult,
                 diagnostic: selection.fallback.clone(),
             },
@@ -234,12 +246,6 @@ impl RuntimeSessionService {
             .strip_prefix("agent-")
             .ok_or_else(|| MezError::invalid_state("routed child agent id is invalid"))?
             .to_string();
-        let child_profile = self
-            .agent
-            .agent_turn_model_profiles
-            .get(&turn.turn_id)
-            .cloned()
-            .ok_or_else(|| MezError::invalid_state("routed child profile is unavailable"))?;
         let output = subagent_task_output_for_execution(execution);
 
         match state.phase {
@@ -254,28 +260,54 @@ impl RuntimeSessionService {
                         workflow.diagnostic =
                             Some("routed worker failed before handoff".to_string());
                     }
-                    self.ready_routed_parent_for_presentation(
+                    self.ready_routed_parent_for_error_explanation(
                         &parent_turn,
+                        "worker",
                         &output,
-                        None,
-                        Some("routed worker failed before handoff"),
+                        "routed worker failed before handoff",
                     )?;
                     self.agent.subagent_task_routes.remove(&turn.turn_id);
                     return Ok(true);
                 }
-                let mut handoff_context = self
-                    .agent_turn_contexts()
-                    .get(&turn.turn_id)
+                let Some(mut handoff_context) = self
+                    .agent
+                    .routed_child_contexts_by_parent_turn
+                    .get(&parent_turn_id)
                     .cloned()
-                    .ok_or_else(|| {
-                        MezError::invalid_state("routed worker context is unavailable")
-                    })?;
+                else {
+                    self.ready_routed_parent_for_error_explanation(
+                        &parent_turn,
+                        "summary request",
+                        &output,
+                        "routed worker context snapshot is unavailable",
+                    )?;
+                    self.agent.subagent_task_routes.remove(&turn.turn_id);
+                    return Ok(true);
+                };
+                let Some(child_profile) = self
+                    .agent
+                    .routed_child_profiles_by_parent_turn
+                    .get(&parent_turn_id)
+                    .cloned()
+                else {
+                    self.ready_routed_parent_for_error_explanation(
+                        &parent_turn,
+                        "summary request",
+                        &output,
+                        "routed worker profile snapshot is unavailable",
+                    )?;
+                    self.agent.subagent_task_routes.remove(&turn.turn_id);
+                    return Ok(true);
+                };
                 handoff_context.blocks.push(ContextBlock {
                     source: ContextSourceKind::RoutedHandoff,
                     label: "routed worker exact final result".to_string(),
                     content: output.clone(),
                 });
-                let handoff_turn = self.queue_routed_child_turn(RoutedChildTurnRequest {
+                self.agent
+                    .routed_child_contexts_by_parent_turn
+                    .insert(parent_turn_id.clone(), handoff_context.clone());
+                let handoff_turn = match self.queue_routed_child_turn(RoutedChildTurnRequest {
                     parent_turn: &parent_turn,
                     child_agent_id: &child_agent_id,
                     child_pane_id: &child_pane_id,
@@ -284,7 +316,19 @@ impl RuntimeSessionService {
                     seed_context: Some(handoff_context),
                     initial_capability: Some(mez_agent::AgentCapability::RespondOnly),
                     reason: "routed_worker_handoff",
-                })?;
+                }) {
+                    Ok(turn) => turn,
+                    Err(error) => {
+                        self.ready_routed_parent_for_error_explanation(
+                            &parent_turn,
+                            "summary request",
+                            &output,
+                            &error.to_string(),
+                        )?;
+                        self.agent.subagent_task_routes.remove(&turn.turn_id);
+                        return Ok(true);
+                    }
+                };
                 self.agent
                     .routed_workflow_by_child_turn
                     .insert(handoff_turn.turn_id.clone(), parent_turn_id.clone());
@@ -297,6 +341,17 @@ impl RuntimeSessionService {
                     workflow.child_turn_id = Some(handoff_turn.turn_id);
                     workflow.phase = RoutedWorkflowPhase::WaitingForHandoff;
                 }
+            }
+            RoutedWorkflowPhase::WaitingForHandoff
+                if execution.terminal_state != AgentTurnState::Completed =>
+            {
+                let final_result = state.worker_final_result.as_deref().unwrap_or_default();
+                self.ready_routed_parent_for_error_explanation(
+                    &parent_turn,
+                    "summary request",
+                    final_result,
+                    "routed handoff provider step failed",
+                )?;
             }
             RoutedWorkflowPhase::WaitingForHandoff => match parse_routed_worker_handoff(&output) {
                 Ok(handoff) => {
@@ -316,16 +371,47 @@ impl RuntimeSessionService {
                     )?;
                 }
                 Err(error) if state.can_repair_handoff() => {
-                    let repair_turn = self.queue_routed_child_turn(RoutedChildTurnRequest {
+                    let Some(child_profile) = self
+                        .agent
+                        .routed_child_profiles_by_parent_turn
+                        .get(&parent_turn_id)
+                        .cloned()
+                    else {
+                        self.ready_routed_parent_for_error_explanation(
+                            &parent_turn,
+                            "summary repair",
+                            state.worker_final_result.as_deref().unwrap_or_default(),
+                            "routed worker profile snapshot is unavailable",
+                        )?;
+                        self.agent.subagent_task_routes.remove(&turn.turn_id);
+                        return Ok(true);
+                    };
+                    let repair_turn = match self.queue_routed_child_turn(RoutedChildTurnRequest {
                         parent_turn: &parent_turn,
                         child_agent_id: &child_agent_id,
                         child_pane_id: &child_pane_id,
                         prompt: ROUTED_HANDOFF_REPAIR_PROMPT,
                         model_profile: child_profile,
-                        seed_context: self.agent_turn_contexts().get(&turn.turn_id).cloned(),
+                        seed_context: self
+                            .agent
+                            .routed_child_contexts_by_parent_turn
+                            .get(&parent_turn_id)
+                            .cloned(),
                         initial_capability: Some(mez_agent::AgentCapability::RespondOnly),
                         reason: "routed_worker_handoff_repair",
-                    })?;
+                    }) {
+                        Ok(turn) => turn,
+                        Err(queue_error) => {
+                            self.ready_routed_parent_for_error_explanation(
+                                &parent_turn,
+                                "summary repair",
+                                state.worker_final_result.as_deref().unwrap_or_default(),
+                                &queue_error.to_string(),
+                            )?;
+                            self.agent.subagent_task_routes.remove(&turn.turn_id);
+                            return Ok(true);
+                        }
+                    };
                     self.agent
                         .routed_workflow_by_child_turn
                         .insert(repair_turn.turn_id.clone(), parent_turn_id.clone());
@@ -343,11 +429,11 @@ impl RuntimeSessionService {
                 Err(error) => {
                     let final_result = state.worker_final_result.as_deref().unwrap_or_default();
                     let diagnostic = error.to_string();
-                    self.ready_routed_parent_for_presentation(
+                    self.ready_routed_parent_for_error_explanation(
                         &parent_turn,
+                        "summary parse",
                         final_result,
-                        None,
-                        Some(&diagnostic),
+                        &diagnostic,
                     )?;
                 }
             },
@@ -359,6 +445,66 @@ impl RuntimeSessionService {
         }
         self.agent.subagent_task_routes.remove(&turn.turn_id);
         Ok(true)
+    }
+
+    /// Adds a routed diagnostic to the parent context and queues one explanation.
+    fn ready_routed_parent_for_error_explanation(
+        &mut self,
+        parent_turn: &AgentTurnRecord,
+        stage: &str,
+        child_output: &str,
+        diagnostic: &str,
+    ) -> Result<()> {
+        let context = self
+            .agent_turn_contexts_mut()
+            .get_mut(&parent_turn.turn_id)
+            .ok_or_else(|| MezError::invalid_state("routed parent context is unavailable"))?;
+        if !child_output.is_empty() {
+            context.blocks.push(ContextBlock {
+                source: ContextSourceKind::RoutedHandoff,
+                label: "routed worker exact final result".to_string(),
+                content: child_output.to_string(),
+            });
+        }
+        context.blocks.push(ContextBlock {
+            source: ContextSourceKind::RoutedHandoff,
+            label: "routed workflow failure".to_string(),
+            content: format!("stage={stage}\ndiagnostic={diagnostic}"),
+        });
+        context.blocks.push(ContextBlock {
+            source: ContextSourceKind::RuntimeHint,
+            label: "routed failure explanation".to_string(),
+            content: "Explain why the routed operation failed. Use the stored diagnostic and any exact worker output as evidence, do not claim the routed operation succeeded, and respond only without executing actions.".to_string(),
+        });
+        if let Some(workflow) = self
+            .agent
+            .routed_workflows_by_parent_turn
+            .get_mut(&parent_turn.turn_id)
+        {
+            workflow.phase = RoutedWorkflowPhase::ReadyForErrorExplanation;
+            workflow.error_explanation_attempted = true;
+            workflow.diagnostic = Some(format!("{stage}: {diagnostic}"));
+        }
+        self.agent
+            .routed_presentation_turns
+            .insert(parent_turn.turn_id.clone());
+        let _ = self
+            .agent
+            .agent_scheduler
+            .resume_blocked(&parent_turn.turn_id);
+        if parent_turn.state == AgentTurnState::Blocked {
+            self.agent_turn_ledger_mut()
+                .resume_blocked_turn(&parent_turn.turn_id)?;
+        }
+        self.agent
+            .pending_agent_provider_tasks
+            .insert(parent_turn.turn_id.clone());
+        self.append_agent_status_text_to_terminal_buffer(
+            &parent_turn.pane_id,
+            "agent: routed workflow failed; explaining with main model",
+        )?;
+        self.release_routed_child_for_close(parent_turn)?;
+        Ok(())
     }
 
     /// Adds routed evidence to the parent context and queues main-model presentation.
@@ -461,28 +607,74 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: &str,
         terminal_state: AgentTurnState,
-    ) {
+    ) -> Result<bool> {
         let Some(terminal_phase) = routed_presentation_terminal_phase(terminal_state) else {
-            return;
+            return Ok(false);
         };
-        if !self.agent.routed_presentation_turns.remove(turn_id) {
-            return;
+        if !self.agent.routed_presentation_turns.contains(turn_id) {
+            return Ok(false);
         }
         if terminal_phase == RoutedWorkflowPhase::Completed {
+            self.agent.routed_presentation_turns.remove(turn_id);
             self.agent.routed_workflows_by_parent_turn.remove(turn_id);
-        } else if let Some(workflow) = self.agent.routed_workflows_by_parent_turn.get_mut(turn_id) {
-            workflow.phase = terminal_phase;
-            workflow.diagnostic = Some(match terminal_state {
-                AgentTurnState::Failed => "routed parent presentation failed".to_string(),
-                AgentTurnState::Interrupted => {
-                    "routed parent presentation was interrupted".to_string()
-                }
-                _ => unreachable!("terminal phase mapping excludes non-error states"),
-            });
+            self.clear_routed_workflow_runtime_state(turn_id);
+            return Ok(false);
         }
+        let diagnostic = match terminal_state {
+            AgentTurnState::Failed => "routed parent presentation failed".to_string(),
+            AgentTurnState::Interrupted => "routed parent presentation was interrupted".to_string(),
+            _ => unreachable!("terminal phase mapping excludes non-error states"),
+        };
+        let should_explain = self
+            .agent
+            .routed_workflows_by_parent_turn
+            .get(turn_id)
+            .is_some_and(|workflow| !workflow.error_explanation_attempted);
+        if should_explain {
+            let context = self
+                .agent_turn_contexts_mut()
+                .get_mut(turn_id)
+                .ok_or_else(|| MezError::invalid_state("routed parent context is unavailable"))?;
+            context.blocks.push(ContextBlock {
+                source: ContextSourceKind::RoutedHandoff,
+                label: "routed workflow failure".to_string(),
+                content: format!("stage=parent presentation\ndiagnostic={diagnostic}"),
+            });
+            context.blocks.push(ContextBlock {
+                source: ContextSourceKind::RuntimeHint,
+                label: "routed failure explanation".to_string(),
+                content: "Explain why routed result presentation failed. Use the stored diagnostic as evidence, do not claim success, and respond only without executing actions.".to_string(),
+            });
+            if let Some(workflow) = self.agent.routed_workflows_by_parent_turn.get_mut(turn_id) {
+                workflow.phase = RoutedWorkflowPhase::ExplainingError;
+                workflow.error_explanation_attempted = true;
+                workflow.diagnostic = Some(diagnostic);
+            }
+            self.agent
+                .pending_agent_provider_tasks
+                .insert(turn_id.to_string());
+            return Ok(true);
+        }
+        self.agent.routed_presentation_turns.remove(turn_id);
+        if let Some(workflow) = self.agent.routed_workflows_by_parent_turn.get_mut(turn_id) {
+            workflow.phase = terminal_phase;
+            workflow.diagnostic = Some(diagnostic);
+        }
+        self.clear_routed_workflow_runtime_state(turn_id);
+        Ok(false)
+    }
+
+    /// Clears runtime-only routed snapshots and superseded child mappings.
+    fn clear_routed_workflow_runtime_state(&mut self, turn_id: &str) {
         self.agent
             .routed_workflow_by_child_turn
             .retain(|_, parent| parent != turn_id);
+        self.agent
+            .routed_child_contexts_by_parent_turn
+            .remove(turn_id);
+        self.agent
+            .routed_child_profiles_by_parent_turn
+            .remove(turn_id);
     }
 
     /// Queues one managed routed-child prompt through the ordinary agent path.

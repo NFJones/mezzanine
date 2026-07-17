@@ -107,11 +107,15 @@ impl RuntimeSessionService {
             self.apply_permission_request_hooks_for_execution(turn, &mut execution)?;
         }
         self.present_agent_action_outcomes_to_terminal_buffer(&turn.pane_id, &execution)?;
-        let failure_feedback_queued = self.queue_agent_failure_feedback_for_correction(
-            turn,
-            &mut execution,
-            "provider_execution_failed_action",
-        )?;
+        let failure_feedback_queued = if self.routed_presentation_turn(&turn.turn_id) {
+            false
+        } else {
+            self.queue_agent_failure_feedback_for_correction(
+                turn,
+                &mut execution,
+                "provider_execution_failed_action",
+            )?
+        };
         let _ = self.continue_completed_turn_for_pending_steering(turn, &mut execution)?;
         self.present_deferred_agent_say_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         let mut persisted_transcript_entries = 0usize;
@@ -162,13 +166,14 @@ impl RuntimeSessionService {
             persisted_transcript_entries =
                 self.persist_runtime_agent_turn_execution_transcript(turn, &execution)?;
             self.emit_subagent_task_result_for_execution(turn, &execution)?;
-            self.complete_routed_presentation(turn_id, execution.terminal_state);
-            self.complete_running_agent_turn_and_start_ready(
-                turn,
-                execution.terminal_state,
-                "provider_execution_settled",
-            )?;
-            self.follow_up_agent_loop_after_terminal_execution(turn, &execution)?;
+            if !self.complete_routed_presentation(turn_id, execution.terminal_state)? {
+                self.complete_running_agent_turn_and_start_ready(
+                    turn,
+                    execution.terminal_state,
+                    "provider_execution_settled",
+                )?;
+                self.follow_up_agent_loop_after_terminal_execution(turn, &execution)?;
+            }
         } else {
             let waiting_for_joined_subagents =
                 self.execution_waiting_for_live_joined_subagents(turn_id, &execution);

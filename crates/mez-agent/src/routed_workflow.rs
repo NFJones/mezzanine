@@ -29,6 +29,10 @@ pub enum RoutedWorkflowPhase {
     ReadyForPresentation,
     /// The main model is producing the user-visible response.
     Presenting,
+    /// A routed failure is ready for one bounded main-model explanation.
+    ReadyForErrorExplanation,
+    /// The main model is producing the one allowed routed failure explanation.
+    ExplainingError,
     /// The main-model presentation completed successfully.
     Completed,
     /// The workflow failed and retains a bounded diagnostic.
@@ -123,6 +127,8 @@ pub struct RoutedWorkflowState {
     pub handoff: Option<RoutedWorkerHandoff>,
     /// Number of corrective handoff prompts already issued.
     pub handoff_repair_attempts: u8,
+    /// Whether the one bounded main-model failure explanation was already queued.
+    pub error_explanation_attempted: bool,
     /// Current workflow phase.
     pub phase: RoutedWorkflowPhase,
     /// Bounded failure or interruption diagnostic.
@@ -224,6 +230,7 @@ mod tests {
             worker_final_result: None,
             handoff: None,
             handoff_repair_attempts: 0,
+            error_explanation_attempted: false,
             phase: RoutedWorkflowPhase::Classifying,
             diagnostic: None,
         }

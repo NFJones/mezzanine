@@ -168,11 +168,13 @@ impl RuntimeSessionService {
         let transcript_entries =
             self.persist_runtime_agent_turn_execution_transcript(turn, &execution)?;
         self.emit_subagent_task_result_for_execution(turn, &execution)?;
-        self.complete_running_agent_turn_and_start_ready(
-            turn,
-            AgentTurnState::Failed,
-            "provider_error",
-        )?;
+        if !self.complete_routed_presentation(&turn.turn_id, AgentTurnState::Failed)? {
+            self.complete_running_agent_turn_and_start_ready(
+                turn,
+                AgentTurnState::Failed,
+                "provider_error",
+            )?;
+        }
         if turn.cooperation_mode.as_deref() == Some("macro-orchestration") {
             let parent_agent_id = format!("agent-{}", turn.pane_id);
             let _ = self.close_subagent_descendants_for_parent_agent(

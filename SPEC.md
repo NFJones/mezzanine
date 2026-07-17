@@ -4520,8 +4520,15 @@ router model. The router decision MUST select one configured size bucket
 keep the parent turn bound to its normal user-selected model profile and MUST
 apply the selected model profile and reasoning effort only to a managed routed
 worker forked from the parent conversation. The routed worker result MUST return
-to the parent for main-profile presentation. Auto-sizing MUST NOT mutate
-persistent model-profile overrides.
+to the parent for main-profile presentation. After worker completion, Mezzanine
+MUST request one bounded structured context summary from the managed child,
+preserve the exact worker final output separately, and append both values to the
+parent context before resuming the parent on its main profile. Worker, summary,
+join, or parent-presentation failure MUST queue at most one response-only
+main-model step that explains the routed failure from a stored diagnostic. If
+that explanation also fails or is interrupted, the workflow MUST terminate
+without another recovery loop while retaining the diagnostic. Auto-sizing MUST
+NOT mutate persistent model-profile overrides.
 
 Agents MUST support a permission or approval model that can restrict command
 execution, file mutation, network use, and destructive actions.

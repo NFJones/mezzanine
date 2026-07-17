@@ -221,6 +221,10 @@ pub(crate) struct RuntimeAgentComponent {
     routed_workflows_by_parent_turn: BTreeMap<String, RoutedWorkflowState>,
     /// Parent routed workflow keyed by managed child turn id.
     routed_workflow_by_child_turn: BTreeMap<String, String>,
+    /// Durable managed-child context snapshots keyed by routed parent turn id.
+    routed_child_contexts_by_parent_turn: BTreeMap<String, AgentContext>,
+    /// Durable managed-child model profiles keyed by routed parent turn id.
+    routed_child_profiles_by_parent_turn: BTreeMap<String, ModelProfile>,
     /// Parent turns whose next provider request is respond-only presentation.
     routed_presentation_turns: BTreeSet<String>,
     /// Approval continuation metadata keyed by blocked approval id.
