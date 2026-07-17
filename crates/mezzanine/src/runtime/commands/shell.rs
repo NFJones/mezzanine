@@ -626,6 +626,12 @@ impl RuntimeSessionService {
                 {
                     let loop_outcome = self.execute_agent_shell_loop_command(&pane_id, input)?;
                     runtime_agent_shell_command_response_json(&pane_id, input, Some(&loop_outcome))
+                } else if let Some(AgentShellCommandOutcome::RequiresRuntime { command, .. }) =
+                    outcome.as_ref()
+                    && command == "reset-status"
+                {
+                    let reset_outcome = self.execute_agent_shell_reset_status_command(&pane_id)?;
+                    runtime_agent_shell_command_response_json(&pane_id, input, Some(&reset_outcome))
                 } else if let Some(AgentShellCommandOutcome::Display { command, .. }) =
                     outcome.as_ref()
                     && command == "status"

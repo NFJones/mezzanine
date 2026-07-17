@@ -5257,6 +5257,9 @@ The baseline command capabilities are:
   unknown rather than as zero. Provider token counters MUST include auxiliary
   routing/model-sizing provider requests as separate provider/model rows when
   token usage is reported.
+- `/reset-status`: Clear only the current panes pane-lifetime provider token
+  counters. Mez-session totals aggregated from retained conversations MUST remain
+  unchanged.
 - `/debug-config`: Show effective configuration, layer order, and policy
   diagnostics.
 - `/title`: Configure terminal window or tab title fields.

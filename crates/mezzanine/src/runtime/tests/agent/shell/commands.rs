@@ -270,6 +270,35 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         "{response}"
     );
     assert!(!response.contains("requires_runtime"), "{response}");
+
+    let session_usage_before_reset = service.total_agent_token_usage_by_model();
+    let second_pane_usage_before_reset = service.agent_token_usage_for_pane(second_pane.as_str());
+    let reset_response = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"agent-reset-status","method":"agent/shell/command","params":{"idempotency_key":"agent-reset-status","input":"/reset-status"}}"#,
+        &primary,
+    );
+
+    assert!(
+        reset_response.contains(r#""kind":"mutated""#),
+        "{reset_response}"
+    );
+    assert!(
+        reset_response.contains(r#""command":"reset-status""#),
+        "{reset_response}"
+    );
+    assert!(
+        reset_response.contains("pane_token_usage_reset=true changed=true"),
+        "{reset_response}"
+    );
+    assert!(service.agent_token_usage_for_pane("%1").is_empty());
+    assert_eq!(
+        service.agent_token_usage_for_pane(second_pane.as_str()),
+        second_pane_usage_before_reset
+    );
+    assert_eq!(
+        service.total_agent_token_usage_by_model(),
+        session_usage_before_reset
+    );
 }
 
 /// Verifies that `/diff` reads the active pane's Git repository and includes

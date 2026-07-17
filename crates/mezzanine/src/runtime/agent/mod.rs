@@ -735,6 +735,14 @@ impl RuntimeSessionService {
             .unwrap_or_default()
     }
 
+    /// Clears cumulative token usage for one pane without changing conversation totals.
+    pub(crate) fn reset_agent_token_usage_for_pane(&mut self, pane_id: &str) -> bool {
+        self.agent
+            .agent_token_usage_by_pane
+            .remove(pane_id)
+            .is_some()
+    }
+
     /// Returns cumulative token usage for one conversation.
     pub(crate) fn agent_token_usage_for_conversation(
         &self,

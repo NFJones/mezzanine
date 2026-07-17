@@ -807,6 +807,7 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "fork" => "fork the current conversation into a new thread.",
         "new" => "start a fresh conversation in this pane.",
         "status" => "show the current agent shell session status.",
+        "reset-status" => "reset pane token-accounting statistics.",
         "stop" => "stop the active agent turn.",
         "title" => "set or clear the pane title.",
         "log-level" => "inspect or change pane agent log verbosity.",

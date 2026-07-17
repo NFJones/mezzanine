@@ -83,6 +83,29 @@ impl RuntimeSessionService {
         })
     }
 
+    /// Executes `/reset-status` against pane-lifetime token accounting only.
+    pub(super) fn execute_agent_shell_reset_status_command(
+        &mut self,
+        pane_id: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        let visibility = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| session.visibility)
+            .ok_or_else(|| {
+                MezError::new(
+                    crate::error::MezErrorKind::NotFound,
+                    "agent shell session not found for pane",
+                )
+            })?;
+        let changed = self.reset_agent_token_usage_for_pane(pane_id);
+        Ok(AgentShellCommandOutcome::Mutated {
+            command: "reset-status".to_string(),
+            body: format!("pane_token_usage_reset=true changed={changed}"),
+            visibility,
+        })
+    }
+
     /// Builds the live `/status` display from runtime session state.
     pub(super) fn runtime_agent_status_display(&self, pane_id: &str) -> Result<String> {
         let session = self.agent_shell_store().get(pane_id).ok_or_else(|| {
