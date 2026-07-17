@@ -162,7 +162,7 @@ impl RuntimeSessionService {
             persisted_transcript_entries =
                 self.persist_runtime_agent_turn_execution_transcript(turn, &execution)?;
             self.emit_subagent_task_result_for_execution(turn, &execution)?;
-            self.complete_routed_presentation(turn_id);
+            self.complete_routed_presentation(turn_id, execution.terminal_state);
             self.complete_running_agent_turn_and_start_ready(
                 turn,
                 execution.terminal_state,

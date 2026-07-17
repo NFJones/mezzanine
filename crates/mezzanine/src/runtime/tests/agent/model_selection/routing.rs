@@ -748,6 +748,26 @@ reasoning_profile = "high"
             .map(|workflow| workflow.phase.clone()),
         Some(mez_agent::routed_workflow::RoutedWorkflowPhase::ReadyForPresentation)
     );
+    service.complete_routed_presentation("turn-1", AgentTurnState::Failed);
+    let failed_workflow = service
+        .routed_workflow_for_tests("turn-1")
+        .expect("failed parent presentation should remain observable");
+    assert_eq!(
+        failed_workflow.phase,
+        mez_agent::routed_workflow::RoutedWorkflowPhase::Failed
+    );
+    assert_eq!(
+        failed_workflow.diagnostic.as_deref(),
+        Some("routed parent presentation failed")
+    );
+    service.complete_routed_presentation("turn-1", AgentTurnState::Completed);
+    assert_eq!(
+        service
+            .routed_workflow_for_tests("turn-1")
+            .map(|workflow| workflow.phase.clone()),
+        Some(mez_agent::routed_workflow::RoutedWorkflowPhase::Failed),
+        "duplicate presentation completion must not overwrite a retained failure"
+    );
 }
 
 /// Verifies that an inaccessible routing model fails the turn instead of

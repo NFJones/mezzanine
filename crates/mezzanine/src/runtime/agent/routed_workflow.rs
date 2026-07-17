@@ -457,16 +457,32 @@ impl RuntimeSessionService {
     }
 
     /// Settles routed workflow state after the main-model presentation finishes.
-    pub(crate) fn complete_routed_presentation(&mut self, turn_id: &str) {
+    pub(crate) fn complete_routed_presentation(
+        &mut self,
+        turn_id: &str,
+        terminal_state: AgentTurnState,
+    ) {
+        let Some(terminal_phase) = routed_presentation_terminal_phase(terminal_state) else {
+            return;
+        };
         if !self.agent.routed_presentation_turns.remove(turn_id) {
             return;
         }
-        if let Some(mut workflow) = self.agent.routed_workflows_by_parent_turn.remove(turn_id) {
-            workflow.phase = RoutedWorkflowPhase::Completed;
-            self.agent
-                .routed_workflow_by_child_turn
-                .retain(|_, parent| parent != turn_id);
+        if terminal_phase == RoutedWorkflowPhase::Completed {
+            self.agent.routed_workflows_by_parent_turn.remove(turn_id);
+        } else if let Some(workflow) = self.agent.routed_workflows_by_parent_turn.get_mut(turn_id) {
+            workflow.phase = terminal_phase;
+            workflow.diagnostic = Some(match terminal_state {
+                AgentTurnState::Failed => "routed parent presentation failed".to_string(),
+                AgentTurnState::Interrupted => {
+                    "routed parent presentation was interrupted".to_string()
+                }
+                _ => unreachable!("terminal phase mapping excludes non-error states"),
+            });
         }
+        self.agent
+            .routed_workflow_by_child_turn
+            .retain(|_, parent| parent != turn_id);
     }
 
     /// Queues one managed routed-child prompt through the ordinary agent path.
@@ -558,4 +574,43 @@ fn parse_routed_worker_handoff(output: &str) -> Result<RoutedWorkerHandoff> {
         .validate(ROUTED_HANDOFF_MAX_BYTES)
         .map_err(MezError::invalid_state)?;
     Ok(handoff)
+}
+
+/// Maps a settled parent presentation turn to its routed terminal phase.
+fn routed_presentation_terminal_phase(
+    terminal_state: AgentTurnState,
+) -> Option<RoutedWorkflowPhase> {
+    match terminal_state {
+        AgentTurnState::Completed => Some(RoutedWorkflowPhase::Completed),
+        AgentTurnState::Failed => Some(RoutedWorkflowPhase::Failed),
+        AgentTurnState::Interrupted => Some(RoutedWorkflowPhase::Interrupted),
+        AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies routed presentation outcomes preserve each supported terminal
+    /// state and reject scheduler states that have not settled.
+    #[test]
+    fn routed_presentation_terminal_phase_tracks_provider_outcomes() {
+        assert_eq!(
+            routed_presentation_terminal_phase(AgentTurnState::Completed),
+            Some(RoutedWorkflowPhase::Completed)
+        );
+        assert_eq!(
+            routed_presentation_terminal_phase(AgentTurnState::Failed),
+            Some(RoutedWorkflowPhase::Failed)
+        );
+        assert_eq!(
+            routed_presentation_terminal_phase(AgentTurnState::Interrupted),
+            Some(RoutedWorkflowPhase::Interrupted)
+        );
+        assert_eq!(
+            routed_presentation_terminal_phase(AgentTurnState::Running),
+            None
+        );
+    }
 }
