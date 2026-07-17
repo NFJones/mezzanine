@@ -339,9 +339,9 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
                 .unwrap_or("none")
         ),
         format!(
-            "last_stable_prompt_prefix_sha256 = {}",
+            "last_stable_projection_sha256 = {}",
             runtime_metrics
-                .last_stable_prompt_prefix_sha256
+                .last_stable_projection_sha256
                 .as_deref()
                 .unwrap_or("none")
         ),
@@ -382,6 +382,12 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
             "last_provider_request_common_message_prefix = {}",
             runtime_metrics
                 .last_provider_request_common_message_prefix
+                .map_or_else(|| "none".to_string(), |value| value.to_string())
+        ),
+        format!(
+            "last_provider_request_common_component_prefix = {}",
+            runtime_metrics
+                .last_provider_request_common_component_prefix
                 .map_or_else(|| "none".to_string(), |value| value.to_string())
         ),
         format!(
@@ -476,16 +482,12 @@ pub(super) fn runtime_show_metrics_display(service: &RuntimeSessionService) -> S
             &runtime_metrics.provider_prompt_volatile_input_bytes,
         ),
         (
-            "provider_prompt_stable_prefix_bytes",
-            &runtime_metrics.provider_prompt_stable_prefix_bytes,
+            "provider_prompt_stable_projection_bytes",
+            &runtime_metrics.provider_prompt_stable_projection_bytes,
         ),
         (
             "provider_request_shape_bytes",
             &runtime_metrics.provider_request_shape_bytes,
-        ),
-        (
-            "provider_prompt_cacheable_prefix_bytes",
-            &runtime_metrics.provider_prompt_cacheable_prefix_bytes,
         ),
         (
             "provider_input_tokens_per_response",

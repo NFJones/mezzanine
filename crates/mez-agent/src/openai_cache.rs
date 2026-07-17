@@ -14,7 +14,7 @@ use crate::{
     ProviderRequestAssemblyResult, openai_allowed_action_surface_message,
     openai_auto_sizing_response_format, openai_macro_judge_response_format,
     openai_prompt_cache_diagnostics, openai_prompt_cache_key as provider_prompt_cache_key,
-    openai_render_messages, openai_stable_prefix_material, validate_provider_request_required,
+    openai_render_messages, openai_stable_projection_material, validate_provider_request_required,
 };
 
 /// Renders request messages and captures canonical stable-prefix material.
@@ -73,22 +73,28 @@ pub fn openai_prompt_cache_diagnostics_for_request_with_stream(
     };
     let provider_request_shape =
         openai_responses_request_control_shape_with_stream(request, stream)?;
+    let prompt_cache_key = openai_prompt_cache_key(request);
+    let mut complete_request = provider_request_shape.clone();
+    complete_request["instructions"] = serde_json::json!(rendered.instructions);
+    complete_request["input"] = serde_json::json!(rendered.input);
+    complete_request["prompt_cache_key"] = serde_json::json!(prompt_cache_key);
     openai_prompt_cache_diagnostics(
-        openai_prompt_cache_key(request),
+        prompt_cache_key,
         &rendered,
         &response_format,
         &tools,
         &tool_choice,
         &provider_request_shape,
+        &complete_request,
     )
 }
 
-/// Returns canonical OpenAI stable-prefix material for tests and diagnostics.
-pub fn openai_stable_prefix_material_for_request(
+/// Returns the local instructions-and-stable-input projection for a request.
+pub fn openai_stable_projection_material_for_request(
     request: &ModelRequest,
 ) -> ProviderRequestAssemblyResult<String> {
     let rendered = openai_render_request_messages(request)?;
-    openai_stable_prefix_material(&rendered)
+    openai_stable_projection_material(&rendered)
 }
 
 #[cfg(test)]

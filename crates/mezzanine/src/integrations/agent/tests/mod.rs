@@ -52,7 +52,7 @@ use mez_agent::{
     OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_ENDPOINT, ProviderHttpRequest, ProviderHttpResponse,
     TranscriptRole, action_result_context_content, action_result_transcript_content,
     openai_prompt_cache_diagnostics_for_request, openai_responses_endpoint_for_base_url,
-    openai_responses_request_body, openai_stable_prefix_material_for_request,
+    openai_responses_request_body, openai_stable_projection_material_for_request,
     postprocess_shell_action_success_output, provider_quota_usage_from_headers,
     transcript_entries_for_execution,
 };
@@ -831,7 +831,7 @@ fn assert_openai_strict_schema_shape_at(schema: &serde_json::Value, path: &str) 
 /// Returns the rendered OpenAI stable-prefix instructions and input messages
 /// for request-shape tests.
 fn openai_test_stable_prefix_parts(request: &ModelRequest) -> (String, Vec<serde_json::Value>) {
-    let material = openai_stable_prefix_material_for_request(request).unwrap();
+    let material = openai_stable_projection_material_for_request(request).unwrap();
     let value: serde_json::Value = serde_json::from_str(&material).unwrap();
     let instructions = value["instructions"].as_str().unwrap().to_string();
     let stable_input = value["stable_input"].as_array().unwrap().clone();

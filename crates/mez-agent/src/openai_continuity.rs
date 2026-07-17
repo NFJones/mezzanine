@@ -33,6 +33,8 @@ pub struct OpenAiRequestContinuitySnapshot {
     pub tools_sha256: String,
     /// SHA-256 of tool choice.
     pub tool_choice_sha256: String,
+    /// SHA-256 of the provider-visible prompt-cache routing key.
+    pub prompt_cache_key_sha256: String,
     /// SHA-256 of request controls outside messages and tools.
     pub request_control_sha256: String,
     /// Ordered digests of every provider-visible input message.
@@ -48,6 +50,8 @@ pub struct OpenAiRequestContinuity {
     pub message_index: Option<usize>,
     /// Number of identical ordered input messages at the front.
     pub common_message_prefix: usize,
+    /// Number of identical diagnostic components before the first divergence.
+    pub common_component_prefix: usize,
     /// Whether the current input messages only append to the previous sequence.
     pub messages_append_only: bool,
 }
@@ -65,6 +69,26 @@ pub fn compare_openai_request_continuity(
         .count();
     let messages_append_only = common_message_prefix == previous.messages.len()
         && current.messages.len() >= previous.messages.len();
+    let common_component_prefix = [
+        (&previous.instructions_sha256, &current.instructions_sha256),
+        (
+            &previous.response_format_sha256,
+            &current.response_format_sha256,
+        ),
+        (&previous.tools_sha256, &current.tools_sha256),
+        (&previous.tool_choice_sha256, &current.tool_choice_sha256),
+        (
+            &previous.prompt_cache_key_sha256,
+            &current.prompt_cache_key_sha256,
+        ),
+        (
+            &previous.request_control_sha256,
+            &current.request_control_sha256,
+        ),
+    ]
+    .into_iter()
+    .take_while(|(previous, current)| previous == current)
+    .count();
     let (category, message_index) = if previous.instructions_sha256 != current.instructions_sha256 {
         ("instructions", None)
     } else if previous.response_format_sha256 != current.response_format_sha256 {
@@ -73,6 +97,8 @@ pub fn compare_openai_request_continuity(
         ("tools", None)
     } else if previous.tool_choice_sha256 != current.tool_choice_sha256 {
         ("tool_choice", None)
+    } else if previous.prompt_cache_key_sha256 != current.prompt_cache_key_sha256 {
+        ("prompt_cache_key", None)
     } else if previous.request_control_sha256 != current.request_control_sha256 {
         ("request_control", None)
     } else if previous.messages != current.messages {
@@ -84,6 +110,7 @@ pub fn compare_openai_request_continuity(
         category: category.to_string(),
         message_index,
         common_message_prefix,
+        common_component_prefix,
         messages_append_only,
     }
 }
@@ -109,6 +136,7 @@ mod tests {
                 response_format_sha256: "format".to_string(),
                 tools_sha256: tools.to_string(),
                 tool_choice_sha256: "choice".to_string(),
+                prompt_cache_key_sha256: "cache-key".to_string(),
                 request_control_sha256: "control".to_string(),
                 messages: messages
                     .iter()
@@ -133,6 +161,7 @@ mod tests {
                 category: "messages".to_string(),
                 message_index: Some(1),
                 common_message_prefix: 1,
+                common_component_prefix: 6,
                 messages_append_only: true,
             }
         );
@@ -142,6 +171,7 @@ mod tests {
                 category: "messages".to_string(),
                 message_index: Some(0),
                 common_message_prefix: 0,
+                common_component_prefix: 6,
                 messages_append_only: false,
             }
         );

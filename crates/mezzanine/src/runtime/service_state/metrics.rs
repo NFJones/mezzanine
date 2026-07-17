@@ -126,12 +126,11 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub(crate) provider_prompt_stable_input_bytes: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of volatile input bytes in cache diagnostics.
     pub(crate) provider_prompt_volatile_input_bytes: crate::host::async_runtime::RuntimeHistogram,
-    /// Histogram of stable prompt-prefix bytes in cache diagnostics.
-    pub(crate) provider_prompt_stable_prefix_bytes: crate::host::async_runtime::RuntimeHistogram,
+    /// Histogram of local instructions-and-stable-input projection bytes.
+    pub(crate) provider_prompt_stable_projection_bytes:
+        crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of provider request-shape bytes tracked outside the prompt prefix.
     pub(crate) provider_request_shape_bytes: crate::host::async_runtime::RuntimeHistogram,
-    /// Histogram of stable observable cacheable prefix bytes.
-    pub(crate) provider_prompt_cacheable_prefix_bytes: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of latest response input tokens.
     pub(crate) provider_input_tokens_per_response: crate::host::async_runtime::RuntimeHistogram,
     /// Histogram of latest response output tokens.
@@ -163,8 +162,8 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub(crate) last_allowed_actions: Option<String>,
     /// Most recent prompt-cache key observed by runtime metrics.
     pub(crate) last_prompt_cache_key: Option<String>,
-    /// Most recent stable prompt-prefix digest observed by runtime metrics.
-    pub(crate) last_stable_prompt_prefix_sha256: Option<String>,
+    /// Most recent local instructions-and-stable-input projection digest.
+    pub(crate) last_stable_projection_sha256: Option<String>,
     /// Most recent provider request-shape digest observed by runtime metrics.
     pub(crate) last_provider_request_shape_sha256: Option<String>,
     /// Most recent complete provider-visible request digest.
@@ -177,6 +176,8 @@ pub(crate) struct RuntimeMetricsSnapshot {
     pub(crate) last_provider_request_continuity_message_index: Option<usize>,
     /// Number of unchanged provider input messages at the request front.
     pub(crate) last_provider_request_common_message_prefix: Option<usize>,
+    /// Number of unchanged request components before the first divergence.
+    pub(crate) last_provider_request_common_component_prefix: Option<usize>,
     /// Whether provider input messages only appended after the previous request.
     pub(crate) last_provider_request_messages_append_only: Option<bool>,
     /// Previous OpenAI request snapshot retained only for continuity comparison.
@@ -288,15 +289,12 @@ impl RuntimeMetricsSnapshot {
                 .record(diagnostics.stable_input_bytes as u64);
             self.provider_prompt_volatile_input_bytes
                 .record(diagnostics.volatile_input_bytes as u64);
-            self.provider_prompt_stable_prefix_bytes
-                .record(diagnostics.stable_prompt_prefix_bytes as u64);
+            self.provider_prompt_stable_projection_bytes
+                .record(diagnostics.stable_projection_bytes as u64);
             self.provider_request_shape_bytes
                 .record(diagnostics.provider_request_shape_bytes as u64);
-            self.provider_prompt_cacheable_prefix_bytes
-                .record(diagnostics.cacheable_prefix_bytes as u64);
             self.last_prompt_cache_key = Some(diagnostics.prompt_cache_key.clone());
-            self.last_stable_prompt_prefix_sha256 =
-                Some(diagnostics.stable_prompt_prefix_sha256.clone());
+            self.last_stable_projection_sha256 = Some(diagnostics.stable_projection_sha256.clone());
             self.last_provider_request_shape_sha256 =
                 Some(diagnostics.provider_request_shape_sha256.clone());
             self.last_tool_choice_sha256 = Some(diagnostics.tool_choice_sha256.clone());
@@ -321,6 +319,9 @@ impl RuntimeMetricsSnapshot {
                 continuity.as_ref().and_then(|value| value.message_index);
             self.last_provider_request_common_message_prefix =
                 continuity.as_ref().map(|value| value.common_message_prefix);
+            self.last_provider_request_common_component_prefix = continuity
+                .as_ref()
+                .map(|value| value.common_component_prefix);
             self.last_provider_request_messages_append_only =
                 continuity.as_ref().map(|value| value.messages_append_only);
             self.last_openai_request_continuity_snapshot =

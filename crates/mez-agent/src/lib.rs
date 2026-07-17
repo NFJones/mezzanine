@@ -331,7 +331,7 @@ pub use network_action::{
 pub use openai_cache::{
     openai_prompt_cache_diagnostics_for_request,
     openai_prompt_cache_diagnostics_for_request_with_stream,
-    openai_stable_prefix_material_for_request,
+    openai_stable_projection_material_for_request,
 };
 pub use openai_chat_completions::{
     ChatCompletionsResponseEnvelope, OpenAiChatCompletionsOptions, OpenAiChatCompletionsResponse,
@@ -389,7 +389,7 @@ pub use provider::{
     openai_models_endpoint_for_responses_endpoint, openai_prompt_cache_diagnostics,
     openai_prompt_cache_key, openai_render_messages, openai_request_options,
     openai_responses_endpoint_for_base_url, openai_service_tier_for_latency_preference,
-    openai_stable_prefix_material, parse_openai_models_http_body,
+    openai_stable_projection_material, parse_openai_models_http_body,
     parse_openai_models_http_body_with, provider_catalog_reasoning_levels, resolve_provider_api,
     validate_provider_request_required,
 };

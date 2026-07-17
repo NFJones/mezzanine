@@ -103,9 +103,9 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
         diagnostics.tool_choice_sha256,
         "6667323a2b74449448aad3d609d98e5288910331b10d71e6f482da3e076eab4e"
     );
-    assert_eq!(diagnostics.stable_prompt_prefix_bytes, 44_653);
+    assert_eq!(diagnostics.stable_projection_bytes, 44_653);
     assert_eq!(
-        diagnostics.stable_prompt_prefix_sha256,
+        diagnostics.stable_projection_sha256,
         "fb59fd2449bf99d2a17d9610db82a7204bc20f352ea5c06b15d000cfc1278573"
     );
     assert_eq!(diagnostics.provider_request_shape_bytes, 20_318);
@@ -216,8 +216,8 @@ fn openai_responses_request_body_uses_stable_derived_prompt_cache_key() {
         serde_json::from_str(&openai_responses_request_body(&second).unwrap()).unwrap();
     let execution_value: serde_json::Value =
         serde_json::from_str(&openai_responses_request_body(&execution).unwrap()).unwrap();
-    let first_prefix = openai_stable_prefix_material_for_request(&first).unwrap();
-    let second_prefix = openai_stable_prefix_material_for_request(&second).unwrap();
+    let first_prefix = openai_stable_projection_material_for_request(&first).unwrap();
+    let second_prefix = openai_stable_projection_material_for_request(&second).unwrap();
 
     assert_eq!(first_prefix, second_prefix);
     assert_eq!(

@@ -289,18 +289,14 @@ pub struct OpenAiPromptCacheDiagnostics {
     pub volatile_input_bytes: usize,
     /// SHA-256 of volatile input suffix material.
     pub volatile_input_sha256: String,
-    /// Bytes in provider-visible stable prompt-prefix material.
-    pub stable_prompt_prefix_bytes: usize,
-    /// SHA-256 of provider-visible stable prompt-prefix material.
-    pub stable_prompt_prefix_sha256: String,
+    /// Bytes in Mezzanine's instructions-and-stable-input projection.
+    pub stable_projection_bytes: usize,
+    /// SHA-256 of Mezzanine's instructions-and-stable-input projection.
+    pub stable_projection_sha256: String,
     /// Bytes in request-control shape material tracked outside the prompt prefix.
     pub provider_request_shape_bytes: usize,
     /// SHA-256 of request-control shape material tracked outside the prompt prefix.
     pub provider_request_shape_sha256: String,
-    /// Bytes in the stable cacheable prompt prefix material Mezzanine can observe.
-    pub cacheable_prefix_bytes: usize,
-    /// SHA-256 of the stable cacheable prompt prefix material Mezzanine can observe.
-    pub cacheable_prefix_sha256: String,
     /// Sensitive-content-free snapshot of the complete provider-visible request.
     pub continuity_snapshot: OpenAiRequestContinuitySnapshot,
 }
@@ -319,6 +315,7 @@ pub fn openai_prompt_cache_diagnostics(
     tools: &serde_json::Value,
     tool_choice: &serde_json::Value,
     provider_request_shape: &serde_json::Value,
+    complete_request: &serde_json::Value,
 ) -> ProviderRequestAssemblyResult<OpenAiPromptCacheDiagnostics> {
     let response_format_text =
         openai_diagnostic_json(response_format, "OpenAI response-format diagnostics failed")?;
@@ -333,7 +330,7 @@ pub fn openai_prompt_cache_diagnostics(
         &rendered.volatile_input,
         "OpenAI volatile-input diagnostics failed",
     )?;
-    let stable_prompt_prefix = openai_stable_prefix_material(rendered)?;
+    let stable_projection = openai_stable_projection_material(rendered)?;
     let provider_request_shape = openai_diagnostic_json(
         provider_request_shape,
         "OpenAI request-shape diagnostics failed",
@@ -344,9 +341,10 @@ pub fn openai_prompt_cache_diagnostics(
         &tools_text,
         &tool_choice_text,
         &provider_request_shape,
+        complete_request,
     )?;
 
-    let stable_prompt_prefix_sha256 = sha256_hex(stable_prompt_prefix.as_bytes());
+    let stable_projection_sha256 = sha256_hex(stable_projection.as_bytes());
     Ok(OpenAiPromptCacheDiagnostics {
         prompt_cache_key,
         instructions_bytes: rendered.instructions.len(),
@@ -361,12 +359,10 @@ pub fn openai_prompt_cache_diagnostics(
         stable_input_sha256: sha256_hex(stable_input_text.as_bytes()),
         volatile_input_bytes: volatile_input_text.len(),
         volatile_input_sha256: sha256_hex(volatile_input_text.as_bytes()),
-        stable_prompt_prefix_bytes: stable_prompt_prefix.len(),
-        stable_prompt_prefix_sha256: stable_prompt_prefix_sha256.clone(),
+        stable_projection_bytes: stable_projection.len(),
+        stable_projection_sha256,
         provider_request_shape_bytes: provider_request_shape.len(),
         provider_request_shape_sha256: sha256_hex(provider_request_shape.as_bytes()),
-        cacheable_prefix_bytes: stable_prompt_prefix.len(),
-        cacheable_prefix_sha256: stable_prompt_prefix_sha256,
         continuity_snapshot,
     })
 }
@@ -378,6 +374,7 @@ fn openai_request_continuity_snapshot(
     tools: &str,
     tool_choice: &str,
     request_control: &str,
+    complete_request: &serde_json::Value,
 ) -> ProviderRequestAssemblyResult<OpenAiRequestContinuitySnapshot> {
     let messages = rendered
         .input
@@ -401,18 +398,7 @@ fn openai_request_continuity_snapshot(
         })
         .collect::<ProviderRequestAssemblyResult<Vec<_>>>()?;
     let request_text = openai_diagnostic_json(
-        &serde_json::json!({
-            "instructions": rendered.instructions,
-            "response_format": serde_json::from_str::<serde_json::Value>(response_format)
-                .unwrap_or(serde_json::Value::Null),
-            "tools": serde_json::from_str::<serde_json::Value>(tools)
-                .unwrap_or(serde_json::Value::Null),
-            "tool_choice": serde_json::from_str::<serde_json::Value>(tool_choice)
-                .unwrap_or(serde_json::Value::Null),
-            "request_control": serde_json::from_str::<serde_json::Value>(request_control)
-                .unwrap_or(serde_json::Value::Null),
-            "input": rendered.input,
-        }),
+        complete_request,
         "OpenAI complete-request continuity diagnostics failed",
     )?;
     Ok(OpenAiRequestContinuitySnapshot {
@@ -422,13 +408,20 @@ fn openai_request_continuity_snapshot(
         response_format_sha256: sha256_hex(response_format.as_bytes()),
         tools_sha256: sha256_hex(tools.as_bytes()),
         tool_choice_sha256: sha256_hex(tool_choice.as_bytes()),
+        prompt_cache_key_sha256: complete_request
+            .get("prompt_cache_key")
+            .and_then(serde_json::Value::as_str)
+            .map_or_else(|| sha256_hex(b"null"), |value| sha256_hex(value.as_bytes())),
         request_control_sha256: sha256_hex(request_control.as_bytes()),
         messages,
     })
 }
 
-/// Returns canonical provider-visible stable-prefix material.
-pub fn openai_stable_prefix_material(
+/// Returns Mezzanine's canonical instructions-and-stable-input projection.
+///
+/// This synthetic projection is useful for local partition diagnostics but is
+/// not the complete provider-visible request or an OpenAI cache-prefix digest.
+pub fn openai_stable_projection_material(
     rendered: &OpenAiRenderedMessages,
 ) -> ProviderRequestAssemblyResult<String> {
     openai_diagnostic_json(
@@ -437,7 +430,7 @@ pub fn openai_stable_prefix_material(
             "instructions": rendered.instructions,
             "stable_input": rendered.stable_input,
         }),
-        "OpenAI stable prompt-prefix diagnostics failed",
+        "OpenAI stable projection diagnostics failed",
     )
 }
 

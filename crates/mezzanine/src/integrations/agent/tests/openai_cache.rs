@@ -67,7 +67,7 @@ fn openai_current_action_results_remain_volatile_suffix() {
         })
         .expect("current action result should be rendered into input");
     assert!(action_index > user_index);
-    let prefix = openai_stable_prefix_material_for_request(&request).unwrap();
+    let prefix = openai_stable_projection_material_for_request(&request).unwrap();
     assert!(prefix.contains("[executed result transcript entry]"));
     assert!(prefix.contains("cached evidence"));
     assert!(!prefix.contains("fresh evidence"));
@@ -232,8 +232,8 @@ fn openai_historical_tool_results_replay_outside_stable_prefix() {
             .as_str()
             .is_some_and(|text| text.contains("[executed result transcript entry]"))
     }));
-    let first_prefix = openai_stable_prefix_material_for_request(&first).unwrap();
-    let second_prefix = openai_stable_prefix_material_for_request(&second).unwrap();
+    let first_prefix = openai_stable_projection_material_for_request(&first).unwrap();
+    let second_prefix = openai_stable_projection_material_for_request(&second).unwrap();
     assert!(first_prefix.contains("[executed result transcript entry]"));
     assert!(first_prefix.contains("stable evidence"));
     assert_eq!(first_prefix, second_prefix);
@@ -335,7 +335,7 @@ fn openai_long_session_keeps_observed_action_results_raw_without_committed_evide
                 .contains("CURRENT_RAW_RESULT_MUST_REMAIN_VOLATILE")
     }));
 
-    let prefix = openai_stable_prefix_material_for_request(&request).unwrap();
+    let prefix = openai_stable_projection_material_for_request(&request).unwrap();
     assert!(!prefix.contains("[committed_evidence]"));
     assert!(!prefix.contains("RAW_DETAIL_SHOULD_NOT_BE_REPLAYED_0"));
 
@@ -478,7 +478,7 @@ fn openai_long_session_stable_prefix_is_append_only_until_compaction() {
             );
         }
 
-        let stable_material = openai_stable_prefix_material_for_request(&request).unwrap();
+        let stable_material = openai_stable_projection_material_for_request(&request).unwrap();
         assert!(
             !stable_material.contains(&current_user),
             "turn {turn_index} leaked current user input into its own stable prefix"
@@ -575,20 +575,10 @@ fn openai_prompt_cache_diagnostics_fingerprint_provider_prefix_parts() {
     assert_eq!(diagnostics.stable_input_sha256.len(), 64);
     assert!(diagnostics.volatile_input_bytes > 2);
     assert_eq!(diagnostics.volatile_input_sha256.len(), 64);
-    assert!(diagnostics.stable_prompt_prefix_bytes > diagnostics.instructions_bytes);
-    assert_eq!(diagnostics.stable_prompt_prefix_sha256.len(), 64);
-    assert_eq!(
-        diagnostics.cacheable_prefix_bytes,
-        diagnostics.stable_prompt_prefix_bytes
-    );
-    assert_eq!(
-        diagnostics.cacheable_prefix_sha256,
-        diagnostics.stable_prompt_prefix_sha256
-    );
+    assert!(diagnostics.stable_projection_bytes > diagnostics.instructions_bytes);
+    assert_eq!(diagnostics.stable_projection_sha256.len(), 64);
     assert!(diagnostics.provider_request_shape_bytes > diagnostics.tools_bytes);
     assert_eq!(diagnostics.provider_request_shape_sha256.len(), 64);
-    assert!(diagnostics.cacheable_prefix_bytes > diagnostics.instructions_bytes);
-    assert_eq!(diagnostics.cacheable_prefix_sha256.len(), 64);
 }
 
 #[test]
@@ -837,12 +827,12 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
     let stable_b_diagnostics = openai_prompt_cache_diagnostics_for_request(&stable_b).unwrap();
 
     assert_eq!(
-        openai_stable_prefix_material_for_request(&stable_a).unwrap(),
-        openai_stable_prefix_material_for_request(&stable_a_different_user).unwrap()
+        openai_stable_projection_material_for_request(&stable_a).unwrap(),
+        openai_stable_projection_material_for_request(&stable_a_different_user).unwrap()
     );
     assert_ne!(
-        openai_stable_prefix_material_for_request(&stable_a).unwrap(),
-        openai_stable_prefix_material_for_request(&stable_b).unwrap()
+        openai_stable_projection_material_for_request(&stable_a).unwrap(),
+        openai_stable_projection_material_for_request(&stable_b).unwrap()
     );
     assert_eq!(
         stable_a_value["prompt_cache_key"],
@@ -853,12 +843,8 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
         stable_b_value["prompt_cache_key"]
     );
     assert_ne!(
-        stable_a_diagnostics.stable_prompt_prefix_sha256,
-        stable_b_diagnostics.stable_prompt_prefix_sha256
-    );
-    assert_ne!(
-        stable_a_diagnostics.cacheable_prefix_sha256,
-        stable_b_diagnostics.cacheable_prefix_sha256
+        stable_a_diagnostics.stable_projection_sha256,
+        stable_b_diagnostics.stable_projection_sha256
     );
 }
 
