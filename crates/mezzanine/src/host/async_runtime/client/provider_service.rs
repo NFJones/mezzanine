@@ -6,13 +6,14 @@ use super::{
     AgentTurnState, AsyncAgentProviderPollReport, AsyncAgentProviderServiceConfig,
     AsyncModelProvider, AsyncRuntimeSessionHandle, ContextSourceKind, JoinSet, MezError,
     MezErrorKind, ModelMessage, ModelMessageRole, ModelProfile, ModelRequest, ModelResponse,
-    ModelTokenUsage, ModelTokenUsageKey, ProviderErrorRetryClass, ReqwestProviderHttpTransport,
-    Result, RuntimeAgentCompactionDispatch, RuntimeAgentProviderDispatch,
-    RuntimeAgentProviderDispatchProvider, RuntimeAgentRememberDispatch, RuntimeEvent,
-    RuntimeEventBatch, RuntimeLifecycleState, RuntimeSideEffect,
-    execute_network_action_with_transport_async, is_terminal_runtime_lifecycle_state,
-    provider_error_retry_class, runtime_execute_auto_sizing_with_async_provider, sleep, watch,
+    ProviderErrorRetryClass, ReqwestProviderHttpTransport, Result, RuntimeAgentCompactionDispatch,
+    RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider,
+    RuntimeAgentRememberDispatch, RuntimeEvent, RuntimeEventBatch, RuntimeLifecycleState,
+    RuntimeSideEffect, execute_network_action_with_transport_async,
+    is_terminal_runtime_lifecycle_state, provider_error_retry_class,
+    runtime_execute_auto_sizing_with_async_provider, sleep, watch,
 };
+use crate::runtime::RuntimeAgentProviderWorkerOutcome;
 use std::time::Duration;
 
 /// Runs the run async agent provider service operation for this subsystem.
@@ -369,16 +370,24 @@ async fn monitor_runtime_agent_remember_dispatch(
 fn provider_worker_event(
     agent_id: AgentId,
     turn_id: String,
-    result: std::result::Result<Result<super::AgentTurnExecution>, tokio::task::JoinError>,
+    result: std::result::Result<Result<RuntimeAgentProviderWorkerOutcome>, tokio::task::JoinError>,
 ) -> (RuntimeEvent, bool) {
     match result {
-        Ok(Ok(execution)) => (
+        Ok(Ok(RuntimeAgentProviderWorkerOutcome::Execution(execution))) => (
             RuntimeEvent::AgentProvider(AgentProviderEvent::Completed {
                 agent_id,
                 turn_id,
-                execution: Box::new(execution),
+                execution,
             }),
             true,
+        ),
+        Ok(Ok(RuntimeAgentProviderWorkerOutcome::RoutedWorkerSelected(selection))) => (
+            RuntimeEvent::AgentProvider(AgentProviderEvent::RoutedWorkerSelected {
+                agent_id,
+                turn_id,
+                selection,
+            }),
+            false,
         ),
         Ok(Err(error)) => (
             RuntimeEvent::AgentProvider(AgentProviderEvent::Failed {
@@ -485,15 +494,14 @@ fn remember_worker_event(
 async fn execute_runtime_agent_provider_dispatch(
     dispatch: RuntimeAgentProviderDispatch,
     _output_progress_sender: Option<tokio::sync::mpsc::UnboundedSender<AgentProviderEvent>>,
-) -> Result<super::AgentTurnExecution> {
+) -> Result<RuntimeAgentProviderWorkerOutcome> {
     let RuntimeAgentProviderDispatch {
         turn,
         context,
-        mut model_profile,
+        model_profile,
         macro_judge_request,
         auto_sizing,
         auto_sizing_provider,
-        auto_sizing_target_providers,
         provider,
         permission_policy,
         session_approvals,
@@ -503,11 +511,13 @@ async fn execute_runtime_agent_provider_dispatch(
         available_mcp_tools,
         memory_actions_enabled,
         issue_actions_enabled,
+        respond_only,
         loop_turn: _,
     } = dispatch;
-    let mut routing_token_usage_by_model = std::collections::BTreeMap::new();
-    let mut selected_auto_sizing_profile: Option<ModelProfile> = None;
-    let loop_allowed_actions = None;
+    let routing_token_usage_by_model = std::collections::BTreeMap::new();
+    let loop_allowed_actions = respond_only.then(|| {
+        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly)
+    });
     if let Some(request) = macro_judge_request {
         let response = match provider {
             RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
@@ -526,176 +536,125 @@ async fn execute_runtime_agent_provider_dispatch(
                 provider.send_request_async(&request).await?
             }
         };
-        return Ok(super::AgentTurnExecution {
-            request,
-            response,
-            latest_response_usage: Default::default(),
-            routing_token_usage_by_model,
-            action_results: Vec::new(),
-            final_turn: false,
-            terminal_state: AgentTurnState::Running,
-        });
+        return Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
+            super::AgentTurnExecution {
+                request,
+                response,
+                latest_response_usage: Default::default(),
+                routing_token_usage_by_model,
+                action_results: Vec::new(),
+                final_turn: false,
+                terminal_state: AgentTurnState::Running,
+            },
+        )));
     }
-    if let Some(auto_sizing) = auto_sizing.as_ref()
-        && let Some(auto_sizing_provider) = auto_sizing_provider.as_ref()
-    {
-        match auto_sizing_provider {
-            RuntimeAgentProviderDispatchProvider::OpenAi(router_provider) => {
-                let auto_sizing_execution = runtime_execute_auto_sizing_with_async_provider(
-                    router_provider,
-                    auto_sizing,
-                    &turn,
-                    &context,
-                )
-                .await?;
-                merge_model_token_usage_by_model(
-                    &mut routing_token_usage_by_model,
-                    auto_sizing_execution.token_usage_by_model(),
-                );
-                selected_auto_sizing_profile = Some(auto_sizing_execution.selected_profile);
+    if let Some(auto_sizing) = auto_sizing.as_ref() {
+        let auto_sizing_execution = if let Some(router_provider) = auto_sizing_provider.as_ref() {
+            match router_provider {
+                RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
+                    runtime_execute_auto_sizing_with_async_provider(
+                        provider,
+                        auto_sizing,
+                        &turn,
+                        &context,
+                    )
+                    .await?
+                }
+                RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
+                    runtime_execute_auto_sizing_with_async_provider(
+                        provider,
+                        auto_sizing,
+                        &turn,
+                        &context,
+                    )
+                    .await?
+                }
+                RuntimeAgentProviderDispatchProvider::Anthropic(provider) => {
+                    runtime_execute_auto_sizing_with_async_provider(
+                        provider,
+                        auto_sizing,
+                        &turn,
+                        &context,
+                    )
+                    .await?
+                }
+                RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
+                    runtime_execute_auto_sizing_with_async_provider(
+                        provider,
+                        auto_sizing,
+                        &turn,
+                        &context,
+                    )
+                    .await?
+                }
+                RuntimeAgentProviderDispatchProvider::ClaudeCode(provider) => {
+                    runtime_execute_auto_sizing_with_async_provider(
+                        provider,
+                        auto_sizing,
+                        &turn,
+                        &context,
+                    )
+                    .await?
+                }
             }
-            RuntimeAgentProviderDispatchProvider::DeepSeek(router_provider) => {
-                let auto_sizing_execution = runtime_execute_auto_sizing_with_async_provider(
-                    router_provider,
-                    auto_sizing,
-                    &turn,
-                    &context,
-                )
-                .await?;
-                merge_model_token_usage_by_model(
-                    &mut routing_token_usage_by_model,
-                    auto_sizing_execution.token_usage_by_model(),
-                );
-                selected_auto_sizing_profile = Some(auto_sizing_execution.selected_profile);
+        } else if auto_sizing.router_profile.provider == provider.provider_id() {
+            match &provider {
+                RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
+                    runtime_execute_auto_sizing_with_async_provider(
+                        provider,
+                        auto_sizing,
+                        &turn,
+                        &context,
+                    )
+                    .await?
+                }
+                RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
+                    runtime_execute_auto_sizing_with_async_provider(
+                        provider,
+                        auto_sizing,
+                        &turn,
+                        &context,
+                    )
+                    .await?
+                }
+                RuntimeAgentProviderDispatchProvider::Anthropic(provider) => {
+                    runtime_execute_auto_sizing_with_async_provider(
+                        provider,
+                        auto_sizing,
+                        &turn,
+                        &context,
+                    )
+                    .await?
+                }
+                RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
+                    runtime_execute_auto_sizing_with_async_provider(
+                        provider,
+                        auto_sizing,
+                        &turn,
+                        &context,
+                    )
+                    .await?
+                }
+                RuntimeAgentProviderDispatchProvider::ClaudeCode(provider) => {
+                    runtime_execute_auto_sizing_with_async_provider(
+                        provider,
+                        auto_sizing,
+                        &turn,
+                        &context,
+                    )
+                    .await?
+                }
             }
-            RuntimeAgentProviderDispatchProvider::Anthropic(router_provider) => {
-                let auto_sizing_execution = runtime_execute_auto_sizing_with_async_provider(
-                    router_provider,
-                    auto_sizing,
-                    &turn,
-                    &context,
-                )
-                .await?;
-                merge_model_token_usage_by_model(
-                    &mut routing_token_usage_by_model,
-                    auto_sizing_execution.token_usage_by_model(),
-                );
-                selected_auto_sizing_profile = Some(auto_sizing_execution.selected_profile);
-            }
-            RuntimeAgentProviderDispatchProvider::OpenAiCompatible(router_provider) => {
-                let auto_sizing_execution = runtime_execute_auto_sizing_with_async_provider(
-                    router_provider,
-                    auto_sizing,
-                    &turn,
-                    &context,
-                )
-                .await?;
-                merge_model_token_usage_by_model(
-                    &mut routing_token_usage_by_model,
-                    auto_sizing_execution.token_usage_by_model(),
-                );
-                selected_auto_sizing_profile = Some(auto_sizing_execution.selected_profile);
-            }
-            RuntimeAgentProviderDispatchProvider::ClaudeCode(router_provider) => {
-                let auto_sizing_execution = runtime_execute_auto_sizing_with_async_provider(
-                    router_provider,
-                    auto_sizing,
-                    &turn,
-                    &context,
-                )
-                .await?;
-                merge_model_token_usage_by_model(
-                    &mut routing_token_usage_by_model,
-                    auto_sizing_execution.token_usage_by_model(),
-                );
-                selected_auto_sizing_profile = Some(auto_sizing_execution.selected_profile);
-            }
-        }
-    }
-    let mut provider = provider;
-    if selected_auto_sizing_profile.is_none()
-        && let Some(auto_sizing) = auto_sizing.as_ref()
-        && auto_sizing.router_profile.provider == provider.provider_id()
-    {
-        selected_auto_sizing_profile = match &provider {
-            RuntimeAgentProviderDispatchProvider::OpenAi(router_provider) => {
-                let auto_sizing_execution = runtime_execute_auto_sizing_with_async_provider(
-                    router_provider,
-                    auto_sizing,
-                    &turn,
-                    &context,
-                )
-                .await?;
-                merge_model_token_usage_by_model(
-                    &mut routing_token_usage_by_model,
-                    auto_sizing_execution.token_usage_by_model(),
-                );
-                Some(auto_sizing_execution.selected_profile)
-            }
-            RuntimeAgentProviderDispatchProvider::DeepSeek(router_provider) => {
-                let auto_sizing_execution = runtime_execute_auto_sizing_with_async_provider(
-                    router_provider,
-                    auto_sizing,
-                    &turn,
-                    &context,
-                )
-                .await?;
-                merge_model_token_usage_by_model(
-                    &mut routing_token_usage_by_model,
-                    auto_sizing_execution.token_usage_by_model(),
-                );
-                Some(auto_sizing_execution.selected_profile)
-            }
-            RuntimeAgentProviderDispatchProvider::Anthropic(router_provider) => {
-                let auto_sizing_execution = runtime_execute_auto_sizing_with_async_provider(
-                    router_provider,
-                    auto_sizing,
-                    &turn,
-                    &context,
-                )
-                .await?;
-                merge_model_token_usage_by_model(
-                    &mut routing_token_usage_by_model,
-                    auto_sizing_execution.token_usage_by_model(),
-                );
-                Some(auto_sizing_execution.selected_profile)
-            }
-            RuntimeAgentProviderDispatchProvider::OpenAiCompatible(router_provider) => {
-                let auto_sizing_execution = runtime_execute_auto_sizing_with_async_provider(
-                    router_provider,
-                    auto_sizing,
-                    &turn,
-                    &context,
-                )
-                .await?;
-                merge_model_token_usage_by_model(
-                    &mut routing_token_usage_by_model,
-                    auto_sizing_execution.token_usage_by_model(),
-                );
-                Some(auto_sizing_execution.selected_profile)
-            }
-            RuntimeAgentProviderDispatchProvider::ClaudeCode(router_provider) => {
-                let auto_sizing_execution = runtime_execute_auto_sizing_with_async_provider(
-                    router_provider,
-                    auto_sizing,
-                    &turn,
-                    &context,
-                )
-                .await?;
-                merge_model_token_usage_by_model(
-                    &mut routing_token_usage_by_model,
-                    auto_sizing_execution.token_usage_by_model(),
-                );
-                Some(auto_sizing_execution.selected_profile)
-            }
+        } else {
+            return Err(MezError::invalid_state(format!(
+                "auto-sizing router provider `{}` is unavailable",
+                auto_sizing.router_profile.provider
+            )));
         };
+        return Ok(RuntimeAgentProviderWorkerOutcome::RoutedWorkerSelected(
+            Box::new(auto_sizing_execution.into_routed_worker_selection()),
+        ));
     }
-    (provider, model_profile) = runtime_provider_dispatch_after_auto_sizing(
-        provider,
-        model_profile,
-        selected_auto_sizing_profile,
-        &auto_sizing_target_providers,
-    );
     match provider {
         RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
             let mut ledger = AgentTurnLedger::new(false);
@@ -724,7 +683,9 @@ async fn execute_runtime_agent_provider_dispatch(
                 .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
-            Ok(execution)
+            Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
+                execution,
+            )))
         }
         RuntimeAgentProviderDispatchProvider::Anthropic(provider) => {
             let mut ledger = AgentTurnLedger::new(false);
@@ -753,7 +714,9 @@ async fn execute_runtime_agent_provider_dispatch(
                 .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
-            Ok(execution)
+            Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
+                execution,
+            )))
         }
         RuntimeAgentProviderDispatchProvider::DeepSeek(provider) => {
             let mut ledger = AgentTurnLedger::new(false);
@@ -782,7 +745,9 @@ async fn execute_runtime_agent_provider_dispatch(
                 .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
-            Ok(execution)
+            Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
+                execution,
+            )))
         }
         RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
             let mut ledger = AgentTurnLedger::new(false);
@@ -811,7 +776,9 @@ async fn execute_runtime_agent_provider_dispatch(
                 .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
-            Ok(execution)
+            Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
+                execution,
+            )))
         }
         RuntimeAgentProviderDispatchProvider::ClaudeCode(provider) => {
             let mut ledger = AgentTurnLedger::new(false);
@@ -840,33 +807,11 @@ async fn execute_runtime_agent_provider_dispatch(
                 .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
             execution.routing_token_usage_by_model = routing_token_usage_by_model;
-            Ok(execution)
+            Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
+                execution,
+            )))
         }
     }
-}
-
-/// Applies a router-selected profile to the async provider dispatch.
-///
-/// Async provider workers run after the runtime actor has already constructed
-/// concrete provider clients. When automatic sizing selects a profile owned by
-/// a different configured provider, the worker must switch to the carried
-/// target provider instead of silently keeping the originally active provider.
-fn runtime_provider_dispatch_after_auto_sizing(
-    provider: RuntimeAgentProviderDispatchProvider,
-    current_profile: ModelProfile,
-    selected_profile: Option<ModelProfile>,
-    target_providers: &std::collections::BTreeMap<String, RuntimeAgentProviderDispatchProvider>,
-) -> (RuntimeAgentProviderDispatchProvider, ModelProfile) {
-    let Some(selected_profile) = selected_profile else {
-        return (provider, current_profile);
-    };
-    if selected_profile.provider == provider.provider_id() {
-        return (provider, selected_profile);
-    }
-    if let Some(target_provider) = target_providers.get(&selected_profile.provider).cloned() {
-        return (target_provider, selected_profile);
-    }
-    (provider, current_profile)
 }
 
 /// Executes runtime-owned network actions before returning provider work to the
@@ -917,16 +862,6 @@ pub(in crate::host::async_runtime) async fn execute_provider_worker_network_acti
     execution.terminal_state =
         mez_agent::turn_state_from_action_results(&execution.action_results, execution.final_turn);
     Ok(execution)
-}
-
-/// Merges per-model token usage maps with saturating counters.
-fn merge_model_token_usage_by_model(
-    target: &mut std::collections::BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
-    source: std::collections::BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
-) {
-    for (key, usage) in source {
-        target.entry(key).or_default().add_assign(usage);
-    }
 }
 
 /// Executes one model-backed conversation compaction request.

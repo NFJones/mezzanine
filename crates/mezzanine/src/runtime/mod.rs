@@ -346,8 +346,9 @@ mod transitions;
 pub use agent_state::{
     RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask, RuntimeAgentLoopState,
     RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind, RuntimeAgentProviderDispatch,
-    RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberDispatch,
-    RuntimeAgentRememberTask,
+    RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask,
+    RuntimeAgentProviderWorkerOutcome, RuntimeAgentRememberDispatch, RuntimeAgentRememberTask,
+    RuntimeRoutedWorkerSelection,
 };
 pub use deferred::AttachedClientStepApplication;
 pub use env::{
@@ -357,7 +358,6 @@ pub use env::{
 pub use fanout::{RuntimeEventConnectionTable, RuntimeEventWakeup};
 #[cfg(test)]
 pub use fanout::{RuntimeEventFanoutSink, RuntimeFocusedShellHookRun, flush_runtime_event_wakeups};
-#[cfg(test)]
 use mez_agent::AutoSizingDecision as RuntimeAutoSizingDecision;
 use mez_agent::{
     AutoSizingConfig as RuntimeAutoSizingConfig, AutoSizingDispatch as RuntimeAutoSizingDispatch,

@@ -5,7 +5,6 @@
 //! invokes concrete product providers, preserves provider diagnostics, and
 //! attaches router token usage to runtime accounting.
 
-#[cfg(test)]
 use super::RuntimeAutoSizingDecision;
 use super::{
     AgentContext, AgentTurnRecord, AsyncModelProvider, MezError, ModelProfile, ModelRequest,
@@ -18,10 +17,8 @@ pub(crate) struct RuntimeAutoSizingExecution {
     /// Effective profile selected for the user-visible provider turn.
     pub(crate) selected_profile: ModelProfile,
     /// Parsed router decision when the router returned valid JSON.
-    #[cfg(test)]
     pub(crate) decision: Option<RuntimeAutoSizingDecision>,
     /// Fallback reason when routing could not select a valid target.
-    #[cfg(test)]
     pub(crate) fallback: Option<String>,
     /// Provider/model key for the router request.
     pub(crate) router_token_usage_key: ModelTokenUsageKey,
@@ -41,6 +38,23 @@ impl RuntimeAutoSizingExecution {
             self.router_token_usage_key.clone(),
             self.router_token_usage,
         )])
+    }
+
+    /// Converts the classifier result into the actor-owned routed-worker payload.
+    pub(crate) fn into_routed_worker_selection(self) -> super::RuntimeRoutedWorkerSelection {
+        let routing_token_usage_by_model = self.token_usage_by_model();
+        let decision_summary = self.decision.as_ref().map(|decision| {
+            format!(
+                "{} reasoning on {}",
+                decision.reasoning_effort, self.selected_profile.model
+            )
+        });
+        super::RuntimeRoutedWorkerSelection {
+            worker_profile: self.selected_profile,
+            routing_token_usage_by_model,
+            decision_summary,
+            fallback: self.fallback,
+        }
     }
 }
 
@@ -125,9 +139,7 @@ fn runtime_auto_sizing_execution_from_selection(
 ) -> RuntimeAutoSizingExecution {
     RuntimeAutoSizingExecution {
         selected_profile: selection.selected_profile,
-        #[cfg(test)]
         decision: selection.decision,
-        #[cfg(test)]
         fallback: selection.fallback,
         router_token_usage_key: ModelTokenUsageKey::new(
             auto_sizing.router_profile.provider.clone(),

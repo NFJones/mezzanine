@@ -358,6 +358,9 @@ impl RuntimeSessionService {
         if self.agent_loop_execution_will_continue(turn, execution) {
             return Ok(());
         }
+        if self.handle_routed_child_execution_result(turn, execution)? {
+            return Ok(());
+        }
         let success = execution.terminal_state == AgentTurnState::Completed;
         let summary = if success {
             "subagent task completed"

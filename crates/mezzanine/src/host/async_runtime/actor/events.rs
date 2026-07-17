@@ -750,6 +750,29 @@ impl AsyncRuntimeSessionActor {
         provider_event: AgentProviderEvent,
     ) -> Result<RuntimeTransition> {
         match provider_event {
+            AgentProviderEvent::RoutedWorkerSelected {
+                agent_id,
+                turn_id,
+                selection,
+            } => {
+                let claim_cancellations = self.provider_claim_cancel_timer_side_effects(&turn_id);
+                self.service.clear_claimed_agent_provider_task(&turn_id);
+                self.service
+                    .clear_agent_provider_retry_attempt(turn_id.as_str());
+                self.timers.provider_retry.remove(turn_id.as_str());
+                self.provider_output_limit_compaction_turns
+                    .remove(turn_id.as_str());
+                let mut transition = self
+                    .service
+                    .apply_routed_worker_selected_transition(&agent_id, &turn_id, *selection)?;
+                if transition.applied {
+                    transition
+                        .side_effects
+                        .extend(self.pending_provider_dispatch_side_effects()?);
+                }
+                transition.side_effects.extend(claim_cancellations);
+                Ok(transition)
+            }
             AgentProviderEvent::Failed {
                 agent_id,
                 turn_id,

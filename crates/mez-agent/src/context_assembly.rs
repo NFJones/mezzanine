@@ -148,7 +148,8 @@ pub fn role_for_context_source(source: ContextSourceKind) -> ModelMessageRole {
         | ContextSourceKind::Configuration
         | ContextSourceKind::RuntimeHint
         | ContextSourceKind::EvidenceLedger
-        | ContextSourceKind::CommittedEvidence => ModelMessageRole::Developer,
+        | ContextSourceKind::CommittedEvidence
+        | ContextSourceKind::RoutedHandoff => ModelMessageRole::Developer,
         ContextSourceKind::ActionResult | ContextSourceKind::TranscriptTool => {
             ModelMessageRole::Tool
         }

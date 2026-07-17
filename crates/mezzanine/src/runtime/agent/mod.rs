@@ -26,11 +26,11 @@ use super::{
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask, RuntimeAgentRememberTask,
     RuntimeAutoSizingConfig, RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile,
     RuntimeHookPipelineBlock, RuntimeHookPipelineDecision, RuntimeMcpActionExecutor,
-    RuntimeProviderConfig, RuntimeSessionService, RuntimeShellTransactionActionFailure,
-    RuntimeSideEffect, RuntimeSubagentLineage, ScheduledWork, SenderIdentity, ShellTransaction,
-    ShellTransactionOutputTransport, SubagentScopeDeclaration, SubagentSpawnRequest,
-    SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload, TranscriptEntry,
-    TranscriptRole, action_result_context_content, assemble_model_request,
+    RuntimeProviderConfig, RuntimeRoutedWorkerSelection, RuntimeSessionService,
+    RuntimeShellTransactionActionFailure, RuntimeSideEffect, RuntimeSubagentLineage, ScheduledWork,
+    SenderIdentity, ShellTransaction, ShellTransactionOutputTransport, SubagentScopeDeclaration,
+    SubagentSpawnRequest, SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload,
+    TranscriptEntry, TranscriptRole, action_result_context_content, assemble_model_request,
     compact_model_context_for_budget_with_retained_tail_percent, current_unix_millis,
     current_unix_seconds, decode_shell_output_transport_with_diagnostics, discover_project_root,
     exact_command_sha256, execute_mcp_action_through_runtime,
@@ -62,6 +62,7 @@ use crate::integrations::agent::provider::{
 #[cfg(test)]
 use mez_agent::CooperationMode;
 use mez_agent::resolve_provider_api;
+use mez_agent::routed_workflow::RoutedWorkflowState;
 use mez_agent::semantic_patch_planning::{
     ApplyPatchTransactionPhase, apply_patch_error_plan, apply_patch_read_plan_for_paths,
     apply_patch_touched_paths, apply_patch_transaction_phase,
@@ -94,6 +95,7 @@ mod provider_context;
 mod provider_events;
 mod provider_execution;
 mod provider_tasks;
+mod routed_workflow;
 mod scheduler_state;
 mod shell_dispatch;
 mod shell_state;
@@ -215,6 +217,12 @@ pub(crate) struct RuntimeAgentComponent {
     macro_runs_by_parent_turn: BTreeMap<String, MacroRunState>,
     /// Parent macro run keyed by child step turn id.
     macro_run_by_child_turn: BTreeMap<String, String>,
+    /// Active routed-worker workflows keyed by parent presentation turn id.
+    routed_workflows_by_parent_turn: BTreeMap<String, RoutedWorkflowState>,
+    /// Parent routed workflow keyed by managed child turn id.
+    routed_workflow_by_child_turn: BTreeMap<String, String>,
+    /// Parent turns whose next provider request is respond-only presentation.
+    routed_presentation_turns: BTreeSet<String>,
     /// Approval continuation metadata keyed by blocked approval id.
     blocked_agent_approval_refs: BTreeMap<String, BlockedAgentApprovalRef>,
     /// Spawned child turns currently joined by parent agent actions.

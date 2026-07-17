@@ -50,6 +50,8 @@ pub enum ContextSourceKind {
     EvidenceLedger,
     /// Immutable evidence promoted from settled turn actions.
     CommittedEvidence,
+    /// Routed-worker result and handoff context supplied for parent presentation.
+    RoutedHandoff,
     /// A current-turn action result.
     ActionResult,
 }
@@ -88,6 +90,7 @@ impl TrustDomain {
             | ContextSourceKind::TranscriptTool
             | ContextSourceKind::EvidenceLedger
             | ContextSourceKind::CommittedEvidence
+            | ContextSourceKind::RoutedHandoff
             | ContextSourceKind::ActionResult => Self::ModelOutput,
         }
     }
@@ -182,7 +185,8 @@ impl ContextBlock {
             | ContextSourceKind::TranscriptUser
             | ContextSourceKind::TranscriptAssistant
             | ContextSourceKind::TranscriptTool
-            | ContextSourceKind::CommittedEvidence => ContextStability::SessionStable,
+            | ContextSourceKind::CommittedEvidence
+            | ContextSourceKind::RoutedHandoff => ContextStability::SessionStable,
             ContextSourceKind::UserInstruction
             | ContextSourceKind::SkillInstruction
             | ContextSourceKind::LocalMessage
@@ -205,7 +209,8 @@ impl ContextBlock {
             | ContextSourceKind::TranscriptUser
             | ContextSourceKind::TranscriptAssistant
             | ContextSourceKind::TranscriptTool
-            | ContextSourceKind::CommittedEvidence => {
+            | ContextSourceKind::CommittedEvidence
+            | ContextSourceKind::RoutedHandoff => {
                 if self.stability() == ContextStability::TurnVolatile {
                     ContextCachePolicy::Ineligible
                 } else if self.source == ContextSourceKind::ProjectGuidance {
@@ -250,6 +255,7 @@ impl ContextBlock {
                 | ContextSourceKind::TranscriptTool
                 | ContextSourceKind::EvidenceLedger
                 | ContextSourceKind::CommittedEvidence
+                | ContextSourceKind::RoutedHandoff
                 | ContextSourceKind::RuntimeHint
                 | ContextSourceKind::ActionResult
                 | ContextSourceKind::LocalMessage

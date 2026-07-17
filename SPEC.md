@@ -4510,10 +4510,11 @@ is enabled for a pane, agent, or subagent, the first provider step for each new
 turn MUST be a bounded classification request to the configured auto-sizing
 router model. The router decision MUST select one configured size bucket
 (`small`, `medium`, or `large`) and one allowed reasoning effort. Mezzanine MUST
-apply the selected model profile and reasoning effort only to that turn, and
-MUST restore the normal user-selected model profile after the turn completes,
-fails, is interrupted, or is cancelled. Auto-sizing MUST NOT mutate persistent
-model-profile overrides.
+keep the parent turn bound to its normal user-selected model profile and MUST
+apply the selected model profile and reasoning effort only to a managed routed
+worker forked from the parent conversation. The routed worker result MUST return
+to the parent for main-profile presentation. Auto-sizing MUST NOT mutate
+persistent model-profile overrides.
 
 Agents MUST support a permission or approval model that can restrict command
 execution, file mutation, network use, and destructive actions.

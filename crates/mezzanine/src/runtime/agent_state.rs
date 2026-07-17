@@ -6,10 +6,10 @@
 //! describe queued or claimed work across async boundaries.
 
 use super::{
-    AgentContext, AgentTurnRecord, DeepSeekChatCompletionsProvider, MemoryScope, ModelProfile,
-    ModelRequest, OpenAiCompatibleChatCompletionsProvider, OpenAiResponsesProvider, PathScopes,
-    PermissionPolicy, ReqwestProviderHttpTransport, RuntimeAutoSizingDispatch,
-    SessionApprovalStore, SubagentScopeDeclaration,
+    AgentContext, AgentTurnExecution, AgentTurnRecord, DeepSeekChatCompletionsProvider,
+    MemoryScope, ModelProfile, ModelRequest, OpenAiCompatibleChatCompletionsProvider,
+    OpenAiResponsesProvider, PathScopes, PermissionPolicy, ReqwestProviderHttpTransport,
+    RuntimeAutoSizingDispatch, SessionApprovalStore, SubagentScopeDeclaration,
 };
 use crate::integrations::agent::provider::{AnthropicMessagesProvider, ClaudeCodeProvider};
 use mez_agent::McpPromptTool;
@@ -141,14 +141,6 @@ pub struct RuntimeAgentProviderDispatch {
     /// Optional router provider for auto-sizing when different from the main
     /// turn provider. When set, auto-sizing requests use this provider.
     pub auto_sizing_provider: Option<RuntimeAgentProviderDispatchProvider>,
-    /// Providers that may be selected by automatic sizing target profiles.
-    ///
-    /// The async provider worker runs outside the runtime actor after the
-    /// router decision is known. Carrying target providers with the dispatch
-    /// lets cross-provider routing use the selected profile instead of falling
-    /// back to the originally active provider.
-    pub auto_sizing_target_providers:
-        std::collections::BTreeMap<String, RuntimeAgentProviderDispatchProvider>,
     /// Stores the provider value for this data structure.
     ///
     /// The field is part of structured state exchanged across this module
@@ -192,12 +184,41 @@ pub struct RuntimeAgentProviderDispatch {
     pub memory_actions_enabled: bool,
     /// Whether local issue-tracking actions are enabled for this provider turn.
     pub issue_actions_enabled: bool,
+    /// Restricts this request to final response actions for routed presentation.
+    pub respond_only: bool,
     /// Optional `/loop` controller metadata for this provider turn.
     #[allow(
         dead_code,
         reason = "provider dispatch carries loop context across worker ownership"
     )]
     pub loop_turn: Option<RuntimeAgentLoopTurn>,
+}
+
+/// Actor-owned result of the routing classifier before worker execution.
+///
+/// Provider workers return this payload instead of executing the parent turn
+/// with the routed profile. The runtime actor uses it to create the managed
+/// child workflow while preserving the parent's ordinary model profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeRoutedWorkerSelection {
+    /// Model and reasoning profile pinned to the managed routed worker.
+    pub worker_profile: ModelProfile,
+    /// Router token usage retained for parent-turn accounting.
+    pub routing_token_usage_by_model:
+        std::collections::BTreeMap<mez_agent::ModelTokenUsageKey, mez_agent::ModelTokenUsage>,
+    /// Bounded user-visible routing decision summary when classification succeeded.
+    pub decision_summary: Option<String>,
+    /// Bounded fallback diagnostic when the default profile was selected.
+    pub fallback: Option<String>,
+}
+
+/// Result produced by one provider worker before actor-owned state mutation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeAgentProviderWorkerOutcome {
+    /// A normal provider execution ready for runtime application.
+    Execution(Box<AgentTurnExecution>),
+    /// A routing decision that must create a managed child in the runtime actor.
+    RoutedWorkerSelected(Box<RuntimeRoutedWorkerSelection>),
 }
 
 /// Identifies the role of one runtime turn owned by a `/loop` command.

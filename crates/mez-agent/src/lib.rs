@@ -118,6 +118,7 @@ pub mod quota;
 pub mod readiness;
 /// Provider-response accounting across one agent turn.
 pub mod response_progress;
+pub mod routed_workflow;
 pub mod routing;
 /// Provider-independent agent scheduling policy and queue state.
 pub mod scheduler;
