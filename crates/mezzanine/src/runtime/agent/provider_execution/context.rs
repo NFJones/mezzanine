@@ -40,12 +40,20 @@ impl RuntimeSessionService {
         }) {
             return Ok(());
         }
-        context.blocks.push(ContextBlock {
-            source: ContextSourceKind::TranscriptAssistant,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label,
-            content,
-        });
+        let insertion_index = context
+            .blocks
+            .iter()
+            .position(|block| block.placement == mez_agent::ContextPlacement::EphemeralTail)
+            .unwrap_or(context.blocks.len());
+        context.blocks.insert(
+            insertion_index,
+            ContextBlock {
+                source: ContextSourceKind::TranscriptAssistant,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label,
+                content,
+            },
+        );
         Ok(())
     }
 

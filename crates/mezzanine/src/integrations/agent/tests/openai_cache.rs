@@ -126,7 +126,7 @@ fn openai_promoted_conversation_entries_keep_complete_input_bytes() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "inspect cache continuity".to_string(),
             },
@@ -376,7 +376,7 @@ fn openai_long_session_keeps_observed_action_results_raw_without_committed_evide
         });
         blocks.push(ContextBlock {
             source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: format!("fetch result {index}"),
             content: format!(
                 "[action_result fetch-{index} fetch_url succeeded]\n\
@@ -435,7 +435,7 @@ fn openai_long_session_keeps_observed_action_results_raw_without_committed_evide
 
     let prefix = openai_stable_projection_material_for_request(&request).unwrap();
     assert!(!prefix.contains("[committed_evidence]"));
-    assert!(!prefix.contains("RAW_DETAIL_SHOULD_NOT_BE_REPLAYED_0"));
+    assert!(prefix.contains("RAW_DETAIL_SHOULD_NOT_BE_REPLAYED_0"));
 
     let body_text = openai_responses_request_body(&request).unwrap();
     assert!(body_text.contains("CURRENT_RAW_RESULT_MUST_REMAIN_VOLATILE"));

@@ -2804,9 +2804,11 @@ placement independent of provenance, trust, provider role, labels, and rendered
 text. `StablePrefix` is reserved for invariant instructions and configuration;
 `ConversationAppend` contains immutable chronological transcript, committed
 evidence, and compaction-summary epochs; and `EphemeralTail` contains regenerated
-controller and current-turn state. Assembly MUST preserve producer order within
-each class while ordering the classes as stable prefix, conversation append,
-then ephemeral tail. Mutable policy and runtime state, including scheduler state,
+controller and current-turn state. Assembly MUST reject contexts whose placements regress from ephemeral tail to
+conversation append or stable prefix, or from conversation append to stable
+prefix. It MUST NOT reorder malformed context because doing so can alter
+transcript or tool-event semantics. Valid contexts MUST preserve producer order
+within each class. Mutable policy and runtime state, including scheduler state,
 active subagent write scopes, pane readiness and identity, environment state,
 pending local messages, capability eligibility, and repair or retry hints, MUST
 use `EphemeralTail`. Provider cache diagnostics and cache breakpoints MUST consume

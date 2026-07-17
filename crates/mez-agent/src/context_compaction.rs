@@ -98,13 +98,26 @@ fn compact_model_context_blocks(
             .saturating_add(retained_tail.len())
             .saturating_add(1),
     );
-    prepared.extend(protected_blocks);
+    let ephemeral_protected_start = protected_blocks
+        .iter()
+        .position(|block| block.placement == crate::ContextPlacement::EphemeralTail)
+        .unwrap_or(protected_blocks.len());
+    prepared.extend(
+        protected_blocks[..ephemeral_protected_start]
+            .iter()
+            .cloned(),
+    );
     prepared.push(bulk_compacted_model_context_block(
         &summarizable_blocks,
         retained_tail,
         tail_budget,
         retained_tail_percent,
     ));
+    prepared.extend(
+        protected_blocks[ephemeral_protected_start..]
+            .iter()
+            .cloned(),
+    );
     let protected_floor = prepared.len();
     prepared.extend(retained_tail.iter().cloned());
 

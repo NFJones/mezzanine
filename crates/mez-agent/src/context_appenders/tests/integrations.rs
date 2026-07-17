@@ -477,11 +477,11 @@ fn memory_context_accepts_sensitive_records_without_heuristic_rejection() {
 
     let context = append_memory_context(context, &records, 1).unwrap();
 
-    assert_eq!(context.blocks[1].content, "api_key = sk-secret");
+    assert_eq!(context.blocks[0].content, "api_key = sk-secret");
 }
 
 #[test]
-/// Verifies memory context appends after active context in priority order.
+/// Verifies memory context precedes the ephemeral tail in priority order.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
@@ -517,11 +517,11 @@ fn memory_context_appends_after_active_context_in_priority_order() {
     let context = append_memory_context(context, &records, 2).unwrap();
     let request = assemble_test_model_request(&context);
 
-    assert_eq!(context.blocks[0].source, ContextSourceKind::UserInstruction);
-    assert_eq!(context.blocks[1].source, ContextSourceKind::Memory);
-    assert!(context.blocks[1].label.contains("high"));
-    assert!(context.blocks[2].label.contains("low"));
-    assert_eq!(request.messages[2].role, ModelMessageRole::User);
+    assert_eq!(context.blocks[0].source, ContextSourceKind::Memory);
+    assert!(context.blocks[0].label.contains("high"));
+    assert!(context.blocks[1].label.contains("low"));
+    assert_eq!(context.blocks[2].source, ContextSourceKind::UserInstruction);
+    assert_eq!(request.messages[3].role, ModelMessageRole::User);
 }
 
 #[test]

@@ -38,14 +38,23 @@ pub fn append_memory_context(
             })
             .then_with(|| left.id.cmp(&right.id))
     });
-    for record in selected.iter().take(max_records) {
-        context.blocks.push(ContextBlock {
+    let insertion_index = context
+        .blocks
+        .iter()
+        .position(|block| block.placement == crate::ContextPlacement::EphemeralTail)
+        .unwrap_or(context.blocks.len());
+    let memory_blocks = selected
+        .iter()
+        .take(max_records)
+        .map(|record| ContextBlock {
             source: ContextSourceKind::Memory,
             placement: crate::ContextPlacement::ConversationAppend,
             label: format!("memory {} ({})", record.id, record.scope.summary()),
             content: record.content.clone(),
         });
-    }
+    context
+        .blocks
+        .splice(insertion_index..insertion_index, memory_blocks);
     AgentContext::new(context.blocks)
 }
 

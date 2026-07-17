@@ -110,15 +110,6 @@ impl RuntimeSessionService {
         self.settle_recoverable_pane_readiness_for_agent_prompt(pane_id)?;
         let mut blocks = vec![];
 
-        blocks.push(ContextBlock {
-            source: ContextSourceKind::Configuration,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
-            label: "session identity".to_string(),
-            content: format!(
-                "session_id={} session_name={}",
-                self.session.id, self.session.name
-            ),
-        });
         if let Some(lineage_id) = self
             .agent_shell_store()
             .get(pane_id)
@@ -132,6 +123,15 @@ impl RuntimeSessionService {
                 content: lineage_id,
             });
         }
+        blocks.push(ContextBlock {
+            source: ContextSourceKind::Configuration,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
+            label: "session identity".to_string(),
+            content: format!(
+                "session_id={} session_name={}",
+                self.session.id, self.session.name
+            ),
+        });
 
         let readiness_state = self.pane_readiness_state(pane_id);
         let window_name = runtime_pane_by_id(&self.session, pane_id)
@@ -513,9 +513,7 @@ impl RuntimeSessionService {
         blocks.retain(|block| !runtime_context_block_is_compaction_refresh_owned(block));
         let insert_at = blocks
             .iter()
-            .position(|block| {
-                block.source == ContextSourceKind::UserInstruction && block.label == "user prompt"
-            })
+            .position(|block| block.placement == mez_agent::ContextPlacement::EphemeralTail)
             .unwrap_or(blocks.len());
         for (offset, block) in refreshed_blocks.into_iter().enumerate() {
             blocks.insert(insert_at + offset, block);

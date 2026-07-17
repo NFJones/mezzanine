@@ -3,7 +3,7 @@
 //! This bounded leaf owns the named behavioral scenarios.
 
 use super::*;
-use crate::{AgentPromptResult, ModelRequest, append_mcp_context};
+use crate::{AgentPromptResult, AgentRequestAssemblyErrorKind, ModelRequest, append_mcp_context};
 
 /// Synthetic root-turn identity retained by moved exact-name tests.
 struct TestTurnIdentity;
@@ -364,6 +364,12 @@ fn model_request_keeps_context_sources_distinct() {
                 content: "approval_policy=ask".to_string(),
             },
             ContextBlock {
+                source: ContextSourceKind::Transcript,
+                placement: crate::ContextPlacement::ConversationAppend,
+                label: "history".to_string(),
+                content: "previous output".to_string(),
+            },
+            ContextBlock {
                 source: ContextSourceKind::LocalMessage,
                 placement: crate::ContextPlacement::EphemeralTail,
                 label: "local message".to_string(),
@@ -374,12 +380,6 @@ fn model_request_keeps_context_sources_distinct() {
                 placement: crate::ContextPlacement::EphemeralTail,
                 label: "runtime hint".to_string(),
                 content: "[action pressure]\nPrefer validation now.".to_string(),
-            },
-            ContextBlock {
-                source: ContextSourceKind::Transcript,
-                placement: crate::ContextPlacement::ConversationAppend,
-                label: "history".to_string(),
-                content: "previous output".to_string(),
             },
         ])
         .unwrap(),
@@ -411,10 +411,10 @@ fn model_request_keeps_context_sources_distinct() {
         request.messages[0].content
     );
     assert_eq!(request.messages[1].role, ModelMessageRole::Developer);
-    assert_eq!(request.messages[2].source, ContextSourceKind::LocalMessage);
-    assert_eq!(request.messages[3].source, ContextSourceKind::RuntimeHint);
-    assert_eq!(request.messages[3].role, ModelMessageRole::Developer);
-    assert_eq!(request.messages[4].source, ContextSourceKind::Transcript);
+    assert_eq!(request.messages[2].source, ContextSourceKind::Transcript);
+    assert_eq!(request.messages[3].source, ContextSourceKind::LocalMessage);
+    assert_eq!(request.messages[4].source, ContextSourceKind::RuntimeHint);
+    assert_eq!(request.messages[4].role, ModelMessageRole::Developer);
 }
 
 #[test]
@@ -519,6 +519,70 @@ fn model_request_preserves_action_results_before_provider_feedback() {
 }
 
 #[test]
+/// Verifies request assembly rejects every cache-lifecycle regression.
+///
+/// Reordering malformed context would change transcript and tool-event
+/// semantics, so the canonical provider boundary must fail before projection.
+fn model_request_rejects_context_lifecycle_regressions() {
+    let regressions = [
+        (
+            crate::ContextPlacement::EphemeralTail,
+            crate::ContextPlacement::ConversationAppend,
+        ),
+        (
+            crate::ContextPlacement::ConversationAppend,
+            crate::ContextPlacement::StablePrefix,
+        ),
+        (
+            crate::ContextPlacement::EphemeralTail,
+            crate::ContextPlacement::StablePrefix,
+        ),
+    ];
+
+    for (first, second) in regressions {
+        let error = assemble_model_request(
+            &ModelProfile {
+                provider: "openai".to_string(),
+                model: "default".to_string(),
+                reasoning_profile: None,
+                latency_preference: None,
+                multimodal_required: false,
+                provider_options: std::collections::BTreeMap::new(),
+                safety_tier: None,
+            },
+            &turn(),
+            &AgentContext::new(vec![
+                ContextBlock {
+                    source: ContextSourceKind::RuntimeHint,
+                    placement: first,
+                    label: "first block".to_string(),
+                    content: "first".to_string(),
+                },
+                ContextBlock {
+                    source: ContextSourceKind::UserInstruction,
+                    placement: second,
+                    label: "regressing block".to_string(),
+                    content: "second".to_string(),
+                },
+            ])
+            .unwrap(),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.kind(), AgentRequestAssemblyErrorKind::InvalidArgs);
+        assert!(error.message().contains("block index 1"));
+        assert!(error.message().contains("regressing block"));
+        assert!(error.message().contains("UserInstruction"));
+        assert!(error.message().contains(&format!("placement={second:?}")));
+        assert!(
+            error
+                .message()
+                .contains(&format!("entered_phase={first:?}"))
+        );
+    }
+}
+
+#[test]
 /// Verifies provider request assembly preserves observed context order while
 /// still embedding project guidance into the system prompt.
 ///
@@ -539,16 +603,16 @@ fn model_request_preserves_context_observation_order() {
         &turn(),
         &AgentContext::new(vec![
             ContextBlock {
-                source: ContextSourceKind::ActionResult,
-                placement: crate::ContextPlacement::EphemeralTail,
-                label: "action result".to_string(),
-                content: "volatile result".to_string(),
-            },
-            ContextBlock {
                 source: ContextSourceKind::ProjectGuidance,
                 placement: crate::ContextPlacement::StablePrefix,
                 label: "project guidance".to_string(),
                 content: "stable guidance".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: crate::ContextPlacement::EphemeralTail,
+                label: "action result".to_string(),
+                content: "volatile result".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
