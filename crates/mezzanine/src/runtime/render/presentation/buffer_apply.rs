@@ -604,7 +604,7 @@ impl RuntimeSessionService {
         pane_id: &str,
         styled_lines: &[(AgentTerminalPresentationStyle, String)],
     ) -> Result<()> {
-        if styled_lines.is_empty() || self.managed_routed_child_pane(pane_id) {
+        if styled_lines.is_empty() {
             return Ok(());
         }
         let descriptor = self.find_pane_descriptor(pane_id).ok_or_else(|| {
@@ -676,7 +676,7 @@ impl RuntimeSessionService {
         rendered_lines: &[RichTextLine],
         copy_lines: &[String],
     ) -> Result<()> {
-        if rendered_lines.is_empty() || self.managed_routed_child_pane(pane_id) {
+        if rendered_lines.is_empty() {
             return Ok(());
         }
         let descriptor = self.find_pane_descriptor(pane_id).ok_or_else(|| {
@@ -745,10 +745,7 @@ impl RuntimeSessionService {
         pane_id: &str,
         lines: &[String],
     ) -> Result<()> {
-        if self.managed_routed_child_pane(pane_id)
-            || self.agent_shell_view_enabled(pane_id)
-            || lines.is_empty()
-        {
+        if self.agent_shell_view_enabled(pane_id) || lines.is_empty() {
             return Ok(());
         }
         let descriptor = self.find_pane_descriptor(pane_id).ok_or_else(|| {

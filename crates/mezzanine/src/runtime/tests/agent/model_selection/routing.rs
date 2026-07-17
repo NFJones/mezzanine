@@ -3,6 +3,114 @@
 use super::*;
 use crate::runtime::RuntimeRoutedWorkerSelection;
 
+/// Verifies managed routed workers retain the normal subagent pane transcript.
+///
+/// Routing creates an idle child before queueing the real instruction. The
+/// queued prompt, transient command status, and durable assistant output must
+/// therefore be presented in the child pane and counted in its transcript
+/// without changing the parent workflow state.
+#[test]
+fn runtime_routed_worker_presents_child_prompt_status_and_output() {
+    let mut service = test_runtime_service();
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-routed-presentation"));
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.set_pane_screen("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let prompt = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"routed-presentation","method":"agent/shell/command","params":{"idempotency_key":"routed-presentation","input":"implement routed logging"}}"#,
+        &primary,
+    );
+    assert!(prompt.contains(r#""state":"running""#), "{prompt}");
+    let parent_profile = service
+        .agent_turn_model_profile("turn-1")
+        .expect("parent profile should exist")
+        .clone();
+    let selection = RuntimeRoutedWorkerSelection {
+        worker_profile: parent_profile,
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        decision_summary: Some("large/high".to_string()),
+        fallback: None,
+    };
+    let parent_agent = AgentId::opaque("agent-%1").unwrap();
+
+    service
+        .apply_routed_worker_selected_transition(&parent_agent, "turn-1", selection)
+        .unwrap();
+
+    let child_prompt = service
+        .pane_screen("%2")
+        .expect("routed child screen should exist")
+        .visible_lines()
+        .join("\n");
+    assert!(
+        child_prompt.contains("parent> implement routed logging"),
+        "{child_prompt}"
+    );
+    let child_conversation_id = service
+        .agent_shell_store()
+        .get("%2")
+        .expect("routed child shell should exist")
+        .session_id
+        .clone();
+    assert_eq!(
+        transcript_store
+            .inspect_presentation(&child_conversation_id)
+            .unwrap()
+            .len(),
+        1
+    );
+
+    service
+        .append_agent_shell_output_status_lines_to_terminal_buffer(
+            "%2",
+            &["running routed command".to_string()],
+        )
+        .unwrap();
+    let child_status = service
+        .pane_screen("%2")
+        .unwrap()
+        .visible_lines()
+        .join("\n");
+    assert!(
+        child_status.contains("running routed command"),
+        "{child_status}"
+    );
+
+    service
+        .append_agent_assistant_text_to_terminal_buffer("%2", "routed worker output")
+        .unwrap();
+    let child_output = service
+        .pane_screen("%2")
+        .unwrap()
+        .visible_lines()
+        .join("\n");
+    assert!(
+        child_output.contains("mez> routed worker output"),
+        "{child_output}"
+    );
+    let presentation = transcript_store
+        .inspect_presentation(&child_conversation_id)
+        .unwrap();
+    assert_eq!(presentation.len(), 2);
+    assert_eq!(presentation[0].style_names, vec!["user-prompt"]);
+    assert_eq!(presentation[1].style_names, vec!["assistant"]);
+    assert_eq!(
+        service
+            .routed_workflow_for_tests("turn-1")
+            .expect("routed workflow should remain active")
+            .phase,
+        mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult
+    );
+}
+
 /// Verifies routed selection setup failure is contained after classification.
 ///
 /// A missing active prompt deterministically fails before worker creation. The

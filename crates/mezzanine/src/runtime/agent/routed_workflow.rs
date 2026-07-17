@@ -122,19 +122,6 @@ struct RoutedChildTurnRequest<'a> {
 }
 
 impl RuntimeSessionService {
-    /// Reports whether a pane belongs to the active internal routed child.
-    pub(crate) fn managed_routed_child_pane(&self, pane_id: &str) -> bool {
-        self.agent
-            .routed_workflow_by_child_turn
-            .keys()
-            .any(|turn_id| {
-                self.agent_turn_ledger()
-                    .turns()
-                    .iter()
-                    .any(|turn| turn.turn_id == *turn_id && turn.pane_id == pane_id)
-            })
-    }
-
     /// Accepts a completed routing decision at the actor boundary.
     ///
     /// The full managed-child transition is deliberately actor-owned so no
@@ -1206,6 +1193,7 @@ impl RuntimeSessionService {
             state: AgentTurnState::Queued,
             initial_capability,
         };
+        self.append_agent_parent_prompt_to_terminal_buffer(child_pane_id, prompt)?;
         self.agent_turn_ledger_mut().queue_turn(turn.clone())?;
         self.agent_turn_contexts_mut()
             .insert(turn_id.clone(), context);
