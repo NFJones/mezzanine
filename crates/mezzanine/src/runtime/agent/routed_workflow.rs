@@ -763,6 +763,10 @@ impl RuntimeSessionService {
             self.agent_turn_ledger_mut()
                 .resume_blocked_turn(&parent_turn.turn_id)?;
         }
+        self.agent_turn_ledger_mut().set_turn_capability(
+            &parent_turn.turn_id,
+            mez_agent::AgentCapability::RespondOnly,
+        )?;
         self.agent
             .pending_agent_provider_tasks
             .insert(parent_turn.turn_id.clone());
@@ -834,6 +838,10 @@ impl RuntimeSessionService {
             self.agent_turn_ledger_mut()
                 .resume_blocked_turn(&parent_turn.turn_id)?;
         }
+        self.agent_turn_ledger_mut().set_turn_capability(
+            &parent_turn.turn_id,
+            mez_agent::AgentCapability::RespondOnly,
+        )?;
         self.agent
             .pending_agent_provider_tasks
             .insert(parent_turn.turn_id.clone());

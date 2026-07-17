@@ -258,6 +258,12 @@ impl RuntimeSessionService {
         state: AgentTurnState,
         reason: &str,
     ) -> Result<AgentShellSession> {
+        if self.complete_routed_presentation(&turn.turn_id, state)? {
+            return Ok(self
+                .agent_shell_store_mut()
+                .ensure_session(&turn.pane_id)
+                .cloned()?);
+        }
         let _ = self.agent.agent_scheduler.complete(&turn.turn_id);
         self.append_agent_trace_turn_event(
             &turn.pane_id,

@@ -1183,12 +1183,30 @@ reasoning_profile = "high"
             .map(|workflow| workflow.phase.clone()),
         Some(mez_agent::routed_workflow::RoutedWorkflowPhase::ReadyForPresentation)
     );
-    assert!(
+    assert_eq!(
         service
-            .complete_routed_presentation("turn-1", AgentTurnState::Failed)
-            .unwrap(),
-        "failed presentation should queue one main-model explanation"
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == "turn-1")
+            .and_then(|turn| turn.initial_capability),
+        Some(mez_agent::AgentCapability::RespondOnly),
+        "routed presentation must expose a hard response-only action surface"
     );
+    let parent_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .cloned()
+        .expect("parent turn should remain recorded");
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &parent_turn,
+            AgentTurnState::Failed,
+            "routed presentation failed",
+        )
+        .unwrap();
     let failed_workflow = service
         .routed_workflow_for_tests("turn-1")
         .expect("failed parent presentation should remain observable");
@@ -1201,12 +1219,13 @@ reasoning_profile = "high"
         Some("routed parent presentation failed")
     );
     assert!(failed_workflow.error_explanation_attempted);
-    assert!(
-        !service
-            .complete_routed_presentation("turn-1", AgentTurnState::Failed)
-            .unwrap(),
-        "failed error explanation must terminate without another retry"
-    );
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &parent_turn,
+            AgentTurnState::Failed,
+            "routed error explanation failed",
+        )
+        .unwrap();
     assert_eq!(
         service
             .routed_workflow_for_tests("turn-1")

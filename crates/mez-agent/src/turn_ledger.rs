@@ -271,6 +271,29 @@ impl AgentTurnLedger {
         Ok(())
     }
 
+    /// Replaces the action capability used for subsequent requests of one turn.
+    ///
+    /// This supports bounded workflow continuations that must narrow an
+    /// already-running turn to a response-only action surface.
+    pub fn set_turn_capability(
+        &mut self,
+        turn_id: &str,
+        capability: crate::AgentCapability,
+    ) -> AgentTurnLedgerResult<()> {
+        let turn = self
+            .turns
+            .iter_mut()
+            .find(|turn| turn.turn_id == turn_id)
+            .ok_or_else(|| AgentTurnLedgerError::not_found("turn not found"))?;
+        if terminal_turn_state(turn.state) {
+            return Err(AgentTurnLedgerError::conflict(
+                "cannot change capability for a terminal turn",
+            ));
+        }
+        turn.initial_capability = Some(capability);
+        Ok(())
+    }
+
     /// Runs the turns operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
