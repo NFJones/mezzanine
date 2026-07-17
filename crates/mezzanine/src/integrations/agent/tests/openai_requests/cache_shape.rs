@@ -85,10 +85,10 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
         diagnostics.prompt_cache_key,
         "mez-fcc0c3076055b2040cb8727ead0dbe7c"
     );
-    assert_eq!(diagnostics.instructions_bytes, 44_521);
+    assert_eq!(diagnostics.instructions_bytes, 42_098);
     assert_eq!(
         diagnostics.instructions_sha256,
-        "974215b1d4b7140af22e016a4c4af905c92d8ec6c741fd70fb7e2d0f9f74eef7"
+        "67594f70a5a061f3a6fff6d1ce71918378576298bcd63ff53ac3e27b04a02f6c"
     );
     assert_eq!(diagnostics.response_format_bytes, 4);
     assert_eq!(
@@ -105,10 +105,10 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
         diagnostics.tool_choice_sha256,
         "6667323a2b74449448aad3d609d98e5288910331b10d71e6f482da3e076eab4e"
     );
-    assert_eq!(diagnostics.stable_projection_bytes, 44_685);
+    assert_eq!(diagnostics.stable_projection_bytes, 42_262);
     assert_eq!(
         diagnostics.stable_projection_sha256,
-        "0f6c906f1572ada7b3b4d6c52acc7011333fb409c57a705d4dbc24df87333a44"
+        "856d193d9ae77bf6c35b12bc27b490f87f7d59fb35c595401191cd77ebc95ec0"
     );
     assert_eq!(diagnostics.provider_request_shape_bytes, 20_318);
     assert_eq!(

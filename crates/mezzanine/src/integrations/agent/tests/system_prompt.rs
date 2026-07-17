@@ -6,6 +6,73 @@
 use super::*;
 
 #[test]
+/// Verifies the default assembled prompt stays within its reviewed byte budget.
+///
+/// Exact section sizes and the whole-prompt digest make prompt growth and
+/// redistribution explicit during review instead of silently increasing
+/// uncached input and cache-write costs.
+fn default_system_prompt_has_reviewed_size_budget() {
+    use sha2::Digest as _;
+
+    let prompt =
+        build_agent_system_prompt(&AgentPromptProfile::default_for("agent-1", "%1")).unwrap();
+    let headings = [
+        "1. Identity",
+        "2. Autonomy",
+        "3. Repository Instructions",
+        "4. Personality",
+        "5. Judgment",
+        "6. Actions",
+        "7. Edits",
+        "8. Validation",
+        "9. Trust",
+        "10. Subagents",
+        "11. Runtime",
+        "12. Communication",
+        "13. Format",
+        "14. MCP",
+    ];
+    let section_bytes = headings
+        .iter()
+        .enumerate()
+        .map(|(index, heading)| {
+            let start = prompt.find(heading).unwrap();
+            let end = headings
+                .get(index + 1)
+                .map_or(prompt.len(), |next| prompt.find(next).unwrap());
+            end - start
+        })
+        .collect::<Vec<_>>();
+    let digest = sha2::Sha256::digest(prompt.as_bytes());
+    let digest = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+
+    eprintln!(
+        "PROMPT_BUDGET bytes={} sha256={} sections={section_bytes:?}",
+        prompt.len(),
+        digest
+    );
+    assert!(
+        prompt.len() <= 44_000,
+        "default prompt exceeded hard byte budget"
+    );
+    assert_eq!(prompt.len(), 41_979, "reviewed prompt size changed");
+    assert_eq!(
+        section_bytes,
+        vec![
+            669, 2_723, 1_260, 646, 6_828, 12_419, 3_023, 1_284, 455, 651, 420, 7_285, 2_484,
+            1_832,
+        ]
+    );
+    assert_eq!(
+        digest,
+        "f7de3f1173c5b76098566c75f4e52214d2a547b4c4266a18db2697542d6ad325"
+    );
+}
+
+#[test]
 /// Verifies the default system prompt carries detailed action-selection rules.
 ///
 /// The action set is the model's main affordance surface, so this test protects
@@ -158,7 +225,6 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("nonterminal sequence-point updates"));
     assert!(prompt.contains("user should know what was learned"));
     assert!(prompt.contains("For non-trivial multi-step work"));
-    assert!(prompt.contains("after the first evidence pass identifies"));
     assert!(prompt.contains("inspection to editing"));
     assert!(prompt.contains("editing to validation"));
     assert!(prompt.contains("validation changes the plan"));
@@ -282,18 +348,18 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("Treat that owner read as sufficient anchor context"));
     assert!(prompt.contains("Do not ask for another anchor read merely to increase confidence"));
     assert!(prompt.contains("several small anchored hunks"));
-    assert!(prompt.contains("without Markdown fences, heredocs"));
+    assert!(prompt.contains("do not wrap them in Markdown fences, heredocs"));
     assert!(!prompt.contains("For recovery compatibility"));
     assert!(!prompt.contains("uniformly indented patch blocks"));
     assert!(!prompt.contains("Markdown-fenced or heredoc-wrapped patch text"));
     assert!(!prompt.contains("blank hunk-body lines as empty context lines"));
     assert!(!prompt.contains("old-line range metadata is a placement hint only"));
     assert!(!prompt.contains("Unanchored pure-addition update hunks append by default"));
-    assert!(prompt.contains("distinctive @@ header anchors"));
+    assert!(prompt.contains("copied @@ anchors"));
     assert!(prompt.contains("use recent action-result evidence"));
     assert!(prompt.contains("In most cases, one bounded owner read is enough"));
     assert!(prompt.contains("read only missing/stale candidate or owner ranges once"));
-    assert!(prompt.contains("if replacement or equivalent behavior exists"));
+    assert!(prompt.contains("If current code already has equivalent behavior"));
     assert!(prompt.contains("Do not delete then recreate a file as a substitute for editing it"));
     assert!(prompt.contains("Do not delete then recreate a file as a substitute for editing it"));
     assert!(prompt.contains(
@@ -305,7 +371,7 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains(
         "ask for clarification using the active pane working directory as the resolution base"
     ));
-    assert!(prompt.contains("relative to pane current working directory"));
+    assert!(prompt.contains("relative to the pane current working directory"));
     assert!(prompt.contains("Prefer relative local paths under repo/CWD"));
     assert!(prompt.contains("use absolute paths above/outside that root"));
     assert!(prompt.contains("Validate proportional to risk"));
@@ -748,11 +814,9 @@ fn system_prompt_keeps_mcp_awareness_abstract() {
     assert!(prompt.contains("Emit the patch string directly"));
     assert!(prompt.contains("1-6 exact old/context lines"));
     assert!(prompt.contains("must be copied verbatim from current file content"));
-    assert!(prompt.contains("never infer, normalize, simplify, or reconstruct likely code"));
-    assert!(prompt.contains("In most cases one bounded owner-range read is enough"));
-    assert!(prompt.contains(
-        "Reuse recent action-result evidence when it already covers the intended hunk range"
-    ));
+    assert!(prompt.contains("do not infer, normalize, simplify, or reconstruct likely code"));
+    assert!(prompt.contains("In most cases, one bounded owner read is enough"));
+    assert!(prompt.contains("recent evidence already covers the intended hunk range"));
     assert!(prompt.contains("several small anchored hunks"));
     assert!(prompt.contains("Treat most `apply_patch` failures as recoverable"));
     assert!(prompt.contains("After five consecutive `apply_patch` failures"));
@@ -762,18 +826,18 @@ fn system_prompt_keeps_mcp_awareness_abstract() {
     assert!(prompt.contains(
         "Do not stop at the first patch failure when a bounded inspection or corrected patch can still make progress"
     ));
-    assert!(prompt.contains("without Markdown fences, heredocs"));
+    assert!(prompt.contains("do not wrap them in Markdown fences, heredocs"));
     assert!(!prompt.contains("For recovery compatibility"));
     assert!(!prompt.contains("uniformly indented patch blocks"));
     assert!(!prompt.contains("Markdown-fenced or heredoc-wrapped patch text"));
     assert!(!prompt.contains("blank hunk-body lines as empty context lines"));
     assert!(!prompt.contains("old-line range metadata is a placement hint only"));
     assert!(!prompt.contains("Unanchored pure-addition update hunks append by default"));
-    assert!(prompt.contains("distinctive @@ header anchors"));
+    assert!(prompt.contains("copied @@ anchors"));
     assert!(prompt.contains("use recent action-result evidence"));
     assert!(prompt.contains("read only missing/stale candidate or owner ranges once"));
     assert!(prompt.contains("A second owner-localization read is exceptional"));
-    assert!(prompt.contains("if replacement or equivalent behavior exists"));
+    assert!(prompt.contains("If current code already has equivalent behavior"));
     assert!(prompt.contains("Do not delete then recreate a file as a substitute for editing it"));
     assert!(prompt.contains(
         "Relative file paths are always resolved against the active pane working directory"
@@ -784,7 +848,7 @@ fn system_prompt_keeps_mcp_awareness_abstract() {
     assert!(prompt.contains(
         "ask for clarification using the active pane working directory as the resolution base"
     ));
-    assert!(prompt.contains("relative to pane current working directory"));
+    assert!(prompt.contains("relative to the pane current working directory"));
     assert!(prompt.contains("Prefer relative local paths under repo/CWD"));
     assert!(prompt.contains("use absolute paths above/outside that root"));
     assert!(prompt.contains("Validate proportional to risk"));
@@ -821,7 +885,6 @@ fn system_prompt_keeps_mcp_awareness_abstract() {
     assert!(prompt.contains("plan-only turn when feasible implementation"));
     assert!(prompt.contains("top-level rationale plus at least one"));
     assert!(prompt.contains("Do not put shell commands or Mezzanine patch blocks in say"));
-    assert!(prompt.contains("display-only unless the user explicitly asked to see them"));
     assert!(prompt.contains("shell_command requires summary and command"));
     assert!(prompt.contains("explorer=read-only search"));
     assert!(prompt.contains("Cooperation mode is about filesystem scope safety, not scheduling"));
