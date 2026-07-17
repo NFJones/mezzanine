@@ -71,9 +71,8 @@ use crate::control::{
 use crate::integrations::skills::{BUILTIN_MEZ_REFERENCE_SKILL_NAME, load_skill_document};
 pub(crate) use component::RuntimeControlComponent;
 use context::{
-    AGENT_TRANSCRIPT_CONTEXT_READ_BYTES, runtime_agent_transcript_context_blocks,
-    runtime_context_block_is_compaction_refresh_owned, runtime_local_message_context_content,
-    runtime_transcript_context_entry_limit,
+    runtime_agent_transcript_context_blocks, runtime_context_block_is_compaction_refresh_owned,
+    runtime_local_message_context_content,
 };
 use mez_agent::{
     SkillDocument, append_memory_context, append_permission_policy_context,
@@ -162,14 +161,16 @@ impl RuntimeSessionService {
                 session.transcript_entries
             };
             if transcript_entries > 0 {
-                let transcript_context_entries =
-                    runtime_transcript_context_entry_limit(transcript_entries);
-                match store.inspect_recent(
-                    transcript_conversation_id,
-                    transcript_context_entries,
-                    AGENT_TRANSCRIPT_CONTEXT_READ_BYTES,
-                ) {
-                    Ok(entries) if !entries.is_empty() => {
+                match store.inspect(transcript_conversation_id) {
+                    Ok(mut entries) if !entries.is_empty() => {
+                        if session.ephemeral {
+                            entries.retain(|entry| entry.sequence <= transcript_entries);
+                        } else {
+                            let active_entries =
+                                usize::try_from(transcript_entries).unwrap_or(usize::MAX);
+                            let first_active = entries.len().saturating_sub(active_entries);
+                            entries.drain(..first_active);
+                        }
                         blocks.extend(runtime_agent_transcript_context_blocks(pane_id, &entries));
                     }
                     Ok(_) => {}
@@ -458,14 +459,16 @@ impl RuntimeSessionService {
                 session.transcript_entries
             };
             if transcript_entries > 0 {
-                let transcript_context_entries =
-                    runtime_transcript_context_entry_limit(transcript_entries);
-                match store.inspect_recent(
-                    transcript_conversation_id,
-                    transcript_context_entries,
-                    AGENT_TRANSCRIPT_CONTEXT_READ_BYTES,
-                ) {
-                    Ok(entries) if !entries.is_empty() => {
+                match store.inspect(transcript_conversation_id) {
+                    Ok(mut entries) if !entries.is_empty() => {
+                        if session.ephemeral {
+                            entries.retain(|entry| entry.sequence <= transcript_entries);
+                        } else {
+                            let active_entries =
+                                usize::try_from(transcript_entries).unwrap_or(usize::MAX);
+                            let first_active = entries.len().saturating_sub(active_entries);
+                            entries.drain(..first_active);
+                        }
                         refreshed_blocks.extend(runtime_agent_transcript_context_blocks(
                             &turn.pane_id,
                             &entries,

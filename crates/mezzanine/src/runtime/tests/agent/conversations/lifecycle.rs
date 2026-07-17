@@ -210,6 +210,73 @@ fn runtime_agent_loop_fork_option_starts_first_iteration_in_ephemeral_conversati
     service.terminate_all_pane_processes().unwrap();
 }
 
+/// Verifies an ephemeral fork replays the complete parent projection captured
+/// at fork time without leaking parent records appended afterward.
+///
+/// A recent-tail read would replace the captured first record with the later
+/// parent record when the fork high-water mark is one.
+#[test]
+fn runtime_agent_loop_fork_context_honors_captured_parent_high_water_mark() {
+    let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-loop-fork-replay"));
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let parent_conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: parent_conversation_id.clone(),
+            sequence: 1,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::User,
+            turn_id: "captured-parent-turn".to_string(),
+            agent_id: "agent".to_string(),
+            pane_id: "%1".to_string(),
+            content: "captured parent message".to_string(),
+        })
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries("%1", 1)
+        .unwrap();
+    service
+        .execute_agent_shell_loop_command("%1", "/loop --fork continue")
+        .unwrap();
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: parent_conversation_id,
+            sequence: 2,
+            created_at_unix_seconds: 2,
+            role: TranscriptRole::User,
+            turn_id: "later-parent-turn".to_string(),
+            agent_id: "agent".to_string(),
+            pane_id: "%1".to_string(),
+            content: "later parent message".to_string(),
+        })
+        .unwrap();
+
+    let context = service
+        .agent_context_for_pane_prompt("%1", "continue", 0)
+        .unwrap();
+    let replay = context
+        .blocks
+        .iter()
+        .filter(|block| block.source == ContextSourceKind::TranscriptUser)
+        .map(|block| block.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(replay.contains("captured parent message"), "{replay}");
+    assert!(!replay.contains("later parent message"), "{replay}");
+}
+
 /// Verifies `/loop --fork` can start from a pane conversation that has no
 /// persisted transcript entries yet.
 ///

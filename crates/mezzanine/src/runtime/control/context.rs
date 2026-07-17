@@ -9,14 +9,7 @@ use super::super::{ContextBlock, ContextSourceKind, Envelope, TranscriptEntry, T
 use mez_agent::ProviderTranscriptEvent;
 
 const AGENT_LOCAL_MESSAGE_CONTEXT_PAYLOAD_CHARS: usize = 256 * 1024;
-pub(super) const AGENT_TRANSCRIPT_CONTEXT_READ_BYTES: u64 = 100 * 1024 * 1024;
 const AGENT_TRANSCRIPT_TOOL_CONTEXT_LIMIT_BYTES: usize = 256 * 1024;
-
-/// Returns the number of transcript entries from the current post-compaction
-/// window that may be replayed into model context.
-pub(super) fn runtime_transcript_context_entry_limit(entries_since_compaction: u64) -> usize {
-    usize::try_from(entries_since_compaction).unwrap_or(usize::MAX)
-}
 
 /// Builds model-context blocks from durable transcript entries for one runtime pane.
 pub(super) fn runtime_agent_transcript_context_blocks(

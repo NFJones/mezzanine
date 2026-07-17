@@ -3491,13 +3491,20 @@ assistant responses MUST be supplied as assistant context, and prior tool or
 action results MUST be supplied only through a bounded, sanitized tool-result
 projection. Compact action/audit summaries MUST NOT replace visible assistant
 text when that text is needed for later references.
-The active post-compaction transcript replay SHOULD NOT be pre-filtered by an
-arbitrary recent-entry count. When explicit compaction or provider context-limit
-recovery reduces replayed transcript context, it MUST preserve or summarize
-older visible assistant and user text rather than silently dropping it before
-retry. Visible assistant and user transcript entries SHOULD NOT be byte-sliced
-before compaction; oversized entries SHOULD use the same compact summary path as
-other oversized context blocks.
+Normal provider-context construction MUST replay the complete active transcript
+projection in sequence order without applying a recent-entry or byte-tail limit.
+For an ordinary conversation, the active projection is the exact retained raw
+suffix committed by the latest successful compaction plus every subsequently
+appended record. For a forked, routed, or ephemeral conversation, replay MUST
+stop at the captured source high-water mark and MUST neither leak later parent
+records nor drop earlier active records. If the required projection cannot be
+loaded or decoded, context construction MUST fail visibly rather than substitute
+a newer tail. When explicit compaction or provider context-limit recovery reduces
+replayed transcript context, it MUST preserve or summarize older visible
+assistant and user text rather than silently dropping it before retry. Visible
+assistant and user transcript entries SHOULD NOT be byte-sliced before
+compaction; oversized entries SHOULD use the same compact summary path as other
+oversized context blocks.
 When conversation compaction runs, Mezzanine MUST retain a bounded raw tail of
 recent durable transcript entries after the compacted summary. The retained raw
 tail MUST cover approximately the configured
