@@ -192,8 +192,12 @@ impl RuntimeSessionService {
                 truncated
             ),
         )?;
-        let content =
-            runtime_command_display_overlay_content(&output, &self.presentation.settings.ui_theme)?;
+        let content = runtime_command_display_overlay_content(
+            &output,
+            &self.presentation.settings.ui_theme,
+            usize::from(self.session.authoritative_size.columns),
+            self.presentation.settings.terminal_agent_wrap_column_cap,
+        )?;
         self.present_runtime_command_display_content(content)
     }
 

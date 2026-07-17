@@ -602,7 +602,12 @@ impl RuntimeSessionService {
                 return Ok(true);
             }
         };
-        match runtime_agent_shell_display_output(&body, &self.presentation.settings.ui_theme) {
+        match runtime_agent_shell_display_output(
+            &body,
+            &self.presentation.settings.ui_theme,
+            usize::from(self.session.authoritative_size.columns),
+            self.presentation.settings.terminal_agent_wrap_column_cap,
+        ) {
             Ok(display_output) => self.set_agent_prompt_display_output(pane_id, display_output)?,
             Err(error) => {
                 self.set_agent_prompt_display_lines(
@@ -783,9 +788,12 @@ impl RuntimeSessionService {
             let outcome = self.execute_agent_shell_routing_command(&pane_id, "/routing toggle")?;
             let response =
                 runtime_agent_shell_command_response_json(&pane_id, "/routing", Some(&outcome));
-            if let Ok(display_output) =
-                runtime_agent_shell_display_output(&response, &self.presentation.settings.ui_theme)
-            {
+            if let Ok(display_output) = runtime_agent_shell_display_output(
+                &response,
+                &self.presentation.settings.ui_theme,
+                usize::from(self.session.authoritative_size.columns),
+                self.presentation.settings.terminal_agent_wrap_column_cap,
+            ) {
                 self.set_agent_prompt_display_output(&pane_id, display_output)?;
             }
             return Ok(());
@@ -796,9 +804,12 @@ impl RuntimeSessionService {
                 self.execute_agent_shell_thinking_command(&pane_id, "/thinking toggle")?;
             let response =
                 runtime_agent_shell_command_response_json(&pane_id, "/thinking", Some(&outcome));
-            if let Ok(display_output) =
-                runtime_agent_shell_display_output(&response, &self.presentation.settings.ui_theme)
-            {
+            if let Ok(display_output) = runtime_agent_shell_display_output(
+                &response,
+                &self.presentation.settings.ui_theme,
+                usize::from(self.session.authoritative_size.columns),
+                self.presentation.settings.terminal_agent_wrap_column_cap,
+            ) {
                 self.set_agent_prompt_display_output(&pane_id, display_output)?;
             }
             return Ok(());
@@ -939,6 +950,8 @@ impl RuntimeSessionService {
                 if let Ok(display_output) = runtime_agent_shell_display_output(
                     &response,
                     &self.presentation.settings.ui_theme,
+                    usize::from(self.session.authoritative_size.columns),
+                    self.presentation.settings.terminal_agent_wrap_column_cap,
                 ) {
                     self.set_agent_prompt_display_output(&selector.pane_id, display_output)?;
                 }
@@ -962,9 +975,12 @@ impl RuntimeSessionService {
             },
             Some(&outcome),
         );
-        if let Ok(display_output) =
-            runtime_agent_shell_display_output(&response, &self.presentation.settings.ui_theme)
-        {
+        if let Ok(display_output) = runtime_agent_shell_display_output(
+            &response,
+            &self.presentation.settings.ui_theme,
+            usize::from(self.session.authoritative_size.columns),
+            self.presentation.settings.terminal_agent_wrap_column_cap,
+        ) {
             self.set_agent_prompt_display_output(&selector.pane_id, display_output)?;
         }
         Ok(())

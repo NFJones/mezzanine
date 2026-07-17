@@ -22,6 +22,7 @@ pub(crate) struct RuntimeCommandDisplayOverlayContent {
 }
 
 /// Wraps command-overlay rows while preserving styles and selectable ranges.
+#[cfg(test)]
 pub(crate) fn wrap_runtime_command_display_overlay_content(
     content: RuntimeCommandDisplayOverlayContent,
     display_width: usize,
@@ -178,6 +179,8 @@ pub(crate) struct RuntimeDisplayChoice {
 pub(crate) fn runtime_command_display_overlay_content(
     body: &str,
     ui_theme: &UiTheme,
+    terminal_width: usize,
+    configured_wrap_width: usize,
 ) -> Result<RuntimeCommandDisplayOverlayContent> {
     let parsed: serde_json::Value = serde_json::from_str(body)
         .map_err(|_| MezError::invalid_args("runtime command response is not valid JSON"))?;
@@ -213,7 +216,16 @@ pub(crate) fn runtime_command_display_overlay_content(
             if agent_output_content_type_is_markdown(content_type)
                 || terminal_command_display_body_is_markdown(command.as_deref(), body)
             {
-                content.extend_markdown_body(command, body, ui_theme);
+                let markdown_width = if command
+                    .as_deref()
+                    .is_some_and(|command| command.starts_with("show-"))
+                {
+                    terminal_width.min(configured_wrap_width)
+                } else {
+                    terminal_width
+                }
+                .max(1);
+                content.extend_markdown_body(command, body, ui_theme, markdown_width);
             } else {
                 content.extend_body(body);
             }
@@ -244,6 +256,49 @@ pub(super) fn list_themes_command_display_detects_markdown_tables() {
         Some("list-themes"),
         "active     theme                   preview"
     ));
+}
+
+/// Verifies non-`show` Markdown command pagers use terminal width during
+/// rendering rather than post-render wrapping at the configured prose width.
+#[cfg(test)]
+#[test]
+pub(super) fn non_show_markdown_command_uses_terminal_width_for_table_layout() {
+    let body = serde_json::json!({
+        "outcomes": [{
+            "kind": "display",
+            "command": "list-themes",
+            "content_type": "text/markdown",
+            "body": "| Field | Value |\n| --- | --- |\n| description | alpha beta gamma delta |"
+        }]
+    })
+    .to_string();
+
+    let content = runtime_command_display_overlay_content(
+        &body,
+        &mez_mux::theme::deepforest_ui_theme(),
+        24,
+        8,
+    )
+    .unwrap();
+
+    assert!(
+        content.lines.iter().any(|line| line.contains('│')),
+        "{content:?}"
+    );
+    assert!(
+        content
+            .lines
+            .iter()
+            .any(|line| UnicodeWidthStr::width(line.as_str()) > 8),
+        "{content:?}"
+    );
+    assert!(
+        content
+            .lines
+            .iter()
+            .all(|line| UnicodeWidthStr::width(line.as_str()) <= 24),
+        "{content:?}"
+    );
 }
 
 /// Verifies Markdown-rendered `list-themes` rows keep clickable theme actions
@@ -625,9 +680,19 @@ pub(crate) fn runtime_enabled_phrase(value: &str) -> &'static str {
 
 impl RuntimeCommandDisplayOverlayContent {
     /// Appends one markdown display body to this overlay content.
-    fn extend_markdown_body(&mut self, command: Option<String>, body: &str, ui_theme: &UiTheme) {
-        let mut markdown_content =
-            runtime_agent_shell_markdown_overlay_content(command, body, ui_theme);
+    fn extend_markdown_body(
+        &mut self,
+        command: Option<String>,
+        body: &str,
+        ui_theme: &UiTheme,
+        display_width: usize,
+    ) {
+        let mut markdown_content = runtime_agent_shell_markdown_overlay_content_for_width(
+            command,
+            body,
+            ui_theme,
+            Some(display_width),
+        );
         let line_offset = self.lines.len();
         self.lines.append(&mut markdown_content.lines);
         self.line_style_spans

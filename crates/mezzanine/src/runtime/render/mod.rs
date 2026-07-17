@@ -612,10 +612,9 @@ use input::{
 };
 #[cfg(test)]
 use mez_mux::render::wrap_rich_text_line_to_width;
-use mez_mux::render::{
-    RichTextLine, RichTextLineKind, push_or_extend_style_span,
-    wrap_rich_text_line_to_width_with_source_ranges,
-};
+use mez_mux::render::{RichTextLine, push_or_extend_style_span};
+#[cfg(test)]
+use mez_mux::render::{RichTextLineKind, wrap_rich_text_line_to_width_with_source_ranges};
 use overlay::{
     RuntimeAgentShellDisplayOutput, agent_command_link_at_line_column,
     agent_shell_mcp_display_state_name, default_runtime_agent_prompt_input,

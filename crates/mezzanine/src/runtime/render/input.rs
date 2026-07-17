@@ -15,7 +15,6 @@ use super::{
     runtime_agent_shell_visibility, runtime_command_display_overlay_content,
     runtime_command_display_should_open_overlay,
 };
-use crate::runtime::render::overlay::wrap_runtime_command_display_overlay_content;
 use crate::runtime::service_state::RuntimeRecordBrowserOverlayState;
 
 /// Display-overlay navigation action decoded from terminal input.
@@ -228,6 +227,8 @@ impl RuntimeSessionService {
                                 runtime_command_display_overlay_content(
                                     &body,
                                     &self.presentation.settings.ui_theme,
+                                    usize::from(self.session.authoritative_size.columns),
+                                    self.presentation.settings.terminal_agent_wrap_column_cap,
                                 )
                             }) {
                             Ok(content) => {
@@ -387,6 +388,8 @@ impl RuntimeSessionService {
                     match runtime_agent_shell_display_output(
                         &body,
                         &self.presentation.settings.ui_theme,
+                        usize::from(self.session.authoritative_size.columns),
+                        self.presentation.settings.terminal_agent_wrap_column_cap,
                     ) {
                         Ok(display_output) => {
                             self.set_agent_prompt_display_output(pane_id, display_output)?;
@@ -424,6 +427,8 @@ impl RuntimeSessionService {
                     match runtime_agent_shell_display_output(
                         &body,
                         &self.presentation.settings.ui_theme,
+                        usize::from(self.session.authoritative_size.columns),
+                        self.presentation.settings.terminal_agent_wrap_column_cap,
                     ) {
                         Ok(display_output) => {
                             self.set_agent_prompt_display_output(pane_id, display_output)?;
@@ -479,7 +484,12 @@ impl RuntimeSessionService {
             "/exit"
         };
         let body = self.execute_agent_shell_command(primary_client_id, command)?;
-        match runtime_agent_shell_display_output(&body, &self.presentation.settings.ui_theme) {
+        match runtime_agent_shell_display_output(
+            &body,
+            &self.presentation.settings.ui_theme,
+            usize::from(self.session.authoritative_size.columns),
+            self.presentation.settings.terminal_agent_wrap_column_cap,
+        ) {
             Ok(display_output) => self.set_agent_prompt_display_output(pane_id, display_output)?,
             Err(error) => self.set_agent_prompt_display_lines(
                 pane_id,
@@ -811,11 +821,6 @@ impl RuntimeSessionService {
                         })
                 });
                 if should_open_overlay {
-                    let wrap_columns = usize::from(self.session.authoritative_size.columns)
-                        .min(self.presentation.settings.terminal_agent_wrap_column_cap)
-                        .max(1);
-                    let content =
-                        wrap_runtime_command_display_overlay_content(content, wrap_columns);
                     self.show_primary_display_overlay_inner(
                         content.lines,
                         content.line_style_spans,
@@ -850,8 +855,12 @@ impl RuntimeSessionService {
         pane_id: &str,
         response: &str,
     ) -> Result<()> {
-        let display_output =
-            runtime_agent_shell_display_output(response, &self.presentation.settings.ui_theme)?;
+        let display_output = runtime_agent_shell_display_output(
+            response,
+            &self.presentation.settings.ui_theme,
+            usize::from(self.session.authoritative_size.columns),
+            self.presentation.settings.terminal_agent_wrap_column_cap,
+        )?;
         self.set_agent_prompt_display_output(pane_id, display_output)
     }
 }

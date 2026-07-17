@@ -1,6 +1,5 @@
 //! Pane-agent selector and record-browser layout projection.
 
-use super::display_content::wrap_runtime_command_display_overlay_content;
 use super::product_content::*;
 use crate::runtime::render::*;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -140,7 +139,7 @@ pub(super) fn render_record_browser_overlay(
             })
             .collect();
     }
-    let content = wrap_runtime_command_display_overlay_content(content, display_width);
+    let content = content;
     overlay.lines = content.lines;
     overlay.line_style_spans = content.line_style_spans;
     overlay.selections = content.selections;

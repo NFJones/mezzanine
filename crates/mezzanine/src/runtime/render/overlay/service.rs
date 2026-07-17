@@ -40,8 +40,12 @@ impl RuntimeSessionService {
                     .pending_record_browser_overlay_stacks
                     .insert((pane_id.clone(), target_command), stack);
             }
-            let display_output =
-                runtime_agent_shell_display_output(&body, &self.presentation.settings.ui_theme)?;
+            let display_output = runtime_agent_shell_display_output(
+                &body,
+                &self.presentation.settings.ui_theme,
+                usize::from(self.session.authoritative_size.columns),
+                self.presentation.settings.terminal_agent_wrap_column_cap,
+            )?;
             self.set_agent_prompt_display_output(&pane_id, display_output)?;
             if runtime_agent_shell_visibility(&body).as_deref() == Some("hidden") {
                 self.presentation.agent_prompt_inputs.remove(&pane_id);
@@ -52,7 +56,12 @@ impl RuntimeSessionService {
         let content = self
             .execute_terminal_command(primary_client_id, command)
             .and_then(|body| {
-                runtime_command_display_overlay_content(&body, &self.presentation.settings.ui_theme)
+                runtime_command_display_overlay_content(
+                    &body,
+                    &self.presentation.settings.ui_theme,
+                    usize::from(self.session.authoritative_size.columns),
+                    self.presentation.settings.terminal_agent_wrap_column_cap,
+                )
             })?;
         self.present_runtime_command_display_content(content)?;
         Ok(true)
@@ -722,18 +731,6 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         let should_open_overlay = runtime_command_display_should_open_overlay(&content);
         if should_open_overlay {
-            let content = if content
-                .command
-                .as_deref()
-                .is_some_and(|command| command.starts_with("show-"))
-            {
-                let wrap_columns = usize::from(self.session.authoritative_size.columns)
-                    .min(self.presentation.settings.terminal_agent_wrap_column_cap)
-                    .max(1);
-                wrap_runtime_command_display_overlay_content(content, wrap_columns)
-            } else {
-                content
-            };
             return self.show_primary_display_overlay_inner(
                 content.lines,
                 content.line_style_spans,

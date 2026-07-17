@@ -108,6 +108,8 @@ pub(crate) enum RuntimeAgentShellDisplayOutput {
 pub(crate) fn runtime_agent_shell_display_output(
     body: &str,
     ui_theme: &UiTheme,
+    terminal_width: usize,
+    configured_wrap_width: usize,
 ) -> Result<RuntimeAgentShellDisplayOutput> {
     let parsed: serde_json::Value = serde_json::from_str(body)
         .map_err(|_| MezError::invalid_args("agent shell response is not valid JSON"))?;
@@ -142,8 +144,21 @@ pub(crate) fn runtime_agent_shell_display_output(
                 lines.truncate(200);
                 return Ok(RuntimeAgentShellDisplayOutput::Lines(lines));
             }
-            let content =
-                runtime_agent_shell_markdown_overlay_content(command.clone(), body, ui_theme);
+            let display_width = if command
+                .as_deref()
+                .is_some_and(|command| command.starts_with("show-"))
+            {
+                terminal_width.min(configured_wrap_width)
+            } else {
+                terminal_width
+            }
+            .max(1);
+            let content = runtime_agent_shell_markdown_overlay_content_for_width(
+                command.clone(),
+                body,
+                ui_theme,
+                Some(display_width),
+            );
             if runtime_command_display_should_open_overlay(&content) {
                 return Ok(RuntimeAgentShellDisplayOutput::Overlay(content));
             }
@@ -218,6 +233,7 @@ fn show_markdown_overlay_uses_width_aware_table_layout() {
 
 /// Renders slash-command markdown display output into the command overlay
 /// pager while preserving clickable `mez-agent:` links.
+#[cfg(test)]
 pub(crate) fn runtime_agent_shell_markdown_overlay_content(
     command: Option<String>,
     markdown: &str,

@@ -65,7 +65,8 @@ fn command_display_overlay_ignores_descriptive_action_metadata() {
         }]
     })
     .to_string();
-    let content = runtime_command_display_overlay_content(&body, &default_ui_theme()).unwrap();
+    let content =
+        runtime_command_display_overlay_content(&body, &default_ui_theme(), 80, 80).unwrap();
 
     assert!(content.selections.is_empty());
     assert_eq!(
