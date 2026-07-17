@@ -99,6 +99,16 @@ fn routed_worker_seed_context(
     AgentContext { blocks }
 }
 
+/// Builds the separately labeled provider output retained after handoff failure.
+fn routed_handoff_failure_output_block(output: &str) -> Option<ContextBlock> {
+    (!output.is_empty()).then(|| ContextBlock {
+        source: ContextSourceKind::RoutedHandoff,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
+        label: "routed handoff failure output".to_string(),
+        content: output.to_string(),
+    })
+}
+
 /// Inputs for one runtime-owned child turn in a routed workflow.
 struct RoutedChildTurnRequest<'a> {
     parent_turn: &'a AgentTurnRecord,
@@ -433,6 +443,15 @@ impl RuntimeSessionService {
                 if execution.terminal_state != AgentTurnState::Completed =>
             {
                 let final_result = state.worker_final_result.as_deref().unwrap_or_default();
+                if let Some(block) = routed_handoff_failure_output_block(&output) {
+                    self.agent_turn_contexts_mut()
+                        .get_mut(&parent_turn.turn_id)
+                        .ok_or_else(|| {
+                            MezError::invalid_state("routed parent context is unavailable")
+                        })?
+                        .blocks
+                        .push(block);
+                }
                 self.ready_routed_parent_for_error_explanation(
                     &parent_turn,
                     "summary request",
@@ -879,6 +898,19 @@ fn routed_presentation_terminal_phase(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies a failed handoff provider result remains distinct from the
+    /// successful worker result consumed by the parent explanation step.
+    #[test]
+    fn routed_handoff_failure_output_keeps_distinct_context_identity() {
+        let block = routed_handoff_failure_output_block("provider context limit exceeded")
+            .expect("non-empty handoff failure output should be retained");
+
+        assert_eq!(block.source, ContextSourceKind::RoutedHandoff);
+        assert_eq!(block.label, "routed handoff failure output");
+        assert_eq!(block.content, "provider context limit exceeded");
+        assert!(routed_handoff_failure_output_block("").is_none());
+    }
 
     /// Verifies routed presentation outcomes preserve each supported terminal
     /// state and reject scheduler states that have not settled.
