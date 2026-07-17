@@ -575,6 +575,65 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
+    /// Settles cancellation of one managed routed child through the parent.
+    ///
+    /// The generic subagent cancellation path cannot resume a blocked routed
+    /// parent. This transition records a phase-specific diagnostic, queues the
+    /// single response-only main-model explanation, and removes superseded
+    /// child indexes before ordinary child-turn cleanup continues.
+    pub(crate) fn handle_routed_child_cancellation(
+        &mut self,
+        turn: &AgentTurnRecord,
+    ) -> Result<bool> {
+        let parent_turn_id = self
+            .agent
+            .routed_workflow_by_child_turn
+            .get(&turn.turn_id)
+            .cloned()
+            .or_else(|| {
+                self.agent
+                    .routed_workflows_by_parent_turn
+                    .iter()
+                    .find(|(_, workflow)| {
+                        workflow.child_turn_id.as_deref() == Some(turn.turn_id.as_str())
+                    })
+                    .map(|(parent_turn_id, _)| parent_turn_id.clone())
+            });
+        let Some(parent_turn_id) = parent_turn_id else {
+            return Ok(false);
+        };
+        let state = self
+            .agent
+            .routed_workflows_by_parent_turn
+            .get(&parent_turn_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("routed workflow state is unavailable"))?;
+        let Some((stage, child_output, diagnostic)) = routed_child_cancellation_details(&state)
+        else {
+            self.agent
+                .routed_workflow_by_child_turn
+                .remove(&turn.turn_id);
+            self.agent.subagent_task_routes.remove(&turn.turn_id);
+            return Ok(true);
+        };
+        let parent_turn = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|candidate| candidate.turn_id == parent_turn_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("routed parent turn is unavailable"))?;
+        self.ready_routed_parent_for_error_explanation(
+            &parent_turn,
+            stage,
+            child_output,
+            diagnostic,
+        )?;
+        self.clear_routed_workflow_runtime_state(&parent_turn_id);
+        self.agent.subagent_task_routes.remove(&turn.turn_id);
+        Ok(true)
+    }
+
     /// Adds a routed diagnostic to the parent context and queues one explanation.
     fn ready_routed_parent_for_error_explanation(
         &mut self,
@@ -905,6 +964,23 @@ fn parse_routed_worker_handoff(output: &str) -> Result<RoutedWorkerHandoff> {
     Ok(handoff)
 }
 
+/// Returns the parent-facing fields for an active routed child cancellation.
+fn routed_child_cancellation_details(
+    state: &RoutedWorkflowState,
+) -> Option<(&'static str, &str, &'static str)> {
+    match state.phase {
+        RoutedWorkflowPhase::WaitingForWorkerResult => {
+            Some(("worker", "", "routed worker was cancelled"))
+        }
+        RoutedWorkflowPhase::WaitingForHandoff => Some((
+            "summary request",
+            state.worker_final_result.as_deref().unwrap_or_default(),
+            "routed handoff was cancelled",
+        )),
+        _ => None,
+    }
+}
+
 /// Maps a settled parent presentation turn to its routed terminal phase.
 fn routed_presentation_terminal_phase(
     terminal_state: AgentTurnState,
@@ -920,6 +996,48 @@ fn routed_presentation_terminal_phase(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies cancellation diagnostics preserve worker output only after the
+    /// workflow has advanced to the handoff phase.
+    #[test]
+    fn routed_child_cancellation_details_are_phase_specific() {
+        let mut state = RoutedWorkflowState {
+            run_id: "parent".to_string(),
+            parent_agent_id: "agent-parent".to_string(),
+            parent_pane_id: "%1".to_string(),
+            parent_conversation_id: "conversation-parent".to_string(),
+            parent_transcript_entries: 0,
+            original_user_prompt: "fix routing".to_string(),
+            main_model_profile: "default".to_string(),
+            worker_model_profile: Some("worker".to_string()),
+            child_agent_id: Some("agent-child".to_string()),
+            child_conversation_id: Some("conversation-child".to_string()),
+            child_turn_id: Some("child".to_string()),
+            worker_final_result: None,
+            handoff: None,
+            handoff_repair_attempts: 0,
+            error_explanation_attempted: false,
+            diagnostic: None,
+            phase: RoutedWorkflowPhase::WaitingForWorkerResult,
+        };
+
+        assert_eq!(
+            routed_child_cancellation_details(&state),
+            Some(("worker", "", "routed worker was cancelled"))
+        );
+        state.phase = RoutedWorkflowPhase::WaitingForHandoff;
+        state.worker_final_result = Some("verified worker result".to_string());
+        assert_eq!(
+            routed_child_cancellation_details(&state),
+            Some((
+                "summary request",
+                "verified worker result",
+                "routed handoff was cancelled"
+            ))
+        );
+        state.phase = RoutedWorkflowPhase::ReadyForErrorExplanation;
+        assert_eq!(routed_child_cancellation_details(&state), None);
+    }
 
     /// Verifies a failed handoff provider result remains distinct from the
     /// successful worker result consumed by the parent explanation step.

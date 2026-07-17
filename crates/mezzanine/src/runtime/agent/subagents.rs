@@ -388,6 +388,9 @@ impl RuntimeSessionService {
         &mut self,
         turn: &AgentTurnRecord,
     ) -> Result<()> {
+        if self.handle_routed_child_cancellation(turn)? {
+            return Ok(());
+        }
         let loop_dependency = self.take_agent_loop_dependency_for_turn(&turn.turn_id);
         self.emit_subagent_task_result_with_dependency(
             turn,
