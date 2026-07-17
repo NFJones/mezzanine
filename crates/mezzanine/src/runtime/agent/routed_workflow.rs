@@ -160,6 +160,40 @@ impl RuntimeSessionService {
         if turn.state != mez_agent::AgentTurnState::Running {
             return Ok(crate::runtime::RuntimeTransition::default());
         }
+        match self.commit_routed_worker_selected_transition(agent_id, turn_id, selection) {
+            Ok(transition) => Ok(transition),
+            Err(error) => {
+                self.recover_routed_worker_selection_failure(&turn, error.message())?;
+                Ok(self.runtime_transition_with_render(
+                    true,
+                    Some(crate::runtime::RenderInvalidationReason::FullRedraw),
+                ))
+            }
+        }
+    }
+
+    /// Commits one routed worker selection after the parent boundary is valid.
+    fn commit_routed_worker_selected_transition(
+        &mut self,
+        agent_id: &AgentId,
+        turn_id: &str,
+        selection: RuntimeRoutedWorkerSelection,
+    ) -> Result<crate::runtime::RuntimeTransition> {
+        let turn = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("routed parent turn is unavailable"))?;
+        if turn.agent_id != agent_id.as_str() {
+            return Err(MezError::invalid_args(
+                "routed worker selection agent id does not match parent turn",
+            ));
+        }
+        if turn.state != mez_agent::AgentTurnState::Running {
+            return Ok(crate::runtime::RuntimeTransition::default());
+        }
 
         let parent_session = self
             .agent_shell_store()
@@ -304,6 +338,108 @@ impl RuntimeSessionService {
             true,
             Some(crate::runtime::RenderInvalidationReason::FullRedraw),
         ))
+    }
+
+    /// Rolls back partial routed-child setup and queues one bounded explanation.
+    fn recover_routed_worker_selection_failure(
+        &mut self,
+        parent_turn: &AgentTurnRecord,
+        diagnostic: &str,
+    ) -> Result<()> {
+        let child_turns = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .filter(|turn| {
+                turn.parent_turn_id.as_deref() == Some(parent_turn.turn_id.as_str())
+                    && turn.cooperation_mode.as_deref() == Some("routed-worker")
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for child_turn in child_turns {
+            self.agent
+                .routed_workflow_by_child_turn
+                .remove(&child_turn.turn_id);
+            self.agent.subagent_task_routes.remove(&child_turn.turn_id);
+            let _ = self.agent.agent_scheduler.cancel(&child_turn.turn_id);
+            let _ = self.cancel_live_shell_transactions_for_turn(&child_turn.turn_id);
+            self.agent
+                .pending_agent_provider_tasks
+                .remove(&child_turn.turn_id);
+            self.agent
+                .claimed_agent_provider_tasks
+                .remove(&child_turn.turn_id);
+            self.agent
+                .pending_terminal_subagent_pane_closes
+                .insert(child_turn.pane_id.clone());
+            self.remove_subagent_authority_state(&child_turn.agent_id);
+            self.integration
+                .model_profile_overrides_mut()
+                .agent_profiles
+                .remove(&child_turn.agent_id);
+            let running_in_shell = self
+                .agent_shell_store()
+                .get(&child_turn.pane_id)
+                .and_then(|session| session.running_turn_id.as_deref())
+                == Some(child_turn.turn_id.as_str());
+            if running_in_shell {
+                let _ = self.finish_agent_turn(
+                    &child_turn.pane_id,
+                    &child_turn.turn_id,
+                    AgentTurnState::Interrupted,
+                );
+            } else if matches!(
+                child_turn.state,
+                AgentTurnState::Queued | AgentTurnState::Running | AgentTurnState::Blocked
+            ) {
+                let _ = self.finish_agent_turn_without_shell_session(
+                    &child_turn,
+                    AgentTurnState::Interrupted,
+                );
+            }
+        }
+        self.agent
+            .routed_workflow_by_child_turn
+            .retain(|_, parent| parent != &parent_turn.turn_id);
+        self.agent
+            .routed_child_contexts_by_parent_turn
+            .remove(&parent_turn.turn_id);
+        self.agent
+            .routed_child_profiles_by_parent_turn
+            .remove(&parent_turn.turn_id);
+        let parent_session = self.agent_shell_store().get(&parent_turn.pane_id);
+        self.agent.routed_workflows_by_parent_turn.insert(
+            parent_turn.turn_id.clone(),
+            RoutedWorkflowState {
+                run_id: parent_turn.turn_id.clone(),
+                parent_agent_id: parent_turn.agent_id.clone(),
+                parent_pane_id: parent_turn.pane_id.clone(),
+                parent_conversation_id: parent_session
+                    .map(|session| session.session_id.clone())
+                    .unwrap_or_else(|| parent_turn.pane_id.clone()),
+                parent_transcript_entries: parent_session
+                    .map(|session| session.transcript_entries)
+                    .unwrap_or(0),
+                original_user_prompt: String::new(),
+                main_model_profile: parent_turn.model_profile.clone(),
+                worker_model_profile: None,
+                child_agent_id: None,
+                child_conversation_id: None,
+                child_turn_id: None,
+                worker_final_result: None,
+                handoff: None,
+                handoff_repair_attempts: 0,
+                error_explanation_attempted: false,
+                phase: RoutedWorkflowPhase::WaitingForWorkerResult,
+                diagnostic: Some(diagnostic.to_string()),
+            },
+        );
+        self.ready_routed_parent_for_error_explanation(
+            parent_turn,
+            "worker selection setup",
+            "",
+            diagnostic,
+        )
     }
 
     /// Advances a routed workflow after one managed child turn settles.
@@ -868,12 +1004,14 @@ impl RuntimeSessionService {
 
     /// Releases one managed routed child after its final workflow step.
     fn release_routed_child_for_close(&mut self, parent_turn: &AgentTurnRecord) -> Result<()> {
-        let child_agent_id = self
+        let Some(child_agent_id) = self
             .agent
             .routed_workflows_by_parent_turn
             .get(&parent_turn.turn_id)
             .and_then(|workflow| workflow.child_agent_id.clone())
-            .ok_or_else(|| MezError::invalid_state("routed child agent is unavailable"))?;
+        else {
+            return Ok(());
+        };
         let child_pane_id = child_agent_id
             .strip_prefix("agent-")
             .ok_or_else(|| MezError::invalid_state("routed child agent id is invalid"))?;
