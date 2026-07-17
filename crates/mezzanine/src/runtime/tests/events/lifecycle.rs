@@ -629,6 +629,7 @@ fn runtime_does_not_restore_agent_metadata_for_other_sessions() {
                 prompt_cache_lineage_id: "lineage-foreign".to_string(),
                 visibility: "visible".to_string(),
                 running_turn_id: None,
+                running_turn_kind: None,
                 transcript_entries: 1,
                 log_level: "normal".to_string(),
                 pane_model_profile: None,
@@ -699,10 +700,17 @@ fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
             .as_deref(),
         Some("turn-running-restore")
     );
+    let mut routed_metadata = transcript_store
+        .load_agent_session_metadata(service.session().id.as_str())
+        .unwrap();
+    routed_metadata[0].running_turn_kind = Some("routed-workflow".to_string());
+    transcript_store
+        .save_agent_session_metadata(service.session().id.as_str(), &routed_metadata)
+        .unwrap();
 
     let mut restored = test_runtime_service();
     restored.session.id = service.session().id.clone();
-    restored.set_agent_transcript_store(transcript_store);
+    restored.set_agent_transcript_store(transcript_store.clone());
     let restored_count = restored
         .restore_agent_sessions_from_transcript_store()
         .unwrap();
@@ -718,6 +726,25 @@ fn runtime_restored_agent_metadata_marks_running_turn_interrupted() {
     assert_eq!(restored_session.session_id, conversation_id);
     assert_eq!(restored_session.running_turn_id, None);
     assert_eq!(restored_turn.state, AgentTurnState::Interrupted);
+    assert!(restored.pending_agent_provider_tasks().is_empty());
+    assert!(!restored.has_active_routed_workflow("turn-running-restore"));
+    let restored_metadata = transcript_store
+        .load_agent_session_metadata(restored.session().id.as_str())
+        .unwrap();
+    assert_eq!(restored_metadata[0].running_turn_id, None);
+    assert_eq!(restored_metadata[0].running_turn_kind, None);
+    let restart_diagnostics = transcript_store
+        .inspect(&conversation_id)
+        .unwrap()
+        .into_iter()
+        .filter(|entry| {
+            entry.role == mez_agent::transcript::TranscriptRole::System
+                && entry
+                    .content
+                    .contains("routed workflow was interrupted by runtime restart")
+        })
+        .count();
+    assert_eq!(restart_diagnostics, 1);
 }
 
 /// Verifies runtime event fanout batches all ready event notifications for one

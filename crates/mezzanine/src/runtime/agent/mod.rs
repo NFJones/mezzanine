@@ -587,6 +587,13 @@ impl RuntimeSessionService {
             .contains_key(parent_turn_id)
     }
 
+    /// Reports whether one parent turn owns an active routed workflow.
+    pub(crate) fn has_active_routed_workflow(&self, parent_turn_id: &str) -> bool {
+        self.agent
+            .routed_workflows_by_parent_turn
+            .contains_key(parent_turn_id)
+    }
+
     /// Returns one active routed workflow to crate-local regression tests.
     #[cfg(test)]
     pub(crate) fn routed_workflow_for_tests(

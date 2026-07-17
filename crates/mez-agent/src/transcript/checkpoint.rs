@@ -22,6 +22,8 @@ pub struct AgentSessionMetadata {
     pub visibility: String,
     /// Running turn at the time of the checkpoint, if any.
     pub running_turn_id: Option<String>,
+    /// Runtime-owned active-turn kind needed for safe restart reconciliation.
+    pub running_turn_kind: Option<String>,
     /// Number of transcript entries known to the pane metadata.
     pub transcript_entries: u64,
     /// Pane-local agent log level.
@@ -62,6 +64,13 @@ impl AgentSessionMetadata {
         validate_agent_visibility(&self.visibility)?;
         if let Some(turn_id) = self.running_turn_id.as_deref() {
             validate_required("running turn id", turn_id)?;
+        }
+        if let Some(kind) = self.running_turn_kind.as_deref()
+            && kind != "routed-workflow"
+        {
+            return Err(TranscriptContractError::new(
+                "running turn kind must be routed-workflow",
+            ));
         }
         validate_log_level(&self.log_level)?;
         for (label, value) in [

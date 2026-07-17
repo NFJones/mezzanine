@@ -855,6 +855,7 @@ fn runtime_agent_session_restore_does_not_narrow_configured_approval_default() {
                 prompt_cache_lineage_id: "lineage-legacy-ask".to_string(),
                 visibility: "visible".to_string(),
                 running_turn_id: None,
+                running_turn_kind: None,
                 transcript_entries: 1,
                 log_level: "normal".to_string(),
                 pane_model_profile: None,

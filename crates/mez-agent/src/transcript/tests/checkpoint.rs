@@ -13,6 +13,7 @@ fn valid_checkpoint() -> AgentSessionMetadata {
         prompt_cache_lineage_id: "lineage-1".to_string(),
         visibility: "visible".to_string(),
         running_turn_id: None,
+        running_turn_kind: None,
         transcript_entries: 1,
         log_level: "normal".to_string(),
         pane_model_profile: None,

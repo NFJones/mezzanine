@@ -11,6 +11,8 @@ use super::{
     runtime_agent_total_token_usage_by_model, runtime_approval_policy_name, runtime_pane_by_id,
     runtime_parse_approval_policy,
 };
+use crate::integrations::agent::actions::next_transcript_sequence;
+use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
 
 impl RuntimeSessionService {
     /// Runs the provider registry operation for this subsystem.
@@ -147,6 +149,7 @@ impl RuntimeSessionService {
                 MezError::invalid_args("agent session metadata log level is invalid")
             })?;
             let running_turn_id = metadata.running_turn_id.clone();
+            let running_turn_kind = metadata.running_turn_kind.clone();
             let session = self
                 .agent_shell_store_mut()
                 .ensure_session(metadata.pane_id.clone())?;
@@ -214,6 +217,26 @@ impl RuntimeSessionService {
                 })?;
                 self.agent_turn_ledger_mut()
                     .finish_turn(&turn_id, AgentTurnState::Interrupted)?;
+                if running_turn_kind.as_deref() == Some("routed-workflow") {
+                    let diagnostic = "routed workflow was interrupted by runtime restart; retry requires a fresh user action";
+                    let sequence = next_transcript_sequence(&store, &metadata.conversation_id)?;
+                    store.append(&TranscriptEntry {
+                        conversation_id: metadata.conversation_id.clone(),
+                        sequence,
+                        created_at_unix_seconds: restored_at,
+                        role: TranscriptRole::System,
+                        turn_id: turn_id.clone(),
+                        agent_id: format!("agent-{}", metadata.pane_id),
+                        pane_id: metadata.pane_id.clone(),
+                        content: diagnostic.to_string(),
+                    })?;
+                    self.agent_shell_store_mut()
+                        .record_transcript_entries(&metadata.pane_id, 1)?;
+                    self.append_agent_status_text_to_terminal_buffer(
+                        &metadata.pane_id,
+                        &format!("agent: {diagnostic}"),
+                    )?;
+                }
                 interrupted = interrupted.saturating_add(1);
             }
             restored = restored.saturating_add(1);
@@ -290,6 +313,10 @@ impl RuntimeSessionService {
                     prompt_cache_lineage_id: session.prompt_cache_lineage_id.clone(),
                     visibility: agent_shell_visibility_json_name(session.visibility).to_string(),
                     running_turn_id: session.running_turn_id.clone(),
+                    running_turn_kind: session.running_turn_id.as_ref().and_then(|turn_id| {
+                        self.has_active_routed_workflow(turn_id)
+                            .then(|| "routed-workflow".to_string())
+                    }),
                     transcript_entries,
                     log_level: session.log_level.as_str().to_string(),
                     pane_model_profile: self

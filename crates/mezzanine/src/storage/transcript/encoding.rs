@@ -286,6 +286,7 @@ pub(super) fn encode_agent_session_metadata(metadata: &AgentSessionMetadata) -> 
         metadata.context_usage.clone().unwrap_or_default(),
         token_usage_by_model,
         context_usage_snapshot,
+        metadata.running_turn_kind.clone().unwrap_or_default(),
     ]
     .into_iter()
     .map(|field| escape_field(&field))
@@ -306,7 +307,8 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
         || fields.len() == 22
         || fields.len() == 23
         || fields.len() == 24
-        || fields.len() == 25)
+        || fields.len() == 25
+        || fields.len() == 26)
         || fields[0] != AGENT_SESSION_METADATA_VERSION
     {
         return Err(MezError::invalid_args(
@@ -315,7 +317,7 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
     }
     let legacy_layout = fields.len() <= 22;
     let current_without_directive_layout = fields.len() == 23;
-    let current_with_cache_write_layout = fields.len() == 25;
+    let current_with_cache_write_layout = fields.len() >= 25;
     let prompt_cache_lineage_id = if legacy_layout {
         fields[3].clone()
     } else {
@@ -481,6 +483,7 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
             .get(context_usage_index)
             .filter(|value| !value.is_empty())
             .cloned(),
+        running_turn_kind: fields.get(25).filter(|value| !value.is_empty()).cloned(),
     };
     metadata.validate()?;
     Ok(metadata)
