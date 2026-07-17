@@ -172,7 +172,6 @@ impl RuntimeSessionService {
                     execution.terminal_state,
                     "provider_execution_settled",
                 )?;
-                self.follow_up_agent_loop_after_terminal_execution(turn, &execution)?;
             }
         } else {
             let waiting_for_joined_subagents =

@@ -10,11 +10,11 @@ use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentTurnExecution,
     AgentTurnRecord, AgentTurnState, AuditActor, AuditRecord, ContextBlock, ContextSourceKind,
     Envelope, EventKind, JoinedSubagentDependency, MezError, PaneId, Recipient, Result,
-    RuntimeSessionService, SenderIdentity, SubagentSpawnRequest, SubagentWaitPolicy,
-    TaskResultPayload, TaskState, TaskStatusPayload, action_result_context_content,
-    current_unix_seconds, json_escape, runtime_agent_terminal_preview,
-    runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
-    runtime_cooperation_mode, runtime_cooperation_mode_name,
+    RuntimeAgentLoopSettlement, RuntimeSessionService, SenderIdentity, SubagentSpawnRequest,
+    SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload,
+    action_result_context_content, current_unix_seconds, json_escape,
+    runtime_agent_terminal_preview, runtime_agent_turn_state_from_action_results,
+    runtime_agent_turn_state_name, runtime_cooperation_mode, runtime_cooperation_mode_name,
     runtime_execution_ready_for_provider_continuation, runtime_mezzanine_error_code,
     runtime_pane_by_id, runtime_spawn_json_agent_and_turn, runtime_subagent_display_label,
     runtime_subagent_placement_mode, runtime_subagent_result_status_label,
@@ -37,7 +37,7 @@ impl RuntimeSessionService {
                         && dependency.child_agent_id == *agent_id
                         && self
                             .agent
-                            .agent_loops_by_pane
+                            .agent_loop_by_pane
                             .contains_key(agent_id.strip_prefix("agent-").unwrap_or_default())
                 }) || (child_turn_id != turn_id
                     && dependency.parent_turn_id != turn_id
@@ -62,7 +62,7 @@ impl RuntimeSessionService {
             .child_agent_id
             .strip_prefix("agent-")
             .is_some_and(|pane_id| {
-                self.agent.agent_loops_by_pane.contains_key(pane_id)
+                self.agent.agent_loop_by_pane.contains_key(pane_id)
                     || self
                         .agent
                         .agent_loop_turns
@@ -356,7 +356,8 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
     ) -> Result<()> {
-        if self.agent_loop_execution_will_continue(turn, execution) {
+        let loop_settlement = self.settle_agent_loop_after_terminal_execution(turn, execution)?;
+        if loop_settlement == RuntimeAgentLoopSettlement::Continued {
             return Ok(());
         }
         if self.handle_routed_child_execution_result(turn, execution)? {
@@ -369,7 +370,18 @@ impl RuntimeSessionService {
             "subagent task failed"
         };
         let output = subagent_task_output_for_execution(execution);
-        let loop_dependency = self.take_agent_loop_dependency_for_turn(&turn.turn_id);
+        let loop_dependency = match loop_settlement {
+            RuntimeAgentLoopSettlement::Terminal { completion } => {
+                completion.map(|completion| JoinedSubagentDependency {
+                    parent_turn_id: completion.parent_turn_id,
+                    parent_action_id: completion.parent_action_id,
+                    child_turn_id: completion.child_turn_id,
+                    child_agent_id: completion.child_agent_id,
+                    child_display_name: completion.child_display_name,
+                })
+            }
+            RuntimeAgentLoopSettlement::NotOwned | RuntimeAgentLoopSettlement::Continued => None,
+        };
         self.emit_subagent_task_result_with_dependency(
             turn,
             loop_dependency,
@@ -450,11 +462,11 @@ impl RuntimeSessionService {
         &mut self,
         turn_id: &str,
     ) -> Option<JoinedSubagentDependency> {
-        let pane_id = self.agent.agent_loop_turns.get(turn_id)?.pane_id.clone();
+        let loop_id = self.agent.agent_loop_turns.get(turn_id)?.loop_id.clone();
         let completion = self
             .agent
-            .agent_loops_by_pane
-            .get_mut(&pane_id)?
+            .agent_loops_by_id
+            .get_mut(&loop_id)?
             .completion
             .take()?;
         Some(JoinedSubagentDependency {

@@ -770,8 +770,11 @@ impl RuntimeSessionService {
         let parent_transcript_entries = parent_session.transcript_entries;
         let parent_prompt_cache_lineage_id = parent_session.prompt_cache_lineage_id.clone();
         let max_iterations = parsed.max_iterations.unwrap_or(self.agent_loop_limit());
+        let loop_id = format!("loop-{}", Self::runtime_new_agent_conversation_id());
         self.insert_agent_loop_state(RuntimeAgentLoopState {
-            pane_id: pane_id.to_string(),
+            loop_id,
+            invoking_pane_id: pane_id.to_string(),
+            execution_pane_id: pane_id.to_string(),
             original_prompt: parsed.original_prompt.to_string(),
             mode: parsed.mode,
             parent_conversation_id: parent_conversation_id.clone(),
@@ -780,6 +783,8 @@ impl RuntimeSessionService {
             iteration: 1,
             emitted_apply_patch: false,
             max_iterations,
+            routed_parent_turn_id: None,
+            routed_worker_profile: None,
             completion: None,
         });
         let started = match self.start_agent_loop_work_turn(pane_id) {
@@ -823,11 +828,20 @@ impl RuntimeSessionService {
         self.insert_agent_loop_turn(
             started.turn_id.clone(),
             RuntimeAgentLoopTurn {
+                loop_id: state.loop_id.clone(),
                 pane_id: pane_id.to_string(),
                 kind: RuntimeAgentLoopTurnKind::Work,
                 iteration: state.iteration,
             },
         );
+        let turn = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == started.turn_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("queued loop work turn is unavailable"))?;
+        self.register_routed_loop_continuation(&state, &turn)?;
         self.append_agent_trace_turn_event(
             pane_id,
             &started.turn_id,
@@ -1408,7 +1422,9 @@ mod tests {
     #[test]
     fn runtime_agent_loop_work_prompt_stays_fresh_across_iterations() {
         let first = runtime_agent_loop_work_prompt(&RuntimeAgentLoopState {
-            pane_id: "%1".to_string(),
+            loop_id: "loop-1".to_string(),
+            invoking_pane_id: "%1".to_string(),
+            execution_pane_id: "%1".to_string(),
             original_prompt: "review this document".to_string(),
             mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
             parent_conversation_id: "parent-conversation".to_string(),
@@ -1417,10 +1433,14 @@ mod tests {
             iteration: 1,
             emitted_apply_patch: false,
             max_iterations: 8,
+            routed_parent_turn_id: None,
+            routed_worker_profile: None,
             completion: None,
         });
         let later = runtime_agent_loop_work_prompt(&RuntimeAgentLoopState {
-            pane_id: "%1".to_string(),
+            loop_id: "loop-1".to_string(),
+            invoking_pane_id: "%1".to_string(),
+            execution_pane_id: "%1".to_string(),
             original_prompt: "review this document".to_string(),
             mode: RuntimeAgentLoopMode::ReuseCurrentConversation,
             parent_conversation_id: "parent-conversation".to_string(),
@@ -1429,6 +1449,8 @@ mod tests {
             iteration: 3,
             emitted_apply_patch: false,
             max_iterations: 8,
+            routed_parent_turn_id: None,
+            routed_worker_profile: None,
             completion: None,
         });
 

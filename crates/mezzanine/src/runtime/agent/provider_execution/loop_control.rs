@@ -1,110 +1,96 @@
-//! Loop continuation policy after terminal provider execution.
+//! Loop settlement policy after terminal provider execution.
 
 use super::super::{
-    AgentTurnExecution, AgentTurnRecord, AgentTurnState, Result, RuntimeAgentLoopTurnKind,
-    RuntimeSessionService,
+    AgentTurnExecution, AgentTurnRecord, AgentTurnState, Result, RuntimeAgentLoopSettlement,
+    RuntimeAgentLoopTurnKind, RuntimeSessionService,
 };
 use mez_agent::outcome::runtime_execution_has_apply_patch_action;
 
 impl RuntimeSessionService {
-    /// Continues or stops an active `/loop` controller after one owned turn settles.
-    pub(crate) fn follow_up_agent_loop_after_terminal_execution(
+    /// Consumes one terminal loop-owned turn and either continues or terminates its logical loop.
+    pub(crate) fn settle_agent_loop_after_terminal_execution(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
-    ) -> Result<()> {
+    ) -> Result<RuntimeAgentLoopSettlement> {
         let Some(loop_turn) = self.agent.agent_loop_turns.remove(&turn.turn_id) else {
-            return Ok(());
+            return Ok(RuntimeAgentLoopSettlement::NotOwned);
         };
         if execution.terminal_state != AgentTurnState::Completed {
-            if let Some(state) = self.agent.agent_loops_by_pane.remove(&loop_turn.pane_id) {
-                self.restore_agent_loop_parent_conversation(&loop_turn.pane_id, &state)?;
-            }
-            return Ok(());
+            let completion =
+                if let Some(state) = self.remove_agent_loop_state_by_id(&loop_turn.loop_id) {
+                    self.restore_agent_loop_parent_conversation(&state.invoking_pane_id, &state)?;
+                    state.completion
+                } else {
+                    None
+                };
+            return Ok(RuntimeAgentLoopSettlement::Terminal { completion });
         }
         match loop_turn.kind {
             RuntimeAgentLoopTurnKind::Work => {
-                let iteration_emitted_apply_patch = self
-                    .agent
-                    .agent_loops_by_pane
-                    .get(&loop_turn.pane_id)
-                    .map(|state| state.emitted_apply_patch)
-                    .unwrap_or_else(|| runtime_execution_has_apply_patch_action(execution));
-                if !iteration_emitted_apply_patch {
-                    if let Some(state) = self.agent.agent_loops_by_pane.remove(&loop_turn.pane_id) {
-                        self.restore_agent_loop_parent_conversation(&loop_turn.pane_id, &state)?;
-                    }
+                let Some(state) = self.agent_loop_state_by_id(&loop_turn.loop_id).cloned() else {
+                    return Ok(RuntimeAgentLoopSettlement::Terminal { completion: None });
+                };
+                let emitted_apply_patch = state.emitted_apply_patch
+                    || runtime_execution_has_apply_patch_action(execution);
+                if !emitted_apply_patch {
+                    let state = self
+                        .remove_agent_loop_state_by_id(&loop_turn.loop_id)
+                        .expect("logical loop state was read immediately before removal");
+                    self.restore_agent_loop_parent_conversation(&state.invoking_pane_id, &state)?;
                     self.append_agent_status_text_to_terminal_buffer(
-                        &loop_turn.pane_id,
+                        &state.invoking_pane_id,
                         &format!(
                             "loop: completed after patch-free iteration {}/{}",
                             loop_turn.iteration,
                             self.agent.agent_loop_limit.max(1)
                         ),
                     )?;
-                    return Ok(());
+                    return Ok(RuntimeAgentLoopSettlement::Terminal {
+                        completion: state.completion,
+                    });
                 }
-                let Some(mut state) = self
-                    .agent
-                    .agent_loops_by_pane
-                    .get(&loop_turn.pane_id)
-                    .cloned()
-                else {
-                    return Ok(());
-                };
                 if state.iteration >= state.max_iterations {
-                    if let Some(state) = self.agent.agent_loops_by_pane.remove(&loop_turn.pane_id) {
-                        self.restore_agent_loop_parent_conversation(&loop_turn.pane_id, &state)?;
-                    }
+                    let state = self
+                        .remove_agent_loop_state_by_id(&loop_turn.loop_id)
+                        .expect("logical loop state was read immediately before removal");
+                    self.restore_agent_loop_parent_conversation(&state.invoking_pane_id, &state)?;
                     self.append_agent_status_text_to_terminal_buffer(
-                        &loop_turn.pane_id,
+                        &state.invoking_pane_id,
                         &format!(
                             "loop: reached iteration limit {}/{} after apply_patch work",
                             state.iteration, state.max_iterations
                         ),
                     )?;
-                    return Ok(());
+                    return Ok(RuntimeAgentLoopSettlement::Terminal {
+                        completion: state.completion,
+                    });
                 }
-                state.iteration = state.iteration.saturating_add(1);
-                state.emitted_apply_patch = false;
-                self.agent
-                    .agent_loops_by_pane
-                    .insert(loop_turn.pane_id.clone(), state.clone());
-                if let Err(error) = self.start_agent_loop_work_turn(&loop_turn.pane_id) {
-                    if let Some(state) = self.agent.agent_loops_by_pane.remove(&loop_turn.pane_id) {
-                        self.restore_agent_loop_parent_conversation(&loop_turn.pane_id, &state)?;
+                let mut next_state = state;
+                next_state.iteration = next_state.iteration.saturating_add(1);
+                next_state.emitted_apply_patch = false;
+                *self
+                    .agent_loop_state_mut_by_id(&loop_turn.loop_id)
+                    .expect("logical loop state was read immediately before update") =
+                    next_state.clone();
+                if let Err(error) = self.start_agent_loop_work_turn(&next_state.execution_pane_id) {
+                    if let Some(state) = self.remove_agent_loop_state_by_id(&loop_turn.loop_id) {
+                        self.restore_agent_loop_parent_conversation(
+                            &state.invoking_pane_id,
+                            &state,
+                        )?;
                     }
                     return Err(error);
                 }
                 self.append_agent_status_text_to_terminal_buffer(
-                    &loop_turn.pane_id,
+                    &next_state.invoking_pane_id,
                     &format!(
                         "loop: continuing fresh iteration {}/{}",
-                        state.iteration, state.max_iterations
+                        next_state.iteration, next_state.max_iterations
                     ),
                 )?;
+                Ok(RuntimeAgentLoopSettlement::Continued)
             }
         }
-        Ok(())
-    }
-
-    /// Reports whether a completed loop work turn will schedule another iteration.
-    pub(crate) fn agent_loop_execution_will_continue(
-        &self,
-        turn: &AgentTurnRecord,
-        execution: &AgentTurnExecution,
-    ) -> bool {
-        let Some(loop_turn) = self.agent.agent_loop_turns.get(&turn.turn_id) else {
-            return false;
-        };
-        if execution.terminal_state != AgentTurnState::Completed {
-            return false;
-        }
-        let Some(state) = self.agent.agent_loops_by_pane.get(&loop_turn.pane_id) else {
-            return false;
-        };
-        let emitted_apply_patch =
-            state.emitted_apply_patch || runtime_execution_has_apply_patch_action(execution);
-        emitted_apply_patch && state.iteration < state.max_iterations
     }
 }

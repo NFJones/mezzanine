@@ -261,8 +261,12 @@ pub struct RuntimeAgentLoopCompletion {
 /// Runtime-owned state for one active `/loop` command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeAgentLoopState {
-    /// Pane whose visible agent shell owns the loop.
-    pub pane_id: String,
+    /// Stable identity shared by every work turn in this logical loop.
+    pub loop_id: String,
+    /// Pane whose visible agent shell invoked and presents the loop.
+    pub invoking_pane_id: String,
+    /// Pane that currently executes loop work turns.
+    pub execution_pane_id: String,
     /// Original user prompt supplied after `/loop`.
     pub original_prompt: String,
     /// Conversation preparation mode for loop-owned work turns.
@@ -281,6 +285,10 @@ pub struct RuntimeAgentLoopState {
     pub emitted_apply_patch: bool,
     /// Maximum number of work iterations allowed before the loop stops.
     pub max_iterations: usize,
+    /// Routed parent turn that owns final handoff and presentation, when any.
+    pub routed_parent_turn_id: Option<String>,
+    /// Routed worker profile pinned across internal loop iterations, when any.
+    pub routed_worker_profile: Option<ModelProfile>,
     /// Parent macro action settled once when the controller terminates.
     pub completion: Option<RuntimeAgentLoopCompletion>,
 }
@@ -288,12 +296,28 @@ pub struct RuntimeAgentLoopState {
 /// Metadata attached to a loop-owned agent turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeAgentLoopTurn {
-    /// Pane whose active loop owns the turn.
+    /// Stable identity of the logical loop that owns this turn.
+    pub loop_id: String,
+    /// Pane that executes this loop-owned turn.
     pub pane_id: String,
     /// Role this turn plays in the loop controller.
     pub kind: RuntimeAgentLoopTurnKind,
     /// One-based work iteration associated with this turn.
     pub iteration: usize,
+}
+
+/// Result of consuming one terminal loop-owned work turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeAgentLoopSettlement {
+    /// The terminal turn was not owned by a logical loop.
+    NotOwned,
+    /// Patch work scheduled the next iteration in the same logical loop.
+    Continued,
+    /// The logical loop terminated and released any parent completion join.
+    Terminal {
+        /// Parent macro completion retained until terminal result delivery.
+        completion: Option<RuntimeAgentLoopCompletion>,
+    },
 }
 
 /// Provider-backed conversation compaction queued outside the actor.

@@ -275,6 +275,70 @@ fn runtime_routed_selection_post_spawn_failure_removes_worker() {
     );
 }
 
+/// Verifies routed `/loop` work transfers from the classifier turn to the
+/// selected worker so patch accounting and later settlement remain attached to
+/// one logical loop.
+#[test]
+fn runtime_routed_loop_transfers_work_turn_ownership_to_selected_worker() {
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.set_pane_screen("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .execute_agent_shell_loop_command("%1", "/loop implement routed ownership")
+        .unwrap();
+
+    let (parent_turn_id, parent_loop_turn) = service
+        .agent_loop_turns_for_tests()
+        .iter()
+        .find(|(_, loop_turn)| loop_turn.pane_id == "%1")
+        .map(|(turn_id, loop_turn)| (turn_id.clone(), loop_turn.clone()))
+        .expect("loop command should create a parent-owned work turn");
+    let parent_profile = service
+        .agent_turn_model_profile(&parent_turn_id)
+        .expect("parent profile should exist")
+        .clone();
+    let selection = RuntimeRoutedWorkerSelection {
+        worker_profile: parent_profile.clone(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        decision_summary: None,
+        fallback: None,
+    };
+    let parent_agent = AgentId::opaque("agent-%1").unwrap();
+
+    service
+        .apply_routed_worker_selected_transition(&parent_agent, &parent_turn_id, selection)
+        .unwrap();
+
+    let (child_turn_id, child_loop_turn) = service
+        .agent_loop_turns_for_tests()
+        .iter()
+        .find(|(_, loop_turn)| loop_turn.pane_id == "%2")
+        .map(|(turn_id, loop_turn)| (turn_id.clone(), loop_turn.clone()))
+        .expect("selected worker should own the loop work turn");
+    assert_ne!(child_turn_id, parent_turn_id);
+    assert_eq!(child_loop_turn.loop_id, parent_loop_turn.loop_id);
+    assert_eq!(child_loop_turn.iteration, parent_loop_turn.iteration);
+    assert!(service.agent_loop_turn(&parent_turn_id).is_none());
+
+    let state = service
+        .agent_loop_state("%2")
+        .expect("selected worker should index the logical loop");
+    assert_eq!(state.execution_pane_id, "%2");
+    assert_eq!(
+        state.routed_parent_turn_id.as_deref(),
+        Some(parent_turn_id.as_str())
+    );
+    assert_eq!(state.routed_worker_profile.as_ref(), Some(&parent_profile));
+}
+
 /// Verifies routed selection recovery terminates cleanly without parent context.
 ///
 /// Losing the complete parent context makes a model-authored explanation

@@ -502,7 +502,6 @@ impl RuntimeSessionService {
                     terminal_state,
                     "shell_transaction_settled",
                 )?;
-                self.follow_up_agent_loop_after_terminal_execution(&turn, &execution)?;
             }
         } else if terminal_state == AgentTurnState::Running {
             self.agent_turn_contexts_mut()

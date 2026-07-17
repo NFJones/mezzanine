@@ -159,7 +159,7 @@ impl RuntimeSessionService {
             dep.parent_turn_id == parent_turn.turn_id
                 && dep.child_agent_id == child_agent_id
                 && self.joined_subagent_dependency_has_live_child(dep)
-        }) || self.agent.agent_loops_by_pane.values().any(|state| {
+        }) || self.agent.agent_loops_by_id.values().any(|state| {
             state.completion.as_ref().is_some_and(|completion| {
                 completion.parent_turn_id == parent_turn.turn_id
                     && completion.child_agent_id == child_agent_id
@@ -212,9 +212,7 @@ impl RuntimeSessionService {
                 .subagent_task_routes
                 .insert(child_turn_id.clone(), parent_turn.agent_id.clone());
             let loop_state = self
-                .agent
-                .agent_loops_by_pane
-                .get_mut(child_pane_id)
+                .agent_loop_state_mut(child_pane_id)
                 .ok_or_else(|| MezError::invalid_state("macro loop controller is unavailable"))?;
             if loop_state.completion.is_some() {
                 return Err(MezError::invalid_state(

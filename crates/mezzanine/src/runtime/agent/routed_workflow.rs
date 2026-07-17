@@ -6,15 +6,15 @@
 
 use super::{
     AgentContext, AgentId, AgentTurnExecution, AgentTurnRecord, AgentTurnState, ContextBlock,
-    ContextSourceKind, MezError, Result, RuntimeRoutedWorkerSelection, RuntimeSessionService,
-    ScheduledWork, current_unix_seconds, runtime_spawn_json_agent_and_turn,
-    runtime_subagent_placement_mode, runtime_subagent_spawn_request,
-    subagent_task_output_for_execution,
+    ContextSourceKind, MezError, Result, RuntimeAgentLoopState, RuntimeAgentLoopTurn,
+    RuntimeRoutedWorkerSelection, RuntimeSessionService, ScheduledWork, current_unix_seconds,
+    runtime_spawn_json_agent_and_turn, runtime_subagent_placement_mode,
+    runtime_subagent_spawn_request, subagent_task_output_for_execution,
 };
-use mez_agent::ScheduledWorkKind;
 use mez_agent::routed_workflow::{
     ROUTED_HANDOFF_VERSION, RoutedWorkerHandoff, RoutedWorkflowPhase, RoutedWorkflowState,
 };
+use mez_agent::{ModelProfile, ScheduledWorkKind};
 
 const ROUTED_HANDOFF_MAX_BYTES: usize = 16 * 1024;
 
@@ -261,6 +261,7 @@ impl RuntimeSessionService {
                 initial_capability: None,
                 reason: "routed_worker_execute",
             })?;
+            self.adopt_routed_worker_loop(&turn.turn_id, &child_turn, &selection.worker_profile)?;
             self.agent
                 .routed_workflow_by_child_turn
                 .insert(child_turn.turn_id.clone(), turn.turn_id.clone());
@@ -349,6 +350,75 @@ impl RuntimeSessionService {
             );
         }
         setup_result
+    }
+
+    /// Transfers a routed classifier's logical loop ownership to its selected worker.
+    fn adopt_routed_worker_loop(
+        &mut self,
+        parent_turn_id: &str,
+        child_turn: &AgentTurnRecord,
+        worker_profile: &ModelProfile,
+    ) -> Result<()> {
+        let Some(parent_loop_turn) = self.remove_agent_loop_turn(parent_turn_id) else {
+            return Ok(());
+        };
+        let loop_id = parent_loop_turn.loop_id.clone();
+        let state = self
+            .agent_loop_state_mut_by_id(&loop_id)
+            .ok_or_else(|| MezError::invalid_state("routed parent loop state is unavailable"))?;
+        state.execution_pane_id = child_turn.pane_id.clone();
+        state.routed_parent_turn_id = Some(parent_turn_id.to_string());
+        state.routed_worker_profile = Some(worker_profile.clone());
+        self.agent
+            .agent_loop_by_pane
+            .insert(child_turn.pane_id.clone(), loop_id.clone());
+        self.insert_agent_loop_turn(
+            child_turn.turn_id.clone(),
+            RuntimeAgentLoopTurn {
+                loop_id,
+                pane_id: child_turn.pane_id.clone(),
+                kind: parent_loop_turn.kind,
+                iteration: parent_loop_turn.iteration,
+            },
+        );
+        Ok(())
+    }
+
+    /// Registers a continued routed-loop turn with its pinned worker workflow.
+    pub(crate) fn register_routed_loop_continuation(
+        &mut self,
+        state: &RuntimeAgentLoopState,
+        turn: &AgentTurnRecord,
+    ) -> Result<()> {
+        let (Some(parent_turn_id), Some(worker_profile)) = (
+            state.routed_parent_turn_id.as_deref(),
+            state.routed_worker_profile.as_ref(),
+        ) else {
+            return Ok(());
+        };
+        let parent_agent_id = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|candidate| candidate.turn_id == parent_turn_id)
+            .map(|parent| parent.agent_id.clone())
+            .ok_or_else(|| MezError::invalid_state("routed loop parent turn is unavailable"))?;
+        self.agent
+            .agent_turn_model_profiles
+            .insert(turn.turn_id.clone(), worker_profile.clone());
+        self.agent
+            .routed_workflow_by_child_turn
+            .insert(turn.turn_id.clone(), parent_turn_id.to_string());
+        self.agent
+            .subagent_task_routes
+            .insert(turn.turn_id.clone(), parent_agent_id);
+        let workflow = self
+            .agent
+            .routed_workflows_by_parent_turn
+            .get_mut(parent_turn_id)
+            .ok_or_else(|| MezError::invalid_state("routed loop workflow is unavailable"))?;
+        workflow.child_turn_id = Some(turn.turn_id.clone());
+        Ok(())
     }
 
     /// Rolls back partial routed-child setup and queues one bounded explanation.

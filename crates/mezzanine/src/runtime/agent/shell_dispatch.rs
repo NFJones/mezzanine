@@ -522,7 +522,7 @@ impl RuntimeSessionService {
                 })?;
             if matches!(action.payload, AgentActionPayload::ApplyPatch { .. })
                 && let Some(loop_turn) = self.agent.agent_loop_turns.get(&turn.turn_id)
-                && let Some(state) = self.agent.agent_loops_by_pane.get_mut(&loop_turn.pane_id)
+                && let Some(state) = self.agent.agent_loops_by_id.get_mut(&loop_turn.loop_id)
             {
                 state.emitted_apply_patch = true;
             }

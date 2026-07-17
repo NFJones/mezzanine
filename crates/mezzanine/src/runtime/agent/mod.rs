@@ -4,7 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::agent_state::RuntimeAgentProviderClaim;
+use super::agent_state::{RuntimeAgentLoopSettlement, RuntimeAgentProviderClaim};
 use super::commands::RuntimeModelCatalog;
 #[cfg(test)]
 use super::runtime_execute_auto_sizing_with_provider;
@@ -143,8 +143,10 @@ pub(crate) struct RuntimeAgentComponent {
     agent_auto_sizing_overrides: BTreeMap<String, RuntimeAutoSizingConfig>,
     /// Maximum iterations accepted by one loop controller.
     agent_loop_limit: usize,
-    /// Active loop controller state keyed by pane id.
-    agent_loops_by_pane: BTreeMap<String, RuntimeAgentLoopState>,
+    /// Active loop controller state keyed by stable logical loop id.
+    agent_loops_by_id: BTreeMap<String, RuntimeAgentLoopState>,
+    /// Active logical loop id indexed by invoking or execution pane id.
+    agent_loop_by_pane: BTreeMap<String, String>,
     /// Loop-owned turn metadata keyed by turn id.
     agent_loop_turns: BTreeMap<String, RuntimeAgentLoopTurn>,
     /// Per-signature correction retry limit for failed model actions.
@@ -1308,19 +1310,48 @@ impl RuntimeSessionService {
 
     /// Returns loop controller state for one pane.
     pub(crate) fn agent_loop_state(&self, pane_id: &str) -> Option<&RuntimeAgentLoopState> {
-        self.agent.agent_loops_by_pane.get(pane_id)
+        let loop_id = self.agent.agent_loop_by_pane.get(pane_id)?;
+        self.agent.agent_loops_by_id.get(loop_id)
+    }
+
+    /// Returns loop controller state for one stable logical loop id.
+    pub(crate) fn agent_loop_state_by_id(&self, loop_id: &str) -> Option<&RuntimeAgentLoopState> {
+        self.agent.agent_loops_by_id.get(loop_id)
+    }
+
+    /// Returns mutable loop controller state indexed by an invoking or execution pane.
+    pub(crate) fn agent_loop_state_mut(
+        &mut self,
+        pane_id: &str,
+    ) -> Option<&mut RuntimeAgentLoopState> {
+        let loop_id = self.agent.agent_loop_by_pane.get(pane_id)?.clone();
+        self.agent.agent_loops_by_id.get_mut(&loop_id)
+    }
+
+    /// Returns mutable loop controller state for one stable logical loop id.
+    pub(crate) fn agent_loop_state_mut_by_id(
+        &mut self,
+        loop_id: &str,
+    ) -> Option<&mut RuntimeAgentLoopState> {
+        self.agent.agent_loops_by_id.get_mut(loop_id)
     }
 
     /// Reports whether a pane has loop controller state.
     pub(crate) fn agent_loop_is_active(&self, pane_id: &str) -> bool {
-        self.agent.agent_loops_by_pane.contains_key(pane_id)
+        self.agent.agent_loop_by_pane.contains_key(pane_id)
     }
 
     /// Replaces loop controller state for one pane.
     pub(crate) fn insert_agent_loop_state(&mut self, state: RuntimeAgentLoopState) {
         self.agent
-            .agent_loops_by_pane
-            .insert(state.pane_id.clone(), state);
+            .agent_loop_by_pane
+            .insert(state.invoking_pane_id.clone(), state.loop_id.clone());
+        self.agent
+            .agent_loop_by_pane
+            .insert(state.execution_pane_id.clone(), state.loop_id.clone());
+        self.agent
+            .agent_loops_by_id
+            .insert(state.loop_id.clone(), state);
     }
 
     /// Removes loop controller state for one pane.
@@ -1328,7 +1359,20 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
     ) -> Option<RuntimeAgentLoopState> {
-        self.agent.agent_loops_by_pane.remove(pane_id)
+        let loop_id = self.agent.agent_loop_by_pane.get(pane_id)?.clone();
+        self.remove_agent_loop_state_by_id(&loop_id)
+    }
+
+    /// Removes loop controller state and every pane index for one logical loop.
+    pub(crate) fn remove_agent_loop_state_by_id(
+        &mut self,
+        loop_id: &str,
+    ) -> Option<RuntimeAgentLoopState> {
+        let state = self.agent.agent_loops_by_id.remove(loop_id)?;
+        self.agent
+            .agent_loop_by_pane
+            .retain(|_, indexed_loop_id| indexed_loop_id != loop_id);
+        Some(state)
     }
 
     /// Returns loop-owned metadata for one turn.
