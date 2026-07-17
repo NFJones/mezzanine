@@ -6063,6 +6063,7 @@ provider's accepted schema subset. This normalization MUST preserve the
 structural argument shape needed to call the MCP tool, but MUST drop
 non-executable annotations such as unsupported JSON Schema `format` values
 when retaining them would cause the provider to reject the whole agent turn.
+MCP tool input schemas MUST be valid JSON object schemas and MUST describe object arguments when a root `type` is declared. Tools with malformed or non-object argument schemas MUST remain non-callable, MUST NOT be represented as zero-argument tools, and SHOULD retain a bounded server/tool diagnostic for inspection.
 Local stdio MCP subprocesses MUST be runtime-owned resources for the Mez
 session, not parent-agent-owned resources, and MUST be terminated when the
 session is killed, force-shutdown, or otherwise leaves the live runtime.

@@ -42,6 +42,37 @@ fn available_server_exposes_tools() {
     );
 }
 
+/// Verifies invalid tool schemas remain visible for diagnostics but are not callable.
+#[test]
+fn invalid_tool_schemas_are_rejected_without_hiding_valid_tools() {
+    let mut registry = McpRegistry::default();
+    registry.add_server(config()).unwrap();
+    let valid = tool();
+    let mut invalid = tool();
+    invalid.name = "broken".to_string();
+    invalid.input_schema_json = r#"{"type":"string"}"#.to_string();
+
+    registry
+        .mark_available("fs", vec![valid, invalid], NOW)
+        .unwrap();
+
+    assert_eq!(registry.available_tools().len(), 1);
+    assert_eq!(registry.available_tools()[0].name, "read_file");
+    assert_eq!(registry.prompt_summary().available_tools.len(), 1);
+    let rejected = registry.list_servers()[0]
+        .tools
+        .iter()
+        .find(|tool| tool.name == "broken")
+        .unwrap();
+    assert!(!rejected.available);
+    assert!(rejected.description.contains("invalid MCP input schema"));
+    assert!(
+        rejected
+            .description
+            .contains("schema root type is not object")
+    );
+}
+
 /// Verifies callable tool descriptions include configured server capability metadata.
 #[test]
 fn prompt_summary_enriches_tool_descriptions_with_server_capability_metadata() {

@@ -14,7 +14,7 @@ use super::types::{
     McpServerState, McpServerStatus, McpStartupPlan, McpStartupTransportPlan, McpToolCallPlan,
     McpToolCallRequest, McpToolEffects, McpToolState,
 };
-use super::{McpError as MezError, McpResult as Result};
+use super::{McpError as MezError, McpResult as Result, validate_mcp_tool_input_schema};
 
 /// Carries Mcp Registry state for this subsystem.
 ///
@@ -81,9 +81,19 @@ impl McpRegistry {
             .into_iter()
             .map(|mut tool| {
                 tool.server_id = server_id.to_string();
-                tool.available = server.configured.tool_allowed_by_config(&tool.name);
+                let schema_error = validate_mcp_tool_input_schema(&tool.input_schema_json).err();
+                tool.available =
+                    server.configured.tool_allowed_by_config(&tool.name) && schema_error.is_none();
                 tool.blacklisted = false;
                 tool.approval = server.configured.approval_for_tool(&tool.name);
+                if let Some(reason) = schema_error {
+                    tool.description = format!(
+                        "{} Unavailable: invalid MCP input schema ({reason}).",
+                        tool.description.trim()
+                    )
+                    .trim()
+                    .to_string();
+                }
                 tool
             })
             .collect();

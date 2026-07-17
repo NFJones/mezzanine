@@ -36,6 +36,29 @@ pub use types::{
     McpToolEffects, McpToolListPagination, McpToolState, McpToolsListResponse,
 };
 
+/// Parses and validates one MCP tool argument schema before it becomes callable.
+///
+/// The schema must be valid JSON with an object root. When the root declares a
+/// `type`, it must declare `object`, because MCP tool arguments are JSON
+/// objects. Callers use the static diagnostic to keep rejected-tool reporting
+/// bounded and secret-safe.
+pub(crate) fn validate_mcp_tool_input_schema(
+    input_schema_json: &str,
+) -> std::result::Result<serde_json::Value, &'static str> {
+    let schema = serde_json::from_str::<serde_json::Value>(input_schema_json)
+        .map_err(|_| "schema is not valid JSON")?;
+    let object = schema
+        .as_object()
+        .ok_or("schema root is not a JSON object")?;
+    if object
+        .get("type")
+        .is_some_and(|schema_type| schema_type != "object")
+    {
+        return Err("schema root type is not object");
+    }
+    Ok(schema)
+}
+
 impl From<&McpToolCallPlan> for McpExecutionRequest {
     fn from(plan: &McpToolCallPlan) -> Self {
         Self {

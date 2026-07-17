@@ -279,7 +279,7 @@ fn maap_action_schema(
             AllowedAction::McpCall => action_schemas.extend(
                 sorted_mcp_prompt_tools(available_mcp_tools)
                     .into_iter()
-                    .map(maap_mcp_call_action_schema_for_tool),
+                    .filter_map(maap_mcp_call_action_schema_for_tool),
             ),
         }
     }
@@ -904,7 +904,7 @@ fn maap_config_change_action_schema(setting_path_description: &str) -> serde_jso
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub fn maap_mcp_call_action_schema_for_tool(tool: &McpPromptTool) -> serde_json::Value {
+pub fn maap_mcp_call_action_schema_for_tool(tool: &McpPromptTool) -> Option<serde_json::Value> {
     let mut schema = maap_action_object_schema(
         "mcp_call",
         [
@@ -926,7 +926,7 @@ pub fn maap_mcp_call_action_schema_for_tool(tool: &McpPromptTool) -> serde_json:
             ),
             (
                 "arguments",
-                mcp_tool_arguments_schema_with_description(tool),
+                mcp_tool_arguments_schema_with_description(tool)?,
             ),
         ],
         &["server", "tool", "arguments"],
@@ -942,7 +942,7 @@ pub fn maap_mcp_call_action_schema_for_tool(tool: &McpPromptTool) -> serde_json:
             )),
         );
     }
-    schema
+    Some(schema)
 }
 
 /// Returns a compact provider-facing description for MCP schema metadata.
@@ -956,8 +956,8 @@ fn mcp_schema_description(description: &str) -> String {
 }
 
 /// Returns the MCP tool arguments schema with tool-specific guidance attached.
-fn mcp_tool_arguments_schema_with_description(tool: &McpPromptTool) -> serde_json::Value {
-    let mut schema = mcp_tool_arguments_schema(tool);
+fn mcp_tool_arguments_schema_with_description(tool: &McpPromptTool) -> Option<serde_json::Value> {
+    let mut schema = mcp_tool_arguments_schema(tool)?;
     if let Some(object) = schema.as_object_mut() {
         object.insert(
             "description".to_string(),
@@ -969,7 +969,7 @@ fn mcp_tool_arguments_schema_with_description(tool: &McpPromptTool) -> serde_jso
             )),
         );
     }
-    schema
+    Some(schema)
 }
 
 /// Runs the mcp tool arguments schema operation for this subsystem.
@@ -977,18 +977,10 @@ fn mcp_tool_arguments_schema_with_description(tool: &McpPromptTool) -> serde_jso
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn mcp_tool_arguments_schema(tool: &McpPromptTool) -> serde_json::Value {
-    match serde_json::from_str::<serde_json::Value>(&tool.input_schema_json) {
-        Ok(serde_json::Value::Object(schema)) => {
-            normalize_openai_strict_schema(serde_json::Value::Object(schema))
-        }
-        _ => serde_json::json!({
-            "type": "object",
-            "properties": {},
-            "required": [],
-            "additionalProperties": false
-        }),
-    }
+fn mcp_tool_arguments_schema(tool: &McpPromptTool) -> Option<serde_json::Value> {
+    crate::mcp::validate_mcp_tool_input_schema(&tool.input_schema_json)
+        .ok()
+        .map(normalize_openai_strict_schema)
 }
 
 /// Runs the normalize openai strict schema operation for this subsystem.
@@ -1089,11 +1081,28 @@ mod tests {
             .to_string(),
         };
 
-        let schema = maap_mcp_call_action_schema_for_tool(&tool);
+        let schema = maap_mcp_call_action_schema_for_tool(&tool).unwrap();
         let arguments = &schema["properties"]["arguments"];
         assert_eq!(arguments["required"], serde_json::json!(["url"]));
         assert_eq!(arguments["additionalProperties"], false);
         assert!(arguments["properties"]["url"].get("format").is_none());
+    }
+
+    /// Verifies malformed and non-object MCP schemas never produce callable
+    /// action variants with synthesized empty arguments.
+    #[test]
+    fn invalid_mcp_argument_schemas_are_omitted_from_action_construction() {
+        for input_schema_json in ["{", "[]", r#"{"type":"string"}"#] {
+            let tool = McpPromptTool {
+                server_id: "example".to_string(),
+                tool_name: "broken".to_string(),
+                description: "Broken schema fixture".to_string(),
+                approval_required: false,
+                input_schema_json: input_schema_json.to_string(),
+            };
+
+            assert!(maap_mcp_call_action_schema_for_tool(&tool).is_none());
+        }
     }
 
     /// Verifies third-party MCP input schemas are normalized into the OpenAI
@@ -1175,7 +1184,7 @@ mod tests {
             })
             .to_string(),
         };
-        let schema = maap_mcp_call_action_schema_for_tool(&tool);
+        let schema = maap_mcp_call_action_schema_for_tool(&tool).unwrap();
 
         assert_eq!(
             schema.pointer("/properties/arguments/properties/data/properties/uri/format"),
