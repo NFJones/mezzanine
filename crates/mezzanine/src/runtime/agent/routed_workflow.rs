@@ -63,6 +63,42 @@ fn routed_child_output_for_execution(execution: &AgentTurnExecution) -> String {
     subagent_task_output_for_execution(execution)
 }
 
+/// Projects the parent turn's effective context into a managed worker seed.
+///
+/// Conversation, loaded skills, runtime guidance, and execution evidence are
+/// inherited by the worker. Product policy and project guidance are rebuilt
+/// for the child turn, while prior routed handoff state must not leak into a
+/// new worker. The active user prompt is appended exactly once by the child
+/// queueing path.
+fn routed_worker_seed_context(
+    parent_context: &AgentContext,
+    original_user_prompt: &str,
+) -> AgentContext {
+    let blocks = parent_context
+        .blocks
+        .iter()
+        .filter(|block| {
+            if block.source == ContextSourceKind::UserInstruction
+                && block.label == "user prompt"
+                && block.content == original_user_prompt
+            {
+                return false;
+            }
+            !matches!(
+                block.source,
+                ContextSourceKind::System
+                    | ContextSourceKind::DeveloperInstruction
+                    | ContextSourceKind::Policy
+                    | ContextSourceKind::Configuration
+                    | ContextSourceKind::ProjectGuidance
+                    | ContextSourceKind::RoutedHandoff
+            )
+        })
+        .cloned()
+        .collect();
+    AgentContext { blocks }
+}
+
 /// Inputs for one runtime-owned child turn in a routed workflow.
 struct RoutedChildTurnRequest<'a> {
     parent_turn: &'a AgentTurnRecord,
@@ -107,17 +143,21 @@ impl RuntimeSessionService {
             .get(&turn.pane_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("routed parent session is unavailable"))?;
-        let original_user_prompt = self
+        let parent_context = self
             .agent_turn_contexts()
             .get(turn_id)
-            .and_then(|context| {
-                context.blocks.iter().find(|block| {
-                    block.source == ContextSourceKind::UserInstruction
-                        && block.label == "user prompt"
-                })
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("routed parent context is unavailable"))?;
+        let original_user_prompt = parent_context
+            .blocks
+            .iter()
+            .find(|block| {
+                block.source == ContextSourceKind::UserInstruction && block.label == "user prompt"
             })
             .map(|block| block.content.clone())
             .ok_or_else(|| MezError::invalid_state("routed parent prompt is unavailable"))?;
+        let worker_seed_context =
+            routed_worker_seed_context(&parent_context, &original_user_prompt);
         let params = serde_json::json!({
             "parent_agent": { "agent_id": turn.agent_id },
             "placement": "new-window",
@@ -159,7 +199,7 @@ impl RuntimeSessionService {
             child_pane_id: &child_pane_id,
             prompt: &original_user_prompt,
             model_profile: selection.worker_profile.clone(),
-            seed_context: None,
+            seed_context: Some(worker_seed_context),
             initial_capability: None,
             reason: "routed_worker_execute",
         })?;

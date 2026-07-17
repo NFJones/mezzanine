@@ -450,6 +450,18 @@ reasoning_profile = "high"
                 label: "policy context".to_string(),
                 content: "policy-only context should not reach the router".to_string(),
             },
+            mez_agent::ContextBlock {
+                source: ContextSourceKind::RuntimeHint,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
+                label: "active routed runtime hint".to_string(),
+                content: "runtime-hint sentinel must reach the routed worker".to_string(),
+            },
+            mez_agent::ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
+                label: "active routed action result".to_string(),
+                content: "action-result sentinel must reach the routed worker".to_string(),
+            },
         ]);
 
     let provider = RuntimeAutoSizingProvider {
@@ -540,6 +552,28 @@ reasoning_profile = "high"
             .count(),
         1
     );
+    assert!(child_context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::TranscriptAssistant
+            && block
+                .content
+                .contains("Implement multi-file runtime auto-sizing")
+    }));
+    assert!(child_context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::TranscriptTool
+            && block.content == "tool-only output should not reach the router"
+    }));
+    assert!(child_context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::RuntimeHint
+            && block.content == "runtime-hint sentinel must reach the routed worker"
+    }));
+    assert!(child_context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult
+            && block.content == "action-result sentinel must reach the routed worker"
+    }));
+    assert!(!child_context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::Policy
+            && block.content == "policy-only context should not reach the router"
+    }));
     assert_eq!(
         service
             .agent_turn_ledger()
