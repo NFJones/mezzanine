@@ -107,7 +107,7 @@ pub fn overlay_footer(overlay: &DisplayOverlay<impl Sized>) -> String {
     } else if let Some(status) = overlay.search_status.as_deref() {
         status.to_string()
     } else if overlay.record_browser.is_some() {
-        "esc: back | /: search | enter: open | k/p/x: filter | s: save | arrows pgup/pgdn"
+        "esc: back | /: search | enter: open | a: all | k/p/x: filter | s: save | arrows pgup/pgdn"
             .to_string()
     } else if overlay.selections.is_empty() {
         "esc: return | /: search | up/down pgup/pgdn home/end".to_string()

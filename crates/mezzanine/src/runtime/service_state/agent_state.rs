@@ -66,6 +66,8 @@ pub(crate) enum RuntimeRecordBrowserOverlaySource {
     Issues {
         /// Optional project glob filter; `None` means all projects.
         project_glob: Option<String>,
+        /// Project glob restored when the all-projects browser view is toggled off.
+        default_project_glob: Option<String>,
         /// Optional defect/task kind filter.
         kind: Option<mez_agent::issues::IssueKind>,
         /// Optional lifecycle state filter.
@@ -79,6 +81,8 @@ pub(crate) enum RuntimeRecordBrowserOverlaySource {
     Memories {
         /// Optional exact memory scope; `None` means all scopes.
         scope: Option<mez_agent::memory::MemoryScope>,
+        /// Scope restored when the all-scopes browser view is toggled off.
+        default_scope: Option<mez_agent::memory::MemoryScope>,
         /// Optional memory kind filter.
         kind: Option<mez_agent::memory::MemoryKind>,
         /// Optional memory state filter.

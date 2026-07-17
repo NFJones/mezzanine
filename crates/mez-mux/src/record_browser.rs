@@ -141,6 +141,7 @@ pub enum RecordBrowserOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordBrowser {
     title: String,
+    scope_indicator: Option<String>,
     records: Vec<RecordBrowserRecord>,
     kind_filter_choices: Vec<RecordBrowserFilterChoice>,
     active_index: usize,
@@ -175,6 +176,7 @@ impl RecordBrowser {
         }
         Ok(Self {
             title,
+            scope_indicator: None,
             records,
             kind_filter_choices,
             active_index: 0,
@@ -188,6 +190,11 @@ impl RecordBrowser {
     /// Replaces the pager error shown above list or detail content.
     pub fn set_error(&mut self, error: Option<String>) {
         self.error = error.filter(|value| !value.trim().is_empty());
+    }
+
+    /// Replaces the scope label rendered near the browser title.
+    pub fn set_scope_indicator(&mut self, scope_indicator: Option<String>) {
+        self.scope_indicator = scope_indicator.filter(|value| !value.trim().is_empty());
     }
 
     /// Returns the currently active modal prompt, if one is open.
@@ -346,7 +353,8 @@ impl RecordBrowser {
     }
 
     fn render_list_page(&self) -> RecordBrowserPage {
-        let raw_markdown = list_markdown(&self.title, &self.records);
+        let raw_markdown =
+            list_markdown(&self.title, self.scope_indicator.as_deref(), &self.records);
         let mut markdown = String::new();
         if let Some(error) = &self.error {
             markdown.push_str(&format!("Error: {error}\n\n"));
@@ -364,7 +372,7 @@ impl RecordBrowser {
 
     fn render_detail_page(&self, detail_index: usize) -> RecordBrowserPage {
         let record = &self.records[detail_index.min(self.records.len().saturating_sub(1))];
-        let raw_markdown = detail_markdown(record);
+        let raw_markdown = detail_markdown(record, self.scope_indicator.as_deref());
         let mut markdown = String::new();
         if let Some(error) = &self.error {
             markdown.push_str(&format!("Error: {error}\n\n"));
@@ -475,8 +483,16 @@ fn filter_field_name(field: RecordBrowserFilterField) -> &'static str {
     }
 }
 
-fn list_markdown(title: &str, records: &[RecordBrowserRecord]) -> String {
+fn list_markdown(
+    title: &str,
+    scope_indicator: Option<&str>,
+    records: &[RecordBrowserRecord],
+) -> String {
     let mut lines = vec![format!("# {title}"), String::new()];
+    if let Some(scope_indicator) = scope_indicator {
+        lines.push(format!("**Scope:** {scope_indicator}"));
+        lines.push(String::new());
+    }
     if records.is_empty() {
         lines.push("No records found.".to_string());
     } else {
@@ -496,8 +512,12 @@ fn list_markdown(title: &str, records: &[RecordBrowserRecord]) -> String {
     lines.join("\n")
 }
 
-fn detail_markdown(record: &RecordBrowserRecord) -> String {
+fn detail_markdown(record: &RecordBrowserRecord, scope_indicator: Option<&str>) -> String {
     let mut lines = vec![format!("# {}", record.title), String::new()];
+    if let Some(scope_indicator) = scope_indicator {
+        lines.push(format!("**Scope:** {scope_indicator}"));
+        lines.push(String::new());
+    }
     lines.push(record.title.clone());
     lines.push(String::new());
     if !record.metadata.is_empty() {

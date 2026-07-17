@@ -63,6 +63,7 @@ impl RuntimeSessionService {
             .is_none()
             .then(|| RuntimeRecordBrowserOverlaySource::Issues {
                 project_glob: project_glob.clone(),
+                default_project_glob: project_glob.clone(),
                 kind: args.kind,
                 state: issue_state,
                 text: args.text.clone(),
@@ -145,6 +146,7 @@ impl RuntimeSessionService {
                 .is_none()
                 .then(|| RuntimeRecordBrowserOverlaySource::Memories {
                     scope: scope.clone(),
+                    default_scope: scope.clone(),
                     kind: args.kind,
                     state: memory_state,
                     text: args.text.clone(),
@@ -227,6 +229,7 @@ impl RuntimeSessionService {
                 state,
                 text,
                 limit,
+                ..
             } => {
                 let Some(config_root) = self
                     .integration
@@ -263,6 +266,7 @@ impl RuntimeSessionService {
                 state,
                 text,
                 limit,
+                ..
             } => {
                 let Some(config_root) = self
                     .integration
@@ -306,6 +310,7 @@ impl RuntimeSessionService {
         match source {
             RuntimeRecordBrowserOverlaySource::Issues {
                 project_glob,
+                default_project_glob,
                 kind,
                 state,
                 text,
@@ -316,6 +321,7 @@ impl RuntimeSessionService {
                 } else {
                     project_glob.clone()
                 },
+                default_project_glob: default_project_glob.clone(),
                 kind: if field == RecordBrowserFilterField::Kind {
                     (!value.is_empty())
                         .then(|| mez_agent::issues::IssueKind::parse(value))
@@ -333,6 +339,7 @@ impl RuntimeSessionService {
             }),
             RuntimeRecordBrowserOverlaySource::Memories {
                 scope,
+                default_scope,
                 kind,
                 state,
                 text,
@@ -351,6 +358,7 @@ impl RuntimeSessionService {
                 } else {
                     scope.clone()
                 },
+                default_scope: default_scope.clone(),
                 kind: if field == RecordBrowserFilterField::Kind {
                     (!value.is_empty())
                         .then(|| parse_kind(value).map_err(MezError::from))
