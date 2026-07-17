@@ -145,8 +145,8 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     );
     assert_eq!(
         openai_tool_action_schemas(capability_tool).len(),
-        15,
-        "the canonical OpenAI tool exposes a stable non-MCP action superset"
+        16,
+        "the canonical OpenAI tool exposes a stable action superset with generic MCP"
     );
     assert_eq!(
         capability_tool["parameters"]["properties"]["actions"]["minItems"],
@@ -179,7 +179,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
     assert!(action_types.contains(&"issue_delete".to_string()));
     assert!(!action_types.contains(&"request_skills".to_string()));
     assert!(!action_types.contains(&"call_skill".to_string()));
-    assert!(!action_types.contains(&"mcp_call".to_string()));
+    assert!(action_types.contains(&"mcp_call".to_string()));
     let removed_user_input_action = ["request", "user_input"].join("_");
     assert!(!action_types.contains(&removed_user_input_action));
     assert!(!action_types.contains(&"abort".to_string()));

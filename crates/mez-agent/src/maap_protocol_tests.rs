@@ -605,6 +605,48 @@ fn maap_parser_fills_compact_provider_defaults() {
 }
 
 #[test]
+/// Verifies generic OpenAI MCP actions normalize JSON object text.
+///
+/// The cache-stable OpenAI schema represents arbitrary MCP arguments as a
+/// string so injected tool schemas cannot change provider-visible tool bytes.
+/// Canonical parsing must decode that string before runtime MCP validation.
+fn maap_parser_normalizes_mcp_argument_object_text() {
+    let batch = parse_maap_action_batch_json_for_turn(
+        r#"{"rationale":"call the injected tool","actions":[{"type":"mcp_call","server":"fs","tool":"read","arguments":"{\"path\":\"README.md\"}"}]}"#,
+        "turn-1",
+        "agent-1",
+    )
+    .unwrap();
+
+    match &batch.actions[0].payload {
+        AgentActionPayload::McpCall { arguments_json, .. } => {
+            assert_eq!(arguments_json, r#"{"path":"README.md"}"#);
+        }
+        payload => panic!("unexpected payload: {payload:?}"),
+    }
+}
+
+#[test]
+/// Verifies generic OpenAI MCP arguments still require an object.
+///
+/// Decoding JSON text must not weaken the canonical MCP contract by accepting
+/// scalar or array values that cannot satisfy an MCP tool's object schema.
+fn maap_parser_rejects_non_object_mcp_argument_text() {
+    let error = parse_maap_action_batch_json_for_turn(
+        r#"{"rationale":"call the injected tool","actions":[{"type":"mcp_call","server":"fs","tool":"read","arguments":"[]"}]}"#,
+        "turn-1",
+        "agent-1",
+    )
+    .unwrap_err();
+
+    assert!(
+        error.message().contains("must contain JSON object text"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
 /// Verifies `say` content types are normalized at the MAAP boundary.
 ///
 /// New provider prompts require models to declare the presentation media type,

@@ -93,10 +93,10 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
         diagnostics.response_format_sha256,
         "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
     );
-    assert_eq!(diagnostics.tools_bytes, 19_103);
+    assert_eq!(diagnostics.tools_bytes, 20_107);
     assert_eq!(
         diagnostics.tools_sha256,
-        "8f3fc2b63137b6701dbb3e17252b786a650b524de49c60f31d307df78fa47da4"
+        "2fdeb9a8a5b07ed6fcba42376514bfb777c482d79a8bd88ff58a1a621582a47b"
     );
     assert_eq!(diagnostics.tool_choice_bytes, 53);
     assert_eq!(
@@ -108,22 +108,20 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
         diagnostics.stable_prompt_prefix_sha256,
         "fb59fd2449bf99d2a17d9610db82a7204bc20f352ea5c06b15d000cfc1278573"
     );
-    assert_eq!(diagnostics.provider_request_shape_bytes, 19_314);
+    assert_eq!(diagnostics.provider_request_shape_bytes, 20_318);
     assert_eq!(
         diagnostics.provider_request_shape_sha256,
-        "4d4e5347d645e36269c1e194ec03d60aa49515a21f58551aef26751a8f556bc2"
+        "45301d2aef59ed4df5d8affb5a4ad542783d2929e320d8128d4327377e3812b6"
     );
 }
 
 #[test]
-/// Verifies large MCP catalogs keep server-level routing context visible.
+/// Verifies large MCP catalogs cannot change the OpenAI function-tool bytes.
 ///
-/// The OpenAI function-tool description is the first routing surface the model
-/// sees for callable MCP integrations. When there are more callable tools than
-/// the compact tool list can enumerate, the schema should still provide a
-/// bounded server-level summary so overlapping tool names retain their server
-/// purpose and routing context.
-fn openai_responses_request_body_summarizes_large_mcp_catalog_by_server() {
+/// MCP routing metadata belongs in late injected context. The function schema
+/// instead exposes one generic MCP variant so request-local catalogs do not
+/// invalidate the provider's cached tool prefix.
+fn openai_responses_request_body_excludes_large_mcp_catalog_from_tools() {
     let mut request = assemble_model_request(
         &ModelProfile {
             provider: "openai".to_string(),
@@ -164,18 +162,10 @@ fn openai_responses_request_body_summarizes_large_mcp_catalog_by_server() {
     let mcp_tool = openai_function_tool(&value, "submit_maap_action_batch");
     let description = mcp_tool["description"].as_str().unwrap();
 
+    assert!(description.contains("The schema includes a generic mcp_call action"));
+    assert!(!description.contains("server00"), "{description}");
     assert!(
-        description.contains(
-            "Available MCP servers callable with mcp_call: server00 (Server 00 operations; tools: search)"
-        ),
-        "{description}"
-    );
-    assert!(
-        description.contains("... plus 2 more MCP servers listed in the schema"),
-        "{description}"
-    );
-    assert!(
-        description.contains("... plus 2 more MCP tools listed in the schema"),
+        !description.contains("Server 00 operations"),
         "{description}"
     );
 }

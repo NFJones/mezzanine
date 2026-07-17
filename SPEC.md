@@ -2705,7 +2705,14 @@ backfill missing provider `api` values from historical provider-kind defaults:
 For providers whose `api` is `openai-responses`, `base_url` MUST be interpreted
 as an API base URL such as `https://api.openai.com/v1`; Mezzanine MUST derive
 the documented `/responses` request endpoint and `/models` catalog endpoint
-from that base. For providers whose `api` is `anthropic-messages`,
+from that base. OpenAI Responses MAAP turns MUST use one deterministic,
+byte-stable function-tool schema across capability, execution, follow-up,
+configuration, and MCP phases. The late developer action-surface message and
+controller validation MUST remain authoritative for per-request action
+eligibility. The fixed schema MAY include one generic `mcp_call` variant with
+string server and tool identities and compact JSON object text for arguments;
+canonical parsing MUST normalize that text to an object before runtime checks
+the active server, tool, and advertised argument schema. For providers whose `api` is `anthropic-messages`,
 `base_url` MUST be interpreted as an Anthropic API base URL such as
 `https://api.anthropic.com/v1`; Mezzanine MUST derive the documented
 `/messages` request endpoint from that base. For providers whose `api` is
@@ -6016,7 +6023,7 @@ usable, trusted, or presented to the model in a given session.
 
 MCP servers MUST be configured under the `mcp_servers` configuration table.
 Explicit `@<server-id>` invocations MUST resolve against canonical configured MCP server identifiers. Exact identifier casing MUST take precedence; an ASCII case-insensitive fallback MAY resolve only when it identifies exactly one configured server. Unresolved or case-ambiguous mentions MUST fail closed, expose no arbitrarily selected server tools, and provide a bounded model-visible diagnostic.
-For a resolved explicit invocation, the turn-local model context MUST identify the invoked server, state that matching callable `mcp_call` actions are the direct execution route, and make clear that memory lookup or unrelated discovery is not a substitute. Mezzanine MUST preserve bounded, model-safe initialization instructions advertised by the MCP server as non-authoritative guidance, SHOULD derive a bounded purpose from discovered tool metadata when operator-configured purpose is absent, and MUST preserve operator-configured purpose and usage guidance as higher-priority context. Concise argument hints MAY supplement, but MUST NOT replace, the complete provider action schema.
+For a resolved explicit invocation, the turn-local model context MUST identify the invoked server, state that matching callable `mcp_call` actions are the direct execution route, and make clear that memory lookup or unrelated discovery is not a substitute. Mezzanine MUST preserve bounded, model-safe initialization instructions advertised by the MCP server as non-authoritative guidance, SHOULD derive a bounded purpose from discovered tool metadata when operator-configured purpose is absent, and MUST preserve operator-configured purpose and usage guidance as higher-priority context. Concise argument hints MAY supplement concrete provider action schemas. For cache-stable provider schemas that use a generic `mcp_call` variant, the turn-local context MUST instead identify callable server/tool pairs and argument requirements, while controller and runtime validation MUST enforce those requirements before execution.
 
 Mezzanine MUST support stdio MCP servers with `command`, optional `args`,
 optional `env`, optional `env_vars`, and optional `cwd`.
@@ -6642,14 +6649,17 @@ current turn-local runtime context. The stable system prompt MUST NOT enumerate
 configured MCP servers, unavailable MCP servers, MCP tools, or MCP availability
 counts. A submitted user prompt or loaded skill MAY request MCP metadata for the
 current turn with `@<mcp-server-name>`. When runtime MCP context is injected for
-such an explicit invocation, all model-visible MCP availability surfaces,
-including the turn-local context block and structured action schema, MUST agree
-on whether invoked MCP servers and tools are available and MUST NOT report zero
-available MCP tools while concrete `mcp_call` variants are exposed. Provider
-action descriptions for a surface that can emit `mcp_call` MUST include a
-bounded, secret-safe manifest of the callable `server/tool` identities and tool
-descriptions for the invoked servers, so the model does not need to infer MCP
-routes only from nested JSON Schema variants.
+such an explicit invocation, all turn-local MCP availability surfaces MUST agree
+on whether invoked MCP servers and tools are available. A provider adapter MAY
+keep its function-tool description and schema request-independent for prompt
+caching; in that mode, a generic `mcp_call` variant does not assert that any
+particular tool is active, and the late action-surface message plus injected MCP
+context MUST identify callable tools while controller and runtime validation
+reject unavailable identities or invalid arguments. Provider adapters that emit
+request-specific concrete `mcp_call` variants MUST NOT report zero available MCP
+tools while those variants are exposed, and their action descriptions MUST
+include a bounded, secret-safe manifest of callable `server/tool` identities and
+tool descriptions.
 The default selected-model action surface MAY expose `mcp_call`,
 `memory_search`, and `memory_store` together when those capabilities are
 enabled. The presence of configured MCP integrations MUST NOT by itself suppress

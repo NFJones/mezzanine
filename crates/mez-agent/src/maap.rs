@@ -1292,7 +1292,7 @@ fn parse_maap_action_value(
         "mcp_call" => AgentActionPayload::McpCall {
             server: required_string(object, "server")?.to_string(),
             tool: required_string(object, "tool")?.to_string(),
-            arguments_json: required_json_object_compact(object, "arguments")?,
+            arguments_json: required_json_object_or_string_compact(object, "arguments")?,
         },
         "complete" => AgentActionPayload::Complete,
         "abort" => AgentActionPayload::Abort {
@@ -1484,25 +1484,6 @@ fn optional_nullable_u64(
     }
 }
 
-/// Runs the required object operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn required_object<'a>(
-    object: &'a serde_json::Map<String, serde_json::Value>,
-    field: &str,
-) -> MaapContractResult<&'a serde_json::Map<String, serde_json::Value>> {
-    match required_value(object, field)? {
-        serde_json::Value::Null => Err(MaapContractError::invalid_args(format!(
-            "maap field {field} must be an object, not null"
-        ))),
-        value => value.as_object().ok_or_else(|| {
-            MaapContractError::invalid_args(format!("maap field {field} must be an object"))
-        }),
-    }
-}
-
 /// Runs the required array operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -1582,18 +1563,38 @@ fn required_json_compact(
     })
 }
 
-/// Runs the required json object compact operation for this subsystem.
+/// Returns a required JSON object in compact canonical form.
 ///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn required_json_object_compact(
+/// OpenAI's cache-stable generic MCP schema carries arbitrary tool arguments
+/// as JSON text, while provider-specific schemas may still return an object.
+/// Both forms normalize to the same canonical action payload here.
+fn required_json_object_or_string_compact(
     object: &serde_json::Map<String, serde_json::Value>,
     field: &str,
 ) -> MaapContractResult<String> {
-    serde_json::to_string(required_object(object, field)?).map_err(|error| {
-        MaapContractError::invalid_args(format!("maap field {field} is invalid: {error}"))
-    })
+    match required_value(object, field)? {
+        serde_json::Value::Object(value) => serde_json::to_string(value).map_err(|error| {
+            MaapContractError::invalid_args(format!("maap field {field} is invalid: {error}"))
+        }),
+        serde_json::Value::String(value) => {
+            let decoded: serde_json::Value = serde_json::from_str(value).map_err(|error| {
+                MaapContractError::invalid_args(format!(
+                    "maap field {field} must contain valid JSON object text: {error}"
+                ))
+            })?;
+            let serde_json::Value::Object(decoded) = decoded else {
+                return Err(MaapContractError::invalid_args(format!(
+                    "maap field {field} must contain JSON object text"
+                )));
+            };
+            serde_json::to_string(&decoded).map_err(|error| {
+                MaapContractError::invalid_args(format!("maap field {field} is invalid: {error}"))
+            })
+        }
+        _ => Err(MaapContractError::invalid_args(format!(
+            "maap field {field} must be a JSON object or JSON object text"
+        ))),
+    }
 }
 
 /// Detects model-authored `fetch_url` file URLs so local filesystem access

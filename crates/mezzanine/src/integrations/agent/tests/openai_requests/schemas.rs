@@ -82,17 +82,13 @@ fn openai_available_mcp_keeps_memory_on_default_surface() {
         .filter(|schema| schema["properties"]["type"]["enum"][0] == "mcp_call")
         .collect::<Vec<_>>();
     assert_eq!(mcp_actions.len(), 1);
-    assert_eq!(
-        mcp_actions[0]["properties"]["arguments"]["properties"]["repo"]["description"],
-        "Repository owner/name"
-    );
+    assert_eq!(mcp_actions[0]["properties"]["arguments"]["type"], "string");
     assert!(
-        description.contains("Available MCP servers callable with mcp_call: githubcopilot (GitHub repository and CI operations; tools: list_ci_results)"),
+        description.contains("The schema includes a generic mcp_call action"),
         "{description}"
     );
     assert!(
-        description
-            .contains("Available MCP tools callable with mcp_call: githubcopilot/list_ci_results"),
+        description.contains("runtime validation rejects unavailable tools and invalid arguments"),
         "{description}"
     );
     assert!(
@@ -531,53 +527,9 @@ fn openai_responses_request_body_describes_config_change_schema() {
     let path_description = config_schema["properties"]["setting_path"]["description"]
         .as_str()
         .unwrap();
-    assert!(
-        path_description.contains("Supported patterns"),
-        "{path_description}"
-    );
-    assert!(
-        path_description.contains("theme.active"),
-        "{path_description}"
-    );
-    assert!(
-        path_description.contains("model_profiles.<name>.<key>"),
-        "{path_description}"
-    );
-    assert!(
-        path_description.contains("mcp_servers.<name>.<key>"),
-        "{path_description}"
-    );
-    assert!(
-        path_description.contains("mcp_servers.<name>.external_capability.usage_instructions"),
-        "{path_description}"
-    );
-    assert!(
-        path_description.contains("mcp_servers.<name>.external_capability.purpose"),
-        "{path_description}"
-    );
-    assert!(
-        path_description.contains("mutates_filesystem_outside_shell"),
-        "{path_description}"
-    );
-    assert!(
-        path_description.contains("Runtime validation still rejects secrets"),
-        "{path_description}"
-    );
-    assert!(
-        path_description.contains("Schema annotations"),
-        "{path_description}"
-    );
-    assert!(
-        path_description.contains("purpose=Switch the active"),
-        "{path_description}"
-    );
-    assert!(
-        path_description.contains("value_type=string"),
-        "{path_description}"
-    );
-    assert!(
-        path_description.contains("format=`<alias>` is an alias name"),
-        "{path_description}"
+    assert_eq!(
+        path_description,
+        "Dotted live configuration path. Use only paths advertised by the product adapter, and inspect current configuration before changing dynamic names."
     );
 
     let value_description = config_schema["properties"]["value"]["description"]
@@ -851,7 +803,7 @@ fn openai_responses_request_body_uses_current_schema_for_composite_action_surfac
     assert!(action_types.contains(&"apply_patch".to_string()));
     assert!(action_types.contains(&"fetch_url".to_string()));
     assert!(action_types.contains(&"web_search".to_string()));
-    assert!(!action_types.contains(&"mcp_call".to_string()));
+    assert!(action_types.contains(&"mcp_call".to_string()));
     assert!(action_types.contains(&"spawn_agent".to_string()));
 }
 
@@ -911,11 +863,11 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
     assert_openai_strict_schema_shape(&mcp_tool["parameters"]);
     assert_eq!(value["tool_choice"]["name"], "submit_maap_action_batch");
     assert!(
-        description.contains("Available MCP servers callable with mcp_call: fs (tools: read_file); zeta (tools: later)"),
+        description.contains("The schema includes a generic mcp_call action"),
         "{description}"
     );
     assert!(
-        description.contains("Available MCP tools callable with mcp_call: fs/read_file: Read file"),
+        description.contains("runtime validation rejects unavailable tools and invalid arguments"),
         "{description}"
     );
     let action_schemas = openai_tool_action_schemas(mcp_tool);
@@ -924,59 +876,14 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
         .filter(|schema| schema["properties"]["type"]["enum"][0] == "mcp_call")
         .collect::<Vec<_>>();
 
-    assert_eq!(action_schemas.len(), 17);
+    assert_eq!(action_schemas.len(), 16);
     let action_types = openai_tool_action_types(mcp_tool);
     assert!(!action_types.contains(&"request_skills".to_string()));
     assert!(!action_types.contains(&"call_skill".to_string()));
-    assert_eq!(mcp_schemas.len(), 2);
-    assert_eq!(mcp_schemas[0]["properties"]["server"]["enum"][0], "fs");
-    assert_eq!(mcp_schemas[0]["properties"]["tool"]["enum"][0], "read_file");
-    assert!(
-        mcp_schemas[0]["description"]
-            .as_str()
-            .unwrap()
-            .contains("Call MCP tool fs/read_file. Description: Read file"),
-        "{}",
-        mcp_schemas[0]
-    );
-    assert!(
-        mcp_schemas[0]["description"]
-            .as_str()
-            .unwrap()
-            .contains("use this as a direct action"),
-        "{}",
-        mcp_schemas[0]
-    );
-    assert!(
-        mcp_schemas[0]["properties"]["tool"]["description"]
-            .as_str()
-            .unwrap()
-            .contains("Tool description: Read file"),
-        "{}",
-        mcp_schemas[0]
-    );
-    assert!(
-        mcp_schemas[0]["properties"]["arguments"]["description"]
-            .as_str()
-            .unwrap()
-            .contains(
-                "Use this action when the task matches this tool description or the user named this MCP server/tool"
-            ),
-        "{}",
-        mcp_schemas[0]
-    );
-    assert_eq!(mcp_schemas[1]["properties"]["server"]["enum"][0], "zeta");
-    assert_eq!(mcp_schemas[1]["properties"]["tool"]["enum"][0], "later");
-    assert_eq!(
-        mcp_schemas[0]["properties"]["arguments"]["properties"]["path"]["type"],
-        "string"
-    );
-    assert_eq!(
-        mcp_schemas[0]["properties"]["arguments"]["required"][0],
-        "path"
-    );
-    assert_eq!(
-        mcp_schemas[0]["properties"]["arguments"]["additionalProperties"],
-        false
-    );
+    assert_eq!(mcp_schemas.len(), 1);
+    assert_eq!(mcp_schemas[0]["properties"]["server"]["type"], "string");
+    assert_eq!(mcp_schemas[0]["properties"]["tool"]["type"], "string");
+    assert_eq!(mcp_schemas[0]["properties"]["arguments"]["type"], "string");
+    assert!(mcp_schemas[0]["properties"]["server"].get("enum").is_none());
+    assert!(mcp_schemas[0]["properties"]["tool"].get("enum").is_none());
 }

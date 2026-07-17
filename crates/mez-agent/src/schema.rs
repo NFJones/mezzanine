@@ -96,6 +96,18 @@ pub fn maap_current_action_batch_description(
     } else {
         "No mcp_call action is active on this request surface.".to_string()
     };
+    maap_action_batch_description_with_mcp_manifest(&mcp_manifest)
+}
+
+/// Returns the request-independent OpenAI Responses MAAP tool description.
+pub fn maap_cache_stable_action_batch_description() -> String {
+    maap_action_batch_description_with_mcp_manifest(
+        "The schema includes a generic mcp_call action. The late allowed-action surface and injected MCP context identify whether MCP is active and which server/tool pairs are callable; runtime validation rejects unavailable tools and invalid arguments.",
+    )
+}
+
+/// Builds shared MAAP tool guidance with the selected MCP routing contract.
+fn maap_action_batch_description_with_mcp_manifest(mcp_manifest: &str) -> String {
     format!(
         "Submit one validated Mezzanine MAAP action batch for the currently allowed actions. {} {} Use only the action objects in this function schema. The function call is only the transport envelope for the chosen action batch, not a prerequisite task step; do not put required-function-call, current-actions-call, or schema-wrapper compliance language in rationale or thought fields. Choose the smallest action that makes concrete progress: direct inspection or execution beats placeholder setup. If an executable action is available and useful, put that action in this function call now. If the needed action family is absent and request_capability is available, emit request_capability for that capability instead of say(blocked), final text, or prose asking for access. If missing information, parameters, or identifiers can be safely gathered from current context, action results, local artifacts, web results, MCP results, or another available or requestable action, request or use the relevant capability instead of asking the user. Do not ask for task-local facts such as identifiers, URLs, versions, paths, command forms, config names, repo owner/name, branch, commit, remote URL, issue/PR numbers, or CI targets when they can be safely discovered. Do not use memory_search or memory_store to rehydrate, preserve, or look up facts already present in current action results. Model-selected skill lookup/loading is disabled; request_skills and call_skill are never valid actions. {} {} {}",
         OpenAiMaapToolSurface::FUNCTION_CALL_DISCIPLINE,
@@ -943,6 +955,52 @@ pub fn maap_mcp_call_action_schema_for_tool(tool: &McpPromptTool) -> Option<serd
         );
     }
     Some(schema)
+}
+
+/// Returns the request-independent MCP action variant used by OpenAI Responses.
+///
+/// Server and tool identity remain unconstrained in the provider schema so
+/// injected catalogs cannot alter the cached tool bytes. The arguments field
+/// carries compact JSON object text that canonical MAAP parsing normalizes
+/// before the active MCP registry validates identity and tool-specific shape.
+pub fn maap_generic_mcp_call_action_schema() -> serde_json::Value {
+    let mut schema = maap_action_object_schema(
+        "mcp_call",
+        [
+            (
+                "server",
+                serde_json::json!({
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "MCP server id from the active injected MCP context."
+                }),
+            ),
+            (
+                "tool",
+                serde_json::json!({
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "MCP tool name from the active injected MCP context."
+                }),
+            ),
+            (
+                "arguments",
+                serde_json::json!({
+                    "type": "string",
+                    "minLength": 2,
+                    "description": "Compact JSON text encoding one object that conforms to the active injected MCP tool schema. Use {} when the tool takes no arguments."
+                }),
+            ),
+        ],
+        &["server", "tool", "arguments"],
+    );
+    if let Some(object) = schema.as_object_mut() {
+        object.insert(
+            "description".to_string(),
+            serde_json::json!("Call an MCP tool listed in the active injected MCP context. Encode arguments as compact JSON object text; canonical parsing normalizes the object before runtime validation checks the active server, tool, and advertised input schema."),
+        );
+    }
+    schema
 }
 
 /// Returns a compact provider-facing description for MCP schema metadata.
