@@ -53,11 +53,11 @@ pub(crate) use diff::{
 pub(crate) use style::AgentTerminalPresentationStyle;
 pub(crate) use text::{
     agent_display_lines_are_error, agent_display_lines_are_low_level_status,
-    agent_prompt_error_display_lines, overlay_styled_lines, render_command_markdown_body_lines,
-    sanitized_agent_terminal_line, wrap_agent_terminal_text,
+    agent_prompt_error_display_lines, overlay_styled_lines,
+    render_command_markdown_body_lines_for_width, sanitized_agent_terminal_line,
 };
 #[cfg(test)]
 pub(crate) use text::{
-    command_preview_terminal_rendered_lines, rendered_line_rendition_at,
-    wrapped_prefixed_agent_terminal_lines,
+    command_preview_terminal_rendered_lines, render_command_markdown_body_lines,
+    rendered_line_rendition_at, wrap_agent_terminal_text, wrapped_prefixed_agent_terminal_lines,
 };

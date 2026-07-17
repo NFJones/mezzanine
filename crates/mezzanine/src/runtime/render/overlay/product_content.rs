@@ -193,6 +193,29 @@ pub(super) fn runtime_agent_shell_transient_display_command_name(command: &str) 
     )
 }
 
+/// Verifies `/show` Markdown tables are laid out to the pager width before
+/// generic physical-row wrapping can damage their structure.
+#[cfg(test)]
+#[test]
+fn show_markdown_overlay_uses_width_aware_table_layout() {
+    let ui_theme = mez_mux::theme::deepforest_ui_theme();
+    let content = runtime_agent_shell_markdown_overlay_content_for_width(
+        Some("show-issues".to_string()),
+        "| Field | Value |\n| --- | --- |\n| description | alpha beta gamma delta |",
+        &ui_theme,
+        Some(24),
+    );
+
+    assert!(content.lines.len() > 3, "{content:?}");
+    assert!(
+        content
+            .lines
+            .iter()
+            .all(|line| UnicodeWidthStr::width(line.as_str()) <= 24),
+        "{content:?}"
+    );
+}
+
 /// Renders slash-command markdown display output into the command overlay
 /// pager while preserving clickable `mez-agent:` links.
 pub(crate) fn runtime_agent_shell_markdown_overlay_content(
@@ -200,13 +223,25 @@ pub(crate) fn runtime_agent_shell_markdown_overlay_content(
     markdown: &str,
     ui_theme: &UiTheme,
 ) -> RuntimeCommandDisplayOverlayContent {
+    runtime_agent_shell_markdown_overlay_content_for_width(command, markdown, ui_theme, None)
+}
+
+/// Renders slash-command Markdown with an optional table-layout width.
+pub(crate) fn runtime_agent_shell_markdown_overlay_content_for_width(
+    command: Option<String>,
+    markdown: &str,
+    ui_theme: &UiTheme,
+    table_display_width: Option<usize>,
+) -> RuntimeCommandDisplayOverlayContent {
     let mut content = RuntimeCommandDisplayOverlayContent {
         command,
         lines: Vec::new(),
         line_style_spans: Vec::new(),
         selections: Vec::new(),
     };
-    for rendered in render_command_markdown_body_lines(markdown, ui_theme) {
+    for rendered in
+        render_command_markdown_body_lines_for_width(markdown, ui_theme, table_display_width)
+    {
         let RichTextLine {
             display,
             mut style_spans,

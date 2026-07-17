@@ -142,24 +142,16 @@ fn runtime_primary_display_overlay_consumes_unbound_pane_input() {
     assert!(service.primary_display_overlay().is_some());
 }
 
-/// Verifies plain pager output wraps at the terminal width instead of being
-/// truncated by the modal renderer. The pager stores each physical row so its
-/// scroll range includes content that would otherwise render off-screen.
+/// Verifies ordinary pager output preserves logical rows without word wrapping.
 #[test]
-fn runtime_primary_display_overlay_wraps_plain_content_to_terminal_width() {
+fn runtime_primary_display_overlay_preserves_unwrapped_plain_content() {
     let mut service = test_runtime_service_with_size(Size::new(12, 6).unwrap());
     service
         .show_primary_display_overlay(vec!["alpha beta gamma".to_string()])
         .unwrap();
 
     let overlay = service.primary_display_overlay().unwrap();
-    assert_eq!(overlay.lines, vec!["alpha beta", "gamma"]);
-    assert!(
-        overlay
-            .lines
-            .iter()
-            .all(|line| mez_terminal::active_terminal_text_width(line) <= 12)
-    );
+    assert_eq!(overlay.lines, vec!["alpha beta gamma"]);
 }
 
 /// Verifies keyboard movement inside a primary command-output pager refreshes

@@ -588,13 +588,6 @@ impl RuntimeSessionService {
     /// primary render pass. An empty line set clears any active overlay. This
     /// fails when the runtime is no longer live.
     pub fn show_primary_display_overlay(&mut self, lines: Vec<String>) -> Result<()> {
-        let wrap_columns = usize::from(self.session.authoritative_size.columns)
-            .min(self.presentation.settings.terminal_agent_wrap_column_cap)
-            .max(1);
-        let lines = lines
-            .into_iter()
-            .flat_map(|line| wrap_agent_terminal_text(&line, wrap_columns))
-            .collect::<Vec<_>>();
         let line_style_spans = vec![Vec::new(); lines.len()];
         self.show_primary_display_overlay_inner(lines, line_style_spans, Vec::new(), false)
     }
@@ -709,10 +702,18 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         let should_open_overlay = runtime_command_display_should_open_overlay(&content);
         if should_open_overlay {
-            let wrap_columns = usize::from(self.session.authoritative_size.columns)
-                .min(self.presentation.settings.terminal_agent_wrap_column_cap)
-                .max(1);
-            let content = wrap_runtime_command_display_overlay_content(content, wrap_columns);
+            let content = if content
+                .command
+                .as_deref()
+                .is_some_and(|command| command.starts_with("show-"))
+            {
+                let wrap_columns = usize::from(self.session.authoritative_size.columns)
+                    .min(self.presentation.settings.terminal_agent_wrap_column_cap)
+                    .max(1);
+                wrap_runtime_command_display_overlay_content(content, wrap_columns)
+            } else {
+                content
+            };
             return self.show_primary_display_overlay_inner(
                 content.lines,
                 content.line_style_spans,

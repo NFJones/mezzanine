@@ -129,15 +129,29 @@ pub(crate) fn render_agent_markdown_body_lines(
 }
 
 /// Renders runtime command markdown body lines without the surrounding frame.
+#[cfg(test)]
 pub(crate) fn render_command_markdown_body_lines(
     markdown: &str,
     ui_theme: &UiTheme,
+) -> Vec<RichTextLine> {
+    render_command_markdown_body_lines_for_width(markdown, ui_theme, None)
+}
+
+/// Renders runtime command Markdown with width-aware table layout.
+pub(crate) fn render_command_markdown_body_lines_for_width(
+    markdown: &str,
+    ui_theme: &UiTheme,
+    table_display_width: Option<usize>,
 ) -> Vec<RichTextLine> {
     let trimmed = markdown.trim_end_matches(['\r', '\n']);
     if trimmed.is_empty() {
         return Vec::new();
     }
-    render_markdown(trimmed, &agent_rich_text_theme(ui_theme), None)
+    render_markdown(
+        trimmed,
+        &agent_rich_text_theme(ui_theme),
+        table_display_width,
+    )
 }
 
 /// Maps product theme slots onto the neutral rich-text semantic palette.
