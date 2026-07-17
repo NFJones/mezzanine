@@ -40,6 +40,8 @@ pub mod context_appenders;
 pub mod context_assembly;
 /// Provider-independent model-context compaction and budgeting.
 pub mod context_compaction;
+/// Provider-neutral immutable-context continuity diagnostics.
+pub mod context_continuity;
 /// Skill-related model-context action-surface constraints.
 pub mod context_skills;
 /// Provider-independent capability-continuation decisions.
@@ -158,7 +160,8 @@ pub mod turn_ledger;
 pub mod turn_runner;
 
 pub use accounting::{
-    AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsageKey, agent_context_usage_snapshot,
+    AgentContextUsageSnapshot, LatestModelRequestUsage, ModelTokenUsage, ModelTokenUsageKey,
+    agent_context_usage_snapshot,
 };
 pub use action_gates::apply_default_action_gates;
 pub use action_planning::{
@@ -243,6 +246,10 @@ pub use context_assembly::{
 pub use context_compaction::{
     DEFAULT_MODEL_CONTEXT_RETAINED_TAIL_PERCENT, compact_model_context_for_budget,
     compact_model_context_for_budget_with_retained_tail_percent, model_context_text_word_count,
+};
+pub use context_continuity::{
+    ContextContinuityBreakReason, ContextContinuityDiagnostics, ContextContinuitySnapshot,
+    ImmutableContextBlockDigest, context_continuity_diagnostics, context_continuity_snapshot,
 };
 pub use context_skills::constrain_skill_actions_for_loaded_context;
 pub use continuation::{

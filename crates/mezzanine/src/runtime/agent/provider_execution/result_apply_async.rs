@@ -64,7 +64,11 @@ impl RuntimeSessionService {
             Some(model_profile),
         );
         self.record_agent_provider_quota_usage(&turn.pane_id, &execution.response.quota_usage);
-        self.append_agent_trace_maap_response(turn, &execution.response)?;
+        self.append_agent_trace_maap_response(
+            turn,
+            &execution.response,
+            execution.latest_response_usage,
+        )?;
         self.suppress_redundant_rationale_entries(turn, &mut execution)?;
         self.reset_action_pressure_after_non_shell_effects(turn, &execution);
         self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;

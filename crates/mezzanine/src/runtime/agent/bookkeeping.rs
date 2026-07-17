@@ -334,6 +334,15 @@ impl RuntimeSessionService {
             .map(|profile| ModelTokenUsageKey::new(profile.provider.clone(), profile.model.clone()))
             .unwrap_or_else(ModelTokenUsageKey::unknown);
         self.agent
+            .agent_latest_request_usage_by_conversation
+            .insert(
+                conversation_id.clone(),
+                mez_agent::LatestModelRequestUsage {
+                    model: token_usage_key.clone(),
+                    usage: latest_context_usage,
+                },
+            );
+        self.agent
             .agent_token_usage_by_conversation
             .entry(conversation_id.clone())
             .or_default()

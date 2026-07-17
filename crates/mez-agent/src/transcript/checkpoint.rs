@@ -2,7 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use crate::{AgentContextUsageSnapshot, ModelTokenUsage, ModelTokenUsageKey};
+use crate::{
+    AgentContextUsageSnapshot, LatestModelRequestUsage, ModelTokenUsage, ModelTokenUsageKey,
+};
 
 use super::TranscriptContractError;
 use super::records::{validate_conversation_id, validate_required};
@@ -52,6 +54,8 @@ pub struct AgentSessionMetadata {
     pub context_usage: Option<String>,
     /// Last provider request-context snapshot shown in pane status.
     pub context_usage_snapshot: Option<AgentContextUsageSnapshot>,
+    /// Latest concrete execution-model request sample for cache diagnostics.
+    pub latest_request_usage: Option<LatestModelRequestUsage>,
 }
 
 impl AgentSessionMetadata {
@@ -103,6 +107,10 @@ impl AgentSessionMetadata {
         for key in self.token_usage_by_model.keys() {
             validate_required("token usage provider", &key.provider)?;
             validate_required("token usage model", &key.model)?;
+        }
+        if let Some(latest) = self.latest_request_usage.as_ref() {
+            validate_required("latest request usage provider", &latest.model.provider)?;
+            validate_required("latest request usage model", &latest.model.model)?;
         }
         Ok(())
     }

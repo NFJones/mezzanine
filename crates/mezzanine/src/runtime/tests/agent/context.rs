@@ -2,6 +2,210 @@
 
 use super::*;
 
+/// Verifies latest execution-model cache reuse stays separate from cumulative
+/// accounting and cannot be overwritten by auxiliary routing usage.
+///
+/// A cold history and router call can keep cumulative reuse low while the last
+/// execution request is warm. `/status` must expose both labelled values and
+/// retain the execution sample after auxiliary provider accounting arrives.
+#[test]
+fn runtime_status_separates_latest_and_cumulative_cache_reuse() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let profile = runtime_model_profile("openai", "gpt-execution");
+    service.record_agent_provider_token_usage_with_profile(
+        "%1",
+        mez_agent::ModelTokenUsage {
+            input_tokens: 1_000,
+            output_tokens: 20,
+            reasoning_tokens: 5,
+            cached_input_tokens: Some(100),
+            cache_write_input_tokens: None,
+        },
+        mez_agent::ModelTokenUsage {
+            input_tokens: 100,
+            output_tokens: 10,
+            reasoning_tokens: 2,
+            cached_input_tokens: Some(90),
+            cache_write_input_tokens: None,
+        },
+        Some(&profile),
+    );
+    service.record_agent_provider_token_usage_by_model(
+        "%1",
+        &std::collections::BTreeMap::from([(
+            mez_agent::ModelTokenUsageKey::new("openai", "gpt-router"),
+            mez_agent::ModelTokenUsage {
+                input_tokens: 100,
+                output_tokens: 1,
+                reasoning_tokens: 0,
+                cached_input_tokens: Some(0),
+                cache_write_input_tokens: None,
+            },
+        )]),
+    );
+
+    let status = service.runtime_agent_status_display("%1").unwrap();
+
+    assert!(
+        status.contains("| Cumulative cache hit | 9.09% |"),
+        "{status}"
+    );
+    assert!(
+        status.contains(
+            "| Latest request cache hit | 90.00% (gpt-execution via openai; cached_input=90 input=100) |"
+        ),
+        "{status}"
+    );
+    let latest = service
+        .agent_latest_request_usage(&service.agent_shell_store().get("%1").unwrap().session_id)
+        .unwrap();
+    assert_eq!(latest.model.model, "gpt-execution");
+    assert_eq!(latest.usage.cached_input_tokens, Some(90));
+}
+
+/// Verifies a cold request after compaction can be followed by a warm latest
+/// request without erasing the cumulative cold-start cost.
+///
+/// Compaction intentionally resets provider cache warming. The next request's
+/// explicit zero must remain distinguishable from unknown, and a subsequent
+/// warm request must replace only the latest sample while cumulative accounting
+/// continues to include both requests.
+#[test]
+fn runtime_cache_status_tracks_post_compaction_cold_then_warm_requests() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let profile = runtime_model_profile("openai", "gpt-execution");
+    let cold = mez_agent::ModelTokenUsage {
+        input_tokens: 100,
+        output_tokens: 5,
+        reasoning_tokens: 0,
+        cached_input_tokens: Some(0),
+        cache_write_input_tokens: None,
+    };
+    service.record_agent_provider_token_usage_with_profile("%1", cold, cold, Some(&profile));
+    let cold_status = service.runtime_agent_status_display("%1").unwrap();
+    assert!(
+        cold_status.contains("| Latest request cache hit | 0.00%"),
+        "{cold_status}"
+    );
+
+    let warm = mez_agent::ModelTokenUsage {
+        cached_input_tokens: Some(90),
+        ..cold
+    };
+    service.record_agent_provider_token_usage_with_profile("%1", warm, warm, Some(&profile));
+    let warm_status = service.runtime_agent_status_display("%1").unwrap();
+
+    assert!(
+        warm_status.contains("| Cumulative cache hit | 45.00% |"),
+        "{warm_status}"
+    );
+    assert!(
+        warm_status.contains("| Latest request cache hit | 90.00%"),
+        "{warm_status}"
+    );
+}
+
+/// Verifies finalized provider requests feed sensitive-content-free immutable
+/// continuity diagnostics into `/status`.
+///
+/// The first request establishes a new-turn baseline. Adding settled chronology
+/// to the same turn must then report append-only growth, a common immutable
+/// prefix, token estimates, and a stable projection digest.
+#[test]
+fn runtime_status_reports_provider_context_continuity_diagnostics() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect continuity")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let context = service
+        .agent_turn_contexts()
+        .get(&turn.turn_id)
+        .cloned()
+        .unwrap();
+    let (_, profile) = service
+        .active_model_profile_for_pane("%1", "agent-%1", None)
+        .unwrap();
+    service.record_runtime_provider_request_shape_for_context(
+        &profile,
+        &turn,
+        &context,
+        &[],
+        false,
+        false,
+    );
+    let initial_status = service.runtime_agent_status_display("%1").unwrap();
+    assert!(
+        initial_status.contains("reason=new_turn"),
+        "{initial_status}"
+    );
+
+    let mut appended = context;
+    mez_agent::insert_context_block_by_placement(
+        &mut appended.blocks,
+        ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "settled result".to_string(),
+            content: "deterministic evidence".to_string(),
+        },
+    );
+    service.record_runtime_provider_request_shape_for_context(
+        &profile,
+        &turn,
+        &appended,
+        &[],
+        false,
+        false,
+    );
+    let status = service.runtime_agent_status_display("%1").unwrap();
+
+    assert!(
+        status.contains("reason=append_only") && status.contains("append_only=true"),
+        "{status}"
+    );
+    assert!(
+        status.contains("| Immutable projection | bytes="),
+        "{status}"
+    );
+    assert!(status.contains("sha256="), "{status}");
+    assert!(
+        status.contains("| Common immutable prefix | blocks=1 tokens~"),
+        "{status}"
+    );
+    let request =
+        crate::integrations::agent::context::assemble_model_request(&profile, &turn, &appended)
+            .unwrap();
+    service
+        .append_agent_trace_maap_request(&turn, &request)
+        .unwrap();
+    let trace = service.agent_pane_trace_log_text("%1").unwrap();
+    assert!(trace.contains("\"context_continuity\""), "{trace}");
+    assert!(
+        trace.contains("\"break_reason\": \"append_only\""),
+        "{trace}"
+    );
+    assert!(trace.contains("\"immutable_token_estimate\""), "{trace}");
+}
+
 /// Verifies that the pane frame reports only the latest provider-backed input
 /// context percentage instead of replacing it with a local preflight estimate
 /// while another turn is running. This keeps the status pill tied to the same

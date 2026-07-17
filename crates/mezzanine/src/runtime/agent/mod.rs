@@ -188,6 +188,15 @@ pub(crate) struct RuntimeAgentComponent {
         BTreeMap<String, BTreeMap<ModelTokenUsageKey, ModelTokenUsage>>,
     /// Cumulative provider token usage keyed by pane and model.
     agent_token_usage_by_pane: BTreeMap<String, BTreeMap<ModelTokenUsageKey, ModelTokenUsage>>,
+    /// Latest concrete execution-model request usage keyed by conversation.
+    agent_latest_request_usage_by_conversation:
+        BTreeMap<String, mez_agent::LatestModelRequestUsage>,
+    /// Previous provider-bound context snapshot keyed by conversation.
+    agent_context_continuity_snapshot_by_conversation:
+        BTreeMap<String, mez_agent::ContextContinuitySnapshot>,
+    /// Latest provider-bound context comparison keyed by conversation.
+    agent_context_continuity_by_conversation:
+        BTreeMap<String, mez_agent::ContextContinuityDiagnostics>,
     /// Latest display-ready context usage keyed by conversation.
     agent_context_usage_by_conversation: BTreeMap<String, String>,
     /// Latest structured context usage keyed by conversation.
@@ -798,6 +807,57 @@ impl RuntimeSessionService {
             .get(conversation_id)
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Returns the latest concrete execution-model request sample.
+    pub(crate) fn agent_latest_request_usage(
+        &self,
+        conversation_id: &str,
+    ) -> Option<&mez_agent::LatestModelRequestUsage> {
+        self.agent
+            .agent_latest_request_usage_by_conversation
+            .get(conversation_id)
+    }
+
+    /// Replaces the latest concrete execution-model request sample on restore.
+    pub(crate) fn restore_agent_latest_request_usage(
+        &mut self,
+        conversation_id: &str,
+        usage: Option<mez_agent::LatestModelRequestUsage>,
+    ) {
+        if let Some(usage) = usage {
+            self.agent
+                .agent_latest_request_usage_by_conversation
+                .insert(conversation_id.to_string(), usage);
+        } else {
+            self.agent
+                .agent_latest_request_usage_by_conversation
+                .remove(conversation_id);
+        }
+    }
+
+    /// Returns the latest immutable-context continuity comparison.
+    pub(crate) fn agent_context_continuity(
+        &self,
+        conversation_id: &str,
+    ) -> Option<&mez_agent::ContextContinuityDiagnostics> {
+        self.agent
+            .agent_context_continuity_by_conversation
+            .get(conversation_id)
+    }
+
+    /// Records one finalized provider-bound context comparison.
+    pub(crate) fn record_agent_context_continuity(
+        &mut self,
+        conversation_id: &str,
+        diagnostics: mez_agent::ContextContinuityDiagnostics,
+    ) {
+        self.agent
+            .agent_context_continuity_snapshot_by_conversation
+            .insert(conversation_id.to_string(), diagnostics.snapshot.clone());
+        self.agent
+            .agent_context_continuity_by_conversation
+            .insert(conversation_id.to_string(), diagnostics);
     }
 
     /// Aggregates non-zero token usage across all agent conversations.

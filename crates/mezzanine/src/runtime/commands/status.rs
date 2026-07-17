@@ -107,7 +107,7 @@ impl RuntimeSessionService {
     }
 
     /// Builds the live `/status` display from runtime session state.
-    pub(super) fn runtime_agent_status_display(&self, pane_id: &str) -> Result<String> {
+    pub(crate) fn runtime_agent_status_display(&self, pane_id: &str) -> Result<String> {
         let session = self.agent_shell_store().get(pane_id).ok_or_else(|| {
             MezError::new(
                 crate::error::MezErrorKind::NotFound,
@@ -152,6 +152,8 @@ impl RuntimeSessionService {
             .map(|execution| execution.request.messages.len())
             .unwrap_or(0);
         let token_usage_by_model = self.agent_token_usage_for_pane(pane_id);
+        let latest_request_usage = self.agent_latest_request_usage(&session.session_id);
+        let context_continuity = self.agent_context_continuity(&session.session_id);
         let instance_token_usage_by_model =
             self.runtime_agent_instance_provider_token_usage_by_model();
         let running_turn = session
@@ -250,6 +252,66 @@ impl RuntimeSessionService {
                 Self::runtime_agent_provider_token_usage_summary(&token_usage_by_model),
             ],
             vec![
+                "Cumulative cache hit".to_string(),
+                Self::runtime_agent_cumulative_cache_hit_display(&token_usage_by_model),
+            ],
+            vec![
+                "Latest request cache hit".to_string(),
+                latest_request_usage.map_or_else(
+                    || "unknown".to_string(),
+                    |sample| {
+                        format!(
+                            "{} ({}; cached_input={} input={})",
+                            sample.usage.cached_input_hit_ratio_display(),
+                            sample.model.display_name(),
+                            sample.usage.cached_input_tokens_display(),
+                            sample.usage.input_tokens,
+                        )
+                    },
+                ),
+            ],
+            vec![
+                "Context continuity".to_string(),
+                context_continuity.map_or_else(
+                    || "unknown".to_string(),
+                    |diagnostics| {
+                        format!(
+                            "reason={} immutable_tokens~{} volatile_tokens~{} append_only={}",
+                            diagnostics.break_reason.as_str(),
+                            diagnostics.snapshot.immutable_token_estimate,
+                            diagnostics.snapshot.volatile_token_estimate,
+                            diagnostics.immutable_append_only,
+                        )
+                    },
+                ),
+            ],
+            vec![
+                "Immutable projection".to_string(),
+                context_continuity.map_or_else(
+                    || "unknown".to_string(),
+                    |diagnostics| {
+                        format!(
+                            "bytes={} sha256={}",
+                            diagnostics.snapshot.stable_projection_bytes,
+                            diagnostics.snapshot.stable_projection_sha256,
+                        )
+                    },
+                ),
+            ],
+            vec![
+                "Common immutable prefix".to_string(),
+                context_continuity.map_or_else(
+                    || "unknown".to_string(),
+                    |diagnostics| {
+                        format!(
+                            "blocks={} tokens~{}",
+                            diagnostics.common_immutable_prefix_blocks,
+                            diagnostics.common_immutable_prefix_tokens,
+                        )
+                    },
+                ),
+            ],
+            vec![
                 "Latest turn".to_string(),
                 format!("{latest_turn_id} ({latest_turn_state})"),
             ],
@@ -268,7 +330,7 @@ impl RuntimeSessionService {
                     "Cached input",
                     "Output",
                     "Reasoning",
-                    "Cache Hit %",
+                    "Cumulative Cache Hit %",
                 ],
                 &Self::runtime_agent_provider_token_usage_rows(&token_usage_by_model),
             ));
@@ -285,7 +347,7 @@ impl RuntimeSessionService {
                     "Cached input",
                     "Output",
                     "Reasoning",
-                    "Cache Hit %",
+                    "Cumulative Cache Hit %",
                 ],
                 &Self::runtime_agent_provider_token_usage_rows(&instance_token_usage_by_model),
             ));
@@ -333,6 +395,21 @@ impl RuntimeSessionService {
         }
     }
 
+    /// Returns the explicitly cumulative cache-hit ratio across pane samples.
+    fn runtime_agent_cumulative_cache_hit_display(
+        usage_by_model: &BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
+    ) -> String {
+        let mut cumulative = ModelTokenUsage::default();
+        for usage in usage_by_model.values() {
+            cumulative.add_assign(*usage);
+        }
+        if usage_by_model.is_empty() {
+            "unknown".to_string()
+        } else {
+            cumulative.cached_input_hit_ratio_display()
+        }
+    }
+
     /// Aggregates provider/model token accounting across retained conversations.
     fn runtime_agent_instance_provider_token_usage_by_model(
         &self,
@@ -363,7 +440,7 @@ impl RuntimeSessionService {
     /// Formats one provider/model token usage value for compact displays.
     fn runtime_agent_provider_token_usage_metrics(usage: ModelTokenUsage) -> String {
         format!(
-            "input={} cached_input={} cache_hit={} output={} reasoning={} total={}",
+            "input={} cached_input={} cumulative_cache_hit={} output={} reasoning={} total={}",
             usage.billed_input_tokens(),
             usage.cached_input_tokens_display(),
             usage.cached_input_hit_ratio_display(),

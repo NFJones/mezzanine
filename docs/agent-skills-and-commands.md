@@ -106,7 +106,7 @@ Common slash commands:
 | Command | Use it for |
 | --- | --- |
 | `/help` | Show the live command list. |
-| `/status` | Inspect the current pane agent session, pane-lifetime token usage across conversation switches, and mez-session retained-conversation token totals; pager output supports `/` search and empty `/` repeats. |
+| `/status` | Inspect the current pane agent session, separately labelled cumulative and latest-request cache reuse, immutable-context continuity, pane-lifetime token usage across conversation switches, and mez-session retained-conversation token totals; pager output supports `/` search and empty `/` repeats. |
 | `/model` | Inspect or change the active model selection. |
 | `/thinking` | Toggle provider thinking mode when supported. |
 | `/approval` | Inspect or change the session approval mode. |

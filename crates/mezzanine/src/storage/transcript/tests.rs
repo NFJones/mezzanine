@@ -576,6 +576,10 @@ fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
             context_window_tokens: 1000,
             cached_input_tokens: Some(80),
         }),
+        latest_request_usage: Some(mez_agent::LatestModelRequestUsage {
+            model: mez_agent::ModelTokenUsageKey::new("openai", "gpt-fast"),
+            usage: owned_token_usage,
+        }),
         token_usage: owned_token_usage,
         token_usage_by_model: BTreeMap::from([(owned_token_usage_key, owned_token_usage)]),
     };
@@ -599,6 +603,7 @@ fn transcript_store_replaces_agent_session_metadata_per_mezzanine_session() {
         project_root: None,
         context_usage: None,
         context_usage_snapshot: None,
+        latest_request_usage: None,
         token_usage: Default::default(),
         token_usage_by_model: Default::default(),
     };

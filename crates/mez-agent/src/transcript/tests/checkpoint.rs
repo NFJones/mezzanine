@@ -28,6 +28,7 @@ fn valid_checkpoint() -> AgentSessionMetadata {
         token_usage_by_model: BTreeMap::<ModelTokenUsageKey, ModelTokenUsage>::new(),
         context_usage: None,
         context_usage_snapshot: None,
+        latest_request_usage: None,
     }
 }
 

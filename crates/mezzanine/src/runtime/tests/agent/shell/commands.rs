@@ -240,6 +240,20 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         response.contains("### Pane Agent Token Usage"),
         "{response}"
     );
+    assert!(
+        response.contains("| Cumulative cache hit | unknown |"),
+        "{response}"
+    );
+    assert!(
+        response.contains(
+            "| Latest request cache hit | 50.00% (deepseek-chat via deepseek; cached_input=100 input=200) |"
+        ),
+        "{response}"
+    );
+    assert!(
+        response.contains("| Cumulative Cache Hit % |"),
+        "{response}"
+    );
     let session_heading = response
         .find("### Pane Agent Token Usage")
         .expect("session token usage heading should be present");

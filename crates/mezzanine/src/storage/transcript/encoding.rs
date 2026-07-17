@@ -12,7 +12,7 @@ use super::types::AgentPresentationEntry;
 use mez_agent::transcript::{
     AgentSessionMetadata, TranscriptEntry, TranscriptRole, validate_conversation_id,
 };
-use mez_agent::{ModelTokenUsage, ModelTokenUsageKey};
+use mez_agent::{LatestModelRequestUsage, ModelTokenUsage, ModelTokenUsageKey};
 use std::collections::BTreeMap;
 
 /// Defines the TRANSCRIPT VERSION const used by this subsystem.
@@ -249,6 +249,7 @@ pub(super) fn encode_agent_session_metadata(metadata: &AgentSessionMetadata) -> 
     let token_usage_by_model = encode_token_usage_by_model(&metadata.token_usage_by_model)?;
     let context_usage_snapshot =
         encode_context_usage_snapshot(metadata.context_usage_snapshot.as_ref())?;
+    let latest_request_usage = encode_latest_request_usage(metadata.latest_request_usage.as_ref())?;
     Ok([
         AGENT_SESSION_METADATA_VERSION.to_string(),
         metadata.mezzanine_session_id.clone(),
@@ -287,6 +288,7 @@ pub(super) fn encode_agent_session_metadata(metadata: &AgentSessionMetadata) -> 
         token_usage_by_model,
         context_usage_snapshot,
         metadata.running_turn_kind.clone().unwrap_or_default(),
+        latest_request_usage,
     ]
     .into_iter()
     .map(|field| escape_field(&field))
@@ -308,7 +310,8 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
         || fields.len() == 23
         || fields.len() == 24
         || fields.len() == 25
-        || fields.len() == 26)
+        || fields.len() == 26
+        || fields.len() == 27)
         || fields[0] != AGENT_SESSION_METADATA_VERSION
     {
         return Err(MezError::invalid_args(
@@ -484,6 +487,11 @@ pub(super) fn decode_agent_session_metadata(line: &str) -> Result<AgentSessionMe
             .filter(|value| !value.is_empty())
             .cloned(),
         running_turn_kind: fields.get(25).filter(|value| !value.is_empty()).cloned(),
+        latest_request_usage: fields
+            .get(26)
+            .filter(|value| !value.is_empty())
+            .map(|value| decode_latest_request_usage(value))
+            .transpose()?,
     };
     metadata.validate()?;
     Ok(metadata)
@@ -586,6 +594,52 @@ fn decode_context_usage_snapshot(value: &str) -> Result<mez_agent::AgentContextU
         input_tokens: json_u64_field(object, "input_tokens")?,
         context_window_tokens: json_u64_field(object, "context_window_tokens")?,
         cached_input_tokens: json_optional_u64_field(object, "cached_input_tokens")?,
+    })
+}
+
+/// Encodes the latest concrete execution-model request sample.
+fn encode_latest_request_usage(sample: Option<&LatestModelRequestUsage>) -> Result<String> {
+    let Some(sample) = sample else {
+        return Ok(String::new());
+    };
+    serde_json::to_string(&serde_json::json!({
+        "provider": sample.model.provider,
+        "model": sample.model.model,
+        "input_tokens": sample.usage.input_tokens,
+        "output_tokens": sample.usage.output_tokens,
+        "reasoning_tokens": sample.usage.reasoning_tokens,
+        "cached_input_tokens": sample.usage.cached_input_tokens,
+        "cache_write_input_tokens": sample.usage.cache_write_input_tokens,
+    }))
+    .map_err(|error| {
+        MezError::invalid_state(format!(
+            "agent session latest request usage encoding failed: {error}"
+        ))
+    })
+}
+
+/// Decodes the latest concrete execution-model request sample.
+fn decode_latest_request_usage(value: &str) -> Result<LatestModelRequestUsage> {
+    let object = serde_json::from_str::<serde_json::Value>(value).map_err(|error| {
+        MezError::invalid_args(format!(
+            "agent session latest request usage JSON is invalid: {error}"
+        ))
+    })?;
+    let object = object.as_object().ok_or_else(|| {
+        MezError::invalid_args("agent session latest request usage must be an object")
+    })?;
+    Ok(LatestModelRequestUsage {
+        model: ModelTokenUsageKey::new(
+            json_string_field(object, "provider")?,
+            json_string_field(object, "model")?,
+        ),
+        usage: ModelTokenUsage {
+            input_tokens: json_u64_field(object, "input_tokens")?,
+            output_tokens: json_u64_field(object, "output_tokens")?,
+            reasoning_tokens: json_u64_field(object, "reasoning_tokens")?,
+            cached_input_tokens: json_optional_u64_field(object, "cached_input_tokens")?,
+            cache_write_input_tokens: json_optional_u64_field(object, "cache_write_input_tokens")?,
+        },
     })
 }
 

@@ -193,6 +193,15 @@ impl RuntimeSessionService {
                 &metadata.pane_id,
                 token_usage_by_model,
             );
+            self.restore_agent_context_usage(
+                &metadata.conversation_id,
+                metadata.context_usage.clone(),
+                metadata.context_usage_snapshot,
+            );
+            self.restore_agent_latest_request_usage(
+                &metadata.conversation_id,
+                metadata.latest_request_usage.clone(),
+            );
             self.record_pane_transcript_ref(
                 &metadata.pane_id,
                 format!(
@@ -342,6 +351,9 @@ impl RuntimeSessionService {
                     token_usage_by_model,
                     context_usage: self.agent_context_usage_display(&conversation_id),
                     context_usage_snapshot: self.agent_context_usage_snapshot(&conversation_id),
+                    latest_request_usage: self
+                        .agent_latest_request_usage(&conversation_id)
+                        .cloned(),
                 }
             })
             .collect::<Vec<_>>();
@@ -398,6 +410,7 @@ impl RuntimeSessionService {
                 metadata.context_usage,
                 metadata.context_usage_snapshot,
             );
+            self.restore_agent_latest_request_usage(conversation_id, metadata.latest_request_usage);
             let _ = self.checkpoint_agent_session_metadata();
             break;
         }

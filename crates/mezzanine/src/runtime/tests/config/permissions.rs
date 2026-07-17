@@ -868,6 +868,7 @@ fn runtime_agent_session_restore_does_not_narrow_configured_approval_default() {
                 project_root: None,
                 context_usage: None,
                 context_usage_snapshot: None,
+                latest_request_usage: None,
                 token_usage: Default::default(),
                 token_usage_by_model: Default::default(),
             }],

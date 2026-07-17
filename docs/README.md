@@ -30,6 +30,8 @@ reference documentation.
 - [agent-skills-and-commands.md](agent-skills-and-commands.md): the three
   interactive command surfaces, explicit skill usage, and common operator
   workflows.
+- [cache-status-diagnostics.md](cache-status-diagnostics.md): cumulative and
+  latest-request cache reuse, immutable-context continuity, and trace fields.
 - [workspace-architecture.md](workspace-architecture.md): workspace package
   ownership, dependency edges, and boundary rules.
 - [workspace-ownership-matrix.md](workspace-ownership-matrix.md): audited

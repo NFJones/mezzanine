@@ -151,6 +151,19 @@ impl ModelTokenUsage {
     }
 }
 
+/// Latest concrete execution-model request sample for one conversation.
+///
+/// This record is intentionally separate from cumulative per-model totals so
+/// auxiliary routing calls can contribute cost without replacing the cache
+/// reuse sample users inspect for the execution model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LatestModelRequestUsage {
+    /// Provider/model identity that produced the sample.
+    pub model: ModelTokenUsageKey,
+    /// Provider-reported counters for exactly one concrete request.
+    pub usage: ModelTokenUsage,
+}
+
 /// Last known provider request context usage for one selected model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AgentContextUsageSnapshot {
@@ -184,7 +197,9 @@ pub fn agent_context_usage_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use super::{ModelTokenUsage, ModelTokenUsageKey, agent_context_usage_snapshot};
+    use super::{
+        LatestModelRequestUsage, ModelTokenUsage, ModelTokenUsageKey, agent_context_usage_snapshot,
+    };
     use crate::ModelProfile;
 
     /// Verifies context snapshots require both provider input usage and a
@@ -291,5 +306,32 @@ mod tests {
         assert_eq!(usage.billed_input_tokens(), 6_114);
         assert_eq!(usage.total_tokens(), 16_622);
         assert_eq!(usage.cached_input_hit_ratio_display(), "63.19%");
+    }
+
+    /// Verifies latest samples preserve an omitted cache counter separately
+    /// from an explicitly reported zero.
+    #[test]
+    fn latest_request_usage_preserves_unknown_and_explicit_zero_cache_samples() {
+        let unknown = LatestModelRequestUsage {
+            model: ModelTokenUsageKey::new("openai", "gpt"),
+            usage: ModelTokenUsage {
+                input_tokens: 100,
+                cached_input_tokens: None,
+                ..ModelTokenUsage::default()
+            },
+        };
+        let explicit_zero = LatestModelRequestUsage {
+            usage: ModelTokenUsage {
+                cached_input_tokens: Some(0),
+                ..unknown.usage
+            },
+            ..unknown.clone()
+        };
+
+        assert_eq!(unknown.usage.cached_input_hit_ratio_display(), "unknown");
+        assert_eq!(
+            explicit_zero.usage.cached_input_hit_ratio_display(),
+            "0.00%"
+        );
     }
 }

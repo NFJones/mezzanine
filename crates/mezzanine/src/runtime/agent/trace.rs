@@ -13,7 +13,7 @@ use mez_agent::AgentTurnRecord;
 use mez_agent::outcome::action_terminal_preview as runtime_agent_terminal_preview;
 use mez_agent::{
     ActionResult, AgentAction, AgentActionPayload, AgentContext, AgentTurnState, ContextSourceKind,
-    MaapBatch, ModelMessageRole, ModelProfile, ModelRequest, ModelResponse,
+    MaapBatch, ModelMessageRole, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
     OpenAiPromptCacheDiagnostics, apply_default_action_gates,
     openai_prompt_cache_diagnostics_for_request,
 };
@@ -149,16 +149,32 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         request: &ModelRequest,
     ) -> Result<()> {
+        let continuity = self
+            .agent_shell_store()
+            .get(&turn.pane_id)
+            .and_then(|session| self.agent_context_continuity(&session.session_id))
+            .cloned();
+        let mut display = runtime_model_request_trace_json(
+            request,
+            self.agent_trace_enabled(&turn.pane_id),
+            true,
+        );
+        let mut retained = runtime_model_request_trace_json(request, true, true);
+        if let Some(continuity) = continuity {
+            let value = runtime_context_continuity_trace_json(&continuity);
+            if let Some(object) = display.as_object_mut() {
+                object.insert("context_continuity".to_string(), value.clone());
+            }
+            if let Some(object) = retained.as_object_mut() {
+                object.insert("context_continuity".to_string(), value);
+            }
+        }
         self.append_agent_trace_maap_value_with_retained(
             &turn.pane_id,
             &turn.turn_id,
             "request",
-            runtime_model_request_trace_json(
-                request,
-                self.agent_trace_enabled(&turn.pane_id),
-                true,
-            ),
-            runtime_model_request_trace_json(request, true, true),
+            display,
+            retained,
         )
     }
 
@@ -172,6 +188,24 @@ impl RuntimeSessionService {
         memory_actions_enabled: bool,
         issue_actions_enabled: bool,
     ) {
+        let conversation_id = self
+            .agent_shell_store()
+            .get(&turn.pane_id)
+            .map(|session| session.session_id.clone())
+            .unwrap_or_else(|| format!("pane:{}", turn.pane_id));
+        let previous = self
+            .agent
+            .agent_context_continuity_snapshot_by_conversation
+            .get(&conversation_id)
+            .cloned();
+        let continuity = mez_agent::context_continuity_diagnostics(
+            context,
+            &model_profile.provider,
+            &model_profile.model,
+            &turn.turn_id,
+            previous.as_ref(),
+        );
+        self.record_agent_context_continuity(&conversation_id, continuity);
         let Ok(mut request) = assemble_model_request(model_profile, turn, context) else {
             return;
         };
@@ -199,13 +233,18 @@ impl RuntimeSessionService {
         &mut self,
         turn: &AgentTurnRecord,
         response: &ModelResponse,
+        latest_request_usage: ModelTokenUsage,
     ) -> Result<()> {
         self.append_agent_trace_maap_value_with_retained(
             &turn.pane_id,
             &turn.turn_id,
             "response",
-            runtime_model_response_trace_json(response, self.agent_trace_enabled(&turn.pane_id)),
-            runtime_model_response_trace_json(response, true),
+            runtime_model_response_trace_json(
+                response,
+                latest_request_usage,
+                self.agent_trace_enabled(&turn.pane_id),
+            ),
+            runtime_model_response_trace_json(response, latest_request_usage, true),
         )
     }
 
@@ -961,6 +1000,7 @@ pub(super) fn runtime_openai_prompt_cache_diagnostics_trace_json(
 /// on duplicated control-flow logic.
 pub(super) fn runtime_model_response_trace_json(
     response: &ModelResponse,
+    latest_request_usage: ModelTokenUsage,
     include_shell_view: bool,
 ) -> serde_json::Value {
     serde_json::json!({
@@ -979,13 +1019,38 @@ pub(super) fn runtime_model_response_trace_json(
             "reasoning_tokens": response.usage.reasoning_tokens,
             "cached_input_tokens": response.usage.cached_input_tokens,
             "cached_input_tokens_reported": response.usage.cached_input_tokens.is_some(),
-            "cached_input_hit_ratio": response.usage.cached_input_hit_ratio_display(),
+            "cumulative_cached_input_hit_ratio": response.usage.cached_input_hit_ratio_display(),
             "total_tokens": response.usage.total_tokens()
+        },
+        "latest_request_usage": {
+            "input_tokens": latest_request_usage.input_tokens,
+            "output_tokens": latest_request_usage.output_tokens,
+            "reasoning_tokens": latest_request_usage.reasoning_tokens,
+            "cached_input_tokens": latest_request_usage.cached_input_tokens,
+            "cached_input_tokens_reported": latest_request_usage.cached_input_tokens.is_some(),
+            "cached_input_hit_ratio": latest_request_usage.cached_input_hit_ratio_display(),
+            "total_tokens": latest_request_usage.total_tokens()
         },
         "action_batch": response
             .action_batch
             .as_ref()
             .map(|batch| runtime_maap_batch_trace_json(batch, true))
+    })
+}
+
+/// Builds sensitive-content-free provider trace JSON for context continuity.
+fn runtime_context_continuity_trace_json(
+    diagnostics: &mez_agent::ContextContinuityDiagnostics,
+) -> serde_json::Value {
+    serde_json::json!({
+        "immutable_token_estimate": diagnostics.snapshot.immutable_token_estimate,
+        "volatile_token_estimate": diagnostics.snapshot.volatile_token_estimate,
+        "stable_projection_bytes": diagnostics.snapshot.stable_projection_bytes,
+        "stable_projection_sha256": diagnostics.snapshot.stable_projection_sha256,
+        "common_immutable_prefix_blocks": diagnostics.common_immutable_prefix_blocks,
+        "common_immutable_prefix_tokens": diagnostics.common_immutable_prefix_tokens,
+        "immutable_append_only": diagnostics.immutable_append_only,
+        "break_reason": diagnostics.break_reason.as_str(),
     })
 }
 
@@ -1086,4 +1151,59 @@ pub(super) fn runtime_action_results_trace_json(
             .map(|result| runtime_action_result_trace_json(result, include_shell_view))
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::runtime_model_response_trace_json;
+
+    /// Verifies provider traces distinguish accumulated exchange usage from
+    /// the latest concrete request sample.
+    ///
+    /// Multi-request action negotiations can have a cold cumulative ratio and
+    /// a warm final request. Both values must remain independently diagnosable.
+    #[test]
+    fn provider_response_trace_labels_cumulative_and_latest_cache_reuse() {
+        let response = mez_agent::ModelResponse {
+            provider: "openai".to_string(),
+            model: "gpt-test".to_string(),
+            raw_text: String::new(),
+            usage: mez_agent::ModelTokenUsage {
+                input_tokens: 1_000,
+                output_tokens: 20,
+                reasoning_tokens: 5,
+                cached_input_tokens: Some(100),
+                cache_write_input_tokens: None,
+            },
+            latest_request_usage: Some(mez_agent::ModelTokenUsage {
+                input_tokens: 100,
+                output_tokens: 10,
+                reasoning_tokens: 2,
+                cached_input_tokens: Some(90),
+                cache_write_input_tokens: None,
+            }),
+            quota_usage: Vec::new(),
+            action_batch: None,
+            provider_transcript_events: Vec::new(),
+        };
+
+        let trace = runtime_model_response_trace_json(
+            &response,
+            response.latest_request_usage.expect("latest usage fixture"),
+            true,
+        );
+
+        assert_eq!(
+            trace["usage"]["cumulative_cached_input_hit_ratio"],
+            "10.00%"
+        );
+        assert_eq!(
+            trace["latest_request_usage"]["cached_input_hit_ratio"],
+            "90.00%"
+        );
+        assert_eq!(
+            trace["latest_request_usage"]["cached_input_tokens_reported"],
+            true
+        );
+    }
 }

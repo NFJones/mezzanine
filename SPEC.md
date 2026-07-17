@@ -2790,6 +2790,11 @@ The derived key MUST NOT include rendered prompt-prefix bytes, user prompt text,
 action output, transcript content, project-file content, secrets, credentials,
 or per-turn identifiers. Provider token accounting MUST preserve the difference
 between an omitted cached-token counter and an explicit provider-reported zero.
+Runtime status MUST label token-weighted cache reuse across retained provider
+samples as cumulative and MUST expose a separate latest-request cache-hit value
+for the concrete execution model. Auxiliary routing and model-sizing requests
+MUST contribute to cumulative provider/model accounting without replacing the
+execution model's latest-request sample.
 OpenAI request diagnostics SHOULD record non-model-visible fingerprints for the
 front-loaded instructions, response-format schema, tool schema, stable input
 prefix, volatile input suffix, and complete observable cacheable prefix so cache
@@ -2816,6 +2821,13 @@ this explicit placement directly and MUST NOT infer cache lifecycle from source
 kinds, labels, or message text. Late developer-role content retains developer
 authority; placement changes cache and ordering lifecycle, not instruction
 priority.
+Once deterministic action evidence settles, it MUST be committed exactly once
+to append-only `ConversationAppend` chronology and any volatile copy MUST be
+removed atomically. Provider-neutral continuity diagnostics MUST keep
+immutable and volatile token estimates, the immutable projection byte length
+and digest, the longest common immutable prefix, and an append-only flag without
+retaining prompt text. Transitions MUST distinguish new turns, compaction,
+provider switches, model switches, append-only growth, and unexpected rewrites.
 OpenAI request diagnostics MUST fingerprint the provider-visible request shape
 after unsupported local profile options are omitted. Local
 `provider_options.prompt_cache_retention` values MUST NOT affect the emitted
@@ -5284,7 +5296,8 @@ The baseline command capabilities are:
 - `/resume`: Resume a saved conversation.
 - `/new`: Start a new conversation.
 - `/status`: Show session status, including model, policy, identity, writable
-  roots, context usage, and cumulative provider token counters. The status
+  roots, context usage, cumulative provider token counters, latest execution-
+  model cache reuse, and immutable-context continuity. The status
   display SHOULD be `text/markdown; charset=utf-8` and SHOULD present the main
   status data as a markdown table. When per-model token usage is available,
   `/status` MUST render a current-pane provider/model accounting table using
@@ -5293,7 +5306,10 @@ The baseline command capabilities are:
   beneath it aggregated across all retained agent conversations for the running
   Mezzanine process, including conversations whose panes or active agent
   sessions have been closed or replaced. Both tables MUST use the same
-  per-model columns, including cache hit percentage. If a provider omits
+  per-model columns, including an explicitly cumulative cache hit percentage.
+  The main status table MUST separately expose the latest concrete execution-
+  model request cache hit without allowing auxiliary routing/model-sizing
+  calls to overwrite it. If a provider omits
   cached-token accounting, the status display SHOULD show that counter as
   unknown rather than as zero. Provider token counters MUST include auxiliary
   routing/model-sizing provider requests as separate provider/model rows when

@@ -529,6 +529,8 @@ Credentials belong in `mez auth`, not in config files.
   configuration fields, defaults, and layer behavior.
 - [docs/maap-actions-reference.md](docs/maap-actions-reference.md): currently
   defined MAAP action objects, fields, capabilities, and runtime boundaries.
+- [docs/cache-status-diagnostics.md](docs/cache-status-diagnostics.md): cache
+  reuse accounting and immutable-context continuity diagnostics.
 - [docs/examples/config.toml](docs/examples/config.toml): generated baseline
   configuration example.
 

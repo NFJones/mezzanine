@@ -60,6 +60,16 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
                     context_window_tokens: 1000,
                     cached_input_tokens: Some(450),
                 }),
+                latest_request_usage: Some(mez_agent::LatestModelRequestUsage {
+                    model: saved_token_usage_key.clone(),
+                    usage: mez_agent::ModelTokenUsage {
+                        input_tokens: 420,
+                        output_tokens: 30,
+                        reasoning_tokens: 12,
+                        cached_input_tokens: Some(400),
+                        cache_write_input_tokens: None,
+                    },
+                }),
                 token_usage: saved_token_usage,
                 token_usage_by_model: std::collections::BTreeMap::from([(
                     saved_token_usage_key.clone(),
@@ -103,7 +113,13 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
 
     assert!(
         status.contains(
-            "| Pane agent tokens | gpt-saved via openai: input=450 cached_input=450 cache_hit=50.00% output=80 reasoning=33 total=980 |"
+            "| Pane agent tokens | gpt-saved via openai: input=450 cached_input=450 cumulative_cache_hit=50.00% output=80 reasoning=33 total=980 |"
+        ),
+        "{status}"
+    );
+    assert!(
+        status.contains(
+            "| Latest request cache hit | 95.24% (gpt-saved via openai; cached_input=400 input=420) |"
         ),
         "{status}"
     );
@@ -123,6 +139,14 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
     assert_eq!(
         restored_metadata.token_usage_by_model,
         std::collections::BTreeMap::from([(saved_token_usage_key.clone(), saved_token_usage,)]),
+        "{restored_metadata:#?}"
+    );
+    assert_eq!(
+        restored_metadata
+            .latest_request_usage
+            .as_ref()
+            .map(|sample| sample.usage.cached_input_tokens),
+        Some(Some(400)),
         "{restored_metadata:#?}"
     );
 
@@ -155,6 +179,12 @@ fn runtime_resume_restores_provider_token_usage_from_session_metadata() {
     );
     assert!(
         resumed_status.contains("| openai | gpt-saved | 525 | 475 | 100 | 38 | 47.50% |"),
+        "{resumed_status}"
+    );
+    assert!(
+        resumed_status.contains(
+            "| Latest request cache hit | 25.00% (gpt-saved via openai; cached_input=25 input=100) |"
+        ),
         "{resumed_status}"
     );
     let resumed_metadata = transcript_store

@@ -642,6 +642,7 @@ fn runtime_does_not_restore_agent_metadata_for_other_sessions() {
                 project_root: None,
                 context_usage: None,
                 context_usage_snapshot: None,
+                latest_request_usage: None,
                 token_usage: Default::default(),
                 token_usage_by_model: Default::default(),
             }],
