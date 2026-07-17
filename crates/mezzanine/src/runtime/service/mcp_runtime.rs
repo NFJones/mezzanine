@@ -247,7 +247,12 @@ impl RuntimeSessionService {
                         cursor = Some(next_cursor);
                     }
                 }
-                registry.mark_available_from_discovered_tools(server_id, tools, checked_at)?;
+                registry.mark_available_from_discovery(
+                    server_id,
+                    tools,
+                    initialize.instructions.as_deref(),
+                    checked_at,
+                )?;
                 self.integration
                     .mcp_transports_mut()
                     .insert_stdio(server_id.to_string(), connection);
@@ -299,9 +304,10 @@ impl RuntimeSessionService {
                     }
                     Err(error) => return Err(error),
                 };
-                registry.mark_available_from_discovered_tools(
+                registry.mark_available_from_discovery(
                     server_id,
                     discovery.tools.clone(),
+                    discovery.initialize.instructions.as_deref(),
                     checked_at,
                 )?;
                 self.integration

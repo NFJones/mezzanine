@@ -6015,6 +6015,7 @@ usable, trusted, or presented to the model in a given session.
 
 MCP servers MUST be configured under the `mcp_servers` configuration table.
 Explicit `@<server-id>` invocations MUST resolve against canonical configured MCP server identifiers. Exact identifier casing MUST take precedence; an ASCII case-insensitive fallback MAY resolve only when it identifies exactly one configured server. Unresolved or case-ambiguous mentions MUST fail closed, expose no arbitrarily selected server tools, and provide a bounded model-visible diagnostic.
+For a resolved explicit invocation, the turn-local model context MUST identify the invoked server, state that matching callable `mcp_call` actions are the direct execution route, and make clear that memory lookup or unrelated discovery is not a substitute. Mezzanine MUST preserve bounded, model-safe initialization instructions advertised by the MCP server as non-authoritative guidance, SHOULD derive a bounded purpose from discovered tool metadata when operator-configured purpose is absent, and MUST preserve operator-configured purpose and usage guidance as higher-priority context. Concise argument hints MAY supplement, but MUST NOT replace, the complete provider action schema.
 
 Mezzanine MUST support stdio MCP servers with `command`, optional `args`,
 optional `env`, optional `env_vars`, and optional `cwd`.

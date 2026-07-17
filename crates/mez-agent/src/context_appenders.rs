@@ -109,6 +109,29 @@ fn append_filtered_mcp_context(
     });
     let mut unavailable_servers = summary.unavailable_servers.clone();
     unavailable_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
+    if !available_servers.is_empty() {
+        let invoked_servers = available_servers
+            .iter()
+            .map(|server| server.server_id.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        lines.push(format!(
+            "explicit_invocation={} action=mcp_call directive={}",
+            mcp_context_quoted_value(&invoked_servers),
+            mcp_context_quoted_value(
+                "The user explicitly invoked these MCP servers. Use a matching callable mcp_call action now when it can advance the request; memory search and unrelated discovery are not substitutes for the requested integration."
+            )
+        ));
+        lines.push(format!(
+            "call_shape={} argument_contract={}",
+            mcp_context_quoted_value(
+                r#"{"type":"mcp_call","server":"<listed server>","tool":"<listed tool>","arguments":{...}}"#
+            ),
+            mcp_context_quoted_value(
+                "Fill arguments according to the selected mcp_call action schema; gather only missing task-local values that are not already present in the prompt or current results."
+            )
+        ));
+    }
     let available_tool_count = available_tools.len();
     let detailed_tools = mcp_context_selected_tool_details(
         &context,
@@ -121,9 +144,10 @@ fn append_filtered_mcp_context(
     }
     for tool in &detailed_tools {
         lines.push(format!(
-            "available_tool={}/{} route=mcp_call callable=true description={}",
+            "available_tool={}/{} route=mcp_call callable=true required_arguments={} description={}",
             tool.server_id,
             tool.tool_name,
+            mcp_context_quoted_value(&mcp_required_argument_summary(tool)),
             mcp_context_quoted_value(&tool.description)
         ));
     }
@@ -487,6 +511,23 @@ fn mcp_available_server_line(server: &McpPromptServer) -> String {
         mcp_context_quoted_value(&server.usage_instructions),
         server.tool_count
     )
+}
+
+/// Returns a concise required-argument list while the action schema remains authoritative.
+fn mcp_required_argument_summary(tool: &McpPromptTool) -> String {
+    serde_json::from_str::<serde_json::Value>(&tool.input_schema_json)
+        .ok()
+        .and_then(|schema| schema.get("required").cloned())
+        .and_then(|required| required.as_array().cloned())
+        .map(|required| {
+            required
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .filter(|required| !required.is_empty())
+        .unwrap_or_else(|| "none".to_string())
 }
 
 /// Quotes one MCP prompt-context value without exposing raw newlines.

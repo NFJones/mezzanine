@@ -17,14 +17,14 @@ fn openai_available_mcp_keeps_memory_on_default_surface() {
         tool_name: "list_ci_results".to_string(),
         description: "Read GitHub CI check results for a repository. User-configured non-authoritative server purpose: GitHub repository and CI operations.".to_string(),
         approval_required: false,
-        input_schema_json: r#"{"type":"object","properties":{"repo":{"type":"string"}}}"#
+        input_schema_json: r#"{"type":"object","properties":{"repo":{"type":"string","description":"Repository owner/name"}},"required":["repo"]}"#
             .to_string(),
     };
     let context = mez_agent::append_mcp_context(
         AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
             label: "user".to_string(),
-            content: "use the githubcopilot mcp server to pull the latest CI results".to_string(),
+            content: "use @githubcopilot to pull the latest CI results".to_string(),
         }])
         .unwrap(),
         &mez_agent::McpPromptSummary {
@@ -67,6 +67,25 @@ fn openai_available_mcp_keeps_memory_on_default_surface() {
     assert!(action_types.contains(&"mcp_call".to_string()));
     assert!(action_types.contains(&"memory_search".to_string()));
     assert!(action_types.contains(&"memory_store".to_string()));
+    assert!(
+        body.contains("explicit_invocation=\\\"githubcopilot\\\""),
+        "{body}"
+    );
+    assert!(body.contains("action=mcp_call"), "{body}");
+    assert!(body.contains("required_arguments=\\\"repo\\\""), "{body}");
+    assert!(
+        body.contains("memory search and unrelated discovery are not substitutes"),
+        "{body}"
+    );
+    let mcp_actions = openai_tool_action_schemas(mcp_tool_schema)
+        .iter()
+        .filter(|schema| schema["properties"]["type"]["enum"][0] == "mcp_call")
+        .collect::<Vec<_>>();
+    assert_eq!(mcp_actions.len(), 1);
+    assert_eq!(
+        mcp_actions[0]["properties"]["arguments"]["properties"]["repo"]["description"],
+        "Repository owner/name"
+    );
     assert!(
         description.contains("Available MCP servers callable with mcp_call: githubcopilot (GitHub repository and CI operations; tools: list_ci_results)"),
         "{description}"

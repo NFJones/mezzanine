@@ -618,6 +618,8 @@ pub struct McpServerState {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub blacklist_reason: Option<String>,
+    /// Bounded model-safe instructions advertised during MCP initialization.
+    pub discovered_instructions: Option<String>,
     /// Stores the tools value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

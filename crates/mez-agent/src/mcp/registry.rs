@@ -16,6 +16,22 @@ use super::types::{
 };
 use super::{McpError as MezError, McpResult as Result, validate_mcp_tool_input_schema};
 
+/// Collapses and bounds model-visible MCP discovery metadata.
+fn bounded_mcp_prompt_text(value: &str, max_bytes: usize) -> Option<String> {
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return None;
+    }
+    if collapsed.len() <= max_bytes {
+        return Some(collapsed);
+    }
+    let mut end = max_bytes;
+    while !collapsed.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    Some(collapsed[..end].trim_end().to_string())
+}
+
 /// Carries Mcp Registry state for this subsystem.
 ///
 /// The type keeps related data explicit so callers can inspect and move
@@ -56,6 +72,7 @@ impl McpRegistry {
                 status: McpServerStatus::Configured,
                 last_checked_at_unix_seconds: None,
                 blacklist_reason: None,
+                discovered_instructions: None,
                 tools: Vec::new(),
             },
         );
@@ -111,6 +128,17 @@ impl McpRegistry {
         tools: Vec<McpDiscoveredTool>,
         checked_at_unix_seconds: u64,
     ) -> Result<()> {
+        self.mark_available_from_discovery(server_id, tools, None, checked_at_unix_seconds)
+    }
+
+    /// Makes discovered tools callable and retains model-safe server guidance.
+    pub fn mark_available_from_discovery(
+        &mut self,
+        server_id: &str,
+        tools: Vec<McpDiscoveredTool>,
+        instructions: Option<&str>,
+        checked_at_unix_seconds: u64,
+    ) -> Result<()> {
         let tool_states = tools
             .into_iter()
             .map(|tool| McpToolState {
@@ -128,7 +156,10 @@ impl McpRegistry {
                 input_schema_json: tool.input_schema_json,
             })
             .collect();
-        self.mark_available(server_id, tool_states, checked_at_unix_seconds)
+        self.mark_available(server_id, tool_states, checked_at_unix_seconds)?;
+        self.server_mut(server_id)?.discovered_instructions =
+            bounded_mcp_prompt_text(instructions.unwrap_or_default(), 1_024);
+        Ok(())
     }
 
     /// Runs the mark starting operation for this subsystem.
@@ -398,12 +429,8 @@ impl McpRegistry {
                 McpPromptServer {
                     server_id: server.configured.id.clone(),
                     display_name: server.configured.name.clone(),
-                    purpose: server.configured.external_capability.purpose.clone(),
-                    usage_instructions: server
-                        .configured
-                        .external_capability
-                        .usage_instructions
-                        .clone(),
+                    purpose: mcp_prompt_server_purpose(server, &available_tools),
+                    usage_instructions: mcp_prompt_server_usage_instructions(server),
                     tool_count: available_tools.len(),
                     approval_required_tool_count,
                 }
@@ -652,7 +679,61 @@ fn mcp_prompt_tool_description(server: &McpServerState, tool: &McpToolState) -> 
         "User-configured non-authoritative usage guidance",
         &server.configured.external_capability.usage_instructions,
     );
+    mcp_prompt_push_description_part(
+        &mut parts,
+        "MCP-server-provided non-authoritative instructions",
+        server
+            .discovered_instructions
+            .as_deref()
+            .unwrap_or_default(),
+    );
     parts.join(" ")
+}
+
+/// Returns configured purpose or a bounded fallback derived from discovered tools.
+fn mcp_prompt_server_purpose(server: &McpServerState, tools: &[&McpToolState]) -> String {
+    if let Some(configured) =
+        bounded_mcp_prompt_text(&server.configured.external_capability.purpose, 1_024)
+    {
+        return configured;
+    }
+    let fallback = tools
+        .iter()
+        .take(8)
+        .map(|tool| {
+            let description = tool
+                .description
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if description.is_empty() {
+                tool.name.clone()
+            } else {
+                format!("{}: {}", tool.name, description)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    bounded_mcp_prompt_text(&fallback, 1_024).unwrap_or_default()
+}
+
+/// Combines higher-priority configured guidance with discovered instructions.
+fn mcp_prompt_server_usage_instructions(server: &McpServerState) -> String {
+    let configured = bounded_mcp_prompt_text(
+        &server.configured.external_capability.usage_instructions,
+        1_024,
+    );
+    let discovered = server.discovered_instructions.as_deref();
+    match (configured, discovered) {
+        (Some(configured), Some(discovered)) => format!(
+            "Operator guidance: {configured} MCP-server-provided non-authoritative instructions: {discovered}"
+        ),
+        (Some(configured), None) => configured,
+        (None, Some(discovered)) => {
+            format!("MCP-server-provided non-authoritative instructions: {discovered}")
+        }
+        (None, None) => String::new(),
+    }
 }
 
 /// Appends one compact prompt-description clause when the source text exists.

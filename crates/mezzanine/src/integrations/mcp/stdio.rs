@@ -370,9 +370,10 @@ pub async fn discover_stdio_mcp_server_into_registry(
     let plan = registry.startup_plan(server_id, environment, checked_at)?;
     match discover_stdio_mcp_server(&plan, environment, client_name, client_version).await {
         Ok(discovery) => {
-            registry.mark_available_from_discovered_tools(
+            registry.mark_available_from_discovery(
                 server_id,
                 discovery.tools.clone(),
+                discovery.initialize.instructions.as_deref(),
                 checked_at,
             )?;
             Ok(discovery)
