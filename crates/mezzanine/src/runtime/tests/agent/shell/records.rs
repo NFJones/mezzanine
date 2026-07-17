@@ -115,6 +115,16 @@ enabled = true
             2,
         )
         .unwrap();
+    store
+        .add_issue(
+            "/other/project".to_string(),
+            mez_agent::issues::IssueKind::Task,
+            "Cross-project issue".to_string(),
+            Some("Cross-project body".to_string()),
+            None,
+            3,
+        )
+        .unwrap();
 
     let response = service
         .execute_agent_shell_command(&primary, "/show-issues")
@@ -134,8 +144,66 @@ enabled = true
     let footer = overlay_view.lines.last().cloned().unwrap_or_default();
     assert!(footer.contains("esc: back"), "{footer}");
     assert!(footer.contains("enter: open"), "{footer}");
+    assert!(footer.contains("a: all"), "{footer}");
     assert!(footer.contains("k/p/x: filter"), "{footer}");
     assert!(footer.contains("s: save"), "{footer}");
+    assert!(
+        !overlay_view
+            .lines
+            .iter()
+            .any(|line| line.contains("Cross-project issue")),
+        "{overlay_view:?}"
+    );
+
+    let toggle_all = service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"a".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    assert_eq!(toggle_all.forwarded_bytes, 0);
+    assert!(toggle_all.view_refresh_required);
+    let overlay = service.primary_display_overlay().unwrap();
+    assert!(
+        overlay
+            .lines
+            .iter()
+            .any(|line| line.contains("all projects"))
+    );
+    assert!(
+        overlay
+            .lines
+            .iter()
+            .any(|line| line.contains("Cross-project issue"))
+    );
+
+    service
+        .apply_attached_terminal_step_plan(
+            &primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(b"a".to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+    let overlay = service.primary_display_overlay().unwrap();
+    assert!(
+        !overlay
+            .lines
+            .iter()
+            .any(|line| line.contains("Cross-project issue"))
+    );
 
     let report = service
         .apply_attached_terminal_step_plan(

@@ -87,6 +87,26 @@ impl RuntimeSessionService {
                 .apply_primary_record_browser_prompt_input(input)
                 .map(Some);
         }
+        if input == b"a" {
+            let source = record_browser.source.clone();
+            if let Some(source) = source {
+                let source = self.record_browser_source_toggled_scope(&source);
+                let browser = self.refresh_record_browser_overlay_source(&source)?;
+                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                    return Ok(Some(false));
+                };
+                let Some(record_browser) = overlay.record_browser.as_mut() else {
+                    return Ok(None);
+                };
+                record_browser.source = Some(source);
+                record_browser.browser = browser;
+                return Ok(Some(render_record_browser_overlay(
+                    overlay,
+                    &self.presentation.settings.ui_theme,
+                    display_width,
+                )));
+            }
+        }
         let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
             return Ok(Some(false));
         };

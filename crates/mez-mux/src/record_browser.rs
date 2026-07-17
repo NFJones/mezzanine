@@ -493,6 +493,11 @@ fn list_markdown(
         lines.push(format!("**Scope:** {scope_indicator}"));
         lines.push(String::new());
     }
+    lines.push(
+        "**Keys:** `a` all/default scope · `k` kind · `p` project · `x` text · `s` save"
+            .to_string(),
+    );
+    lines.push(String::new());
     if records.is_empty() {
         lines.push("No records found.".to_string());
     } else {
@@ -518,6 +523,8 @@ fn detail_markdown(record: &RecordBrowserRecord, scope_indicator: Option<&str>) 
         lines.push(format!("**Scope:** {scope_indicator}"));
         lines.push(String::new());
     }
+    lines.push("**Keys:** `a` all/default scope · `Esc` back · `s` save".to_string());
+    lines.push(String::new());
     lines.push(record.title.clone());
     lines.push(String::new());
     if !record.metadata.is_empty() {

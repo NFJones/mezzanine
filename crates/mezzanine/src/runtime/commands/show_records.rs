@@ -93,6 +93,9 @@ impl RuntimeSessionService {
             records.into_iter().map(issue_browser_record).collect(),
             issue_kind_filter_choices(),
         )?;
+        if let Some(source) = source.as_ref() {
+            set_record_browser_scope_indicator(&mut browser, source);
+        }
         if args.detail_id.is_some() {
             browser.show_first_record_detail();
         }
@@ -177,6 +180,9 @@ impl RuntimeSessionService {
             records.into_iter().map(memory_browser_record).collect(),
             memory_kind_filter_choices(),
         )?;
+        if let Some(source) = source.as_ref() {
+            set_record_browser_scope_indicator(&mut browser, source);
+        }
         if args.detail_id.is_some() {
             browser.show_first_record_detail();
         }
@@ -250,7 +256,7 @@ impl RuntimeSessionService {
                     text.clone(),
                     Some(*limit),
                 )?;
-                Ok(RecordBrowser::new(
+                let mut browser = RecordBrowser::new(
                     "Issues",
                     store
                         .query_issue_browser(&query)?
@@ -258,7 +264,9 @@ impl RuntimeSessionService {
                         .map(issue_browser_record)
                         .collect(),
                     issue_kind_filter_choices(),
-                )?)
+                )?;
+                set_record_browser_scope_indicator(&mut browser, source);
+                Ok(browser)
             }
             RuntimeRecordBrowserOverlaySource::Memories {
                 scope,
@@ -279,7 +287,7 @@ impl RuntimeSessionService {
                 };
                 let store =
                     crate::storage::memory::PersistentMemoryStore::under_config_root(&config_root);
-                Ok(RecordBrowser::new(
+                let mut browser = RecordBrowser::new(
                     "Memories",
                     store
                         .search(&MemorySearchRequest {
@@ -294,8 +302,57 @@ impl RuntimeSessionService {
                         .map(|result| memory_browser_record(result.record))
                         .collect(),
                     memory_kind_filter_choices(),
-                )?)
+                )?;
+                set_record_browser_scope_indicator(&mut browser, source);
+                Ok(browser)
             }
+        }
+    }
+
+    /// Toggles a retained record browser between its default and global scope.
+    pub(crate) fn record_browser_source_toggled_scope(
+        &self,
+        source: &RuntimeRecordBrowserOverlaySource,
+    ) -> RuntimeRecordBrowserOverlaySource {
+        match source {
+            RuntimeRecordBrowserOverlaySource::Issues {
+                project_glob,
+                default_project_glob,
+                kind,
+                state,
+                text,
+                limit,
+            } => RuntimeRecordBrowserOverlaySource::Issues {
+                project_glob: if project_glob.is_some() {
+                    None
+                } else {
+                    default_project_glob.clone()
+                },
+                default_project_glob: default_project_glob.clone(),
+                kind: *kind,
+                state: *state,
+                text: text.clone(),
+                limit: *limit,
+            },
+            RuntimeRecordBrowserOverlaySource::Memories {
+                scope,
+                default_scope,
+                kind,
+                state,
+                text,
+                limit,
+            } => RuntimeRecordBrowserOverlaySource::Memories {
+                scope: if scope.is_some() {
+                    None
+                } else {
+                    default_scope.clone()
+                },
+                default_scope: default_scope.clone(),
+                kind: *kind,
+                state: *state,
+                text: text.clone(),
+                limit: *limit,
+            },
         }
     }
 
@@ -388,6 +445,23 @@ impl RuntimeSessionService {
         fs::write(&destination, markdown)?;
         Ok(destination)
     }
+}
+
+/// Applies the retained backend scope as visible record-browser context.
+fn set_record_browser_scope_indicator(
+    browser: &mut RecordBrowser,
+    source: &RuntimeRecordBrowserOverlaySource,
+) {
+    let indicator = match source {
+        RuntimeRecordBrowserOverlaySource::Issues { project_glob, .. } => project_glob
+            .clone()
+            .unwrap_or_else(|| "all projects".to_string()),
+        RuntimeRecordBrowserOverlaySource::Memories { scope, .. } => scope
+            .as_ref()
+            .map(runtime_remember_scope_display)
+            .unwrap_or_else(|| "all scopes".to_string()),
+    };
+    browser.set_scope_indicator(Some(indicator));
 }
 
 #[derive(Debug, Default)]
