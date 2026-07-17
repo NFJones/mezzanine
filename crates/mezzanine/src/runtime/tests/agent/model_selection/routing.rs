@@ -714,10 +714,25 @@ reasoning_profile = "high"
         .expect("managed worker turn should remain recorded");
     let exact_worker_result = "Implemented the routed fix and verified its regression test.";
     let worker_progress = "Still running the routed regression test.";
-    let _worker_context = service
+    service
         .agent_turn_contexts_mut()
-        .remove(&worker_turn.turn_id)
-        .expect("managed worker context should be available before the failure injection");
+        .get_mut(&worker_turn.turn_id)
+        .expect("managed worker context should be available before completion")
+        .blocks
+        .extend([
+            mez_agent::ContextBlock {
+                source: ContextSourceKind::TranscriptAssistant,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "live routed worker assistant context".to_string(),
+                content: "live assistant sentinel must reach the routed handoff".to_string(),
+            },
+            mez_agent::ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::EphemeralTail,
+                label: "live routed worker action result".to_string(),
+                content: "live action-result sentinel must reach the routed handoff".to_string(),
+            },
+        ]);
     assert!(
         service
             .handle_routed_child_execution_result(
@@ -754,6 +769,14 @@ reasoning_profile = "high"
         .agent_turn_contexts()
         .get(handoff_turn_id)
         .expect("handoff context should be recorded");
+    assert!(handoff_context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::TranscriptAssistant
+            && block.content == "live assistant sentinel must reach the routed handoff"
+    }));
+    assert!(handoff_context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::ActionResult
+            && block.content == "live action-result sentinel must reach the routed handoff"
+    }));
     assert!(handoff_context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::RoutedHandoff
             && block.label == "routed worker exact final result"

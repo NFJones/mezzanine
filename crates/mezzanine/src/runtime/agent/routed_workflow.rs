@@ -351,10 +351,15 @@ impl RuntimeSessionService {
                     return Ok(true);
                 }
                 let Some(mut handoff_context) = self
-                    .agent
-                    .routed_child_contexts_by_parent_turn
-                    .get(&parent_turn_id)
+                    .agent_turn_contexts()
+                    .get(&turn.turn_id)
                     .cloned()
+                    .or_else(|| {
+                        self.agent
+                            .routed_child_contexts_by_parent_turn
+                            .get(&parent_turn_id)
+                            .cloned()
+                    })
                 else {
                     self.ready_routed_parent_for_error_explanation(
                         &parent_turn,
