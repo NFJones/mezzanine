@@ -1079,11 +1079,13 @@ fn openai_replays_current_turn_read_results_without_synthetic_ledger() {
 }
 
 #[test]
-/// Verifies injected MCP integration context stays out of the OpenAI stable prefix.
+/// Verifies injected MCP integration context stays out of OpenAI instructions
+/// and the stable input prefix.
 ///
 /// Explicit `@server` MCP metadata is turn-volatile prompt context. Keeping it
-/// outside provider cache-prefix material prevents one injected server catalog
-/// from influencing later turns that did not invoke that server.
+/// in deterministic late developer input prevents one injected server catalog
+/// from invalidating invariant instructions or influencing later turns that did
+/// not invoke that server.
 fn openai_stable_prefix_excludes_injected_mcp_integration_context() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
@@ -1118,11 +1120,36 @@ fn openai_stable_prefix_excludes_injected_mcp_integration_context() {
     ])
     .unwrap();
 
+    let ordinary_context = AgentContext::new(
+        context
+            .blocks
+            .iter()
+            .filter(|block| block.label != "mcp integrations")
+            .cloned()
+            .collect(),
+    )
+    .unwrap();
+    let ordinary_request = assemble_model_request(&profile, &turn(), &ordinary_context).unwrap();
     let request = assemble_model_request(&profile, &turn(), &context).unwrap();
-    let (_, stable_input) = openai_test_stable_prefix_parts(&request);
+    let post_mcp_request = assemble_model_request(&profile, &turn(), &ordinary_context).unwrap();
+    let (ordinary_instructions, ordinary_stable_input) =
+        openai_test_stable_prefix_parts(&ordinary_request);
+    let (instructions, stable_input) = openai_test_stable_prefix_parts(&request);
+    let (post_mcp_instructions, post_mcp_stable_input) =
+        openai_test_stable_prefix_parts(&post_mcp_request);
     let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
     let stable_input_text = serde_json::to_string(&stable_input).unwrap();
+    let body: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&request).unwrap()).unwrap();
+    let ordinary_body: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&ordinary_request).unwrap()).unwrap();
+    let post_mcp_body: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&post_mcp_request).unwrap()).unwrap();
 
+    assert_eq!(ordinary_instructions, instructions);
+    assert_eq!(instructions, post_mcp_instructions);
+    assert_eq!(ordinary_stable_input, stable_input);
+    assert_eq!(stable_input, post_mcp_stable_input);
     assert!(
         !stable_input_text.contains("[mcp integrations]"),
         "{stable_input_text}"
@@ -1131,4 +1158,16 @@ fn openai_stable_prefix_excludes_injected_mcp_integration_context() {
     assert!(!stable_input.is_empty());
     assert!(diagnostics.stable_input_bytes > 2);
     assert!(diagnostics.volatile_input_bytes > 2);
+    assert!(body["input"].as_array().unwrap().iter().any(|message| {
+        message["role"] == "developer"
+            && message["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("[mcp integrations]"))
+    }));
+    assert!(
+        !ordinary_body["input"]
+            .to_string()
+            .contains("[mcp integrations]")
+    );
+    assert_eq!(ordinary_body["input"], post_mcp_body["input"]);
 }
