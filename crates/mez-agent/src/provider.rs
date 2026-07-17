@@ -156,10 +156,10 @@ fn openai_input_message_value(message: &ModelMessage) -> serde_json::Value {
 fn openai_user_input_text(message: &ModelMessage) -> String {
     match message.source {
         ContextSourceKind::Transcript | ContextSourceKind::TranscriptUser => {
-            openai_historical_user_prompt_entry_text(&message.content)
+            openai_historical_user_prompt_entry_text(openai_context_entry_body(&message.content))
         }
         ContextSourceKind::UserInstruction => {
-            openai_current_user_prompt_entry_text(&message.content)
+            openai_current_user_prompt_entry_text(openai_context_entry_body(&message.content))
         }
         _ => message.content.clone(),
     }
@@ -169,12 +169,25 @@ fn openai_user_input_text(message: &ModelMessage) -> String {
 fn openai_tool_result_input_text(message: &ModelMessage) -> String {
     match message.source {
         ContextSourceKind::ActionResult => {
-            openai_current_action_result_entry_text(&message.content)
+            openai_current_action_result_entry_text(openai_context_entry_body(&message.content))
         }
         ContextSourceKind::TranscriptTool => {
-            openai_historical_action_result_entry_text(&message.content)
+            openai_historical_action_result_entry_text(openai_context_entry_body(&message.content))
         }
         _ => openai_executed_result_entry_text(&message.content),
+    }
+}
+
+/// Removes the provider-neutral context label before applying the canonical
+/// OpenAI transcript wrapper.
+fn openai_context_entry_body(content: &str) -> &str {
+    let Some((header, body)) = content.split_once('\n') else {
+        return content;
+    };
+    if header.starts_with('[') && header.ends_with(']') {
+        body
+    } else {
+        content
     }
 }
 

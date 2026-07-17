@@ -87,6 +87,94 @@ fn openai_current_action_results_remain_volatile_suffix() {
 }
 
 #[test]
+/// Verifies user prompts and action results keep their exact OpenAI wire
+/// representation when current-turn context is promoted into transcript history.
+///
+/// OpenAI can reuse the conversational prefix only when promotion changes the
+/// local cache classification without changing provider-visible role, wrapper,
+/// content, or ordering. The late action-surface message remains an intentional
+/// volatile suffix, so the next request should first diverge after the promoted
+/// user and action-result entries rather than at either promoted entry.
+fn openai_promoted_conversation_entries_keep_complete_input_bytes() {
+    let profile = ModelProfile {
+        provider: "openai".to_string(),
+        model: "gpt-test".to_string(),
+        reasoning_profile: None,
+        latency_preference: None,
+        multimodal_required: false,
+        provider_options: std::collections::BTreeMap::new(),
+        safety_tier: None,
+    };
+    let first = assemble_model_request(
+        &profile,
+        &turn(),
+        &AgentContext::new(vec![
+            ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "inspect cache continuity".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                label: "action result".to_string(),
+                content: "action_id=action-1\noutput: continuity evidence".to_string(),
+            },
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+    let second = assemble_model_request(
+        &profile,
+        &turn(),
+        &AgentContext::new(vec![
+            ContextBlock {
+                source: ContextSourceKind::TranscriptUser,
+                label: "transcript user".to_string(),
+                content: "inspect cache continuity".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::TranscriptTool,
+                label: "transcript tool".to_string(),
+                content: "action_id=action-1\noutput: continuity evidence".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::TranscriptAssistant,
+                label: "transcript assistant".to_string(),
+                content: "the prior evidence is complete".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                label: "user".to_string(),
+                content: "continue".to_string(),
+            },
+        ])
+        .unwrap(),
+    )
+    .unwrap();
+
+    let first_body: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&first).unwrap()).unwrap();
+    let second_body: serde_json::Value =
+        serde_json::from_str(&openai_responses_request_body(&second).unwrap()).unwrap();
+    let first_input = first_body["input"].as_array().unwrap();
+    let second_input = second_body["input"].as_array().unwrap();
+
+    assert_eq!(first_input[0], second_input[0]);
+    assert_eq!(first_input[1], second_input[1]);
+
+    let first_diagnostics = openai_prompt_cache_diagnostics_for_request(&first).unwrap();
+    let second_diagnostics = openai_prompt_cache_diagnostics_for_request(&second).unwrap();
+    let continuity = mez_agent::compare_openai_request_continuity(
+        &first_diagnostics.continuity_snapshot,
+        &second_diagnostics.continuity_snapshot,
+    );
+    assert_eq!(continuity.category, "messages");
+    assert_eq!(continuity.message_index, Some(2));
+    assert_eq!(continuity.common_message_prefix, 2);
+    assert!(!continuity.messages_append_only);
+}
+
+#[test]
 /// Verifies volatile controller state remains out of OpenAI `instructions` and
 /// out of the stable input prefix.
 ///

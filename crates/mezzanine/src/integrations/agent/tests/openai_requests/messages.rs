@@ -334,7 +334,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
         value["input"][1]["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("[user]")
+            .contains("[user prompt transcript entry]")
     );
     assert_eq!(value["input"][2]["role"], "developer");
     let allowed_surface = value["input"][2]["content"][0]["text"].as_str().unwrap();
