@@ -1,6 +1,106 @@
 //! Runtime tests for agent model_selection routing behavior.
 
 use super::*;
+use crate::runtime::RuntimeRoutedWorkerSelection;
+
+/// Verifies routed selection setup failure is contained after classification.
+///
+/// A missing active prompt deterministically fails before worker creation. The
+/// runtime must retain one bounded main-model explanation, avoid child state,
+/// and treat replay of the consumed classifier event as an idempotent no-op.
+#[test]
+fn runtime_routed_selection_setup_failure_recovers_once() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.set_pane_screen("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let prompt = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"routed-setup-failure","method":"agent/shell/command","params":{"idempotency_key":"routed-setup-failure","input":"implement this"}}"#,
+        &primary,
+    );
+    assert!(prompt.contains(r#""state":"running""#), "{prompt}");
+    let parent_profile = service
+        .agent_turn_model_profile("turn-1")
+        .expect("parent profile should exist")
+        .clone();
+    service
+        .agent_turn_contexts_mut()
+        .get_mut("turn-1")
+        .expect("parent context should exist")
+        .blocks
+        .retain(|block| {
+            block.source != ContextSourceKind::UserInstruction || block.label != "user prompt"
+        });
+    let selection = RuntimeRoutedWorkerSelection {
+        worker_profile: parent_profile,
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        decision_summary: Some("large/high".to_string()),
+        fallback: None,
+    };
+    let parent_agent = AgentId::opaque("agent-%1").unwrap();
+
+    service
+        .apply_routed_worker_selected_transition(&parent_agent, "turn-1", selection.clone())
+        .unwrap();
+
+    let workflow = service
+        .routed_workflow_for_tests("turn-1")
+        .expect("setup failure should retain recovery state");
+    assert_eq!(
+        workflow.phase,
+        mez_agent::routed_workflow::RoutedWorkflowPhase::ReadyForErrorExplanation
+    );
+    assert!(workflow.error_explanation_attempted);
+    assert!(workflow.child_turn_id.is_none());
+    assert_eq!(service.pending_agent_provider_tasks().len(), 1);
+    assert!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .all(|turn| turn.parent_turn_id.as_deref() != Some("turn-1"))
+    );
+    let diagnostic_count = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .expect("parent context should remain available")
+        .blocks
+        .iter()
+        .filter(|block| {
+            block.label == "routed workflow failure"
+                && block
+                    .content
+                    .contains("routed parent prompt is unavailable")
+        })
+        .count();
+    assert_eq!(diagnostic_count, 1);
+
+    service
+        .apply_routed_worker_selected_transition(&parent_agent, "turn-1", selection)
+        .unwrap();
+    assert_eq!(service.pending_agent_provider_tasks().len(), 1);
+    let replay_diagnostic_count = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .expect("parent context should remain available")
+        .blocks
+        .iter()
+        .filter(|block| {
+            block.label == "routed workflow failure"
+                && block
+                    .content
+                    .contains("routed parent prompt is unavailable")
+        })
+        .count();
+    assert_eq!(replay_diagnostic_count, 1);
+}
 
 /// Verifies routed child cancellation resumes the parent exactly once and
 /// routed parent cancellation terminates its active managed child.

@@ -160,6 +160,13 @@ impl RuntimeSessionService {
         if turn.state != mez_agent::AgentTurnState::Running {
             return Ok(crate::runtime::RuntimeTransition::default());
         }
+        if self
+            .agent
+            .routed_workflows_by_parent_turn
+            .contains_key(turn_id)
+        {
+            return Ok(crate::runtime::RuntimeTransition::default());
+        }
         match self.commit_routed_worker_selected_transition(agent_id, turn_id, selection) {
             Ok(transition) => Ok(transition),
             Err(error) => {
