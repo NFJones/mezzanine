@@ -172,39 +172,19 @@ impl TerminalScreen {
         self.resize_grid_preserving_cells(size);
     }
 
-    /// Resizes the live alternate screen while preserving its top-left grid.
+    /// Resizes the live alternate screen to a blank application-owned grid.
     ///
     /// Full-screen alternate-buffer applications own their viewport and redraw
-    /// against pane coordinates. Resizes therefore keep row zero and column zero
-    /// anchored instead of applying normal-screen bottom-preservation or history
-    /// reflow heuristics.
+    /// after `SIGWINCH`. Clearing copied pre-resize cells prevents attached
+    /// clients from replaying stale full-screen content while retaining cursor
+    /// and saved-cursor coordinates within the new bounds.
     pub(super) fn resize_alternate_screen(&mut self, size: Size) {
-        let old_rows = self.cells.len();
         let new_rows = usize::from(size.rows);
-        let mut cells = blank_cells(size);
-        let mut renditions = blank_renditions(size, GraphicRendition::default());
-        let mut line_wraps = vec![false; new_rows];
-        let mut line_copy_texts = vec![None; new_rows];
-        let rows = old_rows.min(cells.len());
-        let columns = self
-            .cells
-            .first()
-            .map(Vec::len)
-            .unwrap_or_default()
-            .min(cells.first().map(Vec::len).unwrap_or_default());
-        for (row_index, row) in cells.iter_mut().enumerate().take(rows) {
-            row[..columns].clone_from_slice(&self.cells[row_index][..columns]);
-            renditions[row_index][..columns]
-                .copy_from_slice(&self.renditions[row_index][..columns]);
-            line_wraps[row_index] = self.line_wraps.get(row_index).copied().unwrap_or(false);
-            line_copy_texts[row_index] = self.line_copy_texts.get(row_index).cloned().flatten();
-        }
-
         self.size = size;
-        self.cells = cells;
-        self.renditions = renditions;
-        self.line_wraps = line_wraps;
-        self.line_copy_texts = line_copy_texts;
+        self.cells = blank_cells(size);
+        self.renditions = blank_renditions(size, GraphicRendition::default());
+        self.line_wraps = vec![false; new_rows];
+        self.line_copy_texts = vec![None; new_rows];
         let max_row = self.max_row();
         let max_column = self.max_column();
         self.cursor.row = self.cursor.row.min(max_row);

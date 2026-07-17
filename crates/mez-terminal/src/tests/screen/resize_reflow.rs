@@ -5,13 +5,14 @@ use crate::{
     terminal_text_width,
 };
 
-/// Verifies alternate-screen resize keeps the live grid top-left anchored.
+/// Verifies alternate-screen resize clears copied application content.
 ///
-/// Normal-screen row shrink can preserve the bottom of overflowing content, but
-/// alternate-screen applications own absolute viewport rows. Shrinking an
-/// active alternate buffer must keep row zero visible and clip the bottom.
+/// Full-screen applications redraw after `SIGWINCH`; retaining their old grid
+/// would make the attached renderer replay stale top-of-buffer content before
+/// that redraw arrives. The resized grid must therefore be blank while normal
+/// history remains untouched.
 #[test]
-fn terminal_screen_alternate_resize_keeps_top_left_anchor() {
+fn terminal_screen_alternate_resize_clears_pre_resize_content() {
     let mut screen = TerminalScreen::new(Size::new(6, 4).unwrap(), 10).unwrap();
 
     screen.feed(b"\x1b[?1049hrow0\r\nrow1\r\nrow2\r\nrow3");
@@ -19,10 +20,7 @@ fn terminal_screen_alternate_resize_keeps_top_left_anchor() {
 
     assert!(screen.alternate_screen_active());
     assert_eq!(screen.size(), Size::new(6, 2).unwrap());
-    assert_eq!(
-        screen.visible_lines(),
-        vec!["row0".to_string(), "row1".to_string()]
-    );
+    assert_eq!(screen.visible_lines(), vec!["".to_string(), "".to_string()]);
     assert!(screen.history().is_empty());
 }
 
