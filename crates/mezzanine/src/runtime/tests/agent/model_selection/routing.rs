@@ -611,6 +611,66 @@ reasoning_profile = "high"
             terminal_state: AgentTurnState::Completed,
         }
     };
+    let completed_progress_and_final_execution =
+        |turn: &mez_agent::AgentTurnRecord, progress: &str, final_text: &str| {
+            let progress_action = mez_agent::AgentAction {
+                id: format!("progress-{}", turn.turn_id),
+                rationale: "report routed progress".to_string(),
+                payload: mez_agent::AgentActionPayload::Say {
+                    status: mez_agent::SayStatus::Progress,
+                    text: progress.to_string(),
+                    content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+                },
+            };
+            let final_action = mez_agent::AgentAction {
+                id: format!("final-{}", turn.turn_id),
+                rationale: "return the routed result".to_string(),
+                payload: mez_agent::AgentActionPayload::Say {
+                    status: mez_agent::SayStatus::Final,
+                    text: final_text.to_string(),
+                    content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+                },
+            };
+            mez_agent::AgentTurnExecution {
+                request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+                response: mez_agent::ModelResponse {
+                    provider: "runtime-batch".to_string(),
+                    model: "test".to_string(),
+                    raw_text: "completed routed response".to_string(),
+                    usage: Default::default(),
+                    latest_request_usage: None,
+                    quota_usage: Default::default(),
+                    action_batch: Some(mez_agent::MaapBatch {
+                        protocol: "maap/1".to_string(),
+                        rationale: "report progress and the final routed result".to_string(),
+                        thought: None,
+                        turn_id: turn.turn_id.clone(),
+                        agent_id: turn.agent_id.clone(),
+                        actions: vec![progress_action.clone(), final_action.clone()],
+                        final_turn: true,
+                    }),
+                    provider_transcript_events: Vec::new(),
+                },
+                latest_response_usage: Default::default(),
+                routing_token_usage_by_model: std::collections::BTreeMap::new(),
+                action_results: vec![
+                    mez_agent::ActionResult::succeeded(
+                        turn,
+                        &progress_action,
+                        vec![progress.to_string()],
+                        None,
+                    ),
+                    mez_agent::ActionResult::succeeded(
+                        turn,
+                        &final_action,
+                        vec![final_text.to_string()],
+                        None,
+                    ),
+                ],
+                final_turn: true,
+                terminal_state: AgentTurnState::Completed,
+            }
+        };
     let worker_turn = service
         .agent_turn_ledger()
         .turns()
@@ -619,6 +679,7 @@ reasoning_profile = "high"
         .cloned()
         .expect("managed worker turn should remain recorded");
     let exact_worker_result = "Implemented the routed fix and verified its regression test.";
+    let worker_progress = "Still running the routed regression test.";
     let _worker_context = service
         .agent_turn_contexts_mut()
         .remove(&worker_turn.turn_id)
@@ -627,7 +688,11 @@ reasoning_profile = "high"
         service
             .handle_routed_child_execution_result(
                 &worker_turn,
-                &completed_say_execution(&worker_turn, exact_worker_result),
+                &completed_progress_and_final_execution(
+                    &worker_turn,
+                    worker_progress,
+                    exact_worker_result,
+                ),
             )
             .unwrap()
     );
@@ -642,6 +707,10 @@ reasoning_profile = "high"
     assert_eq!(
         workflow.worker_final_result.as_deref(),
         Some(exact_worker_result)
+    );
+    assert_ne!(
+        workflow.worker_final_result.as_deref(),
+        Some(worker_progress)
     );
     let handoff_turn_id = workflow
         .child_turn_id

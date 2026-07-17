@@ -22,6 +22,47 @@ const ROUTED_HANDOFF_PROMPT: &str = r#"Return all context needed for the main mo
 
 const ROUTED_HANDOFF_REPAIR_PROMPT: &str = r#"Your previous handoff was invalid. Emit one final MAAP say action whose text is exactly one valid JSON object with version 1 and string-array fields decisions, evidence, changes, validation, assumptions, unresolved_risks, and follow_up_context, plus string result_summary. Do not use Markdown fences or call tools."#;
 
+/// Selects the authoritative terminal output for one routed child execution.
+///
+/// Successful routed turns prefer the last executed final `say` action from
+/// the retained MAAP batch. Failed, interrupted, or malformed turns retain the
+/// generic subagent formatter so bounded action and provider diagnostics are
+/// still available to the parent recovery path.
+fn routed_child_output_for_execution(execution: &AgentTurnExecution) -> String {
+    if execution.terminal_state == AgentTurnState::Completed
+        && let Some(batch) = execution.response.action_batch.as_ref()
+    {
+        for action in batch.actions.iter().rev() {
+            if !matches!(
+                action.payload,
+                mez_agent::AgentActionPayload::Say {
+                    status: mez_agent::SayStatus::Final,
+                    ..
+                }
+            ) {
+                continue;
+            }
+            let Some(result) = execution.action_results.iter().find(|result| {
+                result.action_id == action.id
+                    && result.status == mez_agent::ActionStatus::Succeeded
+                    && result.error.is_none()
+            }) else {
+                continue;
+            };
+            let output = result
+                .content_texts()
+                .into_iter()
+                .filter(|text| !text.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !output.is_empty() {
+                return output;
+            }
+        }
+    }
+    subagent_task_output_for_execution(execution)
+}
+
 /// Inputs for one runtime-owned child turn in a routed workflow.
 struct RoutedChildTurnRequest<'a> {
     parent_turn: &'a AgentTurnRecord,
@@ -246,7 +287,7 @@ impl RuntimeSessionService {
             .strip_prefix("agent-")
             .ok_or_else(|| MezError::invalid_state("routed child agent id is invalid"))?
             .to_string();
-        let output = subagent_task_output_for_execution(execution);
+        let output = routed_child_output_for_execution(execution);
 
         match state.phase {
             RoutedWorkflowPhase::WaitingForWorkerResult => {
