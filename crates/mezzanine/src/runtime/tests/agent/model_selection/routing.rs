@@ -339,6 +339,165 @@ fn runtime_routed_loop_transfers_work_turn_ownership_to_selected_worker() {
     assert_eq!(state.routed_worker_profile.as_ref(), Some(&parent_profile));
 }
 
+/// Verifies a routed `/loop` keeps its parent blocked after patch work and
+/// reuses the selected worker for the next iteration before queueing one
+/// terminal handoff.
+#[test]
+fn runtime_routed_loop_continues_in_one_worker_before_terminal_handoff() {
+    let mut service = test_runtime_service();
+    let _primary = service
+        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
+        .unwrap();
+    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
+    screen.feed(b"ready\n");
+    service.set_pane_screen("%1".to_string(), screen);
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .execute_agent_shell_loop_command("%1", "/loop implement routed iterations")
+        .unwrap();
+
+    let parent_turn_id = service
+        .agent_loop_turns_for_tests()
+        .iter()
+        .find(|(_, loop_turn)| loop_turn.pane_id == "%1")
+        .map(|(turn_id, _)| turn_id.clone())
+        .expect("loop command should create a parent-owned work turn");
+    let parent_profile = service
+        .agent_turn_model_profile(&parent_turn_id)
+        .expect("parent profile should exist")
+        .clone();
+    service
+        .apply_routed_worker_selected_transition(
+            &AgentId::opaque("agent-%1").unwrap(),
+            &parent_turn_id,
+            RuntimeRoutedWorkerSelection {
+                worker_profile: parent_profile,
+                routing_token_usage_by_model: std::collections::BTreeMap::new(),
+                decision_summary: None,
+                fallback: None,
+            },
+        )
+        .unwrap();
+
+    let first_worker_turn_id = service
+        .routed_workflow_for_tests(&parent_turn_id)
+        .expect("routed workflow should exist")
+        .child_turn_id
+        .clone()
+        .expect("selected worker should have a work turn");
+    let first_worker_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == first_worker_turn_id)
+        .cloned()
+        .expect("selected worker turn should exist");
+    let patch_action = mez_agent::AgentAction {
+        id: "patch-1".to_string(),
+        rationale: "make the requested change".to_string(),
+        payload: mez_agent::AgentActionPayload::ApplyPatch {
+            patch: "*** Begin Patch\n*** End Patch".to_string(),
+            strip: None,
+        },
+    };
+    let patched_execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&first_worker_turn_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: String::new(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "test routed patch iteration".to_string(),
+                thought: None,
+                turn_id: first_worker_turn_id.clone(),
+                agent_id: first_worker_turn.agent_id.clone(),
+                actions: vec![patch_action.clone()],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::succeeded(
+            &first_worker_turn,
+            &patch_action,
+            vec!["patch applied".to_string()],
+            None,
+        )],
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+    service
+        .emit_subagent_task_result_for_execution(&first_worker_turn, &patched_execution)
+        .unwrap();
+
+    let second_worker_turn_id = service
+        .routed_workflow_for_tests(&parent_turn_id)
+        .expect("routed workflow should remain active after patch work")
+        .child_turn_id
+        .clone()
+        .expect("continued loop should queue a second worker turn");
+    assert_ne!(second_worker_turn_id, first_worker_turn_id);
+    assert_eq!(
+        service
+            .routed_workflow_for_tests(&parent_turn_id)
+            .expect("routed workflow should remain active")
+            .phase,
+        mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForWorkerResult
+    );
+
+    let second_worker_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == second_worker_turn_id)
+        .cloned()
+        .expect("continued worker turn should exist");
+    let patch_free_execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&second_worker_turn_id),
+        response: mez_agent::ModelResponse {
+            provider: "runtime-batch".to_string(),
+            model: "test".to_string(),
+            raw_text: "completed work".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Default::default(),
+            action_batch: Some(runtime_complete_batch_for(
+                second_worker_turn_id.clone(),
+                second_worker_turn.agent_id.clone(),
+            )),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: Vec::new(),
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+    service
+        .emit_subagent_task_result_for_execution(&second_worker_turn, &patch_free_execution)
+        .unwrap();
+
+    let workflow = service
+        .routed_workflow_for_tests(&parent_turn_id)
+        .expect("patch-free iteration should queue a terminal handoff");
+    assert_eq!(
+        workflow.phase,
+        mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForHandoff
+    );
+    assert_ne!(
+        workflow.child_turn_id.as_deref(),
+        Some(second_worker_turn_id.as_str())
+    );
+}
+
 /// Verifies routed selection recovery terminates cleanly without parent context.
 ///
 /// Losing the complete parent context makes a model-authored explanation
