@@ -220,6 +220,7 @@ pub(in crate::control) fn dispatch_agent_task_list_with_ledger(
     request: &JsonRpcRequest,
     session: &Session,
     turn_ledger: &AgentTurnLedger,
+    approval_ids_by_turn: Option<&BTreeMap<String, Vec<String>>>,
 ) -> Result<String> {
     let filter = AgentTaskListFilter::from_params(session, request.params.as_deref())?;
     let tasks = turn_ledger
@@ -235,7 +236,15 @@ pub(in crate::control) fn dispatch_agent_task_list_with_ledger(
                     .as_deref()
                     .is_none_or(|pane_id| turn.pane_id == pane_id)
         })
-        .map(agent_task_state_json)
+        .map(|turn| {
+            agent_task_state_json(
+                turn,
+                approval_ids_by_turn
+                    .and_then(|approval_ids| approval_ids.get(&turn.turn_id))
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+            )
+        })
         .collect::<Vec<_>>();
     Ok(format!(r#"{{"tasks":[{}]}}"#, tasks.join(",")))
 }
@@ -475,18 +484,26 @@ pub(in crate::control) fn agent_state_json_with_shell_session_and_model_profile(
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::control) fn agent_task_state_json(turn: &mez_agent::AgentTurnRecord) -> String {
+pub(in crate::control) fn agent_task_state_json(
+    turn: &mez_agent::AgentTurnRecord,
+    approval_ids: &[String],
+) -> String {
     let time = unix_seconds_to_rfc3339(turn.started_at_unix_seconds);
+    let approval_ids = approval_ids
+        .iter()
+        .map(|approval_id| format!(r#""{}""#, json_escape(approval_id)))
+        .collect::<Vec<_>>()
+        .join(",");
     let result_summary = if turn.state == AgentTurnState::Interrupted {
         r#""interrupted by snapshot resume; explicit user confirmation is required before retrying non-idempotent actions""#.to_string()
     } else {
         "null".to_string()
     };
     format!(
-        r#"{{"id":"{}","version":1,"agent_id":"{}","state":"{}","created_at":"{}","started_at":"{}","finished_at":{},"prompt_preview":"{}","approval_ids":[],"result_summary":{},"pane_id":"{}","policy_profile":"{}","model_profile":"{}"}}"#,
+        r#"{{"id":"{}","version":1,"agent_id":"{}","state":"{}","created_at":"{}","started_at":"{}","finished_at":{},"prompt_preview":"{}","approval_ids":[{}],"result_summary":{},"pane_id":"{}","policy_profile":"{}","model_profile":"{}"}}"#,
         json_escape(&turn.turn_id),
         json_escape(&turn.agent_id),
-        agent_turn_state_name(turn.state),
+        agent_turn_state_name(turn.state, !approval_ids.is_empty()),
         json_escape(&time),
         json_escape(&time),
         if matches!(turn.state, AgentTurnState::Running | AgentTurnState::Queued) {
@@ -495,6 +512,7 @@ pub(in crate::control) fn agent_task_state_json(turn: &mez_agent::AgentTurnRecor
             format!(r#""{}""#, json_escape(&time))
         },
         json_escape(agent_turn_trigger_name(turn.trigger)),
+        approval_ids,
         result_summary,
         json_escape(&turn.pane_id),
         json_escape(&turn.policy_profile),
@@ -507,11 +525,15 @@ pub(in crate::control) fn agent_task_state_json(turn: &mez_agent::AgentTurnRecor
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(in crate::control) fn agent_turn_state_name(state: AgentTurnState) -> &'static str {
+pub(in crate::control) fn agent_turn_state_name(
+    state: AgentTurnState,
+    waiting_for_approval: bool,
+) -> &'static str {
     match state {
         AgentTurnState::Queued => "queued",
         AgentTurnState::Running => "running",
-        AgentTurnState::Blocked => "waiting_approval",
+        AgentTurnState::Blocked if waiting_for_approval => "waiting_approval",
+        AgentTurnState::Blocked => "waiting",
         AgentTurnState::Completed => "completed",
         AgentTurnState::Failed => "failed",
         AgentTurnState::Interrupted => "interrupted",

@@ -546,6 +546,18 @@ reasoning_profile = "high"
         Some(mez_agent::AgentTurnState::Blocked)
     );
     drop(requests);
+    let waiting_tasks = service.dispatch_runtime_control_body(
+        r#"{"jsonrpc":"2.0","id":"routed-worker-wait","method":"agent/task/list","params":{"target":{"agent_id":"agent-%1"}}}"#,
+        &primary,
+    );
+    assert!(
+        waiting_tasks.contains(r#""state":"waiting""#),
+        "{waiting_tasks}"
+    );
+    assert!(
+        waiting_tasks.contains(r#""approval_ids":[]"#),
+        "{waiting_tasks}"
+    );
     let status = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"auto-sizing-token-status","method":"agent/shell/command","params":{"idempotency_key":"auto-sizing-token-status","input":"/status"}}"#,
         &primary,

@@ -54,18 +54,18 @@ pub use connection::{
     ControlConnectionState, dispatch_control_request_cached,
     dispatch_control_request_for_connection,
 };
-#[cfg(test)]
 pub use entry::{
-    dispatch_control_request, dispatch_control_request_for_client,
-    dispatch_control_request_for_client_with_events, dispatch_control_request_with_snapshots,
-};
-pub use entry::{
-    dispatch_control_request_for_client_with_agent_state,
+    AgentStateProjection, dispatch_control_request_for_client_with_agent_state,
     dispatch_control_request_for_client_with_agent_state_and_model_profiles,
     dispatch_control_request_for_client_with_config,
     dispatch_control_request_for_client_with_config_and_audit,
     dispatch_control_request_for_client_with_snapshot_context,
     dispatch_control_request_with_approvals, dispatch_control_request_with_approvals_and_audit,
     dispatch_control_request_with_captures, dispatch_control_request_with_mcp,
+};
+#[cfg(test)]
+pub use entry::{
+    dispatch_control_request, dispatch_control_request_for_client,
+    dispatch_control_request_for_client_with_events, dispatch_control_request_with_snapshots,
 };
 pub(crate) use schema_validation::validate_control_method_params_schema;

@@ -61,6 +61,7 @@ use super::{
     source_pane_target_checked_resolved, validate_config_text, window_target_checked_resolved,
 };
 use crate::config::compose_effective_config;
+use crate::control::AgentStateProjection;
 use crate::control::{
     ControlPersistTarget, authorize_control_request, config_audit_outcome, config_audit_plan,
     config_mutation_plan_result_json, config_mutation_value_from_json, config_request_cache_key,
@@ -609,7 +610,7 @@ impl RuntimeSessionService {
                     None,
                     agent_shell_store,
                     agent_turn_ledger,
-                    Some(&model_profiles_by_pane),
+                    AgentStateProjection::new(Some(&model_profiles_by_pane), None),
                 );
             }
             if matches!(
@@ -623,14 +624,16 @@ impl RuntimeSessionService {
                 );
             }
             if agent_state_control_method(&request.method) {
+                let approval_ids_by_turn = self.blocked_agent_approval_ids_by_turn();
                 let (agent_shell_store, agent_turn_ledger) = self.agent.control_turn_state();
-                return dispatch_control_request_for_client_with_agent_state(
+                return dispatch_control_request_for_client_with_agent_state_and_model_profiles(
                     body,
                     &mut self.session,
                     primary_client_id,
                     None,
                     agent_shell_store,
                     agent_turn_ledger,
+                    AgentStateProjection::new(None, Some(&approval_ids_by_turn)),
                 );
             }
             if request.method.starts_with("config/") {
@@ -1042,7 +1045,7 @@ impl RuntimeSessionService {
                         None,
                         agent_shell_store,
                         agent_turn_ledger,
-                        Some(&model_profiles_by_pane),
+                        AgentStateProjection::new(Some(&model_profiles_by_pane), None),
                     );
                 }
                 if matches!(
@@ -1055,14 +1058,16 @@ impl RuntimeSessionService {
                         &caller_client_id,
                     );
                 }
+                let approval_ids_by_turn = self.blocked_agent_approval_ids_by_turn();
                 let (agent_shell_store, agent_turn_ledger) = self.agent.control_turn_state();
-                return dispatch_control_request_for_client_with_agent_state(
+                return dispatch_control_request_for_client_with_agent_state_and_model_profiles(
                     body,
                     &mut self.session,
                     &caller_client_id,
                     None,
                     agent_shell_store,
                     agent_turn_ledger,
+                    AgentStateProjection::new(None, Some(&approval_ids_by_turn)),
                 );
             }
             if request.method.starts_with("config/") {

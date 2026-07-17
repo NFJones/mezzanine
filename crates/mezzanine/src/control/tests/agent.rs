@@ -1,6 +1,9 @@
 //! Control agent tests.
 
 use super::*;
+use crate::control::{
+    AgentStateProjection, dispatch_control_request_for_client_with_agent_state_and_model_profiles,
+};
 
 /// Verifies dispatches agent read and shell visibility methods.
 ///
@@ -586,6 +589,46 @@ fn agent_state_dispatch_persists_visibility_and_lists_turns() {
     assert!(
         tasks.contains(r#""prompt_preview":"user prompt""#),
         "{tasks}"
+    );
+
+    ledger
+        .finish_turn("turn-1", AgentTurnState::Blocked)
+        .unwrap();
+    let waiting_tasks = dispatch_control_request_for_client_with_agent_state(
+        r#"{"jsonrpc":"2.0","id":34,"method":"agent/task/list","params":{"target":{"agent_id":"agent-%1"}}}"#,
+        &mut session,
+        &primary,
+        None,
+        &mut store,
+        &ledger,
+    );
+    assert!(
+        waiting_tasks.contains(r#""state":"waiting""#),
+        "{waiting_tasks}"
+    );
+    assert!(
+        waiting_tasks.contains(r#""approval_ids":[]"#),
+        "{waiting_tasks}"
+    );
+
+    let approval_ids_by_turn =
+        std::collections::BTreeMap::from([("turn-1".to_string(), vec!["approval-1".to_string()])]);
+    let approval_tasks = dispatch_control_request_for_client_with_agent_state_and_model_profiles(
+        r#"{"jsonrpc":"2.0","id":35,"method":"agent/task/list","params":{"target":{"agent_id":"agent-%1"}}}"#,
+        &mut session,
+        &primary,
+        None,
+        &mut store,
+        &ledger,
+        AgentStateProjection::new(None, Some(&approval_ids_by_turn)),
+    );
+    assert!(
+        approval_tasks.contains(r#""state":"waiting_approval""#),
+        "{approval_tasks}"
+    );
+    assert!(
+        approval_tasks.contains(r#""approval_ids":["approval-1"]"#),
+        "{approval_tasks}"
     );
 
     let session_tasks = dispatch_control_request_for_client_with_agent_state(

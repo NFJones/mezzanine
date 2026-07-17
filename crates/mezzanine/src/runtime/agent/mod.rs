@@ -501,14 +501,6 @@ impl RuntimeSessionService {
             .insert(child_turn_id.into(), dependency);
     }
 
-    /// Reports whether a blocked parent has any joined child work.
-    pub(crate) fn parent_has_joined_subagent(&self, parent_turn_id: &str) -> bool {
-        self.agent
-            .joined_subagent_dependencies
-            .values()
-            .any(|dependency| dependency.parent_turn_id == parent_turn_id)
-    }
-
     /// Removes joined dependencies owned by one child agent.
     pub(crate) fn remove_joined_subagent_dependencies_for_agent(&mut self, child_agent_id: &str) {
         self.agent
@@ -533,6 +525,18 @@ impl RuntimeSessionService {
             .blocked_agent_approval_refs
             .values()
             .any(|approval_ref| approval_ref.turn_id == turn_id)
+    }
+
+    /// Returns pending approval ids grouped by their owning turn.
+    pub(crate) fn blocked_agent_approval_ids_by_turn(&self) -> BTreeMap<String, Vec<String>> {
+        let mut approval_ids_by_turn = BTreeMap::<String, Vec<String>>::new();
+        for (approval_id, approval_ref) in &self.agent.blocked_agent_approval_refs {
+            approval_ids_by_turn
+                .entry(approval_ref.turn_id.clone())
+                .or_default()
+                .push(approval_id.clone());
+        }
+        approval_ids_by_turn
     }
 
     /// Removes every blocked approval continuation owned by one turn.

@@ -1421,8 +1421,12 @@ impl RuntimeSessionService {
 
     /// Returns the pane-frame status for an agent turn.
     fn runtime_agent_frame_status(&self, turn: &AgentTurnRecord) -> &'static str {
-        if turn.state == AgentTurnState::Blocked && self.parent_has_joined_subagent(&turn.turn_id) {
-            return "waiting";
+        if turn.state == AgentTurnState::Blocked {
+            return if self.agent_turn_has_blocked_approval(&turn.turn_id) {
+                "waiting_approval"
+            } else {
+                "waiting"
+            };
         }
         if turn.state == AgentTurnState::Running {
             return self.runtime_running_agent_frame_status(turn);

@@ -284,6 +284,26 @@ pub fn dispatch_control_request_for_client(
     dispatch_parsed_to_response(&request, session, caller_client_id, mcp_registry)
 }
 
+/// Optional runtime-owned data used when projecting agent control state.
+#[derive(Debug, Default)]
+pub struct AgentStateProjection<'a> {
+    model_profiles_by_pane: Option<&'a std::collections::BTreeMap<String, String>>,
+    approval_ids_by_turn: Option<&'a std::collections::BTreeMap<String, Vec<String>>>,
+}
+
+impl<'a> AgentStateProjection<'a> {
+    /// Builds projection inputs for model-profile and approval-aware state.
+    pub fn new(
+        model_profiles_by_pane: Option<&'a std::collections::BTreeMap<String, String>>,
+        approval_ids_by_turn: Option<&'a std::collections::BTreeMap<String, Vec<String>>>,
+    ) -> Self {
+        Self {
+            model_profiles_by_pane,
+            approval_ids_by_turn,
+        }
+    }
+}
+
 /// Runs the dispatch control request for client with agent state operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -304,7 +324,7 @@ pub fn dispatch_control_request_for_client_with_agent_state(
         mcp_registry,
         agent_store,
         turn_ledger,
-        None,
+        AgentStateProjection::default(),
     )
 }
 
@@ -321,7 +341,7 @@ pub fn dispatch_control_request_for_client_with_agent_state_and_model_profiles(
     mcp_registry: Option<&McpRegistry>,
     agent_store: &mut AgentShellStore,
     turn_ledger: &AgentTurnLedger,
-    model_profiles_by_pane: Option<&std::collections::BTreeMap<String, String>>,
+    projection: AgentStateProjection<'_>,
 ) -> String {
     let request = match parse_json_rpc_request(body) {
         Ok(request) => request,
@@ -350,9 +370,14 @@ pub fn dispatch_control_request_for_client_with_agent_state_and_model_profiles(
             &request,
             session,
             agent_store,
-            model_profiles_by_pane,
+            projection.model_profiles_by_pane,
         ),
-        "agent/task/list" => dispatch_agent_task_list_with_ledger(&request, session, turn_ledger),
+        "agent/task/list" => dispatch_agent_task_list_with_ledger(
+            &request,
+            session,
+            turn_ledger,
+            projection.approval_ids_by_turn,
+        ),
         "agent/shell/show" | "agent/shell/hide" => {
             dispatch_agent_shell_visibility_with_store(&request, session, agent_store)
         }

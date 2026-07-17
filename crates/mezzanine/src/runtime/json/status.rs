@@ -131,7 +131,10 @@ pub(crate) fn runtime_agent_turn_state_json(started: &RuntimeAgentPromptTurnStar
         r#"{{"id":"{}","version":1,"agent_id":"{}","state":"{}","created_at":{},"started_at":{},"finished_at":{},"prompt_preview":"{}","approval_ids":[{}],"result_summary":{},"extensions":{{"context_blocks":{}}}}}"#,
         json_escape(&started.turn_id),
         json_escape(&started.agent_id),
-        runtime_agent_turn_state_name(started.state),
+        runtime_agent_turn_state_name_with_approval(
+            started.state,
+            !started.approval_ids.is_empty(),
+        ),
         runtime_timestamp_json(started.created_at_unix_seconds),
         runtime_optional_timestamp_json(started.started_at_unix_seconds),
         runtime_optional_timestamp_json(started.finished_at_unix_seconds),
@@ -167,7 +170,10 @@ pub(crate) fn runtime_subagent_state_json(
         json_escape(display_name),
         json_escape(session.id.as_str()),
         json_escape(pane.id.as_str()),
-        runtime_agent_status_name(turn.map_or(AgentTurnState::Queued, |t| t.state)),
+        runtime_agent_status_name(
+            turn.map_or(AgentTurnState::Queued, |turn| turn.state),
+            turn.is_some_and(|turn| !turn.approval_ids.is_empty()),
+        ),
         visible,
         json_escape(agent_id),
         json_escape(model),
@@ -207,10 +213,19 @@ pub(crate) fn runtime_agent_shell_stop_response_json(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 pub(crate) fn runtime_agent_turn_state_name(state: AgentTurnState) -> &'static str {
+    runtime_agent_turn_state_name_with_approval(state, false)
+}
+
+/// Returns the public turn state while preserving explicit approval waits.
+fn runtime_agent_turn_state_name_with_approval(
+    state: AgentTurnState,
+    waiting_for_approval: bool,
+) -> &'static str {
     match state {
         AgentTurnState::Queued => "queued",
         AgentTurnState::Running => "running",
-        AgentTurnState::Blocked => "waiting_approval",
+        AgentTurnState::Blocked if waiting_for_approval => "waiting_approval",
+        AgentTurnState::Blocked => "waiting",
         AgentTurnState::Completed => "completed",
         AgentTurnState::Failed => "failed",
         AgentTurnState::Interrupted => "interrupted",
@@ -222,11 +237,12 @@ pub(crate) fn runtime_agent_turn_state_name(state: AgentTurnState) -> &'static s
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn runtime_agent_status_name(state: AgentTurnState) -> &'static str {
+fn runtime_agent_status_name(state: AgentTurnState, waiting_for_approval: bool) -> &'static str {
     match state {
         AgentTurnState::Queued | AgentTurnState::Completed => "idle",
         AgentTurnState::Running => "running",
-        AgentTurnState::Blocked => "waiting_approval",
+        AgentTurnState::Blocked if waiting_for_approval => "waiting_approval",
+        AgentTurnState::Blocked => "waiting",
         AgentTurnState::Failed => "failed",
         AgentTurnState::Interrupted => "stopped",
     }

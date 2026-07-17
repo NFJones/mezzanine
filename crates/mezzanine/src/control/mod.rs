@@ -105,6 +105,7 @@ mod types;
 pub use authz::authorize_control_request;
 #[cfg(test)]
 pub use config::{dispatch_project_trust_request, dispatch_session_attach_request};
+pub(crate) use dispatch::AgentStateProjection;
 pub(crate) use dispatch::validate_control_method_params_schema;
 pub use dispatch::{
     ControlConnectionState, dispatch_control_request_cached,
