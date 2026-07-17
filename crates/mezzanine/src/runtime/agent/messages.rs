@@ -7,9 +7,9 @@
 
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentTurnExecution,
-    AgentTurnRecord, AgentTurnState, ContextBlock, ContextSourceKind, Envelope, MezError, PaneId,
-    Result, RuntimeSessionService, SenderIdentity, action_result_context_content,
-    current_unix_seconds, json_escape, runtime_agent_turn_state_from_action_results,
+    AgentTurnRecord, AgentTurnState, Envelope, MezError, PaneId, Result, RuntimeSessionService,
+    SenderIdentity, current_unix_seconds, json_escape,
+    runtime_agent_turn_state_from_action_results,
     runtime_execution_ready_for_provider_continuation, runtime_maap_message_content_type,
     runtime_message_recipient, runtime_mezzanine_error_code, validate_mmp_payload_metadata,
 };
@@ -57,24 +57,13 @@ impl RuntimeSessionService {
         if execution.terminal_state == AgentTurnState::Running
             && runtime_execution_ready_for_provider_continuation(execution)
         {
-            for result in execution
+            let settled_results = execution
                 .action_results
                 .iter()
                 .filter(|result| result.action_type == "send_message")
-            {
-                self.agent_turn_contexts_mut()
-                    .get_mut(&turn.turn_id)
-                    .ok_or_else(|| {
-                        MezError::invalid_state("running agent turn context is unavailable")
-                    })?
-                    .blocks
-                    .push(ContextBlock {
-                        source: ContextSourceKind::ActionResult,
-                        placement: mez_agent::ContextPlacement::EphemeralTail,
-                        label: format!("action result {}", result.action_id),
-                        content: action_result_context_content(result),
-                    });
-            }
+                .cloned()
+                .collect::<Vec<_>>();
+            self.commit_settled_action_results_context(&turn.turn_id, &settled_results)?;
             self.agent
                 .pending_agent_provider_tasks
                 .insert(turn.turn_id.clone());

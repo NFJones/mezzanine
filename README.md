@@ -531,6 +531,8 @@ Credentials belong in `mez auth`, not in config files.
   defined MAAP action objects, fields, capabilities, and runtime boundaries.
 - [docs/cache-status-diagnostics.md](docs/cache-status-diagnostics.md): cache
   reuse accounting and immutable-context continuity diagnostics.
+- [docs/context-lifecycle-and-compaction.md](docs/context-lifecycle-and-compaction.md):
+  active-context phases, atomic action settlement, and safe compaction groups.
 - [docs/examples/config.toml](docs/examples/config.toml): generated baseline
   configuration example.
 

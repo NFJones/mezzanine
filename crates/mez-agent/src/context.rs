@@ -5,8 +5,11 @@
 //! execution remain outside this crate and adapt these errors at their
 //! composition boundaries.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
+use crate::action_result::ActionResult;
+use crate::action_result_context::action_result_context_content;
 use crate::mcp::McpPromptTool;
 use crate::surface::{AllowedActionSet, ModelInteractionKind};
 use crate::{AgentPromptError, AgentPromptErrorKind};
@@ -244,6 +247,78 @@ impl AgentContext {
     pub fn validate_placement_order(&self) -> AgentContextResult<()> {
         validate_context_placement_order(&self.blocks)
     }
+
+    /// Atomically promotes deterministic action results into chronology.
+    ///
+    /// The operation rejects unresolved running or blocked results before it
+    /// mutates context, removes any volatile or legacy copy for each action,
+    /// preserves an already committed exact copy in place, and appends each
+    /// newly settled result at the immutable chronology boundary. Repeating
+    /// the same commit is therefore idempotent and cannot reorder evidence.
+    pub fn commit_settled_action_results(
+        &mut self,
+        results: &[ActionResult],
+    ) -> AgentContextResult<usize> {
+        if results.iter().any(|result| !result.is_terminal()) {
+            return Err(AgentContextError::new(
+                "only terminal action results may be committed to immutable chronology",
+            ));
+        }
+        let mut action_ids = BTreeSet::new();
+        if results
+            .iter()
+            .any(|result| !action_ids.insert(result.action_id.as_str()))
+        {
+            return Err(AgentContextError::new(
+                "an action result commit may contain each action id only once",
+            ));
+        }
+
+        let mut candidate = self.blocks.clone();
+        let mut committed = 0usize;
+        for result in results {
+            let label = format!("action result {}", result.action_id);
+            let content = action_result_context_content(result);
+            let exact_index = candidate.iter().position(|block| {
+                block.source == ContextSourceKind::ActionResult
+                    && block.placement == ContextPlacement::ConversationAppend
+                    && block.label == label
+                    && block.content == content
+            });
+            let mut index = 0usize;
+            candidate.retain(|block| {
+                let same_action = block.source == ContextSourceKind::ActionResult
+                    && action_result_block_id(block).is_some_and(|id| id == result.action_id);
+                let keep = !same_action || exact_index == Some(index);
+                index = index.saturating_add(1);
+                keep
+            });
+            if exact_index.is_some() {
+                continue;
+            }
+            insert_context_block_by_placement(
+                &mut candidate,
+                ContextBlock {
+                    source: ContextSourceKind::ActionResult,
+                    placement: ContextPlacement::ConversationAppend,
+                    label,
+                    content,
+                },
+            );
+            committed = committed.saturating_add(1);
+        }
+        validate_context_placement_order(&candidate)?;
+        self.blocks = candidate;
+        Ok(committed)
+    }
+}
+
+/// Extracts the action id from canonical and legacy result-block labels.
+fn action_result_block_id(block: &ContextBlock) -> Option<&str> {
+    block
+        .label
+        .strip_prefix("action result ")
+        .or_else(|| block.label.strip_prefix("action failure "))
 }
 
 /// Returns the stable insertion boundary for one lifecycle placement.
@@ -497,10 +572,27 @@ pub fn validate_context_required(field: &str, value: &str) -> AgentContextResult
 #[cfg(test)]
 mod tests {
     use super::{
-        AgentContextError, AgentRequestAssemblyError, AgentRequestAssemblyErrorKind, ContextBlock,
-        ContextCachePolicy, ContextSourceKind, ContextStability, validate_context_required,
+        AgentContext, AgentContextError, AgentRequestAssemblyError, AgentRequestAssemblyErrorKind,
+        ContextBlock, ContextCachePolicy, ContextSourceKind, ContextStability,
+        validate_context_required,
     };
-    use crate::AgentPromptError;
+    use crate::{ActionContentBlock, ActionResult, ActionStatus, AgentPromptError};
+
+    /// Builds one valid successful or running action-result fixture.
+    fn action_result(action_id: &str, status: ActionStatus, text: &str) -> ActionResult {
+        ActionResult {
+            protocol: "maap/1".to_string(),
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            action_id: action_id.to_string(),
+            action_type: "shell_command",
+            status,
+            content: vec![ActionContentBlock::text(text)],
+            structured_content_json: None,
+            is_error: false,
+            error: None,
+        }
+    }
 
     /// Verifies context blocks expose cache-stability metadata without changing
     /// the stored source, label, and content shape.
@@ -606,5 +698,90 @@ mod tests {
 
         assert_eq!(error.kind(), AgentRequestAssemblyErrorKind::InvalidState);
         assert_eq!(error.message(), "asset missing");
+    }
+
+    /// Verifies settlement atomically replaces volatile evidence with one
+    /// immutable chronological result and remains idempotent on replay.
+    #[test]
+    fn settled_action_result_commit_removes_volatile_copy_exactly_once() {
+        let running = action_result("action-1", ActionStatus::Running, "still running");
+        let settled = action_result("action-1", ActionStatus::Succeeded, "finished");
+        let mut context = AgentContext::new(vec![
+            ContextBlock {
+                source: ContextSourceKind::System,
+                placement: crate::ContextPlacement::StablePrefix,
+                label: "system".to_string(),
+                content: "policy".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: crate::ContextPlacement::EphemeralTail,
+                label: "action result action-1".to_string(),
+                content: crate::action_result_context_content(&running),
+            },
+            ContextBlock {
+                source: ContextSourceKind::RuntimeHint,
+                placement: crate::ContextPlacement::EphemeralTail,
+                label: "scheduler".to_string(),
+                content: "waiting".to_string(),
+            },
+        ])
+        .unwrap();
+
+        assert_eq!(
+            context.commit_settled_action_results(&[settled]).unwrap(),
+            1
+        );
+        let committed = context.blocks.clone();
+        assert_eq!(
+            context
+                .commit_settled_action_results(&[action_result(
+                    "action-1",
+                    ActionStatus::Succeeded,
+                    "finished",
+                )])
+                .unwrap(),
+            0
+        );
+
+        assert_eq!(context.blocks, committed);
+        let action_blocks = context
+            .blocks
+            .iter()
+            .filter(|block| block.source == ContextSourceKind::ActionResult)
+            .collect::<Vec<_>>();
+        assert_eq!(action_blocks.len(), 1);
+        assert_eq!(
+            action_blocks[0].placement,
+            crate::ContextPlacement::ConversationAppend
+        );
+        context.validate_placement_order().unwrap();
+    }
+
+    /// Verifies a batch containing unresolved controller state is rejected
+    /// before any otherwise terminal sibling can mutate chronology.
+    #[test]
+    fn settled_action_result_commit_rejects_unresolved_batches_atomically() {
+        let mut context = AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::System,
+            placement: crate::ContextPlacement::StablePrefix,
+            label: "system".to_string(),
+            content: "policy".to_string(),
+        }])
+        .unwrap();
+        let original = context.clone();
+
+        let error = context
+            .commit_settled_action_results(&[
+                action_result("action-1", ActionStatus::Succeeded, "finished"),
+                action_result("action-2", ActionStatus::Running, "running"),
+            ])
+            .unwrap_err();
+
+        assert_eq!(
+            error.message(),
+            "only terminal action results may be committed to immutable chronology"
+        );
+        assert_eq!(context, original);
     }
 }

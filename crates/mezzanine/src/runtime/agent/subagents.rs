@@ -8,11 +8,10 @@ use mez_agent::{MacroRunPhase, MacroStepTaskResult, normalize_subagent_spawn_rol
 
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentTurnExecution,
-    AgentTurnRecord, AgentTurnState, AuditActor, AuditRecord, ContextBlock, ContextSourceKind,
-    Envelope, EventKind, JoinedSubagentDependency, MezError, PaneId, Recipient, Result,
-    RuntimeAgentLoopSettlement, RuntimeSessionService, SenderIdentity, SubagentSpawnRequest,
-    SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload,
-    action_result_context_content, current_unix_seconds, json_escape,
+    AgentTurnRecord, AgentTurnState, AuditActor, AuditRecord, Envelope, EventKind,
+    JoinedSubagentDependency, MezError, PaneId, Recipient, Result, RuntimeAgentLoopSettlement,
+    RuntimeSessionService, SenderIdentity, SubagentSpawnRequest, SubagentWaitPolicy,
+    TaskResultPayload, TaskState, TaskStatusPayload, current_unix_seconds, json_escape,
     runtime_agent_terminal_preview, runtime_agent_turn_state_from_action_results,
     runtime_agent_turn_state_name, runtime_cooperation_mode, runtime_cooperation_mode_name,
     runtime_execution_ready_for_provider_continuation, runtime_mezzanine_error_code,
@@ -896,16 +895,14 @@ impl RuntimeSessionService {
                 runtime_execution_ready_for_provider_continuation(execution);
             (observed_result, ready_for_continuation)
         };
-        if let Some(context) = self
-            .agent_turn_contexts_mut()
-            .get_mut(&dependency.parent_turn_id)
+        if self
+            .agent_turn_contexts()
+            .contains_key(&dependency.parent_turn_id)
         {
-            context.blocks.push(ContextBlock {
-                source: ContextSourceKind::ActionResult,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
-                label: format!("action result {}", observed_result.action_id),
-                content: action_result_context_content(&observed_result),
-            });
+            self.append_action_result_context_if_absent(
+                &dependency.parent_turn_id,
+                &observed_result,
+            )?;
         }
         let mut failed_macro_parent_turn = None;
         let mut macro_result_status = None;

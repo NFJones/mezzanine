@@ -7,14 +7,13 @@
 
 use super::{
     ActionPresentationInput, ActionResult, ActionStatus, AgentAction, AgentActionPayload,
-    AgentTurnExecution, AgentTurnRecord, AgentTurnState, BTreeSet, BlockedApprovalRequest,
-    ContextBlock, ContextSourceKind, MezError, Result, RuntimeSessionService, action_outcome_line,
-    action_rationale_repeats_visible_summary, action_result_context_content, action_summary,
-    current_unix_seconds, local_action_plan, network_action_plan, runtime_action_result_error_code,
-    runtime_action_result_is_aggregated_loop_guard_failure,
-    runtime_action_result_is_feedback_candidate, runtime_action_type_is_shell_backed,
-    runtime_agent_terminal_preview, runtime_agent_turn_duration_display,
-    runtime_agent_turn_state_name, runtime_execution_can_feed_failure_to_model,
+    AgentTurnExecution, AgentTurnRecord, AgentTurnState, BlockedApprovalRequest, ContextBlock,
+    ContextSourceKind, MezError, Result, RuntimeSessionService, action_outcome_line,
+    action_rationale_repeats_visible_summary, action_summary, current_unix_seconds,
+    local_action_plan, network_action_plan, runtime_action_result_is_feedback_candidate,
+    runtime_action_type_is_shell_backed, runtime_agent_terminal_preview,
+    runtime_agent_turn_duration_display, runtime_agent_turn_state_name,
+    runtime_execution_can_feed_failure_to_model,
     runtime_execution_uses_unbounded_apply_patch_recovery, runtime_failure_feedback_attempt_keys,
     runtime_failure_feedback_evidence_guidance, runtime_failure_feedback_loop_guard_aggregate_note,
     runtime_failure_feedback_repeat_guidance, runtime_failure_feedback_specific_guidance,
@@ -78,40 +77,17 @@ impl RuntimeSessionService {
         let pane_cwd = self
             .pane_current_working_directory(&turn.pane_id)
             .map(|path| path.to_string_lossy().into_owned());
+        let settled_results = execution
+            .action_results
+            .iter()
+            .filter(|result| result.is_terminal())
+            .cloned()
+            .collect::<Vec<_>>();
+        self.commit_settled_action_results_context(&turn.turn_id, &settled_results)?;
         let context = self
             .agent_turn_contexts_mut()
             .get_mut(&turn.turn_id)
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        let mut aggregated_loop_guard_codes = BTreeSet::new();
-        for result in execution.action_results.iter().filter(|result| {
-            !matches!(result.status, ActionStatus::Running | ActionStatus::Blocked)
-        }) {
-            if runtime_action_result_is_aggregated_loop_guard_failure(result)
-                && let Some(code) = runtime_action_result_error_code(result)
-                && !aggregated_loop_guard_codes.insert(code.to_string())
-            {
-                continue;
-            }
-            let label_prefix = if result.is_error {
-                "action failure"
-            } else {
-                "action result"
-            };
-            let label = format!("{label_prefix} {}", result.action_id);
-            let content = action_result_context_content(result);
-            if !context
-                .blocks
-                .iter()
-                .any(|block| block.label == label && block.content == content)
-            {
-                context.blocks.push(ContextBlock {
-                    source: ContextSourceKind::ActionResult,
-                    placement: mez_agent::ContextPlacement::EphemeralTail,
-                    label,
-                    content,
-                });
-            }
-        }
         let specific_guidance =
             runtime_failure_feedback_specific_guidance(execution, pane_cwd.as_deref())
                 .map(|guidance| format!("\n{guidance}"))
@@ -234,39 +210,28 @@ impl RuntimeSessionService {
             .retain(|key, _| key != turn_id && !key.starts_with(&scoped_prefix));
     }
 
-    /// Appends one action result to the active model context if it has not
-    /// already been recorded.
+    /// Atomically commits deterministic action results to active chronology.
+    pub(crate) fn commit_settled_action_results_context(
+        &mut self,
+        turn_id: &str,
+        results: &[ActionResult],
+    ) -> Result<usize> {
+        let context = self
+            .agent_turn_contexts_mut()
+            .get_mut(turn_id)
+            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
+        context
+            .commit_settled_action_results(results)
+            .map_err(|error| MezError::invalid_state(error.to_string()))
+    }
+
+    /// Commits one deterministic action result if it is not already recorded.
     pub(crate) fn append_action_result_context_if_absent(
         &mut self,
         turn_id: &str,
         result: &ActionResult,
     ) -> Result<()> {
-        let context = self
-            .agent_turn_contexts_mut()
-            .get_mut(turn_id)
-            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        let label = format!("action result {}", result.action_id);
-        let content = action_result_context_content(result);
-        if !context
-            .blocks
-            .iter()
-            .any(|block| block.label == label && block.content == content)
-        {
-            let insertion_index = context
-                .blocks
-                .iter()
-                .position(|block| block.placement == mez_agent::ContextPlacement::EphemeralTail)
-                .unwrap_or(context.blocks.len());
-            context.blocks.insert(
-                insertion_index,
-                ContextBlock {
-                    source: ContextSourceKind::ActionResult,
-                    placement: mez_agent::ContextPlacement::ConversationAppend,
-                    label,
-                    content,
-                },
-            );
-        }
+        self.commit_settled_action_results_context(turn_id, std::slice::from_ref(result))?;
         Ok(())
     }
 }

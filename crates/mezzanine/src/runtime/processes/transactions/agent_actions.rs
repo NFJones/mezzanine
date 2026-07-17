@@ -2,14 +2,14 @@
 
 use super::{
     ActionContentBlock, ActionResult, ActionStatus, AgentActionPayload, AgentTurnState,
-    ApplyPatchTransactionPhase, ContextBlock, ContextSourceKind, EventKind, HookEvent, MezError,
-    PaneReadinessState, Result, RunningShellTransactionKind, RuntimeSessionService,
-    action_result_context_content, apply_patch_transaction_phase, current_unix_millis,
-    decode_shell_output_transport_with_diagnostics, json_escape, local_action_plan,
-    postprocess_shell_action_success_output, runtime_agent_turn_state_from_action_results,
-    runtime_agent_turn_state_name, runtime_execution_ready_for_provider_continuation,
-    runtime_post_shell_hook_payload, runtime_running_shell_transaction_kind_name,
-    shell_action_failure_diagnostic, shell_command_result_content,
+    ApplyPatchTransactionPhase, EventKind, HookEvent, MezError, PaneReadinessState, Result,
+    RunningShellTransactionKind, RuntimeSessionService, apply_patch_transaction_phase,
+    current_unix_millis, decode_shell_output_transport_with_diagnostics, json_escape,
+    local_action_plan, postprocess_shell_action_success_output,
+    runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
+    runtime_execution_ready_for_provider_continuation, runtime_post_shell_hook_payload,
+    runtime_running_shell_transaction_kind_name, shell_action_failure_diagnostic,
+    shell_command_result_content,
 };
 
 impl RuntimeSessionService {
@@ -183,7 +183,6 @@ impl RuntimeSessionService {
 
         let (
             mut terminal_state,
-            observed_contexts,
             ready_for_provider_continuation,
             post_shell_hook_payload,
             action_transition_trace,
@@ -390,22 +389,12 @@ impl RuntimeSessionService {
                 runtime_agent_turn_state_name(execution.terminal_state)
             );
             let observed_result = execution.action_results[result_index].clone();
-            let observed_contexts = observed_results
-                .iter()
-                .map(|result| ContextBlock {
-                    source: ContextSourceKind::ActionResult,
-                    placement: mez_agent::ContextPlacement::EphemeralTail,
-                    label: format!("action result {}", result.action_id),
-                    content: action_result_context_content(result),
-                })
-                .collect::<Vec<_>>();
             let post_shell_hook_payload =
                 runtime_post_shell_hook_payload(&turn, &action, &observed_result, exit_code);
             let ready_for_provider_continuation = shell_command_nonzero_result
                 || runtime_execution_ready_for_provider_continuation(execution);
             (
                 execution.terminal_state,
-                observed_contexts,
                 ready_for_provider_continuation,
                 post_shell_hook_payload,
                 action_transition_trace,
@@ -504,13 +493,7 @@ impl RuntimeSessionService {
                 )?;
             }
         } else if terminal_state == AgentTurnState::Running {
-            self.agent_turn_contexts_mut()
-                .get_mut(turn_id)
-                .ok_or_else(|| {
-                    MezError::invalid_state("running agent turn context is unavailable")
-                })?
-                .blocks
-                .extend(observed_contexts);
+            self.commit_settled_action_results_context(turn_id, &observed_results)?;
             self.set_pane_readiness(pane_id, PaneReadinessState::Ready);
             if ready_for_provider_continuation {
                 self.queue_agent_provider_task(turn_id.to_string());

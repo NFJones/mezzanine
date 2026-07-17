@@ -116,6 +116,18 @@ context_window_tokens = 4500
             content: "compact this transcript".to_string(),
         })
         .unwrap();
+    transcript_store
+        .append(&mez_agent::transcript::TranscriptEntry {
+            conversation_id: "compact-prune".to_string(),
+            sequence: 2,
+            created_at_unix_seconds: 1,
+            role: mez_agent::transcript::TranscriptRole::Assistant,
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-%1".to_string(),
+            pane_id: "%1".to_string(),
+            content: "completed transcript result".to_string(),
+        })
+        .unwrap();
     service.set_agent_transcript_store(transcript_store);
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -129,7 +141,7 @@ context_window_tokens = 4500
         .unwrap();
     service
         .agent_shell_store_mut()
-        .bind_conversation("%1", "compact-prune", 1)
+        .bind_conversation("%1", "compact-prune", 2)
         .unwrap();
 
     let compact = service.dispatch_runtime_control_body(
@@ -318,7 +330,7 @@ context_window_tokens = 4500
         }])
         .unwrap();
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-compact"));
-    for sequence in 1..=12 {
+    for sequence in 1_u64..=12 {
         let (role, content) = match sequence {
             1 => (
                 mez_agent::transcript::TranscriptRole::User,
@@ -338,6 +350,13 @@ context_window_tokens = 4500
                     "release-word ".repeat(28)
                 ),
             ),
+            12 => (
+                mez_agent::transcript::TranscriptRole::Assistant,
+                format!(
+                    "final filler assistant turn {sequence} {}",
+                    "assistant-word ".repeat(28)
+                ),
+            ),
             _ if sequence % 2 == 0 => (
                 mez_agent::transcript::TranscriptRole::User,
                 format!("filler user turn {sequence} {}", "user-word ".repeat(28)),
@@ -350,13 +369,17 @@ context_window_tokens = 4500
                 ),
             ),
         };
+        let turn_id = match sequence {
+            1..=3 => "turn-1".to_string(),
+            _ => format!("turn-{}", (sequence.saturating_sub(2)) / 2 + 1),
+        };
         transcript_store
             .append(&mez_agent::transcript::TranscriptEntry {
                 conversation_id: "as1".to_string(),
                 sequence,
                 created_at_unix_seconds: sequence,
                 role,
-                turn_id: format!("turn-{sequence}"),
+                turn_id,
                 agent_id: "agent-%1".to_string(),
                 pane_id: "%1".to_string(),
                 content,
@@ -391,7 +414,7 @@ context_window_tokens = 4500
         compact.contains("previous_transcript_entries=12"),
         "{compact}"
     );
-    assert!(compact.contains("summarized_entries=6"), "{compact}");
+    assert!(compact.contains("summarized_entries=7"), "{compact}");
     assert!(compact.contains("source=model-compact"), "{compact}");
     assert!(!compact.contains("requires_runtime"), "{compact}");
     assert!(service.agent_is_compacting("%1"));
@@ -421,7 +444,7 @@ context_window_tokens = 4500
             .get("%1")
             .unwrap()
             .transcript_entries,
-        6
+        5
     );
     let compacted = service
         .memory_records()

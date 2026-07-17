@@ -32,6 +32,9 @@ reference documentation.
   workflows.
 - [cache-status-diagnostics.md](cache-status-diagnostics.md): cumulative and
   latest-request cache reuse, immutable-context continuity, and trace fields.
+- [context-lifecycle-and-compaction.md](context-lifecycle-and-compaction.md):
+  stable, chronological, and volatile context ownership plus execution-group
+  compaction and settlement rules.
 - [workspace-architecture.md](workspace-architecture.md): workspace package
   ownership, dependency edges, and boundary rules.
 - [workspace-ownership-matrix.md](workspace-ownership-matrix.md): audited

@@ -7,10 +7,9 @@
 
 use super::{
     ActionResult, ActionStatus, AgentActionPayload, AgentTurnExecution, AgentTurnRecord,
-    AgentTurnState, BlockedAgentApprovalRef, BlockedApprovalRequest, ContextBlock,
-    ContextSourceKind, EventKind, HookEvent, MezError, PermissionPolicy, Result, RuleDecision,
-    RuntimeSessionService, action_result_context_content, current_unix_seconds, json_escape,
-    local_action_plan, network_action_plan, runtime_agent_action_summary,
+    AgentTurnState, BlockedAgentApprovalRef, BlockedApprovalRequest, EventKind, HookEvent,
+    MezError, PermissionPolicy, Result, RuleDecision, RuntimeSessionService, current_unix_seconds,
+    json_escape, local_action_plan, network_action_plan, runtime_agent_action_summary,
     runtime_agent_context_command, runtime_agent_pending_approval_log_line,
     runtime_agent_terminal_preview, runtime_agent_turn_state_from_action_results,
     runtime_agent_turn_state_name, runtime_blocked_approval_request,
@@ -574,18 +573,7 @@ impl RuntimeSessionService {
             && runtime_execution_ready_for_provider_continuation(&execution)
         {
             let observed_result = execution.action_results[result_index].clone();
-            self.agent_turn_contexts_mut()
-                .get_mut(&turn.turn_id)
-                .ok_or_else(|| {
-                    MezError::invalid_state("running agent turn context is unavailable")
-                })?
-                .blocks
-                .push(ContextBlock {
-                    source: ContextSourceKind::ActionResult,
-                    placement: mez_agent::ContextPlacement::EphemeralTail,
-                    label: format!("action result {}", observed_result.action_id),
-                    content: action_result_context_content(&observed_result),
-                });
+            self.append_action_result_context_if_absent(&turn.turn_id, &observed_result)?;
             self.agent
                 .pending_agent_provider_tasks
                 .insert(turn.turn_id.clone());
@@ -809,18 +797,7 @@ impl RuntimeSessionService {
                     && runtime_execution_ready_for_provider_continuation(&execution)
                 {
                     let observed_result = execution.action_results[result_index].clone();
-                    self.agent_turn_contexts_mut()
-                        .get_mut(&turn.turn_id)
-                        .ok_or_else(|| {
-                            MezError::invalid_state("running agent turn context is unavailable")
-                        })?
-                        .blocks
-                        .push(ContextBlock {
-                            source: ContextSourceKind::ActionResult,
-                            placement: mez_agent::ContextPlacement::EphemeralTail,
-                            label: format!("action result {}", observed_result.action_id),
-                            content: action_result_context_content(&observed_result),
-                        });
+                    self.append_action_result_context_if_absent(&turn.turn_id, &observed_result)?;
                     self.agent
                         .pending_agent_provider_tasks
                         .insert(turn.turn_id.clone());

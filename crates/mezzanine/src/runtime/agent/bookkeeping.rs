@@ -14,6 +14,9 @@ use super::{
     transcript_entries_for_execution,
 };
 
+/// Maximum recent execution groups retained for in-process idempotency.
+const RUNTIME_PERSISTED_EXECUTION_TRANSCRIPT_LIMIT: usize = 4096;
+
 impl RuntimeSessionService {
     /// Runs the persist runtime agent turn execution transcript operation for this subsystem.
     ///
@@ -44,6 +47,14 @@ impl RuntimeSessionService {
         };
         let conversation_id = conversation_id
             .ok_or_else(|| MezError::invalid_state("agent shell session missing for transcript"))?;
+        let persistence_key = (conversation_id.clone(), turn.turn_id.clone());
+        if self
+            .agent
+            .agent_persisted_execution_transcripts
+            .contains(&persistence_key)
+        {
+            return Ok(0);
+        }
         let created_at_unix_seconds = current_unix_seconds().max(1);
         let entries = if self.persistence.transcript_uses_adapter() {
             let first_sequence = self
@@ -83,6 +94,14 @@ impl RuntimeSessionService {
             store.append_many(&entries)?;
             entries
         };
+        self.agent
+            .agent_persisted_execution_transcripts
+            .insert(persistence_key);
+        while self.agent.agent_persisted_execution_transcripts.len()
+            > RUNTIME_PERSISTED_EXECUTION_TRANSCRIPT_LIMIT
+        {
+            let _ = self.agent.agent_persisted_execution_transcripts.pop_first();
+        }
         self.agent_shell_store_mut()
             .record_transcript_entries(&turn.pane_id, entries.len())?;
         self.record_pane_transcript_ref(

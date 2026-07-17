@@ -9,7 +9,7 @@ use crate::{
     AgentContext, AgentContextResult, ContextBlock, ContextSourceKind,
     ModelContextCompactionReport, model_context_block_header,
 };
-use std::collections::HashSet;
+use std::ops::Range;
 
 /// Maximum bytes from one context block retained in a raw suffix.
 const MODEL_CONTEXT_BLOCK_LIMIT_BYTES: usize = 128 * 1024;
@@ -68,21 +68,39 @@ fn compact_model_context_blocks(
         return (blocks.to_vec(), report);
     }
 
+    let stable_prefix = blocks
+        .iter()
+        .filter(|block| block.placement == crate::ContextPlacement::StablePrefix)
+        .cloned()
+        .collect::<Vec<_>>();
+    let immutable_chronology = blocks
+        .iter()
+        .filter(|block| block.placement == crate::ContextPlacement::ConversationAppend)
+        .cloned()
+        .collect::<Vec<_>>();
+    let volatile_tail = blocks
+        .iter()
+        .filter(|block| block.placement == crate::ContextPlacement::EphemeralTail)
+        .cloned()
+        .collect::<Vec<_>>();
+    let execution_groups = model_context_execution_group_ranges(&immutable_chronology);
     let tail_budget =
         model_context_retained_tail_budget_words(context_budget_words, retained_tail_percent);
-    let tail_start = model_context_tail_start_index(blocks, tail_budget);
-    let compacted_blocks = &blocks[..tail_start];
-    let retained_tail = &blocks[tail_start..];
-    if compacted_blocks.is_empty() {
+    let tail_group_start =
+        model_context_tail_start_group(&immutable_chronology, &execution_groups, tail_budget);
+    if tail_group_start == 0 {
         return (blocks.to_vec(), report);
     }
-
-    let protected_indices = protected_compacted_block_indices(compacted_blocks);
-    let mut protected_blocks = Vec::new();
+    let compacted_end = execution_groups
+        .get(tail_group_start)
+        .map_or(immutable_chronology.len(), |group| group.start);
+    let compacted_blocks = &immutable_chronology[..compacted_end];
+    let retained_tail = &immutable_chronology[compacted_end..];
+    let mut prior_summary_epochs = Vec::new();
     let mut summarizable_blocks = Vec::new();
-    for (index, block) in compacted_blocks.iter().cloned().enumerate() {
-        if protected_indices.contains(&index) {
-            protected_blocks.push(block);
+    for block in compacted_blocks.iter().cloned() {
+        if model_context_block_is_compaction_summary(&block) {
+            prior_summary_epochs.push(block);
         } else {
             summarizable_blocks.push(block);
         }
@@ -93,71 +111,57 @@ fn compact_model_context_blocks(
 
     report.compacted_blocks = summarizable_blocks.len();
     let mut prepared = Vec::with_capacity(
-        protected_blocks
+        stable_prefix
             .len()
+            .saturating_add(prior_summary_epochs.len())
             .saturating_add(retained_tail.len())
+            .saturating_add(volatile_tail.len())
             .saturating_add(1),
     );
-    let ephemeral_protected_start = protected_blocks
-        .iter()
-        .position(|block| block.placement == crate::ContextPlacement::EphemeralTail)
-        .unwrap_or(protected_blocks.len());
-    prepared.extend(
-        protected_blocks[..ephemeral_protected_start]
-            .iter()
-            .cloned(),
-    );
+    prepared.extend(stable_prefix);
+    prepared.extend(prior_summary_epochs);
     prepared.push(bulk_compacted_model_context_block(
         &summarizable_blocks,
         retained_tail,
         tail_budget,
         retained_tail_percent,
     ));
-    prepared.extend(
-        protected_blocks[ephemeral_protected_start..]
-            .iter()
-            .cloned(),
-    );
-    let protected_floor = prepared.len();
     prepared.extend(retained_tail.iter().cloned());
-
-    let mut total_words = model_context_total_words(&prepared);
-    if total_words > context_budget_words && prepared.len() > protected_floor {
-        let mut omitted_end = protected_floor;
-        while total_words > context_budget_words && omitted_end < prepared.len() {
-            let omitted_words = model_context_block_words(&prepared[omitted_end]);
-            report.omitted_blocks += 1;
-            report.omitted_original_words += omitted_words;
-            total_words = total_words.saturating_sub(omitted_words);
-            omitted_end += 1;
-        }
-        prepared.drain(protected_floor..omitted_end);
-    }
+    prepared.extend(volatile_tail);
 
     (prepared, report)
 }
 
-/// Returns compacted-block indexes that stay exact through compaction.
-fn protected_compacted_block_indices(blocks: &[ContextBlock]) -> HashSet<usize> {
-    let mut protected = HashSet::new();
+/// Groups immutable chronology at indivisible provider-execution boundaries.
+///
+/// Assistant output starts an execution group and all immediately following
+/// native tool events and settled action results remain in that group. Other
+/// chronology blocks begin independent groups, which gives the compactor safe
+/// prefix and raw-suffix boundaries without embedding product turn state.
+fn model_context_execution_group_ranges(blocks: &[ContextBlock]) -> Vec<Range<usize>> {
+    let mut groups = Vec::new();
+    let mut start = 0usize;
+    let mut has_assistant = false;
+    let mut has_native_tool = false;
     for (index, block) in blocks.iter().enumerate() {
-        if matches!(
-            block.source,
-            ContextSourceKind::ProjectGuidance
-                | ContextSourceKind::EvidenceLedger
-                | ContextSourceKind::CommittedEvidence
-        ) || model_context_block_is_compaction_summary(block)
-        {
-            protected.insert(index);
+        let attaches_to_previous = match block.source {
+            ContextSourceKind::TranscriptTool => has_assistant,
+            ContextSourceKind::ActionResult => has_assistant || has_native_tool,
+            _ => false,
+        };
+        if index > start && !attaches_to_previous {
+            groups.push(start..index);
+            start = index;
+            has_assistant = false;
+            has_native_tool = false;
         }
+        has_assistant |= block.source == ContextSourceKind::TranscriptAssistant;
+        has_native_tool |= block.source == ContextSourceKind::TranscriptTool;
     }
-    for (index, block) in blocks.iter().enumerate().rev() {
-        if block.source == ContextSourceKind::ActionResult {
-            protected.insert(index);
-            break;
-        }
+    if start < blocks.len() {
+        groups.push(start..blocks.len());
     }
-    protected
+    groups
 }
 
 /// Returns whether a block is an immutable local compaction summary epoch.
@@ -199,22 +203,35 @@ fn normalize_model_context_retained_tail_percent(retained_tail_percent: usize) -
     retained_tail_percent.clamp(1, 100)
 }
 
-/// Finds the first block in the retained raw suffix.
-fn model_context_tail_start_index(blocks: &[ContextBlock], tail_budget_words: usize) -> usize {
+/// Finds the first complete execution group in the retained raw suffix.
+fn model_context_tail_start_group(
+    blocks: &[ContextBlock],
+    groups: &[Range<usize>],
+    tail_budget_words: usize,
+) -> usize {
     let mut retained_words = 0usize;
-    let mut tail_start = blocks.len();
-    for (index, block) in blocks.iter().enumerate().rev() {
-        if block.content.len() > MODEL_CONTEXT_BLOCK_LIMIT_BYTES {
+    let mut tail_group_start = groups.len();
+    for (group_index, group) in groups.iter().enumerate().rev() {
+        if tail_group_start == groups.len()
+            && blocks[group.clone()]
+                .iter()
+                .any(|block| block.content.len() > MODEL_CONTEXT_BLOCK_LIMIT_BYTES)
+        {
             break;
         }
-        let block_words = model_context_block_words(block);
-        if retained_words.saturating_add(block_words) > tail_budget_words {
+        let group_words = model_context_total_words(&blocks[group.clone()]);
+        if tail_group_start == groups.len() && group_words > tail_budget_words {
             break;
         }
-        retained_words = retained_words.saturating_add(block_words);
-        tail_start = index;
+        if tail_group_start < groups.len()
+            && retained_words.saturating_add(group_words) > tail_budget_words
+        {
+            break;
+        }
+        retained_words = retained_words.saturating_add(group_words);
+        tail_group_start = group_index;
     }
-    tail_start
+    tail_group_start
 }
 
 /// Builds the memory-style block representing compacted context.
@@ -490,5 +507,126 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    /// Verifies compaction never tears assistant/native-tool/result groups,
+    /// retains the selected raw group byte-for-byte, and excludes volatile
+    /// controller state from the immutable summary epoch.
+    #[test]
+    fn context_compaction_retains_complete_execution_groups_and_excludes_volatile_state() {
+        let old_group = vec![
+            ContextBlock {
+                source: ContextSourceKind::TranscriptAssistant,
+                placement: crate::ContextPlacement::ConversationAppend,
+                label: "old assistant".to_string(),
+                content: format!("old plan {}", "history ".repeat(120)),
+            },
+            ContextBlock {
+                source: ContextSourceKind::TranscriptTool,
+                placement: crate::ContextPlacement::ConversationAppend,
+                label: "old native tool event".to_string(),
+                content: format!("native call {}", "arguments ".repeat(40)),
+            },
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: crate::ContextPlacement::ConversationAppend,
+                label: "action result old".to_string(),
+                content: format!("old output {}", "evidence ".repeat(80)),
+            },
+        ];
+        let retained_group = vec![
+            ContextBlock {
+                source: ContextSourceKind::TranscriptAssistant,
+                placement: crate::ContextPlacement::ConversationAppend,
+                label: "recent assistant".to_string(),
+                content: "run the focused verification".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::TranscriptTool,
+                placement: crate::ContextPlacement::ConversationAppend,
+                label: "recent native tool event".to_string(),
+                content: "shell_command action-new".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: crate::ContextPlacement::ConversationAppend,
+                label: "action result new".to_string(),
+                content: "focused verification passed".to_string(),
+            },
+        ];
+        let volatile = ContextBlock {
+            source: ContextSourceKind::RuntimeHint,
+            placement: crate::ContextPlacement::EphemeralTail,
+            label: "scheduler readiness".to_string(),
+            content: "volatile-secret-state=waiting".to_string(),
+        };
+        let mut blocks = vec![ContextBlock {
+            source: ContextSourceKind::System,
+            placement: crate::ContextPlacement::StablePrefix,
+            label: "system".to_string(),
+            content: "stable policy".to_string(),
+        }];
+        blocks.extend(old_group.clone());
+        blocks.extend(retained_group.clone());
+        blocks.push(volatile.clone());
+        let original = AgentContext::new(blocks).unwrap();
+        let previous = crate::context_continuity_snapshot(&original, "openai", "gpt", "turn-1");
+
+        let (mut compacted, report) =
+            compact_model_context_for_budget_with_retained_tail_percent(original, 320, 20).unwrap();
+
+        assert_eq!(report.compacted_blocks, old_group.len());
+        assert!(
+            !old_group
+                .iter()
+                .any(|block| compacted.blocks.contains(block))
+        );
+        let retained_start = compacted
+            .blocks
+            .windows(retained_group.len())
+            .position(|window| window == retained_group.as_slice())
+            .expect("complete recent execution group should remain exact");
+        assert!(retained_start > 0);
+        assert_eq!(compacted.blocks.last(), Some(&volatile));
+        let summaries = compacted
+            .blocks
+            .iter()
+            .filter(|block| model_context_block_is_compaction_summary(block))
+            .collect::<Vec<_>>();
+        assert_eq!(summaries.len(), 1);
+        assert!(!summaries[0].content.contains("volatile-secret-state"));
+        let compacted_diagnostics = crate::context_continuity_diagnostics(
+            &compacted,
+            "openai",
+            "gpt",
+            "turn-1",
+            Some(&previous),
+        );
+        assert_eq!(
+            compacted_diagnostics.break_reason,
+            crate::ContextContinuityBreakReason::Compaction
+        );
+        let compacted_snapshot = compacted_diagnostics.snapshot;
+        crate::insert_context_block_by_placement(
+            &mut compacted.blocks,
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: crate::ContextPlacement::ConversationAppend,
+                label: "action result after-compaction".to_string(),
+                content: "new settled evidence".to_string(),
+            },
+        );
+        let appended_diagnostics = crate::context_continuity_diagnostics(
+            &compacted,
+            "openai",
+            "gpt",
+            "turn-1",
+            Some(&compacted_snapshot),
+        );
+        assert_eq!(
+            appended_diagnostics.break_reason,
+            crate::ContextContinuityBreakReason::AppendOnly
+        );
+        assert!(appended_diagnostics.immutable_append_only);
     }
 }

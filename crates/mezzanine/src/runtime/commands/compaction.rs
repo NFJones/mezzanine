@@ -138,6 +138,14 @@ impl RuntimeSessionService {
             &transcript_records,
             retained_transcript_entries,
         );
+        let retained_transcript_entries = u64::try_from(
+            runtime_compact_active_transcript_entry_count(
+                transcript_entries,
+                transcript_records.len(),
+            )
+            .saturating_sub(compactable_transcript_records.len()),
+        )
+        .unwrap_or(u64::MAX);
         if compactable_transcript_records.is_empty() {
             self.append_agent_status_text_to_terminal_buffer(
                 pane_id,
@@ -664,14 +672,7 @@ pub(super) fn runtime_model_compaction_source(
             runtime_model_compaction_entry_content(&block.content)
         ));
     }
-    let selected = runtime_compact_selected_entries(entries);
-    let omitted = entries.len().saturating_sub(selected.len());
-    if omitted > 0 {
-        lines.push(format!(
-            "Middle durable transcript entries omitted from compaction source: {omitted}"
-        ));
-    }
-    for entry in selected {
+    for entry in entries {
         lines.push(format!(
             "entry={} role={} turn={} pane={} content={}",
             entry.sequence,
@@ -831,20 +832,37 @@ pub(super) fn runtime_compact_retained_transcript_entries(
         return 0;
     }
     let active_entries = &durable_entries[durable_entries.len() - active_count..];
+    let groups = runtime_compact_transcript_execution_groups(active_entries);
+    if groups.is_empty() {
+        return 0;
+    }
+    let closed_group_count = groups
+        .iter()
+        .position(|group| {
+            !active_entries[group.clone()]
+                .iter()
+                .any(|entry| entry.role == TranscriptRole::Assistant)
+        })
+        .unwrap_or(groups.len());
     let tail_budget = runtime_compact_retained_context_tail_budget_words(
         context_budget_words,
         retained_tail_percent,
     );
-    let mut retained_entries = 0usize;
     let mut retained_words = 0usize;
-    for entry in active_entries.iter().rev() {
-        let entry_words = runtime_compact_transcript_entry_context_words(entry);
-        if retained_entries > 0 && retained_words.saturating_add(entry_words) > tail_budget {
+    let mut tail_group_start = groups.len();
+    for (group_index, group) in groups.iter().enumerate().rev() {
+        let group_words = active_entries[group.clone()]
+            .iter()
+            .map(runtime_compact_transcript_entry_context_words)
+            .fold(0usize, usize::saturating_add);
+        let must_retain = group_index >= closed_group_count || tail_group_start == groups.len();
+        if !must_retain && retained_words.saturating_add(group_words) > tail_budget {
             break;
         }
-        retained_entries += 1;
-        retained_words = retained_words.saturating_add(entry_words);
+        retained_words = retained_words.saturating_add(group_words);
+        tail_group_start = group_index;
     }
+    let retained_entries = active_count.saturating_sub(groups[tail_group_start].start);
     u64::try_from(retained_entries).unwrap_or(u64::MAX)
 }
 
@@ -879,8 +897,25 @@ pub(super) fn runtime_compact_forced_retained_transcript_entries(
     if active_count == 0 {
         return 0;
     }
-    let maximum_forced_retained = u64::try_from(active_count.saturating_sub(1)).unwrap_or(u64::MAX);
-    retained.min(maximum_forced_retained)
+    if !runtime_compact_transcript_entries_for_summary(
+        transcript_entries,
+        durable_entries,
+        retained,
+    )
+    .is_empty()
+    {
+        return retained;
+    }
+    let active_entries = &durable_entries[durable_entries.len() - active_count..];
+    let groups = runtime_compact_transcript_execution_groups(active_entries);
+    let Some(first_closed_group) = groups.iter().find(|group| {
+        active_entries[(*group).clone()]
+            .iter()
+            .any(|entry| entry.role == TranscriptRole::Assistant)
+    }) else {
+        return u64::try_from(active_count).unwrap_or(u64::MAX);
+    };
+    u64::try_from(active_count.saturating_sub(first_closed_group.end)).unwrap_or(u64::MAX)
 }
 
 /// Returns the active transcript entry count represented by the current shell
@@ -916,9 +951,43 @@ pub(super) fn runtime_compact_transcript_entries_for_summary(
     let retained_count = usize::try_from(retained_transcript_entries)
         .unwrap_or(usize::MAX)
         .min(active_count);
-    let compactable_count = active_count.saturating_sub(retained_count);
     let active_start = durable_entries.len().saturating_sub(active_count);
-    &durable_entries[active_start..active_start + compactable_count]
+    let active_entries = &durable_entries[active_start..];
+    let requested_compactable_count = active_count.saturating_sub(retained_count);
+    let compactable_count = runtime_compact_transcript_execution_groups(active_entries)
+        .into_iter()
+        .take_while(|group| group.end <= requested_compactable_count)
+        .take_while(|group| {
+            active_entries[group.clone()]
+                .iter()
+                .any(|entry| entry.role == TranscriptRole::Assistant)
+        })
+        .map(|group| group.end)
+        .last()
+        .unwrap_or(0);
+    &active_entries[..compactable_count]
+}
+
+/// Returns contiguous durable execution groups keyed by stable turn id.
+///
+/// All request messages, provider-native events, assistant output, and action
+/// results emitted by terminal persistence share one turn id. Grouping by that
+/// identity prevents compaction from separating any of those records.
+fn runtime_compact_transcript_execution_groups(
+    entries: &[TranscriptEntry],
+) -> Vec<std::ops::Range<usize>> {
+    let mut groups = Vec::new();
+    let mut start = 0usize;
+    for index in 1..entries.len() {
+        if entries[index].turn_id != entries[start].turn_id {
+            groups.push(start..index);
+            start = index;
+        }
+    }
+    if start < entries.len() {
+        groups.push(start..entries.len());
+    }
+    groups
 }
 
 /// Returns the word budget reserved for retained exact transcript replay.
@@ -951,45 +1020,6 @@ pub(super) fn runtime_compact_transcript_entry_context_words(entry: &TranscriptE
         .saturating_add(model_context_text_word_count(&entry.turn_id))
         .saturating_add(model_context_text_word_count(&entry.agent_id))
         .saturating_add(model_context_text_word_count(&entry.pane_id))
-}
-
-/// Runs the runtime compact selected entries operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn runtime_compact_selected_entries(
-    entries: &[TranscriptEntry],
-) -> Vec<&TranscriptEntry> {
-    /// Defines the MAX COMPACTED TRANSCRIPT ENTRIES const used by this subsystem.
-    ///
-    /// Keeping this value documented makes the contract explicit at the module
-    /// boundary and avoids relying on call-site inference.
-    const MAX_COMPACTED_TRANSCRIPT_ENTRIES: usize = 12;
-    /// Defines the LEADING COMPACTED TRANSCRIPT ENTRIES const used by this subsystem.
-    ///
-    /// Keeping this value documented makes the contract explicit at the module
-    /// boundary and avoids relying on call-site inference.
-    const LEADING_COMPACTED_TRANSCRIPT_ENTRIES: usize = 4;
-    /// Defines the TRAILING COMPACTED TRANSCRIPT ENTRIES const used by this subsystem.
-    ///
-    /// Keeping this value documented makes the contract explicit at the module
-    /// boundary and avoids relying on call-site inference.
-    const TRAILING_COMPACTED_TRANSCRIPT_ENTRIES: usize = 8;
-    if entries.len() <= MAX_COMPACTED_TRANSCRIPT_ENTRIES {
-        return entries.iter().collect();
-    }
-    entries
-        .iter()
-        .take(LEADING_COMPACTED_TRANSCRIPT_ENTRIES)
-        .chain(
-            entries.iter().skip(
-                entries
-                    .len()
-                    .saturating_sub(TRAILING_COMPACTED_TRANSCRIPT_ENTRIES),
-            ),
-        )
-        .collect()
 }
 
 /// Runs the runtime compact redact sensitive token operation for this subsystem.

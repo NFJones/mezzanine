@@ -8,9 +8,9 @@
 
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnExecution,
-    AgentTurnRecord, AgentTurnState, ContextBlock, ContextSourceKind, MezError, PathBuf, Result,
-    RuntimeSessionService, action_result_context_content, current_unix_seconds,
-    runtime_agent_action_summary, runtime_agent_turn_state_from_action_results,
+    AgentTurnRecord, AgentTurnState, MezError, PathBuf, Result, RuntimeSessionService,
+    current_unix_seconds, runtime_agent_action_summary,
+    runtime_agent_turn_state_from_action_results,
     runtime_execution_ready_for_provider_continuation, runtime_mezzanine_error_code,
 };
 use crate::runtime::runtime_effective_config_value;
@@ -73,25 +73,18 @@ impl RuntimeSessionService {
         if execution.terminal_state == AgentTurnState::Running
             && runtime_execution_ready_for_provider_continuation(execution)
         {
-            for result in execution.action_results.iter().filter(|result| {
-                matches!(
-                    result.action_type,
-                    "issue_add" | "issue_update" | "issue_query" | "issue_delete"
-                )
-            }) {
-                self.agent_turn_contexts_mut()
-                    .get_mut(&turn.turn_id)
-                    .ok_or_else(|| {
-                        MezError::invalid_state("running agent turn context is unavailable")
-                    })?
-                    .blocks
-                    .push(ContextBlock {
-                        source: ContextSourceKind::ActionResult,
-                        placement: mez_agent::ContextPlacement::EphemeralTail,
-                        label: format!("action result {}", result.action_id),
-                        content: action_result_context_content(result),
-                    });
-            }
+            let settled_results = execution
+                .action_results
+                .iter()
+                .filter(|result| {
+                    matches!(
+                        result.action_type,
+                        "issue_add" | "issue_update" | "issue_query" | "issue_delete"
+                    )
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            self.commit_settled_action_results_context(&turn.turn_id, &settled_results)?;
             self.agent
                 .pending_agent_provider_tasks
                 .insert(turn.turn_id.clone());

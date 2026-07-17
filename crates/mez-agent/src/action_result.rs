@@ -114,6 +114,15 @@ pub struct ActionResult {
 }
 
 impl ActionResult {
+    /// Returns whether this result has reached a deterministic terminal state.
+    ///
+    /// Running work and blocked approvals remain controller-owned volatile
+    /// state. Every other status is settled evidence that may be committed to
+    /// immutable conversation chronology.
+    pub fn is_terminal(&self) -> bool {
+        !matches!(self.status, ActionStatus::Running | ActionStatus::Blocked)
+    }
+
     /// Constructs a nonterminal result for an action still executing.
     pub fn running(
         turn: &(impl AgentTurnResultIdentity + ?Sized),

@@ -2823,7 +2823,12 @@ authority; placement changes cache and ordering lifecycle, not instruction
 priority.
 Once deterministic action evidence settles, it MUST be committed exactly once
 to append-only `ConversationAppend` chronology and any volatile copy MUST be
-removed atomically. Provider-neutral continuity diagnostics MUST keep
+removed atomically. A settlement batch containing a running action or blocked
+approval MUST be rejected without mutating chronology. Replaying a completed
+settlement MUST preserve the original chronological position and MUST NOT
+create a duplicate. Provider assistant output and its provider-native tool
+events plus terminal action results form one execution group for compaction
+and persistence. Provider-neutral continuity diagnostics MUST keep
 immutable and volatile token estimates, the immutable projection byte length
 and digest, the longest common immutable prefix, and an append-only flag without
 retaining prompt text. Transitions MUST distinguish new turns, compaction,
@@ -3536,15 +3541,23 @@ assistant and user text rather than silently dropping it before retry. Visible
 assistant and user transcript entries SHOULD NOT be byte-sliced before
 compaction; oversized entries SHOULD use the same compact summary path as other
 oversized context blocks.
-When conversation compaction runs, Mezzanine MUST retain a bounded raw tail of
-recent durable transcript entries after the compacted summary. The retained raw
-tail MUST cover approximately the configured
-`agents.compaction_raw_retention_percent` of the active model context budget by
-estimated replay word count, with at least the newest entry retained when any
-durable transcript entry exists. The raw tail MUST preserve author roles and exact
-visible assistant/user text so terse follow-up prompts can resolve recent
-references such as numbered list items. Older entries outside the raw tail
-SHOULD be represented by compact memory rather than replayed verbatim.
+When conversation compaction runs, Mezzanine MUST summarize only a closed
+prefix of complete execution groups. It MUST NOT split request messages,
+provider-native events, assistant output, or terminal tool/action results that
+share a turn. Open groups MUST remain outside summary input. Mezzanine MUST
+retain a bounded raw tail of recent durable execution groups after the compacted
+summary. Every retained entry MUST remain byte-for-byte identical and preserve
+its author role and order; compaction MUST NOT omit middle entries from the
+selected closed prefix. The retained raw tail MUST cover approximately the
+configured `agents.compaction_raw_retention_percent` of the active model context
+budget by estimated replay word count, rounded to execution-group boundaries.
+At least the newest complete group MUST be retained when it fits that budget.
+The raw tail MAY be empty when the newest group alone exceeds the budget and
+must be summarized to recover from a provider context-limit rejection. The raw
+tail MUST preserve author roles and exact visible assistant/user text so terse
+follow-up prompts can resolve recent references such as numbered list items.
+Older closed groups outside the raw tail SHOULD be represented by compact
+memory rather than replayed verbatim.
 When compact memory is injected into later model context, Mezzanine MUST also
 inject an explicit compaction notice explaining that older durable transcript
 entries were summarized and that only the retained recent raw tail remains
@@ -4530,6 +4543,11 @@ byte-stable during later provider context-limit recovery; later recovery MAY
 append another summary epoch for newly compacted raw blocks and MAY shrink the
 raw tail. Local context reduction MUST prefer compact summaries over partial
 block truncation so the model does not reason from silently incomplete context.
+Only `StablePrefix` and closed `ConversationAppend` execution groups may
+participate in this operation. `EphemeralTail` controller state MUST remain
+exact and outside summary input. Assistant blocks, provider-native tool events,
+and their settled result blocks MUST move across the summary boundary only as
+one indivisible group.
 Compaction MUST retain a bounded raw recent transcript tail alongside the
 summary epochs so exact recent references remain available after context
 reduction.
@@ -5202,8 +5220,11 @@ The baseline command capabilities are:
   runtime command paths MAY produce an implementation summary, but an explicit
   user `/compact` MUST attempt real transcript compaction whenever active
   durable transcript entries exist, regardless of retained-tail budget. It MUST
-  no-op only when there are no transcript
-  entries to compact or no durable transcript entries are available. When
+  no-op only when there are no closed transcript execution groups to compact or
+  no durable transcript entries are available. Terminal transcript persistence
+  MUST be idempotent by conversation and turn so duplicate lifecycle
+  finalization cannot append the same execution group or advance the active raw
+  replay high-water mark twice. When
   persistent memory is enabled and a config root is available, `/compact`
   SHOULD opportunistically prune expired persistent-memory records before it
   builds compaction context or queues model-backed work.

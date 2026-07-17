@@ -1405,6 +1405,61 @@ mod tests {
         );
     }
 
+    /// Verifies transcript compaction chooses only complete turn groups so
+    /// assistant output, provider-native events, and tool results cannot be
+    /// separated by the retained raw-tail boundary.
+    #[test]
+    fn runtime_compact_transcript_tail_preserves_complete_execution_groups() {
+        let roles = [
+            ("turn-1", TranscriptRole::User, "request one"),
+            ("turn-1", TranscriptRole::System, "native event one"),
+            ("turn-1", TranscriptRole::Assistant, "assistant one"),
+            ("turn-1", TranscriptRole::Tool, "result one"),
+            ("turn-2", TranscriptRole::User, "request two"),
+            ("turn-2", TranscriptRole::System, "native event two"),
+            ("turn-2", TranscriptRole::Assistant, "assistant two"),
+            ("turn-2", TranscriptRole::Tool, "result two"),
+        ];
+        let entries = roles
+            .into_iter()
+            .enumerate()
+            .map(|(index, (turn_id, role, content))| TranscriptEntry {
+                conversation_id: "compact-groups".to_string(),
+                sequence: u64::try_from(index).unwrap_or(0).saturating_add(1),
+                created_at_unix_seconds: 1,
+                role,
+                turn_id: turn_id.to_string(),
+                agent_id: "agent-%1".to_string(),
+                pane_id: "%1".to_string(),
+                content: content.to_string(),
+            })
+            .collect::<Vec<_>>();
+
+        let retained = runtime_compact_retained_transcript_entries(8, &entries, 10, 10);
+        let summarized = runtime_compact_transcript_entries_for_summary(8, &entries, retained);
+
+        assert_eq!(retained, 4);
+        assert_eq!(summarized, &entries[..4]);
+        assert_eq!(&entries[entries.len() - retained as usize..], &entries[4..]);
+    }
+
+    /// Verifies an incomplete durable turn remains entirely raw and cannot be
+    /// crossed by compaction even when a caller requests a smaller suffix.
+    #[test]
+    fn runtime_compact_transcript_summary_stops_before_open_execution_group() {
+        let mut entries = runtime_compact_test_entries(2, 8);
+        entries[0].turn_id = "closed-turn".to_string();
+        entries[0].role = TranscriptRole::Assistant;
+        entries[1].turn_id = "open-turn".to_string();
+        entries[1].role = TranscriptRole::User;
+
+        let summarized = runtime_compact_transcript_entries_for_summary(2, &entries, 0);
+        let forced = runtime_compact_forced_retained_transcript_entries(2, &entries, 100, 10);
+
+        assert_eq!(summarized, &entries[..1]);
+        assert_eq!(forced, 1);
+    }
+
     /// Builds deterministic transcript entries for compaction helper tests.
     ///
     /// # Parameters
@@ -1416,11 +1471,7 @@ mod tests {
                 conversation_id: "compact-test".to_string(),
                 sequence,
                 created_at_unix_seconds: sequence,
-                role: if sequence % 2 == 0 {
-                    TranscriptRole::User
-                } else {
-                    TranscriptRole::Assistant
-                },
+                role: TranscriptRole::Assistant,
                 turn_id: format!("turn-{sequence}"),
                 agent_id: "agent-%1".to_string(),
                 pane_id: "%1".to_string(),

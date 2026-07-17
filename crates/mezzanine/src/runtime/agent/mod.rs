@@ -30,7 +30,7 @@ use super::{
     RuntimeShellTransactionActionFailure, RuntimeSideEffect, RuntimeSubagentLineage, ScheduledWork,
     SenderIdentity, ShellTransaction, ShellTransactionOutputTransport, SubagentScopeDeclaration,
     SubagentSpawnRequest, SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload,
-    TranscriptEntry, TranscriptRole, action_result_context_content, assemble_model_request,
+    TranscriptEntry, TranscriptRole, assemble_model_request,
     compact_model_context_for_budget_with_retained_tail_percent, current_unix_millis,
     current_unix_seconds, decode_shell_output_transport_with_diagnostics, discover_project_root,
     exact_command_sha256, execute_mcp_action_through_runtime,
@@ -264,6 +264,8 @@ pub(crate) struct RuntimeAgentComponent {
     agent_turn_ledger: AgentTurnLedger,
     /// Assembled provider context keyed by turn id.
     agent_turn_contexts: BTreeMap<String, AgentContext>,
+    /// Terminal execution transcript groups already accepted for persistence.
+    agent_persisted_execution_transcripts: BTreeSet<(String, String)>,
     /// Action execution state keyed by turn id.
     agent_turn_executions: BTreeMap<String, AgentTurnExecution>,
 }
@@ -1731,11 +1733,9 @@ use mez_agent::outcome::{
     batch_rationale_repeats_visible_text as runtime_agent_batch_rationale_repeats_visible_batch_text,
     batch_visible_action_texts as runtime_agent_batch_visible_action_texts,
     normalize_user_visible_text as normalize_agent_user_visible_text,
-    runtime_action_result_error_code, runtime_action_result_has_error_code,
-    runtime_action_result_is_aggregated_loop_guard_failure,
-    runtime_action_result_is_feedback_candidate, runtime_action_result_is_terminal_failure,
-    runtime_action_status_name, runtime_action_type_is_shell_backed,
-    runtime_execution_can_feed_failure_to_model,
+    runtime_action_result_has_error_code, runtime_action_result_is_feedback_candidate,
+    runtime_action_result_is_terminal_failure, runtime_action_status_name,
+    runtime_action_type_is_shell_backed, runtime_execution_can_feed_failure_to_model,
     runtime_execution_uses_unbounded_apply_patch_recovery, runtime_failure_feedback_attempt_keys,
     runtime_failure_feedback_evidence_guidance, runtime_failure_feedback_loop_guard_aggregate_note,
     runtime_failure_feedback_repeat_guidance, runtime_failure_feedback_specific_guidance,

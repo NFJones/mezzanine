@@ -319,17 +319,16 @@ context_window_tokens = 40000
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-    service
-        .agent_turn_contexts_mut()
-        .get_mut("turn-1")
-        .unwrap()
-        .blocks
-        .push(ContextBlock {
+    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
+    mez_agent::insert_context_block_by_placement(
+        &mut context.blocks,
+        ContextBlock {
             source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "synthetic provider-rejected action result".to_string(),
             content: format!("provider-context-limit- {}", "cp ".repeat(10_000)),
-        });
+        },
+    );
     service.remove_pending_agent_provider_task("turn-1");
     let provider = RuntimeContextLimitThenSuccessProvider {
         requests: RefCell::new(Vec::new()),
@@ -370,7 +369,11 @@ context_window_tokens = 40000
         "{second_request_text}"
     );
     assert!(
-        second_request_text.contains("provider-context-limit-"),
+        second_request_text.contains("label=synthetic provider-rejected action result"),
+        "{second_request_text}"
+    );
+    assert!(
+        !second_request_text.contains("provider-context-limit-"),
         "{second_request_text}"
     );
     let pane_text = service
@@ -451,19 +454,19 @@ context_window_tokens = 40000
         },
         ContextBlock {
             source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "synthetic retained tail action result one".to_string(),
             content: format!("provider-context-limit-tail-one- {}", "tail ".repeat(5_000)),
         },
         ContextBlock {
             source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "synthetic retained tail action result two".to_string(),
             content: format!("provider-context-limit-tail-two- {}", "tail ".repeat(5_000)),
         },
         ContextBlock {
             source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "synthetic retained tail action result three".to_string(),
             content: format!(
                 "provider-context-limit-tail-three- {}",
@@ -592,19 +595,19 @@ context_window_tokens = 40000
         .blocks = vec![
         ContextBlock {
             source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "synthetic retained action result one".to_string(),
             content: format!("provider-context-limit-tail-one- {}", "tail ".repeat(5_000)),
         },
         ContextBlock {
             source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "synthetic retained action result two".to_string(),
             content: format!("provider-context-limit-tail-two- {}", "tail ".repeat(5_000)),
         },
         ContextBlock {
             source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "synthetic retained action result three".to_string(),
             content: format!(
                 "provider-context-limit-tail-three- {}",
@@ -702,17 +705,16 @@ max_output_tokens = 4096
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-    service
-        .agent_turn_contexts_mut()
-        .get_mut("turn-1")
-        .unwrap()
-        .blocks
-        .push(ContextBlock {
+    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
+    mez_agent::insert_context_block_by_placement(
+        &mut context.blocks,
+        ContextBlock {
             source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "synthetic retained action result".to_string(),
             content: "output-limit-retained-context".to_string(),
-        });
+        },
+    );
     service.remove_pending_agent_provider_task("turn-1");
     let provider = RuntimeOutputLimitThenSuccessProvider {
         requests: RefCell::new(Vec::new()),
@@ -865,17 +867,16 @@ context_window_tokens = 128000
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-    service
-        .agent_turn_contexts_mut()
-        .get_mut("turn-1")
-        .unwrap()
-        .blocks
-        .push(ContextBlock {
+    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
+    mez_agent::insert_context_block_by_placement(
+        &mut context.blocks,
+        ContextBlock {
             source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "synthetic same-turn result".to_string(),
             content: "same-turn result must survive compaction refresh".to_string(),
-        });
+        },
+    );
     let error =
         MezError::invalid_state("OpenAI stream returned an incomplete response: max_output_tokens")
             .with_provider_failure_json(r#"{"incomplete_details":{"reason":"max_output_tokens"}}"#);
@@ -1033,20 +1034,19 @@ context_window_tokens = 100000
         .resolve_profile("default")
         .unwrap();
     service.set_agent_turn_model_profile("turn-1", default_profile);
-    service
-        .agent_turn_contexts_mut()
-        .get_mut("turn-1")
-        .unwrap()
-        .blocks
-        .push(ContextBlock {
+    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
+    mez_agent::insert_context_block_by_placement(
+        &mut context.blocks,
+        ContextBlock {
             source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "synthetic routing action result".to_string(),
             content: format!(
                 "routing-context-pressure- {}",
                 "context-pressure ".repeat(50_000)
             ),
-        });
+        },
+    );
     let error = MezError::invalid_state(
         "OpenAI Responses API returned status 400: context length exceeded",
     )
@@ -1075,11 +1075,13 @@ context_window_tokens = 100000
         .join("\n");
     assert!(stored_context.contains("[context compacted]"));
     let stored_blocks = &service.agent_turn_contexts().get("turn-1").unwrap().blocks;
-    assert!(stored_blocks.iter().any(|block| {
-        block.source == ContextSourceKind::ActionResult
-            && block.label == "synthetic routing action result"
-            && block.content.contains("routing-context-pressure-")
-    }));
+    assert!(
+        !stored_blocks
+            .iter()
+            .any(|block| block.source == ContextSourceKind::ActionResult)
+    );
+    assert!(stored_context.contains("label=synthetic routing action result"));
+    assert!(!stored_context.contains("routing-context-pressure-"));
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
@@ -1148,7 +1150,7 @@ context_window_tokens = 5000
     for sequence in 1..=12 {
         let (role, content) = match sequence {
             1 => (
-                mez_agent::transcript::TranscriptRole::User,
+                mez_agent::transcript::TranscriptRole::Assistant,
                 format!(
                     "old raw marker should be summary only {}",
                     "old-word ".repeat(28)
@@ -1162,7 +1164,7 @@ context_window_tokens = 5000
                 ),
             ),
             _ if sequence % 2 == 0 => (
-                mez_agent::transcript::TranscriptRole::User,
+                mez_agent::transcript::TranscriptRole::Assistant,
                 format!("filler user turn {sequence} {}", "tail-user ".repeat(28)),
             ),
             _ => (

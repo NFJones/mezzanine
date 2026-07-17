@@ -2,6 +2,101 @@
 
 use super::*;
 
+/// Verifies terminal transcript persistence accepts one complete execution
+/// group exactly once even when two lifecycle paths attempt finalization.
+///
+/// Repeated cleanup must not append a second assistant/tool group or advance
+/// the shell session's raw transcript high-water mark twice.
+#[test]
+fn runtime_terminal_execution_transcript_persistence_is_idempotent() {
+    let mut service = test_runtime_service();
+    let transcript_root = temp_root("runtime-terminal-transcript-idempotent");
+    let transcript_store = AgentTranscriptStore::new(transcript_root.clone());
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let started = service
+        .start_agent_prompt_turn("%1", "persist this result once")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let action = mez_agent::AgentAction {
+        id: "say-once".to_string(),
+        rationale: "present the result once".to_string(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Final,
+            text: "done".to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response: mez_agent::ModelResponse {
+            provider: "openai".to_string(),
+            model: "test".to_string(),
+            raw_text: "done".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Vec::new(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "present the result once".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![action.clone()],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::succeeded(
+            &turn,
+            &action,
+            vec!["done".to_string()],
+            None,
+        )],
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+
+    let first = service
+        .persist_runtime_agent_turn_execution_transcript(&turn, &execution)
+        .unwrap();
+    let second = service
+        .persist_runtime_agent_turn_execution_transcript(&turn, &execution)
+        .unwrap();
+    let entries = transcript_store.inspect(&conversation_id).unwrap();
+
+    assert!(first > 0);
+    assert_eq!(second, 0);
+    assert_eq!(entries.len(), first);
+    assert!(entries.iter().all(|entry| entry.turn_id == turn.turn_id));
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get("%1")
+            .unwrap()
+            .transcript_entries,
+        u64::try_from(first).unwrap()
+    );
+    let _ = std::fs::remove_dir_all(transcript_root);
+}
+
 /// Verifies provider-completion validation accepts terminal controller failure
 /// summaries.
 ///
