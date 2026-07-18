@@ -179,7 +179,7 @@ fn truncate_runtime_context_text(content: &str, max_bytes: usize, label: &str) -
 }
 
 /// Returns bounded local-message context including the message payload.
-pub(super) fn runtime_local_message_context_content(envelope: &Envelope) -> String {
+pub(crate) fn runtime_local_message_context_content(envelope: &Envelope) -> String {
     let mut lines = vec![format!(
         "from={} id={} type={} content_type={} ttl_ms={}",
         envelope.sender.agent_id,

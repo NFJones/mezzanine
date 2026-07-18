@@ -36,7 +36,7 @@ fn mcp_summary_for_server_ids(server_ids: &[&str]) -> McpPromptSummary {
 /// relative to durable prompt chronology.
 fn mcp_context_content(context: &AgentContext) -> &str {
     &context
-        .blocks
+        .blocks()
         .iter()
         .find(|block| block.label == MCP_INTEGRATIONS_CONTEXT_LABEL)
         .expect("MCP live-state block should be present")
@@ -62,12 +62,12 @@ fn mcp_context_is_provider_aware_and_keeps_unavailability_diagnostics() {
 
     assert!(
         anthropic
-            .blocks
+            .blocks()
             .iter()
             .all(|block| block.label != MCP_INTEGRATIONS_CONTEXT_LABEL)
     );
     let openai_manifest = openai
-        .blocks
+        .blocks()
         .iter()
         .find(|block| block.label == MCP_INTEGRATIONS_CONTEXT_LABEL)
         .unwrap();
@@ -364,9 +364,12 @@ fn mcp_context_omits_integrations_without_explicit_server_invocation() {
     )
     .unwrap();
 
-    assert_eq!(context.blocks.len(), 1);
-    assert_eq!(context.blocks[0].source, ContextSourceKind::UserInstruction);
-    assert_eq!(context.blocks[0].content, "call a tool");
+    assert_eq!(context.blocks().len(), 1);
+    assert_eq!(
+        context.blocks()[0].source,
+        ContextSourceKind::UserInstruction
+    );
+    assert_eq!(context.blocks()[0].content, "call a tool");
 }
 
 #[test]
@@ -462,7 +465,7 @@ fn mcp_context_refresh_replaces_previous_integration_block() {
     let context = append_mcp_context(context, &first).unwrap();
     let context = append_mcp_context(context, &second).unwrap();
     let mcp_blocks = context
-        .blocks
+        .blocks()
         .iter()
         .filter(|block| block.label == "mcp integrations")
         .collect::<Vec<_>>();
@@ -511,7 +514,7 @@ fn memory_context_accepts_sensitive_records_without_heuristic_rejection() {
 
     assert!(
         context
-            .blocks
+            .blocks()
             .iter()
             .any(|block| block.source == ContextSourceKind::Memory
                 && block.content == "api_key = sk-secret")
@@ -555,10 +558,13 @@ fn memory_context_appends_after_active_context_in_priority_order() {
     let context = append_memory_context(context, &records, 2).unwrap();
     let request = assemble_test_model_request(&context);
 
-    assert_eq!(context.blocks[0].source, ContextSourceKind::UserInstruction);
-    assert_eq!(context.blocks[0].content, "do the task");
-    assert!(context.blocks[1].label.contains("high"));
-    assert!(context.blocks[2].label.contains("low"));
+    assert_eq!(
+        context.blocks()[0].source,
+        ContextSourceKind::UserInstruction
+    );
+    assert_eq!(context.blocks()[0].content, "do the task");
+    assert!(context.blocks()[1].label.contains("high"));
+    assert!(context.blocks()[2].label.contains("low"));
     assert_eq!(request.messages[1].role, ModelMessageRole::User);
     assert_eq!(request.messages[2].role, ModelMessageRole::Context);
 }
@@ -579,7 +585,10 @@ fn permission_context_is_not_model_visible() {
     .unwrap();
     let context = append_permission_policy_context(context).unwrap();
 
-    assert_eq!(context.blocks.len(), 1);
-    assert_eq!(context.blocks[0].source, ContextSourceKind::UserInstruction);
-    assert_eq!(context.blocks[0].content, "edit the file");
+    assert_eq!(context.blocks().len(), 1);
+    assert_eq!(
+        context.blocks()[0].source,
+        ContextSourceKind::UserInstruction
+    );
+    assert_eq!(context.blocks()[0].content, "edit the file");
 }

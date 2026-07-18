@@ -269,7 +269,7 @@ impl RuntimeSessionService {
     fn routed_handoff_transcript_content(&self, turn_id: &str) -> Option<String> {
         self.agent_turn_contexts()
             .get(turn_id)?
-            .blocks
+            .blocks()
             .iter()
             .rev()
             .find(|block| {

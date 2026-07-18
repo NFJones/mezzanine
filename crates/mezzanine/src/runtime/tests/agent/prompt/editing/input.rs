@@ -75,7 +75,7 @@ fn runtime_attached_input_submits_visible_agent_prompt_non_modally() {
     assert_eq!(turn.state, AgentTurnState::Running);
     assert!(
         context
-            .blocks
+            .blocks()
             .iter()
             .any(|block| block.content.contains("summarize\nmore"))
     );
@@ -149,7 +149,7 @@ fn runtime_agent_prompt_preserves_below_threshold_split_paste_fidelity() {
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
     assert!(
         context
-            .blocks
+            .blocks()
             .iter()
             .any(|block| block.content.contains(&expected))
     );
@@ -219,7 +219,7 @@ fn runtime_agent_prompt_preserves_large_split_paste_beyond_visible_area() {
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
     assert!(
         context
-            .blocks
+            .blocks()
             .iter()
             .any(|block| { block.content.contains(&format!("prefix {payload} suffix")) })
     );

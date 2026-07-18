@@ -34,7 +34,7 @@ impl MemoryActionBudget {
     /// work loop.
     pub fn from_context(context: &AgentContext) -> Self {
         let mut budget = Self::default();
-        for block in &context.blocks {
+        for block in context.blocks() {
             if block.source != ContextSourceKind::ActionResult {
                 continue;
             }

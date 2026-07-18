@@ -241,12 +241,12 @@ fn runtime_agent_context_explicit_skill_prompt_loads_skill_context() {
         .agent_context_for_pane_prompt("%1", "$review focus src/lib.rs", 0)
         .unwrap();
     let skill_block = context
-        .blocks
+        .blocks()
         .iter()
         .find(|block| block.label == "explicit skill review")
         .expect("missing explicit skill context block");
     let prompt_block = context
-        .blocks
+        .blocks()
         .iter()
         .find(|block| block.label == "user prompt")
         .expect("missing raw user prompt block");
@@ -278,7 +278,7 @@ fn runtime_agent_context_builtin_create_skill_prompt_loads_builtin_context() {
         )
         .unwrap();
     let skill_block = context
-        .blocks
+        .blocks()
         .iter()
         .find(|block| block.label == "explicit skill create-skill")
         .expect("missing explicit built-in skill context block");
@@ -301,7 +301,7 @@ fn runtime_agent_context_builtin_create_skill_prompt_loads_builtin_context() {
     );
     assert!(
         context
-            .blocks
+            .blocks()
             .iter()
             .all(|block| block.label != "explicit skill invocation create-skill")
     );
@@ -378,7 +378,7 @@ fn runtime_agent_context_omits_persisted_skill_payloads_from_replay() {
         .agent_context_for_pane_prompt("%1", "continue", 0)
         .unwrap();
     let replayed = context
-        .blocks
+        .blocks()
         .iter()
         .filter(|block| {
             matches!(

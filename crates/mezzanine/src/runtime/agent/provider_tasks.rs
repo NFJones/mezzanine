@@ -32,6 +32,36 @@ use super::{
 use crate::integrations::agent::provider::ModelProvider;
 
 impl RuntimeSessionService {
+    /// Installs a deterministic provider claim at a supplied context boundary
+    /// for actor-level causal-order regression tests.
+    #[cfg(test)]
+    pub(crate) fn record_claimed_agent_provider_context_for_tests(
+        &mut self,
+        turn_id: &str,
+        context_event_high_water_mark: u64,
+    ) -> Result<()> {
+        let turn = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == turn_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("provider claim test turn is unavailable"))?;
+        self.agent.claimed_agent_provider_tasks.insert(
+            turn_id.to_string(),
+            RuntimeAgentProviderClaim {
+                turn_id: turn_id.to_string(),
+                agent_id: turn.agent_id,
+                generation: 1,
+                claimed_at_unix_ms: current_unix_millis(),
+                timeout_ms: DEFAULT_PROVIDER_TIMEOUT_MS,
+                context_event_high_water_mark,
+            },
+        );
+        self.agent.pending_agent_provider_tasks.remove(turn_id);
+        Ok(())
+    }
+
     /// Clears retry-attempt state for one provider turn.
     pub(crate) fn clear_agent_provider_retry_attempt(&mut self, turn_id: &str) {
         self.agent
@@ -405,7 +435,6 @@ impl RuntimeSessionService {
             )
         } else {
             self.refresh_agent_turn_project_guidance_context(&turn)?;
-            self.drain_pending_agent_turn_steering_context(&turn)?;
             let durable = self
                 .agent_turn_contexts()
                 .get(turn_id)
@@ -1020,6 +1049,10 @@ impl RuntimeSessionService {
                 generation,
                 claimed_at_unix_ms: current_unix_millis(),
                 timeout_ms,
+                context_event_high_water_mark: dispatch
+                    .context
+                    .durable()
+                    .event_sequence_high_water_mark(),
             },
         );
         self.append_agent_trace_turn_event(

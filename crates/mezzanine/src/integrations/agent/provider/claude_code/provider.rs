@@ -94,10 +94,8 @@ impl AsyncModelProvider for ClaudeCodeProvider {
                     let output = run_claude_code_subprocess(ClaudeCodeSubprocessRequest {
                         program: &self.program,
                         model: &request.model,
-                        session: None,
                         system_prompt: &system_prompt,
                         prompt: &prompt,
-                        resume_prompt: None,
                         reasoning_effort: request.reasoning_effort.as_deref(),
                         timeout_ms: self.timeout_ms,
                         json_output: true,

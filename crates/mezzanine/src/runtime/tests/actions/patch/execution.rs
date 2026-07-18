@@ -131,7 +131,7 @@ fn runtime_semantic_mutation_logs_colored_diff_in_normal_mode() {
         .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
-        .blocks
+        .blocks()
         .iter()
         .find(|block| {
             block.source == ContextSourceKind::ActionResult
@@ -328,7 +328,7 @@ fn runtime_apply_patch_read_phase_truncation_dispatches_specific_error_plan() {
         .unwrap();
     assert!(!service.agent_turn_executions().contains_key("turn-1"));
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
-    assert!(context.blocks.iter().all(|block| {
+    assert!(context.blocks().iter().all(|block| {
         block.source != ContextSourceKind::RuntimeHint || block.label != "action failure feedback"
     }));
     service.terminate_all_pane_processes().unwrap();
@@ -744,14 +744,14 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
         vec![1]
     );
     let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block
                 .content
                 .contains("[action_result patch-transport apply_patch failed]")
             && block.content.contains("pane_input_write_failed")
     }));
-    assert!(context.blocks.iter().all(|block| {
+    assert!(context.blocks().iter().all(|block| {
         block.source != ContextSourceKind::RuntimeHint || block.label != "action failure feedback"
     }));
     service.terminate_all_pane_processes().unwrap();

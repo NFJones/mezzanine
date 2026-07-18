@@ -12,8 +12,11 @@ use super::{
     DEFAULT_COMMAND_SHELL_CLASSIFICATION, MezError, PermissionPolicy, Result,
     RuntimeSessionService, exact_command_sha256, json_escape, runtime_agent_action_summary,
     runtime_agent_turn_state_from_action_results, runtime_apply_persisted_config_mutation_batch,
-    runtime_execution_ready_for_provider_continuation, runtime_mezzanine_error_code,
-    runtime_set_theme_command,
+    runtime_mezzanine_error_code, runtime_set_theme_command,
+};
+#[cfg(test)]
+use super::{
+    outcome::RuntimeTerminalActionObservations, runtime_execution_ready_for_provider_continuation,
 };
 use crate::config::{compose_effective_config, contains_secret_material};
 use crate::runtime::fs;
@@ -926,20 +929,6 @@ impl RuntimeSessionService {
             &execution.action_results,
             execution.final_turn,
         );
-        if execution.terminal_state == AgentTurnState::Running
-            && runtime_execution_ready_for_provider_continuation(execution)
-        {
-            let settled_results = execution
-                .action_results
-                .iter()
-                .filter(|result| result.action_type == "config_change")
-                .cloned()
-                .collect::<Vec<_>>();
-            self.commit_settled_action_results_context(&turn.turn_id, &settled_results)?;
-            self.agent
-                .pending_agent_provider_tasks
-                .insert(turn.turn_id.clone());
-        }
         Ok(executed)
     }
 
@@ -1094,20 +1083,6 @@ impl RuntimeSessionService {
             &execution.action_results,
             execution.final_turn,
         );
-        if execution.terminal_state == AgentTurnState::Running
-            && runtime_execution_ready_for_provider_continuation(execution)
-        {
-            let settled_results = execution
-                .action_results
-                .iter()
-                .filter(|result| result.action_type == "config_change")
-                .cloned()
-                .collect::<Vec<_>>();
-            self.commit_settled_action_results_context(&turn.turn_id, &settled_results)?;
-            self.agent
-                .pending_agent_provider_tasks
-                .insert(turn.turn_id.clone());
-        }
         Ok(executed)
     }
 
@@ -1136,7 +1111,23 @@ impl RuntimeSessionService {
             }) {
                 continue;
             }
+            let mut terminal_observations = RuntimeTerminalActionObservations::default();
+            terminal_observations.observe(&execution);
             if self.execute_running_config_change_actions_for_turn(&turn, &mut execution)? > 0 {
+                terminal_observations.observe(&execution);
+                if !terminal_observations.results().is_empty() {
+                    self.commit_settled_action_results_context(
+                        &turn.turn_id,
+                        terminal_observations.results(),
+                    )?;
+                }
+                if execution.terminal_state == AgentTurnState::Running
+                    && runtime_execution_ready_for_provider_continuation(&execution)
+                {
+                    self.agent
+                        .pending_agent_provider_tasks
+                        .insert(turn.turn_id.clone());
+                }
                 self.agent_turn_executions_mut()
                     .insert(turn.turn_id.clone(), execution);
             }

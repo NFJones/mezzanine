@@ -2,6 +2,8 @@
 
 use super::super::RuntimeSessionService;
 #[cfg(test)]
+use super::super::outcome::RuntimeTerminalActionObservations;
+#[cfg(test)]
 use super::super::{
     AgentTurnExecution, AgentTurnRecord, AgentTurnState, EventKind, ModelProfile,
     ModelTokenUsageKey, Result, TaskState, json_escape, runtime_agent_execution_failure_error,
@@ -76,23 +78,39 @@ impl RuntimeSessionService {
         self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         self.append_agent_execution_assistant_context(turn, &execution)?;
         self.record_agent_copy_output(turn, &execution);
+        let mut terminal_observations = RuntimeTerminalActionObservations::default();
+        terminal_observations.observe(&execution);
         let skill_actions_executed =
             self.execute_running_skill_actions_for_turn(turn, &mut execution)?;
+        terminal_observations.observe(&execution);
         let message_actions_executed =
             self.execute_running_message_actions_for_turn(turn, &mut execution)?;
+        terminal_observations.observe(&execution);
         let network_actions_executed = 0usize;
         let mcp_actions_executed =
             self.execute_running_mcp_actions_for_turn(turn, &mut execution)?;
+        terminal_observations.observe(&execution);
         let spawn_actions_executed =
             self.execute_running_spawn_actions_for_turn(turn, &mut execution)?;
+        terminal_observations.observe(&execution);
         let config_actions_executed =
             self.execute_running_config_change_actions_for_turn(turn, &mut execution)?;
+        terminal_observations.observe(&execution);
         let memory_actions_executed =
             self.execute_running_memory_actions_for_turn(turn, &mut execution)?;
+        terminal_observations.observe(&execution);
         let _issue_actions_executed =
             self.execute_running_issue_actions_for_turn(turn, &mut execution)?;
+        terminal_observations.observe(&execution);
         let shell_actions_dispatched =
             self.dispatch_running_shell_actions_to_panes(turn, &mut execution)?;
+        terminal_observations.observe(&execution);
+        if !terminal_observations.results().is_empty() {
+            self.commit_settled_action_results_context(
+                &turn.turn_id,
+                terminal_observations.results(),
+            )?;
+        }
         self.append_agent_trace_maap_action_results(
             &turn.pane_id,
             &turn.turn_id,
@@ -117,7 +135,6 @@ impl RuntimeSessionService {
                 "provider_execution_failed_action",
             )?
         };
-        let _ = self.continue_completed_turn_for_pending_steering(turn, &mut execution)?;
         self.present_deferred_agent_say_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         let mut persisted_transcript_entries = 0usize;
         if failure_feedback_queued {

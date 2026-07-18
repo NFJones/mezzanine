@@ -15,6 +15,113 @@ use super::{
 };
 
 impl RuntimeSessionService {
+    /// Commits unread runtime-agent messages at the actor boundary in delivery
+    /// sequence order and acknowledges each message only after its canonical
+    /// reference event exists.
+    ///
+    /// Messages for agents without an active queued, running, or blocked turn
+    /// remain behind the durable delivery cursor. A later prompt builder places
+    /// them before that task's prelude and prompt. Messages for an active turn
+    /// append at arrival time; an older in-flight provider claim will therefore
+    /// be rejected by the canonical event high-water check.
+    pub(crate) fn deliver_pending_runtime_agent_messages(&mut self, now_ms: u64) -> Result<usize> {
+        let ready = self
+            .control
+            .message_service()
+            .fanout_ready(now_ms, usize::MAX);
+        let mut committed = 0usize;
+        for fanout in ready {
+            let recipient = fanout.recipient;
+            if !recipient.as_str().starts_with("agent-") {
+                continue;
+            }
+            let Some(turn) = self
+                .agent_turn_ledger()
+                .turns()
+                .iter()
+                .rev()
+                .find(|turn| {
+                    turn.agent_id == recipient.as_str()
+                        && matches!(
+                            turn.state,
+                            AgentTurnState::Queued
+                                | AgentTurnState::Running
+                                | AgentTurnState::Blocked
+                        )
+                })
+                .cloned()
+            else {
+                continue;
+            };
+            if !self.agent_turn_contexts().contains_key(&turn.turn_id) {
+                continue;
+            }
+
+            for message in fanout.batch.messages {
+                let label = format!(
+                    "local message sequence {} id {}",
+                    message.sequence, message.envelope.id
+                );
+                let already_committed =
+                    self.agent_turn_contexts()
+                        .get(&turn.turn_id)
+                        .is_some_and(|context| {
+                            context.blocks().iter().any(|block| {
+                                block.source == mez_agent::ContextSourceKind::LocalMessage
+                                    && block.label == label
+                            })
+                        });
+                if !already_committed {
+                    let content = crate::runtime::control::runtime_local_message_context_content(
+                        &message.envelope,
+                    );
+                    self.agent_turn_contexts_mut()
+                        .get_mut(&turn.turn_id)
+                        .ok_or_else(|| {
+                            MezError::invalid_state("runtime agent turn context is unavailable")
+                        })?
+                        .append_reference_event(
+                            mez_agent::ContextSourceKind::LocalMessage,
+                            label,
+                            content,
+                        )?;
+                    committed = committed.saturating_add(1);
+                    self.append_agent_trace_turn_event(
+                        &turn.pane_id,
+                        &turn.turn_id,
+                        &format!(
+                            "local_message committed sequence={} event_high_water={}",
+                            message.sequence,
+                            self.agent_turn_contexts()
+                                .get(&turn.turn_id)
+                                .map(mez_agent::AgentContext::event_sequence_high_water_mark)
+                                .unwrap_or(0)
+                        ),
+                    )?;
+                }
+                self.control
+                    .message_service_mut()
+                    .advance_subscription(&recipient, message.sequence)?;
+            }
+
+            if turn.state == AgentTurnState::Running
+                && !self.agent_provider_task_is_owned(&turn.turn_id)
+                && self
+                    .agent_turn_executions()
+                    .get(&turn.turn_id)
+                    .is_none_or(runtime_execution_ready_for_provider_continuation)
+            {
+                self.queue_agent_provider_task(turn.turn_id.clone());
+                self.append_agent_trace_turn_event(
+                    &turn.pane_id,
+                    &turn.turn_id,
+                    "provider_task queued reason=local_message_arrival",
+                )?;
+            }
+        }
+        Ok(committed)
+    }
+
     /// Runs the execute running message actions for turn operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -54,20 +161,6 @@ impl RuntimeSessionService {
             &execution.action_results,
             execution.final_turn,
         );
-        if execution.terminal_state == AgentTurnState::Running
-            && runtime_execution_ready_for_provider_continuation(execution)
-        {
-            let settled_results = execution
-                .action_results
-                .iter()
-                .filter(|result| result.action_type == "send_message")
-                .cloned()
-                .collect::<Vec<_>>();
-            self.commit_settled_action_results_context(&turn.turn_id, &settled_results)?;
-            self.agent
-                .pending_agent_provider_tasks
-                .insert(turn.turn_id.clone());
-        }
         Ok(executed)
     }
 
@@ -156,6 +249,7 @@ impl RuntimeSessionService {
                 return Ok(result);
             }
         };
+        self.deliver_pending_runtime_agent_messages(now_ms)?;
         Ok(ActionResult::succeeded(
             turn,
             action,

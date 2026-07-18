@@ -1,10 +1,11 @@
 //! Assistant chronology and controller-side rationale suppression.
 
 use super::super::{
-    AgentTurnExecution, AgentTurnRecord, ContextBlock, ContextSourceKind, MezError, Result,
+    AgentTurnExecution, AgentTurnRecord, ContextSourceKind, MezError, Result,
     RuntimeSessionService, assistant_context_content_for_execution,
     runtime_suppress_redundant_batch_rationale,
 };
+use mez_agent::ContextExecutionGroupId;
 
 impl RuntimeSessionService {
     /// Appends the provider response's assistant-visible context to a running
@@ -28,27 +29,22 @@ impl RuntimeSessionService {
             .get_mut(&turn.turn_id)
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let label = format!("assistant response for {}", turn.turn_id);
-        if context.blocks.iter().any(|block| {
+        if context.blocks().iter().any(|block| {
             block.source == ContextSourceKind::TranscriptAssistant
                 && block.label == label
                 && block.content == content
         }) {
             return Ok(());
         }
-        let insertion_index = context
-            .blocks
-            .iter()
-            .position(|block| block.placement == mez_agent::ContextPlacement::EphemeralTail)
-            .unwrap_or(context.blocks.len());
-        context.blocks.insert(
-            insertion_index,
-            ContextBlock {
-                source: ContextSourceKind::TranscriptAssistant,
-                placement: mez_agent::ContextPlacement::ConversationAppend,
-                label,
-                content,
-            },
-        );
+        let group_id = ContextExecutionGroupId::new(format!(
+            "{}:provider-response:{}",
+            turn.turn_id,
+            context.event_sequence_high_water_mark().saturating_add(1)
+        ))
+        .map_err(|error| MezError::invalid_state(error.to_string()))?;
+        context
+            .append_assistant_event(label, content, group_id)
+            .map_err(|error| MezError::invalid_state(error.to_string()))?;
         Ok(())
     }
 

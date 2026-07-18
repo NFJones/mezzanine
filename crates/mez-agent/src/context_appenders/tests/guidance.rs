@@ -45,23 +45,32 @@ fn project_guidance_context_is_inserted_before_user_prompt() {
 
     let context = append_project_guidance_context(context, &files, 2).unwrap();
 
-    assert_eq!(context.blocks[0].source, ContextSourceKind::Policy);
-    assert_eq!(context.blocks[1].source, ContextSourceKind::ProjectGuidance);
-    assert_eq!(context.blocks[2].source, ContextSourceKind::ProjectGuidance);
+    assert_eq!(context.blocks()[0].source, ContextSourceKind::Policy);
+    assert_eq!(
+        context.blocks()[1].source,
+        ContextSourceKind::ProjectGuidance
+    );
+    assert_eq!(
+        context.blocks()[2].source,
+        ContextSourceKind::ProjectGuidance
+    );
     assert!(
-        context.blocks[1]
+        context.blocks()[1]
             .label
             .starts_with("active repository instructions (scope .")
     );
     assert!(
-        context.blocks[2]
+        context.blocks()[2]
             .label
             .starts_with("active repository instructions (scope ./src")
     );
-    assert!(!context.blocks[1].label.contains("AGENTS.md"));
-    assert!(!context.blocks[2].label.contains("AGENTS.md"));
-    assert!(context.blocks[2].label.contains("truncated"));
-    assert_eq!(context.blocks[3].source, ContextSourceKind::UserInstruction);
+    assert!(!context.blocks()[1].label.contains("AGENTS.md"));
+    assert!(!context.blocks()[2].label.contains("AGENTS.md"));
+    assert!(context.blocks()[2].label.contains("truncated"));
+    assert_eq!(
+        context.blocks()[3].source,
+        ContextSourceKind::UserInstruction
+    );
 }
 
 #[test]
@@ -96,9 +105,15 @@ fn project_guidance_context_precedes_task_environment_configuration() {
 
     let context = append_project_guidance_context(context, &files, 1).unwrap();
 
-    assert_eq!(context.blocks[0].source, ContextSourceKind::ProjectGuidance);
-    assert_eq!(context.blocks[1].label, "environment signature");
-    assert_eq!(context.blocks[2].source, ContextSourceKind::UserInstruction);
+    assert_eq!(
+        context.blocks()[0].source,
+        ContextSourceKind::ProjectGuidance
+    );
+    assert_eq!(context.blocks()[1].label, "environment signature");
+    assert_eq!(
+        context.blocks()[2].source,
+        ContextSourceKind::UserInstruction
+    );
     context.validate_placement_order().unwrap();
 }
 
@@ -141,7 +156,7 @@ fn project_guidance_context_replaces_existing_guidance_blocks() {
     let context = set_project_guidance_context(context, &files, 2).unwrap();
 
     let guidance = context
-        .blocks
+        .blocks()
         .iter()
         .filter(|block| block.source == ContextSourceKind::ProjectGuidance)
         .collect::<Vec<_>>();
@@ -152,9 +167,15 @@ fn project_guidance_context_replaces_existing_guidance_blocks() {
             .content
             .contains("If a higher-priority instruction prevents following this file")
     );
-    assert_eq!(context.blocks[0].source, ContextSourceKind::Policy);
-    assert_eq!(context.blocks[1].source, ContextSourceKind::ProjectGuidance);
-    assert_eq!(context.blocks[2].source, ContextSourceKind::UserInstruction);
+    assert_eq!(context.blocks()[0].source, ContextSourceKind::Policy);
+    assert_eq!(
+        context.blocks()[1].source,
+        ContextSourceKind::ProjectGuidance
+    );
+    assert_eq!(
+        context.blocks()[2].source,
+        ContextSourceKind::UserInstruction
+    );
 }
 
 #[test]
@@ -190,28 +211,31 @@ fn project_guidance_context_respects_file_limit_and_skips_empty_content() {
 
     let context = append_project_guidance_context(context, &files, 2).unwrap();
 
-    assert_eq!(context.blocks.len(), 2);
-    assert_eq!(context.blocks[0].source, ContextSourceKind::ProjectGuidance);
+    assert_eq!(context.blocks().len(), 2);
+    assert_eq!(
+        context.blocks()[0].source,
+        ContextSourceKind::ProjectGuidance
+    );
     assert!(
-        context.blocks[0]
+        context.blocks()[0]
             .label
             .starts_with("active repository instructions (scope ./src")
     );
-    assert!(!context.blocks[0].label.contains("AGENTS.md"));
+    assert!(!context.blocks()[0].label.contains("AGENTS.md"));
     assert!(
-        context.blocks[0]
+        context.blocks()[0]
             .content
             .contains("Repository instruction contract")
     );
     assert!(
-        context.blocks[0]
+        context.blocks()[0]
             .content
             .contains(r#"<repository_instructions scope="./src""#)
     );
-    assert!(!context.blocks[0].content.contains("AGENTS.md"));
-    assert!(context.blocks[0].content.contains("src guidance"));
+    assert!(!context.blocks()[0].content.contains("AGENTS.md"));
+    assert!(context.blocks()[0].content.contains("src guidance"));
     assert!(
-        context.blocks[0]
+        context.blocks()[0]
             .content
             .contains("</repository_instructions>")
     );
@@ -264,174 +288,4 @@ fn project_guidance_is_templated_into_system_prompt() {
             .skip(1)
             .all(|message| message.source != ContextSourceKind::ProjectGuidance)
     );
-}
-
-#[test]
-/// Verifies idle scheduler context remains available when the active task is
-/// about scheduling or parallel work. This keeps useful controller state
-/// discoverable for subagent and concurrency tasks without adding it to every
-/// unrelated provider turn.
-fn scheduler_context_keeps_relevant_idle_state_compact() {
-    let context = AgentContext::new(vec![ContextBlock {
-        source: ContextSourceKind::UserInstruction,
-        placement: crate::ContextPlacement::ConversationAppend,
-        label: "user".to_string(),
-        content: "spawn subagents for this task".to_string(),
-    }])
-    .unwrap();
-    let scheduler = AgentScheduler::new(2).unwrap();
-
-    let context = append_scheduler_context(context, &scheduler).unwrap();
-    let scheduler_context = context
-        .blocks
-        .iter()
-        .find(|block| block.label == "scheduler state")
-        .unwrap();
-    assert_eq!(
-        scheduler_context.content,
-        "state=idle\nmax_concurrent_agents=2"
-    );
-    assert!(!scheduler_context.content.contains("running_turns=none"));
-    assert!(!scheduler_context.content.contains("queued_turns=none"));
-}
-
-#[test]
-/// Verifies idle scheduler context is omitted from ordinary turns.
-///
-/// Empty scheduler state consumes volatile prompt space without improving the
-/// provider's next action unless the user is asking about scheduling,
-/// subagents, or concurrency.
-fn scheduler_context_omits_unrelated_idle_state() {
-    let context = AgentContext::new(vec![ContextBlock {
-        source: ContextSourceKind::UserInstruction,
-        placement: crate::ContextPlacement::ConversationAppend,
-        label: "user".to_string(),
-        content: "do the task".to_string(),
-    }])
-    .unwrap();
-    let scheduler = AgentScheduler::new(2).unwrap();
-
-    let context = append_scheduler_context(context, &scheduler).unwrap();
-
-    assert!(
-        context
-            .blocks
-            .iter()
-            .all(|block| block.label != "scheduler state")
-    );
-}
-
-#[test]
-/// Verifies scheduler context remains in the request-local suffix after the
-/// durable user prompt while permission policy stays runtime-owned.
-///
-/// This regression scenario documents the behavior being protected so a
-/// failure points at a concrete contract change rather than an incidental
-/// implementation detail.
-fn scheduler_context_follows_durable_prompt_context() {
-    let context = AgentContext::new(vec![
-        ContextBlock {
-            source: ContextSourceKind::ProjectGuidance,
-            placement: crate::ContextPlacement::StablePrefix,
-            label: "project".to_string(),
-            content: "follow style".to_string(),
-        },
-        ContextBlock {
-            source: ContextSourceKind::UserInstruction,
-            placement: crate::ContextPlacement::ConversationAppend,
-            label: "user".to_string(),
-            content: "do the task".to_string(),
-        },
-    ])
-    .unwrap();
-    let mut scheduler = AgentScheduler::new(2).unwrap();
-    scheduler
-        .enqueue(crate::ScheduledWork {
-            turn_id: "turn-queued".to_string(),
-            agent_id: "agent-queued".to_string(),
-            pane_id: Some("%1".to_string()),
-            kind: crate::ScheduledWorkKind::ShellCapable,
-        })
-        .unwrap();
-
-    let context = append_permission_policy_context(context).unwrap();
-    let context = append_scheduler_context(context, &scheduler).unwrap();
-
-    assert_eq!(context.blocks[0].source, ContextSourceKind::ProjectGuidance);
-    assert_eq!(context.blocks[1].source, ContextSourceKind::UserInstruction);
-    assert_eq!(context.blocks[2].label, "scheduler state");
-    context.validate_placement_order().unwrap();
-    assert!(
-        context
-            .blocks
-            .iter()
-            .all(|block| block.label != "permission policy")
-    );
-    assert!(context.blocks[2].content.contains("queued=1"));
-    assert!(context.blocks[2].content.contains("agent-queued"));
-}
-
-#[test]
-/// Verifies scheduler context distinguishes dependency waits from active
-/// provider capacity and queued reacquisition.
-///
-/// The model needs occupancy, lifecycle counts, and the affected agent identity
-/// to coordinate work. Turn IDs, pane IDs, and complete work inventories are
-/// controller bookkeeping and must stay out of request-local context.
-fn scheduler_context_reports_dependency_waits_and_reacquisition() {
-    let context = AgentContext::new(vec![ContextBlock {
-        source: ContextSourceKind::UserInstruction,
-        placement: crate::ContextPlacement::ConversationAppend,
-        label: "user".to_string(),
-        content: "inspect scheduler concurrency".to_string(),
-    }])
-    .unwrap();
-    let mut scheduler = AgentScheduler::new(1).unwrap();
-    scheduler
-        .enqueue(crate::ScheduledWork {
-            turn_id: "parent".to_string(),
-            agent_id: "parent-agent".to_string(),
-            pane_id: Some("%1".to_string()),
-            kind: crate::ScheduledWorkKind::ShellCapable,
-        })
-        .unwrap();
-    scheduler.start_ready().unwrap();
-    scheduler.wait_running("parent").unwrap();
-
-    let waiting_context = append_scheduler_context(context.clone(), &scheduler).unwrap();
-    let waiting_summary = waiting_context
-        .blocks
-        .iter()
-        .find(|block| block.label == "scheduler state")
-        .unwrap();
-    assert!(waiting_summary.content.contains("active_capacity_used=0"));
-    assert!(waiting_summary.content.contains("waiting=1"));
-    assert!(
-        waiting_summary
-            .content
-            .contains("active_agents=parent-agent")
-    );
-    assert!(!waiting_summary.content.contains("turns="));
-    assert!(!waiting_summary.content.contains("parent:"));
-
-    scheduler.requeue_waiting("parent").unwrap();
-    let reacquiring_context = append_scheduler_context(context, &scheduler).unwrap();
-    let reacquiring_summary = reacquiring_context
-        .blocks
-        .iter()
-        .find(|block| block.label == "scheduler state")
-        .unwrap();
-    assert!(
-        reacquiring_summary
-            .content
-            .contains("active_capacity_used=0")
-    );
-    assert!(reacquiring_summary.content.contains("reacquiring=1"));
-    assert!(
-        reacquiring_summary
-            .content
-            .contains("active_agents=parent-agent")
-    );
-    assert!(!reacquiring_summary.content.contains("turns="));
-    assert!(reacquiring_summary.content.contains("queued=1"));
 }

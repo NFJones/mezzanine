@@ -6,15 +6,15 @@
 //! helper decisions stay grouped by their context-shaping responsibility.
 
 use super::{
-    AgentId, AgentTurnExecution, AgentTurnRecord, AgentTurnState, ContextBlock, ContextSourceKind,
-    MezError, ModelProfile, Result, RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile,
-    RuntimeSessionService, append_mcp_context_for_provider, append_scheduler_context,
+    AgentId, AgentTurnRecord, AgentTurnState, ContextBlock, ContextSourceKind, MezError,
+    ModelProfile, Result, RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile,
+    RuntimeSessionService, append_mcp_context_for_provider,
     compact_model_context_for_budget_with_retained_tail_percent, invoked_mcp_tools_for_context,
     runtime_cooperation_mode_name, runtime_mezzanine_error_code, set_project_guidance_context,
 };
 #[cfg(test)]
 use crate::runtime::RuntimeAutoSizingDecision;
-use crate::runtime::control::runtime_agent_pane_readiness_context_block;
+use mez_agent::{ContextRetention, ContextSemanticKind};
 
 impl RuntimeSessionService {
     /// Prepares the next provider request from durable chronology and a fresh
@@ -29,61 +29,25 @@ impl RuntimeSessionService {
         durable.validate_durable()?;
         let mut request_context = durable.clone();
 
-        if let Some(block) = runtime_agent_pane_readiness_context_block(
-            &turn.pane_id,
-            self.pane_readiness_state(&turn.pane_id),
-        ) {
-            request_context.blocks.push(block);
-        }
         if let Some(current_directory) = self.pane_current_working_directory(&turn.pane_id) {
-            request_context.blocks.push(ContextBlock::live_state(
-                ContextSourceKind::RuntimeHint,
-                "runtime state",
-                format!("cwd={}", current_directory.to_string_lossy()),
-            ));
+            request_context
+                .insert_typed_block(
+                    ContextBlock::live_state(
+                        ContextSourceKind::RuntimeHint,
+                        "runtime state",
+                        format!("cwd={}", current_directory.to_string_lossy()),
+                    ),
+                    ContextSemanticKind::LiveState,
+                    ContextRetention::RequestLocal,
+                    false,
+                )
+                .map_err(|error| MezError::invalid_state(error.to_string()))?;
         }
-        if let Some(attempt) = self
-            .agent
-            .agent_turn_output_limit_recovery_attempts
-            .get(&turn.turn_id)
-        {
-            request_context.blocks.push(ContextBlock::live_state(
-                ContextSourceKind::Configuration,
-                "provider recovery state",
-                format!("output_limit_recovery_attempt={attempt}"),
-            ));
-        }
-        let active_subagent_scopes = self.active_subagent_write_scopes();
-        if !active_subagent_scopes.is_empty() {
-            request_context.blocks.push(ContextBlock::live_state(
-                ContextSourceKind::Policy,
-                "active write conflicts",
-                active_subagent_scopes
-                    .iter()
-                    .map(|scope| {
-                        format!(
-                            "agent={} mode={} scope={} serial_lock={}",
-                            scope.agent_id,
-                            runtime_cooperation_mode_name(scope.mode),
-                            scope.scope,
-                            scope.serial_lock.as_deref().unwrap_or("none")
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            ));
-        }
-        request_context = append_scheduler_context(request_context, self.agent_scheduler())?;
         request_context =
             append_mcp_context_for_provider(request_context, mcp_summary, &model_profile.provider)?;
         let available_mcp_tools = invoked_mcp_tools_for_context(&durable, mcp_summary);
 
-        let tail_start = request_context
-            .blocks
-            .iter()
-            .position(|block| block.placement == mez_agent::ContextPlacement::EphemeralTail)
-            .unwrap_or(request_context.blocks.len());
-        let live_state = request_context.blocks.split_off(tail_start);
+        let live_state = request_context.split_off_live_state();
         if request_context != durable {
             return Err(MezError::invalid_state(
                 "provider preparation modified durable context while building live state",
@@ -121,35 +85,6 @@ impl RuntimeSessionService {
         self.agent_turn_contexts_mut()
             .insert(turn.turn_id.clone(), context);
         Ok(())
-    }
-
-    /// Drains exact user steering into immutable chronology at its observed
-    /// action boundary without adding controller prose or timestamp metadata.
-    pub(crate) fn drain_pending_agent_turn_steering_context(
-        &mut self,
-        turn: &AgentTurnRecord,
-    ) -> Result<usize> {
-        let Some(steering) = self.take_agent_turn_steering(&turn.turn_id) else {
-            return Ok(0);
-        };
-        let count = steering.len();
-        let context = self
-            .agent_turn_contexts_mut()
-            .get_mut(&turn.turn_id)
-            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        for (index, steering) in steering.into_iter().enumerate() {
-            context.blocks.push(ContextBlock::user_event(
-                format!("user steering {}", index + 1),
-                mez_agent::agent_turn_steering_context_content(&steering),
-            ));
-        }
-        context.validate_durable()?;
-        self.append_agent_trace_turn_event(
-            &turn.pane_id,
-            &turn.turn_id,
-            &format!("user_steering applied count={count} reason=provider_context_preparation"),
-        )?;
-        Ok(count)
     }
 
     /// Locally compacts active-turn context after a provider rejects the request
@@ -361,36 +296,6 @@ impl RuntimeSessionService {
                 trace_retry_tokens,
                 runtime_mezzanine_error_code(error.kind())
             ),
-        )?;
-        Ok(true)
-    }
-
-    /// Keeps an active turn alive when user steering arrived mid-request.
-    ///
-    /// If the model completed while a newer user prompt was waiting to be
-    /// incorporated, finishing the turn would silently discard the user's
-    /// steering. Instead, the runtime converts that completion into one more
-    /// provider continuation so the pending input can be drained into context.
-    pub(crate) fn continue_completed_turn_for_pending_steering(
-        &mut self,
-        turn: &AgentTurnRecord,
-        execution: &mut AgentTurnExecution,
-    ) -> Result<bool> {
-        if execution.terminal_state != AgentTurnState::Completed
-            || !self.agent_turn_has_pending_steering(&turn.turn_id)
-        {
-            return Ok(false);
-        }
-        execution.terminal_state = AgentTurnState::Running;
-        execution.final_turn = false;
-        self.append_agent_status_text_to_terminal_buffer(
-            &turn.pane_id,
-            "agent: steering input arrived during provider work; continuing current turn",
-        )?;
-        self.append_agent_trace_turn_event(
-            &turn.pane_id,
-            &turn.turn_id,
-            "user_steering forced_continuation reason=provider_completed_before_context_applied",
         )?;
         Ok(true)
     }

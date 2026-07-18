@@ -12,7 +12,7 @@ use crate::action_result::ActionResult;
 use crate::action_result_context::action_result_context_content;
 use crate::mcp::McpPromptTool;
 use crate::surface::{AllowedActionSet, ModelInteractionKind};
-use crate::{AgentPromptError, AgentPromptErrorKind};
+use crate::{AgentPromptError, AgentPromptErrorKind, ProviderTranscriptEvent};
 
 /// Identifies the provenance and stability class of one model-context value.
 ///
@@ -182,6 +182,112 @@ pub enum ContextRetention {
     Summarizable,
     /// The block exists only in one prepared request and is never persisted.
     RequestLocal,
+}
+
+/// Monotonic identity assigned when one chronological event commits.
+///
+/// Stable instructions and request-local live state do not have event
+/// sequences. Conversation events receive exactly one sequence and keep it
+/// through provider projection and compaction-range replacement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ContextEventSequence(u64);
+
+impl ContextEventSequence {
+    /// Creates a non-zero committed event sequence.
+    pub fn new(value: u64) -> AgentContextResult<Self> {
+        if value == 0 {
+            return Err(AgentContextError::new(
+                "context event sequence must be greater than zero",
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the numeric sequence value.
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// Stable identity shared by one assistant execution and its result events.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ContextExecutionGroupId(String);
+
+impl ContextExecutionGroupId {
+    /// Creates a non-empty execution-group identity.
+    pub fn new(value: impl Into<String>) -> AgentContextResult<Self> {
+        let value = value.into();
+        validate_context_required("context execution group id", &value)?;
+        Ok(Self(value))
+    }
+
+    /// Returns the underlying group identifier.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Provider that exclusively owns one opaque continuity event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ProviderContinuityOwner {
+    /// DeepSeek thinking/tool-call replay state.
+    DeepSeek,
+}
+
+impl ProviderContinuityOwner {
+    /// Returns whether this owner matches a configured provider id.
+    pub fn matches_provider(self, provider: &str) -> bool {
+        match self {
+            Self::DeepSeek => provider == "deepseek",
+        }
+    }
+}
+
+/// Stored causal and retention properties for one canonical context block.
+///
+/// These values are captured when the producer commits the block. Provider
+/// preparation and compaction consume them directly and must not reconstruct
+/// semantics from labels or transport roles.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextBlockMetadata {
+    semantic_kind: ContextSemanticKind,
+    retention: ContextRetention,
+    event_sequence: Option<ContextEventSequence>,
+    execution_group_id: Option<ContextExecutionGroupId>,
+    provider_owner: Option<ProviderContinuityOwner>,
+    recoverable_for_compaction: bool,
+}
+
+impl ContextBlockMetadata {
+    /// Returns the producer-selected semantic kind.
+    pub fn semantic_kind(&self) -> ContextSemanticKind {
+        self.semantic_kind
+    }
+
+    /// Returns the producer-selected retention policy.
+    pub fn retention(&self) -> ContextRetention {
+        self.retention
+    }
+
+    /// Returns the committed chronological sequence, when applicable.
+    pub fn event_sequence(&self) -> Option<ContextEventSequence> {
+        self.event_sequence
+    }
+
+    /// Returns the owning execution group, when applicable.
+    pub fn execution_group_id(&self) -> Option<&ContextExecutionGroupId> {
+        self.execution_group_id.as_ref()
+    }
+
+    /// Returns the exclusive provider owner for opaque continuity state.
+    pub fn provider_owner(&self) -> Option<ProviderContinuityOwner> {
+        self.provider_owner
+    }
+
+    /// Reports whether exact content can be recovered for semantic compaction.
+    pub fn recoverable_for_compaction(&self) -> bool {
+        self.recoverable_for_compaction
+    }
 }
 
 /// One ordered unit of model-visible context.
@@ -426,20 +532,27 @@ impl ModelContextMetadata {
 /// Ordered context supplied to provider request assembly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentContext {
-    /// Ordered model-context blocks.
-    pub blocks: Vec<ContextBlock>,
+    /// Ordered model-context blocks, mutable only through checked APIs.
+    blocks: Vec<ContextBlock>,
+    /// Stored semantics and causal identity aligned one-to-one with `blocks`.
+    block_metadata: Vec<ContextBlockMetadata>,
+    /// Next sequence reserved for a future committed conversation event.
+    next_event_sequence: u64,
     /// Typed request metadata excluded from model-message projection.
-    pub metadata: ModelContextMetadata,
+    metadata: ModelContextMetadata,
 }
 
 impl AgentContext {
     /// Creates validated non-empty agent context.
     pub fn new(blocks: Vec<ContextBlock>) -> AgentContextResult<Self> {
-        Self {
+        let mut context = Self {
             blocks,
+            block_metadata: Vec::new(),
+            next_event_sequence: 1,
             metadata: ModelContextMetadata::default(),
-        }
-        .revalidate()
+        };
+        context.initialize_block_metadata()?;
+        context.revalidate()
     }
 
     /// Revalidates context blocks without discarding typed request metadata.
@@ -452,6 +565,7 @@ impl AgentContext {
         for block in &self.blocks {
             validate_context_required("context label", &block.label)?;
         }
+        self.validate_stored_metadata()?;
         Ok(self)
     }
 
@@ -471,8 +585,341 @@ impl AgentContext {
         self
     }
 
+    /// Returns the canonical block sequence without permitting direct mutation.
+    pub fn blocks(&self) -> &[ContextBlock] {
+        &self.blocks
+    }
+
+    /// Returns typed request metadata that is excluded from model messages.
+    pub fn metadata(&self) -> &ModelContextMetadata {
+        &self.metadata
+    }
+
+    /// Replaces typed non-model-visible request metadata.
+    pub fn set_metadata(&mut self, metadata: ModelContextMetadata) {
+        self.metadata = metadata;
+    }
+
+    /// Returns stored causal metadata aligned with [`AgentContext::blocks`].
+    pub fn block_metadata(&self) -> &[ContextBlockMetadata] {
+        &self.block_metadata
+    }
+
+    /// Returns the highest committed conversation-event sequence.
+    pub fn event_sequence_high_water_mark(&self) -> u64 {
+        self.next_event_sequence.saturating_sub(1)
+    }
+
+    /// Returns metadata for one canonical block index.
+    pub fn metadata_for_block(&self, index: usize) -> Option<&ContextBlockMetadata> {
+        self.block_metadata.get(index)
+    }
+
+    /// Appends an exact user event at the next chronological sequence.
+    pub fn append_user_event(
+        &mut self,
+        label: impl Into<String>,
+        content: impl Into<String>,
+    ) -> AgentContextResult<ContextEventSequence> {
+        self.append_conversation_event(
+            ContextBlock::user_event(label, content),
+            ContextSemanticKind::UserEvent,
+            ContextRetention::Exact,
+            None,
+            None,
+            false,
+        )
+    }
+
+    /// Appends an assistant response owned by one execution group.
+    pub fn append_assistant_event(
+        &mut self,
+        label: impl Into<String>,
+        content: impl Into<String>,
+        execution_group_id: ContextExecutionGroupId,
+    ) -> AgentContextResult<ContextEventSequence> {
+        self.append_conversation_event(
+            ContextBlock::assistant_event(label, content),
+            ContextSemanticKind::AssistantEvent,
+            ContextRetention::ExecutionGroup,
+            Some(execution_group_id),
+            None,
+            true,
+        )
+    }
+
+    /// Appends settled evidence owned by one execution group.
+    pub fn append_evidence_event(
+        &mut self,
+        source: ContextSourceKind,
+        label: impl Into<String>,
+        content: impl Into<String>,
+        execution_group_id: ContextExecutionGroupId,
+        provider_owner: Option<ProviderContinuityOwner>,
+        recoverable_for_compaction: bool,
+    ) -> AgentContextResult<ContextEventSequence> {
+        self.append_conversation_event(
+            ContextBlock::evidence_event(source, label, content),
+            ContextSemanticKind::EvidenceEvent,
+            ContextRetention::ExecutionGroup,
+            Some(execution_group_id),
+            provider_owner,
+            recoverable_for_compaction,
+        )
+    }
+
+    /// Appends an exact neutral reference event.
+    pub fn append_reference_event(
+        &mut self,
+        source: ContextSourceKind,
+        label: impl Into<String>,
+        content: impl Into<String>,
+    ) -> AgentContextResult<ContextEventSequence> {
+        self.append_conversation_event(
+            ContextBlock::reference_event(source, label, content),
+            ContextSemanticKind::ReferenceEvent,
+            ContextRetention::Exact,
+            None,
+            None,
+            true,
+        )
+    }
+
+    /// Appends a typed task prelude before the first direct-user event.
+    pub fn append_task_prelude(
+        &mut self,
+        source: ContextSourceKind,
+        label: impl Into<String>,
+        content: impl Into<String>,
+        retention: ContextRetention,
+    ) -> AgentContextResult<ContextEventSequence> {
+        self.append_conversation_event(
+            ContextBlock::task_prelude(source, label, content),
+            ContextSemanticKind::TaskPrelude,
+            retention,
+            None,
+            None,
+            true,
+        )
+    }
+
+    /// Reclassifies one exact direct-user event as an exact neutral reference
+    /// without moving it in chronology.
+    ///
+    /// Routed child construction uses this when the ordinary pane-context
+    /// builder has initially represented the controller-authored task as a
+    /// direct prompt. The replacement preserves the event sequence and rejects
+    /// ambiguous or multiple matches.
+    pub fn reclassify_user_event_as_reference(
+        &mut self,
+        content: &str,
+        source: ContextSourceKind,
+        label: impl Into<String>,
+    ) -> AgentContextResult<()> {
+        let matching = self
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(index, block)| {
+                block.source == ContextSourceKind::UserInstruction
+                    && block.content == content
+                    && self.block_metadata[*index].semantic_kind == ContextSemanticKind::UserEvent
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if matching.len() != 1 {
+            return Err(AgentContextError::new(format!(
+                "user-event reclassification requires exactly one match; found {}",
+                matching.len()
+            )));
+        }
+        let index = matching[0];
+        let replacement = ContextBlock::reference_event(source, label, content);
+        let mut metadata = self.block_metadata[index].clone();
+        metadata.semantic_kind = ContextSemanticKind::ReferenceEvent;
+        metadata.retention = ContextRetention::Exact;
+        metadata.execution_group_id = None;
+        metadata.provider_owner = provider_owner_for_block(&replacement);
+        metadata.recoverable_for_compaction = true;
+        validate_context_block_metadata(index, &replacement, &metadata)?;
+        self.blocks[index] = replacement;
+        self.block_metadata[index] = metadata;
+        self.validate_stored_metadata()
+    }
+
+    /// Removes blocks matching a predicate while preserving all retained event
+    /// sequences and metadata.
+    pub fn retain_blocks(&mut self, mut keep: impl FnMut(&ContextBlock) -> bool) {
+        let blocks = std::mem::take(&mut self.blocks);
+        let metadata = std::mem::take(&mut self.block_metadata);
+        for (block, metadata) in blocks.into_iter().zip(metadata) {
+            if keep(&block) {
+                self.blocks.push(block);
+                self.block_metadata.push(metadata);
+            }
+        }
+    }
+
+    /// Inserts a new block at its lifecycle boundary and records its semantics.
+    ///
+    /// This compatibility operation is intended for stable/task-prelude/live
+    /// assembly helpers. Runtime conversation events must use the narrower
+    /// append methods so execution ownership is explicit.
+    pub fn insert_typed_block(
+        &mut self,
+        block: ContextBlock,
+        semantic_kind: ContextSemanticKind,
+        retention: ContextRetention,
+        recoverable_for_compaction: bool,
+    ) -> AgentContextResult<Option<ContextEventSequence>> {
+        let sequence = if block.placement == ContextPlacement::ConversationAppend {
+            Some(self.allocate_event_sequence()?)
+        } else {
+            None
+        };
+        let metadata = ContextBlockMetadata {
+            semantic_kind,
+            retention,
+            event_sequence: sequence,
+            execution_group_id: None,
+            provider_owner: provider_owner_for_block(&block),
+            recoverable_for_compaction,
+        };
+        validate_context_block_metadata(self.blocks.len(), &block, &metadata)?;
+        let index = context_placement_insertion_index(&self.blocks, block.placement);
+        self.blocks.insert(index, block);
+        self.block_metadata.insert(index, metadata);
+        self.validate_stored_metadata()?;
+        Ok(sequence)
+    }
+
+    /// Removes the request-local suffix and returns it for prepared-request
+    /// construction without changing durable event identity.
+    pub fn split_off_live_state(&mut self) -> Vec<ContextBlock> {
+        let tail_start = self
+            .blocks
+            .iter()
+            .position(|block| block.placement == ContextPlacement::EphemeralTail)
+            .unwrap_or(self.blocks.len());
+        self.block_metadata.truncate(tail_start);
+        self.blocks.split_off(tail_start)
+    }
+
+    /// Replaces all canonical blocks after an explicit compaction operation.
+    ///
+    /// Compaction is the only supported non-append mutation of chronology. The
+    /// supplied blocks are re-sequenced in their already validated order and a
+    /// fresh cache lineage is expected at the product layer.
+    pub fn replace_after_compaction(
+        &mut self,
+        blocks: Vec<ContextBlock>,
+    ) -> AgentContextResult<()> {
+        self.blocks = blocks;
+        self.block_metadata.clear();
+        self.next_event_sequence = 1;
+        self.initialize_block_metadata()?;
+        self.validate_durable()
+    }
+
+    /// Appends one producer-classified chronological event.
+    fn append_conversation_event(
+        &mut self,
+        block: ContextBlock,
+        semantic_kind: ContextSemanticKind,
+        retention: ContextRetention,
+        execution_group_id: Option<ContextExecutionGroupId>,
+        provider_owner: Option<ProviderContinuityOwner>,
+        recoverable_for_compaction: bool,
+    ) -> AgentContextResult<ContextEventSequence> {
+        if block.placement != ContextPlacement::ConversationAppend {
+            return Err(AgentContextError::new(
+                "chronological events must use conversation-append placement",
+            ));
+        }
+        let sequence = self.allocate_event_sequence()?;
+        let metadata = ContextBlockMetadata {
+            semantic_kind,
+            retention,
+            event_sequence: Some(sequence),
+            execution_group_id,
+            provider_owner,
+            recoverable_for_compaction,
+        };
+        let index = context_placement_insertion_index(&self.blocks, block.placement);
+        validate_context_block_metadata(index, &block, &metadata)?;
+        self.blocks.insert(index, block);
+        self.block_metadata.insert(index, metadata);
+        self.validate_stored_metadata()?;
+        Ok(sequence)
+    }
+
+    /// Allocates the next non-zero chronological sequence.
+    fn allocate_event_sequence(&mut self) -> AgentContextResult<ContextEventSequence> {
+        let sequence = ContextEventSequence::new(self.next_event_sequence)?;
+        self.next_event_sequence = self
+            .next_event_sequence
+            .checked_add(1)
+            .ok_or_else(|| AgentContextError::new("context event sequence exhausted"))?;
+        Ok(sequence)
+    }
+
+    /// Initializes stored metadata for a fully ordered legacy/block-vector
+    /// boundary. Production mutation after construction uses typed methods.
+    fn initialize_block_metadata(&mut self) -> AgentContextResult<()> {
+        self.block_metadata.clear();
+        self.next_event_sequence = 1;
+        for block in self.blocks.clone() {
+            let event_sequence = if block.placement == ContextPlacement::ConversationAppend {
+                Some(self.allocate_event_sequence()?)
+            } else {
+                None
+            };
+            self.block_metadata.push(ContextBlockMetadata {
+                semantic_kind: block.semantic_kind(),
+                retention: block.retention(),
+                event_sequence,
+                execution_group_id: None,
+                provider_owner: provider_owner_for_block(&block),
+                recoverable_for_compaction: block.recoverable_for_compaction(),
+            });
+        }
+        self.validate_stored_metadata()
+    }
+
+    /// Validates stored metadata alignment and strictly increasing chronology.
+    fn validate_stored_metadata(&self) -> AgentContextResult<()> {
+        if self.blocks.len() != self.block_metadata.len() {
+            return Err(AgentContextError::new(format!(
+                "context block metadata length mismatch: blocks={} metadata={}; mutate context through checked APIs",
+                self.blocks.len(),
+                self.block_metadata.len()
+            )));
+        }
+        let mut last_sequence = 0u64;
+        for (index, (block, metadata)) in self.blocks.iter().zip(&self.block_metadata).enumerate() {
+            validate_context_block_metadata(index, block, metadata)?;
+            if let Some(sequence) = metadata.event_sequence {
+                if sequence.get() <= last_sequence {
+                    return Err(context_semantic_error(
+                        index,
+                        block,
+                        "conversation event sequences must be strictly increasing",
+                    ));
+                }
+                last_sequence = sequence.get();
+            }
+        }
+        if last_sequence >= self.next_event_sequence {
+            return Err(AgentContextError::new(
+                "next context event sequence must exceed the committed high-water mark",
+            ));
+        }
+        Ok(())
+    }
+
     /// Validates the semantic and lifetime contract for stored turn context.
     pub fn validate_durable(&self) -> AgentContextResult<()> {
+        self.validate_stored_metadata()?;
         validate_context_placement_order(&self.blocks)?;
         validate_context_semantics(&self.blocks)?;
         if let Some((index, block)) = self
@@ -511,6 +958,31 @@ impl AgentContext {
         &mut self,
         results: &[ActionResult],
     ) -> AgentContextResult<usize> {
+        let group = self
+            .block_metadata
+            .iter()
+            .rev()
+            .find_map(|metadata| metadata.execution_group_id.clone())
+            .or_else(|| {
+                results.first().and_then(|result| {
+                    ContextExecutionGroupId::new(format!(
+                        "legacy-action-results:{}",
+                        result.turn_id
+                    ))
+                    .ok()
+                })
+            })
+            .ok_or_else(|| AgentContextError::new("action result commit requires a group"))?;
+        self.commit_settled_action_results_in_group(results, group)
+    }
+
+    /// Atomically promotes deterministic action results into one explicit
+    /// assistant execution group in caller-supplied observation order.
+    pub fn commit_settled_action_results_in_group(
+        &mut self,
+        results: &[ActionResult],
+        execution_group_id: ContextExecutionGroupId,
+    ) -> AgentContextResult<usize> {
         if results.iter().any(|result| !result.is_terminal()) {
             return Err(AgentContextError::new(
                 "only terminal action results may be committed to immutable chronology",
@@ -526,41 +998,43 @@ impl AgentContext {
             ));
         }
 
-        let mut candidate = self.blocks.clone();
+        let mut candidate = self.clone();
         let mut committed = 0usize;
         for result in results {
             let label = format!("action result {}", result.action_id);
             let content = action_result_context_content(result);
-            let exact_index = candidate.iter().position(|block| {
-                block.source == ContextSourceKind::ActionResult
-                    && block.placement == ContextPlacement::ConversationAppend
-                    && block.label == label
-                    && block.content == content
-            });
-            let mut index = 0usize;
-            candidate.retain(|block| {
+            let exact_block = candidate
+                .blocks
+                .iter()
+                .find(|block| {
+                    block.source == ContextSourceKind::ActionResult
+                        && block.placement == ContextPlacement::ConversationAppend
+                        && block.label == label
+                        && block.content == content
+                })
+                .cloned();
+            candidate.retain_blocks(|block| {
                 let same_action = block.source == ContextSourceKind::ActionResult
                     && action_result_block_id(block).is_some_and(|id| id == result.action_id);
-                let keep = !same_action || exact_index == Some(index);
-                index = index.saturating_add(1);
-                keep
+                !same_action || exact_block.as_ref().is_some_and(|exact| exact == block)
             });
-            if exact_index.is_some() {
+            if exact_block.is_some() {
                 continue;
             }
-            insert_context_block_by_placement(
-                &mut candidate,
-                ContextBlock {
-                    source: ContextSourceKind::ActionResult,
-                    placement: ContextPlacement::ConversationAppend,
-                    label,
-                    content,
-                },
-            );
+            candidate.append_evidence_event(
+                ContextSourceKind::ActionResult,
+                label,
+                content,
+                execution_group_id.clone(),
+                None,
+                true,
+            )?;
             committed = committed.saturating_add(1);
         }
-        validate_context_placement_order(&candidate)?;
-        self.blocks = candidate;
+        candidate.validate_stored_metadata()?;
+        validate_context_placement_order(&candidate.blocks)?;
+        validate_context_semantics(&candidate.blocks)?;
+        *self = candidate;
         Ok(committed)
     }
 }
@@ -617,15 +1091,24 @@ impl PreparedModelContext {
 
     /// Clones the canonical provider-visible sequence without changing order.
     pub fn to_agent_context(&self) -> AgentContext {
-        AgentContext {
-            blocks: self.ordered_blocks(),
-            metadata: self.durable.metadata.clone(),
-        }
+        let mut context = AgentContext::new(self.ordered_blocks())
+            .expect("prepared context was validated at construction");
+        context.metadata = self.durable.metadata.clone();
+        context
     }
 
     /// Consumes the prepared view and joins its two already validated phases.
     pub fn into_agent_context(mut self) -> AgentContext {
-        self.durable.blocks.append(&mut self.live_state);
+        for block in self.live_state.drain(..) {
+            self.durable
+                .insert_typed_block(
+                    block,
+                    ContextSemanticKind::LiveState,
+                    ContextRetention::RequestLocal,
+                    false,
+                )
+                .expect("prepared live state was validated at construction");
+        }
         self.durable
     }
 
@@ -746,6 +1229,94 @@ fn context_semantic_error(index: usize, block: &ContextBlock, reason: &str) -> A
         block.semantic_kind(),
         block.retention()
     ))
+}
+
+/// Returns the exclusive owner encoded by one provider continuity payload.
+fn provider_owner_for_block(block: &ContextBlock) -> Option<ProviderContinuityOwner> {
+    ProviderTranscriptEvent::from_transcript_content(&block.content)
+        .map(|_| ProviderContinuityOwner::DeepSeek)
+}
+
+/// Validates producer-selected metadata against structural placement rules.
+fn validate_context_block_metadata(
+    index: usize,
+    block: &ContextBlock,
+    metadata: &ContextBlockMetadata,
+) -> AgentContextResult<()> {
+    let invalid_reason = match block.placement {
+        ContextPlacement::StablePrefix
+            if metadata.semantic_kind != ContextSemanticKind::AmbientInstruction
+                || metadata.event_sequence.is_some()
+                || metadata.retention == ContextRetention::RequestLocal =>
+        {
+            Some("stable blocks must be unsequenced ambient instructions")
+        }
+        ContextPlacement::ConversationAppend
+            if metadata.semantic_kind == ContextSemanticKind::LiveState
+                || metadata.retention == ContextRetention::RequestLocal
+                || metadata.event_sequence.is_none() =>
+        {
+            Some("conversation events require a sequence and durable semantics")
+        }
+        ContextPlacement::EphemeralTail
+            if metadata.semantic_kind != ContextSemanticKind::LiveState
+                || metadata.retention != ContextRetention::RequestLocal
+                || metadata.event_sequence.is_some()
+                || metadata.execution_group_id.is_some() =>
+        {
+            Some("live state must be unsequenced request-local context")
+        }
+        _ => None,
+    };
+    if let Some(reason) = invalid_reason {
+        return Err(context_semantic_error(index, block, reason));
+    }
+    if metadata.provider_owner.is_some()
+        && ProviderTranscriptEvent::from_transcript_content(&block.content).is_none()
+    {
+        return Err(context_semantic_error(
+            index,
+            block,
+            "provider ownership requires a typed provider continuity payload",
+        ));
+    }
+    if ProviderTranscriptEvent::from_transcript_content(&block.content).is_some()
+        && metadata.provider_owner.is_none()
+    {
+        return Err(context_semantic_error(
+            index,
+            block,
+            "provider continuity payload requires an explicit owner",
+        ));
+    }
+    if metadata.semantic_kind == ContextSemanticKind::UserEvent
+        && (block.source != ContextSourceKind::UserInstruction
+            && block.source != ContextSourceKind::TranscriptUser)
+    {
+        return Err(context_semantic_error(
+            index,
+            block,
+            "only direct or transcript user sources may claim user-event semantics",
+        ));
+    }
+    if metadata.retention == ContextRetention::ExecutionGroup
+        && metadata.execution_group_id.is_none()
+        && !matches!(
+            block.source,
+            ContextSourceKind::TranscriptAssistant
+                | ContextSourceKind::TranscriptTool
+                | ContextSourceKind::CommittedEvidence
+                | ContextSourceKind::RoutedHandoff
+                | ContextSourceKind::ActionResult
+        )
+    {
+        return Err(context_semantic_error(
+            index,
+            block,
+            "execution-group retention requires an execution-group identity",
+        ));
+    }
+    Ok(())
 }
 
 /// Counts deterministic compaction performed on provider-bound context.

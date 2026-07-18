@@ -184,7 +184,7 @@ fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
         .values()
         .map(|context| {
             context
-                .blocks
+                .blocks()
                 .iter()
                 .map(|block| block.content.as_str())
                 .collect::<Vec<_>>()

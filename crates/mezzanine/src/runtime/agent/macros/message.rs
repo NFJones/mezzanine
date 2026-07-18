@@ -298,7 +298,7 @@ impl RuntimeSessionService {
                 "context prepared blocks={} model_profile={}",
                 self.agent_turn_contexts()
                     .get(&turn_id)
-                    .map(|context| context.blocks.len())
+                    .map(|context| context.blocks().len())
                     .unwrap_or_default(),
                 model_profile_name
             ),

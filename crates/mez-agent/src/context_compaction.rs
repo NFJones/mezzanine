@@ -38,13 +38,13 @@ pub fn compact_model_context_for_budget_with_retained_tail_percent(
 ) -> AgentContextResult<(AgentContext, ModelContextCompactionReport)> {
     context.validate_durable()?;
     let (blocks, report) = compact_model_context_blocks(
-        &context.blocks,
+        context.blocks(),
         context_budget_words,
         true,
         retained_tail_percent,
     )?;
     AgentContext::new_durable(blocks)
-        .map(|compacted| compacted.with_metadata(context.metadata))
+        .map(|compacted| compacted.with_metadata(context.metadata().clone()))
         .map(|context| (context, report))
 }
 
@@ -404,12 +404,12 @@ mod tests {
 
         assert!(report.changed());
         let summary = context
-            .blocks
+            .blocks()
             .iter()
             .find(|block| block.source == ContextSourceKind::Memory)
             .expect("oldest transcript should be present in summary inventory");
         let recent_history = context
-            .blocks
+            .blocks()
             .iter()
             .find(|block| block.label == "transcript 19")
             .expect("recent transcript should remain present");
@@ -459,19 +459,19 @@ mod tests {
         .unwrap();
 
         assert!(report.changed());
-        assert!(context.blocks.iter().any(|block| {
+        assert!(context.blocks().iter().any(|block| {
             block.source == ContextSourceKind::ProjectGuidance
                 && block.content.contains("run just test")
         }));
-        assert!(context.blocks.iter().any(|block| {
+        assert!(context.blocks().iter().any(|block| {
             block.source == ContextSourceKind::ActionResult
                 && block.content.contains("fresh evidence")
         }));
-        assert!(context.blocks.iter().any(|block| {
+        assert!(context.blocks().iter().any(|block| {
             block.source == ContextSourceKind::ActionResult
                 && block.content.contains("large-action-marker")
         }));
-        assert!(context.blocks.iter().any(|block| {
+        assert!(context.blocks().iter().any(|block| {
             block.source == ContextSourceKind::Memory
                 && block.content.contains("[context compacted]")
         }));
@@ -496,7 +496,7 @@ mod tests {
 
         assert!(report.changed());
         let memory_block = context
-            .blocks
+            .blocks()
             .iter()
             .find(|block| block.source == ContextSourceKind::Memory)
             .expect("bulk compaction memory should be present");
@@ -528,18 +528,25 @@ mod tests {
             .unwrap();
         assert!(first_report.changed());
         let first_epoch = first
-            .blocks
+            .blocks()
             .iter()
             .find(|block| model_context_block_is_compaction_summary(block))
             .expect("first compaction epoch should exist")
             .clone();
         for index in 24..32 {
-            first.blocks.push(ContextBlock {
-                source: ContextSourceKind::Transcript,
-                placement: crate::ContextPlacement::ConversationAppend,
-                label: format!("transcript {index}"),
-                content: format!("entry-{index} {}", "new history word ".repeat(80)),
-            });
+            first
+                .insert_typed_block(
+                    ContextBlock {
+                        source: ContextSourceKind::Transcript,
+                        placement: crate::ContextPlacement::ConversationAppend,
+                        label: format!("transcript {index}"),
+                        content: format!("entry-{index} {}", "new history word ".repeat(80)),
+                    },
+                    crate::ContextSemanticKind::ReferenceEvent,
+                    crate::ContextRetention::Summarizable,
+                    true,
+                )
+                .unwrap();
         }
 
         let (second, second_report) =
@@ -549,7 +556,7 @@ mod tests {
             compact_model_context_for_budget_with_retained_tail_percent(first, 600, 10).unwrap();
 
         assert!(second_report.changed());
-        assert_eq!(second.blocks, repeated.blocks);
+        assert_eq!(second.blocks(), repeated.blocks());
         assert_eq!(
             second_report.compacted_blocks,
             repeated_report.compacted_blocks
@@ -559,10 +566,10 @@ mod tests {
             second_report.omitted_original_words,
             repeated_report.omitted_original_words
         );
-        assert!(second.blocks.contains(&first_epoch));
+        assert!(second.blocks().contains(&first_epoch));
         assert_eq!(
             second
-                .blocks
+                .blocks()
                 .iter()
                 .filter(|block| model_context_block_is_compaction_summary(block))
                 .count(),
@@ -639,20 +646,20 @@ mod tests {
         assert!(
             !old_group
                 .iter()
-                .any(|block| compacted.blocks.contains(block))
+                .any(|block| compacted.blocks().contains(block))
         );
         let retained_start = compacted
-            .blocks
+            .blocks()
             .windows(retained_group.len())
             .position(|window| window == retained_group.as_slice())
             .expect("complete recent execution group should remain exact");
         assert!(retained_start > 0);
-        assert!(!compacted.blocks.contains(&volatile));
+        assert!(!compacted.blocks().contains(&volatile));
         let prepared = crate::PreparedModelContext::new(compacted.clone(), vec![volatile.clone()])
             .expect("live state should attach only after durable compaction");
         assert_eq!(prepared.live_state(), &[volatile]);
         let summaries = compacted
-            .blocks
+            .blocks()
             .iter()
             .filter(|block| model_context_block_is_compaction_summary(block))
             .collect::<Vec<_>>();
@@ -670,15 +677,16 @@ mod tests {
             crate::ContextContinuityBreakReason::Compaction
         );
         let compacted_snapshot = compacted_diagnostics.snapshot;
-        crate::insert_context_block_by_placement(
-            &mut compacted.blocks,
-            ContextBlock {
-                source: ContextSourceKind::ActionResult,
-                placement: crate::ContextPlacement::ConversationAppend,
-                label: "action result after-compaction".to_string(),
-                content: "new settled evidence".to_string(),
-            },
-        );
+        compacted
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "action result after-compaction",
+                "new settled evidence",
+                crate::ContextExecutionGroupId::new("after-compaction").unwrap(),
+                None,
+                true,
+            )
+            .unwrap();
         let appended_diagnostics = crate::context_continuity_diagnostics(
             &compacted,
             "openai",
@@ -735,16 +743,20 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.compacted_blocks, 4);
-        assert_eq!(first.blocks[0], prompt);
-        assert!(model_context_block_is_compaction_summary(&first.blocks[1]));
-        assert_eq!(first.blocks[2], steering);
-        assert!(model_context_block_is_compaction_summary(&first.blocks[3]));
+        assert_eq!(first.blocks()[0], prompt);
+        assert!(model_context_block_is_compaction_summary(
+            &first.blocks()[1]
+        ));
+        assert_eq!(first.blocks()[2], steering);
+        assert!(model_context_block_is_compaction_summary(
+            &first.blocks()[3]
+        ));
 
         let (second, repeated_report) =
             compact_model_context_for_budget_with_retained_tail_percent(first.clone(), 1_000, 1)
                 .unwrap();
         assert!(!repeated_report.changed());
-        assert_eq!(second.blocks, first.blocks);
+        assert_eq!(second.blocks(), first.blocks());
     }
 
     /// Verifies protected task context that cannot fit fails explicitly.

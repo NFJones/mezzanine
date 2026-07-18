@@ -963,6 +963,7 @@ impl RuntimeSessionService {
         self.control
             .message_service_mut()
             .accept_at(&child_identity.agent_id, envelope, now_ms)?;
+        self.deliver_pending_runtime_agent_messages(now_ms)?;
         self.append_subagent_parent_status_line(
             initial_status.parent_agent_id,
             &format!(

@@ -145,7 +145,7 @@ impl RuntimeSessionService {
             .unwrap_or("none");
         let context_blocks = latest_turn
             .and_then(|turn| self.agent_turn_contexts().get(&turn.turn_id))
-            .map(|context| context.blocks.len())
+            .map(|context| context.blocks().len())
             .unwrap_or(0);
         let request_messages = latest_turn
             .and_then(|turn| self.agent_turn_executions().get(&turn.turn_id))

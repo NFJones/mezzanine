@@ -500,7 +500,7 @@ fn auto_sizing_task_metadata(
 
 fn auto_sizing_latest_user_task(context: &AgentContext) -> Option<&str> {
     context
-        .blocks
+        .blocks()
         .iter()
         .rev()
         .find(|block| block.source == ContextSourceKind::UserInstruction)
@@ -545,7 +545,7 @@ fn auto_sizing_conversation_messages(context: &AgentContext) -> Vec<ModelMessage
     let mut remaining_bytes = AUTO_SIZING_CONVERSATION_CONTEXT_MAX_BYTES;
     let mut messages = Vec::new();
     for block in context
-        .blocks
+        .blocks()
         .iter()
         .filter(|block| auto_sizing_includes_conversation_source(block.source))
         .rev()

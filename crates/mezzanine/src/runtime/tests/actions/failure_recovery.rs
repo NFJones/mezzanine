@@ -31,7 +31,7 @@ fn runtime_shell_history_remains_outside_model_context() {
     let durable = service.agent_turn_contexts().get("turn-1").unwrap();
     assert!(
         durable
-            .blocks
+            .blocks()
             .iter()
             .all(|block| block.label != "action pressure")
     );
@@ -58,7 +58,7 @@ fn runtime_shell_history_remains_outside_model_context() {
     assert!(
         prepared
             .to_agent_context()
-            .blocks
+            .blocks()
             .iter()
             .all(|block| block.label != "action pressure")
     );
@@ -504,7 +504,7 @@ fn runtime_spawn_limit_denial_queues_model_recovery() {
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
     assert!(service.agent_provider_task_is_pending("turn-1"));
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block
                 .content
@@ -513,7 +513,7 @@ fn runtime_spawn_limit_denial_queues_model_recovery() {
     }));
     assert!(
         context
-            .blocks
+            .blocks()
             .iter()
             .all(|block| block.source != ContextSourceKind::RuntimeHint)
     );

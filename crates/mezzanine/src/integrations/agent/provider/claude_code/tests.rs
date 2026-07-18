@@ -114,14 +114,15 @@ EOF
     assert!(!stdin.contains("Developer instruction:"), "{stdin}");
 }
 
-/// Verifies repeated Claude Code turns with the same Mez session id create
-/// the Claude conversation once and then resume it.
+/// Verifies repeated Claude Code turns remain stateless even when Mezzanine's
+/// diagnostic cache-session identity is stable.
 ///
-/// Claude Code distinguishes `--session-id` from `--resume`; repeatedly
-/// passing `--session-id` can collide with Claude's active-session lock
-/// instead of behaving like a conversation resume.
+/// Each subprocess must receive the complete canonical prompt and neither
+/// create nor resume provider-owned history. This establishes exactly one
+/// history owner and prevents old Claude session state from duplicating a
+/// replayed user prompt.
 #[tokio::test]
-async fn claude_code_provider_resumes_stable_session_after_creation() {
+async fn claude_code_provider_replays_complete_history_statelessly() {
     let fixture = ClaudeCodeFixture::new("session-resume");
     fixture.write_claude_script(
         r#"#!/bin/sh
@@ -134,14 +135,6 @@ count=$((count + 1))
 printf '%s' "$count" > "$count_file"
 printf '%s\n' "$@" > "$0.args.$count"
 cat > "$0.stdin.$count"
-case " $* " in
-*" --resume "*)
-    if [ "$count" -eq 1 ]; then
-        printf '%s\n' 'Error: No conversation found for session.' >&2
-        exit 1
-    fi
-    ;;
-esac
 cat <<'EOF'
 {"type":"result","subtype":"success","is_error":false,"result":"hello","structured_output":{"rationale":"return final text","thought":null,"actions":[{"type":"say","status":"final","text":"hello","content_type":"text/plain; charset=utf-8"}]},"usage":{"input_tokens":2,"output_tokens":12}}
 EOF
@@ -154,49 +147,26 @@ EOF
     provider.send_request_async(&request).await.unwrap();
     provider.send_request_async(&request).await.unwrap();
 
-    let first_resume_args = fs::read_to_string(fixture.program.with_extension("args.1")).unwrap();
-    let create_args = fs::read_to_string(fixture.program.with_extension("args.2")).unwrap();
-    let second_turn_args = fs::read_to_string(fixture.program.with_extension("args.3")).unwrap();
+    let first_args = fs::read_to_string(fixture.program.with_extension("args.1")).unwrap();
+    let second_args = fs::read_to_string(fixture.program.with_extension("args.2")).unwrap();
+    for args in [&first_args, &second_args] {
+        assert!(!args.contains("--resume"), "{args}");
+        assert!(!args.contains("--session-id"), "{args}");
+    }
+    let first_stdin = fs::read_to_string(fixture.program.with_extension("stdin.1")).unwrap();
+    let second_stdin = fs::read_to_string(fixture.program.with_extension("stdin.2")).unwrap();
+    assert_eq!(first_stdin, second_stdin);
     assert!(
-        first_resume_args.contains("--resume"),
-        "{first_resume_args}"
+        second_stdin.contains("No conversation messages were provided; follow the system prompt."),
+        "{second_stdin}"
     );
-    assert!(
-        !first_resume_args.contains("--session-id"),
-        "{first_resume_args}"
-    );
-    assert!(create_args.contains("--session-id"), "{create_args}");
-    assert!(!create_args.contains("--resume"), "{create_args}");
-    assert!(second_turn_args.contains("--resume"), "{second_turn_args}");
-    assert!(
-        !second_turn_args.contains("--session-id"),
-        "{second_turn_args}"
-    );
-    let first_resume_stdin = fs::read_to_string(fixture.program.with_extension("stdin.1")).unwrap();
-    let create_stdin = fs::read_to_string(fixture.program.with_extension("stdin.2")).unwrap();
-    let second_turn_stdin = fs::read_to_string(fixture.program.with_extension("stdin.3")).unwrap();
-    assert!(
-        first_resume_stdin
-            .contains("No conversation messages were provided; follow the system prompt."),
-        "{first_resume_stdin}"
-    );
-    assert!(
-        create_stdin.contains("No conversation messages were provided; follow the system prompt."),
-        "{create_stdin}"
-    );
-    assert!(
-        second_turn_stdin
-            .contains("No conversation messages were provided; follow the system prompt."),
-        "{second_turn_stdin}"
-    );
-    assert!(second_turn_stdin.contains("Ordered Mezzanine conversation context:"));
+    assert!(second_stdin.contains("Ordered Mezzanine conversation context:"));
 }
 
-/// Verifies resumed Claude Code turns replay Mezzanine-managed tool
-/// results through stdin so `--resume` requests keep local execution
-/// context that Claude's native session history does not know about.
+/// Verifies every stateless Claude Code turn replays Mezzanine-managed tool
+/// results once and in canonical order.
 #[tokio::test]
-async fn claude_code_provider_resume_prompt_replays_prior_tool_results() {
+async fn claude_code_provider_stateless_prompt_replays_prior_tool_results() {
     let fixture = ClaudeCodeFixture::new("session-tool-context");
     fixture.write_claude_script(
         r#"#!/bin/sh
@@ -209,14 +179,6 @@ count=$((count + 1))
 printf '%s' "$count" > "$count_file"
 printf '%s\n' "$@" > "$0.args.$count"
 cat > "$0.stdin.$count"
-case " $* " in
-*" --resume "*)
-    if [ "$count" -eq 1 ]; then
-        printf '%s\n' 'Error: No conversation found for session.' >&2
-        exit 1
-    fi
-    ;;
-esac
 cat <<'EOF'
 {"type":"result","subtype":"success","is_error":false,"result":"hello","structured_output":{"rationale":"return final text","thought":null,"actions":[{"type":"say","status":"final","text":"hello","content_type":"text/plain; charset=utf-8"}]},"usage":{"input_tokens":2,"output_tokens":12}}
 EOF
@@ -267,10 +229,14 @@ EOF
     provider.send_request_async(&request).await.unwrap();
     provider.send_request_async(&request).await.unwrap();
 
-    let second_turn_args = fs::read_to_string(fixture.program.with_extension("args.3")).unwrap();
-    let second_turn_stdin = fs::read_to_string(fixture.program.with_extension("stdin.3")).unwrap();
+    let second_turn_args = fs::read_to_string(fixture.program.with_extension("args.2")).unwrap();
+    let second_turn_stdin = fs::read_to_string(fixture.program.with_extension("stdin.2")).unwrap();
 
-    assert!(second_turn_args.contains("--resume"), "{second_turn_args}");
+    assert!(!second_turn_args.contains("--resume"), "{second_turn_args}");
+    assert!(
+        !second_turn_args.contains("--session-id"),
+        "{second_turn_args}"
+    );
     let earlier_user_index = second_turn_stdin
         .find("User message:\nEarlier user turn.")
         .expect("missing earlier user message");
@@ -300,13 +266,14 @@ EOF
     );
 }
 
-/// Verifies corrective retries resume the just-created Claude session.
+/// Verifies corrective retries remain stateless and replay the full canonical
+/// snapshot with bounded repair guidance.
 ///
-/// The first subprocess may return malformed MAAP while still creating the
-/// Claude conversation. The retry must use `--resume` so it can benefit from
-/// that prompt context without colliding on `--session-id`.
+/// A malformed first response must not create provider-owned history. The
+/// second subprocess receives the same ordered context plus the corrective
+/// instruction and still uses neither session CLI flag.
 #[tokio::test]
-async fn claude_code_provider_corrective_retry_resumes_created_session() {
+async fn claude_code_provider_corrective_retry_remains_stateless() {
     let fixture = ClaudeCodeFixture::new("session-retry-resume");
     fixture.write_claude_script(
         r#"#!/bin/sh
@@ -320,10 +287,6 @@ printf '%s' "$count" > "$count_file"
 printf '%s\n' "$@" > "$0.args.$count"
 cat >/dev/null
 if [ "$count" -eq 1 ]; then
-printf '%s\n' 'Error: No conversation found for session.' >&2
-exit 1
-fi
-if [ "$count" -eq 2 ]; then
 printf '%s\n' 'plain assistant text without a MAAP block'
 exit 0
 fi
@@ -339,29 +302,21 @@ EOF
     let response = provider.send_request_async(&request).await.unwrap();
 
     assert!(response.action_batch.is_some());
-    let initial_resume_args = fs::read_to_string(fixture.program.with_extension("args.1")).unwrap();
-    let create_args = fs::read_to_string(fixture.program.with_extension("args.2")).unwrap();
-    let retry_args = fs::read_to_string(fixture.program.with_extension("args.3")).unwrap();
-    assert!(
-        initial_resume_args.contains("--resume"),
-        "{initial_resume_args}"
-    );
-    assert!(
-        !initial_resume_args.contains("--session-id"),
-        "{initial_resume_args}"
-    );
-    assert!(create_args.contains("--session-id"), "{create_args}");
-    assert!(!create_args.contains("--resume"), "{create_args}");
-    assert!(retry_args.contains("--resume"), "{retry_args}");
-    assert!(!retry_args.contains("--session-id"), "{retry_args}");
+    let initial_args = fs::read_to_string(fixture.program.with_extension("args.1")).unwrap();
+    let retry_args = fs::read_to_string(fixture.program.with_extension("args.2")).unwrap();
+    for args in [&initial_args, &retry_args] {
+        assert!(!args.contains("--resume"), "{args}");
+        assert!(!args.contains("--session-id"), "{args}");
+    }
 }
 
-/// Verifies an active-session failure from `--resume` gets a short retry.
+/// Verifies a stable Mezzanine cache-session id cannot activate Claude's
+/// provider-session flags.
 ///
-/// This covers the provider error where Claude reports `Session ID ... is
-/// already in use` before producing a MAAP action batch.
+/// The fixture would fail if `--resume` appeared. A successful single
+/// invocation proves the provider ignores cache identity for history ownership.
 #[tokio::test]
-async fn claude_code_provider_resumes_after_active_session_id_failure() {
+async fn claude_code_provider_ignores_cache_session_for_history() {
     let fixture = ClaudeCodeFixture::new("session-active-fallback");
     fixture.write_claude_script(
         r#"#!/bin/sh
@@ -395,11 +350,9 @@ EOF
 
     assert!(response.action_batch.is_some());
     let first_args = fs::read_to_string(fixture.program.with_extension("args.1")).unwrap();
-    let retry_args = fs::read_to_string(fixture.program.with_extension("args.2")).unwrap();
-    assert!(first_args.contains("--resume"), "{first_args}");
+    assert!(!first_args.contains("--resume"), "{first_args}");
     assert!(!first_args.contains("--session-id"), "{first_args}");
-    assert!(retry_args.contains("--resume"), "{retry_args}");
-    assert!(!retry_args.contains("--session-id"), "{retry_args}");
+    assert!(!fixture.program.with_extension("args.2").exists());
 }
 
 /// Verifies Claude Code subprocess prompts are fully delivered and closed

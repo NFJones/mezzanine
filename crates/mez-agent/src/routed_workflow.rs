@@ -9,8 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AgentActionPayload, AgentContext, AgentTurnExecution, AgentTurnState, ContextBlock,
-    ContextPlacement, ContextSourceKind, SayStatus, insert_context_block_by_placement,
-    subagent_task_output_for_execution,
+    ContextPlacement, ContextSourceKind, SayStatus, subagent_task_output_for_execution,
 };
 
 /// Version of the structured routed-worker handoff contract.
@@ -358,7 +357,7 @@ pub fn routed_worker_seed_context(
     original_user_prompt: &str,
 ) -> AgentContext {
     let blocks = parent_context
-        .blocks
+        .blocks()
         .iter()
         .filter(|block| {
             if block.placement == ContextPlacement::EphemeralTail {
@@ -382,10 +381,7 @@ pub fn routed_worker_seed_context(
         })
         .cloned()
         .collect();
-    AgentContext {
-        blocks,
-        metadata: Default::default(),
-    }
+    AgentContext::new_durable(blocks).expect("routed worker seed context remains durable")
 }
 
 /// Parses and validates one structured routed-worker handoff.
@@ -454,10 +450,37 @@ pub fn routed_presentation_context_blocks(
 }
 
 /// Inserts provider-neutral routed blocks at their declared lifecycle boundaries.
-pub fn insert_routed_context_blocks(context: &mut AgentContext, blocks: Vec<ContextBlock>) {
+pub fn insert_routed_context_blocks(
+    context: &mut AgentContext,
+    blocks: Vec<ContextBlock>,
+) -> crate::AgentContextResult<()> {
     for block in blocks {
-        insert_context_block_by_placement(&mut context.blocks, block);
+        if block.source == ContextSourceKind::RoutedHandoff
+            && block.placement == ContextPlacement::ConversationAppend
+        {
+            let group = crate::ContextExecutionGroupId::new(format!(
+                "routed-handoff:{}:{}",
+                block.label,
+                context.event_sequence_high_water_mark().saturating_add(1)
+            ))?;
+            context.append_evidence_event(
+                block.source,
+                block.label,
+                block.content,
+                group,
+                None,
+                true,
+            )?;
+        } else {
+            context.insert_typed_block(
+                block.clone(),
+                block.semantic_kind(),
+                block.retention(),
+                block.recoverable_for_compaction(),
+            )?;
+        }
     }
+    Ok(())
 }
 
 /// Builds the canonical exact-worker-result context block.
@@ -725,45 +748,43 @@ mod tests {
     /// removing rebuilt policy, the active prompt, and prior routed context.
     #[test]
     fn routed_worker_seed_context_has_a_deterministic_policy_boundary() {
-        let parent = AgentContext {
-            blocks: vec![
-                context_block(
-                    ContextSourceKind::Policy,
-                    ContextPlacement::StablePrefix,
-                    "product policy",
-                    "rebuild me",
-                ),
-                context_block(
-                    ContextSourceKind::SkillInstruction,
-                    ContextPlacement::ConversationAppend,
-                    "loaded skill",
-                    "retain me",
-                ),
-                context_block(
-                    ContextSourceKind::UserInstruction,
-                    ContextPlacement::ConversationAppend,
-                    "user prompt",
-                    "fix routing",
-                ),
-                context_block(
-                    ContextSourceKind::TranscriptAssistant,
-                    ContextPlacement::ConversationAppend,
-                    "prior answer",
-                    "retain evidence",
-                ),
-                context_block(
-                    ContextSourceKind::RoutedHandoff,
-                    ContextPlacement::ConversationAppend,
-                    "prior routed result",
-                    "do not leak",
-                ),
-            ],
-            metadata: Default::default(),
-        };
+        let parent = AgentContext::new_durable(vec![
+            context_block(
+                ContextSourceKind::Policy,
+                ContextPlacement::StablePrefix,
+                "product policy",
+                "rebuild me",
+            ),
+            context_block(
+                ContextSourceKind::SkillInstruction,
+                ContextPlacement::ConversationAppend,
+                "loaded skill",
+                "retain me",
+            ),
+            context_block(
+                ContextSourceKind::UserInstruction,
+                ContextPlacement::ConversationAppend,
+                "user prompt",
+                "fix routing",
+            ),
+            context_block(
+                ContextSourceKind::TranscriptAssistant,
+                ContextPlacement::ConversationAppend,
+                "prior answer",
+                "retain evidence",
+            ),
+            context_block(
+                ContextSourceKind::RoutedHandoff,
+                ContextPlacement::ConversationAppend,
+                "prior routed result",
+                "do not leak",
+            ),
+        ])
+        .unwrap();
 
         let seed = routed_worker_seed_context(&parent, "fix routing");
         assert_eq!(
-            seed.blocks,
+            seed.blocks(),
             vec![
                 context_block(
                     ContextSourceKind::SkillInstruction,

@@ -1,6 +1,181 @@
 //! Runtime tests for actions messaging behavior.
 
 use super::*;
+use crate::runtime::current_unix_seconds;
+use mez_agent::messaging::Envelope;
+use mez_core::ids::PaneId;
+
+/// Verifies a message accepted while a turn is active becomes one canonical
+/// reference event at its actor-observed arrival point.
+///
+/// The delivery cursor must advance only after the event append succeeds, a
+/// repeated fanout pass must not duplicate the event, and the message must
+/// remain later than the prompt that causally preceded its arrival.
+#[test]
+fn runtime_active_turn_local_message_commits_once_at_arrival() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect the current implementation")
+        .unwrap();
+    let now_ms = current_unix_seconds().saturating_mul(1000);
+    let sender = service
+        .ensure_runtime_message_identity("agent-sender", None, "agent", &[], now_ms)
+        .unwrap();
+    let recipient = AgentId::opaque(started.agent_id.clone()).unwrap();
+    let envelope = Envelope {
+        protocol: "mmp/1",
+        id: "active-message-1".to_string(),
+        message_type: "send".to_string(),
+        time: format!("runtime:{now_ms}"),
+        sender: sender.clone(),
+        recipient: mez_agent::messaging::Recipient::Agent(recipient.clone()),
+        correlation_id: Some(started.turn_id.clone()),
+        ttl_ms: None,
+        content_type: "text/plain; charset=utf-8".to_string(),
+        payload: "new evidence arrived".to_string(),
+        extension_fields: Vec::new(),
+    };
+    let delivery = service
+        .control
+        .message_service_mut()
+        .accept_at(&sender.agent_id, envelope, now_ms)
+        .unwrap();
+
+    assert_eq!(
+        service
+            .deliver_pending_runtime_agent_messages(now_ms)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        service
+            .deliver_pending_runtime_agent_messages(now_ms)
+            .unwrap(),
+        0
+    );
+
+    let context = service.agent_turn_contexts().get(&started.turn_id).unwrap();
+    let prompt_index = context
+        .blocks()
+        .iter()
+        .position(|block| block.label == "user prompt")
+        .unwrap();
+    let message_indexes = context
+        .blocks()
+        .iter()
+        .enumerate()
+        .filter(|(_, block)| block.label.contains("active-message-1"))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    assert_eq!(message_indexes.len(), 1);
+    assert!(prompt_index < message_indexes[0]);
+    assert_eq!(
+        service
+            .control
+            .message_service()
+            .subscription(&recipient)
+            .unwrap()
+            .last_sequence,
+        delivery.sequence
+    );
+}
+
+/// Verifies an unread message with no active turn remains behind the cursor
+/// and is committed before the next task's direct user prompt.
+///
+/// This distinguishes offline delivery from an active-turn arrival: the
+/// message must not be acknowledged merely because it is retained, and prompt
+/// construction must advance the cursor only after the new turn context is
+/// stored.
+#[test]
+fn runtime_inactive_local_message_precedes_next_prompt_and_advances_after_commit() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let now_ms = current_unix_seconds().saturating_mul(1000);
+    let recipient_identity = service
+        .ensure_runtime_message_identity(
+            "agent-%1",
+            PaneId::opaque("%1".to_string()),
+            "agent",
+            &[],
+            now_ms,
+        )
+        .unwrap();
+    service
+        .control
+        .message_service_mut()
+        .subscribe_from_retained_start(&recipient_identity.agent_id)
+        .unwrap();
+    let sender = service
+        .ensure_runtime_message_identity("agent-sender", None, "agent", &[], now_ms)
+        .unwrap();
+    let envelope = Envelope {
+        protocol: "mmp/1",
+        id: "inactive-message-1".to_string(),
+        message_type: "send".to_string(),
+        time: format!("runtime:{now_ms}"),
+        sender: sender.clone(),
+        recipient: mez_agent::messaging::Recipient::Agent(recipient_identity.agent_id.clone()),
+        correlation_id: None,
+        ttl_ms: None,
+        content_type: "text/plain; charset=utf-8".to_string(),
+        payload: "background evidence".to_string(),
+        extension_fields: Vec::new(),
+    };
+    let delivery = service
+        .control
+        .message_service_mut()
+        .accept_at(&sender.agent_id, envelope, now_ms)
+        .unwrap();
+
+    assert_eq!(
+        service
+            .deliver_pending_runtime_agent_messages(now_ms)
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        service
+            .control
+            .message_service()
+            .subscription(&recipient_identity.agent_id)
+            .unwrap()
+            .last_sequence,
+        0
+    );
+
+    let started = service
+        .start_agent_prompt_turn("%1", "use the background evidence")
+        .unwrap();
+    let context = service.agent_turn_contexts().get(&started.turn_id).unwrap();
+    let message_index = context
+        .blocks()
+        .iter()
+        .position(|block| block.label.contains("inactive-message-1"))
+        .unwrap();
+    let prompt_index = context
+        .blocks()
+        .iter()
+        .position(|block| block.label == "user prompt")
+        .unwrap();
+    assert!(message_index < prompt_index);
+    assert_eq!(
+        service
+            .control
+            .message_service()
+            .subscription(&recipient_identity.agent_id)
+            .unwrap()
+            .last_sequence,
+        delivery.sequence
+    );
+}
 
 /// Verifies macro step slash commands are dispatched through the child agent shell.
 ///
@@ -115,12 +290,12 @@ fn runtime_agent_macro_send_message_queues_child_shell_turn() {
         "{child_pane_text}"
     );
     let child_context = service.agent_turn_contexts().get(&child_turn_id).unwrap();
-    assert!(child_context.blocks.iter().any(|block| {
+    assert!(child_context.blocks().iter().any(|block| {
         block
             .content
             .contains("inspect release notes for the requested version.")
     }));
-    assert!(child_context.blocks.iter().any(|block| {
+    assert!(child_context.blocks().iter().any(|block| {
         block
             .content
             .contains("User additional context for this macro invocation:\nfor v1.2")
@@ -247,7 +422,7 @@ fn runtime_rejects_send_message_action_with_invalid_mmp_payload_metadata() {
                 .any(|task| task.turn_id == "turn-1")
         );
         let context = service.agent_turn_contexts().get("turn-1").unwrap();
-        assert!(context.blocks.iter().any(|block| {
+        assert!(context.blocks().iter().any(|block| {
             block.source == ContextSourceKind::ActionResult
                 && block
                     .content
@@ -256,7 +431,7 @@ fn runtime_rejects_send_message_action_with_invalid_mmp_payload_metadata() {
         }));
         assert!(
             context
-                .blocks
+                .blocks()
                 .iter()
                 .all(|block| block.source != ContextSourceKind::RuntimeHint)
         );

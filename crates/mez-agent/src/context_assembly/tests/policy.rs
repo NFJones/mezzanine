@@ -223,6 +223,69 @@ fn assemble_model_request_preserves_hidden_provider_transcript_events_without_la
 }
 
 #[test]
+/// Verifies a DeepSeek-owned continuity event is omitted by every non-owner
+/// provider without moving or relabeling surrounding canonical events.
+///
+/// DeepSeek is currently the only adapter with native continuity payloads.
+/// The switch matrix therefore projects the same stored chronology through
+/// OpenAI, Anthropic, Claude Code, and an OpenAI-compatible provider and proves
+/// each receives the neutral user event but never the opaque DeepSeek record.
+fn assemble_model_request_omits_deepseek_continuity_for_all_nonowners() {
+    let event_content = ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+        content: "native assistant call".to_string(),
+        reasoning_content: Some("native reasoning".to_string()),
+        tool_calls: vec![serde_json::json!({
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "submit_maap_action_batch", "arguments": "{}"}
+        })],
+    }
+    .to_transcript_content();
+    let context = AgentContext::new(vec![
+        ContextBlock {
+            source: ContextSourceKind::Transcript,
+            placement: crate::ContextPlacement::ConversationAppend,
+            label: "deepseek native event".to_string(),
+            content: event_content.clone(),
+        },
+        ContextBlock::user_event("user prompt", "continue after the switch"),
+    ])
+    .unwrap();
+
+    for provider in ["openai", "anthropic", "claude-code", "compatible-chat"] {
+        let request = assemble_model_request(
+            &ModelProfile {
+                provider: provider.to_string(),
+                model: "test-model".to_string(),
+                reasoning_profile: None,
+                latency_preference: None,
+                multimodal_required: false,
+                provider_options: std::collections::BTreeMap::new(),
+                safety_tier: None,
+            },
+            &turn(),
+            &context,
+        )
+        .unwrap();
+
+        assert!(
+            request
+                .messages
+                .iter()
+                .all(|message| message.content != event_content),
+            "{provider} received DeepSeek-owned continuity"
+        );
+        assert!(
+            request
+                .messages
+                .iter()
+                .any(|message| message.content.contains("continue after the switch")),
+            "{provider} lost the provider-neutral user event"
+        );
+    }
+}
+
+#[test]
 /// Verifies runtime MCP availability does not mutate stable system instructions.
 ///
 /// The selected model reads both the system prompt and the `[mcp integrations]`

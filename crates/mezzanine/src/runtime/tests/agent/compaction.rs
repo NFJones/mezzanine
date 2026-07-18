@@ -83,7 +83,7 @@ fn runtime_agent_prompt_displays_large_paste_as_compact_block() {
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
     assert!(
         context
-            .blocks
+            .blocks()
             .iter()
             .any(|block| block.content.contains(&format!("prefix {payload} suffix")))
     );
@@ -147,7 +147,7 @@ fn runtime_agent_prompt_displays_over_height_paste_as_compact_block() {
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
     assert!(
         context
-            .blocks
+            .blocks()
             .iter()
             .any(|block| block.content.contains(&format!("prefix {payload} suffix")))
     );
@@ -320,8 +320,8 @@ context_window_tokens = 40000
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
-    mez_agent::insert_context_block_by_placement(
-        &mut context.blocks,
+    insert_test_context_block(
+        context,
         ContextBlock {
             source: ContextSourceKind::ActionResult,
             placement: mez_agent::ContextPlacement::ConversationAppend,
@@ -445,40 +445,41 @@ context_window_tokens = 40000
         .agent_turn_contexts_mut()
         .get_mut("turn-1")
         .unwrap()
-        .blocks = vec![
-        ContextBlock {
-            source: ContextSourceKind::Memory,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "synthetic post-first-pass summary".to_string(),
-            content: format!("[context compacted]\n{}", "summary ".repeat(8_000)),
-        },
-        ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "synthetic retained tail action result one".to_string(),
-            content: format!("provider-context-limit-tail-one- {}", "tail ".repeat(5_000)),
-        },
-        ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "synthetic retained tail action result two".to_string(),
-            content: format!("provider-context-limit-tail-two- {}", "tail ".repeat(5_000)),
-        },
-        ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "synthetic retained tail action result three".to_string(),
-            content: format!(
-                "provider-context-limit-tail-three- {}",
-                "tail ".repeat(5_000)
-            ),
-        },
-    ];
+        .replace_after_compaction(vec![
+            ContextBlock {
+                source: ContextSourceKind::Memory,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "synthetic post-first-pass summary".to_string(),
+                content: format!("[context compacted]\n{}", "summary ".repeat(8_000)),
+            },
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "synthetic retained tail action result one".to_string(),
+                content: format!("provider-context-limit-tail-one- {}", "tail ".repeat(5_000)),
+            },
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "synthetic retained tail action result two".to_string(),
+                content: format!("provider-context-limit-tail-two- {}", "tail ".repeat(5_000)),
+            },
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "synthetic retained tail action result three".to_string(),
+                content: format!(
+                    "provider-context-limit-tail-three- {}",
+                    "tail ".repeat(5_000)
+                ),
+            },
+        ])
+        .unwrap();
     let before_context = service
         .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
-        .blocks
+        .blocks()
         .iter()
         .map(|block| block.content.as_str())
         .collect::<Vec<_>>()
@@ -504,7 +505,7 @@ context_window_tokens = 40000
         .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
-        .blocks
+        .blocks()
         .iter()
         .map(|block| block.content.as_str())
         .collect::<Vec<_>>()
@@ -592,29 +593,30 @@ context_window_tokens = 40000
         .agent_turn_contexts_mut()
         .get_mut("turn-1")
         .unwrap()
-        .blocks = vec![
-        ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "synthetic retained action result one".to_string(),
-            content: format!("provider-context-limit-tail-one- {}", "tail ".repeat(5_000)),
-        },
-        ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "synthetic retained action result two".to_string(),
-            content: format!("provider-context-limit-tail-two- {}", "tail ".repeat(5_000)),
-        },
-        ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::ConversationAppend,
-            label: "synthetic retained action result three".to_string(),
-            content: format!(
-                "provider-context-limit-tail-three- {}",
-                "tail ".repeat(5_000)
-            ),
-        },
-    ];
+        .replace_after_compaction(vec![
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "synthetic retained action result one".to_string(),
+                content: format!("provider-context-limit-tail-one- {}", "tail ".repeat(5_000)),
+            },
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "synthetic retained action result two".to_string(),
+                content: format!("provider-context-limit-tail-two- {}", "tail ".repeat(5_000)),
+            },
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "synthetic retained action result three".to_string(),
+                content: format!(
+                    "provider-context-limit-tail-three- {}",
+                    "tail ".repeat(5_000)
+                ),
+            },
+        ])
+        .unwrap();
     let error = MezError::invalid_state(
         "OpenAI Responses API returned status 400: This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens. Please reduce the length of the messages.",
     )
@@ -636,7 +638,7 @@ context_window_tokens = 40000
         .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
-        .blocks
+        .blocks()
         .iter()
         .map(|block| block.content.as_str())
         .collect::<Vec<_>>()
@@ -706,8 +708,8 @@ max_output_tokens = 4096
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
-    mez_agent::insert_context_block_by_placement(
-        &mut context.blocks,
+    insert_test_context_block(
+        context,
         ContextBlock {
             source: ContextSourceKind::ActionResult,
             placement: mez_agent::ContextPlacement::ConversationAppend,
@@ -748,10 +750,10 @@ max_output_tokens = 4096
         "{second_request_text}"
     );
     assert!(
-        second_request_text.contains("Mezzanine interaction mode: output_limit_retry")
-            && second_request_text.contains("output_limit_recovery_attempt=1"),
+        second_request_text.contains("Mezzanine interaction mode: output_limit_retry"),
         "{second_request_text}"
     );
+    assert!(!second_request_text.contains("output_limit_recovery_attempt="));
     assert!(
         !second_request_text.contains("error_message="),
         "{second_request_text}"
@@ -763,10 +765,10 @@ max_output_tokens = 4096
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        third_request_text.contains("Mezzanine interaction mode: output_limit_retry")
-            && third_request_text.contains("output_limit_recovery_attempt=2"),
+        third_request_text.contains("Mezzanine interaction mode: output_limit_retry"),
         "{third_request_text}"
     );
+    assert!(!third_request_text.contains("output_limit_recovery_attempt="));
     assert!(
         !second_request_text.contains("[context compacted]"),
         "{second_request_text}"
@@ -870,8 +872,16 @@ context_window_tokens = 128000
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
-    mez_agent::insert_context_block_by_placement(
-        &mut context.blocks,
+    insert_test_context_block(
+        context,
+        ContextBlock::reference_event(
+            ContextSourceKind::LocalMessage,
+            "local message compaction barrier",
+            "local message must remain after the active prompt",
+        ),
+    );
+    insert_test_context_block(
+        context,
         ContextBlock {
             source: ContextSourceKind::ActionResult,
             placement: mez_agent::ContextPlacement::ConversationAppend,
@@ -922,7 +932,7 @@ context_window_tokens = 128000
         .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
-        .blocks
+        .blocks()
         .iter()
         .map(|block| block.content.as_str())
         .collect::<Vec<_>>()
@@ -947,6 +957,39 @@ context_window_tokens = 128000
         stored_context.contains("same-turn result must survive compaction refresh"),
         "{stored_context}"
     );
+    let blocks = service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .blocks();
+    let summary_index = blocks
+        .iter()
+        .position(|block| {
+            block
+                .content
+                .contains("summary after output-limit exhaustion")
+        })
+        .unwrap();
+    let retained_raw_index = blocks
+        .iter()
+        .position(|block| block.content.contains("durable prior output-limit entry 4"))
+        .unwrap();
+    let prompt_index = blocks
+        .iter()
+        .position(|block| block.label == "user prompt")
+        .unwrap();
+    let local_message_index = blocks
+        .iter()
+        .position(|block| block.label == "local message compaction barrier")
+        .unwrap();
+    let same_turn_result_index = blocks
+        .iter()
+        .position(|block| block.label == "synthetic same-turn result")
+        .unwrap();
+    assert!(summary_index < retained_raw_index);
+    assert!(retained_raw_index < prompt_index);
+    assert!(prompt_index < local_message_index);
+    assert!(local_message_index < same_turn_result_index);
 }
 
 /// Verifies routing context-limit recovery budgets against the smallest
@@ -1037,8 +1080,8 @@ context_window_tokens = 100000
         .unwrap();
     service.set_agent_turn_model_profile("turn-1", default_profile);
     let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
-    mez_agent::insert_context_block_by_placement(
-        &mut context.blocks,
+    insert_test_context_block(
+        context,
         ContextBlock {
             source: ContextSourceKind::ActionResult,
             placement: mez_agent::ContextPlacement::ConversationAppend,
@@ -1070,13 +1113,17 @@ context_window_tokens = 100000
         .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
-        .blocks
+        .blocks()
         .iter()
         .map(|block| block.content.as_str())
         .collect::<Vec<_>>()
         .join("\n");
     assert!(stored_context.contains("[context compacted]"));
-    let stored_blocks = &service.agent_turn_contexts().get("turn-1").unwrap().blocks;
+    let stored_blocks = &service
+        .agent_turn_contexts()
+        .get("turn-1")
+        .unwrap()
+        .blocks();
     assert!(
         !stored_blocks
             .iter()
@@ -1231,7 +1278,7 @@ context_window_tokens = 5000
     assert!(prompt.contains(r#""state":"running""#), "{prompt}");
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
     let compaction_notice = context
-        .blocks
+        .blocks()
         .iter()
         .find(|block| block.label == "conversation compaction notice")
         .expect("compaction notice should be model-visible after /compact");
@@ -1242,7 +1289,7 @@ context_window_tokens = 5000
         "{compaction_notice:?}"
     );
     let transcript_context = context
-        .blocks
+        .blocks()
         .iter()
         .filter(|block| {
             matches!(

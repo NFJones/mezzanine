@@ -53,10 +53,36 @@ fn runtime_provider_preparation_does_not_mutate_or_grow_durable_context() {
     assert_eq!(first.live_state(), second.live_state());
     assert!(
         original
-            .blocks
+            .blocks()
             .iter()
             .all(|block| block.placement != mez_agent::ContextPlacement::EphemeralTail)
     );
+}
+
+/// Verifies ordinary provider preparation emits only the working directory in
+/// its request-local suffix.
+///
+/// Readiness, scheduler occupancy, write-scope inventories, and retry counters
+/// are enforced or consumed by the controller. Exposing them to the model
+/// would change a cache-sensitive suffix without changing the model's correct
+/// next decision. Explicit MCP invocation is covered separately because it is
+/// the only other allowlisted tail producer.
+#[test]
+fn runtime_provider_preparation_allowlists_only_cwd_for_ordinary_turns() {
+    let mut service = test_runtime_service();
+    service.set_pane_current_working_directory("%1".to_string(), PathBuf::from("/repo/work"));
+    service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
+    let durable = mez_agent::AgentContext::new_durable(vec![ContextBlock::user_event(
+        "active user prompt",
+        "inspect the repository",
+    )])
+    .unwrap();
+
+    let prepared = prepared_context_for_prompt(&service, durable);
+
+    assert_eq!(prepared.live_state().len(), 1);
+    assert_eq!(prepared.live_state()[0].label, "runtime state");
+    assert_eq!(prepared.live_state()[0].content, "cwd=/repo/work");
 }
 
 /// Verifies session and cache-lineage identity travel as typed request metadata
@@ -74,14 +100,14 @@ fn runtime_agent_context_keeps_cache_identity_out_of_model_text() {
         .unwrap();
 
     assert_eq!(
-        context.metadata.prompt_cache_session_id.as_deref(),
+        context.metadata().prompt_cache_session_id.as_deref(),
         Some(session.session_id.as_str())
     );
     assert_eq!(
-        context.metadata.prompt_cache_lineage_id.as_deref(),
+        context.metadata().prompt_cache_lineage_id.as_deref(),
         Some(session.prompt_cache_lineage_id.as_str())
     );
-    assert!(!context.blocks.iter().any(|block| {
+    assert!(!context.blocks().iter().any(|block| {
         block.content.contains(&session.session_id)
             || block.content.contains(&session.prompt_cache_lineage_id)
     }));
@@ -276,8 +302,8 @@ fn runtime_status_reports_provider_context_continuity_diagnostics() {
     );
 
     let mut appended = context;
-    mez_agent::insert_context_block_by_placement(
-        &mut appended.blocks,
+    insert_test_context_block(
+        &mut appended,
         ContextBlock {
             source: ContextSourceKind::ActionResult,
             placement: mez_agent::ContextPlacement::ConversationAppend,
@@ -507,8 +533,8 @@ context_window_tokens = 40000
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
     let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
-    mez_agent::insert_context_block_by_placement(
-        &mut context.blocks,
+    insert_test_context_block(
+        context,
         ContextBlock {
             source: ContextSourceKind::ActionResult,
             placement: mez_agent::ContextPlacement::ConversationAppend,
@@ -576,15 +602,15 @@ context_window_tokens = 40000
     );
 }
 
-/// Verifies provider preparation includes non-ready pane diagnostics without
-/// persisting volatile readiness in durable chronology.
+/// Verifies pane readiness remains controller-owned and never enters model
+/// context.
 ///
-/// If the pane is already known `interactive-blocked`, the model needs that
-/// runtime fact in context before it chooses shell actions. Without this hint,
-/// the provider can only discover the blockage after the runtime rejects the
-/// first shell batch.
+/// The action dispatcher already gates shell-backed work and commits a concrete
+/// rejection as chronological evidence. A speculative readiness warning would
+/// otherwise churn the request tail and bias the model before it chooses an
+/// action whose execution may not require the pane at all.
 #[test]
-fn runtime_agent_context_reports_nonready_pane_readiness() {
+fn runtime_agent_context_omits_nonready_pane_readiness() {
     let mut service = test_runtime_service();
     service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
 
@@ -596,17 +622,16 @@ fn runtime_agent_context_reports_nonready_pane_readiness() {
     assert!(durable.validate_durable().is_ok());
     assert!(
         !durable
-            .blocks
+            .blocks()
             .iter()
             .any(|block| { block.label == "pane identity" || block.label == "pane readiness" })
     );
-    assert!(prepared.live_state().iter().any(|block| {
-        block.source == ContextSourceKind::RuntimeHint
-            && block.label == "pane readiness"
-            && block
-                .content
-                .contains("shell_command and apply_patch cannot execute")
-    }));
+    assert!(
+        prepared
+            .live_state()
+            .iter()
+            .all(|block| block.label != "pane readiness")
+    );
 }
 
 /// Verifies prompt construction settles recoverable passive readiness before
@@ -635,7 +660,7 @@ fn runtime_agent_context_settles_recoverable_prompt_candidate_readiness() {
     assert!(durable.validate_durable().is_ok());
     assert!(
         !durable
-            .blocks
+            .blocks()
             .iter()
             .any(|block| { block.label == "pane identity" || block.label == "pane readiness" })
     );
@@ -648,14 +673,14 @@ fn runtime_agent_context_settles_recoverable_prompt_candidate_readiness() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies provider preparation keeps a request-local readiness warning when
-/// no shell-state evidence can reconcile a passive non-ready pane.
+/// Verifies an unreconciled passive readiness state remains controller-owned.
 ///
 /// A stale `busy` state should only settle away when host process metadata
 /// proves the primary shell owns the foreground again. Without that evidence,
-/// prompt context must continue warning that shell-backed actions may wait.
+/// action dispatch remains conservative, but provider preparation must not turn
+/// the controller's uncertainty into volatile model-facing coaching.
 #[test]
-fn runtime_agent_context_keeps_unconfirmed_busy_readiness_warning() {
+fn runtime_agent_context_omits_unconfirmed_busy_readiness() {
     let mut service = test_runtime_service();
     service.set_pane_readiness("%1", PaneReadinessState::Busy);
 
@@ -668,21 +693,15 @@ fn runtime_agent_context_keeps_unconfirmed_busy_readiness_warning() {
     assert!(durable.validate_durable().is_ok());
     assert!(
         !durable
-            .blocks
+            .blocks()
             .iter()
             .any(|block| { block.label == "pane identity" || block.label == "pane readiness" })
     );
-    let block = prepared
-        .live_state()
-        .iter()
-        .find(|block| {
-            block.source == ContextSourceKind::RuntimeHint && block.label == "pane readiness"
-        })
-        .unwrap();
     assert!(
-        block
-            .content
-            .contains("may be delayed or rejected until Mezzanine confirms")
+        prepared
+            .live_state()
+            .iter()
+            .all(|block| block.label != "pane readiness")
     );
 }
 
@@ -713,7 +732,7 @@ fn runtime_agent_context_builtin_mez_reference_prompt_includes_current_config() 
         .agent_context_for_pane_prompt("%1", "$mez-reference set the prompt color", 0)
         .unwrap();
     let skill_block = context
-        .blocks
+        .blocks()
         .iter()
         .find(|block| block.label == "explicit skill mez-reference")
         .expect("missing explicit mez-reference skill context block");
@@ -742,7 +761,7 @@ fn runtime_agent_context_builtin_mez_reference_prompt_includes_current_config() 
         mez_agent::ContextPlacement::ConversationAppend
     );
     let snapshot_block = context
-        .blocks
+        .blocks()
         .iter()
         .find(|block| block.label == "explicit skill mez-reference invocation-time config snapshot")
         .expect("missing explicit mez-reference config snapshot block");

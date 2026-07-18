@@ -550,7 +550,7 @@ fn runtime_agent_shell_command_output_keeps_decoded_context() {
             .agent_turn_contexts()
             .get("turn-1")
             .unwrap()
-            .blocks
+            .blocks()
             .iter()
             .map(|block| block.content.as_str())
             .collect::<Vec<_>>()
@@ -595,7 +595,7 @@ fn runtime_agent_shell_command_output_keeps_decoded_context() {
         .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
-        .blocks
+        .blocks()
         .iter()
         .map(|block| block.content.as_str())
         .collect::<Vec<_>>()
@@ -702,7 +702,7 @@ fn runtime_agent_shell_command_without_output_keeps_mez_framing_out_of_logs() {
         .agent_turn_contexts()
         .get("turn-1")
         .unwrap()
-        .blocks
+        .blocks()
         .iter()
         .map(|block| block.content.as_str())
         .collect::<Vec<_>>()
@@ -1055,7 +1055,7 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
             .is_empty()
     );
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::TranscriptAssistant
             && block.content.contains("failing shell")
             && !block
@@ -1065,7 +1065,7 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
                 .content
                 .contains("thinking: exercise failure feedback")
     }));
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block
                 .content
@@ -1073,7 +1073,7 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
             && block.content.contains("exit_code: 2")
             && block.content.contains("model-visible failure output")
     }));
-    assert!(!context.blocks.iter().any(|block| {
+    assert!(!context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::RuntimeHint
             && block.content.contains("action failure feedback")
     }));
@@ -1212,7 +1212,7 @@ fn runtime_shell_action_timeout_queues_model_self_correction() {
             .any(|task| task.turn_id == turn.turn_id)
     );
     let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block
                 .content

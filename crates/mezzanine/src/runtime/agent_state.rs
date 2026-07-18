@@ -59,6 +59,8 @@ pub(crate) struct RuntimeAgentProviderClaim {
     pub claimed_at_unix_ms: u64,
     /// Maximum lease duration before the runtime fails the turn.
     pub timeout_ms: u64,
+    /// Highest canonical event sequence consumed by the claimed request.
+    pub context_event_high_water_mark: u64,
 }
 
 /// Carries Runtime Agent Provider Dispatch Provider state for this subsystem.

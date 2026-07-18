@@ -94,7 +94,6 @@ impl RuntimeSessionService {
         }
         self.agent_turn_contexts_mut().remove(&turn.turn_id);
         self.agent_turn_executions_mut().remove(&turn.turn_id);
-        self.clear_agent_turn_steering(&turn.turn_id);
         self.clear_agent_failure_feedback_attempts_for_turn(&turn.turn_id);
         self.agent
             .agent_turn_shell_dispatch_history

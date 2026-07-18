@@ -683,6 +683,9 @@ impl RuntimeSessionService {
             envelope,
             now_ms,
         );
+        if delivery.is_ok() {
+            self.deliver_pending_runtime_agent_messages(now_ms)?;
+        }
         let child_label =
             runtime_subagent_display_label(&turn.agent_id, child_display_name.as_deref());
         self.append_subagent_parent_status_line(
@@ -900,11 +903,11 @@ impl RuntimeSessionService {
                 })
                 .unwrap_or_default(),
         };
-        Ok(self
-            .control
+        self.control
             .message_service_mut()
-            .accept_at(&child_identity.agent_id, envelope, now_ms)
-            .map(|_| ())?)
+            .accept_at(&child_identity.agent_id, envelope, now_ms)?;
+        self.deliver_pending_runtime_agent_messages(now_ms)?;
+        Ok(())
     }
 
     /// Resolves a parent `spawn_agent` action that joined a child task result.

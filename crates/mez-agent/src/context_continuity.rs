@@ -279,7 +279,7 @@ pub fn context_continuity_snapshot(
     let mut exact_duplicate_blocks = 0usize;
     let mut near_duplicate_blocks = 0usize;
     let mut contains_compaction_epoch = false;
-    for (index, block) in context.blocks.iter().enumerate() {
+    for (index, block) in context.blocks().iter().enumerate() {
         let token_estimate = context_block_token_estimate(block);
         let canonical = canonical_context_block_bytes(block);
         let digest = sha256_hex(&canonical);
@@ -539,7 +539,7 @@ mod tests {
         .unwrap();
         let previous = context_continuity_snapshot(&initial, "openai", "gpt", "turn-1");
         let appended = AgentContext::new(vec![
-            initial.blocks[0].clone(),
+            initial.blocks()[0].clone(),
             block(
                 ContextPlacement::ConversationAppend,
                 ContextSourceKind::TranscriptUser,

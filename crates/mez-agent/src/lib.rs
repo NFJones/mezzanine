@@ -216,13 +216,11 @@ pub use auto_sizing::{
 pub use claude_code::{
     CLAUDE_CODE_EMPTY_OUTPUT_RETRY_INSTRUCTION, CLAUDE_CODE_MAAP_RETRY_INSTRUCTION,
     CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL, ClaudeCodeOutput, ClaudeCodeResponseError,
-    ClaudeCodeResponseResult, ClaudeCodeSessionErrorKind, bound_claude_code_text,
-    claude_code_auto_sizing_json_schema, claude_code_corrective_retry_instruction,
-    claude_code_empty_output_error, claude_code_maap_json_schema,
-    claude_code_macro_judge_json_schema, claude_code_prompt, claude_code_resume_prompt,
-    claude_code_session_error_kind, claude_code_session_id, claude_code_system_prompt,
-    parse_claude_code_json_output, parse_claude_code_maap_output, redact_claude_code_text,
-    validate_claude_code_auto_sizing_output,
+    ClaudeCodeResponseResult, bound_claude_code_text, claude_code_auto_sizing_json_schema,
+    claude_code_corrective_retry_instruction, claude_code_empty_output_error,
+    claude_code_maap_json_schema, claude_code_macro_judge_json_schema, claude_code_prompt,
+    claude_code_system_prompt, parse_claude_code_json_output, parse_claude_code_maap_output,
+    redact_claude_code_text, validate_claude_code_auto_sizing_output,
 };
 pub use config_change::{
     CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_SETTING_PATH_DESCRIPTION,
@@ -232,16 +230,18 @@ pub use config_change::{
 };
 pub use context::{
     AgentContext, AgentContextError, AgentContextResult, AgentRequestAssemblyError,
-    AgentRequestAssemblyErrorKind, AgentRequestAssemblyResult, ContextBlock, ContextCachePolicy,
-    ContextPlacement, ContextRetention, ContextSemanticKind, ContextSourceKind, ContextStability,
+    AgentRequestAssemblyErrorKind, AgentRequestAssemblyResult, ContextBlock, ContextBlockMetadata,
+    ContextCachePolicy, ContextEventSequence, ContextExecutionGroupId, ContextPlacement,
+    ContextRetention, ContextSemanticKind, ContextSourceKind, ContextStability,
     ModelContextCompactionReport, ModelContextMetadata, ModelMessage, ModelMessageRole,
-    ModelRequest, PreparedModelContext, TrustDomain, context_placement_insertion_index,
-    insert_context_block_by_placement, model_context_block_header,
-    validate_context_placement_order, validate_context_required, validate_context_semantics,
+    ModelRequest, PreparedModelContext, ProviderContinuityOwner, TrustDomain,
+    context_placement_insertion_index, insert_context_block_by_placement,
+    model_context_block_header, validate_context_placement_order, validate_context_required,
+    validate_context_semantics,
 };
 pub use context_appenders::{
     append_mcp_context, append_mcp_context_for_provider, append_memory_context,
-    append_permission_policy_context, append_project_guidance_context, append_scheduler_context,
+    append_permission_policy_context, append_project_guidance_context,
     invoked_mcp_tools_for_context, memory_context_blocks, set_project_guidance_context,
 };
 pub use context_assembly::{

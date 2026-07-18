@@ -151,30 +151,30 @@ fn runtime_config_reload_applies_agent_prompt_and_personality_profiles() {
         .agent_turn_contexts()
         .get(&started.turn_id)
         .expect("started turn should retain provider context");
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::System
             && block.label == "configured agent system prompt"
             && block.content.contains("Always preserve user work")
     }));
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::System
             && block.label == "agent personality system prompt"
             && block.content.contains("Be exact about evidence")
     }));
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.label == "agent shell plan mode" && block.content.contains("Planning mode is active")
     }));
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.label == "agent shell plan mode"
             && block
                 .content
                 .contains("Do not use a visible plan when the next safe inspection")
     }));
-    assert!(!context.blocks.iter().any(|block| {
+    assert!(!context.blocks().iter().any(|block| {
         block.label == "agent shell plan mode"
             && block.content.contains("Start by presenting a concise")
     }));
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.label == "agent shell personality"
             && block.content.contains("Response style preference")
             && block.content.contains("terse")

@@ -12,7 +12,6 @@ use crate::{
     maap_action_batch_schema, parse_maap_action_batch_json_for_turn,
     provider_malformed_output_error,
 };
-use sha2::Digest;
 
 /// Corrective instruction used after Claude Code returns malformed MAAP output.
 pub const CLAUDE_CODE_MAAP_RETRY_INSTRUCTION: &str = "Your previous response was invalid for Mezzanine because it did not satisfy the required structured output contract. Return only one validated Mezzanine MAAP action batch that matches the provided JSON schema, with no surrounding prose.";
@@ -103,19 +102,6 @@ impl From<ProviderMalformedOutputError> for ClaudeCodeResponseError {
 /// Result returned while interpreting Claude Code output.
 pub type ClaudeCodeResponseResult<T> = Result<T, ClaudeCodeResponseError>;
 
-/// Session-diagnostic classes used by the subprocess resume/create adapter.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ClaudeCodeSessionErrorKind {
-    /// The requested conversation is currently locked by another invocation.
-    Active,
-    /// A create request collided with an already-created conversation.
-    Existing,
-    /// A resume request referenced an absent conversation.
-    Missing,
-    /// The diagnostic does not describe a recognized session state.
-    Other,
-}
-
 /// Builds the Claude system prompt passed through the dedicated CLI channel.
 pub fn claude_code_system_prompt(
     request: &ModelRequest,
@@ -144,15 +130,6 @@ pub fn claude_code_prompt(request: &ModelRequest, _retry_instruction: Option<&st
     let mut prompt = String::new();
     append_claude_code_ordered_context(&mut prompt, request);
     prompt
-}
-
-/// Builds the stdin prompt used when resuming an existing Claude Code
-/// conversation and replaying Mezzanine-owned continuation context.
-pub fn claude_code_resume_prompt(
-    request: &ModelRequest,
-    retry_instruction: Option<&str>,
-) -> String {
-    claude_code_prompt(request, retry_instruction)
 }
 
 /// Appends authoritative instructions to Claude's system-prompt channel.
@@ -465,36 +442,6 @@ pub fn claude_code_corrective_retry_instruction(assistant_text: &str) -> &'stati
     }
 }
 
-/// Classifies one sanitized Claude Code session diagnostic.
-pub fn claude_code_session_error_kind(
-    message: &str,
-    provider_raw_text: Option<&str>,
-) -> ClaudeCodeSessionErrorKind {
-    let mut text = message.to_string();
-    if let Some(raw_text) = provider_raw_text {
-        text.push('\n');
-        text.push_str(raw_text);
-    }
-    let text = text.to_ascii_lowercase();
-    if claude_code_error_indicates_active_session_text(&text) {
-        ClaudeCodeSessionErrorKind::Active
-    } else if text.contains("already exists")
-        || (text.contains("session id") && text.contains("already"))
-    {
-        ClaudeCodeSessionErrorKind::Existing
-    } else if (text.contains("session") || text.contains("conversation"))
-        && (text.contains("not found")
-            || text.contains("does not exist")
-            || text.contains("could not find")
-            || text.contains("no conversation")
-            || text.contains("unknown"))
-    {
-        ClaudeCodeSessionErrorKind::Missing
-    } else {
-        ClaudeCodeSessionErrorKind::Other
-    }
-}
-
 /// Redacts common secret-bearing fragments from subprocess diagnostics.
 pub fn redact_claude_code_text(value: &str) -> String {
     let mut ranges = Vec::new();
@@ -625,15 +572,6 @@ fn claude_code_extract_top_level_json_object(text: &str) -> Option<String> {
         }
     }
     None
-}
-
-/// Reports whether normalized diagnostic text describes an active session lock.
-fn claude_code_error_indicates_active_session_text(text: &str) -> bool {
-    (text.contains("session") || text.contains("conversation"))
-        && (text.contains("already in use")
-            || text.contains("currently in use")
-            || text.contains("is in use")
-            || text.contains("locked"))
 }
 
 /// Records ranges for bearer credentials, including compact URL separators.
@@ -905,69 +843,6 @@ fn serialize_claude_code_schema(
     })
 }
 
-/// Returns the Claude Code session id used to resume one Mezzanine
-/// conversation.
-pub fn claude_code_session_id(request: &ModelRequest) -> Option<String> {
-    if let Some(session_id) = request
-        .prompt_cache_session_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|session_id| !session_id.is_empty())
-    {
-        if claude_code_uuid_is_valid(session_id) {
-            return Some(session_id.to_ascii_lowercase());
-        }
-        return Some(claude_code_uuid_from_stable_key(&format!(
-            "session:{session_id}"
-        )));
-    }
-    request
-        .prompt_cache_lineage_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|lineage_id| !lineage_id.is_empty())
-        .map(|lineage_id| claude_code_uuid_from_stable_key(&format!("lineage:{lineage_id}")))
-}
-
-/// Reports whether a string already has Claude's UUID-shaped session id form.
-fn claude_code_uuid_is_valid(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    bytes.len() == 36
-        && [8, 13, 18, 23].iter().all(|index| bytes[*index] == b'-')
-        && bytes
-            .iter()
-            .enumerate()
-            .all(|(index, byte)| [8, 13, 18, 23].contains(&index) || byte.is_ascii_hexdigit())
-}
-
-/// Derives a deterministic UUID-shaped Claude session id from stable Mez data.
-fn claude_code_uuid_from_stable_key(key: &str) -> String {
-    let digest = sha2::Sha256::digest(format!("mezzanine-claude-code-session-v1\n{key}"));
-    let mut bytes = [0u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    bytes[6] = (bytes[6] & 0x0f) | 0x50;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0],
-        bytes[1],
-        bytes[2],
-        bytes[3],
-        bytes[4],
-        bytes[5],
-        bytes[6],
-        bytes[7],
-        bytes[8],
-        bytes[9],
-        bytes[10],
-        bytes[11],
-        bytes[12],
-        bytes[13],
-        bytes[14],
-        bytes[15]
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1145,15 +1020,12 @@ mod tests {
         let system_prompt =
             claude_code_system_prompt(&request, Some(CLAUDE_CODE_MAAP_RETRY_INSTRUCTION));
         let prompt = claude_code_prompt(&request, Some(CLAUDE_CODE_MAAP_RETRY_INSTRUCTION));
-        let resume_prompt =
-            claude_code_resume_prompt(&request, Some(CLAUDE_CODE_MAAP_RETRY_INSTRUCTION));
 
         assert!(
             system_prompt
                 .contains("Developer retry instruction:\nYour previous response was invalid")
         );
         assert!(!prompt.contains("Developer retry instruction:"));
-        assert!(!resume_prompt.contains("Developer retry instruction:"));
     }
 
     /// Verifies instruction-only Claude Code requests produce an explicit
@@ -1321,55 +1193,6 @@ mod tests {
             error.message()
         );
         assert_eq!(error.provider_raw_text(), Some(raw));
-    }
-
-    /// Verifies session diagnostics distinguish lock, collision, absence, and
-    /// unrelated failures for the root subprocess retry loop.
-    #[test]
-    fn claude_code_session_errors_have_stable_retry_classes() {
-        assert_eq!(
-            claude_code_session_error_kind("session is already in use", None),
-            ClaudeCodeSessionErrorKind::Active
-        );
-        assert_eq!(
-            claude_code_session_error_kind("session id already exists", None),
-            ClaudeCodeSessionErrorKind::Existing
-        );
-        assert_eq!(
-            claude_code_session_error_kind("failed", Some("conversation not found")),
-            ClaudeCodeSessionErrorKind::Missing
-        );
-        assert_eq!(
-            claude_code_session_error_kind("permission denied", None),
-            ClaudeCodeSessionErrorKind::Other
-        );
-    }
-
-    /// Verifies Claude Code session ids are stable per Mezzanine session and
-    /// still satisfy Claude's UUID argument contract when Mezzanine only has a
-    /// non-UUID fallback key.
-    #[test]
-    fn claude_code_session_id_uses_stable_mez_session_key() {
-        let mut request = claude_request();
-        assert_eq!(claude_code_session_id(&request), None);
-
-        request.prompt_cache_session_id = Some("018f6b3a-1b2c-7000-9000-cafebabefeed".to_string());
-
-        assert_eq!(
-            claude_code_session_id(&request),
-            Some("018f6b3a-1b2c-7000-9000-cafebabefeed".to_string())
-        );
-
-        request.prompt_cache_session_id = Some("mez-session-A".to_string());
-        let derived_a = claude_code_session_id(&request).unwrap();
-        let derived_a_again = claude_code_session_id(&request).unwrap();
-        request.prompt_cache_session_id = Some("mez-session-B".to_string());
-        let derived_b = claude_code_session_id(&request).unwrap();
-
-        assert_eq!(derived_a, derived_a_again);
-        assert_ne!(derived_a, derived_b);
-        assert!(claude_code_uuid_is_valid(&derived_a));
-        assert!(claude_code_uuid_is_valid(&derived_b));
     }
 
     /// Builds a minimal Claude Code request for deterministic policy tests.

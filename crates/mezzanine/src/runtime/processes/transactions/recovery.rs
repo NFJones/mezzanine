@@ -218,7 +218,6 @@ impl RuntimeSessionService {
         let turn_id = turn.turn_id.as_str();
         self.agent_provider_task_is_owned(turn_id)
             || actor_progress_turn_ids.contains(turn_id)
-            || self.agent_turn_has_pending_steering(turn_id)
             || self
                 .process
                 .running_shell_transactions

@@ -83,7 +83,6 @@ impl RuntimeSessionService {
             );
         }
         self.refresh_agent_turn_project_guidance_context(&turn)?;
-        self.drain_pending_agent_turn_steering_context(&turn)?;
         let durable = self
             .agent_turn_contexts()
             .get(turn_id)
@@ -171,7 +170,7 @@ impl RuntimeSessionService {
                 "provider_request started provider={} model={} context_blocks={}",
                 provider.provider_id(),
                 model_profile.model,
-                context.blocks.len()
+                context.blocks().len()
             ),
         )?;
         self.record_runtime_provider_request_shape_for_context(
@@ -428,7 +427,6 @@ impl RuntimeSessionService {
             );
         }
         self.refresh_agent_turn_project_guidance_context(&turn)?;
-        self.drain_pending_agent_turn_steering_context(&turn)?;
         let durable = self
             .agent_turn_contexts()
             .get(turn_id)
@@ -515,7 +513,7 @@ impl RuntimeSessionService {
                 "provider_request started provider={} model={} context_blocks={}",
                 provider.provider_id(),
                 model_profile.model,
-                context.blocks.len()
+                context.blocks().len()
             ),
         )?;
         self.record_runtime_provider_request_shape_for_context(

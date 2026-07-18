@@ -60,6 +60,22 @@ const EXPECTED_MARKDOWN_INLINE_CODE_FOREGROUND: TerminalColor =
 const EXPECTED_MARKDOWN_TABLE_ALTERNATE_ROW_FOREGROUND: TerminalColor =
     TerminalColor::Rgb(0xe6, 0xe6, 0xe6);
 
+/// Inserts one synthetic block through the same checked context boundary used
+/// by production producers.
+///
+/// Runtime tests occasionally need deliberately large or provider-specific
+/// context without executing the action that would normally create it. The
+/// helper preserves that fixture capability while ensuring tests cannot mutate
+/// the durable vector behind the causal metadata ledger.
+fn insert_test_context_block(context: &mut mez_agent::AgentContext, block: ContextBlock) {
+    let semantic_kind = block.semantic_kind();
+    let retention = block.retention();
+    let recoverable_for_compaction = block.recoverable_for_compaction();
+    context
+        .insert_typed_block(block, semantic_kind, retention, recoverable_for_compaction)
+        .unwrap();
+}
+
 /// Returns the rendered style active at one displayed terminal column.
 ///
 /// # Parameters

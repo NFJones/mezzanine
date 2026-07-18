@@ -454,6 +454,25 @@ impl MessageService {
         Ok(cursor)
     }
 
+    /// Creates a durable subscription that begins at the oldest retained
+    /// message instead of at the current queue high-water mark.
+    ///
+    /// Runtime-owned agents use this boundary so a message accepted while no
+    /// turn is active remains unread and can be committed immediately before
+    /// the next prompt. Transport clients retain [`MessageService::subscribe`]
+    /// semantics, which intentionally begin with only future messages.
+    pub fn subscribe_from_retained_start(&mut self, recipient: &AgentId) -> Result<DeliveryCursor> {
+        self.registered.get(recipient).ok_or_else(|| {
+            MessageError::forbidden("delivery subscription requires registered agent")
+        })?;
+        let cursor = DeliveryCursor {
+            recipient: recipient.clone(),
+            last_sequence: 0,
+        };
+        self.subscriptions.insert(recipient.clone(), cursor.clone());
+        Ok(cursor)
+    }
+
     /// Runs the subscription operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in

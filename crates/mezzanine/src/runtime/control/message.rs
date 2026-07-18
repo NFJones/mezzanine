@@ -40,6 +40,7 @@ impl RuntimeSessionService {
                 previous_agent_id.as_ref(),
                 connection.agent_id.as_ref(),
             )?;
+            self.deliver_pending_runtime_agent_messages(now_ms)?;
         }
         Ok((output, consumed))
     }

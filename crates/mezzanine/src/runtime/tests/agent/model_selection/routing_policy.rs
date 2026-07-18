@@ -457,7 +457,7 @@ reasoning_profile = "high"
                 content: "action-result sentinel must reach the routed worker".to_string(),
             },
         ] {
-        mez_agent::insert_context_block_by_placement(&mut context.blocks, block);
+        insert_test_context_block(context, block);
     }
 
     let provider = RuntimeAutoSizingProvider {
@@ -543,28 +543,28 @@ reasoning_profile = "high"
         .expect("managed worker context should exist");
     assert_eq!(
         child_context
-            .blocks
+            .blocks()
             .iter()
             .filter(|block| block.content == "implement this")
             .count(),
         1
     );
-    assert!(child_context.blocks.iter().any(|block| {
+    assert!(child_context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::TranscriptAssistant
             && block
                 .content
                 .contains("Implement multi-file runtime auto-sizing")
     }));
-    assert!(child_context.blocks.iter().any(|block| {
+    assert!(child_context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::TranscriptTool
             && block.content == "tool-only output should not reach the router"
     }));
-    assert!(child_context.blocks.iter().any(|block| {
+    assert!(child_context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block.content == "action-result sentinel must reach the routed worker"
     }));
     assert!(child_context.validate_durable().is_ok());
-    assert!(!child_context.blocks.iter().any(|block| {
+    assert!(!child_context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::Policy
             && block.content == "policy-only context should not reach the router"
     }));
@@ -726,7 +726,7 @@ reasoning_profile = "high"
             content: "live action-result sentinel must reach the routed handoff".to_string(),
         },
     ] {
-        mez_agent::insert_context_block_by_placement(&mut worker_context.blocks, block);
+        insert_test_context_block(worker_context, block);
     }
     assert!(
         service
@@ -764,15 +764,15 @@ reasoning_profile = "high"
         .agent_turn_contexts()
         .get(handoff_turn_id)
         .expect("handoff context should be recorded");
-    assert!(handoff_context.blocks.iter().any(|block| {
+    assert!(handoff_context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::TranscriptAssistant
             && block.content == "live assistant sentinel must reach the routed handoff"
     }));
-    assert!(handoff_context.blocks.iter().any(|block| {
+    assert!(handoff_context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block.content == "live action-result sentinel must reach the routed handoff"
     }));
-    assert!(handoff_context.blocks.iter().any(|block| {
+    assert!(handoff_context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::RoutedHandoff
             && block.label == "routed worker exact final result"
             && block.content == exact_worker_result
@@ -808,7 +808,7 @@ reasoning_profile = "high"
         .expect("repair context should be recorded");
     assert_eq!(
         repair_context
-            .blocks
+            .blocks()
             .iter()
             .filter(|block| {
                 block.source == ContextSourceKind::RoutedHandoff
@@ -818,12 +818,12 @@ reasoning_profile = "high"
             .count(),
         1
     );
-    assert!(repair_context.blocks.iter().any(|block| {
+    assert!(repair_context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::RoutedHandoff
             && block.label == "invalid routed handoff output"
             && block.content == "invalid handoff"
     }));
-    assert!(repair_context.blocks.iter().any(|block| {
+    assert!(repair_context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::RoutedHandoff
             && block.label == "routed handoff validation feedback"
             && block
@@ -853,12 +853,12 @@ reasoning_profile = "high"
         .agent_turn_contexts()
         .get("turn-1")
         .expect("parent context should remain recorded");
-    assert!(parent_context.blocks.iter().any(|block| {
+    assert!(parent_context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::RoutedHandoff
             && block.label == "routed worker exact final result"
             && block.content == exact_worker_result
     }));
-    assert!(parent_context.blocks.iter().any(|block| {
+    assert!(parent_context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::RoutedHandoff
             && block.label == "routed worker handoff context"
             && block
@@ -1111,7 +1111,7 @@ fn runtime_agent_presentation_persistence_stays_out_of_model_context() {
         .unwrap();
     assert!(
         context
-            .blocks
+            .blocks()
             .iter()
             .all(|block| !block.content.contains("visual-only pane replay"))
     );
@@ -1213,14 +1213,14 @@ fn runtime_shell_pane_not_ready_queues_model_self_correction() {
     assert!(queued);
     assert_eq!(execution.terminal_state, AgentTurnState::Running);
     let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block
                 .content
                 .contains("[action_result shell-not-ready shell_command failed]")
             && block.content.contains("interactive-blocked")
     }));
-    assert!(!context.blocks.iter().any(|block| {
+    assert!(!context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::RuntimeHint
             && block.content.contains("Shell-readiness recovery")
     }));

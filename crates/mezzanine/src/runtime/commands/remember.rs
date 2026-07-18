@@ -84,9 +84,9 @@ impl RuntimeRememberCandidate {
 pub(super) fn runtime_remember_context_source(pane_id: &str, context: &AgentContext) -> String {
     let mut lines = vec![
         format!("Pane: {pane_id}"),
-        format!("Context blocks supplied: {}", context.blocks.len()),
+        format!("Context blocks supplied: {}", context.blocks().len()),
     ];
-    for (index, block) in context.blocks.iter().enumerate() {
+    for (index, block) in context.blocks().iter().enumerate() {
         lines.push(format!(
             "context_block={} source={} label={} content={}",
             index,

@@ -660,10 +660,10 @@ pub(super) fn runtime_model_compaction_source(
         format!("Durable entries supplied for compaction: {}", entries.len()),
         format!(
             "Provider-bound context blocks supplied: {}",
-            context.blocks.len()
+            context.blocks().len()
         ),
     ];
-    for (index, block) in context.blocks.iter().enumerate() {
+    for (index, block) in context.blocks().iter().enumerate() {
         lines.push(format!(
             "context_block={} source={} label={} content={}",
             index,
@@ -789,9 +789,10 @@ pub(super) fn runtime_compaction_context_without_transcript_blocks(
 ) -> Result<AgentContext> {
     Ok(AgentContext::new(
         context
-            .blocks
+            .blocks()
             .into_iter()
             .filter(|block| !runtime_context_block_is_transcript_replay(block))
+            .cloned()
             .collect(),
     )?)
 }

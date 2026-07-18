@@ -181,7 +181,7 @@ fn runtime_agent_shell_resume_and_fork_manage_saved_conversations() {
     let context = service
         .agent_context_for_pane_prompt("%1", "continue", 0)
         .unwrap();
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == mez_agent::ContextSourceKind::TranscriptUser
             && block.content.contains("saved prompt")
     }));

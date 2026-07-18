@@ -5,7 +5,7 @@ use super::*;
 /// Verifies controller retry coaching is not persisted beside factual action
 /// evidence in durable model chronology.
 fn assert_no_persisted_failure_feedback(context: &mez_agent::AgentContext) {
-    assert!(context.blocks.iter().all(|block| {
+    assert!(context.blocks().iter().all(|block| {
         block.source != ContextSourceKind::RuntimeHint || block.label != "action failure feedback"
     }));
 }
@@ -119,7 +119,7 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
         vec![1]
     );
     let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block
                 .content
@@ -238,7 +238,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_preserves_failure_evidence() {
     assert!(queued);
     let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     assert_no_persisted_failure_feedback(context);
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block
                 .content
@@ -940,7 +940,7 @@ fn runtime_apply_patch_unsafe_path_recovery_preserves_diagnostic() {
     );
     let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
     assert_no_persisted_failure_feedback(context);
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block
                 .content

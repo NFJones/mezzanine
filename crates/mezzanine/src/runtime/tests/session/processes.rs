@@ -898,7 +898,7 @@ fn runtime_pane_write_failure_fails_running_file_action() {
     assert_eq!(service.pending_agent_provider_tasks().len(), 1);
     assert!(!service.agent_turn_executions().contains_key("turn-1"));
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block
                 .content

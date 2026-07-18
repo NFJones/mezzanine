@@ -255,8 +255,7 @@ fn runtime_routed_selection_setup_failure_recovers_once() {
         .agent_turn_contexts_mut()
         .get_mut("turn-1")
         .expect("parent context should exist")
-        .blocks
-        .retain(|block| {
+        .retain_blocks(|block| {
             block.source != ContextSourceKind::UserInstruction || block.label != "user prompt"
         });
     let selection = AutoSizingWorkerSelection {
@@ -292,7 +291,7 @@ fn runtime_routed_selection_setup_failure_recovers_once() {
         .agent_turn_contexts()
         .get("turn-1")
         .expect("parent context should remain available")
-        .blocks
+        .blocks()
         .iter()
         .filter(|block| {
             block.label == "routed workflow failure"
@@ -311,7 +310,7 @@ fn runtime_routed_selection_setup_failure_recovers_once() {
         .agent_turn_contexts()
         .get("turn-1")
         .expect("parent context should remain available")
-        .blocks
+        .blocks()
         .iter()
         .filter(|block| {
             block.label == "routed workflow failure"
@@ -670,7 +669,7 @@ fn runtime_routed_loop_continuation_queue_failure_recovers_once() {
             .agent_turn_contexts()
             .get(&parent_turn_id)
             .expect("parent context should remain available")
-            .blocks
+            .blocks()
             .iter()
             .filter(|block| {
                 block.label == "routed workflow failure"
@@ -688,7 +687,7 @@ fn runtime_routed_loop_continuation_queue_failure_recovers_once() {
             .agent_turn_contexts()
             .get(&parent_turn_id)
             .expect("parent context should remain available")
-            .blocks
+            .blocks()
             .iter()
             .filter(|block| block.label == "routed workflow failure")
             .count(),
@@ -796,7 +795,7 @@ fn runtime_routed_loop_fresh_modes_restore_parent_at_limit() {
                 .agent_turn_contexts()
                 .get(&worker_turn.turn_id)
                 .expect("new-mode worker context should exist");
-            assert!(!worker_context.blocks.iter().any(|block| {
+            assert!(!worker_context.blocks().iter().any(|block| {
                 matches!(
                     block.source,
                     ContextSourceKind::TranscriptUser
@@ -1056,7 +1055,7 @@ reasoning_profile = "high"
         .agent_turn_contexts()
         .get("turn-1")
         .expect("parent context should remain available")
-        .blocks
+        .blocks()
         .iter()
         .filter(|block| {
             block.label == "routed workflow failure"
@@ -1135,7 +1134,7 @@ reasoning_profile = "high"
         .expect("parent context should remain available");
     assert_eq!(
         parent_context
-            .blocks
+            .blocks()
             .iter()
             .filter(|block| {
                 block.label == "routed worker exact final result" && block.content == exact_result
@@ -1145,7 +1144,7 @@ reasoning_profile = "high"
     );
     assert_eq!(
         parent_context
-            .blocks
+            .blocks()
             .iter()
             .filter(|block| {
                 block.label == "routed workflow failure"

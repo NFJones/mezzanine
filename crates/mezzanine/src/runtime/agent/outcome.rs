@@ -18,6 +18,34 @@ use super::{
     runtime_provider_audit_error_message,
 };
 
+/// Collects newly terminal action results in the order the actor observes
+/// terminal transitions.
+///
+/// Callers invoke this after planning and after each executor family. The
+/// result vector is therefore ordered by actor transition boundaries rather
+/// than MAAP array position or one final category scan.
+#[derive(Debug, Default)]
+pub(super) struct RuntimeTerminalActionObservations {
+    action_ids: std::collections::BTreeSet<String>,
+    results: Vec<ActionResult>,
+}
+
+impl RuntimeTerminalActionObservations {
+    /// Observes terminal transitions visible at the current actor boundary.
+    pub(super) fn observe(&mut self, execution: &AgentTurnExecution) {
+        for result in &execution.action_results {
+            if result.is_terminal() && self.action_ids.insert(result.action_id.clone()) {
+                self.results.push(result.clone());
+            }
+        }
+    }
+
+    /// Returns terminal results in actor observation order.
+    pub(super) fn results(&self) -> &[ActionResult] {
+        &self.results
+    }
+}
+
 impl RuntimeSessionService {
     /// Queues one provider continuation after model-correctable action
     /// failures.

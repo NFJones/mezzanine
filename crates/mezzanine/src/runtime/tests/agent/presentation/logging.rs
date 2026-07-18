@@ -67,7 +67,7 @@ fn runtime_progress_say_chronology_reaches_provider_continuation_without_ledger(
     assert_eq!(first_execution.terminal_state, AgentTurnState::Running);
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
     let assistant_block = context
-        .blocks
+        .blocks()
         .iter()
         .find(|block| block.source == ContextSourceKind::TranscriptAssistant)
         .expect("progress say should be preserved as assistant chronology");
@@ -83,7 +83,7 @@ fn runtime_progress_say_chronology_reaches_provider_continuation_without_ledger(
         assistant_block.content
     );
     assert!(context.validate_durable().is_ok());
-    assert!(!context.blocks.iter().any(|block| {
+    assert!(!context.blocks().iter().any(|block| {
         block.label.contains("ledger") || block.content.contains("progress_say:")
     }));
 

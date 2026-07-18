@@ -8,8 +8,7 @@
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentTurnExecution, AgentTurnRecord, AgentTurnState,
     MezError, PathBuf, Result, RuntimeSessionService, runtime_agent_action_summary,
-    runtime_agent_turn_state_from_action_results,
-    runtime_execution_ready_for_provider_continuation, runtime_mezzanine_error_code,
+    runtime_agent_turn_state_from_action_results, runtime_mezzanine_error_code,
     runtime_path_under_project_root,
 };
 use crate::integrations::skills::{discover_skill_catalog, load_skill_document};
@@ -59,7 +58,7 @@ impl RuntimeSessionService {
             .agent_turn_contexts()
             .get(turn_id)
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        Ok(skill_action_context_from_blocks(&context.blocks))
+        Ok(skill_action_context_from_blocks(&context.blocks()))
     }
 
     /// Executes a runtime-owned skill lookup or skill-load action.
@@ -165,20 +164,6 @@ impl RuntimeSessionService {
             &execution.action_results,
             execution.final_turn,
         );
-        if execution.terminal_state == AgentTurnState::Running
-            && runtime_execution_ready_for_provider_continuation(execution)
-        {
-            let settled_results = execution
-                .action_results
-                .iter()
-                .filter(|result| matches!(result.action_type, "request_skills" | "call_skill"))
-                .cloned()
-                .collect::<Vec<_>>();
-            self.commit_settled_action_results_context(&turn.turn_id, &settled_results)?;
-            self.agent
-                .pending_agent_provider_tasks
-                .insert(turn.turn_id.clone());
-        }
         Ok(executed)
     }
 }

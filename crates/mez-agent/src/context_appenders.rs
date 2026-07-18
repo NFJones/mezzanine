@@ -5,14 +5,11 @@
 //! policy, and scheduler state. Keeping these helpers together preserves the
 //! ordering contracts used before provider request assembly.
 
-use std::collections::BTreeSet;
-
 use crate::instructions::DiscoveredInstructionFile;
 use crate::{
-    AgentContext, AgentContextResult, AgentScheduler, ContextBlock, ContextSourceKind,
-    McpPromptServer, McpPromptSummary, McpPromptTool, McpPromptUnavailableServer,
-    MemoryContextRecord, context_placement_insertion_index, insert_context_block_by_placement,
-    runnable_agent_ids, validate_context_required,
+    AgentContext, AgentContextResult, ContextBlock, ContextRetention, ContextSemanticKind,
+    ContextSourceKind, McpPromptServer, McpPromptSummary, McpPromptTool,
+    McpPromptUnavailableServer, MemoryContextRecord, validate_context_required,
 };
 
 /// Appends selected memory records to provider-bound context.
@@ -27,7 +24,12 @@ pub fn append_memory_context(
 ) -> AgentContextResult<AgentContext> {
     let memory_blocks = memory_context_blocks(records, max_records);
     for block in memory_blocks {
-        insert_context_block_by_placement(&mut context.blocks, block);
+        context.insert_typed_block(
+            block,
+            ContextSemanticKind::ReferenceEvent,
+            ContextRetention::Summarizable,
+            true,
+        )?;
     }
     context.revalidate()
 }
@@ -77,7 +79,7 @@ pub fn append_mcp_context(
     mut context: AgentContext,
     summary: &McpPromptSummary,
 ) -> AgentContextResult<AgentContext> {
-    context.blocks.retain(|block| !is_mcp_context_block(block));
+    context.retain_blocks(|block| !is_mcp_context_block(block));
     let invocation = explicit_mcp_invocation_summary(&context, summary);
     if invocation.available_servers.is_empty()
         && invocation.available_tools.is_empty()
@@ -100,7 +102,7 @@ pub fn append_mcp_context_for_provider(
     summary: &McpPromptSummary,
     provider: &str,
 ) -> AgentContextResult<AgentContext> {
-    context.blocks.retain(|block| !is_mcp_context_block(block));
+    context.retain_blocks(|block| !is_mcp_context_block(block));
     let invocation = explicit_mcp_invocation_summary(&context, summary);
     append_filtered_mcp_context(context, &invocation, provider == "openai")
 }
@@ -190,17 +192,17 @@ fn append_filtered_mcp_context(
             mcp_context_quoted_value(&server.reason)
         ));
     }
-    let insert_at =
-        context_placement_insertion_index(&context.blocks, crate::ContextPlacement::EphemeralTail);
-    context.blocks.insert(
-        insert_at,
+    context.insert_typed_block(
         ContextBlock {
             source: ContextSourceKind::RuntimeHint,
             placement: crate::ContextPlacement::EphemeralTail,
             label: MCP_INTEGRATIONS_CONTEXT_LABEL.to_string(),
             content: lines.join("\n"),
         },
-    );
+        ContextSemanticKind::LiveState,
+        ContextRetention::RequestLocal,
+        false,
+    )?;
     context.revalidate()
 }
 
@@ -326,7 +328,7 @@ fn resolve_explicit_mcp_invocations(
 /// Extracts ordered unique `@<server-id>` MCP invocations from turn-local text.
 fn explicit_mcp_invocations_from_context(context: &AgentContext) -> Vec<String> {
     let mut names = Vec::new();
-    for block in &context.blocks {
+    for block in context.blocks() {
         if !matches!(
             block.source,
             ContextSourceKind::UserInstruction | ContextSourceKind::SkillInstruction
@@ -470,7 +472,7 @@ fn mcp_context_selected_tool_details(
 /// Returns normalized user-authored text for explicit MCP detail selection.
 fn mcp_context_normalized_user_text(context: &AgentContext) -> String {
     context
-        .blocks
+        .blocks()
         .iter()
         .filter(|block| block.source == ContextSourceKind::UserInstruction)
         .map(|block| mcp_context_normalize_identifier(&block.content))
@@ -600,7 +602,12 @@ pub fn append_project_guidance_context(
         });
     }
     for block in guidance_blocks {
-        insert_context_block_by_placement(&mut context.blocks, block);
+        context.insert_typed_block(
+            block,
+            ContextSemanticKind::AmbientInstruction,
+            ContextRetention::Exact,
+            false,
+        )?;
     }
     context.revalidate()
 }
@@ -637,9 +644,7 @@ pub fn set_project_guidance_context(
     files: &[DiscoveredInstructionFile],
     max_files: usize,
 ) -> AgentContextResult<AgentContext> {
-    context
-        .blocks
-        .retain(|block| block.source != ContextSourceKind::ProjectGuidance);
+    context.retain_blocks(|block| block.source != ContextSourceKind::ProjectGuidance);
     append_project_guidance_context(context, files, max_files)
 }
 
@@ -651,108 +656,6 @@ pub fn set_project_guidance_context(
 /// mistaken for user-facing task constraints.
 pub fn append_permission_policy_context(context: AgentContext) -> AgentContextResult<AgentContext> {
     Ok(context)
-}
-
-/// Replaces scheduler context with the current scheduler state when relevant.
-///
-/// Idle state is omitted unless the active task explicitly involves scheduling,
-/// subagents, queued work, or concurrency. Non-idle state is always included.
-pub fn append_scheduler_context(
-    mut context: AgentContext,
-    scheduler: &AgentScheduler,
-) -> AgentContextResult<AgentContext> {
-    context.blocks.retain(|block| {
-        block.source != ContextSourceKind::Policy || block.label != "scheduler state"
-    });
-    let snapshot = scheduler.snapshot();
-    let runnable_agents = runnable_agent_ids(scheduler);
-    let scheduler_idle = snapshot.running == 0
-        && snapshot.blocked == 0
-        && snapshot.waiting == 0
-        && snapshot.queued == 0
-        && runnable_agents.is_empty();
-    if scheduler_idle && !idle_scheduler_context_is_relevant(&context) {
-        return context.revalidate();
-    }
-    let content = if scheduler_idle {
-        format!(
-            "state=idle\nmax_concurrent_agents={}",
-            snapshot.max_concurrent_agents
-        )
-    } else {
-        let runnable = runnable_agents.into_iter().collect::<Vec<_>>().join(",");
-        let mut active_agents = BTreeSet::new();
-        for work in scheduler
-            .running_turns()
-            .chain(scheduler.blocked_turns())
-            .chain(scheduler.waiting_turns())
-            .chain(scheduler.reacquiring_turns())
-        {
-            active_agents.insert(work.agent_id.as_str());
-        }
-        for work in scheduler.queued_turns() {
-            active_agents.insert(work.agent_id.as_str());
-        }
-        let active_agents = active_agents.into_iter().collect::<Vec<_>>().join(",");
-        format!(
-            "state=active\nactive_capacity_used={}\nrunning={}\nblocked={}\nwaiting={}\nreacquiring={}\nqueued={}\nmax_concurrent_agents={}\nrunnable_agents={}\nactive_agents={}",
-            snapshot.active_capacity_used,
-            snapshot.running,
-            snapshot.blocked,
-            snapshot.waiting,
-            snapshot.reacquiring,
-            snapshot.queued,
-            snapshot.max_concurrent_agents,
-            if runnable.is_empty() {
-                "none"
-            } else {
-                &runnable
-            },
-            if active_agents.is_empty() {
-                "none"
-            } else {
-                &active_agents
-            }
-        )
-    };
-    let block = ContextBlock {
-        source: ContextSourceKind::Policy,
-        placement: crate::ContextPlacement::EphemeralTail,
-        label: "scheduler state".to_string(),
-        content,
-    };
-    insert_context_block_by_placement(&mut context.blocks, block);
-    context.revalidate()
-}
-
-/// Returns whether an otherwise idle scheduler summary is relevant.
-fn idle_scheduler_context_is_relevant(context: &AgentContext) -> bool {
-    context.blocks.iter().any(|block| {
-        matches!(
-            block.source,
-            ContextSourceKind::UserInstruction | ContextSourceKind::LocalMessage
-        ) && scheduler_context_text_is_relevant(&block.content)
-    })
-}
-
-/// Returns true when text asks about scheduling, subagents, or concurrency.
-fn scheduler_context_text_is_relevant(content: &str) -> bool {
-    let normalized = content.to_ascii_lowercase();
-    [
-        "subagent",
-        "subagents",
-        "spawn agent",
-        "scheduler",
-        "scheduling",
-        "concurrency",
-        "concurrent",
-        "parallel",
-        "queued",
-        "running turn",
-        "background task",
-    ]
-    .iter()
-    .any(|needle| normalized.contains(needle))
 }
 
 #[cfg(test)]

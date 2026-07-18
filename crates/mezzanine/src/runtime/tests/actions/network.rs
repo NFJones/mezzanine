@@ -257,14 +257,14 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
     assert_eq!(attempt_values, vec![1, 3]);
     assert!(service.agent_provider_task_is_pending("turn-1"));
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block
                 .content
                 .contains("[action_result fetch-good fetch_url succeeded]")
             && block.content.contains("usable source body")
     }));
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block
                 .content
@@ -273,7 +273,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
     }));
     assert!(
         context
-            .blocks
+            .blocks()
             .iter()
             .all(|block| block.source != ContextSourceKind::RuntimeHint)
     );

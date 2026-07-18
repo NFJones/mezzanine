@@ -6,13 +6,14 @@
 //! request defaults. Product code supplies stable turn identity and prompt
 //! assets without exposing runtime records or filesystem access.
 
+#[cfg(test)]
+use crate::ProviderTranscriptEvent;
 use crate::{
     AgentContext, AgentPromptAssetSource, AgentPromptProfile, AgentRequestAssemblyResult,
     AllowedActionSet, ContextBlock, ContextPlacement, ContextSourceKind, ModelInteractionKind,
-    ModelMessage, ModelMessageRole, ModelProfile, ModelRequest, ProviderTranscriptEvent,
-    assemble_agent_system_prompt, constrain_skill_actions_for_loaded_context,
-    model_context_block_header, validate_context_placement_order, validate_context_semantics,
-    validate_model_profile_request,
+    ModelMessage, ModelMessageRole, ModelProfile, ModelRequest, assemble_agent_system_prompt,
+    constrain_skill_actions_for_loaded_context, model_context_block_header,
+    validate_context_placement_order, validate_context_semantics, validate_model_profile_request,
 };
 
 /// Stable product identity required to assemble one provider request.
@@ -34,10 +35,10 @@ pub fn assemble_model_request_from_context(
     prompt_assets: &impl AgentPromptAssetSource,
 ) -> AgentRequestAssemblyResult<ModelRequest> {
     validate_model_profile_request(profile, identity.turn_id)?;
-    validate_context_placement_order(&context.blocks)?;
-    validate_context_semantics(&context.blocks)?;
+    validate_context_placement_order(context.blocks())?;
+    validate_context_semantics(context.blocks())?;
 
-    let blocks = context.blocks.clone();
+    let blocks = context.blocks();
     let repository_instruction_blocks = blocks
         .iter()
         .filter(|block| block.source == ContextSourceKind::ProjectGuidance)
@@ -67,8 +68,16 @@ pub fn assemble_model_request_from_context(
             &repository_instruction_blocks,
         ));
     }
-    for block in &blocks {
-        if ProviderTranscriptEvent::from_transcript_content(&block.content).is_some() {
+    for (index, block) in blocks.iter().enumerate() {
+        let metadata = context.metadata_for_block(index).ok_or_else(|| {
+            crate::AgentRequestAssemblyError::from(crate::AgentContextError::new(
+                "context block is missing stored causal metadata",
+            ))
+        })?;
+        if let Some(owner) = metadata.provider_owner() {
+            if !owner.matches_provider(&profile.provider) {
+                continue;
+            }
             messages.push(ModelMessage {
                 role: ModelMessageRole::System,
                 source: block.source,
@@ -81,7 +90,7 @@ pub fn assemble_model_request_from_context(
             continue;
         }
         messages.push(ModelMessage {
-            role: role_for_context_block(block),
+            role: role_for_context_semantic(block, metadata.semantic_kind()),
             source: block.source,
             placement: block.placement,
             content: format!("{}{}", model_context_block_header(block), block.content),
@@ -111,8 +120,8 @@ pub fn assemble_model_request_from_context(
                     None
                 }
             }),
-        prompt_cache_session_id: context.metadata.prompt_cache_session_id.clone(),
-        prompt_cache_lineage_id: context.metadata.prompt_cache_lineage_id.clone(),
+        prompt_cache_session_id: context.metadata().prompt_cache_session_id.clone(),
+        prompt_cache_lineage_id: context.metadata().prompt_cache_lineage_id.clone(),
         turn_id: identity.turn_id.to_string(),
         agent_id: identity.agent_id.to_string(),
         available_mcp_tools: Vec::new(),
@@ -135,7 +144,15 @@ pub fn assemble_model_request_from_context(
 
 /// Maps canonical context semantics to provider-neutral message roles.
 pub fn role_for_context_block(block: &ContextBlock) -> ModelMessageRole {
-    match block.semantic_kind() {
+    role_for_context_semantic(block, block.semantic_kind())
+}
+
+/// Maps one producer-selected canonical semantic to a provider-neutral role.
+fn role_for_context_semantic(
+    block: &ContextBlock,
+    semantic_kind: crate::ContextSemanticKind,
+) -> ModelMessageRole {
+    match semantic_kind {
         crate::ContextSemanticKind::AmbientInstruction => {
             if block.source == ContextSourceKind::System {
                 ModelMessageRole::System

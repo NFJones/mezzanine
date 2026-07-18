@@ -1165,7 +1165,7 @@ fn openai_stable_prefix_excludes_injected_mcp_integration_context() {
 
     let ordinary_context = AgentContext::new(
         context
-            .blocks
+            .blocks()
             .iter()
             .filter(|block| block.label != "mcp integrations")
             .cloned()

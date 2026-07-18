@@ -555,7 +555,6 @@ impl RuntimeSessionService {
             };
             self.agent_turn_contexts_mut().remove(&turn_id);
             self.agent_turn_executions_mut().remove(&turn_id);
-            self.clear_agent_turn_steering(&turn_id);
             self.clear_agent_failure_feedback_attempts_for_turn(&turn_id);
             self.clear_agent_action_bookkeeping_for_turn(&turn_id);
             self.clear_joined_subagent_dependencies_for_turn(&turn_id);
@@ -645,36 +644,39 @@ impl RuntimeSessionService {
         mut context: AgentContext,
     ) -> Result<AgentContext> {
         if let Some(prompt) = self.integration.custom_agent_system_prompt() {
-            mez_agent::insert_context_block_by_placement(
-                &mut context.blocks,
+            context.insert_typed_block(
                 ContextBlock {
                     source: ContextSourceKind::System,
                     placement: mez_agent::ContextPlacement::StablePrefix,
                     label: "configured agent system prompt".to_string(),
                     content: prompt.to_string(),
                 },
-            );
+                mez_agent::ContextSemanticKind::AmbientInstruction,
+                mez_agent::ContextRetention::Exact,
+                true,
+            )?;
         }
         if let Some(profile) = self.agent_selected_personality_profile(pane_id)
             && let Some(prompt) = profile.system_prompt.as_ref()
         {
-            mez_agent::insert_context_block_by_placement(
-                &mut context.blocks,
+            context.insert_typed_block(
                 ContextBlock {
                     source: ContextSourceKind::System,
                     placement: mez_agent::ContextPlacement::StablePrefix,
                     label: "agent personality system prompt".to_string(),
                     content: prompt.clone(),
                 },
-            );
+                mez_agent::ContextSemanticKind::AmbientInstruction,
+                mez_agent::ContextRetention::Exact,
+                true,
+            )?;
         }
         if let Some(directive) = self
             .agent_shell_store()
             .get(pane_id)
             .and_then(|session| session.directive.as_deref())
         {
-            mez_agent::insert_context_block_by_placement(
-                &mut context.blocks,
+            context.insert_typed_block(
                 ContextBlock {
                     source: ContextSourceKind::DeveloperInstruction,
                     placement: mez_agent::ContextPlacement::StablePrefix,
@@ -684,33 +686,44 @@ impl RuntimeSessionService {
                         directive
                     ),
                 },
-            );
+                mez_agent::ContextSemanticKind::AmbientInstruction,
+                mez_agent::ContextRetention::Exact,
+                true,
+            )?;
         }
         let selected_profile = self.agent_selected_personality_profile(pane_id);
         let planning_enabled = self.agent_planning_enabled(pane_id)
             || selected_profile.is_some_and(|profile| profile.planning_enabled == Some(true));
         if planning_enabled {
-            mez_agent::insert_context_block_by_placement(&mut context.blocks, ContextBlock {
-                source: ContextSourceKind::Configuration,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                label: "agent shell plan mode".to_string(),
-                content: "Planning mode is active. For broad or ambiguous work, briefly state the execution approach before acting. Do not use a visible plan when the next safe inspection, edit, validation, or repair action is clear."
-                    .to_string(),
-            });
+            context.insert_typed_block(
+                ContextBlock {
+                    source: ContextSourceKind::Configuration,
+                    placement: mez_agent::ContextPlacement::StablePrefix,
+                    label: "agent shell plan mode".to_string(),
+                    content: "Planning mode is active. For broad or ambiguous work, briefly state the execution approach before acting. Do not use a visible plan when the next safe inspection, edit, validation, or repair action is clear."
+                        .to_string(),
+                },
+                mez_agent::ContextSemanticKind::AmbientInstruction,
+                mez_agent::ContextRetention::Exact,
+                true,
+            )?;
         }
         let profile_style = selected_profile.and_then(|profile| profile.response_style.as_deref());
         if let Some(style) = self.agent_response_style(pane_id).or(profile_style) {
-            mez_agent::insert_context_block_by_placement(
-                &mut context.blocks,
+            context.insert_typed_block(
                 ContextBlock {
                     source: ContextSourceKind::Configuration,
                     placement: mez_agent::ContextPlacement::StablePrefix,
                     label: "agent shell personality".to_string(),
                     content: format!("Response style preference for this pane: {style}."),
                 },
-            );
+                mez_agent::ContextSemanticKind::AmbientInstruction,
+                mez_agent::ContextRetention::Exact,
+                true,
+            )?;
         }
-        Ok(AgentContext::new_durable(context.blocks)?)
+        context.validate_durable()?;
+        Ok(context)
     }
 
     /// Runs the start agent prompt turn operation for this subsystem.
@@ -960,10 +973,11 @@ impl RuntimeSessionService {
 
     /// Injects user steering input into the currently running pane turn.
     ///
-    /// Provider requests already in flight cannot be edited, so the text is
-    /// retained as pending steering and drained into the next provider-bound
-    /// context. The visible agent prompt has already logged the submitted user
-    /// text before this helper runs.
+    /// Provider requests already in flight cannot be edited, so the actor
+    /// commits steering immediately to canonical chronology. Completion ingress
+    /// discards any older provider generation whose consumed event high-water
+    /// mark predates this event. The visible agent prompt has already logged the
+    /// submitted user text before this helper runs.
     pub(super) fn inject_agent_steering_for_running_turn(
         &mut self,
         pane_id: &str,
@@ -990,24 +1004,42 @@ impl RuntimeSessionService {
         else {
             return Ok(None);
         };
-        self.push_agent_turn_steering(
-            turn.turn_id.clone(),
-            AgentTurnSteering {
-                input: input.to_string(),
-                submitted_at_unix_seconds: current_unix_seconds(),
-            },
-        );
+        let steering = AgentTurnSteering {
+            input: input.to_string(),
+            submitted_at_unix_seconds: current_unix_seconds(),
+        };
+        let context = self
+            .agent_turn_contexts_mut()
+            .get_mut(&turn.turn_id)
+            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
+        let steering_ordinal = context
+            .blocks()
+            .iter()
+            .filter(|block| block.label.starts_with("user steering "))
+            .count()
+            .saturating_add(1);
+        let steering_label = format!("user steering {steering_ordinal}");
+        let sequence = context
+            .append_user_event(
+                steering_label,
+                mez_agent::agent_turn_steering_context_content(&steering),
+            )
+            .map_err(|error| MezError::invalid_state(error.to_string()))?;
         self.append_agent_status_text_to_terminal_buffer(
             pane_id,
             &format!(
-                "agent: queued steering input for current turn {}; it will be incorporated after the next step",
-                turn.turn_id
+                "agent: applied steering input to current turn {} at event sequence {}",
+                turn.turn_id,
+                sequence.get()
             ),
         )?;
         self.append_agent_trace_turn_event(
             pane_id,
             &turn.turn_id,
-            "user_steering queued reason=mid_turn_agent_prompt",
+            &format!(
+                "user_steering applied reason=mid_turn_agent_prompt event_sequence={}",
+                sequence.get()
+            ),
         )?;
         if !self.agent_provider_task_is_owned(&turn.turn_id)
             && self
@@ -1076,12 +1108,13 @@ impl RuntimeSessionService {
                 block.hook_id, block.message
             )));
         }
-        let context = self.agent_context_for_pane_prompt(pane_id, prompt, 100)?;
+        let (context, delivered_message_sequence) =
+            self.agent_context_for_pane_prompt_with_message_delivery(pane_id, prompt, 100, true)?;
         let context = self.apply_agent_shell_preference_context(pane_id, context)?;
         context.validate_placement_order()?;
         let turn_id = self.next_agent_turn_id();
         let agent_id = format!("agent-{pane_id}");
-        let context_blocks = context.blocks.len();
+        let context_blocks = context.blocks().len();
         let created_at_unix_seconds = current_unix_seconds();
         let prompt_preview = prompt.chars().take(160).collect::<String>();
         let (model_profile_name, model_profile) =
@@ -1115,6 +1148,13 @@ impl RuntimeSessionService {
         )?;
         self.agent_turn_contexts_mut()
             .insert(turn_id.clone(), context);
+        if let Some(sequence) = delivered_message_sequence {
+            let recipient = AgentId::opaque(agent_id.clone())
+                .ok_or_else(|| MezError::invalid_state("runtime agent id is invalid for MMP"))?;
+            self.control
+                .message_service_mut()
+                .advance_subscription(&recipient, sequence)?;
+        }
         self.set_agent_turn_model_profile(turn_id.clone(), model_profile);
         self.enqueue_agent_work(ScheduledWork {
             turn_id: turn_id.clone(),

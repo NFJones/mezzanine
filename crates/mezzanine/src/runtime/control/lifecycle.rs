@@ -285,7 +285,6 @@ impl RuntimeSessionService {
         *self.agent_turn_ledger_mut() = AgentTurnLedger::new(false);
         self.agent_turn_contexts_mut().clear();
         self.agent_turn_executions_mut().clear();
-        self.clear_all_agent_turn_steering();
         self.clear_all_agent_action_bookkeeping();
         self.clear_agent_session_artifacts();
         self.clear_agent_prompt_inputs();

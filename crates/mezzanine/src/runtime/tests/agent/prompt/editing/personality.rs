@@ -109,7 +109,7 @@ fn runtime_agent_shell_personality_feeds_prompt_context() {
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
     assert!(
         context
-            .blocks
+            .blocks()
             .iter()
             .any(|block| block.label == "agent shell personality"
                 && block.content.contains("concise"))

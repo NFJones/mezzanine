@@ -473,12 +473,12 @@ context_window_tokens = 4500
     );
     assert!(prompt.contains(r#""state":"running""#), "{prompt}");
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::Memory
             && block.label.contains("compact-as1")
             && block.content.contains("summarize release plan")
     }));
-    assert!(context.blocks.iter().all(|block| {
+    assert!(context.blocks().iter().all(|block| {
         !matches!(
             block.source,
             ContextSourceKind::Transcript
@@ -487,7 +487,7 @@ context_window_tokens = 4500
                 | ContextSourceKind::TranscriptTool
         ) || !block.content.contains("release plan summary is ready")
     }));
-    assert!(context.blocks.iter().all(|block| {
+    assert!(context.blocks().iter().all(|block| {
         !matches!(
             block.source,
             ContextSourceKind::Transcript
@@ -496,7 +496,7 @@ context_window_tokens = 4500
                 | ContextSourceKind::TranscriptTool
         ) || !block.content.contains("sk-secret")
     }));
-    assert!(context.blocks.iter().all(|block| {
+    assert!(context.blocks().iter().all(|block| {
         !matches!(
             block.source,
             ContextSourceKind::Transcript
@@ -573,7 +573,7 @@ fn runtime_agent_context_injects_only_active_compact_memory() {
         .agent_context_for_pane_prompt("%1", "continue", 0)
         .unwrap();
     let memory_blocks = context
-        .blocks
+        .blocks()
         .iter()
         .filter(|block| block.source == ContextSourceKind::Memory)
         .collect::<Vec<_>>();
@@ -595,13 +595,13 @@ fn runtime_agent_context_injects_only_active_compact_memory() {
     );
     assert!(
         context
-            .blocks
+            .blocks()
             .iter()
             .all(|block| !block.content.contains("generic memory"))
     );
     assert!(
         context
-            .blocks
+            .blocks()
             .iter()
             .all(|block| !block.content.contains("other compaction"))
     );

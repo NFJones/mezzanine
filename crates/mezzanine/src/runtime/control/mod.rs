@@ -70,14 +70,13 @@ use crate::control::{
 };
 use crate::integrations::skills::{BUILTIN_MEZ_REFERENCE_SKILL_NAME, load_skill_document};
 pub(crate) use component::RuntimeControlComponent;
+pub(crate) use context::runtime_local_message_context_content;
 use context::{
     runtime_agent_transcript_context_blocks, runtime_context_block_is_compaction_refresh_owned,
-    runtime_local_message_context_content,
 };
 use mez_agent::{
-    SkillDocument, append_memory_context, insert_context_block_by_placement, is_valid_skill_name,
-    memory_context_blocks, parse_skill_prompt_invocation, set_project_guidance_context,
-    skill_context_text,
+    SkillDocument, insert_context_block_by_placement, is_valid_skill_name, memory_context_blocks,
+    parse_skill_prompt_invocation, set_project_guidance_context, skill_context_text,
 };
 use protocol::{
     pane_id_from_runtime_agent_id, paths_equivalent, runtime_project_trust_read_method,
@@ -101,82 +100,71 @@ impl RuntimeSessionService {
         &mut self,
         pane_id: &str,
         prompt: &str,
-        _max_history_lines: usize,
+        max_history_lines: usize,
     ) -> Result<AgentContext> {
+        self.agent_context_for_pane_prompt_with_message_delivery(
+            pane_id,
+            prompt,
+            max_history_lines,
+            false,
+        )
+        .map(|(context, _)| context)
+    }
+
+    /// Builds prompt context and optionally includes the unread local-message
+    /// prefix that the caller will acknowledge after storing the context.
+    pub(super) fn agent_context_for_pane_prompt_with_message_delivery(
+        &mut self,
+        pane_id: &str,
+        prompt: &str,
+        _max_history_lines: usize,
+        include_unread_messages: bool,
+    ) -> Result<(AgentContext, Option<mez_agent::messaging::MessageSequence>)> {
         if prompt.trim().is_empty() {
             return Err(MezError::invalid_args("agent prompt must not be empty"));
         }
         self.refresh_project_config_layers_for_pane(pane_id)?;
         self.settle_recoverable_pane_readiness_for_agent_prompt(pane_id)?;
-        let mut blocks = vec![];
-
-        let context_memory_records = self.model_context_memory_records_for_pane(pane_id);
-        if let Some(block) =
-            Self::runtime_agent_compaction_notice_context_block(&context_memory_records)
-        {
-            insert_context_block_by_placement(&mut blocks, block);
-        }
-        let prompt_memory_records = context_memory_records
-            .iter()
-            .map(mez_agent::MemoryContextRecord::from)
-            .collect::<Vec<_>>();
-        for block in memory_context_blocks(&prompt_memory_records, 1) {
-            insert_context_block_by_placement(&mut blocks, block);
-        }
-
-        if let Some(session) = self.agent_shell_store().get(pane_id)
-            && let Some(store) = self.persistence.transcript_store()
-        {
-            let transcript_conversation_id = session
-                .ephemeral_transcript_source_conversation_id
-                .as_deref()
-                .unwrap_or(session.session_id.as_str());
-            let transcript_entries = if session.ephemeral {
-                session.ephemeral_transcript_source_entries
-            } else {
-                session.transcript_entries
-            };
-            if transcript_entries > 0 {
-                match store.inspect(transcript_conversation_id) {
-                    Ok(mut entries) if !entries.is_empty() => {
-                        if session.ephemeral {
-                            entries.retain(|entry| entry.sequence <= transcript_entries);
-                        } else {
-                            let active_entries =
-                                usize::try_from(transcript_entries).unwrap_or(usize::MAX);
-                            let first_active = entries.len().saturating_sub(active_entries);
-                            entries.drain(..first_active);
-                        }
-                        for block in runtime_agent_transcript_context_blocks(pane_id, &entries) {
-                            insert_context_block_by_placement(&mut blocks, block);
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {}
-                    Err(error) => return Err(error),
-                }
+        let mut blocks = self.runtime_agent_history_epoch_context_blocks(pane_id)?;
+        let mut delivered_message_sequence = None;
+        if include_unread_messages {
+            let now_ms = super::current_unix_seconds().saturating_mul(1000);
+            let identity = self.ensure_runtime_message_identity(
+                &format!("agent-{pane_id}"),
+                PaneId::opaque(pane_id.to_string()),
+                "agent",
+                &[],
+                now_ms,
+            )?;
+            if self
+                .control
+                .message_service()
+                .subscription(&identity.agent_id)
+                .is_none()
+            {
+                self.control
+                    .message_service_mut()
+                    .subscribe_from_retained_start(&identity.agent_id)?;
             }
-        }
-        let agent_id = mez_core::ids::AgentId::opaque(format!("agent-{pane_id}"))
-            .ok_or_else(|| MezError::invalid_args("agent id must be non-empty"))?;
-        let pending_messages = self
-            .control
-            .message_service_mut()
-            .receive_for(&agent_id, super::current_unix_seconds());
-        if !pending_messages.is_empty() {
-            let message_lines: Vec<String> = pending_messages
-                .iter()
-                .map(runtime_local_message_context_content)
-                .collect();
-            insert_context_block_by_placement(
-                &mut blocks,
-                ContextBlock {
-                    source: ContextSourceKind::LocalMessage,
-                    placement: mez_agent::ContextPlacement::ConversationAppend,
-                    label: format!("pending local messages for agent {agent_id}"),
-                    content: message_lines.join("\n\n"),
-                },
-            );
+            let pending_messages = self.control.message_service().receive_subscribed(
+                &identity.agent_id,
+                now_ms,
+                usize::MAX,
+            )?;
+            for message in pending_messages.messages {
+                insert_context_block_by_placement(
+                    &mut blocks,
+                    ContextBlock::reference_event(
+                        ContextSourceKind::LocalMessage,
+                        format!(
+                            "local message sequence {} id {}",
+                            message.sequence, message.envelope.id
+                        ),
+                        runtime_local_message_context_content(&message.envelope),
+                    ),
+                );
+                delivered_message_sequence = Some(message.sequence);
+            }
         }
         if let Some(signature) = self.pane_environment_signature(pane_id) {
             let mut env_lines = vec![
@@ -224,7 +212,7 @@ impl RuntimeSessionService {
         {
             let context = AgentContext::new(blocks)?;
             let context = set_project_guidance_context(context, instruction_files, 2)?;
-            blocks = context.blocks;
+            blocks = context.blocks().to_vec();
             if instruction_files.iter().any(|f| f.truncated) {
                 let truncated_paths: Vec<&str> = instruction_files
                     .iter()
@@ -304,7 +292,10 @@ impl RuntimeSessionService {
                 )
             })
             .unwrap_or_default();
-        Ok(AgentContext::new_durable(blocks)?.with_metadata(metadata))
+        Ok((
+            AgentContext::new_durable(blocks)?.with_metadata(metadata),
+            delivered_message_sequence,
+        ))
     }
 
     /// Formats immutable skill context for one invocation.
@@ -387,6 +378,68 @@ impl RuntimeSessionService {
         })
     }
 
+    /// Builds one frozen historical epoch shared by initial prompt restoration
+    /// and active-turn compaction refresh.
+    ///
+    /// The epoch order is invariant: the compaction notice and older compact
+    /// memory precede the retained newer raw transcript. Task-local messages,
+    /// prelude, prompt, steering, and same-turn execution events are appended by
+    /// their owning producers after this epoch.
+    fn runtime_agent_history_epoch_context_blocks(
+        &self,
+        pane_id: &str,
+    ) -> Result<Vec<ContextBlock>> {
+        let context_memory_records = self.model_context_memory_records_for_pane(pane_id);
+        let mut blocks = Vec::new();
+        if let Some(block) =
+            Self::runtime_agent_compaction_notice_context_block(&context_memory_records)
+        {
+            blocks.push(block);
+        }
+        blocks.extend(memory_context_blocks(
+            &context_memory_records
+                .iter()
+                .map(mez_agent::MemoryContextRecord::from)
+                .collect::<Vec<_>>(),
+            1,
+        ));
+
+        let Some(session) = self.agent_shell_store().get(pane_id) else {
+            return Ok(blocks);
+        };
+        let Some(store) = self.persistence.transcript_store() else {
+            return Ok(blocks);
+        };
+        let transcript_conversation_id = session
+            .ephemeral_transcript_source_conversation_id
+            .as_deref()
+            .unwrap_or(session.session_id.as_str());
+        let transcript_entries = if session.ephemeral {
+            session.ephemeral_transcript_source_entries
+        } else {
+            session.transcript_entries
+        };
+        if transcript_entries == 0 {
+            return Ok(blocks);
+        }
+        match store.inspect(transcript_conversation_id) {
+            Ok(mut entries) if !entries.is_empty() => {
+                if session.ephemeral {
+                    entries.retain(|entry| entry.sequence <= transcript_entries);
+                } else {
+                    let active_entries = usize::try_from(transcript_entries).unwrap_or(usize::MAX);
+                    let first_active = entries.len().saturating_sub(active_entries);
+                    entries.drain(..first_active);
+                }
+                blocks.extend(runtime_agent_transcript_context_blocks(pane_id, &entries));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        Ok(blocks)
+    }
+
     /// Refreshes transcript and compact-memory context for a running turn.
     ///
     /// Automatic provider recovery can compact a pane conversation while the
@@ -416,77 +469,40 @@ impl RuntimeSessionService {
             return Ok(false);
         }
 
-        let mut refreshed_blocks = Vec::new();
-        if let Some(store) = self.persistence.transcript_store() {
-            let transcript_conversation_id = session
-                .ephemeral_transcript_source_conversation_id
-                .as_deref()
-                .unwrap_or(session.session_id.as_str());
-            let transcript_entries = if session.ephemeral {
-                session.ephemeral_transcript_source_entries
-            } else {
-                session.transcript_entries
-            };
-            if transcript_entries > 0 {
-                match store.inspect(transcript_conversation_id) {
-                    Ok(mut entries) if !entries.is_empty() => {
-                        if session.ephemeral {
-                            entries.retain(|entry| entry.sequence <= transcript_entries);
-                        } else {
-                            let active_entries =
-                                usize::try_from(transcript_entries).unwrap_or(usize::MAX);
-                            let first_active = entries.len().saturating_sub(active_entries);
-                            entries.drain(..first_active);
-                        }
-                        refreshed_blocks.extend(runtime_agent_transcript_context_blocks(
-                            &turn.pane_id,
-                            &entries,
-                        ));
-                    }
-                    Ok(_) => {}
-                    Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => {}
-                    Err(error) => return Err(error),
-                }
-            }
-        }
-        let context_memory_records = self.model_context_memory_records_for_pane(&turn.pane_id);
-        if let Some(block) =
-            Self::runtime_agent_compaction_notice_context_block(&context_memory_records)
-        {
-            refreshed_blocks.push(block);
-        }
-        let refreshed_context = append_memory_context(
-            AgentContext::new(refreshed_blocks)?,
-            &context_memory_records
-                .iter()
-                .map(mez_agent::MemoryContextRecord::from)
-                .collect::<Vec<_>>(),
-            1,
-        )?;
-        let refreshed_blocks = refreshed_context.blocks;
+        let refreshed_blocks = self.runtime_agent_history_epoch_context_blocks(&turn.pane_id)?;
 
         let Some(existing_context) = self.agent_turn_contexts().get(turn_id).cloned() else {
             return Ok(false);
         };
-        let mut blocks = existing_context.blocks;
-        blocks.retain(|block| !runtime_context_block_is_compaction_refresh_owned(block));
-        let insert_at = blocks
+        let mut blocks = existing_context.blocks().to_vec();
+        let owned_indexes = blocks
             .iter()
-            .position(|block| {
-                matches!(
-                    block.source,
-                    ContextSourceKind::Configuration
-                        | ContextSourceKind::SkillInstruction
-                        | ContextSourceKind::UserInstruction
-                        | ContextSourceKind::TranscriptAssistant
-                        | ContextSourceKind::TranscriptTool
-                        | ContextSourceKind::ActionResult
-                ) && block.placement == mez_agent::ContextPlacement::ConversationAppend
-            })
-            .unwrap_or(blocks.len());
-        for (offset, block) in refreshed_blocks.into_iter().enumerate() {
-            blocks.insert(insert_at + offset, block);
-        }
+            .enumerate()
+            .filter(|(_, block)| runtime_context_block_is_compaction_refresh_owned(block))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let (replace_start, replace_end) = match owned_indexes.as_slice() {
+            [] => {
+                let anchor = blocks
+                    .iter()
+                    .position(|block| {
+                        block.placement == mez_agent::ContextPlacement::ConversationAppend
+                    })
+                    .unwrap_or(blocks.len());
+                (anchor, anchor)
+            }
+            indexes => {
+                let start = indexes[0];
+                let end = indexes[indexes.len() - 1].saturating_add(1);
+                if indexes.iter().copied().ne(start..end) {
+                    return Err(MezError::invalid_state(
+                        "running turn history epoch is fragmented across a causal barrier; refusing compaction refresh",
+                    ));
+                }
+                (start, end)
+            }
+        };
+        blocks.splice(replace_start..replace_end, refreshed_blocks);
         let refreshed_block_count = blocks.len();
         self.agent_turn_contexts_mut()
             .insert(turn_id.to_string(), AgentContext::new_durable(blocks)?);
@@ -1132,42 +1148,6 @@ impl RuntimeSessionService {
         )?;
         Ok(())
     }
-}
-
-/// Builds an explicit model-visible readiness hint for non-ready panes.
-pub(crate) fn runtime_agent_pane_readiness_context_block(
-    pane_id: &str,
-    readiness_state: PaneReadinessState,
-) -> Option<ContextBlock> {
-    if readiness_state == PaneReadinessState::Ready {
-        return None;
-    }
-    let state_name = runtime_pane_readiness_state_name(readiness_state);
-    let content = match readiness_state {
-        PaneReadinessState::Unknown
-        | PaneReadinessState::PromptCandidate
-        | PaneReadinessState::Probing
-        | PaneReadinessState::Busy
-        | PaneReadinessState::Degraded => format!(
-            "pane_id={pane_id} readiness_state={state_name}\n\
-             Shell-backed actions for this pane may be delayed or rejected until Mezzanine confirms a safe shell boundary. \
-             Do not assume shell_command or apply_patch can execute immediately unless later action results show the pane became ready."
-        ),
-        PaneReadinessState::FullScreen
-        | PaneReadinessState::PasswordPrompt
-        | PaneReadinessState::InteractiveBlocked => format!(
-            "pane_id={pane_id} readiness_state={state_name}\n\
-             Foreground interactive content is still active in this pane, so shell_command and apply_patch cannot execute until the user exits that UI or the pane readiness changes. \
-             If local shell work is required, report the blockage or tell the user to return the pane to its shell prompt instead of emitting shell-backed actions immediately."
-        ),
-        PaneReadinessState::Ready => return None,
-    };
-    Some(ContextBlock {
-        source: ContextSourceKind::RuntimeHint,
-        placement: mez_agent::ContextPlacement::EphemeralTail,
-        label: "pane readiness".to_string(),
-        content,
-    })
 }
 
 /// Runs the runtime mcp retry result json operation for this subsystem.

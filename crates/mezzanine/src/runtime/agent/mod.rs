@@ -71,13 +71,12 @@ use mez_agent::semantic_patch_planning::{
 };
 use mez_agent::{
     ActiveWriteScope, AgentContext, AgentNetworkActionHistory, AgentShellDispatchHistory,
-    AgentShellStore, AgentTurnLedger, AgentTurnSteering, AutoSizingWorkerSelection,
-    DEFAULT_PROVIDER_TIMEOUT_MS, EnvironmentSignature, MaapBatch, MacroManagedSubagent,
-    MacroRunState, ModelInteractionKind, ModelTokenUsage, ModelTokenUsageKey, PreparedModelContext,
-    ProviderApiCompatibility, ProviderQuotaUsage, SayStatus, ToolDiscoveryCache, ToolInventory,
-    append_mcp_context_for_provider, append_scheduler_context,
-    assistant_context_content_for_execution, invoked_mcp_tools_for_context,
-    set_project_guidance_context,
+    AgentShellStore, AgentTurnLedger, AutoSizingWorkerSelection, DEFAULT_PROVIDER_TIMEOUT_MS,
+    EnvironmentSignature, MaapBatch, MacroManagedSubagent, MacroRunState, ModelInteractionKind,
+    ModelTokenUsage, ModelTokenUsageKey, PreparedModelContext, ProviderApiCompatibility,
+    ProviderQuotaUsage, SayStatus, ToolDiscoveryCache, ToolInventory,
+    append_mcp_context_for_provider, assistant_context_content_for_execution,
+    invoked_mcp_tools_for_context, set_project_guidance_context,
 };
 use mez_mux::command::CommandInvocation;
 
@@ -187,8 +186,6 @@ pub(crate) struct RuntimeAgentComponent {
     pending_agent_provider_tasks: BTreeSet<String>,
     /// Provider turns claimed by workers but not yet settled.
     claimed_agent_provider_tasks: BTreeMap<String, RuntimeAgentProviderClaim>,
-    /// User steering prompts waiting for the next provider action boundary.
-    agent_turn_pending_steering: BTreeMap<String, Vec<AgentTurnSteering>>,
     /// Panes currently running model-backed context compaction.
     agent_compacting_panes: BTreeMap<String, u64>,
     /// Model-backed compaction tasks waiting for provider dispatch.
@@ -468,11 +465,6 @@ impl RuntimeSessionService {
     /// Returns active write scopes for one agent.
     pub(crate) fn active_subagent_write_scopes_for(&self, agent_id: &str) -> Vec<ActiveWriteScope> {
         self.agent.subagent_scopes.active_write_scopes_for(agent_id)
-    }
-
-    /// Returns every active subagent write scope.
-    pub(crate) fn active_subagent_write_scopes(&self) -> Vec<ActiveWriteScope> {
-        self.agent.subagent_scopes.active_write_scopes()
     }
 
     /// Returns the number of active subagent write scopes.
@@ -1213,42 +1205,6 @@ impl RuntimeSessionService {
         pane_id: &str,
     ) -> Option<&RuntimeAgentCompactionTask> {
         self.agent.pending_agent_compaction_tasks.get(pane_id)
-    }
-
-    /// Appends one steering prompt to an active turn.
-    pub(crate) fn push_agent_turn_steering(
-        &mut self,
-        turn_id: impl Into<String>,
-        steering: AgentTurnSteering,
-    ) {
-        self.agent
-            .agent_turn_pending_steering
-            .entry(turn_id.into())
-            .or_default()
-            .push(steering);
-    }
-
-    /// Takes all steering prompts waiting for one turn.
-    pub(crate) fn take_agent_turn_steering(
-        &mut self,
-        turn_id: &str,
-    ) -> Option<Vec<AgentTurnSteering>> {
-        self.agent.agent_turn_pending_steering.remove(turn_id)
-    }
-
-    /// Reports whether one turn has pending user steering.
-    pub(crate) fn agent_turn_has_pending_steering(&self, turn_id: &str) -> bool {
-        self.agent.agent_turn_pending_steering.contains_key(turn_id)
-    }
-
-    /// Removes pending steering for one completed turn.
-    pub(crate) fn clear_agent_turn_steering(&mut self, turn_id: &str) {
-        self.agent.agent_turn_pending_steering.remove(turn_id);
-    }
-
-    /// Clears all pending steering for session replacement.
-    pub(crate) fn clear_all_agent_turn_steering(&mut self) {
-        self.agent.agent_turn_pending_steering.clear();
     }
 
     /// Reports whether one provider turn is queued for dispatch.

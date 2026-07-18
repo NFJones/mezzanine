@@ -63,6 +63,35 @@ impl RuntimeSessionService {
             );
             return Ok(true);
         }
+        let consumed_high_water_mark = self
+            .agent
+            .claimed_agent_provider_tasks
+            .get(turn_id)
+            .map(|claim| claim.context_event_high_water_mark);
+        let current_high_water_mark = self
+            .agent_turn_contexts()
+            .get(turn_id)
+            .map(mez_agent::AgentContext::event_sequence_high_water_mark)
+            .unwrap_or_default();
+        if consumed_high_water_mark.is_some_and(|consumed| current_high_water_mark > consumed)
+            && execution.request.interaction_kind != mez_agent::ModelInteractionKind::MacroJudge
+        {
+            self.agent.pending_agent_provider_tasks.remove(turn_id);
+            self.agent.claimed_agent_provider_tasks.remove(turn_id);
+            self.agent
+                .pending_agent_provider_tasks
+                .insert(turn_id.to_string());
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                turn_id,
+                &format!(
+                    "provider_response discarded reason=stale_context consumed_event_sequence={} current_event_sequence={}",
+                    consumed_high_water_mark.unwrap_or_default(),
+                    current_high_water_mark
+                ),
+            )?;
+            return Ok(true);
+        }
         if execution.request.interaction_kind == mez_agent::ModelInteractionKind::MacroJudge {
             let Some(step_index) = self.macro_judge_step_index_for_turn(turn_id) else {
                 let error = MezError::invalid_state(

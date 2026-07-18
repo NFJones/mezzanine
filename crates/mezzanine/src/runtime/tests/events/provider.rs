@@ -2,6 +2,100 @@
 
 use super::*;
 
+/// Verifies actor-accepted steering invalidates an older in-flight provider
+/// generation instead of reordering that response around the newer user event.
+///
+/// The stale response must never enter canonical chronology or reach action
+/// dispatch. Completion ingress queues a fresh provider request whose snapshot
+/// includes the steering event.
+#[tokio::test]
+async fn runtime_provider_completion_discards_generation_older_than_steering() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect the parser")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let consumed_high_water_mark = service
+        .agent_turn_contexts()
+        .get(&turn.turn_id)
+        .unwrap()
+        .event_sequence_high_water_mark();
+    service
+        .record_claimed_agent_provider_context_for_tests(&turn.turn_id, consumed_high_water_mark)
+        .unwrap();
+
+    assert_eq!(
+        service
+            .inject_agent_steering_for_running_turn("%1", "stop and review ordering")
+            .unwrap(),
+        Some(turn.turn_id.clone())
+    );
+
+    let response = runtime_say_response(&turn.turn_id, "stale provider answer", true);
+    let action = response
+        .action_batch
+        .as_ref()
+        .unwrap()
+        .actions
+        .first()
+        .unwrap()
+        .clone();
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response,
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::succeeded(
+            &turn,
+            &action,
+            vec!["stale provider answer".to_string()],
+            None,
+        )],
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+
+    assert!(
+        service
+            .apply_agent_provider_completed_event(
+                &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+                &turn.turn_id,
+                execution,
+            )
+            .await
+            .unwrap()
+    );
+
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    assert!(context.blocks().iter().any(|block| {
+        block.source == ContextSourceKind::UserInstruction
+            && block.content == "stop and review ordering"
+    }));
+    assert!(
+        !context
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("stale provider answer"))
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == turn.turn_id)
+    );
+    assert!(!service.agent_turn_executions().contains_key(&turn.turn_id));
+}
+
 /// Verifies terminal transcript persistence accepts one complete execution
 /// group exactly once even when two lifecycle paths attempt finalization.
 ///
@@ -155,7 +249,7 @@ fn runtime_routed_handoff_summary_persists_once_and_rehydrates_with_parent_answe
             content: "PRESENTATION INSTRUCTION MUST NOT PERSIST".to_string(),
         },
     ] {
-        mez_agent::insert_context_block_by_placement(&mut context.blocks, block);
+        insert_test_context_block(context, block);
     }
     let action = mez_agent::AgentAction {
         id: "present-routed-result".to_string(),
@@ -255,12 +349,12 @@ fn runtime_routed_handoff_summary_persists_once_and_rehydrates_with_parent_answe
         .start_agent_prompt_turn("%1", "continue from the routed result")
         .unwrap();
     let next_context = service.agent_turn_contexts().get(&next.turn_id).unwrap();
-    assert!(next_context.blocks.iter().any(|block| {
+    assert!(next_context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::RoutedHandoff
             && block.label == "routed worker handoff context"
             && block.content == handoff
     }));
-    assert!(next_context.blocks.iter().any(|block| {
+    assert!(next_context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::TranscriptAssistant
             && block.content == "The routed implementation is complete."
     }));
@@ -1174,14 +1268,14 @@ async fn runtime_provider_completion_records_preexecuted_network_results_before_
     );
     assert!(!service.agent_turn_executions().contains_key("turn-1"));
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block
                 .content
                 .contains("[action_result fetch-ok fetch_url succeeded]")
             && block.content.contains("provider document body")
     }));
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block
                 .content

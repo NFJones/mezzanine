@@ -607,7 +607,7 @@ fn runtime_restores_active_agent_session_metadata_for_same_session() {
     let context = restored
         .agent_context_for_pane_prompt("%1", "continue", 0)
         .unwrap();
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == mez_agent::ContextSourceKind::TranscriptUser
             && block.content.contains("saved restart context")
     }));

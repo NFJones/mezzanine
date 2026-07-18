@@ -296,7 +296,7 @@ fn runtime_agent_loop_fork_context_honors_captured_parent_high_water_mark() {
         .agent_context_for_pane_prompt("%1", "continue", 0)
         .unwrap();
     let replay = context
-        .blocks
+        .blocks()
         .iter()
         .filter(|block| block.source == ContextSourceKind::TranscriptUser)
         .map(|block| block.content.as_str())
@@ -305,12 +305,12 @@ fn runtime_agent_loop_fork_context_honors_captured_parent_high_water_mark() {
 
     assert!(replay.contains("captured parent message"), "{replay}");
     assert!(!replay.contains("later parent message"), "{replay}");
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::RoutedHandoff
             && block.label == "routed worker handoff context"
             && block.content == handoff
     }));
-    assert!(context.blocks.iter().any(|block| {
+    assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::TranscriptAssistant
             && block.content == "captured parent presentation"
     }));

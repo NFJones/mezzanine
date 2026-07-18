@@ -511,12 +511,9 @@ context_window_tokens = 64000
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-    service
-        .agent_turn_contexts_mut()
-        .get_mut("turn-1")
-        .unwrap()
-        .blocks
-        .push(ContextBlock {
+    insert_test_context_block(
+        service.agent_turn_contexts_mut().get_mut("turn-1").unwrap(),
+        ContextBlock {
             source: ContextSourceKind::ActionResult,
             placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "synthetic in-turn action result".to_string(),
@@ -524,7 +521,8 @@ context_window_tokens = 64000
                 "turn-context-pressure- {}",
                 "context-pressure ".repeat(10_000)
             ),
-        });
+        },
+    );
     service.remove_pending_agent_provider_task("turn-1");
     let provider = RuntimeRecordingProvider {
         provider: "runtime-batch",
@@ -609,20 +607,34 @@ fn runtime_prompt_during_running_turn_becomes_steering_context() {
     assert!(first.contains(r#""state":"running""#), "{first}");
     {
         let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
-        context.blocks.extend([
-            ContextBlock::assistant_event("assistant action 1", "inspect action"),
-            ContextBlock::evidence_event(
+        let group_1 = mez_agent::ContextExecutionGroupId::new("turn-1:test-group-1").unwrap();
+        context
+            .append_assistant_event("assistant action 1", "inspect action", group_1.clone())
+            .unwrap();
+        context
+            .append_evidence_event(
                 ContextSourceKind::ActionResult,
                 "result 1",
                 "inspection evidence",
-            ),
-            ContextBlock::assistant_event("assistant action 2", "edit action"),
-            ContextBlock::evidence_event(
+                group_1,
+                None,
+                true,
+            )
+            .unwrap();
+        let group_2 = mez_agent::ContextExecutionGroupId::new("turn-1:test-group-2").unwrap();
+        context
+            .append_assistant_event("assistant action 2", "edit action", group_2.clone())
+            .unwrap();
+        context
+            .append_evidence_event(
                 ContextSourceKind::ActionResult,
                 "result 2",
                 "edit evidence",
-            ),
-        ]);
+                group_2,
+                None,
+                true,
+            )
+            .unwrap();
         context.validate_durable().unwrap();
     }
     let second = service.dispatch_runtime_control_body(
@@ -635,29 +647,33 @@ fn runtime_prompt_during_running_turn_becomes_steering_context() {
     assert_eq!(service.agent_turn_ledger().turns().len(), 1);
     assert_eq!(service.agent_scheduler().snapshot().queued, 0);
     assert_eq!(service.agent_scheduler().snapshot().running, 1);
-    let turn = service
-        .agent_turn_ledger()
-        .turns()
-        .iter()
-        .find(|turn| turn.turn_id == "turn-1")
-        .cloned()
-        .unwrap();
-    assert_eq!(
+    assert!(
         service
-            .drain_pending_agent_turn_steering_context(&turn)
-            .unwrap(),
-        1
+            .agent_turn_contexts()
+            .get("turn-1")
+            .unwrap()
+            .blocks()
+            .iter()
+            .any(|block| block.source == ContextSourceKind::UserInstruction
+                && block.label.starts_with("user steering ")
+                && block.content == "second prompt")
     );
     {
         let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
-        context.blocks.extend([
-            ContextBlock::assistant_event("assistant action 3", "spec action"),
-            ContextBlock::evidence_event(
+        let group_3 = mez_agent::ContextExecutionGroupId::new("turn-1:test-group-3").unwrap();
+        context
+            .append_assistant_event("assistant action 3", "spec action", group_3.clone())
+            .unwrap();
+        context
+            .append_evidence_event(
                 ContextSourceKind::ActionResult,
                 "result 3",
                 "spec evidence",
-            ),
-        ]);
+                group_3,
+                None,
+                true,
+            )
+            .unwrap();
         context.validate_durable().unwrap();
     }
     let provider = RuntimeRecordingProvider {
