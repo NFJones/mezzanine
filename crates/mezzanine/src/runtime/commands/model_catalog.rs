@@ -7,10 +7,12 @@
 //! execution focused on state transitions and profile overrides.
 
 use super::{
-    AsyncModelProvider, AuthCredentialKind, BTreeMap, DEFAULT_PROVIDER_TIMEOUT_MS, MezError,
-    ModelProfile, ProviderApiCompatibility, ProviderModelCatalog, ProviderModelInfo,
-    ProviderQuotaUsage, ReqwestProviderHttpTransport, Result, RuntimeSessionService,
+    AsyncModelProvider, AuthCredentialKind, DEFAULT_PROVIDER_TIMEOUT_MS, MezError, ModelCatalog,
+    ModelCatalogCandidate, ModelCatalogEntry, ModelCatalogInput, ModelCatalogSource, ModelProfile,
+    ProviderApiCompatibility, ProviderModelCatalog, ProviderModelInfo, ProviderQuotaUsage,
+    ReqwestProviderHttpTransport, Result, RuntimeSessionService,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options, json_escape,
+    normalize_model_catalog_values,
     openai_compatible_provider_from_auth_store_with_provider_options,
     openai_default_reasoning_levels_for_model,
     openai_responses_provider_from_auth_store_with_provider_options, resolve_provider_api,
@@ -76,15 +78,7 @@ impl RuntimeSessionService {
                     self.cache_provider_model_catalog(provider_id, catalog.clone());
                     Ok(catalog)
                 }
-                Err(_error) if fallback.models.is_empty() => Ok(fallback),
-                Err(_error) => Ok(RuntimeModelCatalog {
-                    provider: fallback.provider,
-                    source: "config".to_string(),
-                    provider_error: None,
-                    models: fallback.models,
-                    reasoning_levels: fallback.reasoning_levels,
-                    quota_usage: Vec::new(),
-                }),
+                Err(_error) => Ok(fallback),
             },
             ProviderApiCompatibility::AnthropicMessages | ProviderApiCompatibility::ClaudeCode => {
                 Ok(fallback)
@@ -121,8 +115,8 @@ impl RuntimeSessionService {
                         "{} source={} models={} reasoning_levels={} quota_entries={} provider_error={}",
                         json_escape(provider_id),
                         json_escape(&catalog.source),
-                        catalog.models.len(),
-                        catalog.reasoning_levels.len(),
+                        catalog.catalog.entries().len(),
+                        catalog.catalog.reasoning_levels().len(),
                         catalog.quota_usage.len(),
                         provider_error
                     ));
@@ -160,14 +154,13 @@ impl RuntimeSessionService {
     ) {
         self.cache_provider_model_catalog(
             provider_id,
-            RuntimeModelCatalog {
+            RuntimeModelCatalog::from_provider(ProviderModelCatalog {
                 provider: provider_id.to_string(),
                 source: "provider".to_string(),
-                provider_error: None,
                 models,
                 reasoning_levels,
                 quota_usage: Vec::new(),
-            },
+            }),
         );
     }
 
@@ -306,16 +299,8 @@ pub(crate) struct RuntimeModelCatalog {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) provider_error: Option<String>,
-    /// Stores the models value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) models: Vec<ProviderModelInfo>,
-    /// Stores the reasoning levels value for this data structure.
-    ///
-    /// The field is part of structured state exchanged across this module
-    /// boundary and should remain aligned with the owning type invariant.
-    pub(super) reasoning_levels: Vec<String>,
+    /// Provider-neutral normalized catalog policy state.
+    pub(super) catalog: ModelCatalog,
     /// Provider-reported quota usage percentages from the catalog request.
     pub(super) quota_usage: Vec<ProviderQuotaUsage>,
 }
@@ -327,13 +312,28 @@ impl RuntimeModelCatalog {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn from_provider(catalog: ProviderModelCatalog) -> Self {
+        let ProviderModelCatalog {
+            provider,
+            source,
+            models,
+            reasoning_levels,
+            quota_usage,
+        } = catalog;
         Self {
-            provider: catalog.provider,
-            source: catalog.source,
+            provider,
+            source,
             provider_error: None,
-            models: catalog.models,
-            reasoning_levels: dedupe_runtime_strings(catalog.reasoning_levels),
-            quota_usage: catalog.quota_usage,
+            catalog: ModelCatalog::from_input(ModelCatalogInput {
+                candidates: models
+                    .into_iter()
+                    .map(|model| {
+                        ModelCatalogCandidate::available(ModelCatalogSource::Discovered, model)
+                    })
+                    .collect(),
+                reasoning_levels,
+                ..ModelCatalogInput::default()
+            }),
+            quota_usage,
         }
     }
 }
@@ -343,20 +343,20 @@ impl RuntimeModelCatalog {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn runtime_configured_model_catalog(
+pub(super) fn runtime_configured_model_catalog(
     provider_id: &str,
     provider_config: &crate::runtime::RuntimeProviderConfig,
     registry: &crate::runtime::RuntimeProviderRegistry,
 ) -> RuntimeModelCatalog {
-    let mut models = BTreeMap::<String, ProviderModelInfo>::new();
+    let mut candidates = Vec::new();
     if let Some(default_model) = provider_config.default_model.as_deref()
         && !default_model.is_empty()
     {
-        runtime_insert_catalog_model(
-            &mut models,
+        candidates.push(runtime_catalog_candidate(
             default_model,
             runtime_configured_reasoning_levels_for_model(provider_config, default_model),
-        );
+            ModelCatalogSource::Configured,
+        ));
     }
     let configured_models = provider_config
         .models
@@ -378,11 +378,15 @@ fn runtime_configured_model_catalog(
         configured_models
     };
     for model in provider_models {
-        runtime_insert_catalog_model(
-            &mut models,
+        candidates.push(runtime_catalog_candidate(
             model,
             runtime_configured_reasoning_levels_for_model(provider_config, model),
-        );
+            if provider_config.models.is_empty() {
+                ModelCatalogSource::Default
+            } else {
+                ModelCatalogSource::Configured
+            },
+        ));
     }
     for profile in registry
         .profiles()
@@ -394,62 +398,57 @@ fn runtime_configured_model_catalog(
         if let Some(reasoning) = profile.reasoning_profile.as_deref() {
             reasoning_levels.push(reasoning.to_string());
         }
-        runtime_insert_catalog_model(&mut models, &profile.model, reasoning_levels);
+        candidates.push(runtime_catalog_candidate(
+            &profile.model,
+            reasoning_levels,
+            ModelCatalogSource::Configured,
+        ));
     }
-    if models.is_empty()
-        && let Some(recommended_model) = runtime_provider_recommended_model(provider_config)
+    let recommended_model = runtime_provider_recommended_model(provider_config);
+    if !candidates
+        .iter()
+        .any(|candidate: &ModelCatalogCandidate| !candidate.model.id.trim().is_empty())
+        && let Some(recommended_model) = recommended_model
     {
-        runtime_insert_catalog_model(
-            &mut models,
+        candidates.push(runtime_catalog_candidate(
             recommended_model,
             runtime_configured_reasoning_levels_for_model(provider_config, recommended_model),
-        );
+            ModelCatalogSource::Recommended,
+        ));
     }
-    let models = models.into_values().collect::<Vec<_>>();
-    let reasoning_levels = dedupe_runtime_strings(
-        models
-            .iter()
-            .flat_map(|model| model.reasoning_levels.iter().cloned())
-            .collect(),
-    );
     RuntimeModelCatalog {
         provider: provider_id.to_string(),
         source: "config".to_string(),
         provider_error: None,
-        models,
-        reasoning_levels,
+        catalog: ModelCatalog::from_input(ModelCatalogInput {
+            candidates,
+            default_model: provider_config.default_model.clone(),
+            recommended_model: recommended_model.map(str::to_string),
+            reasoning_levels: Vec::new(),
+        }),
         quota_usage: Vec::new(),
     }
 }
 
-/// Runs the runtime insert catalog model operation for this subsystem.
+/// Converts one resolved product model into a provider-neutral catalog candidate.
 ///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn runtime_insert_catalog_model(
-    models: &mut BTreeMap<String, ProviderModelInfo>,
+/// Product configuration and provider API interpretation happen before this
+/// function; lower-crate policy receives only model metadata and source.
+fn runtime_catalog_candidate(
     model: &str,
     reasoning_levels: Vec<String>,
-) {
-    let entry = models
-        .entry(model.to_string())
-        .or_insert_with(|| ProviderModelInfo {
+    source: ModelCatalogSource,
+) -> ModelCatalogCandidate {
+    ModelCatalogCandidate::available(
+        source,
+        ProviderModelInfo {
             id: model.to_string(),
             display_name: None,
-            reasoning_levels: Vec::new(),
+            reasoning_levels,
             context_window_tokens: mez_agent::known_model_context_window_tokens(model),
             capabilities: Vec::new(),
-        });
-    entry.reasoning_levels.extend(
-        reasoning_levels
-            .into_iter()
-            .filter(|level| !level.is_empty()),
-    );
-    entry.reasoning_levels = dedupe_runtime_strings(std::mem::take(&mut entry.reasoning_levels));
-    if entry.context_window_tokens.is_none() {
-        entry.context_window_tokens = mez_agent::known_model_context_window_tokens(model);
-    }
+        },
+    )
 }
 
 /// Runs the runtime configured reasoning levels for model operation for this subsystem.
@@ -487,7 +486,7 @@ pub(super) fn runtime_configured_reasoning_levels_for_model(
             ProviderApiCompatibility::OpenAiChatCompletions => {}
         }
     }
-    dedupe_runtime_strings(levels)
+    normalize_model_catalog_values(levels)
 }
 
 /// Returns built-in default models only when the provider's selected API keeps
@@ -598,15 +597,16 @@ pub(super) fn runtime_model_catalog_display(
         ));
         lines.push(String::new());
     }
-    if !catalog.reasoning_levels.is_empty() {
+    if !catalog.catalog.reasoning_levels().is_empty() {
         lines.push(format!(
             "**Reasoning levels:** `{}`",
-            catalog.reasoning_levels.join(", ")
+            catalog.catalog.reasoning_levels().join(", ")
         ));
         lines.push(String::new());
     }
     let model_rows = catalog
-        .models
+        .catalog
+        .entries()
         .iter()
         .map(|model| {
             let model_name = runtime_model_catalog_model_name(model);
@@ -651,7 +651,7 @@ pub(super) fn runtime_model_catalog_display(
 }
 
 /// Formats a provider model name with optional display metadata.
-fn runtime_model_catalog_model_name(model: &ProviderModelInfo) -> String {
+fn runtime_model_catalog_model_name(model: &ModelCatalogEntry) -> String {
     match model.display_name.as_deref() {
         Some(display_name) if !display_name.is_empty() => {
             format!("{} ({display_name})", model.id)
@@ -742,17 +742,6 @@ pub(super) fn runtime_model_catalog_unavailable_reason(error: &str) -> String {
     } else {
         error.replace(char::is_whitespace, "-")
     }
-}
-
-/// Returns values in first-seen order without duplicates.
-fn dedupe_runtime_strings(values: Vec<String>) -> Vec<String> {
-    let mut deduped = Vec::new();
-    for value in values {
-        if !deduped.iter().any(|existing| existing == &value) {
-            deduped.push(value);
-        }
-    }
-    deduped
 }
 
 #[cfg(test)]

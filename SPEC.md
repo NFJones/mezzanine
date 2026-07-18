@@ -7983,6 +7983,26 @@ user has configured pause-on-detach behavior.
 
 Mezzanine MUST select models through named model profiles.
 
+Provider-neutral catalog construction MUST consume explicit configured,
+discovered, built-in-default, and recommended model observations. It MUST
+normalize empty metadata, deduplicate canonical model identifiers, and produce
+stable model-id ordering. Duplicate metadata MUST use the precedence
+configured, discovered, built-in default, then recommendation; a higher-source
+record MUST NOT erase a context limit or display label merely because that
+optional field was absent. Reasoning levels, capability tags, and aliases MUST
+be normalized as ordered unions without empty values or duplicates. Known
+context-window metadata is an agent-domain input; unknown context windows MUST
+remain unknown rather than receiving a fabricated limit.
+
+Model selection MUST resolve an exact canonical identifier before aliases,
+reject unavailable entries, and validate non-empty reasoning choices against
+model-specific levels or the catalog-wide fallback. Preferred-model selection
+MUST choose an available configured default, then an available recommendation,
+then the first available stable entry; an empty catalog MUST have no preferred
+model. Provider HTTP, credentials, configuration resolution, cache lifecycle,
+quota/audit handling, unavailable-provider diagnostics, and model-catalog
+rendering MUST remain application effects and composition.
+
 Each model profile MUST include provider identity, model identity, reasoning or
 effort preference when supported, latency preference when supported, multimodal
 capability requirements, and any provider-specific non-secret options.

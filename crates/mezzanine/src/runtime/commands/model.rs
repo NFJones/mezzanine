@@ -8,15 +8,15 @@
 
 use super::model_catalog::{
     RuntimeModelCatalog, runtime_configured_reasoning_levels_for_model,
-    runtime_model_catalog_display, runtime_provider_default_models,
-    runtime_routing_model_profile_display,
+    runtime_model_catalog_display, runtime_routing_model_profile_display,
 };
 use super::slash::runtime_single_mode_arg;
 use super::{
     AgentShellCommandOutcome, AgentShellVisibility, DEFAULT_AUTO_SIZING_ROUTER_PROFILE, MezError,
-    ModelProfile, ModelProfileOverrides, ProviderCapabilities, RUNTIME_LATENCY_PREFERENCES, Result,
-    RuntimeAutoSizingConfig, RuntimeModelPreset, RuntimeModelProfileOverrideScope,
-    RuntimeSessionService, json_escape, parse_slash_command, runtime_default_models_for_provider,
+    ModelCatalogSelectionErrorKind, ModelProfile, ModelProfileOverrides, ProviderCapabilities,
+    RUNTIME_LATENCY_PREFERENCES, Result, RuntimeAutoSizingConfig, RuntimeModelPreset,
+    RuntimeModelProfileOverrideScope, RuntimeSessionService, json_escape,
+    normalize_model_catalog_values, parse_slash_command, runtime_default_models_for_provider,
     runtime_model_command_args, runtime_model_override_scope_for_args,
     runtime_model_override_scope_name, runtime_model_profile_display,
     runtime_validate_latency_preference, select_model_profile,
@@ -445,23 +445,28 @@ impl RuntimeSessionService {
             let models_for_provider: Vec<String> = if let Some(provider_config) =
                 self.provider_registry().provider(provider_id).cloned()
             {
-                let catalog = self.runtime_model_catalog_for_provider(provider_id)?;
-                let mut items: Vec<String> = catalog
-                    .models
-                    .iter()
+                let observed = self.runtime_model_catalog_for_provider(provider_id)?;
+                let configured = super::model_catalog::runtime_configured_model_catalog(
+                    provider_id,
+                    &provider_config,
+                    self.provider_registry(),
+                );
+                let merged = super::ModelCatalog::from_input(super::ModelCatalogInput {
+                    candidates: observed
+                        .catalog
+                        .entries()
+                        .iter()
+                        .chain(configured.catalog.entries())
+                        .map(super::ModelCatalogEntry::to_candidate)
+                        .collect(),
+                    default_model: provider_config.default_model.clone(),
+                    recommended_model: configured.catalog.preferred_model().map(str::to_string),
+                    reasoning_levels: observed.catalog.reasoning_levels().to_vec(),
+                });
+                merged
+                    .available_entries()
                     .map(|model| format!("{provider_id}: {}", model.id))
-                    .collect();
-                let configured_items: Vec<String> = if provider_config.models.is_empty() {
-                    runtime_provider_default_models(&provider_config)
-                } else {
-                    provider_config.models.clone()
-                }
-                .iter()
-                .map(|m| format!("{provider_id}: {m}"))
-                .filter(|label| !items.iter().any(|i| i == label))
-                .collect();
-                items.extend(configured_items);
-                items
+                    .collect()
             } else {
                 runtime_default_models_for_provider(provider_id)
                     .map(|models| {
@@ -500,16 +505,9 @@ impl RuntimeSessionService {
         let catalog = self.runtime_model_catalog_for_provider(&active_profile.provider)?;
         let provider_config = self.provider_registry().provider(&active_profile.provider);
         let mut levels = catalog
-            .models
-            .iter()
-            .find(|model| model.id == model_name)
-            .map(|model| {
-                if model.reasoning_levels.is_empty() {
-                    catalog.reasoning_levels.clone()
-                } else {
-                    model.reasoning_levels.clone()
-                }
-            })
+            .catalog
+            .reasoning_levels_for(model_name)
+            .map(<[String]>::to_vec)
             .unwrap_or_else(|| {
                 provider_config
                     .map(|provider_config| {
@@ -522,7 +520,7 @@ impl RuntimeSessionService {
         {
             levels.insert(0, reasoning);
         }
-        Ok(dedupe_runtime_strings(levels))
+        Ok(normalize_model_catalog_values(levels))
     }
 
     /// Applies a model selected from the pane-frame model picker.
@@ -547,21 +545,7 @@ impl RuntimeSessionService {
                     None
                 }
             })
-            .filter(|reasoning| {
-                catalog
-                    .models
-                    .iter()
-                    .find(|model| model.id == model_name)
-                    .map(|model| {
-                        let levels = if model.reasoning_levels.is_empty() {
-                            catalog.reasoning_levels.as_slice()
-                        } else {
-                            model.reasoning_levels.as_slice()
-                        };
-                        levels.is_empty() || levels.iter().any(|level| level == reasoning)
-                    })
-                    .unwrap_or(false)
-            });
+            .filter(|reasoning| catalog.catalog.select(model_name, Some(reasoning)).is_ok());
         let model_name = model_name.to_string();
         let requested_reasoning = requested_reasoning.as_deref();
         self.apply_pane_model_picker_profile(pane_id, &model_name, requested_reasoning, &catalog)
@@ -842,34 +826,21 @@ impl RuntimeSessionService {
         latency_preference: Option<&str>,
         catalog: &RuntimeModelCatalog,
     ) -> Result<String> {
-        if model_name.trim().is_empty() {
-            return Err(MezError::invalid_args("model name must not be empty"));
-        }
-        let model = catalog
-            .models
-            .iter()
-            .find(|model| model.id == model_name)
-            .ok_or_else(|| {
-                MezError::invalid_args(format!(
+        let selection = catalog
+            .catalog
+            .select(model_name, reasoning_profile)
+            .map_err(|error| match error.kind() {
+                ModelCatalogSelectionErrorKind::UnknownModel => MezError::invalid_args(format!(
                     "model `{model_name}` is not available from provider `{provider_id}`; run `/model list`"
-                ))
+                )),
+                ModelCatalogSelectionErrorKind::EmptyModel
+                | ModelCatalogSelectionErrorKind::UnavailableModel
+                | ModelCatalogSelectionErrorKind::EmptyReasoning
+                | ModelCatalogSelectionErrorKind::UnknownReasoning => {
+                    MezError::invalid_args(error.message())
+                }
             })?;
-        if let Some(reasoning) = reasoning_profile {
-            if reasoning.trim().is_empty() {
-                return Err(MezError::invalid_args("reasoning level must not be empty"));
-            }
-            let levels = if model.reasoning_levels.is_empty() {
-                catalog.reasoning_levels.as_slice()
-            } else {
-                model.reasoning_levels.as_slice()
-            };
-            if !levels.is_empty() && !levels.iter().any(|level| level == reasoning) {
-                return Err(MezError::invalid_args(format!(
-                    "reasoning level `{reasoning}` is not available for model `{model_name}`; available={}",
-                    levels.join(",")
-                )));
-            }
-        }
+        let model = &selection.model;
 
         let mut provider_options = std::collections::BTreeMap::new();
         if let Some(context_window_tokens) = model.context_window_tokens {
@@ -890,8 +861,8 @@ impl RuntimeSessionService {
             .map(str::to_string);
         let profile = ModelProfile {
             provider: provider_id.to_string(),
-            model: model_name.to_string(),
-            reasoning_profile: reasoning_profile.map(str::to_string),
+            model: model.id.clone(),
+            reasoning_profile: selection.reasoning.clone(),
             latency_preference,
             multimodal_required: false,
             provider_options,
@@ -900,8 +871,8 @@ impl RuntimeSessionService {
         let profile_name = runtime_generated_model_profile_name(
             self.provider_registry(),
             provider_id,
-            model_name,
-            reasoning_profile,
+            &model.id,
+            selection.reasoning.as_deref(),
             &profile,
         );
         self.integration
@@ -1140,19 +1111,4 @@ fn runtime_profile_name_available_or_matching(
             && existing.latency_preference.as_deref().unwrap_or("default")
                 == profile.latency_preference.as_deref().unwrap_or("default")
     })
-}
-
-/// Runs the dedupe runtime strings operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn dedupe_runtime_strings(values: Vec<String>) -> Vec<String> {
-    let mut deduped = Vec::new();
-    for value in values {
-        if !deduped.iter().any(|existing| existing == &value) {
-            deduped.push(value);
-        }
-    }
-    deduped
 }

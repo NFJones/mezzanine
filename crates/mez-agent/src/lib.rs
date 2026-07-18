@@ -80,6 +80,8 @@ pub mod memory;
 pub mod memory_guardrail;
 /// Deterministic local-agent message protocol and delivery service state.
 pub mod messaging;
+/// Provider-neutral model catalog construction and selection policy.
+pub mod model_catalog;
 /// Provider-independent model profile records and selection policy.
 pub mod model_profile;
 /// Provider-independent successful model response contract.
@@ -328,6 +330,11 @@ pub use mcp::{
 };
 pub use memory::{MemoryContextRecord, MemoryContextScope};
 pub use memory_guardrail::MemoryActionBudget;
+pub use model_catalog::{
+    ModelAvailability, ModelCatalog, ModelCatalogCandidate, ModelCatalogEntry, ModelCatalogInput,
+    ModelCatalogSelection, ModelCatalogSelectionError, ModelCatalogSelectionErrorKind,
+    ModelCatalogSource, normalize_model_catalog_values,
+};
 pub use model_profile::{
     ModelProfile, ModelProfileOverrideSource, ModelProfileOverrides, SelectedModelProfile,
     select_model_profile, validate_model_profile_request,

@@ -53,10 +53,12 @@ use mez_agent::ModelResponse;
 use mez_agent::model_context_text_word_count;
 use mez_agent::{
     AgentActionPayload, AgentTurnSteering, AllowedActionSet, DEFAULT_PROVIDER_TIMEOUT_MS,
-    ModelInteractionKind, ModelMessage, ModelMessageRole, ModelRequest, ModelTokenUsage,
-    ModelTokenUsageKey, ProviderApiCompatibility, ProviderCapabilities, ProviderModelCatalog,
-    ProviderModelInfo, ProviderQuotaUsage, append_mcp_context,
-    openai_default_reasoning_levels_for_model, resolve_provider_api,
+    ModelCatalog, ModelCatalogCandidate, ModelCatalogEntry, ModelCatalogInput,
+    ModelCatalogSelectionErrorKind, ModelCatalogSource, ModelInteractionKind, ModelMessage,
+    ModelMessageRole, ModelRequest, ModelTokenUsage, ModelTokenUsageKey, ProviderApiCompatibility,
+    ProviderCapabilities, ProviderModelCatalog, ProviderModelInfo, ProviderQuotaUsage,
+    append_mcp_context, normalize_model_catalog_values, openai_default_reasoning_levels_for_model,
+    resolve_provider_api,
 };
 
 mod approval;
