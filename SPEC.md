@@ -4700,6 +4700,14 @@ logical job and MUST reuse its pinned managed worker and profile. Worker
 provider failure, continuation queue failure, patch-free completion, limit
 exhaustion, child or parent cancellation, handoff failure, and presentation
 failure MUST converge on the same exactly-once routed terminal lifecycle.
+Routed child-settlement, structured-handoff parsing and byte limits, repair
+eligibility, phase-specific child cancellation, and parent-presentation
+terminal decisions MUST be owned by a provider-independent `mez-agent` reducer.
+The product runtime MUST supply settled execution observations, interpret the
+reducer's typed handoff, repair, presentation, explanation, and terminal effect
+plans, and retain ownership of provider dispatch, scheduler and pane mutation,
+persistence, cancellation I/O, security, and cross-domain orchestration. A pure
+routed-workflow transition MUST NOT claim that any product effect succeeded.
 
 Agents MUST support a permission or approval model that can restrict command
 execution, file mutation, network use, and destructive actions.
