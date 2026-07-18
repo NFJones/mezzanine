@@ -653,7 +653,7 @@ impl RuntimeSessionService {
                 },
                 mez_agent::ContextSemanticKind::AmbientInstruction,
                 mez_agent::ContextRetention::Exact,
-                true,
+                false,
             )?;
         }
         if let Some(profile) = self.agent_selected_personality_profile(pane_id)
@@ -668,7 +668,7 @@ impl RuntimeSessionService {
                 },
                 mez_agent::ContextSemanticKind::AmbientInstruction,
                 mez_agent::ContextRetention::Exact,
-                true,
+                false,
             )?;
         }
         if let Some(directive) = self
@@ -688,7 +688,7 @@ impl RuntimeSessionService {
                 },
                 mez_agent::ContextSemanticKind::AmbientInstruction,
                 mez_agent::ContextRetention::Exact,
-                true,
+                false,
             )?;
         }
         let selected_profile = self.agent_selected_personality_profile(pane_id);
@@ -705,7 +705,7 @@ impl RuntimeSessionService {
                 },
                 mez_agent::ContextSemanticKind::AmbientInstruction,
                 mez_agent::ContextRetention::Exact,
-                true,
+                false,
             )?;
         }
         let profile_style = selected_profile.and_then(|profile| profile.response_style.as_deref());
@@ -719,7 +719,7 @@ impl RuntimeSessionService {
                 },
                 mez_agent::ContextSemanticKind::AmbientInstruction,
                 mez_agent::ContextRetention::Exact,
-                true,
+                false,
             )?;
         }
         context.validate_durable()?;

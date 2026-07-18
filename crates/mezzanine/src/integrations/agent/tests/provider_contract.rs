@@ -172,3 +172,102 @@ fn provider_projection_matrix_preserves_chronology_and_neutral_authorship() {
         );
     }
 }
+
+#[test]
+/// Verifies the effective adapter payload switch matrix consumes DeepSeek
+/// native continuity only for its owner and otherwise preserves the eligible
+/// canonical subsequence around the omitted event.
+///
+/// DeepSeek is currently the sole provider with opaque native continuity. The
+/// test assembles through the product boundary and then renders every concrete
+/// adapter payload so a canonical-only fixture cannot hide a later lift into a
+/// foreign system channel.
+fn provider_effective_payloads_omit_foreign_native_events_without_reordering() {
+    let native_marker = "DEEPSEEK_NATIVE_CONTINUITY_MARKER";
+    let native_event = mez_agent::ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+        content: native_marker.to_string(),
+        reasoning_content: Some("DEEPSEEK_NATIVE_REASONING_MARKER".to_string()),
+        tool_calls: vec![serde_json::json!({
+            "id": "call_native_matrix",
+            "type": "function",
+            "function": {"name": "submit_maap_action_batch", "arguments": "{}"}
+        })],
+    }
+    .to_transcript_content();
+    let context = AgentContext::new(vec![
+        ContextBlock::user_event("user prompt", "SWITCH_PROMPT_MARKER"),
+        ContextBlock {
+            source: ContextSourceKind::Transcript,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "deepseek native continuity".to_string(),
+            content: native_event,
+        },
+        ContextBlock::reference_event(
+            ContextSourceKind::Memory,
+            "post-switch reference",
+            "SWITCH_REFERENCE_MARKER",
+        ),
+    ])
+    .unwrap();
+    let profile = |provider: &str| ModelProfile {
+        provider: provider.to_string(),
+        model: "test-model".to_string(),
+        reasoning_profile: None,
+        latency_preference: None,
+        multimodal_required: false,
+        provider_options: std::collections::BTreeMap::new(),
+        safety_tier: None,
+    };
+
+    for provider in [
+        "openai",
+        "openai-chat",
+        "anthropic",
+        "deepseek",
+        "claude-code",
+    ] {
+        let request = assemble_model_request(&profile(provider), &turn(), &context).unwrap();
+        let body = match provider {
+            "openai" => mez_agent::openai_responses_request_body(&request).unwrap(),
+            "openai-chat" => mez_agent::openai_chat_completions_request_body(
+                &request,
+                mez_agent::OpenAiChatCompletionsOptions::default(),
+            )
+            .unwrap(),
+            "anthropic" => mez_agent::anthropic_messages_request_body(
+                &request,
+                false,
+                &mez_agent::AnthropicMessagesOptions::default(),
+            )
+            .unwrap(),
+            "deepseek" => mez_agent::deepseek_chat_completions_request_body_with_strategy(
+                &request,
+                false,
+                mez_agent::DeepSeekMaapRequestStrategy::NoTool,
+            )
+            .unwrap(),
+            "claude-code" => mez_agent::claude_code_prompt(&request, None),
+            _ => unreachable!(),
+        };
+        let prompt = body.find("SWITCH_PROMPT_MARKER").unwrap();
+        let reference = body.find("SWITCH_REFERENCE_MARKER").unwrap();
+        assert!(
+            prompt < reference,
+            "{provider} reordered eligible events: {body}"
+        );
+        if provider == "deepseek" {
+            let native = body.find(native_marker).unwrap();
+            assert!(
+                prompt < native && native < reference,
+                "DeepSeek moved its native continuity event: {body}"
+            );
+        } else {
+            assert!(
+                !body.contains(native_marker)
+                    && !body.contains("DEEPSEEK_NATIVE_REASONING_MARKER")
+                    && !body.contains("call_native_matrix"),
+                "{provider} received foreign DeepSeek continuity: {body}"
+            );
+        }
+    }
+}

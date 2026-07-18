@@ -232,9 +232,10 @@ pub use context::{
     AgentContext, AgentContextError, AgentContextResult, AgentRequestAssemblyError,
     AgentRequestAssemblyErrorKind, AgentRequestAssemblyResult, ContextBlock, ContextBlockMetadata,
     ContextCachePolicy, ContextEventSequence, ContextExecutionGroupId, ContextPlacement,
-    ContextRetention, ContextSemanticKind, ContextSourceKind, ContextStability,
-    ModelContextCompactionReport, ModelContextMetadata, ModelMessage, ModelMessageRole,
-    ModelRequest, PreparedModelContext, ProviderContinuityOwner, TrustDomain,
+    ContextRetention, ContextSemanticKind, ContextSourceKind, ContextStability, ConversationEvent,
+    LiveStateBlock, ModelContextCompactionReport, ModelContextMetadata, ModelMessage,
+    ModelMessageRole, ModelRequest, PreparedModelContext, ProviderContinuityOwner,
+    StableContextBlock, StableContextSlotId, StableContextSourceFingerprint, TrustDomain,
     context_placement_insertion_index, insert_context_block_by_placement,
     model_context_block_header, validate_context_placement_order, validate_context_required,
     validate_context_semantics,
@@ -249,6 +250,7 @@ pub use context_assembly::{
 };
 pub use context_compaction::{
     DEFAULT_MODEL_CONTEXT_RETAINED_TAIL_PERCENT, compact_model_context_for_budget,
+    compact_model_context_for_budget_at_consumed_sequence,
     compact_model_context_for_budget_with_retained_tail_percent, model_context_text_word_count,
 };
 pub use context_continuity::{

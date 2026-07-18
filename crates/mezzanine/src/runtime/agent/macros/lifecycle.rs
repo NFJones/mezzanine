@@ -278,27 +278,27 @@ impl RuntimeSessionService {
             actions: vec![action],
             final_turn: false,
         };
-        self.agent_turn_executions_mut().insert(
-            parent_turn.turn_id.clone(),
-            AgentTurnExecution {
-                request: macro_step_model_request(&parent_turn),
-                response: ModelResponse {
-                    provider: "runtime".to_string(),
-                    model: "macro-orchestration".to_string(),
-                    raw_text: "runtime-owned macro first step".to_string(),
-                    usage: Default::default(),
-                    latest_request_usage: None,
-                    quota_usage: Default::default(),
-                    action_batch: Some(batch),
-                    provider_transcript_events: Vec::new(),
-                },
-                latest_response_usage: Default::default(),
-                routing_token_usage_by_model: Default::default(),
-                action_results: vec![result],
-                final_turn: false,
-                terminal_state: AgentTurnState::Running,
+        let execution = AgentTurnExecution {
+            request: macro_step_model_request(&parent_turn),
+            response: ModelResponse {
+                provider: "runtime".to_string(),
+                model: "macro-orchestration".to_string(),
+                raw_text: "runtime-owned macro first step".to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(batch),
+                provider_transcript_events: Vec::new(),
             },
-        );
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: Default::default(),
+            action_results: vec![result],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        };
+        self.append_agent_execution_assistant_context(&parent_turn, &execution)?;
+        self.agent_turn_executions_mut()
+            .insert(parent_turn.turn_id.clone(), execution);
         self.agent
             .pending_agent_provider_tasks
             .remove(&parent_turn.turn_id);

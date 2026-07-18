@@ -1005,6 +1005,14 @@ fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
             terminal_state: AgentTurnState::Running,
         },
     );
+    let parent_execution = service
+        .agent_turn_executions()
+        .get(&parent.turn_id)
+        .unwrap()
+        .clone();
+    service
+        .append_agent_execution_assistant_context(&parent_turn, &parent_execution)
+        .unwrap();
     service.insert_joined_subagent_dependency(
         child.turn_id.clone(),
         JoinedSubagentDependency {

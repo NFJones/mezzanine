@@ -785,16 +785,10 @@ pub(super) fn runtime_model_compact_memory_content(
 /// # Parameters
 /// - `context`: The provider context assembled for the compaction turn.
 pub(super) fn runtime_compaction_context_without_transcript_blocks(
-    context: AgentContext,
+    mut context: AgentContext,
 ) -> Result<AgentContext> {
-    Ok(AgentContext::new(
-        context
-            .blocks()
-            .into_iter()
-            .filter(|block| !runtime_context_block_is_transcript_replay(block))
-            .cloned()
-            .collect(),
-    )?)
+    context.retain_blocks(|block| !runtime_context_block_is_transcript_replay(block))?;
+    Ok(context.revalidate()?)
 }
 
 /// Returns true when a context block is raw transcript replay.

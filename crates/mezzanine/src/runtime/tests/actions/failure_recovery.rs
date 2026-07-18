@@ -492,6 +492,7 @@ fn runtime_spawn_limit_denial_queues_model_recovery() {
         terminal_state: AgentTurnState::Failed,
     };
 
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
     let queued = service
         .queue_agent_failure_feedback_for_correction(
             &turn,

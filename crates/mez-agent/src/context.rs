@@ -1,18 +1,33 @@
 //! Provider-independent agent context validation contracts.
 //!
-//! This module owns deterministic validation failures for context blocks and
-//! model-profile selection. Product prompt assets, persistence, and provider
-//! execution remain outside this crate and adapt these errors at their
-//! composition boundaries.
+//! This module owns typed stable slots, monotonic conversation events,
+//! request-local live state, and deterministic validation failures for context
+//! and model-profile selection. Typed collections are authoritative; ordered
+//! blocks and metadata are read-only projections rebuilt after a checked
+//! mutation. Mutations validate an isolated candidate before commit, direct
+//! user events are exact, evidence requires a preceding causal owner, and no
+//! request-local state may survive in durable context. Product prompt assets,
+//! transcript persistence, and provider execution remain outside this crate
+//! and adapt these contracts at their composition boundaries.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::ops::Range;
+
+use sha2::{Digest, Sha256};
 
 use crate::action_result::ActionResult;
 use crate::action_result_context::action_result_context_content;
 use crate::mcp::McpPromptTool;
 use crate::surface::{AllowedActionSet, ModelInteractionKind};
 use crate::{AgentPromptError, AgentPromptErrorKind, ProviderTranscriptEvent};
+
+/// Sequence spacing reserved between newly appended canonical events.
+///
+/// Sparse identities let a compaction-refresh import replace a historical
+/// prefix with a different number of records while preserving every retained
+/// prompt, steering, message, and same-turn event identity.
+const CONTEXT_EVENT_SEQUENCE_STRIDE: u64 = 1024;
 
 /// Identifies the provenance and stability class of one model-context value.
 ///
@@ -227,6 +242,138 @@ impl ContextExecutionGroupId {
     }
 }
 
+/// Stable identity for one replaceable reusable-prefix slot.
+///
+/// Slot identity is controller metadata and is never rendered into model
+/// context. Producers use it to update mutable-on-source-change authority
+/// without removing and re-appending an indistinguishable prefix block.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StableContextSlotId(String);
+
+impl StableContextSlotId {
+    /// Creates one non-empty stable slot identity.
+    pub fn new(value: impl Into<String>) -> AgentContextResult<Self> {
+        let value = value.into();
+        validate_context_required("stable context slot id", &value)?;
+        Ok(Self(value))
+    }
+
+    /// Returns the stable slot identifier.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Cryptographic fingerprint of the source material for one stable slot.
+///
+/// The digest remains outside model-visible text and lets refresh code
+/// distinguish a true source change from repeated discovery of identical
+/// authority.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StableContextSourceFingerprint(String);
+
+impl StableContextSourceFingerprint {
+    /// Creates a validated lowercase SHA-256 source fingerprint.
+    pub fn new(value: impl Into<String>) -> AgentContextResult<Self> {
+        let value = value.into();
+        if value.len() != 64
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(AgentContextError::new(
+                "stable context source fingerprint must be 64 lowercase hexadecimal characters",
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the lowercase SHA-256 digest.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// One producer-classified reusable-prefix block with replacement identity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StableContextBlock {
+    slot_id: StableContextSlotId,
+    source_fingerprint: StableContextSourceFingerprint,
+    block: ContextBlock,
+}
+
+impl StableContextBlock {
+    /// Creates one stable ambient-instruction slot.
+    pub fn new(
+        slot_id: StableContextSlotId,
+        source_fingerprint: StableContextSourceFingerprint,
+        block: ContextBlock,
+    ) -> AgentContextResult<Self> {
+        if block.placement != ContextPlacement::StablePrefix
+            || block.semantic_kind() != ContextSemanticKind::AmbientInstruction
+        {
+            return Err(AgentContextError::new(
+                "stable context slots require stable-prefix ambient instructions",
+            ));
+        }
+        Ok(Self {
+            slot_id,
+            source_fingerprint,
+            block,
+        })
+    }
+
+    /// Returns the non-model-visible slot identity.
+    pub fn slot_id(&self) -> &StableContextSlotId {
+        &self.slot_id
+    }
+
+    /// Returns the non-model-visible source fingerprint.
+    pub fn source_fingerprint(&self) -> &StableContextSourceFingerprint {
+        &self.source_fingerprint
+    }
+
+    /// Returns the exact model-visible stable block.
+    pub fn block(&self) -> &ContextBlock {
+        &self.block
+    }
+
+    /// Builds a deterministic compatibility slot for an already ordered block
+    /// vector at a legacy/test construction boundary.
+    fn from_compatibility_block(block: ContextBlock, index: usize) -> AgentContextResult<Self> {
+        let mut identity_material = format!("{index}:{:?}:{}", block.source, block.label);
+        let identity_digest = Sha256::digest(identity_material.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        identity_material.push('\0');
+        identity_material.push_str(&block.content);
+        let source_fingerprint = Sha256::digest(identity_material.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        Self::new(
+            StableContextSlotId::new(format!("compat-{identity_digest}"))?,
+            StableContextSourceFingerprint::new(source_fingerprint)?,
+            block,
+        )
+    }
+
+    /// Builds the adapter-facing metadata projection for this stable slot.
+    fn metadata(&self) -> ContextBlockMetadata {
+        ContextBlockMetadata {
+            semantic_kind: ContextSemanticKind::AmbientInstruction,
+            retention: ContextRetention::Exact,
+            event_sequence: None,
+            execution_group_id: None,
+            provider_owner: None,
+            recoverable_for_compaction: false,
+            stable_slot_id: Some(self.slot_id.clone()),
+            stable_source_fingerprint: Some(self.source_fingerprint.clone()),
+        }
+    }
+}
+
 /// Provider that exclusively owns one opaque continuity event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ProviderContinuityOwner {
@@ -256,6 +403,8 @@ pub struct ContextBlockMetadata {
     execution_group_id: Option<ContextExecutionGroupId>,
     provider_owner: Option<ProviderContinuityOwner>,
     recoverable_for_compaction: bool,
+    stable_slot_id: Option<StableContextSlotId>,
+    stable_source_fingerprint: Option<StableContextSourceFingerprint>,
 }
 
 impl ContextBlockMetadata {
@@ -287,6 +436,123 @@ impl ContextBlockMetadata {
     /// Reports whether exact content can be recovered for semantic compaction.
     pub fn recoverable_for_compaction(&self) -> bool {
         self.recoverable_for_compaction
+    }
+
+    /// Returns the replacement identity for an explicitly slotted stable block.
+    pub fn stable_slot_id(&self) -> Option<&StableContextSlotId> {
+        self.stable_slot_id.as_ref()
+    }
+
+    /// Returns the source fingerprint for an explicitly slotted stable block.
+    pub fn stable_source_fingerprint(&self) -> Option<&StableContextSourceFingerprint> {
+        self.stable_source_fingerprint.as_ref()
+    }
+}
+
+/// One immutable chronological event stored by durable agent context.
+///
+/// Event identity, semantics, retention, execution ownership, and provider
+/// ownership are captured together when the event commits. They cannot drift
+/// from the event block through a parallel metadata mutation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationEvent {
+    block: ContextBlock,
+    semantic_kind: ContextSemanticKind,
+    retention: ContextRetention,
+    sequence: ContextEventSequence,
+    execution_group_id: Option<ContextExecutionGroupId>,
+    provider_owner: Option<ProviderContinuityOwner>,
+    recoverable_for_compaction: bool,
+}
+
+impl ConversationEvent {
+    /// Returns the exact chronological model-context block.
+    pub fn block(&self) -> &ContextBlock {
+        &self.block
+    }
+
+    /// Returns the monotonic commit sequence.
+    pub fn sequence(&self) -> ContextEventSequence {
+        self.sequence
+    }
+
+    /// Returns the producer-selected semantic kind.
+    pub fn semantic_kind(&self) -> ContextSemanticKind {
+        self.semantic_kind
+    }
+
+    /// Returns the producer-selected retention rule.
+    pub fn retention(&self) -> ContextRetention {
+        self.retention
+    }
+
+    /// Returns the owning assistant execution group, when applicable.
+    pub fn execution_group_id(&self) -> Option<&ContextExecutionGroupId> {
+        self.execution_group_id.as_ref()
+    }
+
+    /// Returns the exclusive provider continuity owner, when applicable.
+    pub fn provider_owner(&self) -> Option<ProviderContinuityOwner> {
+        self.provider_owner
+    }
+
+    /// Reports whether exact source content can be recovered after compaction.
+    pub fn recoverable_for_compaction(&self) -> bool {
+        self.recoverable_for_compaction
+    }
+
+    /// Builds the adapter-facing metadata projection for this event.
+    fn metadata(&self) -> ContextBlockMetadata {
+        ContextBlockMetadata {
+            semantic_kind: self.semantic_kind,
+            retention: self.retention,
+            event_sequence: Some(self.sequence),
+            execution_group_id: self.execution_group_id.clone(),
+            provider_owner: self.provider_owner,
+            recoverable_for_compaction: self.recoverable_for_compaction,
+            stable_slot_id: None,
+            stable_source_fingerprint: None,
+        }
+    }
+}
+
+/// One factual request-local block stored only by a prepared model request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveStateBlock {
+    block: ContextBlock,
+}
+
+impl LiveStateBlock {
+    /// Creates one validated request-local live-state block.
+    pub fn new(block: ContextBlock) -> AgentContextResult<Self> {
+        if block.placement != ContextPlacement::EphemeralTail
+            || block.semantic_kind() != ContextSemanticKind::LiveState
+            || block.retention() != ContextRetention::RequestLocal
+        {
+            return Err(AgentContextError::new(
+                "live-state blocks require ephemeral-tail request-local semantics",
+            ));
+        }
+        Ok(Self { block })
+    }
+
+    /// Returns the exact model-visible live-state block.
+    pub fn block(&self) -> &ContextBlock {
+        &self.block
+    }
+
+    /// Builds the adapter-facing metadata projection for this live state.
+    fn metadata(&self) -> ContextBlockMetadata {
+        ContextBlockMetadata {
+            semantic_kind: ContextSemanticKind::LiveState,
+            retention: ContextRetention::RequestLocal,
+            event_sequence: None,
+            execution_group_id: None,
+            provider_owner: None,
+            recoverable_for_compaction: false,
+            stable_slot_id: None,
+            stable_source_fingerprint: None,
+        }
     }
 }
 
@@ -438,12 +704,12 @@ impl ContextBlock {
             ContextSourceKind::TranscriptAssistant => ContextSemanticKind::AssistantEvent,
             ContextSourceKind::TranscriptTool
             | ContextSourceKind::CommittedEvidence
-            | ContextSourceKind::RoutedHandoff
             | ContextSourceKind::ActionResult => ContextSemanticKind::EvidenceEvent,
             ContextSourceKind::SkillInstruction => ContextSemanticKind::TaskPrelude,
             ContextSourceKind::LocalMessage
             | ContextSourceKind::Memory
-            | ContextSourceKind::Transcript => ContextSemanticKind::ReferenceEvent,
+            | ContextSourceKind::Transcript
+            | ContextSourceKind::RoutedHandoff => ContextSemanticKind::ReferenceEvent,
             ContextSourceKind::System
             | ContextSourceKind::DeveloperInstruction
             | ContextSourceKind::ProjectGuidance => {
@@ -477,11 +743,11 @@ impl ContextBlock {
             | ContextSourceKind::Policy
             | ContextSourceKind::Configuration
             | ContextSourceKind::ProjectGuidance
-            | ContextSourceKind::RuntimeHint => ContextRetention::Exact,
+            | ContextSourceKind::RuntimeHint
+            | ContextSourceKind::RoutedHandoff => ContextRetention::Exact,
             ContextSourceKind::TranscriptAssistant
             | ContextSourceKind::TranscriptTool
             | ContextSourceKind::CommittedEvidence
-            | ContextSourceKind::RoutedHandoff
             | ContextSourceKind::ActionResult => ContextRetention::ExecutionGroup,
             ContextSourceKind::Memory
             | ContextSourceKind::Transcript
@@ -491,9 +757,13 @@ impl ContextBlock {
 
     /// Returns whether exact content can be recovered outside model context.
     pub fn recoverable_for_compaction(&self) -> bool {
+        if self.placement == ContextPlacement::EphemeralTail {
+            return false;
+        }
         matches!(
             self.source,
-            ContextSourceKind::Transcript
+            ContextSourceKind::Memory
+                | ContextSourceKind::Transcript
                 | ContextSourceKind::TranscriptUser
                 | ContextSourceKind::TranscriptAssistant
                 | ContextSourceKind::TranscriptTool
@@ -532,9 +802,15 @@ impl ModelContextMetadata {
 /// Ordered context supplied to provider request assembly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentContext {
-    /// Ordered model-context blocks, mutable only through checked APIs.
+    /// Replaceable reusable-prefix slots owned by explicit producers.
+    stable_slots: Vec<StableContextBlock>,
+    /// Immutable chronological events in actor commit order.
+    chronology: Vec<ConversationEvent>,
+    /// Request-local state present only on compatibility provider views.
+    live_state: Vec<LiveStateBlock>,
+    /// Read-only ordered projection consumed by existing provider adapters.
     blocks: Vec<ContextBlock>,
-    /// Stored semantics and causal identity aligned one-to-one with `blocks`.
+    /// Read-only metadata projection aligned one-to-one with `blocks`.
     block_metadata: Vec<ContextBlockMetadata>,
     /// Next sequence reserved for a future committed conversation event.
     next_event_sequence: u64,
@@ -543,16 +819,42 @@ pub struct AgentContext {
 }
 
 impl AgentContext {
-    /// Creates validated non-empty agent context.
-    pub fn new(blocks: Vec<ContextBlock>) -> AgentContextResult<Self> {
-        let mut context = Self {
-            blocks,
+    /// Creates an empty durable context for an intermediate composition stage.
+    ///
+    /// Provider request assembly still requires at least one model-visible
+    /// block, but routed and restored builders may legitimately remove every
+    /// inherited block before appending the new task's own prompt.
+    pub fn empty() -> Self {
+        Self {
+            stable_slots: Vec::new(),
+            chronology: Vec::new(),
+            live_state: Vec::new(),
+            blocks: Vec::new(),
             block_metadata: Vec::new(),
-            next_event_sequence: 1,
+            next_event_sequence: CONTEXT_EVENT_SEQUENCE_STRIDE,
             metadata: ModelContextMetadata::default(),
-        };
-        context.initialize_block_metadata()?;
+        }
+    }
+
+    /// Imports one ordered compatibility block sequence into typed storage.
+    ///
+    /// This boundary is reserved for transcript restoration, staged initial
+    /// composition, migration, and fixtures that do not already own typed
+    /// event records. It never sorts input and applies the explicit safe import
+    /// policy documented by [`compatibility_event_contract`].
+    pub fn import_ordered_blocks(blocks: Vec<ContextBlock>) -> AgentContextResult<Self> {
+        let mut context = Self::empty();
+        context.initialize_typed_storage_from_blocks(blocks)?;
         context.revalidate()
+    }
+
+    /// Creates validated non-empty compatibility context.
+    ///
+    /// New product composition should name its import boundary explicitly with
+    /// [`AgentContext::import_ordered_blocks`]. This alias remains for compact
+    /// lower-crate fixtures and provider contract tests.
+    pub fn new(blocks: Vec<ContextBlock>) -> AgentContextResult<Self> {
+        Self::import_ordered_blocks(blocks)
     }
 
     /// Revalidates context blocks without discarding typed request metadata.
@@ -573,10 +875,19 @@ impl AgentContext {
     ///
     /// Runtime turn storage must use this constructor so request-local state
     /// cannot accidentally survive into later provider calls.
-    pub fn new_durable(blocks: Vec<ContextBlock>) -> AgentContextResult<Self> {
-        let context = Self::new(blocks)?;
+    pub fn import_durable_blocks(blocks: Vec<ContextBlock>) -> AgentContextResult<Self> {
+        let context = Self::import_ordered_blocks(blocks)?;
         context.validate_durable()?;
         Ok(context)
+    }
+
+    /// Creates durable compatibility context for lower-crate fixtures.
+    ///
+    /// Product restoration and staged construction should use
+    /// [`AgentContext::import_durable_blocks`] so inference is visibly confined
+    /// to an audited import boundary.
+    pub fn new_durable(blocks: Vec<ContextBlock>) -> AgentContextResult<Self> {
+        Self::import_durable_blocks(blocks)
     }
 
     /// Attaches typed non-model-visible metadata to this context.
@@ -588,6 +899,16 @@ impl AgentContext {
     /// Returns the canonical block sequence without permitting direct mutation.
     pub fn blocks(&self) -> &[ContextBlock] {
         &self.blocks
+    }
+
+    /// Returns typed reusable-prefix slots in model-visible order.
+    pub fn stable_slots(&self) -> &[StableContextBlock] {
+        &self.stable_slots
+    }
+
+    /// Returns immutable chronological events in actor commit order.
+    pub fn chronology(&self) -> &[ConversationEvent] {
+        &self.chronology
     }
 
     /// Returns typed request metadata that is excluded from model messages.
@@ -607,7 +928,9 @@ impl AgentContext {
 
     /// Returns the highest committed conversation-event sequence.
     pub fn event_sequence_high_water_mark(&self) -> u64 {
-        self.next_event_sequence.saturating_sub(1)
+        self.chronology
+            .last()
+            .map_or(0, |event| event.sequence.get())
     }
 
     /// Returns metadata for one canonical block index.
@@ -716,14 +1039,27 @@ impl AgentContext {
         source: ContextSourceKind,
         label: impl Into<String>,
     ) -> AgentContextResult<()> {
+        let mut candidate = self.clone();
+        candidate.reclassify_user_event_as_reference_candidate(content, source, label)?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Applies one already isolated user-event reclassification candidate.
+    fn reclassify_user_event_as_reference_candidate(
+        &mut self,
+        content: &str,
+        source: ContextSourceKind,
+        label: impl Into<String>,
+    ) -> AgentContextResult<()> {
         let matching = self
-            .blocks
+            .chronology
             .iter()
             .enumerate()
-            .filter(|(index, block)| {
-                block.source == ContextSourceKind::UserInstruction
-                    && block.content == content
-                    && self.block_metadata[*index].semantic_kind == ContextSemanticKind::UserEvent
+            .filter(|(_, event)| {
+                event.block.source == ContextSourceKind::UserInstruction
+                    && event.block.content == content
+                    && event.semantic_kind == ContextSemanticKind::UserEvent
             })
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
@@ -735,29 +1071,137 @@ impl AgentContext {
         }
         let index = matching[0];
         let replacement = ContextBlock::reference_event(source, label, content);
-        let mut metadata = self.block_metadata[index].clone();
-        metadata.semantic_kind = ContextSemanticKind::ReferenceEvent;
-        metadata.retention = ContextRetention::Exact;
-        metadata.execution_group_id = None;
-        metadata.provider_owner = provider_owner_for_block(&replacement);
-        metadata.recoverable_for_compaction = true;
-        validate_context_block_metadata(index, &replacement, &metadata)?;
-        self.blocks[index] = replacement;
-        self.block_metadata[index] = metadata;
+        let event = &mut self.chronology[index];
+        event.block = replacement;
+        event.semantic_kind = ContextSemanticKind::ReferenceEvent;
+        event.retention = ContextRetention::Exact;
+        event.execution_group_id = None;
+        event.provider_owner = None;
+        event.recoverable_for_compaction = true;
+        self.rebuild_projections();
         self.validate_stored_metadata()
     }
 
-    /// Removes blocks matching a predicate while preserving all retained event
-    /// sequences and metadata.
-    pub fn retain_blocks(&mut self, mut keep: impl FnMut(&ContextBlock) -> bool) {
-        let blocks = std::mem::take(&mut self.blocks);
-        let metadata = std::mem::take(&mut self.block_metadata);
-        for (block, metadata) in blocks.into_iter().zip(metadata) {
-            if keep(&block) {
-                self.blocks.push(block);
-                self.block_metadata.push(metadata);
+    /// Removes blocks matching a predicate without exposing a partially valid
+    /// chronology when removal would break a causal ownership invariant.
+    pub fn retain_blocks(
+        &mut self,
+        mut keep: impl FnMut(&ContextBlock) -> bool,
+    ) -> AgentContextResult<()> {
+        let mut candidate = self.clone();
+        candidate.stable_slots.retain(|slot| keep(&slot.block));
+        candidate.chronology.retain(|event| keep(&event.block));
+        candidate.live_state.retain(|state| keep(&state.block));
+        candidate.rebuild_projections();
+        candidate.validate_stored_metadata()?;
+        validate_context_placement_order(&candidate.blocks)?;
+        validate_context_semantics(&candidate.blocks)?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Replaces every stable slot owned by one source at the source's existing
+    /// prefix anchor.
+    ///
+    /// Identical slot ids, fingerprints, and model-visible bytes are an exact
+    /// no-op. A changed slot set replaces one contiguous stable range without
+    /// moving any other stable authority or chronological event. Fragmented
+    /// ownership is rejected because silently gathering it would reorder an
+    /// intervening causal or authority boundary.
+    pub fn replace_stable_source_slots(
+        &mut self,
+        source: ContextSourceKind,
+        slots: Vec<StableContextBlock>,
+    ) -> AgentContextResult<bool> {
+        let mut candidate = self.clone();
+        let changed = candidate.replace_stable_source_slots_candidate(source, slots)?;
+        *self = candidate;
+        Ok(changed)
+    }
+
+    /// Applies one stable-source replacement to an isolated candidate.
+    fn replace_stable_source_slots_candidate(
+        &mut self,
+        source: ContextSourceKind,
+        slots: Vec<StableContextBlock>,
+    ) -> AgentContextResult<bool> {
+        let mut slot_ids = BTreeSet::new();
+        for slot in &slots {
+            if slot.block.source != source {
+                return Err(AgentContextError::new(
+                    "stable slot source does not match replacement owner",
+                ));
+            }
+            if !slot_ids.insert(slot.slot_id.as_str()) {
+                return Err(AgentContextError::new(
+                    "stable source replacement contains a duplicate slot id",
+                ));
             }
         }
+
+        if self
+            .chronology
+            .iter()
+            .any(|event| event.block.source == source)
+            || self
+                .live_state
+                .iter()
+                .any(|state| state.block.source == source)
+        {
+            return Err(AgentContextError::new(
+                "stable source replacement found the source outside the stable prefix",
+            ));
+        }
+        let existing_indices = self
+            .stable_slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| slot.block.source == source)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if existing_indices
+            .windows(2)
+            .any(|pair| pair[1] != pair[0].saturating_add(1))
+        {
+            return Err(AgentContextError::new(
+                "stable source slots are fragmented across another prefix owner",
+            ));
+        }
+
+        let unchanged = existing_indices.len() == slots.len()
+            && existing_indices
+                .iter()
+                .zip(&slots)
+                .all(|(index, slot)| self.stable_slots[*index] == *slot);
+        if unchanged {
+            return Ok(false);
+        }
+
+        let insertion_index = existing_indices
+            .first()
+            .copied()
+            .unwrap_or(self.stable_slots.len());
+        let removal_end = existing_indices
+            .last()
+            .map_or(insertion_index, |index| index.saturating_add(1));
+        self.stable_slots
+            .splice(insertion_index..removal_end, slots);
+        self.rebuild_projections();
+        self.validate_stored_metadata()?;
+        validate_context_placement_order(&self.blocks)?;
+        validate_context_semantics(&self.blocks)?;
+        Ok(true)
+    }
+
+    /// Returns the source fingerprint stored for one named stable slot.
+    pub fn stable_slot_source_fingerprint(
+        &self,
+        slot_id: &str,
+    ) -> Option<&StableContextSourceFingerprint> {
+        self.stable_slots
+            .iter()
+            .find(|slot| slot.slot_id.as_str() == slot_id)
+            .map(|slot| &slot.source_fingerprint)
     }
 
     /// Inserts a new block at its lifecycle boundary and records its semantics.
@@ -772,23 +1216,87 @@ impl AgentContext {
         retention: ContextRetention,
         recoverable_for_compaction: bool,
     ) -> AgentContextResult<Option<ContextEventSequence>> {
-        let sequence = if block.placement == ContextPlacement::ConversationAppend {
-            Some(self.allocate_event_sequence()?)
-        } else {
-            None
-        };
-        let metadata = ContextBlockMetadata {
+        let mut candidate = self.clone();
+        let sequence = candidate.insert_typed_block_candidate(
+            block,
             semantic_kind,
             retention,
-            event_sequence: sequence,
-            execution_group_id: None,
-            provider_owner: provider_owner_for_block(&block),
             recoverable_for_compaction,
+        )?;
+        *self = candidate;
+        Ok(sequence)
+    }
+
+    /// Applies one compatibility insertion to an isolated candidate.
+    fn insert_typed_block_candidate(
+        &mut self,
+        block: ContextBlock,
+        semantic_kind: ContextSemanticKind,
+        retention: ContextRetention,
+        recoverable_for_compaction: bool,
+    ) -> AgentContextResult<Option<ContextEventSequence>> {
+        let sequence = match block.placement {
+            ContextPlacement::StablePrefix => {
+                let slot =
+                    StableContextBlock::from_compatibility_block(block, self.stable_slots.len())?;
+                if semantic_kind != ContextSemanticKind::AmbientInstruction
+                    || retention != ContextRetention::Exact
+                    || recoverable_for_compaction
+                {
+                    return Err(AgentContextError::new(
+                        "stable compatibility insertion requires exact ambient instruction semantics",
+                    ));
+                }
+                self.stable_slots.push(slot);
+                None
+            }
+            ContextPlacement::ConversationAppend => {
+                let provider_owner = provider_owner_for_block(&block);
+                let sequence = self.allocate_event_sequence()?;
+                let execution_group_id = if retention == ContextRetention::ExecutionGroup {
+                    Some(
+                        self.chronology
+                            .last()
+                            .and_then(|event| event.execution_group_id.clone())
+                            .unwrap_or(ContextExecutionGroupId::new(format!(
+                                "compat-insert-execution-group-{}",
+                                sequence.get()
+                            ))?),
+                    )
+                } else {
+                    None
+                };
+                let event = ConversationEvent {
+                    block,
+                    semantic_kind,
+                    retention,
+                    sequence,
+                    execution_group_id,
+                    provider_owner,
+                    recoverable_for_compaction,
+                };
+                validate_context_block_metadata(
+                    self.stable_slots.len() + self.chronology.len(),
+                    &event.block,
+                    &event.metadata(),
+                )?;
+                self.chronology.push(event);
+                Some(sequence)
+            }
+            ContextPlacement::EphemeralTail => {
+                if semantic_kind != ContextSemanticKind::LiveState
+                    || retention != ContextRetention::RequestLocal
+                    || recoverable_for_compaction
+                {
+                    return Err(AgentContextError::new(
+                        "live-state insertion requires request-local non-recoverable semantics",
+                    ));
+                }
+                self.live_state.push(LiveStateBlock::new(block)?);
+                None
+            }
         };
-        validate_context_block_metadata(self.blocks.len(), &block, &metadata)?;
-        let index = context_placement_insertion_index(&self.blocks, block.placement);
-        self.blocks.insert(index, block);
-        self.block_metadata.insert(index, metadata);
+        self.rebuild_projections();
         self.validate_stored_metadata()?;
         Ok(sequence)
     }
@@ -796,28 +1304,191 @@ impl AgentContext {
     /// Removes the request-local suffix and returns it for prepared-request
     /// construction without changing durable event identity.
     pub fn split_off_live_state(&mut self) -> Vec<ContextBlock> {
-        let tail_start = self
-            .blocks
-            .iter()
-            .position(|block| block.placement == ContextPlacement::EphemeralTail)
-            .unwrap_or(self.blocks.len());
-        self.block_metadata.truncate(tail_start);
-        self.blocks.split_off(tail_start)
+        let live_state = self
+            .live_state
+            .drain(..)
+            .map(|state| state.block)
+            .collect::<Vec<_>>();
+        self.rebuild_projections();
+        live_state
     }
 
-    /// Replaces all canonical blocks after an explicit compaction operation.
+    /// Replaces chronology for compatibility fixtures and imported snapshots.
     ///
-    /// Compaction is the only supported non-append mutation of chronology. The
-    /// supplied blocks are re-sequenced in their already validated order and a
-    /// fresh cache lineage is expected at the product layer.
+    /// Product compaction uses [`Self::compact_execution_ranges`] and active
+    /// history refresh uses [`Self::replace_imported_history_prefix`] so that
+    /// unaffected event identities survive either mutation. This whole-history
+    /// replacement deliberately re-sequences the supplied validated order and
+    /// therefore establishes a fresh cache lineage.
     pub fn replace_after_compaction(
         &mut self,
         blocks: Vec<ContextBlock>,
     ) -> AgentContextResult<()> {
-        self.blocks = blocks;
-        self.block_metadata.clear();
-        self.next_event_sequence = 1;
-        self.initialize_block_metadata()?;
+        let mut candidate = self.clone();
+        candidate.initialize_typed_storage_from_blocks(blocks)?;
+        candidate.validate_durable()?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Replaces one imported historical prefix without changing retained event
+    /// identities.
+    ///
+    /// The ownership predicate must select a contiguous prefix of conversation
+    /// chronology. Replacement records receive fresh sparse sequences strictly
+    /// before the first retained event, while retained prompt, steering,
+    /// message, assistant, and evidence records keep their original sequence
+    /// and group metadata. A replacement that cannot fit in the reserved
+    /// sequence interval fails atomically instead of renumbering or moving
+    /// retained chronology.
+    pub fn replace_imported_history_prefix(
+        &mut self,
+        mut owns: impl FnMut(&ContextBlock) -> bool,
+        blocks: Vec<ContextBlock>,
+    ) -> AgentContextResult<usize> {
+        if blocks
+            .iter()
+            .any(|block| block.placement != ContextPlacement::ConversationAppend)
+        {
+            return Err(AgentContextError::new(
+                "imported history replacement accepts conversation events only",
+            ));
+        }
+        let mut candidate = self.clone();
+        let owned_indices = candidate
+            .chronology
+            .iter()
+            .enumerate()
+            .filter(|(_, event)| owns(&event.block))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if owned_indices.iter().copied().ne(0..owned_indices.len()) {
+            return Err(AgentContextError::new(
+                "imported history ownership must be one contiguous chronology prefix",
+            ));
+        }
+        let remove_end = owned_indices.len();
+        let successor_sequence = candidate
+            .chronology
+            .get(remove_end)
+            .map(|event| event.sequence.get());
+
+        let mut imported = Self::empty();
+        if !blocks.is_empty() {
+            imported.initialize_typed_storage_from_blocks(blocks)?;
+        }
+        if !imported.stable_slots.is_empty() || !imported.live_state.is_empty() {
+            return Err(AgentContextError::new(
+                "imported history replacement produced a non-chronological block",
+            ));
+        }
+        let replacement_count = imported.chronology.len();
+        let assigned_sequences =
+            history_prefix_replacement_sequences(replacement_count, successor_sequence)?;
+        let mut replacement_events = imported.chronology;
+        let mut replacement_groups = BTreeMap::<String, ContextExecutionGroupId>::new();
+        for (event, sequence) in replacement_events.iter_mut().zip(assigned_sequences) {
+            event.sequence = ContextEventSequence::new(sequence)?;
+            if let Some(old_group) = event.execution_group_id.as_ref() {
+                let old_group_key = old_group.as_str().to_string();
+                let replacement_group = if let Some(group) = replacement_groups.get(&old_group_key)
+                {
+                    group.clone()
+                } else {
+                    let group = ContextExecutionGroupId::new(format!(
+                        "history-import:{sequence}:{old_group_key}"
+                    ))?;
+                    replacement_groups.insert(old_group_key, group.clone());
+                    group
+                };
+                event.execution_group_id = Some(replacement_group);
+            }
+        }
+        candidate
+            .chronology
+            .splice(0..remove_end, replacement_events);
+        if let Some(last_sequence) = candidate
+            .chronology
+            .last()
+            .map(|event| event.sequence.get())
+            && candidate.next_event_sequence <= last_sequence
+        {
+            candidate.next_event_sequence = last_sequence
+                .checked_add(CONTEXT_EVENT_SEQUENCE_STRIDE)
+                .ok_or_else(|| AgentContextError::new("context event sequence exhausted"))?;
+        }
+        candidate.rebuild_projections();
+        candidate.validate_durable()?;
+        *self = candidate;
+        Ok(replacement_count)
+    }
+
+    /// Replaces closed chronological ranges with semantic summaries while
+    /// preserving every retained event identity.
+    ///
+    /// Ranges are expressed in typed chronology indexes, must be ordered and
+    /// non-overlapping, and are applied from newest to oldest. Each summary
+    /// inherits the first replaced sequence so later retained events keep their
+    /// original identities and strict temporal order. Exact barriers and
+    /// unrecoverable events cannot be replaced.
+    pub fn compact_execution_ranges(
+        &mut self,
+        replacements: Vec<(Range<usize>, ContextBlock)>,
+    ) -> AgentContextResult<()> {
+        let mut candidate = self.clone();
+        candidate.compact_execution_ranges_candidate(replacements)?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Applies validated compaction replacements to an isolated candidate.
+    fn compact_execution_ranges_candidate(
+        &mut self,
+        replacements: Vec<(Range<usize>, ContextBlock)>,
+    ) -> AgentContextResult<()> {
+        let mut previous_end = 0usize;
+        for (index, (range, summary)) in replacements.iter().enumerate() {
+            if range.is_empty()
+                || range.end > self.chronology.len()
+                || (index > 0 && range.start < previous_end)
+            {
+                return Err(AgentContextError::new(
+                    "compaction ranges must be non-empty, in bounds, ordered, and non-overlapping",
+                ));
+            }
+            if summary.placement != ContextPlacement::ConversationAppend
+                || summary.semantic_kind() != ContextSemanticKind::ReferenceEvent
+                || summary.retention() != ContextRetention::Summarizable
+            {
+                return Err(AgentContextError::new(
+                    "compaction replacement must be a summarizable chronological reference event",
+                ));
+            }
+            let replaced = &self.chronology[range.clone()];
+            if replaced.iter().any(|event| {
+                event.retention == ContextRetention::Exact || !event.recoverable_for_compaction
+            }) {
+                return Err(AgentContextError::new(
+                    "compaction cannot replace exact or unrecoverable chronological events",
+                ));
+            }
+            previous_end = range.end;
+        }
+
+        for (range, summary) in replacements.into_iter().rev() {
+            let sequence = self.chronology[range.start].sequence;
+            let summary_event = ConversationEvent {
+                block: summary,
+                semantic_kind: ContextSemanticKind::ReferenceEvent,
+                retention: ContextRetention::Summarizable,
+                sequence,
+                execution_group_id: None,
+                provider_owner: None,
+                recoverable_for_compaction: false,
+            };
+            self.chronology.splice(range, [summary_event]);
+        }
+        self.rebuild_projections();
         self.validate_durable()
     }
 
@@ -836,20 +1507,26 @@ impl AgentContext {
                 "chronological events must use conversation-append placement",
             ));
         }
-        let sequence = self.allocate_event_sequence()?;
-        let metadata = ContextBlockMetadata {
+        let mut candidate = self.clone();
+        let sequence = candidate.allocate_event_sequence()?;
+        let event = ConversationEvent {
+            block,
             semantic_kind,
             retention,
-            event_sequence: Some(sequence),
+            sequence,
             execution_group_id,
             provider_owner,
             recoverable_for_compaction,
         };
-        let index = context_placement_insertion_index(&self.blocks, block.placement);
-        validate_context_block_metadata(index, &block, &metadata)?;
-        self.blocks.insert(index, block);
-        self.block_metadata.insert(index, metadata);
-        self.validate_stored_metadata()?;
+        validate_context_block_metadata(
+            candidate.stable_slots.len() + candidate.chronology.len(),
+            &event.block,
+            &event.metadata(),
+        )?;
+        candidate.chronology.push(event);
+        candidate.rebuild_projections();
+        candidate.validate_stored_metadata()?;
+        *self = candidate;
         Ok(sequence)
     }
 
@@ -858,46 +1535,174 @@ impl AgentContext {
         let sequence = ContextEventSequence::new(self.next_event_sequence)?;
         self.next_event_sequence = self
             .next_event_sequence
-            .checked_add(1)
+            .checked_add(CONTEXT_EVENT_SEQUENCE_STRIDE)
             .ok_or_else(|| AgentContextError::new("context event sequence exhausted"))?;
         Ok(sequence)
     }
 
-    /// Initializes stored metadata for a fully ordered legacy/block-vector
-    /// boundary. Production mutation after construction uses typed methods.
-    fn initialize_block_metadata(&mut self) -> AgentContextResult<()> {
+    /// Initializes typed storage from one already ordered compatibility block
+    /// vector.
+    ///
+    /// This boundary exists for fixtures and legacy adapters. Active runtime
+    /// producers mutate context through typed APIs and never infer semantics
+    /// after an event has committed.
+    fn initialize_typed_storage_from_blocks(
+        &mut self,
+        blocks: Vec<ContextBlock>,
+    ) -> AgentContextResult<()> {
+        validate_context_placement_order(&blocks)?;
+        validate_context_semantics(&blocks)?;
+        let compatibility_group_ids = compatibility_execution_group_ids(&blocks)?;
+        let mut conversation_index = 0usize;
+        self.stable_slots.clear();
+        self.chronology.clear();
+        self.live_state.clear();
         self.block_metadata.clear();
-        self.next_event_sequence = 1;
-        for block in self.blocks.clone() {
-            let event_sequence = if block.placement == ContextPlacement::ConversationAppend {
-                Some(self.allocate_event_sequence()?)
-            } else {
-                None
-            };
-            self.block_metadata.push(ContextBlockMetadata {
-                semantic_kind: block.semantic_kind(),
-                retention: block.retention(),
-                event_sequence,
-                execution_group_id: None,
-                provider_owner: provider_owner_for_block(&block),
-                recoverable_for_compaction: block.recoverable_for_compaction(),
-            });
+        self.blocks.clear();
+        self.next_event_sequence = CONTEXT_EVENT_SEQUENCE_STRIDE;
+        for (index, block) in blocks.into_iter().enumerate() {
+            match block.placement {
+                ContextPlacement::StablePrefix => self
+                    .stable_slots
+                    .push(StableContextBlock::from_compatibility_block(block, index)?),
+                ContextPlacement::ConversationAppend => {
+                    let execution_group_id = compatibility_group_ids[conversation_index].clone();
+                    let (semantic_kind, retention, recoverable_for_compaction) =
+                        compatibility_event_contract(&block, execution_group_id.as_ref());
+                    let provider_owner = provider_owner_for_block(&block);
+                    let sequence = self.allocate_event_sequence()?;
+                    self.chronology.push(ConversationEvent {
+                        block,
+                        semantic_kind,
+                        retention,
+                        sequence,
+                        execution_group_id,
+                        provider_owner,
+                        recoverable_for_compaction,
+                    });
+                    conversation_index = conversation_index.saturating_add(1);
+                }
+                ContextPlacement::EphemeralTail => {
+                    self.live_state.push(LiveStateBlock::new(block)?);
+                }
+            }
         }
+        self.rebuild_projections();
         self.validate_stored_metadata()
+    }
+
+    /// Rebuilds adapter projections from typed canonical storage.
+    fn rebuild_projections(&mut self) {
+        self.blocks.clear();
+        self.block_metadata.clear();
+        self.blocks
+            .reserve(self.stable_slots.len() + self.chronology.len() + self.live_state.len());
+        self.block_metadata.reserve(self.blocks.capacity());
+        for slot in &self.stable_slots {
+            self.blocks.push(slot.block.clone());
+            self.block_metadata.push(slot.metadata());
+        }
+        for event in &self.chronology {
+            self.blocks.push(event.block.clone());
+            self.block_metadata.push(event.metadata());
+        }
+        for live_state in &self.live_state {
+            self.blocks.push(live_state.block.clone());
+            self.block_metadata.push(live_state.metadata());
+        }
     }
 
     /// Validates stored metadata alignment and strictly increasing chronology.
     fn validate_stored_metadata(&self) -> AgentContextResult<()> {
-        if self.blocks.len() != self.block_metadata.len() {
+        let typed_len = self
+            .stable_slots
+            .len()
+            .saturating_add(self.chronology.len())
+            .saturating_add(self.live_state.len());
+        if self.blocks.len() != self.block_metadata.len() || self.blocks.len() != typed_len {
             return Err(AgentContextError::new(format!(
-                "context block metadata length mismatch: blocks={} metadata={}; mutate context through checked APIs",
+                "context projection length mismatch: stable={} chronology={} live_state={} blocks={} metadata={}; mutate context through checked APIs",
+                self.stable_slots.len(),
+                self.chronology.len(),
+                self.live_state.len(),
                 self.blocks.len(),
                 self.block_metadata.len()
             )));
         }
+        let typed_projection = self
+            .stable_slots
+            .iter()
+            .map(|slot| (&slot.block, slot.metadata()))
+            .chain(
+                self.chronology
+                    .iter()
+                    .map(|event| (&event.block, event.metadata())),
+            )
+            .chain(
+                self.live_state
+                    .iter()
+                    .map(|live_state| (&live_state.block, live_state.metadata())),
+            );
+        for (index, ((expected_block, expected_metadata), (block, metadata))) in typed_projection
+            .zip(self.blocks.iter().zip(&self.block_metadata))
+            .enumerate()
+        {
+            if expected_block != block || expected_metadata != *metadata {
+                return Err(AgentContextError::new(format!(
+                    "context read projection drifted from typed storage at block index {index}"
+                )));
+            }
+        }
         let mut last_sequence = 0u64;
+        let mut stable_slot_ids = BTreeSet::new();
+        let mut active_prompt_count = 0usize;
+        let mut assistant_execution_groups = BTreeSet::new();
         for (index, (block, metadata)) in self.blocks.iter().zip(&self.block_metadata).enumerate() {
             validate_context_block_metadata(index, block, metadata)?;
+            if let Some(slot_id) = metadata.stable_slot_id.as_ref()
+                && !stable_slot_ids.insert(slot_id.as_str())
+            {
+                return Err(context_semantic_error(
+                    index,
+                    block,
+                    "stable slot identities must be unique",
+                ));
+            }
+            if block.source == ContextSourceKind::UserInstruction && block.label == "user prompt" {
+                active_prompt_count = active_prompt_count.saturating_add(1);
+                if active_prompt_count > 1 {
+                    return Err(context_semantic_error(
+                        index,
+                        block,
+                        "durable context may contain only one active user prompt",
+                    ));
+                }
+            }
+            if metadata.semantic_kind == ContextSemanticKind::AssistantEvent {
+                let Some(group_id) = metadata.execution_group_id.as_ref() else {
+                    return Err(context_semantic_error(
+                        index,
+                        block,
+                        "assistant execution events require an execution-group identity",
+                    ));
+                };
+                assistant_execution_groups.insert(group_id.clone());
+            }
+            if matches!(
+                block.source,
+                ContextSourceKind::ActionResult | ContextSourceKind::TranscriptTool
+            ) && metadata.retention == ContextRetention::ExecutionGroup
+                && !metadata
+                    .execution_group_id
+                    .as_ref()
+                    .is_some_and(|group_id| assistant_execution_groups.contains(group_id))
+            {
+                return Err(context_semantic_error(
+                    index,
+                    block,
+                    "action and native-tool evidence requires a preceding owning assistant execution",
+                ));
+            }
             if let Some(sequence) = metadata.event_sequence {
                 if sequence.get() <= last_sequence {
                     return Err(context_semantic_error(
@@ -1017,7 +1822,7 @@ impl AgentContext {
                 let same_action = block.source == ContextSourceKind::ActionResult
                     && action_result_block_id(block).is_some_and(|id| id == result.action_id);
                 !same_action || exact_block.as_ref().is_some_and(|exact| exact == block)
-            });
+            })?;
             if exact_block.is_some() {
                 continue;
             }
@@ -1037,6 +1842,142 @@ impl AgentContext {
         *self = candidate;
         Ok(committed)
     }
+}
+
+/// Allocates ordered identities for a replacement history prefix.
+fn history_prefix_replacement_sequences(
+    count: usize,
+    successor_sequence: Option<u64>,
+) -> AgentContextResult<Vec<u64>> {
+    if count == 0 {
+        return Ok(Vec::new());
+    }
+    let count_u64 = u64::try_from(count)
+        .map_err(|_| AgentContextError::new("imported history replacement is too large"))?;
+    if let Some(successor) = successor_sequence {
+        let divisor = count_u64
+            .checked_add(1)
+            .ok_or_else(|| AgentContextError::new("imported history replacement is too large"))?;
+        let step = successor / divisor;
+        if step == 0 {
+            return Err(AgentContextError::new(
+                "imported history replacement cannot preserve retained event identities",
+            ));
+        }
+        return (1..=count_u64)
+            .map(|index| {
+                step.checked_mul(index).ok_or_else(|| {
+                    AgentContextError::new("imported history replacement sequence exhausted")
+                })
+            })
+            .collect();
+    }
+    (1..=count_u64)
+        .map(|index| {
+            CONTEXT_EVENT_SEQUENCE_STRIDE
+                .checked_mul(index)
+                .ok_or_else(|| {
+                    AgentContextError::new("imported history replacement sequence exhausted")
+                })
+        })
+        .collect()
+}
+
+/// Assigns explicit compatibility group identities while importing an ordered
+/// legacy/test block vector.
+fn compatibility_execution_group_ids(
+    blocks: &[ContextBlock],
+) -> AgentContextResult<Vec<Option<ContextExecutionGroupId>>> {
+    let chronology = blocks
+        .iter()
+        .filter(|block| block.placement == ContextPlacement::ConversationAppend)
+        .collect::<Vec<_>>();
+    let mut group_ids = vec![None; chronology.len()];
+    for range in compatibility_execution_group_ranges(&chronology) {
+        if !chronology[range.clone()]
+            .iter()
+            .any(|block| block.source == ContextSourceKind::TranscriptAssistant)
+        {
+            continue;
+        }
+        let group_id = ContextExecutionGroupId::new(format!(
+            "compat-execution-group-{}",
+            range.start.saturating_add(1)
+        ))?;
+        for index in range {
+            if chronology[index].retention() == ContextRetention::ExecutionGroup {
+                group_ids[index] = Some(group_id.clone());
+            }
+        }
+    }
+    Ok(group_ids)
+}
+
+/// Chooses the explicit compatibility contract for one imported event.
+///
+/// Persisted transcripts carry authoritative role and sequence but older
+/// records do not carry an execution-group identifier. Contiguous
+/// assistant/tool/result records can be grouped without changing chronology.
+/// Evidence separated from its possible assistant owner by an exact barrier is
+/// retained as an exact neutral reference instead of inventing a causal link or
+/// rejecting otherwise complete history.
+fn compatibility_event_contract(
+    block: &ContextBlock,
+    execution_group_id: Option<&ContextExecutionGroupId>,
+) -> (ContextSemanticKind, ContextRetention, bool) {
+    if matches!(
+        block.source,
+        ContextSourceKind::TranscriptTool
+            | ContextSourceKind::CommittedEvidence
+            | ContextSourceKind::ActionResult
+    ) && execution_group_id.is_none()
+    {
+        return (
+            ContextSemanticKind::ReferenceEvent,
+            ContextRetention::Exact,
+            true,
+        );
+    }
+    (
+        block.semantic_kind(),
+        block.retention(),
+        block.recoverable_for_compaction(),
+    )
+}
+
+/// Finds indivisible execution groups at the compatibility import boundary.
+fn compatibility_execution_group_ranges(blocks: &[&ContextBlock]) -> Vec<Range<usize>> {
+    let mut groups = Vec::new();
+    let mut start = 0usize;
+    let mut has_assistant = false;
+    let mut has_native_tool = false;
+    for (index, block) in blocks.iter().enumerate() {
+        let protected = block.retention() == ContextRetention::Exact
+            || (block.source == ContextSourceKind::Memory
+                && block.label == "context compaction summary");
+        let attaches_to_previous = match block.source {
+            ContextSourceKind::TranscriptTool => has_assistant,
+            ContextSourceKind::ActionResult => has_assistant || has_native_tool,
+            _ => false,
+        };
+        let current_group_protected = blocks[start..index].iter().any(|candidate| {
+            candidate.retention() == ContextRetention::Exact
+                || (candidate.source == ContextSourceKind::Memory
+                    && candidate.label == "context compaction summary")
+        });
+        if index > start && (protected || current_group_protected || !attaches_to_previous) {
+            groups.push(start..index);
+            start = index;
+            has_assistant = false;
+            has_native_tool = false;
+        }
+        has_assistant |= block.source == ContextSourceKind::TranscriptAssistant;
+        has_native_tool |= block.source == ContextSourceKind::TranscriptTool;
+    }
+    if start < blocks.len() {
+        groups.push(start..blocks.len());
+    }
+    groups
 }
 
 /// One provider-bound view composed from durable chronology and request-local
@@ -1091,9 +2032,17 @@ impl PreparedModelContext {
 
     /// Clones the canonical provider-visible sequence without changing order.
     pub fn to_agent_context(&self) -> AgentContext {
-        let mut context = AgentContext::new(self.ordered_blocks())
-            .expect("prepared context was validated at construction");
-        context.metadata = self.durable.metadata.clone();
+        let mut context = self.durable.clone();
+        for block in &self.live_state {
+            context
+                .insert_typed_block(
+                    block.clone(),
+                    ContextSemanticKind::LiveState,
+                    ContextRetention::RequestLocal,
+                    false,
+                )
+                .expect("prepared live state was validated at construction");
+        }
         context
     }
 
@@ -1243,28 +2192,39 @@ fn validate_context_block_metadata(
     block: &ContextBlock,
     metadata: &ContextBlockMetadata,
 ) -> AgentContextResult<()> {
+    let stable_slot_metadata_is_partial =
+        metadata.stable_slot_id.is_some() != metadata.stable_source_fingerprint.is_some();
     let invalid_reason = match block.placement {
         ContextPlacement::StablePrefix
             if metadata.semantic_kind != ContextSemanticKind::AmbientInstruction
                 || metadata.event_sequence.is_some()
-                || metadata.retention == ContextRetention::RequestLocal =>
+                || metadata.retention == ContextRetention::RequestLocal
+                || stable_slot_metadata_is_partial =>
         {
-            Some("stable blocks must be unsequenced ambient instructions")
+            Some(
+                "stable blocks must be unsequenced ambient instructions with complete slot metadata",
+            )
         }
         ContextPlacement::ConversationAppend
             if metadata.semantic_kind == ContextSemanticKind::LiveState
                 || metadata.retention == ContextRetention::RequestLocal
-                || metadata.event_sequence.is_none() =>
+                || metadata.event_sequence.is_none()
+                || metadata.stable_slot_id.is_some()
+                || metadata.stable_source_fingerprint.is_some() =>
         {
-            Some("conversation events require a sequence and durable semantics")
+            Some("conversation events require a sequence and cannot own stable-slot metadata")
         }
         ContextPlacement::EphemeralTail
             if metadata.semantic_kind != ContextSemanticKind::LiveState
                 || metadata.retention != ContextRetention::RequestLocal
                 || metadata.event_sequence.is_some()
-                || metadata.execution_group_id.is_some() =>
+                || metadata.execution_group_id.is_some()
+                || metadata.stable_slot_id.is_some()
+                || metadata.stable_source_fingerprint.is_some() =>
         {
-            Some("live state must be unsequenced request-local context")
+            Some(
+                "live state must be unsequenced request-local context without stable-slot metadata",
+            )
         }
         _ => None,
     };
@@ -1301,14 +2261,6 @@ fn validate_context_block_metadata(
     }
     if metadata.retention == ContextRetention::ExecutionGroup
         && metadata.execution_group_id.is_none()
-        && !matches!(
-            block.source,
-            ContextSourceKind::TranscriptAssistant
-                | ContextSourceKind::TranscriptTool
-                | ContextSourceKind::CommittedEvidence
-                | ContextSourceKind::RoutedHandoff
-                | ContextSourceKind::ActionResult
-        )
     {
         return Err(context_semantic_error(
             index,
@@ -1536,9 +2488,10 @@ pub fn validate_context_required(field: &str, value: &str) -> AgentContextResult
 mod tests {
     use super::{
         AgentContext, AgentContextError, AgentRequestAssemblyError, AgentRequestAssemblyErrorKind,
-        ContextBlock, ContextCachePolicy, ContextRetention, ContextSemanticKind, ContextSourceKind,
-        ContextStability, PreparedModelContext, validate_context_required,
-        validate_context_semantics,
+        ContextBlock, ContextCachePolicy, ContextExecutionGroupId, ContextRetention,
+        ContextSemanticKind, ContextSourceKind, ContextStability, PreparedModelContext,
+        StableContextBlock, StableContextSlotId, StableContextSourceFingerprint,
+        validate_context_required, validate_context_semantics,
     };
     use crate::{ActionContentBlock, ActionResult, ActionStatus, AgentPromptError};
 
@@ -1862,6 +2815,305 @@ mod tests {
         assert!(error.message().contains("durable agent context"));
     }
 
+    /// Verifies the typed collections are the source of truth for their
+    /// read-only provider projection and retain stable replacement identity.
+    #[test]
+    fn agent_context_projects_typed_stable_event_and_live_state_storage_in_order() {
+        let mut durable = AgentContext::new_durable(vec![ContextBlock::user_event(
+            "user prompt",
+            "inspect chronology",
+        )])
+        .unwrap();
+        durable
+            .replace_stable_source_slots(
+                ContextSourceKind::ProjectGuidance,
+                vec![
+                    StableContextBlock::new(
+                        StableContextSlotId::new("project-guidance").unwrap(),
+                        StableContextSourceFingerprint::new("a".repeat(64)).unwrap(),
+                        ContextBlock::stable_instruction(
+                            ContextSourceKind::ProjectGuidance,
+                            "active repository instructions",
+                            "preserve chronology",
+                        ),
+                    )
+                    .unwrap(),
+                ],
+            )
+            .unwrap();
+        let group = ContextExecutionGroupId::new("execution-1").unwrap();
+        durable
+            .append_assistant_event("assistant action", "inspect files", group.clone())
+            .unwrap();
+        durable
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "action result inspect",
+                "files inspected",
+                group,
+                None,
+                true,
+            )
+            .unwrap();
+        let prepared = PreparedModelContext::new(
+            durable.clone(),
+            vec![ContextBlock::live_state(
+                ContextSourceKind::RuntimeHint,
+                "runtime state",
+                "cwd=/repo",
+            )],
+        )
+        .unwrap();
+        let projected = prepared.to_agent_context();
+
+        assert_eq!(projected.stable_slots().len(), 1);
+        assert_eq!(projected.chronology().len(), 3);
+        assert_eq!(projected.live_state.len(), 1);
+        assert_eq!(
+            projected
+                .blocks()
+                .iter()
+                .map(|block| block.label.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "active repository instructions",
+                "user prompt",
+                "assistant action",
+                "action result inspect",
+                "runtime state",
+            ]
+        );
+        assert_eq!(prepared.durable(), &durable);
+    }
+
+    /// Verifies duplicate active prompts are rejected atomically instead of
+    /// advancing the event high-water mark or leaving a partial event behind.
+    #[test]
+    fn agent_context_rejects_duplicate_active_prompt_atomically() {
+        let mut context =
+            AgentContext::new_durable(vec![ContextBlock::user_event("user prompt", "first task")])
+                .unwrap();
+        let original = context.clone();
+
+        let error = context
+            .append_user_event("user prompt", "second task")
+            .unwrap_err();
+
+        assert!(error.message().contains("only one active user prompt"));
+        assert_eq!(context, original);
+    }
+
+    /// Verifies the compatibility insertion boundary is transactional even
+    /// when its inferred event would violate a whole-context invariant.
+    #[test]
+    fn agent_context_rejects_invalid_compatibility_insertion_atomically() {
+        let mut context =
+            AgentContext::new_durable(vec![ContextBlock::user_event("user prompt", "first task")])
+                .unwrap();
+        let original = context.clone();
+
+        let error = context
+            .insert_typed_block(
+                ContextBlock::user_event("user prompt", "second task"),
+                ContextSemanticKind::UserEvent,
+                ContextRetention::Exact,
+                false,
+            )
+            .unwrap_err();
+
+        assert!(error.message().contains("only one active user prompt"));
+        assert_eq!(context, original);
+    }
+
+    /// Verifies evidence cannot commit without a preceding assistant execution
+    /// in the same ownership group and that the failed append is atomic.
+    #[test]
+    fn agent_context_rejects_unowned_evidence_atomically() {
+        let mut context = AgentContext::new_durable(vec![ContextBlock::user_event(
+            "user prompt",
+            "run the check",
+        )])
+        .unwrap();
+        let original = context.clone();
+
+        let error = context
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "action result check",
+                "passed",
+                ContextExecutionGroupId::new("missing-assistant").unwrap(),
+                None,
+                true,
+            )
+            .unwrap_err();
+
+        assert!(error.message().contains("preceding owning assistant"));
+        assert_eq!(context, original);
+    }
+
+    /// Verifies predicate-based cleanup cannot remove an assistant owner while
+    /// leaving its evidence behind or expose the invalid intermediate state.
+    #[test]
+    fn agent_context_rejects_causality_breaking_retention_atomically() {
+        let mut context = AgentContext::new_durable(vec![ContextBlock::user_event(
+            "user prompt",
+            "run the check",
+        )])
+        .unwrap();
+        let group = ContextExecutionGroupId::new("execution-1").unwrap();
+        context
+            .append_assistant_event("assistant action", "run check", group.clone())
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "action result check",
+                "passed",
+                group,
+                None,
+                true,
+            )
+            .unwrap();
+        let original = context.clone();
+
+        let error = context
+            .retain_blocks(|block| block.source != ContextSourceKind::TranscriptAssistant)
+            .unwrap_err();
+
+        assert!(error.message().contains("preceding owning assistant"));
+        assert_eq!(context, original);
+    }
+
+    /// Verifies legacy transcript import preserves a tool result that settles
+    /// after steering without moving it before the user event or inventing an
+    /// execution owner across the exact barrier.
+    #[test]
+    fn compatibility_import_keeps_straddling_evidence_as_exact_reference() {
+        let context = AgentContext::new_durable(vec![
+            ContextBlock {
+                source: ContextSourceKind::TranscriptAssistant,
+                placement: crate::ContextPlacement::ConversationAppend,
+                label: "previous assistant action".to_string(),
+                content: "started action-1".to_string(),
+            },
+            ContextBlock::user_event("user steering", "change the output format"),
+            ContextBlock {
+                source: ContextSourceKind::TranscriptTool,
+                placement: crate::ContextPlacement::ConversationAppend,
+                label: "late action result action-1".to_string(),
+                content: "action-1 completed".to_string(),
+            },
+        ])
+        .unwrap();
+
+        assert_eq!(
+            context
+                .chronology()
+                .iter()
+                .map(|event| event.block().label.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "previous assistant action",
+                "user steering",
+                "late action result action-1"
+            ]
+        );
+        let late_evidence = &context.chronology()[2];
+        assert_eq!(
+            late_evidence.semantic_kind(),
+            ContextSemanticKind::ReferenceEvent
+        );
+        assert_eq!(late_evidence.retention(), ContextRetention::Exact);
+        assert!(late_evidence.execution_group_id().is_none());
+    }
+
+    /// Verifies a history refresh can change the imported prefix cardinality
+    /// without renumbering the active prompt or any later causal event.
+    #[test]
+    fn imported_history_prefix_replacement_preserves_retained_event_identities() {
+        let mut context = AgentContext::new_durable(vec![
+            ContextBlock::assistant_event("previous assistant", "older history"),
+            ContextBlock::user_event("user prompt", "continue the task"),
+        ])
+        .unwrap();
+        context
+            .append_reference_event(
+                ContextSourceKind::LocalMessage,
+                "local message",
+                "new constraint",
+            )
+            .unwrap();
+        let group = ContextExecutionGroupId::new("current-execution").unwrap();
+        context
+            .append_assistant_event("current assistant", "run check", group.clone())
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "action result check",
+                "passed",
+                group,
+                None,
+                true,
+            )
+            .unwrap();
+        let retained = context.chronology()[1..].to_vec();
+
+        let replacement_count = context
+            .replace_imported_history_prefix(
+                |block| block.label == "previous assistant",
+                vec![
+                    ContextBlock::reference_event(
+                        ContextSourceKind::Memory,
+                        "conversation compaction notice",
+                        "older history was compacted",
+                    ),
+                    ContextBlock::reference_event(
+                        ContextSourceKind::Memory,
+                        "memory compact-session",
+                        "semantic summary",
+                    ),
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(replacement_count, 2);
+        assert_eq!(&context.chronology()[2..], retained.as_slice());
+        assert!(context.chronology()[1].sequence() < retained[0].sequence());
+    }
+
+    /// Verifies history refresh rejects fragmented ownership atomically instead
+    /// of gathering records across a local-message barrier.
+    #[test]
+    fn imported_history_prefix_replacement_rejects_fragmented_ownership_atomically() {
+        let mut context = AgentContext::new_durable(vec![
+            ContextBlock::reference_event(ContextSourceKind::Memory, "old history 1", "one"),
+            ContextBlock::reference_event(
+                ContextSourceKind::LocalMessage,
+                "local message",
+                "barrier",
+            ),
+            ContextBlock::reference_event(ContextSourceKind::Memory, "old history 2", "two"),
+            ContextBlock::user_event("user prompt", "continue"),
+        ])
+        .unwrap();
+        let original = context.clone();
+
+        let error = context
+            .replace_imported_history_prefix(
+                |block| block.source == ContextSourceKind::Memory,
+                vec![ContextBlock::reference_event(
+                    ContextSourceKind::Memory,
+                    "replacement history",
+                    "summary",
+                )],
+            )
+            .unwrap_err();
+
+        assert!(error.message().contains("contiguous chronology prefix"));
+        assert_eq!(context, original);
+    }
+
     /// Required context validation accepts substantive values and rejects
     /// whitespace-only values with a stable field-specific diagnostic.
     #[test]
@@ -1913,6 +3165,7 @@ mod tests {
                 label: "system".to_string(),
                 content: "policy".to_string(),
             },
+            ContextBlock::assistant_event("assistant response action-1", "execute action-1"),
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
                 placement: crate::ContextPlacement::ConversationAppend,

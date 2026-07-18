@@ -719,6 +719,7 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
         terminal_state: AgentTurnState::Failed,
     };
 
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
     let queued = service
         .queue_agent_failure_feedback_for_correction(
             &turn,

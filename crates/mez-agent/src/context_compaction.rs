@@ -1,13 +1,16 @@
 //! Provider-independent model-context compaction and budgeting.
 //!
 //! This module owns deterministic bulk compaction after an explicit trigger or
-//! provider context-limit response. It preserves protected guidance and recent
-//! evidence, retains a configurable raw tail, and emits bounded inventory
-//! summaries without product runtime or persistence dependencies.
+//! provider context-limit response. It freezes the provider-consumed event
+//! boundary, replaces only closed contiguous ranges at their original anchors,
+//! keeps exact barriers and straddling causal owners raw, preserves retained
+//! event identities, and emits deterministic semantic recovery indexes without
+//! product runtime or persistence dependencies.
 
 use crate::{
     AgentContext, AgentContextError, AgentContextResult, ContextBlock, ContextRetention,
-    ContextSourceKind, ModelContextCompactionReport, model_context_block_header,
+    ContextSemanticKind, ContextSourceKind, ModelContextCompactionReport,
+    model_context_block_header,
 };
 use std::ops::Range;
 
@@ -17,6 +20,33 @@ const MODEL_CONTEXT_BLOCK_LIMIT_BYTES: usize = 128 * 1024;
 const MODEL_CONTEXT_COMPACTED_PREFIX: &str = "[context compacted]";
 /// Default raw suffix percent retained after local context compaction.
 pub const DEFAULT_MODEL_CONTEXT_RETAINED_TAIL_PERCENT: usize = 10;
+
+/// Validated replacement plan produced before typed chronology is mutated.
+struct ModelContextCompactionPlan {
+    blocks: Vec<ContextBlock>,
+    replacements: Vec<(Range<usize>, ContextBlock)>,
+    report: ModelContextCompactionReport,
+}
+
+impl ModelContextCompactionPlan {
+    /// Constructs a no-op plan that preserves the supplied provider projection.
+    fn unchanged(blocks: &[ContextBlock], report: ModelContextCompactionReport) -> Self {
+        Self {
+            blocks: blocks.to_vec(),
+            replacements: Vec::new(),
+            report,
+        }
+    }
+}
+
+/// Mutable state accumulated while contiguous compactable runs are planned.
+struct ModelContextCompactionRun {
+    prepared: Vec<ContextBlock>,
+    pending: Vec<ContextBlock>,
+    pending_ranges: Vec<Range<usize>>,
+    replacements: Vec<(Range<usize>, ContextBlock)>,
+    report: ModelContextCompactionReport,
+}
 
 /// Compacts provider-bound context with the default retained-tail percentage.
 pub fn compact_model_context_for_budget(
@@ -36,16 +66,52 @@ pub fn compact_model_context_for_budget_with_retained_tail_percent(
     context_budget_words: usize,
     retained_tail_percent: usize,
 ) -> AgentContextResult<(AgentContext, ModelContextCompactionReport)> {
+    let consumed_sequence_high_water = context.event_sequence_high_water_mark();
+    compact_model_context_for_budget_at_consumed_sequence(
+        context,
+        context_budget_words,
+        retained_tail_percent,
+        consumed_sequence_high_water,
+    )
+}
+
+/// Compacts one provider-consumed context snapshot at an explicit causal
+/// boundary.
+///
+/// Events committed after `consumed_sequence_high_water` remain raw even when
+/// the caller's stored context already contains them. Runtime recovery uses the
+/// high-water mark captured by the rejected provider request so concurrent
+/// steering, messages, and action results cannot be swept into an older
+/// request's compaction epoch.
+pub fn compact_model_context_for_budget_at_consumed_sequence(
+    context: AgentContext,
+    context_budget_words: usize,
+    retained_tail_percent: usize,
+    consumed_sequence_high_water: u64,
+) -> AgentContextResult<(AgentContext, ModelContextCompactionReport)> {
     context.validate_durable()?;
-    let (blocks, report) = compact_model_context_blocks(
-        context.blocks(),
+    let ModelContextCompactionPlan {
+        blocks,
+        replacements,
+        report,
+    } = compact_model_context_blocks(
+        &context,
         context_budget_words,
         true,
         retained_tail_percent,
+        consumed_sequence_high_water,
     )?;
-    AgentContext::new_durable(blocks)
-        .map(|compacted| compacted.with_metadata(context.metadata().clone()))
-        .map(|context| (context, report))
+    if replacements.is_empty() {
+        return Ok((context, report));
+    }
+    let mut compacted = context;
+    compacted.compact_execution_ranges(replacements)?;
+    if compacted.blocks() != blocks {
+        return Err(AgentContextError::new(
+            "typed compaction projection differs from the validated compaction plan",
+        ));
+    }
+    Ok((compacted, report))
 }
 
 /// Counts whitespace-delimited words for context budgeting.
@@ -55,20 +121,22 @@ pub fn model_context_text_word_count(value: &str) -> usize {
 
 /// Applies summary-plus-tail compaction to ordered context blocks.
 fn compact_model_context_blocks(
-    blocks: &[ContextBlock],
+    context: &AgentContext,
     context_budget_words: usize,
     force: bool,
     retained_tail_percent: usize,
-) -> AgentContextResult<(Vec<ContextBlock>, ModelContextCompactionReport)> {
+    consumed_sequence_high_water: u64,
+) -> AgentContextResult<ModelContextCompactionPlan> {
+    let blocks = context.blocks();
     let retained_tail_percent =
         normalize_model_context_retained_tail_percent(retained_tail_percent);
-    let mut report = ModelContextCompactionReport::default();
+    let report = ModelContextCompactionReport::default();
     let total_words = model_context_total_words(blocks);
     let oversized_block_present = blocks
         .iter()
         .any(|block| block.content.len() > MODEL_CONTEXT_BLOCK_LIMIT_BYTES);
     if !force && total_words <= context_budget_words && !oversized_block_present {
-        return Ok((blocks.to_vec(), report));
+        return Ok(ModelContextCompactionPlan::unchanged(blocks, report));
     }
 
     let stable_prefix = blocks
@@ -95,7 +163,7 @@ fn compact_model_context_blocks(
             "unrecoverable model context overflow: protected exact context requires {protected_words} words but provider budget is {context_budget_words}; direct user and task instructions cannot be truncated or summarized"
         )));
     }
-    let execution_groups = model_context_execution_group_ranges(&immutable_chronology);
+    let execution_groups = model_context_execution_group_ranges(context);
     let eligible_groups = execution_groups
         .iter()
         .enumerate()
@@ -103,11 +171,16 @@ fn compact_model_context_blocks(
             !immutable_chronology[(*group).clone()]
                 .iter()
                 .any(model_context_block_is_protected_barrier)
+                && model_context_group_is_closed_and_consumed(
+                    context,
+                    group,
+                    consumed_sequence_high_water,
+                )
         })
         .map(|(index, _)| index)
         .collect::<Vec<_>>();
     if eligible_groups.is_empty() {
-        return Ok((blocks.to_vec(), report));
+        return Ok(ModelContextCompactionPlan::unchanged(blocks, report));
     }
     let tail_budget =
         model_context_retained_tail_budget_words(context_budget_words, retained_tail_percent);
@@ -125,103 +198,135 @@ fn compact_model_context_blocks(
                 .cloned()
         })
         .collect::<Vec<_>>();
-    let mut prepared = Vec::with_capacity(blocks.len().saturating_add(execution_groups.len()));
-    prepared.extend(stable_prefix);
-    let mut pending_compacted = Vec::new();
+    let mut run = ModelContextCompactionRun {
+        prepared: Vec::with_capacity(blocks.len().saturating_add(execution_groups.len())),
+        pending: Vec::new(),
+        pending_ranges: Vec::new(),
+        replacements: Vec::new(),
+        report,
+    };
+    run.prepared.extend(stable_prefix);
     for (group_index, group) in execution_groups.iter().enumerate() {
         let group_blocks = &immutable_chronology[group.clone()];
         let protected = group_blocks
             .iter()
             .any(model_context_block_is_protected_barrier);
-        if !protected && !retained_groups.contains(&group_index) {
-            pending_compacted.extend(group_blocks.iter().cloned());
+        if eligible_groups.contains(&group_index)
+            && !protected
+            && !retained_groups.contains(&group_index)
+        {
+            run.pending.extend(group_blocks.iter().cloned());
+            run.pending_ranges.push(group.clone());
             continue;
         }
-        flush_compacted_context_run(
-            &mut prepared,
-            &mut pending_compacted,
-            &retained_tail,
-            tail_budget,
-            retained_tail_percent,
-            &mut report,
-        );
-        prepared.extend(group_blocks.iter().cloned());
+        flush_compacted_context_run(&mut run, &retained_tail, tail_budget, retained_tail_percent);
+        run.prepared.extend(group_blocks.iter().cloned());
     }
-    flush_compacted_context_run(
-        &mut prepared,
-        &mut pending_compacted,
-        &retained_tail,
-        tail_budget,
-        retained_tail_percent,
-        &mut report,
-    );
-    if report.compacted_blocks == 0 {
-        return Ok((blocks.to_vec(), report));
+    flush_compacted_context_run(&mut run, &retained_tail, tail_budget, retained_tail_percent);
+    if run.report.compacted_blocks == 0 {
+        return Ok(ModelContextCompactionPlan::unchanged(blocks, run.report));
     }
-    let compacted_words = model_context_total_words(&prepared);
+    let compacted_words = model_context_total_words(&run.prepared);
     if compacted_words > context_budget_words {
         return Err(AgentContextError::new(format!(
             "unrecoverable model context overflow: minimum barrier-preserving compacted context requires {compacted_words} words but provider budget is {context_budget_words}"
         )));
     }
 
-    Ok((prepared, report))
+    Ok(ModelContextCompactionPlan {
+        blocks: run.prepared,
+        replacements: run.replacements,
+        report: run.report,
+    })
+}
+
+/// Returns whether one compactable segment is causally closed at the frozen
+/// provider-consumed sequence boundary.
+fn model_context_group_is_closed_and_consumed(
+    context: &AgentContext,
+    group: &Range<usize>,
+    consumed_sequence_high_water: u64,
+) -> bool {
+    let events = context.chronology();
+    if events[group.clone()].iter().any(|event| {
+        event.sequence().get() > consumed_sequence_high_water || !event.recoverable_for_compaction()
+    }) {
+        return false;
+    }
+    let Some(group_id) = events[group.start].execution_group_id() else {
+        return true;
+    };
+    if group.end >= events.len()
+        && !events[group.clone()]
+            .iter()
+            .any(|event| event.semantic_kind() == ContextSemanticKind::EvidenceEvent)
+    {
+        return false;
+    }
+    !events[..group.start]
+        .iter()
+        .chain(events[group.end..].iter())
+        .any(|event| event.execution_group_id() == Some(group_id))
 }
 
 /// Emits one compacted summary at the original position of its replaced run.
 fn flush_compacted_context_run(
-    prepared: &mut Vec<ContextBlock>,
-    pending: &mut Vec<ContextBlock>,
+    run: &mut ModelContextCompactionRun,
     retained_tail: &[ContextBlock],
     tail_budget_words: usize,
     retained_tail_percent: usize,
-    report: &mut ModelContextCompactionReport,
 ) {
-    if pending.is_empty() {
+    if run.pending.is_empty() {
         return;
     }
-    report.compacted_blocks = report.compacted_blocks.saturating_add(pending.len());
-    prepared.push(bulk_compacted_model_context_block(
-        pending,
+    run.report.compacted_blocks = run
+        .report
+        .compacted_blocks
+        .saturating_add(run.pending.len());
+    let summary = bulk_compacted_model_context_block(
+        &run.pending,
         retained_tail,
         tail_budget_words,
         retained_tail_percent,
-    ));
-    pending.clear();
+    );
+    let replacement_range = run
+        .pending_ranges
+        .first()
+        .expect("pending compacted blocks require a source range")
+        .start
+        ..run
+            .pending_ranges
+            .last()
+            .expect("pending compacted blocks require a source range")
+            .end;
+    run.prepared.push(summary.clone());
+    run.replacements.push((replacement_range, summary));
+    run.pending.clear();
+    run.pending_ranges.clear();
 }
 
-/// Groups immutable chronology at indivisible provider-execution boundaries.
+/// Groups typed chronology at indivisible provider-execution boundaries.
 ///
-/// Assistant output starts an execution group and all immediately following
-/// native tool events and settled action results remain in that group. Other
-/// chronology blocks begin independent groups, which gives the compactor safe
-/// prefix and raw-suffix boundaries without embedding product turn state.
-fn model_context_execution_group_ranges(blocks: &[ContextBlock]) -> Vec<Range<usize>> {
+/// Explicit execution-group identity is the sole ownership signal. Exact task,
+/// prompt, steering, and message events have no group and form their own
+/// barriers, so the compactor cannot infer attachment from labels or source
+/// adjacency after an event has committed.
+fn model_context_execution_group_ranges(context: &AgentContext) -> Vec<Range<usize>> {
+    let events = context.chronology();
     let mut groups = Vec::new();
     let mut start = 0usize;
-    let mut has_assistant = false;
-    let mut has_native_tool = false;
-    for (index, block) in blocks.iter().enumerate() {
-        let protected = model_context_block_is_protected_barrier(block);
-        let attaches_to_previous = match block.source {
-            ContextSourceKind::TranscriptTool => has_assistant,
-            ContextSourceKind::ActionResult => has_assistant || has_native_tool,
-            _ => false,
-        };
-        let current_group_protected = blocks[start..index]
-            .iter()
-            .any(model_context_block_is_protected_barrier);
-        if index > start && (protected || current_group_protected || !attaches_to_previous) {
+    for index in 1..events.len() {
+        let previous = &events[index - 1];
+        let current = &events[index];
+        let same_execution_group = previous.execution_group_id().is_some()
+            && previous.execution_group_id() == current.execution_group_id();
+        if !same_execution_group {
             groups.push(start..index);
             start = index;
-            has_assistant = false;
-            has_native_tool = false;
         }
-        has_assistant |= block.source == ContextSourceKind::TranscriptAssistant;
-        has_native_tool |= block.source == ContextSourceKind::TranscriptTool;
     }
-    if start < blocks.len() {
-        groups.push(start..blocks.len());
+    if start < events.len() {
+        groups.push(start..events.len());
     }
     groups
 }
@@ -319,25 +424,21 @@ fn bulk_compacted_model_context_block(
             "retained_tail_percent={}",
             normalize_model_context_retained_tail_percent(retained_tail_percent)
         ),
-        "Compacted block inventory:".to_string(),
+        "Semantic recovery records:".to_string(),
     ];
-    for (index, block) in compacted_blocks.iter().take(64).enumerate() {
+    for (index, block) in compacted_blocks.iter().enumerate() {
         lines.push(format!(
-            "{}. source={} label={} original_words={}",
+            "{}. source={} label={} categories={} summary={:?} original_words={}",
             index.saturating_add(1),
             model_context_source_kind_name(block.source),
             model_context_single_line(&block.label),
+            model_context_semantic_categories(block),
+            model_context_semantic_excerpt(&block.content),
             model_context_block_words(block)
         ));
     }
-    if compacted_blocks.len() > 64 {
-        lines.push(format!(
-            "... {} additional compacted blocks omitted from inventory",
-            compacted_blocks.len().saturating_sub(64)
-        ));
-    }
     lines.push(
-        "Exact compacted content was omitted. Use targeted read/search/capture actions if details are needed."
+        "Every replaced source record is indexed above. These records preserve decision-relevant semantics, not exact source bytes. Recover exact details from transcript, action, memory, or artifact storage with targeted read/search/capture actions before relying on an excerpted detail."
             .to_string(),
     );
     ContextBlock {
@@ -346,6 +447,103 @@ fn bulk_compacted_model_context_block(
         label: "context compaction summary".to_string(),
         content: lines.join("\n"),
     }
+}
+
+/// Classifies decision-relevant semantics retained by one compacted record.
+fn model_context_semantic_categories(block: &ContextBlock) -> String {
+    let normalized = block.content.to_ascii_lowercase();
+    let mut categories = Vec::new();
+    match block.source {
+        ContextSourceKind::TranscriptAssistant => categories.push("decision"),
+        ContextSourceKind::TranscriptTool
+        | ContextSourceKind::ActionResult
+        | ContextSourceKind::CommittedEvidence
+        | ContextSourceKind::RoutedHandoff => categories.push("outcome"),
+        _ => categories.push("fact"),
+    }
+    if ["error", "failed", "failure", "denied", "blocked"]
+        .iter()
+        .any(|needle| normalized.contains(needle))
+    {
+        categories.push("error");
+    }
+    if [
+        "artifact", "path=", "file=", "commit", "created ", "updated ",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
+    {
+        categories.push("artifact");
+    }
+    if ["unresolved", "remaining", "pending", "todo", "follow up"]
+        .iter()
+        .any(|needle| normalized.contains(needle))
+    {
+        categories.push("unresolved");
+    }
+    categories.join(",")
+}
+
+/// Extracts a bounded semantic excerpt, prioritizing lines that encode errors,
+/// decisions, artifacts, outcomes, or unresolved obligations.
+fn model_context_semantic_excerpt(content: &str) -> String {
+    const MAX_EXCERPT_CHARS: usize = 120;
+    const MAX_EXCERPT_LINES: usize = 6;
+    const IMPORTANT_TERMS: [&str; 19] = [
+        "decision",
+        "error",
+        "failed",
+        "failure",
+        "denied",
+        "blocked",
+        "status",
+        "result",
+        "output",
+        "command",
+        "artifact",
+        "path",
+        "file",
+        "commit",
+        "created",
+        "updated",
+        "unresolved",
+        "remaining",
+        "pending",
+    ];
+    let normalized_lines = content
+        .lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let mut selected = Vec::new();
+    for line in &normalized_lines {
+        let normalized = line.to_ascii_lowercase();
+        if IMPORTANT_TERMS
+            .iter()
+            .any(|needle| normalized.contains(needle))
+            && !selected.contains(line)
+        {
+            selected.push(line.clone());
+            if selected.len() == MAX_EXCERPT_LINES {
+                break;
+            }
+        }
+    }
+    for line in &normalized_lines {
+        if selected.len() == MAX_EXCERPT_LINES {
+            break;
+        }
+        if !selected.contains(line) {
+            selected.push(line.clone());
+        }
+    }
+    let excerpt = selected.join(" | ");
+    if excerpt.chars().count() <= MAX_EXCERPT_CHARS {
+        return excerpt;
+    }
+    let mut bounded = excerpt.chars().take(MAX_EXCERPT_CHARS).collect::<String>();
+    bounded.push('…');
+    bounded
 }
 
 /// Returns a stable source label for compaction diagnostics.
@@ -379,6 +577,123 @@ fn model_context_single_line(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ContextExecutionGroupId;
+
+    /// Verifies an older provider request cannot compact events committed after
+    /// the exact chronology boundary that request consumed.
+    #[test]
+    fn context_compaction_freezes_at_explicit_provider_consumed_sequence() {
+        let mut context = AgentContext::new_durable(vec![ContextBlock::user_event(
+            "user prompt",
+            "continue the task",
+        )])
+        .unwrap();
+        let consumed_group = ContextExecutionGroupId::new("consumed-group").unwrap();
+        context
+            .append_assistant_event(
+                "consumed assistant action",
+                format!("inspect old state {}", "history ".repeat(3_000)),
+                consumed_group.clone(),
+            )
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "consumed action result",
+                format!("old result {}", "evidence ".repeat(3_000)),
+                consumed_group,
+                None,
+                true,
+            )
+            .unwrap();
+        let consumed_sequence_high_water = context.event_sequence_high_water_mark();
+        let newer_group = ContextExecutionGroupId::new("newer-group").unwrap();
+        context
+            .append_assistant_event(
+                "newer assistant action",
+                "inspect state committed after the rejected request",
+                newer_group.clone(),
+            )
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "newer action result",
+                "new result must remain byte-exact",
+                newer_group,
+                None,
+                true,
+            )
+            .unwrap();
+        let newer_events = context.chronology()[3..].to_vec();
+
+        let (compacted, report) = compact_model_context_for_budget_at_consumed_sequence(
+            context,
+            1_000,
+            1,
+            consumed_sequence_high_water,
+        )
+        .unwrap();
+
+        assert!(report.changed());
+        assert_eq!(&compacted.chronology()[2..], newer_events.as_slice());
+        assert_eq!(
+            compacted.chronology()[1].block().label,
+            "context compaction summary"
+        );
+    }
+
+    /// Verifies one causal execution owner may straddle steering while the
+    /// compactor refuses to join either side into a replacement range.
+    #[test]
+    fn context_compaction_never_crosses_steering_for_straddling_execution_owner() {
+        let mut context = AgentContext::new_durable(vec![ContextBlock::user_event(
+            "user prompt",
+            "run the action",
+        )])
+        .unwrap();
+        let group = ContextExecutionGroupId::new("straddling-action").unwrap();
+        context
+            .append_assistant_event(
+                "assistant action",
+                format!("long action request {}", "request ".repeat(2_000)),
+                group.clone(),
+            )
+            .unwrap();
+        context
+            .append_user_event("user steering", "preserve executed action evidence")
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "action result after steering",
+                format!("executed result {}", "result ".repeat(2_000)),
+                group,
+                None,
+                true,
+            )
+            .unwrap();
+        let original = context.clone();
+
+        let (compacted, report) =
+            compact_model_context_for_budget_with_retained_tail_percent(context, 500, 1).unwrap();
+
+        assert!(!report.changed());
+        assert_eq!(compacted, original);
+        assert_eq!(
+            compacted
+                .chronology()
+                .iter()
+                .map(|event| event.block().label.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "user prompt",
+                "assistant action",
+                "user steering",
+                "action result after steering",
+            ]
+        );
+    }
 
     /// Verifies explicit bulk compaction prefers older recoverable history
     /// before the recent context tail.
@@ -441,6 +756,10 @@ mod tests {
                 content: "old unrelated context ".repeat(20),
             });
         }
+        blocks.push(ContextBlock::assistant_event(
+            "assistant response a1",
+            "run the current verification action",
+        ));
         blocks.push(ContextBlock {
             source: ContextSourceKind::ActionResult,
             placement: crate::ContextPlacement::ConversationAppend,
@@ -453,7 +772,7 @@ mod tests {
 
         let (context, report) = compact_model_context_for_budget_with_retained_tail_percent(
             AgentContext::new(blocks).unwrap(),
-            600,
+            1_200,
             10,
         )
         .unwrap();
@@ -550,10 +869,10 @@ mod tests {
         }
 
         let (second, second_report) =
-            compact_model_context_for_budget_with_retained_tail_percent(first.clone(), 600, 10)
+            compact_model_context_for_budget_with_retained_tail_percent(first.clone(), 1_200, 10)
                 .unwrap();
         let (repeated, repeated_report) =
-            compact_model_context_for_budget_with_retained_tail_percent(first, 600, 10).unwrap();
+            compact_model_context_for_budget_with_retained_tail_percent(first, 1_200, 10).unwrap();
 
         assert!(second_report.changed());
         assert_eq!(second.blocks(), repeated.blocks());
@@ -677,12 +996,21 @@ mod tests {
             crate::ContextContinuityBreakReason::Compaction
         );
         let compacted_snapshot = compacted_diagnostics.snapshot;
+        let after_compaction_group =
+            crate::ContextExecutionGroupId::new("after-compaction").unwrap();
+        compacted
+            .append_assistant_event(
+                "assistant response after-compaction",
+                "record newly settled evidence",
+                after_compaction_group.clone(),
+            )
+            .unwrap();
         compacted
             .append_evidence_event(
                 ContextSourceKind::ActionResult,
                 "action result after-compaction",
                 "new settled evidence",
-                crate::ContextExecutionGroupId::new("after-compaction").unwrap(),
+                after_compaction_group,
                 None,
                 true,
             )
@@ -735,12 +1063,15 @@ mod tests {
         blocks.push(steering.clone());
         blocks.extend(second_execution);
 
-        let (first, report) = compact_model_context_for_budget_with_retained_tail_percent(
-            AgentContext::new_durable(blocks).unwrap(),
-            1_000,
-            1,
-        )
-        .unwrap();
+        let original = AgentContext::new_durable(blocks).unwrap();
+        let original_sequences = original
+            .chronology()
+            .iter()
+            .map(|event| event.sequence().get())
+            .collect::<Vec<_>>();
+        let (first, report) =
+            compact_model_context_for_budget_with_retained_tail_percent(original, 1_000, 1)
+                .unwrap();
 
         assert_eq!(report.compacted_blocks, 4);
         assert_eq!(first.blocks()[0], prompt);
@@ -751,12 +1082,67 @@ mod tests {
         assert!(model_context_block_is_compaction_summary(
             &first.blocks()[3]
         ));
+        assert_eq!(
+            first
+                .chronology()
+                .iter()
+                .map(|event| event.sequence().get())
+                .collect::<Vec<_>>(),
+            vec![
+                original_sequences[0],
+                original_sequences[1],
+                original_sequences[3],
+                original_sequences[4]
+            ]
+        );
 
         let (second, repeated_report) =
             compact_model_context_for_budget_with_retained_tail_percent(first.clone(), 1_000, 1)
                 .unwrap();
         assert!(!repeated_report.changed());
         assert_eq!(second.blocks(), first.blocks());
+    }
+
+    /// Verifies deterministic compaction preserves decision-relevant semantics
+    /// instead of emitting only labels and word counts.
+    #[test]
+    fn context_compaction_summary_retains_semantic_recovery_records() {
+        let blocks = vec![
+            ContextBlock::assistant_event(
+                "assistant decision",
+                format!(
+                    "Decision: use the actor reducer. Updated file=src/runtime.rs commit=abc123. {}",
+                    "reasoning ".repeat(120)
+                ),
+            ),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "action result failed-check",
+                format!(
+                    "status=failed error=clippy rejected the change. Remaining: fix the pending lint. artifact path=src/runtime.rs {}",
+                    "diagnostic ".repeat(120)
+                ),
+            ),
+            ContextBlock::user_event("user steering", "preserve the exact causal boundary"),
+        ];
+
+        let (compacted, report) = compact_model_context_for_budget_with_retained_tail_percent(
+            AgentContext::new_durable(blocks).unwrap(),
+            1_000,
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(report.compacted_blocks, 2);
+        let summary = &compacted.blocks()[0].content;
+        assert!(summary.contains("Semantic recovery records:"));
+        assert!(summary.contains("categories=decision,artifact"));
+        assert!(summary.contains("categories=outcome,error,artifact,unresolved"));
+        assert!(summary.contains("Decision: use the actor reducer"));
+        assert!(summary.contains("error=clippy rejected the change"));
+        assert!(summary.contains("Remaining: fix the pending lint"));
+        assert!(summary.contains("path=src/runtime.rs"));
+        assert_eq!(compacted.blocks()[1].label, "user steering");
     }
 
     /// Verifies protected task context that cannot fit fails explicitly.

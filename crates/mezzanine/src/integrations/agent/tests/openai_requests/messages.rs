@@ -372,6 +372,7 @@ fn openai_responses_request_body_marks_action_results_as_execution_evidence() {
                 label: "user".to_string(),
                 content: "verify the plan file exists".to_string(),
             },
+            ContextBlock::assistant_event("assistant shell action", "requested action-1"),
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
                 placement: mez_agent::ContextPlacement::ConversationAppend,

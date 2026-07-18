@@ -9,8 +9,10 @@ use crate::instructions::DiscoveredInstructionFile;
 use crate::{
     AgentContext, AgentContextResult, ContextBlock, ContextRetention, ContextSemanticKind,
     ContextSourceKind, McpPromptServer, McpPromptSummary, McpPromptTool,
-    McpPromptUnavailableServer, MemoryContextRecord, validate_context_required,
+    McpPromptUnavailableServer, MemoryContextRecord, StableContextBlock, StableContextSlotId,
+    StableContextSourceFingerprint, validate_context_required,
 };
+use sha2::{Digest, Sha256};
 
 /// Appends selected memory records to provider-bound context.
 ///
@@ -79,7 +81,7 @@ pub fn append_mcp_context(
     mut context: AgentContext,
     summary: &McpPromptSummary,
 ) -> AgentContextResult<AgentContext> {
-    context.retain_blocks(|block| !is_mcp_context_block(block));
+    context.retain_blocks(|block| !is_mcp_context_block(block))?;
     let invocation = explicit_mcp_invocation_summary(&context, summary);
     if invocation.available_servers.is_empty()
         && invocation.available_tools.is_empty()
@@ -102,7 +104,7 @@ pub fn append_mcp_context_for_provider(
     summary: &McpPromptSummary,
     provider: &str,
 ) -> AgentContextResult<AgentContext> {
-    context.retain_blocks(|block| !is_mcp_context_block(block));
+    context.retain_blocks(|block| !is_mcp_context_block(block))?;
     let invocation = explicit_mcp_invocation_summary(&context, summary);
     append_filtered_mcp_context(context, &invocation, provider == "openai")
 }
@@ -575,41 +577,63 @@ pub fn append_project_guidance_context(
     if max_files == 0 || files.is_empty() {
         return Ok(context);
     }
+    let slots = project_guidance_stable_slots(files, max_files)?;
+    context.replace_stable_source_slots(ContextSourceKind::ProjectGuidance, slots)?;
+    context.revalidate()
+}
 
-    let mut guidance_blocks = Vec::new();
+/// Builds the single named stable slot that owns active project guidance.
+fn project_guidance_stable_slots(
+    files: &[DiscoveredInstructionFile],
+    max_files: usize,
+) -> AgentContextResult<Vec<StableContextBlock>> {
     let mut selected_files = files.to_vec();
     selected_files.sort_by(|left, right| {
         left.scope_root
             .cmp(&right.scope_root)
             .then_with(|| left.path.cmp(&right.path))
     });
-
-    for file in selected_files.iter().take(max_files) {
+    selected_files.truncate(max_files);
+    selected_files.retain(|file| !file.content.is_empty());
+    if selected_files.is_empty() {
+        return Ok(Vec::new());
+    }
+    for file in &selected_files {
         validate_context_required("project instruction path", &file.path)?;
         validate_context_required("project instruction scope", &file.scope_root)?;
-        if file.content.is_empty() {
-            continue;
+    }
+
+    let content = selected_files
+        .iter()
+        .map(project_guidance_context_content)
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let mut source_material = Vec::new();
+    for file in &selected_files {
+        for field in [
+            file.path.as_bytes(),
+            file.scope_root.as_bytes(),
+            file.content.as_bytes(),
+        ] {
+            source_material.extend_from_slice(&(field.len() as u64).to_be_bytes());
+            source_material.extend_from_slice(field);
         }
-        let truncated = if file.truncated { " truncated" } else { "" };
-        guidance_blocks.push(ContextBlock {
-            source: ContextSourceKind::ProjectGuidance,
-            placement: crate::ContextPlacement::StablePrefix,
-            label: format!(
-                "active repository instructions (scope {}, {} bytes{})",
-                file.scope_root, file.bytes, truncated
-            ),
-            content: project_guidance_context_content(file),
-        });
+        source_material.extend_from_slice(&(file.bytes as u64).to_be_bytes());
+        source_material.push(u8::from(file.truncated));
     }
-    for block in guidance_blocks {
-        context.insert_typed_block(
-            block,
-            ContextSemanticKind::AmbientInstruction,
-            ContextRetention::Exact,
-            false,
-        )?;
-    }
-    context.revalidate()
+    let fingerprint = Sha256::digest(&source_material)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    Ok(vec![StableContextBlock::new(
+        StableContextSlotId::new("project-guidance")?,
+        StableContextSourceFingerprint::new(fingerprint)?,
+        ContextBlock::stable_instruction(
+            ContextSourceKind::ProjectGuidance,
+            "active repository instructions",
+            content,
+        ),
+    )?])
 }
 
 /// Builds the model-facing body for one project instruction file.
@@ -644,8 +668,9 @@ pub fn set_project_guidance_context(
     files: &[DiscoveredInstructionFile],
     max_files: usize,
 ) -> AgentContextResult<AgentContext> {
-    context.retain_blocks(|block| block.source != ContextSourceKind::ProjectGuidance);
-    append_project_guidance_context(context, files, max_files)
+    let slots = project_guidance_stable_slots(files, max_files)?;
+    context.replace_stable_source_slots(ContextSourceKind::ProjectGuidance, slots)?;
+    context.revalidate()
 }
 
 /// Leaves runtime permission policy out of model-visible task context.

@@ -50,25 +50,21 @@ fn project_guidance_context_is_inserted_before_user_prompt() {
         context.blocks()[1].source,
         ContextSourceKind::ProjectGuidance
     );
-    assert_eq!(
-        context.blocks()[2].source,
-        ContextSourceKind::ProjectGuidance
+    assert_eq!(context.blocks()[1].label, "active repository instructions");
+    assert!(!context.blocks()[1].label.contains("AGENTS.md"));
+    assert!(
+        context.blocks()[1]
+            .content
+            .contains(r#"<repository_instructions scope=".""#)
     );
     assert!(
         context.blocks()[1]
-            .label
-            .starts_with("active repository instructions (scope .")
+            .content
+            .contains(r#"<repository_instructions scope="./src""#)
     );
-    assert!(
-        context.blocks()[2]
-            .label
-            .starts_with("active repository instructions (scope ./src")
-    );
-    assert!(!context.blocks()[1].label.contains("AGENTS.md"));
-    assert!(!context.blocks()[2].label.contains("AGENTS.md"));
-    assert!(context.blocks()[2].label.contains("truncated"));
+    assert!(context.blocks()[1].content.contains("truncated=\"true\""));
     assert_eq!(
-        context.blocks()[3].source,
+        context.blocks()[2].source,
         ContextSourceKind::UserInstruction
     );
 }
@@ -179,6 +175,86 @@ fn project_guidance_context_replaces_existing_guidance_blocks() {
 }
 
 #[test]
+/// Verifies repeated discovery of byte-identical repository instructions is an
+/// exact stable-slot no-op.
+///
+/// Provider continuations refresh guidance before every request. Reconstructing
+/// or relocating an unchanged block would make cache lineage appear unstable
+/// even though the governing source did not change.
+fn project_guidance_context_noop_refresh_preserves_slot_and_fingerprint() {
+    let files = vec![DiscoveredInstructionFile {
+        path: "./AGENTS.md".to_string(),
+        scope_root: ".".to_string(),
+        bytes: 15,
+        truncated: false,
+        content: "stable guidance".to_string(),
+    }];
+    let original = set_project_guidance_context(
+        AgentContext::new(vec![ContextBlock::user_event("user", "do the task")]).unwrap(),
+        &files,
+        2,
+    )
+    .unwrap();
+    let fingerprint = original
+        .stable_slot_source_fingerprint("project-guidance")
+        .unwrap()
+        .clone();
+
+    let refreshed = set_project_guidance_context(original.clone(), &files, 2).unwrap();
+
+    assert_eq!(refreshed, original);
+    assert_eq!(
+        refreshed
+            .stable_slot_source_fingerprint("project-guidance")
+            .unwrap(),
+        &fingerprint
+    );
+}
+
+#[test]
+/// Verifies a real guidance change replaces the named slot at its original
+/// prefix anchor and records a new source fingerprint.
+fn project_guidance_context_change_rewrites_only_reserved_slot() {
+    let before_files = vec![DiscoveredInstructionFile {
+        path: "./AGENTS.md".to_string(),
+        scope_root: ".".to_string(),
+        bytes: 14,
+        truncated: false,
+        content: "old guidance".to_string(),
+    }];
+    let after_files = vec![DiscoveredInstructionFile {
+        path: "./AGENTS.md".to_string(),
+        scope_root: ".".to_string(),
+        bytes: 14,
+        truncated: false,
+        content: "new guidance".to_string(),
+    }];
+    let base = AgentContext::new(vec![
+        ContextBlock::stable_instruction(ContextSourceKind::Policy, "policy", "stay safe"),
+        ContextBlock::user_event("user", "do the task"),
+    ])
+    .unwrap();
+    let before = set_project_guidance_context(base, &before_files, 2).unwrap();
+    let old_fingerprint = before
+        .stable_slot_source_fingerprint("project-guidance")
+        .unwrap()
+        .clone();
+
+    let after = set_project_guidance_context(before, &after_files, 2).unwrap();
+
+    assert_eq!(after.blocks()[0].label, "policy");
+    assert_eq!(after.blocks()[1].label, "active repository instructions");
+    assert!(after.blocks()[1].content.contains("new guidance"));
+    assert_eq!(after.blocks()[2].label, "user");
+    assert_ne!(
+        after
+            .stable_slot_source_fingerprint("project-guidance")
+            .unwrap(),
+        &old_fingerprint
+    );
+}
+
+#[test]
 /// Verifies project guidance context respects file limit and skips empty content.
 ///
 /// This regression scenario documents the behavior being protected so a
@@ -216,11 +292,7 @@ fn project_guidance_context_respects_file_limit_and_skips_empty_content() {
         context.blocks()[0].source,
         ContextSourceKind::ProjectGuidance
     );
-    assert!(
-        context.blocks()[0]
-            .label
-            .starts_with("active repository instructions (scope ./src")
-    );
+    assert_eq!(context.blocks()[0].label, "active repository instructions");
     assert!(!context.blocks()[0].label.contains("AGENTS.md"));
     assert!(
         context.blocks()[0]

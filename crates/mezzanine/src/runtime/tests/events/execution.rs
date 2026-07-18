@@ -367,6 +367,7 @@ fn runtime_action_failure_retry_budget_is_per_failed_action() {
         terminal_state: AgentTurnState::Failed,
     };
 
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
     let queued = service
         .queue_agent_failure_feedback_for_correction(
             &turn,

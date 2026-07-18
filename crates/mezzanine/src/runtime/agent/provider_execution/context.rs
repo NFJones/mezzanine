@@ -15,7 +15,7 @@ impl RuntimeSessionService {
     /// - `turn`: The running agent turn receiving the assistant context block.
     /// - `execution`: The provider execution whose rationale and visible
     ///   assistant text should remain available to later provider requests.
-    pub(super) fn append_agent_execution_assistant_context(
+    pub(crate) fn append_agent_execution_assistant_context(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,

@@ -24,19 +24,32 @@ non-user-authored.
 
 Validation rejects stable conversation events, append-only live state, tail
 events, false user authorship, task preludes inserted after the active prompt,
-and lifecycle regressions. It reports the offending block index, source,
-placement, semantic kind, retention, and rule. It never sorts malformed input.
+duplicate active prompts, non-increasing sequences, unowned evidence, invalid
+provider ownership, and lifecycle regressions. It reports the offending block
+index, source, placement, semantic kind, retention, and rule. It never sorts
+malformed input.
 
 ## Stored and prepared context
 
-Durable `AgentContext` stores only stable and append-only blocks. The initial
-sequence is built in explicit stages:
+Durable `AgentContext` stores named stable slots and sequenced append-only
+conversation events as distinct private types. Request-local state has a third
+type and never enters durable storage. Adapter-facing blocks and metadata are
+read-only projections rebuilt from typed storage. Checked mutations validate an
+isolated candidate before commit, so an error cannot expose a partial chronology
+or advance its event high-water mark. The initial sequence is built in explicit
+stages:
 
 1. stable authority and repository guidance;
 2. compacted older history and retained raw transcript;
 3. local messages that already arrived;
 4. task environment and active skill/task prelude;
 5. the exact user prompt, once.
+
+Event identities are sparse and monotonic. A running-turn compaction refresh
+may replace only the contiguous imported history prefix and allocate new history
+identities before the first retained event. The prompt and every later event
+keep their existing sequence and causal owner; insufficient sequence space is a
+typed atomic failure, not permission to renumber chronology.
 
 Memory and local/controller reference material remain neutral. Session id,
 cache lineage, and similar diagnostic identity travel as typed request metadata
@@ -53,25 +66,31 @@ occurrence boundaries. Steering preserves only the exact user text. The prompt
 is never repeated after its evidence and no adapter may relocate a later
 transport-level user message to the end.
 
+Every provider task claims the highest event sequence in the snapshot it
+consumed. Steering and local messages commit at actor receipt. A response from
+an older snapshot is discarded before its assistant output or proposed actions
+become visible. If an action was already dispatched, its later result remains
+after the steering event and retains its original causal owner; chronology is
+never rewritten to make that owner contiguous.
+
 ## Request-local allowlist
 
 Tail state is included only when it can change the correctness of the next
 response and no typed provider field or durable event already carries it:
 
-- abnormal pane readiness;
 - authoritative current working directory;
-- relevant write conflicts;
-- compact scheduler counts and agent identities needed for immediate
-  coordination;
-- OpenAI action-superset narrowing;
-- provider-required MCP manifest or unavailable-integration diagnostics; and
-- typed recovery-mode identity with bounded factual evidence.
+- OpenAI interaction/action narrowing because its cache-stable action schema is
+  intentionally a superset;
+- the explicitly invoked OpenAI MCP manifest that its stable generic MCP action
+  cannot express; and
+- concise unavailable-MCP diagnostics when the requested integration affects
+  the next response.
 
 The tail excludes prompt or steering events, action results, transcript,
-memory, skill instructions, full scheduler inventories, session/pane/cache
-identity, environment hashes, permission policy, progress/rationale ledgers,
-action pressure, generic failure coaching, resolved-skill hints, and duplicate
-MCP schemas.
+memory, skill instructions, readiness, write scopes/conflicts, scheduler state,
+retry/recovery counters or mode names, session/pane/cache identity, environment
+hashes, permission policy, progress/rationale ledgers, action pressure, generic
+failure coaching, resolved-skill hints, and duplicate MCP schemas.
 
 ## Settled action evidence
 
@@ -84,13 +103,15 @@ exactly once to `ConversationAppend`:
 - an existing identical result keeps its original position; and
 - replay does not duplicate or reorder evidence.
 
-Assistant output, provider-native tool events, and their settled results form
-one execution group. They remain complete and ordered during persistence and
-compaction.
+Assistant output, provider-native tool events, and their settled results share
+one causal execution owner. They remain complete and ordered during persistence
+and compaction. An owner may straddle steering when already-dispatched work
+settles later; that fact does not permit compaction to gather records across the
+barrier.
 
 ## Durable routed handoffs
 
-The parent presentation turn stores one versioned routed-handoff evidence event
+The parent presentation turn stores one versioned routed-handoff reference event
 immediately before the visible parent answer. The event contains the validated
 bounded handoff summary. Exact worker output and presentation-only instructions
 remain request-local. Malformed, unsupported, or ordinary system transcript
@@ -112,11 +133,19 @@ non-crossable barriers include:
 - delegated or routed task statements required to interpret the work; and
 - existing summary epochs.
 
-The compactor splits chronology at these barriers, forms closed execution
-groups inside each segment, and selects the oldest eligible groups. Each new
-summary replaces its original contiguous range in place. It cannot move across
-a task/user barrier. Protected blocks and existing epochs remain byte-for-byte
-stable. A configured recent raw suffix is retained only in complete groups.
+The compactor freezes the provider-consumed event high-water mark, splits that
+chronology at exact barriers, forms closed contiguous execution ranges inside
+each segment, and selects the oldest eligible ranges. Events committed after the
+consumed boundary remain raw. If one execution owner appears on both sides of a
+barrier, both fragments remain raw. Each new summary replaces its original
+contiguous range in place. It cannot move across a task/user barrier. Protected
+blocks and existing epochs remain byte-for-byte stable. A configured recent raw
+suffix is retained only in complete groups.
+
+Each summary contains a semantic recovery index accounting for every replaced
+record, including outcomes, errors, decisions, artifacts, unresolved
+obligations, and an exact recovery route. Content that cannot be safely
+recovered remains raw or produces typed unrecoverable overflow.
 
 Repeated compaction can therefore produce:
 

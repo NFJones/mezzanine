@@ -70,6 +70,12 @@ fn runtime_shell_dispatch_recovers_stale_interactive_blocked_readiness() {
             terminal_state: AgentTurnState::Running,
         },
     );
+    let execution = service
+        .agent_turn_executions()
+        .get(&turn.turn_id)
+        .cloned()
+        .unwrap();
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
     service.remove_pending_agent_provider_task(&turn.turn_id);
     service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
 
@@ -162,6 +168,12 @@ fn runtime_shell_dispatch_completes_pending_action_after_stale_interactive_block
             terminal_state: AgentTurnState::Running,
         },
     );
+    let execution = service
+        .agent_turn_executions()
+        .get(&turn.turn_id)
+        .cloned()
+        .unwrap();
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
     service.remove_pending_agent_provider_task(&turn.turn_id);
     service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
 

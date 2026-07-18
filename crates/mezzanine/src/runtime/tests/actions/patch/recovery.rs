@@ -94,6 +94,7 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
         terminal_state: AgentTurnState::Failed,
     };
 
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
     let queued = service
         .queue_agent_failure_feedback_for_correction(
             &turn,
@@ -227,6 +228,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_preserves_failure_evidence() {
         terminal_state: AgentTurnState::Failed,
     };
 
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
     let queued = service
         .queue_agent_failure_feedback_for_correction(
             &turn,
@@ -344,6 +346,7 @@ fn runtime_apply_patch_replacement_hint_recovery_preserves_diagnostic() {
         terminal_state: AgentTurnState::Failed,
     };
 
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
     assert!(
         service
             .queue_agent_failure_feedback_for_correction(
@@ -445,6 +448,7 @@ fn runtime_apply_patch_missing_anchor_recovery_preserves_diagnostic() {
         terminal_state: AgentTurnState::Failed,
     };
 
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
     assert!(
         service
             .queue_agent_failure_feedback_for_correction(
@@ -545,6 +549,7 @@ fn runtime_apply_patch_candidate_region_recovery_preserves_diagnostic() {
         terminal_state: AgentTurnState::Failed,
     };
 
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
     assert!(
         service
             .queue_agent_failure_feedback_for_correction(
@@ -796,6 +801,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_is_unbounded_and_hides_retry_budge
             "different provider wording"
         };
         let mut execution = build_execution(raw_text, &action_id);
+        append_test_execution_assistant_context(&mut service, &turn, &execution);
         assert!(
             service
                 .queue_agent_failure_feedback_for_correction(
@@ -922,6 +928,7 @@ fn runtime_apply_patch_unsafe_path_recovery_preserves_diagnostic() {
         terminal_state: AgentTurnState::Failed,
     };
 
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
     let queued = service
         .queue_agent_failure_feedback_for_correction(
             &turn,

@@ -368,6 +368,10 @@ fn model_request_does_not_generate_evidence_ledger_block() {
         label: "user".to_string(),
         content: "Continue from the existing command history.".to_string(),
     }];
+    blocks.push(ContextBlock::assistant_event(
+        "assistant command batch",
+        "run the recorded command batch",
+    ));
     for index in 0..8 {
         blocks.push(ContextBlock {
             source: ContextSourceKind::ActionResult,
@@ -499,13 +503,19 @@ fn model_request_keeps_skill_actions_disabled_after_skill_catalog_result() {
             safety_tier: None,
         },
         &turn(),
-        &AgentContext::new(vec![ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: crate::ContextPlacement::ConversationAppend,
-            label: "action result skill-catalog".to_string(),
-            content: "[action_result skill-catalog request_skills succeeded]\n- create-skill"
-                .to_string(),
-        }])
+        &AgentContext::new(vec![
+            ContextBlock::assistant_event(
+                "assistant skill catalog request",
+                "request the skill catalog",
+            ),
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: crate::ContextPlacement::ConversationAppend,
+                label: "action result skill-catalog".to_string(),
+                content: "[action_result skill-catalog request_skills succeeded]\n- create-skill"
+                    .to_string(),
+            },
+        ])
         .unwrap(),
     )
     .unwrap();
@@ -524,7 +534,10 @@ fn model_request_keeps_skill_actions_disabled_after_skill_catalog_result() {
 /// source of truth for context-size decisions, so normal request assembly should
 /// preserve recoverable action details and the newest task direction.
 fn model_request_preserves_action_results_before_provider_feedback() {
-    let mut blocks = Vec::new();
+    let mut blocks = vec![ContextBlock::assistant_event(
+        "assistant oversized action batch",
+        "run the requested actions",
+    )];
     for index in 0..6 {
         blocks.push(ContextBlock {
             source: ContextSourceKind::ActionResult,
@@ -604,34 +617,22 @@ fn model_request_rejects_context_lifecycle_regressions() {
     ];
 
     for (first, second) in regressions {
-        let error = assemble_model_request(
-            &ModelProfile {
-                provider: "openai".to_string(),
-                model: "default".to_string(),
-                reasoning_profile: None,
-                latency_preference: None,
-                multimodal_required: false,
-                provider_options: std::collections::BTreeMap::new(),
-                safety_tier: None,
+        let context_error = AgentContext::new(vec![
+            ContextBlock {
+                source: ContextSourceKind::RuntimeHint,
+                placement: first,
+                label: "first block".to_string(),
+                content: "first".to_string(),
             },
-            &turn(),
-            &AgentContext::new(vec![
-                ContextBlock {
-                    source: ContextSourceKind::RuntimeHint,
-                    placement: first,
-                    label: "first block".to_string(),
-                    content: "first".to_string(),
-                },
-                ContextBlock {
-                    source: ContextSourceKind::UserInstruction,
-                    placement: second,
-                    label: "regressing block".to_string(),
-                    content: "second".to_string(),
-                },
-            ])
-            .unwrap(),
-        )
+            ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                placement: second,
+                label: "regressing block".to_string(),
+                content: "second".to_string(),
+            },
+        ])
         .unwrap_err();
+        let error = crate::AgentRequestAssemblyError::from(context_error);
 
         assert_eq!(error.kind(), AgentRequestAssemblyErrorKind::InvalidArgs);
         assert!(error.message().contains("block index 1"));
@@ -672,6 +673,7 @@ fn model_request_preserves_context_observation_order() {
                 label: "project guidance".to_string(),
                 content: "stable guidance".to_string(),
             },
+            ContextBlock::assistant_event("assistant response", "produce the observed result"),
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
                 placement: crate::ContextPlacement::ConversationAppend,
@@ -698,6 +700,7 @@ fn model_request_preserves_context_observation_order() {
         sources,
         vec![
             ContextSourceKind::System,
+            ContextSourceKind::TranscriptAssistant,
             ContextSourceKind::ActionResult,
             ContextSourceKind::UserInstruction,
         ]
@@ -734,6 +737,10 @@ fn model_request_preserves_context_observation_order() {
                 label: "user".to_string(),
                 content: "verify the file exists".to_string(),
             },
+            ContextBlock::assistant_event(
+                "assistant verification action",
+                "verify the file before continuing",
+            ),
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
                 placement: crate::ContextPlacement::ConversationAppend,
@@ -755,6 +762,7 @@ fn model_request_preserves_context_observation_order() {
         vec![
             ContextSourceKind::System,
             ContextSourceKind::UserInstruction,
+            ContextSourceKind::TranscriptAssistant,
             ContextSourceKind::ActionResult,
         ]
     );
@@ -787,12 +795,18 @@ fn model_request_preserves_oversized_context_until_provider_feedback() {
             safety_tier: None,
         },
         &turn(),
-        &AgentContext::new(vec![ContextBlock {
-            source: ContextSourceKind::ActionResult,
-            placement: crate::ContextPlacement::ConversationAppend,
-            label: "action result".to_string(),
-            content: huge_content,
-        }])
+        &AgentContext::new(vec![
+            ContextBlock::assistant_event(
+                "assistant oversized action",
+                "run the action with large output",
+            ),
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: crate::ContextPlacement::ConversationAppend,
+                label: "action result".to_string(),
+                content: huge_content,
+            },
+        ])
         .unwrap(),
     )
     .unwrap();

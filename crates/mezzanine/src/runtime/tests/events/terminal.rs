@@ -632,6 +632,12 @@ fn runtime_pane_not_ready_stops_shell_batch_after_first_failure() {
         }])
         .unwrap(),
     );
+    let stored_execution = service
+        .agent_turn_executions()
+        .get(&turn.turn_id)
+        .cloned()
+        .unwrap();
+    append_test_execution_assistant_context(&mut service, &turn, &stored_execution);
     let execution = service
         .dispatch_stored_running_shell_actions(&turn.turn_id)
         .unwrap()

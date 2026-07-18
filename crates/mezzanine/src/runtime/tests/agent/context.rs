@@ -2,6 +2,83 @@
 
 use super::*;
 
+/// Builds one discovered repository-instruction fixture.
+fn project_instruction(content: &str) -> mez_agent::instructions::DiscoveredInstructionFile {
+    mez_agent::instructions::DiscoveredInstructionFile {
+        path: "/repo/AGENTS.md".to_string(),
+        scope_root: "/repo".to_string(),
+        bytes: content.len(),
+        truncated: false,
+        content: content.to_string(),
+    }
+}
+
+/// Verifies project-guidance discovery is an exact no-op until source content
+/// changes, then rewrites only the reserved stable slot and records a new cache
+/// lineage with an attributable diagnostic.
+#[test]
+fn runtime_project_guidance_refresh_preserves_or_rewrites_cache_lineage_by_fingerprint() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service
+        .set_pane_agent_instruction_files("%1", vec![project_instruction("Preserve chronology.")]);
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect context ordering")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let original = service
+        .agent_turn_contexts()
+        .get(&turn.turn_id)
+        .unwrap()
+        .clone();
+
+    service
+        .refresh_agent_turn_project_guidance_context(&turn)
+        .unwrap();
+    assert_eq!(
+        service.agent_turn_contexts().get(&turn.turn_id).unwrap(),
+        &original
+    );
+
+    service.set_pane_agent_instruction_files(
+        "%1",
+        vec![project_instruction(
+            "Preserve chronology and causal ownership.",
+        )],
+    );
+    service
+        .refresh_agent_turn_project_guidance_context(&turn)
+        .unwrap();
+    let changed = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    assert_ne!(
+        changed
+            .stable_slot_source_fingerprint("project-guidance")
+            .unwrap(),
+        original
+            .stable_slot_source_fingerprint("project-guidance")
+            .unwrap()
+    );
+    assert_ne!(
+        changed.metadata().prompt_cache_lineage_id,
+        original.metadata().prompt_cache_lineage_id
+    );
+    assert_eq!(changed.chronology(), original.chronology());
+    let trace = service.agent_pane_trace_log_text("%1").unwrap();
+    assert!(
+        trace.contains("context lineage changed") && trace.contains("project guidance"),
+        "{trace}"
+    );
+}
+
 /// Prepares one synthetic provider request from prompt chronology without
 /// starting a scheduler-owned turn.
 fn prepared_context_for_prompt(
@@ -587,7 +664,10 @@ context_window_tokens = 40000
         "{second_request_text}"
     );
     assert!(
-        !second_request_text.contains("cw cw cw"),
+        requests[1]
+            .messages
+            .iter()
+            .all(|message| message.source != ContextSourceKind::ActionResult),
         "{second_request_text}"
     );
     let retry_notice = service

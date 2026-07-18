@@ -12,21 +12,21 @@
 // Runtime module tests.
 
 use super::{
-    ActionStatus, AgentId, AgentShellVisibility, AgentTurnState, ApprovalPolicy, AuditLog,
-    AuthStore, AuxiliarySocketKind, BlockedApprovalRequest, CommandRuleScope, ConfigFormat,
-    ConfigLayer, ConfigScope, ContextBlock, ContextSourceKind, ControlConnectionState,
-    CooperationMode, EventAudience, EventKind, HookEvent, JoinedSubagentDependency,
-    MEZ_ENV_FIELD_SEPARATOR, MemoryRecord, ModelProfile, OsString, PaneExitUpdate,
-    PaneReadinessState, Path, PathBuf, ProjectTrustStore, Result, RuleDecision, RuleMatch,
-    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeEnv, RuntimeLifecycleState,
-    RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSideEffect, RuntimeSubagentLineage,
-    RuntimeSubagentPlacement, SenderIdentity, SocketDirectorySource, SplitDirection,
-    SubagentWaitPolicy, TrustDecision, UnixStream, authorize_unix_peer, authorize_unix_peer_uid,
-    auxiliary_socket_path_for_control_socket, bind_control_socket, default_socket_directory,
-    effective_uid, ensure_private_socket_directory, fs, json_escape, pane_environment,
-    pane_environment_with_term, prune_stale_socket_files_in_directory, runtime_cooperation_mode,
-    runtime_hook_event_for_lifecycle, runtime_hook_event_name, runtime_marker_for_action,
-    socket_path_for_name,
+    ActionStatus, AgentId, AgentShellVisibility, AgentTurnRecord, AgentTurnState, ApprovalPolicy,
+    AuditLog, AuthStore, AuxiliarySocketKind, BlockedApprovalRequest, CommandRuleScope,
+    ConfigFormat, ConfigLayer, ConfigScope, ContextBlock, ContextSourceKind,
+    ControlConnectionState, CooperationMode, EventAudience, EventKind, HookEvent,
+    JoinedSubagentDependency, MEZ_ENV_FIELD_SEPARATOR, MemoryRecord, ModelProfile, OsString,
+    PaneExitUpdate, PaneReadinessState, Path, PathBuf, ProjectTrustStore, Result, RuleDecision,
+    RuleMatch, RunningShellTransactionKind, RunningShellTransactionRef, RuntimeEnv,
+    RuntimeLifecycleState, RuntimeRegistryUpdatePlan, RuntimeSessionService, RuntimeSideEffect,
+    RuntimeSubagentLineage, RuntimeSubagentPlacement, SenderIdentity, SocketDirectorySource,
+    SplitDirection, SubagentWaitPolicy, TrustDecision, UnixStream, authorize_unix_peer,
+    authorize_unix_peer_uid, auxiliary_socket_path_for_control_socket, bind_control_socket,
+    default_socket_directory, effective_uid, ensure_private_socket_directory, fs, json_escape,
+    pane_environment, pane_environment_with_term, prune_stale_socket_files_in_directory,
+    runtime_cooperation_mode, runtime_hook_event_for_lifecycle, runtime_hook_event_name,
+    runtime_marker_for_action, socket_path_for_name,
 };
 use crate::MezError;
 use crate::host::terminal::{
@@ -60,6 +60,38 @@ const EXPECTED_MARKDOWN_INLINE_CODE_FOREGROUND: TerminalColor =
 const EXPECTED_MARKDOWN_TABLE_ALTERNATE_ROW_FOREGROUND: TerminalColor =
     TerminalColor::Rgb(0xe6, 0xe6, 0xe6);
 
+/// Test-only canonical event projection used to assert causal identity rather
+/// than relying on rendered text or block placement alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CanonicalEventOracleRecord {
+    sequence: u64,
+    execution_group_id: Option<String>,
+    source: ContextSourceKind,
+    semantic_kind: mez_agent::ContextSemanticKind,
+    retention: mez_agent::ContextRetention,
+    provider_owner: Option<mez_agent::ProviderContinuityOwner>,
+    label: String,
+}
+
+/// Captures the complete causal metadata of durable conversation chronology.
+fn canonical_event_oracle(context: &mez_agent::AgentContext) -> Vec<CanonicalEventOracleRecord> {
+    context
+        .chronology()
+        .iter()
+        .map(|event| CanonicalEventOracleRecord {
+            sequence: event.sequence().get(),
+            execution_group_id: event
+                .execution_group_id()
+                .map(|group| group.as_str().to_string()),
+            source: event.block().source,
+            semantic_kind: event.semantic_kind(),
+            retention: event.retention(),
+            provider_owner: event.provider_owner(),
+            label: event.block().label.clone(),
+        })
+        .collect()
+}
+
 /// Inserts one synthetic block through the same checked context boundary used
 /// by production producers.
 ///
@@ -71,8 +103,49 @@ fn insert_test_context_block(context: &mut mez_agent::AgentContext, block: Conte
     let semantic_kind = block.semantic_kind();
     let retention = block.retention();
     let recoverable_for_compaction = block.recoverable_for_compaction();
+    if block.source == ContextSourceKind::ActionResult {
+        let group_id = mez_agent::ContextExecutionGroupId::new(format!(
+            "synthetic-test-execution:{}",
+            context.event_sequence_high_water_mark().saturating_add(1)
+        ))
+        .unwrap();
+        context
+            .append_assistant_event(
+                "synthetic test assistant action",
+                "synthetic action request corresponding to injected evidence",
+                group_id.clone(),
+            )
+            .unwrap();
+        context
+            .append_evidence_event(
+                block.source,
+                block.label,
+                block.content,
+                group_id,
+                None,
+                recoverable_for_compaction,
+            )
+            .unwrap();
+        return;
+    }
     context
         .insert_typed_block(block, semantic_kind, retention, recoverable_for_compaction)
+        .unwrap();
+}
+
+/// Commits the assistant side of one synthetic provider execution before a
+/// test drives a lower recovery or settlement boundary directly.
+///
+/// Production provider-result application performs this step before any action
+/// evidence can settle. Tests that bypass that actor boundary must reproduce
+/// the same causal precondition instead of relying on orphan result fixtures.
+fn append_test_execution_assistant_context(
+    service: &mut RuntimeSessionService,
+    turn: &AgentTurnRecord,
+    execution: &mez_agent::AgentTurnExecution,
+) {
+    service
+        .append_agent_execution_assistant_context(turn, execution)
         .unwrap();
 }
 

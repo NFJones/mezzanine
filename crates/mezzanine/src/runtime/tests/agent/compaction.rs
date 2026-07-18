@@ -373,7 +373,10 @@ context_window_tokens = 40000
         "{second_request_text}"
     );
     assert!(
-        !second_request_text.contains("provider-context-limit-"),
+        requests[1]
+            .messages
+            .iter()
+            .all(|message| message.source != ContextSourceKind::ActionResult),
         "{second_request_text}"
     );
     let pane_text = service
@@ -452,6 +455,10 @@ context_window_tokens = 40000
                 label: "synthetic post-first-pass summary".to_string(),
                 content: format!("[context compacted]\n{}", "summary ".repeat(8_000)),
             },
+            ContextBlock::assistant_event(
+                "synthetic retained action request",
+                "synthetic action request owning the retained results",
+            ),
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
@@ -594,6 +601,10 @@ context_window_tokens = 40000
         .get_mut("turn-1")
         .unwrap()
         .replace_after_compaction(vec![
+            ContextBlock::assistant_event(
+                "synthetic retained action request",
+                "synthetic action request owning the retained results",
+            ),
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
@@ -889,6 +900,16 @@ context_window_tokens = 128000
             content: "same-turn result must survive compaction refresh".to_string(),
         },
     );
+    let retained_labels = [
+        "user prompt",
+        "local message compaction barrier",
+        "synthetic test assistant action",
+        "synthetic same-turn result",
+    ];
+    let retained_before = canonical_event_oracle(context)
+        .into_iter()
+        .filter(|event| retained_labels.contains(&event.label.as_str()))
+        .collect::<Vec<_>>();
     let error =
         MezError::invalid_state("OpenAI stream returned an incomplete response: max_output_tokens")
             .with_provider_failure_json(r#"{"incomplete_details":{"reason":"max_output_tokens"}}"#);
@@ -911,6 +932,13 @@ context_window_tokens = 128000
     assert!(!service.agent_provider_task_is_pending("turn-1"));
 
     complete_runtime_test_compaction(&mut service, "%1", "summary after output-limit exhaustion");
+
+    let retained_after =
+        canonical_event_oracle(service.agent_turn_contexts().get("turn-1").unwrap())
+            .into_iter()
+            .filter(|event| retained_labels.contains(&event.label.as_str()))
+            .collect::<Vec<_>>();
+    assert_eq!(retained_after, retained_before);
 
     assert!(service.agent_provider_task_is_pending("turn-1"));
     assert_eq!(
@@ -1130,7 +1158,6 @@ context_window_tokens = 100000
             .any(|block| block.source == ContextSourceKind::ActionResult)
     );
     assert!(stored_context.contains("label=synthetic routing action result"));
-    assert!(!stored_context.contains("routing-context-pressure-"));
     let pane_text = service
         .pane_screen("%1")
         .unwrap()

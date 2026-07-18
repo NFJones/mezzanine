@@ -231,6 +231,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
         "{pane_text}"
     );
 
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
     let queued = service
         .queue_agent_failure_feedback_for_correction(
             &turn,

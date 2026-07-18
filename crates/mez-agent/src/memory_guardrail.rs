@@ -248,6 +248,10 @@ mod tests {
     /// result once the two-search ceiling is already exhausted.
     fn memory_action_budget_reconstructs_prior_searches_from_context() {
         let context = AgentContext::new(vec![
+            ContextBlock::assistant_event(
+                "assistant memory searches",
+                "search durable memory twice",
+            ),
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
                 placement: crate::ContextPlacement::ConversationAppend,

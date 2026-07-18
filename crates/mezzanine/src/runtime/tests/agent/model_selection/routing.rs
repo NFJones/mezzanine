@@ -257,7 +257,8 @@ fn runtime_routed_selection_setup_failure_recovers_once() {
         .expect("parent context should exist")
         .retain_blocks(|block| {
             block.source != ContextSourceKind::UserInstruction || block.label != "user prompt"
-        });
+        })
+        .expect("removing the test prompt should preserve context validity");
     let selection = AutoSizingWorkerSelection {
         worker_profile: parent_profile,
         routing_token_usage_by_model: std::collections::BTreeMap::new(),

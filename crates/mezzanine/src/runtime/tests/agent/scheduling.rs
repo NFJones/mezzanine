@@ -899,6 +899,14 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
             terminal_state: AgentTurnState::Running,
         },
     );
+    let parent_execution = service
+        .agent_turn_executions()
+        .get(&parent.turn_id)
+        .unwrap()
+        .clone();
+    service
+        .append_agent_execution_assistant_context(&parent_turn, &parent_execution)
+        .unwrap();
     service.insert_joined_subagent_dependency(
         child_one.turn_id.clone(),
         JoinedSubagentDependency {

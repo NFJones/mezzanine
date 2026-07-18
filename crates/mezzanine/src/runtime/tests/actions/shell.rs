@@ -1195,6 +1195,7 @@ fn runtime_shell_action_timeout_queues_model_self_correction() {
         terminal_state: AgentTurnState::Failed,
     };
 
+    append_test_execution_assistant_context(&mut service, &turn, &execution);
     let queued = service
         .queue_agent_failure_feedback_for_correction(
             &turn,

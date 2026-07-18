@@ -70,6 +70,10 @@ explicit breakpoint controls, but their provider-projection digest and ordered
 per-block roles still expose a late insertion, false user projection, or
 duplicate context block.
 
-Changing only CWD, readiness, scheduler state, write conflicts, recovery state,
-or required MCP live state should preserve the stable and append-only prefix.
-No-op preparation should produce identical durable and provider-shape hashes.
+Changing CWD or required MCP live state should preserve the stable and
+append-only prefix while changing only the volatile/full-request hashes.
+Readiness, scheduler state, write conflicts/scopes, retry counters, and recovery
+mode names are controller-only and should leave even the complete model request
+unchanged. A project-guidance fingerprint change intentionally rewrites the
+stable hash and cache lineage. No-op preparation should produce identical
+durable and provider-shape hashes.

@@ -1,6 +1,7 @@
 //! Runtime tests for actions messaging behavior.
 
 use super::*;
+use crate::runtime::ControlIdempotencyCache;
 use crate::runtime::current_unix_seconds;
 use mez_agent::messaging::Envelope;
 use mez_core::ids::PaneId;
@@ -81,6 +82,123 @@ fn runtime_active_turn_local_message_commits_once_at_arrival() {
             .unwrap()
             .last_sequence,
         delivery.sequence
+    );
+}
+
+/// Verifies an active local message invalidates an older provider generation
+/// before that generation can append or dispatch its response.
+///
+/// The message is committed and acknowledged at actor delivery, so a provider
+/// completion whose consumed high-water mark predates it must remain
+/// diagnostic-only. The continuation queued by message delivery retains the
+/// newer canonical snapshot as the only model-visible future.
+#[tokio::test]
+async fn runtime_local_message_discards_older_provider_generation() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect before the message arrives")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let consumed_high_water_mark = service
+        .agent_turn_contexts()
+        .get(&turn.turn_id)
+        .unwrap()
+        .event_sequence_high_water_mark();
+    service
+        .record_claimed_agent_provider_context_for_tests(&turn.turn_id, consumed_high_water_mark)
+        .unwrap();
+
+    let now_ms = current_unix_seconds().saturating_mul(1000);
+    let sender = service
+        .ensure_runtime_message_identity("agent-sender", None, "agent", &[], now_ms)
+        .unwrap();
+    let recipient = AgentId::opaque(started.agent_id.clone()).unwrap();
+    service
+        .control
+        .message_service_mut()
+        .accept_at(
+            &sender.agent_id,
+            Envelope {
+                protocol: "mmp/1",
+                id: "stale-provider-message".to_string(),
+                message_type: "send".to_string(),
+                time: format!("runtime:{now_ms}"),
+                sender: sender.clone(),
+                recipient: mez_agent::messaging::Recipient::Agent(recipient.clone()),
+                correlation_id: Some(started.turn_id.clone()),
+                ttl_ms: None,
+                content_type: "text/plain; charset=utf-8".to_string(),
+                payload: "newer local evidence".to_string(),
+                extension_fields: Vec::new(),
+            },
+            now_ms,
+        )
+        .unwrap();
+    assert_eq!(
+        service
+            .deliver_pending_runtime_agent_messages(now_ms)
+            .unwrap(),
+        1
+    );
+
+    let response = runtime_say_response(&turn.turn_id, "obsolete provider conclusion", true);
+    let action = response
+        .action_batch
+        .as_ref()
+        .unwrap()
+        .actions
+        .first()
+        .unwrap()
+        .clone();
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response,
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::succeeded(
+            &turn,
+            &action,
+            vec!["obsolete provider conclusion".to_string()],
+            None,
+        )],
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+
+    assert!(
+        service
+            .apply_agent_provider_completed_event(&recipient, &turn.turn_id, execution)
+            .await
+            .unwrap()
+    );
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("newer local evidence"))
+    );
+    assert!(
+        context
+            .blocks()
+            .iter()
+            .all(|block| !block.content.contains("obsolete provider conclusion"))
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == turn.turn_id)
     );
 }
 
@@ -174,6 +292,142 @@ fn runtime_inactive_local_message_precedes_next_prompt_and_advances_after_commit
             .unwrap()
             .last_sequence,
         delivery.sequence
+    );
+}
+
+/// Verifies retained message subscriptions survive a process-style snapshot
+/// restore, commit unread messages once in sequence order before the next
+/// prompt, and do not replay them after a second restore.
+#[test]
+fn runtime_local_message_cursor_restores_exactly_once_in_arrival_order() {
+    let now_ms = current_unix_seconds().saturating_mul(1000);
+    let mut before_restart = test_runtime_service();
+    let recipient_identity = before_restart
+        .ensure_runtime_message_identity(
+            "agent-%1",
+            PaneId::opaque("%1".to_string()),
+            "agent",
+            &[],
+            now_ms,
+        )
+        .unwrap();
+    before_restart
+        .control
+        .message_service_mut()
+        .subscribe_from_retained_start(&recipient_identity.agent_id)
+        .unwrap();
+    let sender = before_restart
+        .ensure_runtime_message_identity("agent-sender", None, "agent", &[], now_ms)
+        .unwrap();
+    for (id, payload) in [
+        ("restart-message-1", "first retained message"),
+        ("restart-message-2", "second retained message"),
+    ] {
+        before_restart
+            .control
+            .message_service_mut()
+            .accept_at(
+                &sender.agent_id,
+                Envelope {
+                    protocol: "mmp/1",
+                    id: id.to_string(),
+                    message_type: "send".to_string(),
+                    time: format!("runtime:{now_ms}"),
+                    sender: sender.clone(),
+                    recipient: mez_agent::messaging::Recipient::Agent(
+                        recipient_identity.agent_id.clone(),
+                    ),
+                    correlation_id: None,
+                    ttl_ms: None,
+                    content_type: "text/plain; charset=utf-8".to_string(),
+                    payload: payload.to_string(),
+                    extension_fields: Vec::new(),
+                },
+                now_ms,
+            )
+            .unwrap();
+    }
+    let restored_messages = mez_agent::messaging::MessageService::from_snapshot_state(
+        &before_restart.control.message_service().snapshot_state(),
+    )
+    .unwrap();
+    let mut after_restart = RuntimeSessionService::from_parts(
+        SessionFixture::new().build(),
+        PathBuf::from("/tmp/mez-1000/message-restart.sock"),
+        100,
+        ControlIdempotencyCache::default(),
+        restored_messages,
+        None,
+    )
+    .unwrap();
+    after_restart
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+
+    let started = after_restart
+        .start_agent_prompt_turn("%1", "use all retained messages")
+        .unwrap();
+    let context = after_restart
+        .agent_turn_contexts()
+        .get(&started.turn_id)
+        .unwrap();
+    let ordered_labels = context
+        .blocks()
+        .iter()
+        .map(|block| block.label.as_str())
+        .collect::<Vec<_>>();
+    let first = ordered_labels
+        .iter()
+        .position(|label| label.contains("restart-message-1"))
+        .unwrap();
+    let second = ordered_labels
+        .iter()
+        .position(|label| label.contains("restart-message-2"))
+        .unwrap();
+    let prompt = ordered_labels
+        .iter()
+        .position(|label| *label == "user prompt")
+        .unwrap();
+    assert!(first < second && second < prompt, "{ordered_labels:?}");
+    assert_eq!(
+        after_restart
+            .control
+            .message_service()
+            .subscription(&recipient_identity.agent_id)
+            .unwrap()
+            .last_sequence,
+        2
+    );
+
+    let restored_again = mez_agent::messaging::MessageService::from_snapshot_state(
+        &after_restart.control.message_service().snapshot_state(),
+    )
+    .unwrap();
+    let mut second_restart = RuntimeSessionService::from_parts(
+        SessionFixture::new().build(),
+        PathBuf::from("/tmp/mez-1000/message-restart-2.sock"),
+        100,
+        ControlIdempotencyCache::default(),
+        restored_again,
+        None,
+    )
+    .unwrap();
+    second_restart
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let replay_check = second_restart
+        .start_agent_prompt_turn("%1", "do not replay old messages")
+        .unwrap();
+    assert!(
+        second_restart
+            .agent_turn_contexts()
+            .get(&replay_check.turn_id)
+            .unwrap()
+            .blocks()
+            .iter()
+            .all(|block| !block.label.contains("restart-message-"))
     );
 }
 

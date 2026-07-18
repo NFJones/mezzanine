@@ -2882,10 +2882,12 @@ front-loaded instructions, response-format schema, tool schema, stable input
 prefix, volatile input suffix, and complete observable cacheable prefix so cache
 misses can be diagnosed without inserting diagnostic text into model context.
 Static invariant agent behavior SHOULD remain in the front-loaded OpenAI
-`instructions` field. Dynamic controller state such as capability decisions,
-repair hints, compaction notices, and current action eligibility SHOULD be
-rendered as later role-preserving model input rather than mutating the static
-instructions prefix.
+`instructions` field. Dynamic model-relevant facts such as compaction notices
+and current OpenAI action eligibility SHOULD be rendered as later
+role-preserving model input rather than mutating the static instructions
+prefix. Controller-enforced readiness, scheduling, permission, retry, and scope
+state MUST remain controller data unless an actual denial or failure becomes a
+chronological event.
 Every model-visible context producer MUST explicitly select provider-neutral
 placement, semantic kind, retention, provenance, and canonical role. These are
 independent properties. `StablePrefix` is reserved for invariant ambient
@@ -2916,15 +2918,30 @@ malformed context. Tail blocks MUST use live-state semantics and request-local
 retention. Conversation events, action results, user prompts, steering, skill
 instructions, memories, and transcript records MUST NOT enter the tail.
 
-Allowlisted tail state consists only of relevant abnormal pane readiness, the
-authoritative current working directory, active write conflicts, a compact
-relevant scheduler summary, OpenAI action-superset narrowing, provider-required
-MCP manifest or unavailable-integration diagnostics, and bounded factual
-recovery-mode payloads. Session/pane/cache identity, environment hashes, host
-diagnostics, progress or rationale ledgers, action pressure, generic failure
-coaching, resolved-skill hints, permission policy, full scheduler inventories,
-and duplicate MCP schemas MUST stay out of model context. Session and cache
-lineage travel as typed non-model-visible request metadata.
+Stable slots, sequenced conversation events, and live-state blocks MUST be
+structurally distinct stored types. Typed storage is the source of truth;
+adapter-facing block and metadata vectors, if retained, MUST be read-only exact
+projections. Every checked mutation MUST validate an isolated candidate before
+commit so failure cannot expose a partial chronology or advance its event
+sequence. Compatibility transcript import MUST preserve source order. If an old
+transcript has evidence separated from any unambiguous assistant owner by an
+exact barrier, Mezzanine MUST retain that evidence as an exact neutral reference
+rather than invent an execution group or move the evidence across the barrier.
+Event identities MUST leave sufficient monotonic space for a running-turn
+history refresh to replace only the imported historical prefix without
+renumbering the active prompt or later events. If a replacement cannot fit
+before the first retained event, it MUST fail atomically.
+
+Allowlisted tail state consists only of the authoritative current working
+directory, OpenAI action-superset narrowing, the explicitly invoked OpenAI MCP
+manifest that its stable generic schema cannot express, and concise unavailable
+MCP diagnostics when the requested integration affects the next response.
+Pane readiness, write conflicts/scopes, scheduler state, retry bounds, recovery
+mode names, session/pane/cache identity, environment hashes, host diagnostics,
+progress or rationale ledgers, action pressure, generic failure coaching,
+resolved-skill hints, permission policy, and duplicate MCP schemas MUST stay out
+of model context. Session and cache lineage travel as typed non-model-visible
+request metadata.
 
 Provider cache diagnostics and cache breakpoints MUST consume explicit
 placement and semantic metadata rather than infer lifecycle from sources,
@@ -2949,8 +2966,11 @@ removed atomically. A settlement batch containing a running action or blocked
 approval MUST be rejected without mutating chronology. Replaying a completed
 settlement MUST preserve the original chronological position and MUST NOT
 create a duplicate. Provider assistant output and its provider-native tool
-events plus terminal action results form one execution group for compaction
-and persistence. Provider-neutral continuity diagnostics MUST keep
+events plus terminal action results share one causal execution owner. If an
+exact user or message event arrives after dispatch and before a result settles,
+the owner MAY occur on both sides of that barrier; chronology MUST remain
+unchanged and compaction MUST NOT gather those fragments into one replacement
+range. Provider-neutral continuity diagnostics MUST keep
 immutable and volatile token estimates, the immutable projection byte length
 and digest, the longest common immutable prefix, and an append-only flag without
 retaining prompt text. Transitions MUST distinguish new turns, compaction,
@@ -3074,8 +3094,10 @@ contents by default.
 
 Default model-facing agent context MUST include only the active user request,
 configured system and developer instructions, applicable project guidance,
-permission and scheduler state, compacted prior task context, and explicit
-action results.
+compacted prior task context, explicit chronological action results, and the
+minimal allowlisted live state defined above. Permission, scheduler, readiness,
+scope, and retry state MUST be enforced by the controller rather than copied
+speculatively into model context.
 
 Every provider request for a running agent turn MUST include the current
 discovered project guidance as a final stable system-prompt suffix after
@@ -4711,11 +4733,14 @@ pressure. Compaction MUST operate on durable context before request-local live
 state is attached. Exact user prompts, every user-steering event, active
 skill/task preludes, delegated or routed task statements required to interpret
 the work, and existing summary epochs MUST be non-crossable barriers. The
-compactor MUST split chronology at those barriers, form closed
-assistant/action/result execution groups only within each segment, and prefer
-the oldest eligible groups for summarization. Assistant blocks,
-provider-native tool events, and their settled results MUST move together as
-one indivisible group.
+compactor MUST split chronology at those barriers, form closed contiguous
+assistant/action/result execution ranges only within each segment, and prefer
+the oldest eligible ranges for summarization. Assistant blocks,
+provider-native tool events, and their settled results MUST move together when
+they are contiguous inside one segment. An execution owner that appears on both
+sides of a barrier because already-dispatched work settled later makes both
+fragments ineligible for grouped replacement; ownership MUST NOT be used to
+move or gather either fragment across the barrier.
 
 Each summary MUST replace its selected contiguous range at the range's original
 position. It MUST NOT be moved to the start or end of the conversation or
@@ -4725,6 +4750,15 @@ byte-for-byte exact. Local context reduction MUST prefer compact summaries over
 partial block truncation so the model never reasons from silently incomplete
 events. `EphemeralTail` state MUST remain outside summary input and MUST be
 recomputed only after compaction completes.
+
+Provider-limit recovery MUST compact only events at or below the event-sequence
+high-water mark consumed by the rejected provider request. Events committed
+after that boundary, including steering, local messages, and later action
+results, MUST remain exact and raw. A semantic recovery index MUST account for
+every replaced record and preserve or classify outcomes, errors, decisions,
+artifacts, unresolved obligations, and an exact recovery route. A range whose
+required content is not safely recoverable MUST remain raw or cause typed
+unrecoverable overflow.
 
 Within each barrier-delimited segment, compaction MUST retain a bounded recent
 raw suffix of complete execution groups so exact recent references remain

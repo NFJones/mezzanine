@@ -1,20 +1,23 @@
 //! Runtime agent provider-context preparation and recovery helpers.
 //!
-//! This module owns active-turn project-guidance refresh, mid-turn steering
-//! insertion, provider context/output-limit recovery, and auto-sizing dispatch
-//! selection. The provider execution loop remains in the facade while these
-//! helper decisions stay grouped by their context-shaping responsibility.
+//! This module owns active-turn project-guidance refresh, request-local context
+//! preparation, provider context/output-limit recovery, and auto-sizing
+//! dispatch selection. Steering and other chronology commit at their actor
+//! receipt boundaries before this module observes a snapshot. The provider
+//! execution loop remains in the facade while these helper decisions stay
+//! grouped by their context-shaping responsibility.
 
 use super::{
     AgentId, AgentTurnRecord, AgentTurnState, ContextBlock, ContextSourceKind, MezError,
     ModelProfile, Result, RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile,
     RuntimeSessionService, append_mcp_context_for_provider,
-    compact_model_context_for_budget_with_retained_tail_percent, invoked_mcp_tools_for_context,
+    compact_model_context_for_budget_at_consumed_sequence, invoked_mcp_tools_for_context,
     runtime_cooperation_mode_name, runtime_mezzanine_error_code, set_project_guidance_context,
 };
 #[cfg(test)]
 use crate::runtime::RuntimeAutoSizingDecision;
 use mez_agent::{ContextRetention, ContextSemanticKind};
+use sha2::{Digest, Sha256};
 
 impl RuntimeSessionService {
     /// Prepares the next provider request from durable chronology and a fresh
@@ -71,19 +74,50 @@ impl RuntimeSessionService {
         let Some(instruction_files) = self
             .pane_agent_instruction_files(&turn.pane_id)
             .map(<[_]>::to_vec)
-            .filter(|files| !files.is_empty())
         else {
             return Ok(());
         };
-        let context = self
+        let previous = self
             .agent_turn_contexts()
             .get(&turn.turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        let context = set_project_guidance_context(context, &instruction_files, 2)?;
+        let previous_fingerprint = previous
+            .stable_slot_source_fingerprint("project-guidance")
+            .map(|fingerprint| fingerprint.as_str().to_string());
+        let mut context = set_project_guidance_context(previous.clone(), &instruction_files, 2)?;
+        let current_fingerprint = context
+            .stable_slot_source_fingerprint("project-guidance")
+            .map(|fingerprint| fingerprint.as_str().to_string());
+        if previous_fingerprint == current_fingerprint && context == previous {
+            return Ok(());
+        }
+
+        let prior_lineage = previous
+            .metadata()
+            .prompt_cache_lineage_id
+            .as_deref()
+            .unwrap_or("none");
+        let current_fingerprint_text = current_fingerprint.as_deref().unwrap_or("removed");
+        let lineage_material =
+            format!("{prior_lineage}\0project-guidance\0{current_fingerprint_text}");
+        let lineage_digest = Sha256::digest(lineage_material.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let mut metadata = context.metadata().clone();
+        metadata.prompt_cache_lineage_id = Some(format!("guidance-{lineage_digest}"));
+        context.set_metadata(metadata);
         context.validate_durable()?;
         self.agent_turn_contexts_mut()
             .insert(turn.turn_id.clone(), context);
+        self.append_agent_trace_turn_event(
+            &turn.pane_id,
+            &turn.turn_id,
+            &format!(
+                "context_lineage changed reason=project_guidance source_fingerprint={current_fingerprint_text}"
+            ),
+        )?;
         Ok(())
     }
 
@@ -137,6 +171,12 @@ impl RuntimeSessionService {
             .get(turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
+        let consumed_sequence_high_water = self
+            .agent
+            .claimed_agent_provider_tasks
+            .get(turn_id)
+            .map(|claim| claim.context_event_high_water_mark)
+            .unwrap_or_else(|| context.event_sequence_high_water_mark());
         let profile_budget_words = model_profile.context_window_budget_words();
         let recovery_attempt = attempt.max(1);
         let recovery_budget_words = match recovery_attempt {
@@ -147,19 +187,20 @@ impl RuntimeSessionService {
         }
         .max(1);
         let retained_tail_percent = self.agent_compaction_raw_retention_percent();
-        let (compacted_context, report) =
-            compact_model_context_for_budget_with_retained_tail_percent(
-                context,
-                recovery_budget_words,
-                retained_tail_percent,
-            )?;
+        let (compacted_context, report) = compact_model_context_for_budget_at_consumed_sequence(
+            context,
+            recovery_budget_words,
+            retained_tail_percent,
+            consumed_sequence_high_water,
+        )?;
         if !report.changed() {
             self.append_agent_trace_turn_event(
                 &turn.pane_id,
                 turn_id,
                 &format!(
-                    "context_limit_recovery skipped attempt={} profile_budget_words={} recovery_budget_words={} retained_tail_percent={} error_kind={} no_compactable_blocks=true",
+                    "context_limit_recovery skipped attempt={} consumed_event_sequence={} profile_budget_words={} recovery_budget_words={} retained_tail_percent={} error_kind={} no_compactable_blocks=true",
                     recovery_attempt,
+                    consumed_sequence_high_water,
                     profile_budget_words,
                     recovery_budget_words,
                     retained_tail_percent,
@@ -193,8 +234,9 @@ impl RuntimeSessionService {
             &turn.pane_id,
             turn_id,
             &format!(
-                "context_limit_recovery applied attempt={} profile_budget_words={} recovery_budget_words={} retained_tail_percent={} compacted_blocks={} omitted_blocks={} omitted_original_words={} error_kind={}",
+                "context_limit_recovery applied attempt={} consumed_event_sequence={} profile_budget_words={} recovery_budget_words={} retained_tail_percent={} compacted_blocks={} omitted_blocks={} omitted_original_words={} error_kind={}",
                 recovery_attempt,
+                consumed_sequence_high_water,
                 profile_budget_words,
                 recovery_budget_words,
                 retained_tail_percent,

@@ -58,7 +58,7 @@ impl RuntimeSessionService {
             .agent_turn_contexts()
             .get(turn_id)
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        Ok(skill_action_context_from_blocks(&context.blocks()))
+        Ok(skill_action_context_from_blocks(context.blocks()))
     }
 
     /// Executes a runtime-owned skill lookup or skill-load action.

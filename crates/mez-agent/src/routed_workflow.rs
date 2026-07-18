@@ -380,8 +380,13 @@ pub fn routed_worker_seed_context(
             )
         })
         .cloned()
-        .collect();
-    AgentContext::new_durable(blocks).expect("routed worker seed context remains durable")
+        .collect::<Vec<_>>();
+    if blocks.is_empty() {
+        AgentContext::empty()
+    } else {
+        AgentContext::import_durable_blocks(blocks)
+            .expect("routed worker seed context remains durable")
+    }
 }
 
 /// Parses and validates one structured routed-worker handoff.
@@ -458,19 +463,7 @@ pub fn insert_routed_context_blocks(
         if block.source == ContextSourceKind::RoutedHandoff
             && block.placement == ContextPlacement::ConversationAppend
         {
-            let group = crate::ContextExecutionGroupId::new(format!(
-                "routed-handoff:{}:{}",
-                block.label,
-                context.event_sequence_high_water_mark().saturating_add(1)
-            ))?;
-            context.append_evidence_event(
-                block.source,
-                block.label,
-                block.content,
-                group,
-                None,
-                true,
-            )?;
+            context.append_reference_event(block.source, block.label, block.content)?;
         } else {
             context.insert_typed_block(
                 block.clone(),

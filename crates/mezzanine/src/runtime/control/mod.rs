@@ -207,27 +207,25 @@ impl RuntimeSessionService {
                 },
             );
         }
-        if let Some(instruction_files) = self.pane_agent_instruction_files(pane_id)
-            && !instruction_files.is_empty()
+        let instruction_files = self
+            .pane_agent_instruction_files(pane_id)
+            .map(<[_]>::to_vec);
+        if let Some(instruction_files) = instruction_files.as_deref()
+            && instruction_files.iter().any(|file| file.truncated)
         {
-            let context = AgentContext::new(blocks)?;
-            let context = set_project_guidance_context(context, instruction_files, 2)?;
-            blocks = context.blocks().to_vec();
-            if instruction_files.iter().any(|f| f.truncated) {
-                let truncated_paths: Vec<&str> = instruction_files
-                    .iter()
-                    .filter(|f| f.truncated)
-                    .map(|f| f.path.as_str())
-                    .collect();
-                let _ = self.append_lifecycle_event(
-                    EventKind::Diagnostic,
-                    format!(
-                        r#"{{"pane_id":"{}","kind":"instruction_truncated","paths":{},"message":"project instruction content was truncated to the configured byte limit"}}"#,
-                        json_escape(pane_id),
-                        serde_json::to_string(&truncated_paths).unwrap_or_else(|_| "[]".to_string()),
-                    ),
-                );
-            }
+            let truncated_paths: Vec<&str> = instruction_files
+                .iter()
+                .filter(|file| file.truncated)
+                .map(|file| file.path.as_str())
+                .collect();
+            let _ = self.append_lifecycle_event(
+                EventKind::Diagnostic,
+                format!(
+                    r#"{{"pane_id":"{}","kind":"instruction_truncated","paths":{},"message":"project instruction content was truncated to the configured byte limit"}}"#,
+                    json_escape(pane_id),
+                    serde_json::to_string(&truncated_paths).unwrap_or_else(|_| "[]".to_string()),
+                ),
+            );
         }
         if let Some(invocation) = parse_skill_prompt_invocation(prompt) {
             if !is_valid_skill_name(&invocation.name) {
@@ -292,10 +290,11 @@ impl RuntimeSessionService {
                 )
             })
             .unwrap_or_default();
-        Ok((
-            AgentContext::new_durable(blocks)?.with_metadata(metadata),
-            delivered_message_sequence,
-        ))
+        let mut context = AgentContext::import_durable_blocks(blocks)?.with_metadata(metadata);
+        if let Some(instruction_files) = instruction_files.as_deref() {
+            context = set_project_guidance_context(context, instruction_files, 2)?;
+        }
+        Ok((context, delivered_message_sequence))
     }
 
     /// Formats immutable skill context for one invocation.
@@ -471,41 +470,16 @@ impl RuntimeSessionService {
 
         let refreshed_blocks = self.runtime_agent_history_epoch_context_blocks(&turn.pane_id)?;
 
-        let Some(existing_context) = self.agent_turn_contexts().get(turn_id).cloned() else {
+        let Some(mut refreshed_context) = self.agent_turn_contexts().get(turn_id).cloned() else {
             return Ok(false);
         };
-        let mut blocks = existing_context.blocks().to_vec();
-        let owned_indexes = blocks
-            .iter()
-            .enumerate()
-            .filter(|(_, block)| runtime_context_block_is_compaction_refresh_owned(block))
-            .map(|(index, _)| index)
-            .collect::<Vec<_>>();
-        let (replace_start, replace_end) = match owned_indexes.as_slice() {
-            [] => {
-                let anchor = blocks
-                    .iter()
-                    .position(|block| {
-                        block.placement == mez_agent::ContextPlacement::ConversationAppend
-                    })
-                    .unwrap_or(blocks.len());
-                (anchor, anchor)
-            }
-            indexes => {
-                let start = indexes[0];
-                let end = indexes[indexes.len() - 1].saturating_add(1);
-                if indexes.iter().copied().ne(start..end) {
-                    return Err(MezError::invalid_state(
-                        "running turn history epoch is fragmented across a causal barrier; refusing compaction refresh",
-                    ));
-                }
-                (start, end)
-            }
-        };
-        blocks.splice(replace_start..replace_end, refreshed_blocks);
-        let refreshed_block_count = blocks.len();
+        refreshed_context.replace_imported_history_prefix(
+            runtime_context_block_is_compaction_refresh_owned,
+            refreshed_blocks,
+        )?;
+        let refreshed_block_count = refreshed_context.blocks().len();
         self.agent_turn_contexts_mut()
-            .insert(turn_id.to_string(), AgentContext::new_durable(blocks)?);
+            .insert(turn_id.to_string(), refreshed_context);
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             turn_id,

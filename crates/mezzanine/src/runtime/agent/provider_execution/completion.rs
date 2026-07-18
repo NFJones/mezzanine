@@ -73,9 +73,7 @@ impl RuntimeSessionService {
             .get(turn_id)
             .map(mez_agent::AgentContext::event_sequence_high_water_mark)
             .unwrap_or_default();
-        if consumed_high_water_mark.is_some_and(|consumed| current_high_water_mark > consumed)
-            && execution.request.interaction_kind != mez_agent::ModelInteractionKind::MacroJudge
-        {
+        if consumed_high_water_mark.is_some_and(|consumed| current_high_water_mark > consumed) {
             self.agent.pending_agent_provider_tasks.remove(turn_id);
             self.agent.claimed_agent_provider_tasks.remove(turn_id);
             self.agent

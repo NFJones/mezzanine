@@ -33,7 +33,13 @@ pub(super) struct RuntimeTerminalActionObservations {
 impl RuntimeTerminalActionObservations {
     /// Observes terminal transitions visible at the current actor boundary.
     pub(super) fn observe(&mut self, execution: &AgentTurnExecution) {
-        for result in &execution.action_results {
+        self.observe_results(&execution.action_results);
+    }
+
+    /// Observes one actor-boundary result projection without using action-array
+    /// order as a substitute for prior observation order.
+    fn observe_results(&mut self, results: &[ActionResult]) {
+        for result in results {
             if result.is_terminal() && self.action_ids.insert(result.action_id.clone()) {
                 self.results.push(result.clone());
             }
@@ -450,4 +456,102 @@ pub(super) fn runtime_agent_action_outcome_line(
         },
     )
     .map(|outcome| (outcome.is_error, outcome.line))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RuntimeTerminalActionObservations;
+    use mez_agent::{
+        ActionContentBlock, ActionError, ActionResult, ActionStatus, AgentContext, ContextBlock,
+        ContextExecutionGroupId,
+    };
+
+    /// Builds one action result at the supplied actor-visible lifecycle state.
+    fn result(action_id: &str, action_type: &'static str, status: ActionStatus) -> ActionResult {
+        ActionResult {
+            protocol: "maap/1".to_string(),
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            action_id: action_id.to_string(),
+            action_type,
+            status,
+            content: vec![ActionContentBlock::text(format!("{action_id} settled"))],
+            structured_content_json: None,
+            is_error: status == ActionStatus::Failed,
+            error: (status == ActionStatus::Failed).then(|| ActionError {
+                code: "test_failure".to_string(),
+                message: "failed".to_string(),
+                data_json: None,
+            }),
+        }
+    }
+
+    /// Verifies heterogeneous terminal transitions observed across actor
+    /// boundaries commit once in observation order, even when that order is the
+    /// reverse of action-array and executor-family order.
+    #[test]
+    fn terminal_action_observations_preserve_cross_boundary_settlement_order() {
+        let mut observations = RuntimeTerminalActionObservations::default();
+        observations.observe_results(&[
+            result("skill-1", "use_skill", ActionStatus::Running),
+            result("message-1", "send_message", ActionStatus::Succeeded),
+            result("config-1", "config_change", ActionStatus::Running),
+        ]);
+        observations.observe_results(&[
+            result("skill-1", "use_skill", ActionStatus::Succeeded),
+            result("message-1", "send_message", ActionStatus::Succeeded),
+            result("config-1", "config_change", ActionStatus::Running),
+        ]);
+        observations.observe_results(&[
+            result("skill-1", "use_skill", ActionStatus::Succeeded),
+            result("message-1", "send_message", ActionStatus::Succeeded),
+            result("config-1", "config_change", ActionStatus::Failed),
+        ]);
+        observations.observe_results(&[
+            result("skill-1", "use_skill", ActionStatus::Succeeded),
+            result("message-1", "send_message", ActionStatus::Succeeded),
+            result("config-1", "config_change", ActionStatus::Failed),
+        ]);
+
+        assert_eq!(
+            observations
+                .results()
+                .iter()
+                .map(|result| result.action_id.as_str())
+                .collect::<Vec<_>>(),
+            ["message-1", "skill-1", "config-1"]
+        );
+        let group = ContextExecutionGroupId::new("provider-execution-1").unwrap();
+        let mut context = AgentContext::new_durable(vec![ContextBlock::user_event(
+            "user prompt",
+            "run heterogeneous actions",
+        )])
+        .unwrap();
+        context
+            .append_assistant_event(
+                "assistant heterogeneous action request",
+                "dispatch message, skill, and config actions",
+                group.clone(),
+            )
+            .unwrap();
+        assert_eq!(
+            context
+                .commit_settled_action_results_in_group(observations.results(), group)
+                .unwrap(),
+            3
+        );
+        assert_eq!(
+            context
+                .chronology()
+                .iter()
+                .skip(2)
+                .map(|event| event.block().label.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "action result message-1",
+                "action result skill-1",
+                "action result config-1",
+            ]
+        );
+    }
 }

@@ -692,7 +692,7 @@ impl RuntimeSessionService {
                     insert_routed_context_blocks(&mut context, context_blocks)?;
                     context
                 } else {
-                    AgentContext::new_durable(context_blocks)
+                    AgentContext::import_durable_blocks(context_blocks)
                         .map_err(|error| MezError::invalid_state(error.to_string()))?
                 };
                 let repair_turn = match self.queue_routed_child_turn(RoutedChildTurnRequest {
@@ -1255,8 +1255,7 @@ impl RuntimeSessionService {
                     ContextSourceKind::LocalMessage,
                     "routed controller task",
                 )?;
-                let context = self.apply_agent_shell_preference_context(child_pane_id, context)?;
-                context
+                self.apply_agent_shell_preference_context(child_pane_id, context)?
             }
         };
         context.set_metadata(

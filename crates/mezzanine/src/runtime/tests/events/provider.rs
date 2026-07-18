@@ -2,8 +2,8 @@
 
 use super::*;
 
-/// Verifies actor-accepted steering invalidates an older in-flight provider
-/// generation instead of reordering that response around the newer user event.
+/// Verifies actor-accepted steering invalidates every older in-flight provider
+/// decision instead of reordering it around the newer user event.
 ///
 /// The stale response must never enter canonical chronology or reach action
 /// dispatch. Completion ingress queues a fresh provider request whose snapshot
@@ -94,6 +94,301 @@ async fn runtime_provider_completion_discards_generation_older_than_steering() {
             .any(|task| task.turn_id == turn.turn_id)
     );
     assert!(!service.agent_turn_executions().contains_key(&turn.turn_id));
+
+    let macro_consumed_high_water_mark = service
+        .agent_turn_contexts()
+        .get(&turn.turn_id)
+        .unwrap()
+        .event_sequence_high_water_mark();
+    service
+        .record_claimed_agent_provider_context_for_tests(
+            &turn.turn_id,
+            macro_consumed_high_water_mark,
+        )
+        .unwrap();
+    service
+        .inject_agent_steering_for_running_turn("%1", "also stop the macro judge")
+        .unwrap();
+    let macro_response = runtime_say_response(&turn.turn_id, "stale macro decision", true);
+    let macro_action = macro_response
+        .action_batch
+        .as_ref()
+        .unwrap()
+        .actions
+        .first()
+        .unwrap()
+        .clone();
+    let mut macro_request = runtime_model_request_fixture(&turn.turn_id);
+    macro_request.interaction_kind = mez_agent::ModelInteractionKind::MacroJudge;
+    let macro_execution = mez_agent::AgentTurnExecution {
+        request: macro_request,
+        response: macro_response,
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::succeeded(
+            &turn,
+            &macro_action,
+            vec!["stale macro decision".to_string()],
+            None,
+        )],
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+
+    assert!(
+        service
+            .apply_agent_provider_completed_event(
+                &AgentId::opaque(turn.agent_id.clone()).unwrap(),
+                &turn.turn_id,
+                macro_execution,
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        service
+            .agent_turn_contexts()
+            .get(&turn.turn_id)
+            .unwrap()
+            .blocks()
+            .iter()
+            .all(|block| !block.content.contains("stale macro decision"))
+    );
+}
+
+/// Verifies steering accepted after an action request does not suppress or
+/// backdate the later result of work that already executed.
+///
+/// The action and result keep one causal owner, while actor chronology remains
+/// `assistant action -> steering -> result`. This is the straddling-group case
+/// the compactor must preserve raw rather than gather across the user barrier.
+#[test]
+fn runtime_steering_during_executed_action_preserves_later_evidence_in_place() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "run the long action")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let group = mez_agent::ContextExecutionGroupId::new("executed-before-steering").unwrap();
+    service
+        .agent_turn_contexts_mut()
+        .get_mut(&turn.turn_id)
+        .unwrap()
+        .append_assistant_event(
+            "assistant response for executed action",
+            "dispatch shell action already in progress",
+            group.clone(),
+        )
+        .unwrap();
+    assert_eq!(
+        service
+            .inject_agent_steering_for_running_turn(
+                "%1",
+                "do not start anything else; retain this result",
+            )
+            .unwrap(),
+        Some(turn.turn_id.clone())
+    );
+    let action = mez_agent::AgentAction {
+        id: "executed-action".to_string(),
+        rationale: "finish work already dispatched".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "finish dispatched action".to_string(),
+            command: "printf completed".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let result = mez_agent::ActionResult::succeeded(
+        &turn,
+        &action,
+        vec!["completed after steering".to_string()],
+        None,
+    );
+    service
+        .commit_settled_action_results_context(&turn.turn_id, &[result])
+        .unwrap();
+
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    let events = canonical_event_oracle(context);
+    assert!(
+        events
+            .windows(2)
+            .all(|pair| pair[0].sequence < pair[1].sequence)
+    );
+    let action_index = events
+        .iter()
+        .position(|event| event.label == "assistant response for executed action")
+        .unwrap();
+    let steering_index = events
+        .iter()
+        .position(|event| event.label.starts_with("user steering"))
+        .unwrap();
+    let result_index = events
+        .iter()
+        .position(|event| event.label == "action result executed-action")
+        .unwrap();
+    assert!(action_index < steering_index && steering_index < result_index);
+    assert_eq!(
+        events[action_index].execution_group_id.as_deref(),
+        Some(group.as_str())
+    );
+    assert_eq!(
+        events[result_index].execution_group_id.as_deref(),
+        Some(group.as_str())
+    );
+    assert_eq!(events[steering_index].execution_group_id, None);
+    assert_eq!(
+        events[steering_index].retention,
+        mez_agent::ContextRetention::Exact
+    );
+}
+
+/// Verifies repeated steering cannot gather, suppress, or reassign terminal
+/// evidence from multiple actions already owned by one assistant execution.
+///
+/// A failure observed after the first steering event and a cancellation
+/// observed after the second remain at their actor acceptance positions. Both
+/// results retain the original execution group, while each steering event is
+/// an exact unowned barrier between the surrounding causal records.
+#[test]
+fn runtime_multiple_steering_events_preserve_failure_and_cancellation_order() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "run both long actions")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let group = mez_agent::ContextExecutionGroupId::new("multi-steering-actions").unwrap();
+    service
+        .agent_turn_contexts_mut()
+        .get_mut(&turn.turn_id)
+        .unwrap()
+        .append_assistant_event(
+            "assistant response for two actions",
+            "dispatch two actions before steering",
+            group.clone(),
+        )
+        .unwrap();
+
+    let failed_action = mez_agent::AgentAction {
+        id: "failed-after-first-steering".to_string(),
+        rationale: "observe an already-started failure".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "fail after first steering".to_string(),
+            command: "exit 1".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+    let cancelled_action = mez_agent::AgentAction {
+        id: "cancelled-after-second-steering".to_string(),
+        rationale: "observe an explicitly cancelled sibling".to_string(),
+        payload: mez_agent::AgentActionPayload::ShellCommand {
+            summary: "cancel after second steering".to_string(),
+            command: "sleep 10".to_string(),
+            interactive: false,
+            stateful: false,
+            timeout_ms: None,
+        },
+    };
+
+    service
+        .inject_agent_steering_for_running_turn("%1", "retain the first settled result")
+        .unwrap();
+    let failed_result = mez_agent::ActionResult::failed(
+        &turn,
+        &failed_action,
+        ActionStatus::Failed,
+        "test_action_failed",
+        "first action failed after steering",
+    )
+    .unwrap();
+    service
+        .commit_settled_action_results_context(&turn.turn_id, &[failed_result])
+        .unwrap();
+
+    service
+        .inject_agent_steering_for_running_turn("%1", "cancel the remaining action")
+        .unwrap();
+    let cancelled_result = mez_agent::ActionResult::failed(
+        &turn,
+        &cancelled_action,
+        ActionStatus::Cancelled,
+        "test_action_cancelled",
+        "second action was cancelled after steering",
+    )
+    .unwrap();
+    service
+        .commit_settled_action_results_context(&turn.turn_id, &[cancelled_result])
+        .unwrap();
+
+    let events = canonical_event_oracle(service.agent_turn_contexts().get(&turn.turn_id).unwrap());
+    let labels = events
+        .iter()
+        .map(|event| event.label.as_str())
+        .collect::<Vec<_>>();
+    let assistant_index = labels
+        .iter()
+        .position(|label| *label == "assistant response for two actions")
+        .unwrap();
+    let steering_indices = labels
+        .iter()
+        .enumerate()
+        .filter_map(|(index, label)| label.starts_with("user steering").then_some(index))
+        .collect::<Vec<_>>();
+    let failed_index = labels
+        .iter()
+        .position(|label| *label == "action result failed-after-first-steering")
+        .unwrap();
+    let cancelled_index = labels
+        .iter()
+        .position(|label| *label == "action result cancelled-after-second-steering")
+        .unwrap();
+
+    assert_eq!(steering_indices.len(), 2);
+    assert!(
+        assistant_index < steering_indices[0]
+            && steering_indices[0] < failed_index
+            && failed_index < steering_indices[1]
+            && steering_indices[1] < cancelled_index
+    );
+    assert_eq!(
+        events[failed_index].execution_group_id.as_deref(),
+        Some(group.as_str())
+    );
+    assert_eq!(
+        events[cancelled_index].execution_group_id.as_deref(),
+        Some(group.as_str())
+    );
+    for steering_index in steering_indices {
+        assert_eq!(events[steering_index].execution_group_id, None);
+        assert_eq!(
+            events[steering_index].retention,
+            mez_agent::ContextRetention::Exact
+        );
+    }
 }
 
 /// Verifies terminal transcript persistence accepts one complete execution

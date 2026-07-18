@@ -27,6 +27,7 @@ fn openai_current_action_results_remain_append_only_before_volatile_suffix() {
         &profile,
         &turn(),
         &AgentContext::new(vec![
+            ContextBlock::assistant_event("historical assistant action", "requested action-3"),
             ContextBlock {
                 source: ContextSourceKind::TranscriptTool,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
@@ -39,6 +40,7 @@ fn openai_current_action_results_remain_append_only_before_volatile_suffix() {
                 label: "user".to_string(),
                 content: "use the prior output".to_string(),
             },
+            ContextBlock::assistant_event("current assistant action", "requested action-4"),
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
@@ -1039,6 +1041,105 @@ fn openai_prompt_cache_key_uses_unknown_lineage_without_session_identity() {
 }
 
 #[test]
+/// Verifies cache diagnostics distinguish no-op preparation, volatile CWD
+/// changes, real stable-guidance rewrites, and exceptional request controls.
+///
+/// CWD must alter only the volatile suffix/full request, while stable guidance
+/// intentionally rewrites the reusable projection. A typed exceptional mode
+/// changes provider control shape and is therefore an expected cache break.
+fn openai_cache_hashes_attribute_stable_volatile_and_control_changes() {
+    let profile = ModelProfile {
+        provider: "openai".to_string(),
+        model: "gpt-5.4".to_string(),
+        reasoning_profile: None,
+        latency_preference: None,
+        multimodal_required: false,
+        provider_options: std::collections::BTreeMap::new(),
+        safety_tier: None,
+    };
+    let context = |guidance: &str, cwd: &str| {
+        AgentContext::new(vec![
+            ContextBlock::stable_instruction(
+                ContextSourceKind::ProjectGuidance,
+                "active repository instructions",
+                guidance,
+            ),
+            ContextBlock::user_event("user prompt", "inspect cache chronology"),
+            ContextBlock::live_state(
+                ContextSourceKind::RuntimeHint,
+                "runtime state",
+                format!("cwd={cwd}"),
+            ),
+        ])
+        .unwrap()
+    };
+    let request = |guidance: &str, cwd: &str| {
+        assemble_model_request(&profile, &turn(), &context(guidance, cwd)).unwrap()
+    };
+    let base = request("preserve chronology", "/repo/a");
+    let no_op = request("preserve chronology", "/repo/a");
+    let cwd_changed = request("preserve chronology", "/repo/b");
+    let guidance_changed = request("preserve chronology and causal ownership", "/repo/a");
+    let mut exceptional = base.clone();
+    exceptional.interaction_kind = mez_agent::ModelInteractionKind::AutoSizing;
+    exceptional.allowed_actions = mez_agent::AllowedActionSet::say_only();
+
+    let base = openai_prompt_cache_diagnostics_for_request(&base).unwrap();
+    let no_op = openai_prompt_cache_diagnostics_for_request(&no_op).unwrap();
+    let cwd_changed = openai_prompt_cache_diagnostics_for_request(&cwd_changed).unwrap();
+    let guidance_changed = openai_prompt_cache_diagnostics_for_request(&guidance_changed).unwrap();
+    let exceptional = openai_prompt_cache_diagnostics_for_request(&exceptional).unwrap();
+
+    assert_eq!(
+        base.stable_projection_sha256,
+        no_op.stable_projection_sha256
+    );
+    assert_eq!(
+        base.continuity_snapshot.request_sha256,
+        no_op.continuity_snapshot.request_sha256
+    );
+    assert_eq!(
+        base.provider_request_shape_sha256,
+        no_op.provider_request_shape_sha256
+    );
+
+    assert_eq!(
+        base.stable_projection_sha256,
+        cwd_changed.stable_projection_sha256
+    );
+    assert_ne!(
+        base.volatile_input_sha256,
+        cwd_changed.volatile_input_sha256
+    );
+    assert_ne!(
+        base.continuity_snapshot.request_sha256,
+        cwd_changed.continuity_snapshot.request_sha256
+    );
+    assert_eq!(
+        base.provider_request_shape_sha256,
+        cwd_changed.provider_request_shape_sha256
+    );
+
+    assert_ne!(
+        base.stable_projection_sha256,
+        guidance_changed.stable_projection_sha256
+    );
+    assert_ne!(
+        base.continuity_snapshot.request_sha256,
+        guidance_changed.continuity_snapshot.request_sha256
+    );
+
+    assert_ne!(
+        base.provider_request_shape_sha256,
+        exceptional.provider_request_shape_sha256
+    );
+    assert_ne!(
+        base.continuity_snapshot.request_sha256,
+        exceptional.continuity_snapshot.request_sha256
+    );
+}
+
+#[test]
 /// Verifies active-turn read/search action results replay directly into the
 /// provider request instead of being replaced with a synthetic read-ledger
 /// block.
@@ -1062,6 +1163,10 @@ fn openai_replays_current_turn_read_results_without_synthetic_ledger() {
                 label: "user".to_string(),
                 content: "Patch the overlay style helper.".to_string(),
             },
+            ContextBlock::assistant_event(
+                "assistant read actions",
+                "requested read-1, read-2, and read-3",
+            ),
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
                 placement: mez_agent::ContextPlacement::ConversationAppend,
