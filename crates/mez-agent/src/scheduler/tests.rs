@@ -173,3 +173,102 @@ fn scheduler_blocked_turns_reserve_capacity_and_keep_pane_exclusive() {
     scheduler.complete("t2").unwrap();
     assert_eq!(scheduler.start_ready().unwrap().turn_id, "t3");
 }
+
+/// Verifies dependency-waiting parents release provider capacity while
+/// retaining lifecycle and pane ownership.
+///
+/// With a one-slot limit, independent dependent work must start immediately.
+/// Work targeting the waiting parent's pane remains ineligible, and the parent
+/// re-enters the ordinary fairness queue once its dependency settles.
+#[test]
+fn scheduler_dependency_waits_release_capacity_and_reacquire_fairly() {
+    let mut scheduler = AgentScheduler::new(1).unwrap();
+    scheduler
+        .enqueue(work("parent", "parent-agent", "%1"))
+        .unwrap();
+    scheduler
+        .enqueue(work("same-pane", "other-agent", "%1"))
+        .unwrap();
+    scheduler
+        .enqueue(work("child", "child-agent", "%2"))
+        .unwrap();
+    assert_eq!(scheduler.start_ready().unwrap().turn_id, "parent");
+
+    scheduler.wait_running("parent").unwrap();
+
+    assert_eq!(scheduler.snapshot().active_capacity_used, 0);
+    assert_eq!(scheduler.snapshot().waiting, 1);
+    assert_eq!(scheduler.start_ready().unwrap().turn_id, "child");
+    assert_eq!(scheduler.snapshot().active_capacity_used, 1);
+    scheduler.requeue_waiting("parent").unwrap();
+    assert_eq!(scheduler.snapshot().waiting, 0);
+    assert_eq!(scheduler.snapshot().reacquiring, 1);
+    assert!(scheduler.start_ready().is_none());
+
+    scheduler.complete("child").unwrap();
+    assert_eq!(scheduler.start_ready().unwrap().turn_id, "parent");
+    assert_eq!(scheduler.snapshot().reacquiring, 0);
+    scheduler.complete("parent").unwrap();
+    assert_eq!(scheduler.start_ready().unwrap().turn_id, "same-pane");
+}
+
+/// Verifies cancellation removes both dependency waits and queued
+/// reacquisition claims without leaking capacity or pane exclusivity.
+#[test]
+fn scheduler_cancels_dependency_waits_and_reacquisition_claims() {
+    let mut scheduler = AgentScheduler::new(1).unwrap();
+    scheduler
+        .enqueue(work("parent", "parent-agent", "%1"))
+        .unwrap();
+    scheduler.enqueue(work("next", "next-agent", "%1")).unwrap();
+    scheduler.start_ready().unwrap();
+    scheduler.wait_running("parent").unwrap();
+
+    let waiting = scheduler.cancel("parent").unwrap();
+    assert!(matches!(waiting, SchedulerCancellation::Waiting(_)));
+    assert_eq!(scheduler.snapshot().waiting, 0);
+    assert_eq!(scheduler.start_ready().unwrap().turn_id, "next");
+    scheduler.complete("next").unwrap();
+
+    scheduler
+        .enqueue(work("parent-2", "parent-agent", "%1"))
+        .unwrap();
+    scheduler
+        .enqueue(work("next-2", "next-agent", "%1"))
+        .unwrap();
+    scheduler.start_ready().unwrap();
+    scheduler.wait_running("parent-2").unwrap();
+    scheduler.requeue_waiting("parent-2").unwrap();
+    let queued = scheduler.cancel("parent-2").unwrap();
+
+    assert!(matches!(queued, SchedulerCancellation::Queued(_)));
+    assert_eq!(scheduler.snapshot().reacquiring, 0);
+    assert_eq!(scheduler.start_ready().unwrap().turn_id, "next-2");
+}
+
+/// Verifies multiple dependency-waiting parents do not reduce newly configured
+/// active capacity.
+///
+/// Both parents retain their wait records and pane claims, while an unrelated
+/// child can use the sole provider slot after the limit is lowered.
+#[test]
+fn scheduler_multiple_dependency_waits_do_not_consume_active_capacity() {
+    let mut scheduler = AgentScheduler::new(2).unwrap();
+    scheduler
+        .enqueue(work("parent-1", "parent-1", "%1"))
+        .unwrap();
+    scheduler
+        .enqueue(work("parent-2", "parent-2", "%2"))
+        .unwrap();
+    scheduler.enqueue(work("child", "child", "%3")).unwrap();
+    scheduler.start_ready().unwrap();
+    scheduler.start_ready().unwrap();
+    scheduler.wait_running("parent-1").unwrap();
+    scheduler.wait_running("parent-2").unwrap();
+    scheduler.set_max_concurrent_agents(1).unwrap();
+
+    assert_eq!(scheduler.snapshot().waiting, 2);
+    assert_eq!(scheduler.snapshot().active_capacity_used, 0);
+    assert_eq!(scheduler.start_ready().unwrap().turn_id, "child");
+    assert_eq!(scheduler.snapshot().active_capacity_used, 1);
+}

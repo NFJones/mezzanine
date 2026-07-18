@@ -640,6 +640,7 @@ pub fn append_scheduler_context(
     let runnable_agents = runnable_agent_ids(scheduler);
     let scheduler_idle = snapshot.running == 0
         && snapshot.blocked == 0
+        && snapshot.waiting == 0
         && snapshot.queued == 0
         && runnable_agents.is_empty();
     if scheduler_idle && !idle_scheduler_context_is_relevant(&context) {
@@ -691,10 +692,39 @@ pub fn append_scheduler_context(
             })
             .collect::<Vec<_>>()
             .join(",");
+        let waiting = scheduler
+            .waiting_turns()
+            .map(|work| {
+                format!(
+                    "{}:{}:{}:{:?}",
+                    work.turn_id,
+                    work.agent_id,
+                    work.pane_id.as_deref().unwrap_or("-"),
+                    work.kind
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let reacquiring = scheduler
+            .reacquiring_turns()
+            .map(|work| {
+                format!(
+                    "{}:{}:{}:{:?}",
+                    work.turn_id,
+                    work.agent_id,
+                    work.pane_id.as_deref().unwrap_or("-"),
+                    work.kind
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
         format!(
-            "running={}\nblocked={}\nqueued={}\nmax_concurrent_agents={}\nrunnable_agents={}\nrunning_turns={}\nblocked_turns={}\nqueued_turns={}",
+            "active_capacity_used={}\nrunning={}\nblocked={}\nwaiting={}\nreacquiring={}\nqueued={}\nmax_concurrent_agents={}\nrunnable_agents={}\nrunning_turns={}\nblocked_turns={}\nwaiting_turns={}\nreacquiring_turns={}\nqueued_turns={}",
+            snapshot.active_capacity_used,
             snapshot.running,
             snapshot.blocked,
+            snapshot.waiting,
+            snapshot.reacquiring,
             snapshot.queued,
             snapshot.max_concurrent_agents,
             if runnable.is_empty() {
@@ -704,6 +734,12 @@ pub fn append_scheduler_context(
             },
             if running.is_empty() { "none" } else { &running },
             if blocked.is_empty() { "none" } else { &blocked },
+            if waiting.is_empty() { "none" } else { &waiting },
+            if reacquiring.is_empty() {
+                "none"
+            } else {
+                &reacquiring
+            },
             if queued.is_empty() { "none" } else { &queued }
         )
     };

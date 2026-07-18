@@ -430,7 +430,7 @@ description.
 | `agents.default_personality` | string | `""` | Default personality profile id; empty means none. |
 | `agents.auto_sizing` | table | see below | Model auto-sizing settings. |
 | `agents.subagent_placement` | string | `"new-window"` | Where root-spawned subagents are placed. |
-| `agents.max_concurrent_agents` | integer | `4` | Global concurrent agent limit. |
+| `agents.max_concurrent_agents` | integer | `4` | Global active-agent limit; parents waiting for routed, joined, or macro dependencies release capacity and reacquire it fairly before continuing. |
 | `agents.max_root_subagents` | integer | `4` | Maximum subagents a root agent may spawn. |
 | `agents.max_subagents_per_subagent` | integer | `2` | Maximum child subagents for each subagent. |
 | `agents.max_subagent_panes_per_window` | integer | `4` | Maximum subagent panes per window. |

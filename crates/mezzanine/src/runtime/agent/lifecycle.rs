@@ -319,23 +319,60 @@ impl RuntimeSessionService {
                 .ok_or_else(|| {
                     MezError::invalid_state("scheduled turn is missing from runtime ledger")
                 })?;
-            self.agent_turn_ledger_mut()
-                .mark_turn_running(&running.turn_id)?;
-            self.agent_shell_store_mut()
-                .start_turn(&turn.pane_id, running.turn_id.clone())?;
+            let previous_state = turn.state;
+            match previous_state {
+                AgentTurnState::Queued => {
+                    self.agent_turn_ledger_mut()
+                        .mark_turn_running(&running.turn_id)?;
+                    self.agent_shell_store_mut()
+                        .start_turn(&turn.pane_id, running.turn_id.clone())?;
+                }
+                AgentTurnState::Blocked => {
+                    self.agent_turn_ledger_mut()
+                        .resume_blocked_turn(&running.turn_id)?;
+                    match self
+                        .agent_shell_store()
+                        .get(&turn.pane_id)
+                        .and_then(|session| session.running_turn_id.as_deref())
+                    {
+                        Some(active_turn_id) if active_turn_id == running.turn_id => {}
+                        None => self
+                            .agent_shell_store_mut()
+                            .start_turn(&turn.pane_id, running.turn_id.clone())?,
+                        Some(_) => {
+                            return Err(MezError::invalid_state(
+                                "reacquiring parent pane is owned by another agent turn",
+                            ));
+                        }
+                    }
+                }
+                _ => {
+                    return Err(MezError::invalid_state(
+                        "scheduled work must reference a queued or dependency-waiting turn",
+                    ));
+                }
+            }
             self.agent
                 .pending_agent_provider_tasks
                 .insert(running.turn_id.clone());
             self.append_agent_trace_turn_transition(
                 &turn,
-                AgentTurnState::Queued,
+                previous_state,
                 AgentTurnState::Running,
-                "scheduler_start",
+                if previous_state == AgentTurnState::Blocked {
+                    "scheduler_reacquire"
+                } else {
+                    "scheduler_start"
+                },
             )?;
             self.append_agent_trace_turn_event(
                 &turn.pane_id,
                 &running.turn_id,
-                "provider_task queued reason=scheduler_start",
+                if previous_state == AgentTurnState::Blocked {
+                    "provider_task queued reason=scheduler_reacquire"
+                } else {
+                    "provider_task queued reason=scheduler_start"
+                },
             )?;
             if suppressed_turn_id != Some(running.turn_id.as_str()) {
                 self.append_lifecycle_event(

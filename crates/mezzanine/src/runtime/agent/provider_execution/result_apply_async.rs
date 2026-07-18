@@ -183,11 +183,11 @@ impl RuntimeSessionService {
             if waiting_for_joined_subagents {
                 self.agent_turn_executions_mut()
                     .insert(turn_id.to_string(), execution.clone());
-                self.agent.agent_scheduler.block_running(turn_id)?;
+                self.agent.agent_scheduler.wait_running(turn_id)?;
                 self.append_agent_trace_turn_event(
                     &turn.pane_id,
                     turn_id,
-                    "scheduler running -> blocked reason=waiting_for_subagents",
+                    "scheduler running -> waiting reason=waiting_for_subagents capacity=released",
                 )?;
                 self.agent.pending_agent_provider_tasks.remove(turn_id);
                 self.append_agent_trace_turn_event(

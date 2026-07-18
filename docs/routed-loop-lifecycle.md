@@ -13,12 +13,19 @@ invoking model. Internal iterations are not independent routed turns.
 | Classification | Auto-sizing router | Classify the first work turn once. The router cannot execute user actions. |
 | Iteration | Managed worker | Run the transferred work prompt in one persistent worker with the selected profile pinned. Internal continuation turns skip routing. |
 | Exit and handoff | Runtime and managed worker | Continue after a completed iteration that emitted `apply_patch`; otherwise stop after the first patch-free completion or at the limit. Preserve the exact final output and request one structured handoff from the same worker. |
-| Presentation | Invoking model | Resume the blocked parent on its ordinary profile and present one result. A joined subagent or macro dependency remains pending through this phase. |
+| Presentation | Invoking model | Queue the waiting parent for fair capacity reacquisition, then resume it on its ordinary profile and present one result. A joined subagent or macro dependency remains pending through this phase. |
 
 The worker receives a structured transfer of the loop prompt and context. It
 does not receive a new literal `/loop` command, so it cannot accidentally
 create a nested controller. Routing is disabled for the managed worker's
 internal turns, including continuation and handoff requests.
+
+While the parent waits for classification, worker execution, handoff, or a
+runtime-owned macro dependency, it retains lifecycle and pane ownership but
+releases its active scheduler slot. Each dependent stage can therefore run when
+`agents.max_concurrent_agents = 1`. Once the dependency is ready, the parent
+returns to the ordinary fair scheduler queue and receives a provider task only
+after it reacquires capacity.
 
 ## Conversation modes
 

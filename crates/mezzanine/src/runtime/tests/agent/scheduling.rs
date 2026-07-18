@@ -682,13 +682,14 @@ fn runtime_scheduler_prefers_other_runnable_agent_after_completion() {
     );
 }
 
-/// Verifies joined child completion drains the scheduler when other joined
-/// children are queued behind a low concurrency limit.
+/// Verifies joined child completion drains the scheduler and fairly resumes
+/// the parent when joined work is queued behind a one-slot limit.
 ///
 /// A blocked parent releases its global scheduler slot while it waits for
 /// joined subagents. When the first running child finishes, the next queued
 /// child must start immediately so the parent is not left waiting for a child
-/// turn that is ready but never launched.
+/// turn that is ready but never launched. After the last child completes, the
+/// parent must reacquire the slot before its provider continuation is queued.
 #[test]
 fn runtime_joined_child_completion_starts_next_queued_child() {
     let mut service = test_runtime_service();
@@ -798,12 +799,14 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
     service.remove_pending_agent_provider_task(&parent.turn_id);
     service
         .agent_scheduler_mut()
-        .complete(&parent.turn_id)
+        .wait_running(&parent.turn_id)
         .unwrap();
     service
         .agent_turn_ledger_mut()
         .finish_turn(&parent.turn_id, AgentTurnState::Blocked)
         .unwrap();
+    assert_eq!(service.agent_scheduler().snapshot().waiting, 1);
+    assert_eq!(service.agent_scheduler().snapshot().active_capacity_used, 0);
     service.start_ready_agent_turns().unwrap();
     assert_eq!(
         service
@@ -857,5 +860,49 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
             .find(|turn| turn.turn_id == parent.turn_id)
             .map(|turn| turn.state),
         Some(AgentTurnState::Blocked)
+    );
+
+    let child_two_provider = RuntimeBatchProvider {
+        response: runtime_say_response_for_agent(
+            &child_two.turn_id,
+            &child_two.agent_id,
+            "child two done",
+            true,
+        ),
+    };
+    service
+        .execute_agent_turn_with_provider(
+            &child_two.turn_id,
+            &child_two_provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+
+    assert!(!service.has_joined_subagent_dependency(&child_two.turn_id));
+    assert_eq!(service.agent_scheduler().snapshot().waiting, 0);
+    assert_eq!(service.agent_scheduler().snapshot().reacquiring, 0);
+    assert_eq!(service.agent_scheduler().snapshot().active_capacity_used, 1);
+    assert_eq!(
+        service
+            .agent_scheduler()
+            .running_turns()
+            .map(|running| running.turn_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![parent.turn_id.as_str()]
+    );
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == parent.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Running)
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == parent.turn_id)
     );
 }

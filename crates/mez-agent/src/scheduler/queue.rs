@@ -28,6 +28,8 @@ impl AgentScheduler {
             queued: VecDeque::new(),
             running: Vec::new(),
             blocked: Vec::new(),
+            waiting: Vec::new(),
+            reacquiring: Vec::new(),
             last_started_agent_id: None,
         })
     }
@@ -40,6 +42,8 @@ impl AgentScheduler {
             queued: VecDeque::new(),
             running: Vec::new(),
             blocked: Vec::new(),
+            waiting: Vec::new(),
+            reacquiring: Vec::new(),
             last_started_agent_id: None,
         }
     }
@@ -78,9 +82,13 @@ impl AgentScheduler {
                 .blocked
                 .iter()
                 .any(|blocked| blocked.turn_id == work.turn_id)
+            || self
+                .waiting
+                .iter()
+                .any(|waiting| waiting.turn_id == work.turn_id)
         {
             return Err(SchedulerError::conflict(
-                "scheduled turn id is already queued, running, or blocked",
+                "scheduled turn id is already queued, running, blocked, or waiting",
             ));
         }
         self.queued.push_back(work);
@@ -93,7 +101,7 @@ impl AgentScheduler {
     /// agent is preferred when available, and pane-conflicted turns are skipped
     /// without preventing later runnable work from starting.
     pub fn start_ready(&mut self) -> Option<RunningWork> {
-        if self.running.len() + self.blocked.len() >= self.max_concurrent_agents {
+        if self.active_capacity_used() >= self.max_concurrent_agents {
             return None;
         }
         self.start_ready_candidate(true)
@@ -129,6 +137,45 @@ impl AgentScheduler {
         Ok(work)
     }
 
+    /// Moves a running parent into dependency-waiting state and releases its
+    /// provider-capacity slot.
+    ///
+    /// Waiting work retains agent and shell-pane exclusivity so unrelated work
+    /// cannot take over its lifecycle owner while a routed worker or joined
+    /// subagent is outstanding.
+    pub fn wait_running(&mut self, turn_id: &str) -> SchedulerResult<RunningWork> {
+        let index = self
+            .running
+            .iter()
+            .position(|running| running.turn_id == turn_id)
+            .ok_or_else(|| SchedulerError::new(SchedulerErrorKind::NotFound, "turn not found"))?;
+        let work = self.running.remove(index);
+        self.waiting.push(work.clone());
+        Ok(work)
+    }
+
+    /// Queues a dependency-waiting parent for fair capacity reacquisition.
+    ///
+    /// The parent re-enters the normal ready queue while a private claim keeps
+    /// its agent and pane exclusive until it starts or is cancelled.
+    pub fn requeue_waiting(&mut self, turn_id: &str) -> SchedulerResult<ScheduledWork> {
+        let index = self
+            .waiting
+            .iter()
+            .position(|waiting| waiting.turn_id == turn_id)
+            .ok_or_else(|| SchedulerError::new(SchedulerErrorKind::NotFound, "turn not found"))?;
+        let work = self.waiting.remove(index);
+        let scheduled = ScheduledWork {
+            turn_id: work.turn_id.clone(),
+            agent_id: work.agent_id.clone(),
+            pane_id: work.pane_id.clone(),
+            kind: work.kind,
+        };
+        self.reacquiring.push(work);
+        self.queued.push_back(scheduled.clone());
+        Ok(scheduled)
+    }
+
     /// Moves a blocked turn back to running state.
     ///
     /// Approved continuations are resumptions of already-started user work. The
@@ -160,6 +207,8 @@ impl AgentScheduler {
                     "queued scheduler work disappeared during cancellation",
                 )
             })?;
+            self.reacquiring
+                .retain(|claim| claim.turn_id != work.turn_id);
             return Ok(SchedulerCancellation::Queued(work));
         }
 
@@ -179,6 +228,14 @@ impl AgentScheduler {
             return Ok(SchedulerCancellation::Blocked(self.blocked.remove(index)));
         }
 
+        if let Some(index) = self
+            .waiting
+            .iter()
+            .position(|waiting| waiting.turn_id == turn_id)
+        {
+            return Ok(SchedulerCancellation::Waiting(self.waiting.remove(index)));
+        }
+
         Err(SchedulerError::new(
             SchedulerErrorKind::NotFound,
             "turn not found",
@@ -192,8 +249,16 @@ impl AgentScheduler {
             queued: self.queued.len(),
             running: self.running.len(),
             blocked: self.blocked.len(),
+            waiting: self.waiting.len(),
+            reacquiring: self.reacquiring.len(),
+            active_capacity_used: self.active_capacity_used(),
             max_concurrent_agents: self.max_concurrent_agents,
         }
+    }
+
+    /// Returns the number of turns that currently own provider capacity.
+    pub fn active_capacity_used(&self) -> usize {
+        self.running.len().saturating_add(self.blocked.len())
     }
 
     /// Iterates queued turns in their current fairness order.
@@ -211,6 +276,16 @@ impl AgentScheduler {
         self.blocked.iter()
     }
 
+    /// Iterates parent turns waiting for routed or joined dependent work.
+    pub fn waiting_turns(&self) -> impl Iterator<Item = &RunningWork> {
+        self.waiting.iter()
+    }
+
+    /// Iterates waiting parents queued to reacquire provider capacity.
+    pub fn reacquiring_turns(&self) -> impl Iterator<Item = &RunningWork> {
+        self.reacquiring.iter()
+    }
+
     /// Runs the can start operation for this subsystem.
     ///
     /// The function keeps parsing, state changes, and error propagation in
@@ -221,6 +296,12 @@ impl AgentScheduler {
             .running
             .iter()
             .chain(self.blocked.iter())
+            .chain(self.waiting.iter())
+            .chain(
+                self.reacquiring
+                    .iter()
+                    .filter(|claim| claim.turn_id != work.turn_id),
+            )
             .any(|running| running.agent_id == work.agent_id)
         {
             return false;
@@ -235,6 +316,12 @@ impl AgentScheduler {
             .running
             .iter()
             .chain(self.blocked.iter())
+            .chain(self.waiting.iter())
+            .chain(
+                self.reacquiring
+                    .iter()
+                    .filter(|claim| claim.turn_id != work.turn_id),
+            )
             .any(|running| {
                 running.kind == ScheduledWorkKind::ShellCapable
                     && running.pane_id.as_deref() == Some(pane_id.as_str())
@@ -260,6 +347,8 @@ impl AgentScheduler {
             kind: work.kind,
         };
         self.last_started_agent_id = Some(running.agent_id.clone());
+        self.reacquiring
+            .retain(|claim| claim.turn_id != running.turn_id);
         self.running.push(running.clone());
         Some(running)
     }

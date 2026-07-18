@@ -4830,6 +4830,10 @@ spawned child delivers its final task result, and the parent provider turn MUST
 not continue or complete before joined child results are available as action
 result context. A joined parent turn MUST release global scheduler capacity
 while waiting so child agents can run even when the concurrency limit is low.
+The scheduler MUST retain the waiting parent's lifecycle, cancellation,
+correlation, agent, and pane ownership while that capacity is released. After
+the last joined dependency settles, the parent MUST re-enter the ordinary fair
+ready queue and MUST NOT resume provider execution until it reacquires capacity.
 In `detach` mode, the parent may continue immediately after spawn creation
 while status updates may route to the controlling pane and final output routes
 to the parent agent through the local message passing protocol.
@@ -7889,6 +7893,17 @@ The maximum number of concurrently running agents MUST be configurable.
 
 The scheduler MUST provide fair progress among runnable agents and MUST NOT
 starve an agent indefinitely while resources remain available.
+
+The scheduler MUST distinguish active execution from parents waiting for
+routed workers, joined subagents, or runtime-owned macro dependencies. Such
+dependency-waiting parents MUST retain lifecycle, cancellation, correlation,
+agent, and pane ownership but MUST NOT consume global running-agent capacity.
+When a dependency settles, the parent MUST join the ordinary ready queue for
+fair capacity reacquisition; the runtime MUST NOT queue its provider
+continuation or restore running state before admission. Cancellation or failure
+MUST remove both dependency-wait and pending-reacquisition records. Scheduler
+diagnostics MUST distinguish active capacity, queued work, dependency waits,
+and pending reacquisition so admission decisions remain observable.
 
 Agent turns blocked on approval, redirect, trust, or user input MUST retain
 their pane and agent exclusivity, but they MUST NOT consume global running-agent

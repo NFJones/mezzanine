@@ -8,6 +8,10 @@ fn selected_routed_loop(
     command: &str,
 ) -> (RuntimeSessionService, String, mez_agent::AgentTurnRecord) {
     let mut service = test_runtime_service();
+    service
+        .agent_scheduler_mut()
+        .set_max_concurrent_agents(1)
+        .unwrap();
     let _primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
@@ -109,6 +113,10 @@ fn routed_patch_execution(turn: &mez_agent::AgentTurnRecord) -> mez_agent::Agent
 #[test]
 fn runtime_routed_worker_presents_child_prompt_status_and_output() {
     let mut service = test_runtime_service();
+    service
+        .agent_scheduler_mut()
+        .set_max_concurrent_agents(1)
+        .unwrap();
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-routed-presentation"));
     service.set_agent_transcript_store(transcript_store.clone());
     let primary = service
@@ -141,6 +149,10 @@ fn runtime_routed_worker_presents_child_prompt_status_and_output() {
     service
         .apply_routed_worker_selected_transition(&parent_agent, "turn-1", selection)
         .unwrap();
+
+    assert_eq!(service.agent_scheduler().snapshot().waiting, 1);
+    assert_eq!(service.agent_scheduler().snapshot().running, 1);
+    assert_eq!(service.agent_scheduler().snapshot().active_capacity_used, 1);
 
     let child_prompt = service
         .pane_screen("%2")
@@ -612,6 +624,11 @@ fn runtime_routed_loop_continuation_queue_failure_recovers_once() {
     service
         .emit_subagent_task_result_for_execution(&worker_turn, &execution)
         .unwrap();
+    service
+        .agent_scheduler_mut()
+        .complete(&worker_turn.turn_id)
+        .unwrap();
+    service.start_ready_agent_turns().unwrap();
 
     let workflow = service
         .routed_workflow_for_tests(&parent_turn_id)
@@ -702,6 +719,11 @@ fn runtime_routed_loop_worker_provider_failure_terminates_controller() {
     service
         .emit_subagent_task_result_for_execution(&worker_turn, &execution)
         .unwrap();
+    service
+        .agent_scheduler_mut()
+        .complete(&worker_turn.turn_id)
+        .unwrap();
+    service.start_ready_agent_turns().unwrap();
 
     let workflow = service
         .routed_workflow_for_tests(&parent_turn_id)

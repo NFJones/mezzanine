@@ -229,6 +229,7 @@ impl RuntimeSessionService {
                     execution.final_turn = false;
                     execution.terminal_state = AgentTurnState::Running;
                 }
+                self.agent.agent_scheduler.wait_running(&turn.turn_id)?;
                 self.agent_turn_ledger_mut()
                     .finish_turn(&turn.turn_id, AgentTurnState::Blocked)?;
                 self.append_agent_trace_turn_transition(
@@ -237,6 +238,7 @@ impl RuntimeSessionService {
                     AgentTurnState::Blocked,
                     "macro_judge_dispatched_next_step",
                 )?;
+                self.start_ready_agent_turns()?;
             }
             MacroJudgeOutcome::RetryCurrentStep => {
                 let (child_agent_id, prompt, retry_action_id, dispatch_status) = {
@@ -301,6 +303,7 @@ impl RuntimeSessionService {
                     execution.final_turn = false;
                     execution.terminal_state = AgentTurnState::Running;
                 }
+                self.agent.agent_scheduler.wait_running(&turn.turn_id)?;
                 self.agent_turn_ledger_mut()
                     .finish_turn(&turn.turn_id, AgentTurnState::Blocked)?;
                 self.append_agent_trace_turn_transition(
@@ -309,6 +312,7 @@ impl RuntimeSessionService {
                     AgentTurnState::Blocked,
                     "macro_judge_retried_current_step",
                 )?;
+                self.start_ready_agent_turns()?;
             }
             MacroJudgeOutcome::StopFailure => {
                 let message = decision

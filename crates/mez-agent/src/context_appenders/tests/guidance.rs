@@ -370,3 +370,61 @@ fn scheduler_context_follows_stable_project_context_and_precedes_user_context() 
     assert!(context.blocks[1].content.contains("queued=1"));
     assert!(context.blocks[1].content.contains("agent-queued"));
 }
+
+#[test]
+/// Verifies scheduler context distinguishes dependency waits from active
+/// provider capacity and queued reacquisition.
+///
+/// Operators and model-facing diagnostics need to explain why a dependent can
+/// start under a one-slot limit and why its parent remains live after releasing
+/// that slot. The summary therefore reports both occupancy and lifecycle state.
+fn scheduler_context_reports_dependency_waits_and_reacquisition() {
+    let context = AgentContext::new(vec![ContextBlock {
+        source: ContextSourceKind::UserInstruction,
+        placement: crate::ContextPlacement::EphemeralTail,
+        label: "user".to_string(),
+        content: "inspect scheduler concurrency".to_string(),
+    }])
+    .unwrap();
+    let mut scheduler = AgentScheduler::new(1).unwrap();
+    scheduler
+        .enqueue(crate::ScheduledWork {
+            turn_id: "parent".to_string(),
+            agent_id: "parent-agent".to_string(),
+            pane_id: Some("%1".to_string()),
+            kind: crate::ScheduledWorkKind::ShellCapable,
+        })
+        .unwrap();
+    scheduler.start_ready().unwrap();
+    scheduler.wait_running("parent").unwrap();
+
+    let waiting_context = append_scheduler_context(context.clone(), &scheduler).unwrap();
+    let waiting_summary = waiting_context
+        .blocks
+        .iter()
+        .find(|block| block.label == "scheduler state")
+        .unwrap();
+    assert!(waiting_summary.content.contains("active_capacity_used=0"));
+    assert!(waiting_summary.content.contains("waiting=1"));
+    assert!(waiting_summary.content.contains("waiting_turns=parent:"));
+
+    scheduler.requeue_waiting("parent").unwrap();
+    let reacquiring_context = append_scheduler_context(context, &scheduler).unwrap();
+    let reacquiring_summary = reacquiring_context
+        .blocks
+        .iter()
+        .find(|block| block.label == "scheduler state")
+        .unwrap();
+    assert!(
+        reacquiring_summary
+            .content
+            .contains("active_capacity_used=0")
+    );
+    assert!(reacquiring_summary.content.contains("reacquiring=1"));
+    assert!(
+        reacquiring_summary
+            .content
+            .contains("reacquiring_turns=parent:")
+    );
+    assert!(reacquiring_summary.content.contains("queued=1"));
+}

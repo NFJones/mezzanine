@@ -305,6 +305,9 @@ impl RuntimeSessionService {
         self.agent
             .claimed_agent_provider_tasks
             .remove(&parent_turn.turn_id);
+        self.agent
+            .agent_scheduler
+            .wait_running(&parent_turn.turn_id)?;
         self.agent_turn_ledger_mut()
             .finish_turn(&parent_turn.turn_id, AgentTurnState::Blocked)?;
         self.append_agent_trace_turn_transition(
@@ -318,6 +321,12 @@ impl RuntimeSessionService {
             &parent_turn.turn_id,
             "provider_task removed reason=runtime_owned_macro_first_step",
         )?;
+        self.append_agent_trace_turn_event(
+            pane_id,
+            &parent_turn.turn_id,
+            "scheduler running -> waiting reason=runtime_owned_macro_first_step capacity=released",
+        )?;
+        self.start_ready_agent_turns()?;
         Ok(())
     }
 

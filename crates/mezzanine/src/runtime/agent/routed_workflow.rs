@@ -122,6 +122,61 @@ struct RoutedChildTurnRequest<'a> {
 }
 
 impl RuntimeSessionService {
+    /// Makes a routed parent eligible for its next provider request without
+    /// bypassing scheduler capacity or fairness.
+    ///
+    /// Ordinary routed completion moves a dependency-waiting parent back to
+    /// the ready queue. Setup failures occur before the parent enters waiting
+    /// state, so their already-running parent can queue the bounded explanation
+    /// directly without a synthetic release/reacquire cycle.
+    fn queue_routed_parent_provider_continuation(
+        &mut self,
+        parent_turn: &AgentTurnRecord,
+        reason: &str,
+    ) -> Result<()> {
+        if self
+            .agent
+            .agent_scheduler
+            .waiting_turns()
+            .any(|work| work.turn_id == parent_turn.turn_id)
+        {
+            self.agent
+                .agent_scheduler
+                .requeue_waiting(&parent_turn.turn_id)?;
+            self.append_agent_trace_turn_event(
+                &parent_turn.pane_id,
+                &parent_turn.turn_id,
+                &format!("scheduler waiting -> queued reason={reason} capacity=reacquire"),
+            )?;
+        } else if self
+            .agent
+            .agent_scheduler
+            .running_turns()
+            .any(|work| work.turn_id == parent_turn.turn_id)
+        {
+            self.agent
+                .pending_agent_provider_tasks
+                .insert(parent_turn.turn_id.clone());
+            self.append_agent_trace_turn_event(
+                &parent_turn.pane_id,
+                &parent_turn.turn_id,
+                &format!("provider_task queued reason={reason}_already_running"),
+            )?;
+        } else if !self
+            .agent
+            .agent_scheduler
+            .queued_turns()
+            .any(|work| work.turn_id == parent_turn.turn_id)
+        {
+            return Err(MezError::new(
+                crate::error::MezErrorKind::NotFound,
+                "routed parent scheduler work is unavailable",
+            ));
+        }
+        self.start_ready_agent_turns()?;
+        Ok(())
+    }
+
     /// Accepts a completed routing decision at the actor boundary.
     ///
     /// The full managed-child transition is deliberately actor-owned so no
@@ -321,7 +376,7 @@ impl RuntimeSessionService {
                     ),
                 )?;
             }
-            self.agent.agent_scheduler.block_running(turn_id)?;
+            self.agent.agent_scheduler.wait_running(turn_id)?;
             self.agent_turn_ledger_mut()
                 .finish_turn(turn_id, AgentTurnState::Blocked)?;
             self.append_agent_trace_turn_event(
@@ -334,6 +389,11 @@ impl RuntimeSessionService {
                     child_agent_id,
                     child_turn.turn_id
                 ),
+            )?;
+            self.append_agent_trace_turn_event(
+                &turn.pane_id,
+                turn_id,
+                "scheduler running -> waiting reason=waiting_for_routed_worker capacity=released",
             )?;
             self.start_ready_agent_turns()?;
             Ok(self.runtime_transition_with_render(
@@ -1074,21 +1134,11 @@ impl RuntimeSessionService {
         self.agent
             .routed_presentation_turns
             .insert(parent_turn.turn_id.clone());
-        let _ = self
-            .agent
-            .agent_scheduler
-            .resume_blocked(&parent_turn.turn_id);
-        if parent_turn.state == AgentTurnState::Blocked {
-            self.agent_turn_ledger_mut()
-                .resume_blocked_turn(&parent_turn.turn_id)?;
-        }
         self.agent_turn_ledger_mut().set_turn_capability(
             &parent_turn.turn_id,
             mez_agent::AgentCapability::RespondOnly,
         )?;
-        self.agent
-            .pending_agent_provider_tasks
-            .insert(parent_turn.turn_id.clone());
+        self.queue_routed_parent_provider_continuation(parent_turn, "routed_failure_ready")?;
         self.append_agent_status_text_to_terminal_buffer(
             &parent_turn.pane_id,
             "agent: routed workflow failed; explaining with main model",
@@ -1155,21 +1205,11 @@ impl RuntimeSessionService {
         self.agent
             .routed_presentation_turns
             .insert(parent_turn.turn_id.clone());
-        let _ = self
-            .agent
-            .agent_scheduler
-            .resume_blocked(&parent_turn.turn_id);
-        if parent_turn.state == AgentTurnState::Blocked {
-            self.agent_turn_ledger_mut()
-                .resume_blocked_turn(&parent_turn.turn_id)?;
-        }
         self.agent_turn_ledger_mut().set_turn_capability(
             &parent_turn.turn_id,
             mez_agent::AgentCapability::RespondOnly,
         )?;
-        self.agent
-            .pending_agent_provider_tasks
-            .insert(parent_turn.turn_id.clone());
+        self.queue_routed_parent_provider_continuation(parent_turn, "routed_presentation_ready")?;
         self.append_agent_status_text_to_terminal_buffer(
             &parent_turn.pane_id,
             "agent: routed worker context received; presenting with main model",

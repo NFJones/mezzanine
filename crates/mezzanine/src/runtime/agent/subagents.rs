@@ -1094,7 +1094,7 @@ impl RuntimeSessionService {
         )?;
         if let Some(parent_turn_id) = failed_macro_parent_turn {
             self.agent.macro_runs_by_parent_turn.remove(&parent_turn_id);
-            let _ = self.agent.agent_scheduler.complete(&parent_turn_id);
+            let _ = self.agent.agent_scheduler.cancel(&parent_turn_id);
             self.agent_turn_ledger_mut()
                 .finish_turn(&parent_turn_id, AgentTurnState::Failed)?;
             self.append_agent_trace_turn_transition(
@@ -1117,40 +1117,20 @@ impl RuntimeSessionService {
             return Ok(());
         }
         if ready_for_continuation {
-            let _ = self
-                .agent
-                .agent_scheduler
-                .resume_blocked(&parent_turn.turn_id);
-            self.append_agent_trace_turn_event(
-                &parent_turn.pane_id,
-                &parent_turn.turn_id,
-                "scheduler blocked -> running reason=joined_subagent_result_ready",
-            )?;
-            if parent_previous_state == AgentTurnState::Blocked {
-                self.agent_turn_ledger_mut()
-                    .resume_blocked_turn(&parent_turn.turn_id)?;
-                self.append_agent_trace_turn_transition(
-                    &parent_turn,
-                    AgentTurnState::Blocked,
-                    AgentTurnState::Running,
-                    "joined_subagent_result_ready",
-                )?;
-            }
             self.agent
-                .pending_agent_provider_tasks
-                .insert(parent_turn.turn_id.clone());
+                .agent_scheduler
+                .requeue_waiting(&parent_turn.turn_id)?;
             self.append_agent_trace_turn_event(
                 &parent_turn.pane_id,
                 &parent_turn.turn_id,
-                "provider_task queued reason=joined_subagent_result_ready",
+                "scheduler waiting -> queued reason=joined_subagent_result_ready capacity=reacquire",
             )?;
             self.append_agent_status_text_to_terminal_buffer(
                 &parent_turn.pane_id,
                 "agent: subagent results received; continuing",
             )?;
-        } else {
-            self.start_ready_agent_turns()?;
         }
+        self.start_ready_agent_turns()?;
         Ok(())
     }
 

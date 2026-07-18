@@ -1,7 +1,10 @@
 //! Shared scheduler data types.
 //!
-//! These types define the public contract for queued and running work while
-//! keeping mutable queue storage owned by the scheduler implementation.
+//! These types define the public contract for queued, active, blocked, and
+//! dependency-waiting work while keeping mutable queue storage owned by the
+//! scheduler implementation. Provider capacity is owned only by running work
+//! and blocked work that explicitly retains its slot; dependency waits retain
+//! lifecycle and pane claims without consuming provider capacity.
 
 use std::collections::VecDeque;
 
@@ -54,8 +57,16 @@ pub struct SchedulerSnapshot {
     pub queued: usize,
     /// Number of turns currently running.
     pub running: usize,
-    /// Number of turns blocked on external input while retaining pane ownership.
+    /// Number of turns blocked on external input while retaining provider
+    /// capacity and pane ownership.
     pub blocked: usize,
+    /// Number of parent turns waiting for dependent work without provider
+    /// capacity.
+    pub waiting: usize,
+    /// Number of waiting parents queued to reacquire provider capacity.
+    pub reacquiring: usize,
+    /// Number of provider-capacity slots currently owned.
+    pub active_capacity_used: usize,
     /// Configured maximum concurrent agent turns.
     pub max_concurrent_agents: usize,
 }
@@ -69,6 +80,8 @@ pub enum SchedulerCancellation {
     Running(RunningWork),
     /// The requested turn is blocked on external input.
     Blocked(RunningWork),
+    /// The requested parent turn is waiting for dependent work.
+    Waiting(RunningWork),
 }
 
 /// Fair scheduler for agent turns and exclusive shell-pane access.
@@ -94,6 +107,14 @@ pub struct AgentScheduler {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub(super) blocked: Vec<RunningWork>,
+    /// Parent turns waiting on routed workers or joined subagents.
+    ///
+    /// Waiting work retains agent and pane exclusivity but does not consume a
+    /// provider-capacity slot.
+    pub(super) waiting: Vec<RunningWork>,
+    /// Pane and agent claims retained while a waiting parent is queued for fair
+    /// provider-capacity reacquisition.
+    pub(super) reacquiring: Vec<RunningWork>,
     /// Stores the last started agent id value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

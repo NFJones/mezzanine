@@ -244,6 +244,10 @@ fn runtime_agent_macro_routed_loop_resolves_after_terminal_presentation() {
     )
     .unwrap();
     let mut service = test_runtime_service();
+    service
+        .agent_scheduler_mut()
+        .set_max_concurrent_agents(1)
+        .unwrap();
     let primary = service
         .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
         .unwrap();
