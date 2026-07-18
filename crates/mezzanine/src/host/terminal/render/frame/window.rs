@@ -2,10 +2,9 @@
 
 use super::super::{
     FrameStatusSegment, MousePaneAgentStatusCell, MouseWindowActionFrameCell, MouseWindowFrameCell,
-    PaneGeometry, PositionedFrameStatus, RenderedFrameStatus, TerminalFrameContext,
-    TerminalFramePosition, TerminalFrameStyle, TerminalStyleSpan, TerminalWindowStatusContext,
-    UiTheme, WindowFrameAction, compose_frame_text_row, fitted_text_width,
-    pane_frame_merges_into_divider, pane_render_region_size_for_geometry, position_frame_status,
+    PositionedFrameStatus, RenderedFrameStatus, TerminalFrameContext, TerminalFrameStyle,
+    TerminalStyleSpan, TerminalWindowStatusContext, UiTheme, WindowFrameAction,
+    WindowPresentationPlan, compose_frame_text_row, fitted_text_width, position_frame_status,
     sanitize_frame_text,
 };
 use super::{
@@ -366,31 +365,29 @@ pub fn window_frame_action_pillbox_cells(
 
 /// Returns rendered cells occupied by pane-frame model and reasoning pills.
 ///
-/// The caller supplies pane geometries in rendered-window body coordinates and
-/// a row offset for conditional group/window frames. This keeps hit testing
-/// aligned with the same layout routine that renders the pane status text.
+/// The caller supplies the mux-owned presentation plan so hit cells use the
+/// exact frame rows, clipping, focus, and pane order selected for rendering.
 pub fn pane_frame_agent_status_pillbox_cells(
     window: &Window,
     frame_context: &TerminalFrameContext,
     template: &str,
-    position: TerminalFramePosition,
-    row_offset: u16,
-    geometries: &[PaneGeometry],
+    plan: &WindowPresentationPlan,
 ) -> Vec<MousePaneAgentStatusCell> {
-    geometries
+    plan.panes
         .iter()
-        .flat_map(|geometry| {
-            let pane = window
+        .flat_map(|pane_plan| {
+            let Some(pane) = window
                 .panes()
                 .iter()
-                .find(|pane| pane.index == geometry.index)
-                .unwrap_or_else(|| window.active_pane());
-            let width =
-                usize::from(pane_render_region_size_for_geometry(geometry, geometries).columns);
-            let row = mez_mux::presentation::pane_frame_row_for_geometry(
-                geometry, geometries, position, row_offset,
-            );
-            let fill = if pane_frame_merges_into_divider(geometry, geometries, position) {
+                .find(|pane| pane.index == pane_plan.source_index)
+            else {
+                return Vec::new();
+            };
+            let Some(row) = pane_plan.frame_row else {
+                return Vec::new();
+            };
+            let width = usize::from(pane_plan.render_region_size.columns);
+            let fill = if pane_plan.frame_merges_into_divider {
                 pane_frame_fill_char(template)
             } else {
                 ' '
@@ -405,9 +402,12 @@ pub fn pane_frame_agent_status_pillbox_cells(
                     pillbox_segment_local_columns(segment.start, segment.width, width)
                         .filter_map(move |column| {
                             Some(MousePaneAgentStatusCell {
-                                column: geometry.column.checked_add(u16::try_from(column).ok()?)?,
+                                column: pane_plan
+                                    .geometry
+                                    .column
+                                    .checked_add(u16::try_from(column).ok()?)?,
                                 row,
-                                pane_index: geometry.index,
+                                pane_index: pane_plan.source_index,
                                 field,
                             })
                         })

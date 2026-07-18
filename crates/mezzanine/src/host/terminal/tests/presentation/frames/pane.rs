@@ -5,12 +5,14 @@ use crate::host::terminal::{
     BTreeMap, DEFAULT_PANE_FRAME_TEMPLATE, PaneAgentStatusField, PaneRenderInput,
     TerminalClientLoopConfig, TerminalFrameContext, TerminalFrameRenderOptions,
     TerminalPaneFrameContext, pane_frame_agent_status_pillbox_cells, render_attached_client_view,
-    render_window_with_pane_frame_template, rendered_pane_geometries,
+    render_window_with_pane_frame_template,
 };
 use mez_core::ids::IdFactory;
 use mez_mux::layout::{PaneGeometry, Size, SplitDirection, Window};
 use mez_mux::presentation::ClientViewRole;
-use mez_mux::presentation::{TerminalFramePosition, TerminalFrameStyle};
+use mez_mux::presentation::{
+    TerminalFramePosition, TerminalFrameStyle, WindowPresentationOptions, plan_window_presentation,
+};
 use mez_terminal::TerminalColor;
 
 /// Verifies render pane frame uses named template fields.
@@ -294,15 +296,20 @@ fn render_default_pane_frame_agent_model_and_reasoning_pills_are_clickable() {
         },
     );
     frame_context.policy_mode = Some("full-access".to_string());
-    let geometries = rendered_pane_geometries(&window, false).unwrap();
+    let plan = plan_window_presentation(
+        &window,
+        WindowPresentationOptions {
+            pane_frames_visible: true,
+            ..WindowPresentationOptions::default()
+        },
+    )
+    .unwrap();
 
     let cells = pane_frame_agent_status_pillbox_cells(
         &window,
         &frame_context,
         DEFAULT_PANE_FRAME_TEMPLATE,
-        TerminalFramePosition::Top,
-        0,
-        &geometries,
+        &plan,
     );
 
     for field in [

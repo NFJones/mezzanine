@@ -19,7 +19,8 @@ use mez_mux::layout::{PaneGeometry, Size, Window};
 use mez_mux::presentation::{ClientViewRole, ReadlinePromptRegion, RenderedClientView};
 use mez_mux::presentation::{
     TerminalFramePosition, TerminalFrameStyle, TerminalWindowFrameContext,
-    TerminalWindowGroupFrameContext, TerminalWindowStatusContext, plan_window_render,
+    TerminalWindowGroupFrameContext, TerminalWindowStatusContext, WindowPresentationOptions,
+    WindowPresentationPlan, plan_window_presentation,
 };
 use mez_mux::render::line_slice;
 use mez_mux::render::{
@@ -64,11 +65,7 @@ pub use frame::{
 };
 #[cfg(test)]
 use mez_mux::presentation::compose_client_presentation_with_styles;
-use mez_mux::presentation::{
-    pane_content_size_for_geometry, pane_frame_merges_into_divider,
-    pane_render_region_size_for_geometry, place_group_frame, place_window_frame,
-    rendered_window_body_size,
-};
+use mez_mux::presentation::{place_group_frame, place_window_frame};
 use mez_mux::render::{
     agent_status_running_gradient_palette, animated_scan_background, blend_terminal_color,
     contrasting_binary_foreground, gradient_highlight_for_offset, neutral_surface_step,
@@ -80,7 +77,7 @@ pub use overlay::compose_modal_display_overlay_lines;
 pub use overlay::{
     compose_display_overlay_line_style_spans, compose_modal_display_overlay_line_style_spans,
 };
-pub use panes::{draw_styled_window_from_screens, rendered_pane_geometries};
+pub use panes::draw_styled_window_from_screens;
 #[cfg(test)]
 pub use panes::{draw_window_from_screens, render_window, render_window_with_pane_frame_template};
 #[cfg(test)]
@@ -231,7 +228,6 @@ pub fn render_attached_client_view(
     if role == ClientViewRole::PendingObserver {
         return Ok(None);
     }
-    let render_window = window_with_group_frame_space(window, config)?;
     let styled_lines = draw_styled_window_from_screens(window, screens, config)?;
     let mut lines = Vec::with_capacity(styled_lines.len());
     let mut line_style_spans = Vec::with_capacity(styled_lines.len());
@@ -240,16 +236,10 @@ pub fn render_attached_client_view(
         line_style_spans.push(line.style_spans);
     }
     let (cursor_row, cursor_column, cursor_visible) =
-        rendered_cursor(&render_window, screens, config, role)?;
-    let group_offset = group_frame_top_offset(config);
-    let cursor_row = cursor_row.saturating_add(group_offset);
-    let agent_prompt_region =
-        active_agent_prompt_region(&render_window, config, role)?.map(|mut region| {
-            region.row = region.row.saturating_add(group_offset);
-            region
-        });
+        rendered_cursor(window, screens, config, role)?;
+    let agent_prompt_region = active_agent_prompt_region(window, config, role)?;
     align_active_agent_prompt_block_to_region(
-        &render_window,
+        window,
         config,
         role,
         agent_prompt_region,
@@ -294,25 +284,35 @@ pub fn render_attached_client_view(
     }))
 }
 
-/// Returns the number of rows reserved above the window for the group bar.
-fn group_frame_top_offset(config: &TerminalClientLoopConfig) -> usize {
-    usize::from(group_frame_visible(&config.frame_context))
-}
-
 /// Returns a display window whose body is reduced by the conditional group bar.
 fn window_with_group_frame_space(
     window: &Window,
     config: &TerminalClientLoopConfig,
 ) -> Result<Window> {
-    if !group_frame_visible(&config.frame_context) {
-        return Ok(window.clone());
-    }
+    let plan = window_presentation_plan(window, config)?;
     let mut window = window.clone();
-    window.size = Size::new(
-        window.size.columns,
-        window.size.rows.saturating_sub(1).max(1),
-    )?;
+    window.size = plan.display_size;
     Ok(window)
+}
+
+/// Resolves product frame configuration into the narrow mux presentation input.
+fn window_presentation_options(config: &TerminalClientLoopConfig) -> WindowPresentationOptions {
+    WindowPresentationOptions {
+        group_frame_visible: group_frame_visible(&config.frame_context),
+        window_frame_visible: config.window_frames_enabled,
+        window_frame_position: config.window_frame_position,
+        pane_frames_visible: config.pane_frames_enabled,
+        pane_frame_position: config.pane_frame_position,
+    }
+}
+
+/// Plans one product window through the mux-owned presentation boundary.
+fn window_presentation_plan(
+    window: &Window,
+    config: &TerminalClientLoopConfig,
+) -> Result<WindowPresentationPlan> {
+    plan_window_presentation(window, window_presentation_options(config))
+        .ok_or_else(|| MezError::invalid_state("cannot plan a window with no visible panes"))
 }
 
 /// Runs the rendered cursor operation for this subsystem.
@@ -333,63 +333,26 @@ fn rendered_cursor(
     let Some(active_pane) = window.panes().get(active_index) else {
         return Ok((0, 0, false));
     };
-    let render_plan = plan_window_render(
-        window,
-        config.window_frames_enabled,
-        config.pane_frames_enabled,
-        config.pane_frame_position,
-    )
-    .ok_or_else(|| MezError::invalid_state("cannot plan active pane rendering"))?;
-    let geometries = render_plan
-        .panes
-        .iter()
-        .map(|pane| pane.geometry)
-        .collect::<Vec<_>>();
-    let geometry = geometries
-        .iter()
-        .copied()
-        .find(|geometry| geometry.index == active_index)
-        .unwrap_or(PaneGeometry {
-            index: active_index,
-            column: 0,
-            row: 0,
-            columns: active_pane.size.columns,
-            rows: active_pane.size.rows,
-        });
-    let window_frame_top_offset = usize::from(
-        config.window_frames_enabled && config.window_frame_position == TerminalFramePosition::Top,
-    );
-    let pane_frame_top_offset = usize::from(
-        config.pane_frames_enabled
-            && config.pane_frame_position == TerminalFramePosition::Top
-            && !pane_frame_merges_into_divider(&geometry, &geometries, config.pane_frame_position),
-    );
-    let content_size = pane_content_size_for_geometry(
-        &geometry,
-        &geometries,
-        config.pane_frames_enabled,
-        config.pane_frame_position,
-    );
-    let content_rows = usize::from(content_size.rows);
-    let content_columns = usize::from(content_size.columns);
+    let render_plan = window_presentation_plan(window, config)?;
+    let pane_plan = render_plan
+        .pane(active_index)
+        .ok_or_else(|| MezError::invalid_state("active pane is missing from presentation plan"))?;
+    if pane_plan.content_region.is_empty() {
+        return Ok((0, 0, false));
+    }
+    let content_rows = usize::from(pane_plan.content_region.rows);
+    let content_columns = usize::from(pane_plan.content_region.columns);
     if pane_agent_shell_visible(&config.frame_context, active_pane.id.as_str()) {
         let block = render_agent_prompt_block(
             content_columns,
             content_rows,
             config.frame_context.panes.get(active_pane.id.as_str()),
         );
-        let window_frame_top_offset = usize::from(
-            config.window_frames_enabled
-                && config.window_frame_position == TerminalFramePosition::Top,
-        );
-        let body_row = window_frame_top_offset
-            .saturating_add(usize::from(geometry.row))
-            .saturating_add(pane_frame_top_offset);
-        let prompt_row_start =
-            body_row.saturating_add(content_rows.saturating_sub(block.prompt_lines.len()));
+        let prompt_row_start = usize::from(pane_plan.content_region.row)
+            .saturating_add(content_rows.saturating_sub(block.prompt_lines.len()));
         return Ok((
             prompt_row_start.saturating_add(block.cursor_row),
-            usize::from(geometry.column).saturating_add(block.cursor_column),
+            usize::from(pane_plan.content_region.column).saturating_add(block.cursor_column),
             block.cursor_visible,
         ));
     }
@@ -400,11 +363,10 @@ fn rendered_cursor(
         .map(TerminalScreen::cursor_state)
         .unwrap_or(mez_terminal::TerminalCursorState { row: 0, column: 0 });
     let cursor_visible = screen.map(TerminalScreen::cursor_visible).unwrap_or(true);
-    let row = window_frame_top_offset
-        .saturating_add(usize::from(geometry.row))
-        .saturating_add(pane_frame_top_offset)
-        .saturating_add(cursor.row.min(max_cursor_row));
-    let column = usize::from(geometry.column).saturating_add(cursor.column.min(max_cursor_column));
+    let row =
+        usize::from(pane_plan.content_region.row).saturating_add(cursor.row.min(max_cursor_row));
+    let column = usize::from(pane_plan.content_region.column)
+        .saturating_add(cursor.column.min(max_cursor_column));
     Ok((row, column, cursor_visible))
 }
 
@@ -442,58 +404,21 @@ fn active_pane_render_region(
         return Ok(None);
     }
     let active_index = window.active_pane_index();
-    let Some(active_pane) = window.panes().get(active_index) else {
-        return Ok(None);
-    };
-    let render_plan = plan_window_render(
-        window,
-        config.window_frames_enabled,
-        config.pane_frames_enabled,
-        config.pane_frame_position,
-    )
-    .ok_or_else(|| MezError::invalid_state("cannot plan active pane rendering"))?;
-    let geometries = render_plan
-        .panes
-        .iter()
-        .map(|pane| pane.geometry)
-        .collect::<Vec<_>>();
-    let geometry = geometries
-        .iter()
-        .copied()
-        .find(|geometry| geometry.index == active_index)
-        .unwrap_or(PaneGeometry {
-            index: active_index,
-            column: 0,
-            row: 0,
-            columns: active_pane.size.columns,
-            rows: active_pane.size.rows,
-        });
-    let pane_frame_top_offset = usize::from(
-        config.pane_frames_enabled
-            && config.pane_frame_position == TerminalFramePosition::Top
-            && !pane_frame_merges_into_divider(&geometry, &geometries, config.pane_frame_position),
-    );
-    let content_size = pane_content_size_for_geometry(
-        &geometry,
-        &geometries,
-        config.pane_frames_enabled,
-        config.pane_frame_position,
-    );
-    let rows = usize::from(content_size.rows);
-    let columns = usize::from(content_size.columns);
-    if rows == 0 || columns == 0 {
+    if window.panes().get(active_index).is_none() {
         return Ok(None);
     }
-    let window_frame_top_offset = usize::from(
-        config.window_frames_enabled && config.window_frame_position == TerminalFramePosition::Top,
-    );
+    let render_plan = window_presentation_plan(window, config)?;
+    let pane_plan = render_plan
+        .pane(active_index)
+        .ok_or_else(|| MezError::invalid_state("active pane is missing from presentation plan"))?;
+    if pane_plan.content_region.is_empty() {
+        return Ok(None);
+    }
     Ok(Some(ReadlinePromptRegion {
-        row: window_frame_top_offset
-            .saturating_add(usize::from(geometry.row))
-            .saturating_add(pane_frame_top_offset),
-        column: usize::from(geometry.column),
-        columns,
-        rows,
+        row: usize::from(pane_plan.content_region.row),
+        column: usize::from(pane_plan.content_region.column),
+        columns: usize::from(pane_plan.content_region.columns),
+        rows: usize::from(pane_plan.content_region.rows),
     }))
 }
 

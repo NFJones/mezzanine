@@ -9,12 +9,11 @@ use super::{
     DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS, MezError, MouseAction, MousePaneTarget,
     MouseSelectionDragState, MouseSelectionEdge, MouseSelectionTarget, PaneAgentStatusField,
     Result, RuntimeMouseClickState, RuntimePaneAgentStatusSelector, RuntimeSessionService,
-    SelectorInputOutcome, Size, TerminalClientLoopAction, TerminalFramePosition, WindowFrameAction,
+    SelectorInputOutcome, Size, TerminalClientLoopAction, WindowFrameAction,
     WindowFrameCommandKind, agent_command_link_at_line_column, agent_prompt_error_display_lines,
-    apply_selector_input, current_unix_millis, pane_frame_merges_into_divider,
-    pane_render_region_size_for_geometry, rendered_pane_geometries,
-    runtime_agent_shell_command_response_json, runtime_agent_shell_display_output,
-    runtime_agent_shell_visibility, runtime_approval_policy_name, runtime_copy_position_for_view,
+    apply_selector_input, current_unix_millis, runtime_agent_shell_command_response_json,
+    runtime_agent_shell_display_output, runtime_agent_shell_visibility,
+    runtime_approval_policy_name, runtime_copy_position_for_view,
     runtime_pane_agent_status_selector_layout, runtime_scroll_selector,
     runtime_selector_input_action, runtime_set_selector_index,
 };
@@ -1197,38 +1196,13 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     fn mouse_resize_drag_state_at(&self, column: u16, row: u16) -> Option<MouseResizeDragState> {
         let window = self.session.active_window()?;
-        let window_frame_visible = self.presentation.settings.window_frames_enabled;
-        let group_top_offset = u16::from(self.session.window_groups().len() > 1);
-        if group_top_offset > 0 && row == 0 {
-            return None;
-        }
-        let mut display_window = window.clone();
-        display_window.size = Size::new(
-            window.size.columns,
-            window.size.rows.saturating_sub(group_top_offset).max(1),
-        )
-        .ok()?;
-        let local_row = row.checked_sub(group_top_offset)?;
-        if window_frame_visible {
-            match self.presentation.settings.window_frame_position {
-                TerminalFramePosition::Top if local_row == 0 => return None,
-                TerminalFramePosition::Bottom
-                    if local_row == display_window.size.rows.saturating_sub(1) =>
-                {
-                    return None;
-                }
-                _ => {}
-            }
-        }
-        let row_offset = group_top_offset.saturating_add(u16::from(
-            window_frame_visible
-                && self.presentation.settings.window_frame_position == TerminalFramePosition::Top,
-        ));
-        let body_row = row.checked_sub(row_offset)?;
-        let geometries = rendered_pane_geometries(&display_window, window_frame_visible).ok()?;
+        let plan = self.window_presentation_plan(window)?;
+        let body_row = plan.body_row_at(row)?;
+        let geometries = plan.pane_geometries();
 
-        vertical_mouse_resize_state(&geometries, column, body_row)
-            .or_else(|| horizontal_mouse_resize_state(&geometries, body_row, column, row_offset))
+        vertical_mouse_resize_state(&geometries, column, body_row).or_else(|| {
+            horizontal_mouse_resize_state(&geometries, body_row, column, plan.body_row_offset)
+        })
     }
 
     /// Runs the mouse pane target at operation for this subsystem.
@@ -1238,77 +1212,22 @@ impl RuntimeSessionService {
     /// on duplicated control-flow logic.
     fn mouse_pane_target_at(&self, position: CopyPosition) -> Option<MousePaneTarget> {
         let window = self.session.active_window()?;
-        let window_frame_visible = self.presentation.settings.window_frames_enabled;
         let column = u16::try_from(position.column).ok()?;
         let row = u16::try_from(position.line).ok()?;
-        let group_top_offset = u16::from(self.session.window_groups().len() > 1);
-        if group_top_offset > 0 && row == 0 {
-            return None;
-        }
-        let mut display_window = window.clone();
-        display_window.size = Size::new(
-            window.size.columns,
-            window.size.rows.saturating_sub(group_top_offset).max(1),
-        )
-        .ok()?;
-        let local_row = row.checked_sub(group_top_offset)?;
-        let window_frame_top_offset = group_top_offset.saturating_add(u16::from(
-            window_frame_visible
-                && self.presentation.settings.window_frame_position == TerminalFramePosition::Top,
-        ));
-        if window_frame_visible {
-            match self.presentation.settings.window_frame_position {
-                TerminalFramePosition::Top if local_row == 0 => return None,
-                TerminalFramePosition::Bottom
-                    if local_row == display_window.size.rows.saturating_sub(1) =>
-                {
-                    return None;
-                }
-                _ => {}
-            }
-        }
-        let body_row = row.checked_sub(window_frame_top_offset)?;
-        let geometries = rendered_pane_geometries(&display_window, window_frame_visible).ok()?;
-        for geometry in &geometries {
-            let region_size = pane_render_region_size_for_geometry(geometry, &geometries);
-            let row_end = geometry.row.saturating_add(region_size.rows);
-            let column_end = geometry.column.saturating_add(region_size.columns);
-            if body_row < geometry.row
-                || body_row >= row_end
-                || column < geometry.column
-                || column >= column_end
-            {
-                continue;
-            }
-            let pane = window
-                .panes()
-                .iter()
-                .find(|pane| pane.index == geometry.index)?;
-            let pane_frame_top_offset = u16::from(
-                self.presentation.settings.pane_frames_enabled
-                    && self.presentation.settings.pane_frame_position == TerminalFramePosition::Top
-                    && !pane_frame_merges_into_divider(
-                        geometry,
-                        &geometries,
-                        self.presentation.settings.pane_frame_position,
-                    ),
-            );
-            if pane_frame_top_offset > 0 && body_row == geometry.row {
-                return None;
-            }
-            let local_row = body_row
-                .saturating_sub(geometry.row)
-                .saturating_sub(pane_frame_top_offset);
-            let local_column = column.saturating_sub(geometry.column);
-            return Some(MousePaneTarget {
-                pane_id: pane.id.to_string(),
-                position: CopyPosition {
-                    line: usize::from(local_row),
-                    column: usize::from(local_column),
-                },
-            });
-        }
-        None
+        let target = self
+            .window_presentation_plan(window)?
+            .pane_content_target_at(row, column)?;
+        let pane = window
+            .panes()
+            .iter()
+            .find(|pane| pane.index == target.source_index)?;
+        Some(MousePaneTarget {
+            pane_id: pane.id.to_string(),
+            position: CopyPosition {
+                line: usize::from(target.row),
+                column: usize::from(target.column),
+            },
+        })
     }
 
     /// Runs the mouse selection target at operation for this subsystem.

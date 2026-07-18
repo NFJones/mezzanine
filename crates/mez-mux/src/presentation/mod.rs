@@ -9,7 +9,6 @@ use std::collections::BTreeMap;
 use mez_terminal::{GraphicRendition, TerminalSize, TerminalStyleSpan};
 
 use crate::copy::CopyPosition;
-use crate::layout::{PaneGeometry, range_overlap_u16};
 use crate::theme::UiTheme;
 
 /// Cursor shape used when presenting an attached interactive surface.
@@ -696,585 +695,8 @@ pub enum TerminalFramePosition {
     Bottom,
 }
 
-/// Places a one-row frame within an authoritative terminal region.
-///
-/// Top frames are inserted before body content, while bottom frames replace
-/// the final available row. In both cases the result is clipped to the
-/// authoritative row count.
-pub fn place_window_frame<T>(
-    lines: &mut Vec<T>,
-    frame: T,
-    position: TerminalFramePosition,
-    authoritative_rows: u16,
-) {
-    let rows = usize::from(authoritative_rows);
-    match position {
-        TerminalFramePosition::Top => {
-            lines.insert(0, frame);
-            lines.truncate(rows);
-        }
-        TerminalFramePosition::Bottom => {
-            lines.truncate(rows.saturating_sub(1));
-            lines.push(frame);
-            lines.truncate(rows);
-        }
-    }
-}
-
-/// Places a conditional top window-group frame above rendered window rows.
-pub fn place_group_frame<T>(lines: &mut Vec<T>, frame: T, authoritative_rows: u16) {
-    let rows = usize::from(authoritative_rows);
-    lines.insert(0, frame);
-    lines.truncate(rows);
-}
-
-/// Returns the drawable window body after reserving a mux-managed frame row.
-pub fn rendered_window_body_size(size: TerminalSize, window_frames_enabled: bool) -> TerminalSize {
-    let rows = if window_frames_enabled {
-        size.rows.saturating_sub(1)
-    } else {
-        size.rows
-    };
-    TerminalSize {
-        columns: size.columns,
-        rows: rows.max(1),
-    }
-}
-
-/// One pane selected for dependency-neutral window rendering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PaneRenderPlan {
-    /// Pane index used to locate the source pane and its prepared rows.
-    pub source_index: usize,
-    /// Pane placement within the drawable window body.
-    pub geometry: PaneGeometry,
-    /// Visible pane region after shared-divider reservations.
-    pub render_region_size: TerminalSize,
-    /// Whether the pane frame occupies an adjacent shared divider.
-    pub frame_merges_into_divider: bool,
-}
-
-/// Dependency-neutral geometry plan for rendering one mux window.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WindowRenderPlan {
-    /// Drawable size after reserving the optional window frame.
-    pub body_size: TerminalSize,
-    /// Ordered pane sources and placements to render into the body.
-    pub panes: Vec<PaneRenderPlan>,
-}
-
-/// Plans pane selection, zoom handling, geometry, and frame merging for a window.
-///
-/// Returns `None` when the window has no panes or references a missing zoomed
-/// pane. Product renderers remain responsible for preparing pane content,
-/// frame text, themes, overlays, and host-terminal output.
-pub fn plan_window_render(
-    window: &crate::layout::Window,
-    window_frames_enabled: bool,
-    pane_frames_enabled: bool,
-    pane_frame_position: TerminalFramePosition,
-) -> Option<WindowRenderPlan> {
-    if window.panes().is_empty() {
-        return None;
-    }
-    let body_size = rendered_window_body_size(window.size, window_frames_enabled);
-    if let Some(zoomed_id) = window.zoomed_pane_id() {
-        let pane = window.panes().iter().find(|pane| pane.id == *zoomed_id)?;
-        return Some(WindowRenderPlan {
-            body_size,
-            panes: vec![PaneRenderPlan {
-                source_index: pane.index,
-                geometry: PaneGeometry {
-                    index: pane.index,
-                    column: 0,
-                    row: 0,
-                    columns: body_size.columns,
-                    rows: body_size.rows,
-                },
-                render_region_size: body_size,
-                frame_merges_into_divider: false,
-            }],
-        });
-    }
-    let geometries = window.pane_geometries_for_size(body_size);
-    let panes = geometries
-        .iter()
-        .copied()
-        .map(|geometry| PaneRenderPlan {
-            source_index: geometry.index,
-            render_region_size: pane_render_region_size_for_geometry(&geometry, &geometries),
-            frame_merges_into_divider: pane_frames_enabled
-                && pane_frame_merges_into_divider(&geometry, &geometries, pane_frame_position),
-            geometry,
-        })
-        .collect();
-    Some(WindowRenderPlan { body_size, panes })
-}
-
-/// Returns whether a pane has a shared horizontal divider immediately below it.
-pub fn geometry_has_bottom_divider(geometry: &PaneGeometry, geometries: &[PaneGeometry]) -> bool {
-    let bottom = geometry.row.saturating_add(geometry.rows);
-    geometries.iter().any(|candidate| {
-        candidate.index != geometry.index
-            && candidate.row == bottom
-            && range_overlap_u16(
-                geometry.column,
-                geometry.column.saturating_add(geometry.columns),
-                candidate.column,
-                candidate.column.saturating_add(candidate.columns),
-            ) > 0
-    })
-}
-
-/// Returns whether a pane has a shared vertical divider immediately to its right.
-pub fn geometry_has_right_divider(geometry: &PaneGeometry, geometries: &[PaneGeometry]) -> bool {
-    let right = geometry.column.saturating_add(geometry.columns);
-    geometries.iter().any(|candidate| {
-        candidate.index != geometry.index
-            && candidate.column == right
-            && range_overlap_u16(
-                geometry.row,
-                geometry.row.saturating_add(geometry.rows),
-                candidate.row,
-                candidate.row.saturating_add(candidate.rows),
-            ) > 0
-    })
-}
-
-/// Returns the visible pane region after reserving shared divider cells.
-pub fn pane_render_region_size_for_geometry(
-    geometry: &PaneGeometry,
-    geometries: &[PaneGeometry],
-) -> TerminalSize {
-    TerminalSize {
-        columns: geometry
-            .columns
-            .saturating_sub(u16::from(geometry_has_right_divider(geometry, geometries)))
-            .max(1),
-        rows: geometry
-            .rows
-            .saturating_sub(u16::from(geometry_has_bottom_divider(geometry, geometries)))
-            .max(1),
-    }
-}
-
-/// Returns the pane body size available after divider and frame reservations.
-pub fn pane_content_size_for_geometry(
-    geometry: &PaneGeometry,
-    geometries: &[PaneGeometry],
-    pane_frames_enabled: bool,
-    pane_frame_position: TerminalFramePosition,
-) -> TerminalSize {
-    let render_region = pane_render_region_size_for_geometry(geometry, geometries);
-    let frame_rows = if pane_frames_enabled
-        && !pane_frame_merges_into_divider(geometry, geometries, pane_frame_position)
-    {
-        1
-    } else {
-        0
-    };
-    TerminalSize {
-        columns: render_region.columns,
-        rows: render_region.rows.saturating_sub(frame_rows).max(1),
-    }
-}
-
-/// Returns the rendered terminal row occupied by one pane frame.
-///
-/// Frames that merge into a shared horizontal divider use that divider row;
-/// standalone frames use the pane render region's top or bottom edge.
-pub fn pane_frame_row_for_geometry(
-    geometry: &PaneGeometry,
-    geometries: &[PaneGeometry],
-    position: TerminalFramePosition,
-    row_offset: u16,
-) -> u16 {
-    if pane_frame_merges_into_divider(geometry, geometries, position) {
-        return row_offset.saturating_add(match position {
-            TerminalFramePosition::Top => geometry.row.saturating_sub(1),
-            TerminalFramePosition::Bottom => {
-                geometry.row.saturating_add(geometry.rows).saturating_sub(1)
-            }
-        });
-    }
-    row_offset.saturating_add(match position {
-        TerminalFramePosition::Top => geometry.row,
-        TerminalFramePosition::Bottom => {
-            let render_rows = pane_render_region_size_for_geometry(geometry, geometries).rows;
-            geometry.row.saturating_add(render_rows).saturating_sub(1)
-        }
-    })
-}
-
-/// Bounded destination for one pane frame rendered on a shared divider row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MergedPaneFramePlacement {
-    /// Pane index in the owning window.
-    pub pane_index: usize,
-    /// Destination row in the window body canvas.
-    pub row: usize,
-    /// First destination column in the window body canvas.
-    pub column_start: usize,
-    /// Maximum number of terminal cells available to the frame.
-    pub width: usize,
-}
-
-/// Computes pane-frame placements that occupy shared horizontal dividers.
-pub fn merged_pane_frame_placements(
-    geometries: &[PaneGeometry],
-    position: TerminalFramePosition,
-) -> Vec<MergedPaneFramePlacement> {
-    geometries
-        .iter()
-        .filter(|geometry| pane_frame_merges_into_divider(geometry, geometries, position))
-        .map(|geometry| MergedPaneFramePlacement {
-            pane_index: geometry.index,
-            row: usize::from(pane_frame_row_for_geometry(
-                geometry, geometries, position, 0,
-            )),
-            column_start: usize::from(geometry.column),
-            width: usize::from(pane_render_region_size_for_geometry(geometry, geometries).columns),
-        })
-        .collect()
-}
-
-/// Bounded destination for one rendered pane inside a window-body canvas.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PaneCanvasPlacement {
-    /// Index of the pane's geometry in the source geometry slice.
-    pub source_index: usize,
-    /// First destination row in the window body canvas.
-    pub row_start: usize,
-    /// First destination column in the window body canvas.
-    pub column_start: usize,
-    /// Number of pane rows visible in the destination canvas.
-    pub pane_rows: usize,
-    /// Number of pane columns visible in the destination canvas.
-    pub pane_columns: usize,
-}
-
-/// Computes pane-to-canvas placements with divider reservations and clipping.
-pub fn pane_canvas_placements(
-    size: TerminalSize,
-    geometries: &[PaneGeometry],
-) -> Vec<PaneCanvasPlacement> {
-    let rows = usize::from(size.rows);
-    let columns = usize::from(size.columns);
-    let mut placements = Vec::with_capacity(geometries.len());
-    for (source_index, geometry) in geometries.iter().enumerate() {
-        let row_start = usize::from(geometry.row);
-        let column_start = usize::from(geometry.column);
-        if row_start >= rows || column_start >= columns {
-            continue;
-        }
-        let region_size = pane_render_region_size_for_geometry(geometry, geometries);
-        placements.push(PaneCanvasPlacement {
-            source_index,
-            row_start,
-            column_start,
-            pane_rows: usize::from(region_size.rows).min(rows.saturating_sub(row_start)),
-            pane_columns: usize::from(region_size.columns)
-                .min(columns.saturating_sub(column_start)),
-        });
-    }
-    placements
-}
-
-/// Returns whether a pane frame should occupy an adjacent shared divider row.
-///
-/// Top frames merge into a horizontal divider immediately above the pane;
-/// bottom frames merge into one immediately below it. Keeping this geometry
-/// decision in the mux lets product renderers consume the result without
-/// owning split-layout policy.
-pub fn pane_frame_merges_into_divider(
-    geometry: &PaneGeometry,
-    geometries: &[PaneGeometry],
-    frame_position: TerminalFramePosition,
-) -> bool {
-    geometries.iter().any(|candidate| {
-        if candidate.index == geometry.index {
-            return false;
-        }
-        let shares_boundary = match frame_position {
-            TerminalFramePosition::Top => {
-                candidate.row.saturating_add(candidate.rows) == geometry.row
-            }
-            TerminalFramePosition::Bottom => {
-                geometry.row.saturating_add(geometry.rows) == candidate.row
-            }
-        };
-        shares_boundary
-            && range_overlap_u16(
-                geometry.column,
-                geometry.column.saturating_add(geometry.columns),
-                candidate.column,
-                candidate.column.saturating_add(candidate.columns),
-            ) > 0
-    })
-}
-
-/// One mux-managed pane-divider cell and its box-drawing glyph.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PaneDividerCell {
-    /// Zero-based terminal column occupied by the divider.
-    pub column: u16,
-    /// Zero-based terminal row occupied by the divider.
-    pub row: u16,
-    /// Thin box-drawing glyph selected from neighboring divider strokes.
-    pub glyph: char,
-}
-
-/// Directional strokes that meet in one mux-managed pane-divider cell.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct PaneDividerConnections {
-    up: bool,
-    down: bool,
-    left: bool,
-    right: bool,
-    vertical: bool,
-    horizontal: bool,
-}
-
-impl PaneDividerConnections {
-    fn add_vertical(&mut self, up: bool, down: bool) {
-        self.vertical = true;
-        self.up |= up;
-        self.down |= down;
-    }
-
-    fn add_horizontal(&mut self, left: bool, right: bool) {
-        self.horizontal = true;
-        self.left |= left;
-        self.right |= right;
-    }
-
-    fn has_vertical(&self) -> bool {
-        self.vertical
-    }
-
-    fn has_horizontal(&self) -> bool {
-        self.horizontal
-    }
-
-    fn glyph(self) -> char {
-        pane_divider_glyph(self.up, self.down, self.left, self.right)
-    }
-}
-
-/// Selects the thin box-drawing glyph for explicit divider connections.
-pub fn pane_divider_glyph(mut up: bool, mut down: bool, mut left: bool, mut right: bool) -> char {
-    if !up && !down && !left && !right {
-        return ' ';
-    }
-    if !up && !down {
-        left = true;
-        right = true;
-    }
-    if !left && !right {
-        up = true;
-        down = true;
-    }
-    match (up, down, left, right) {
-        (true, true, true, true) => '\u{253c}',
-        (true, true, true, false) => '\u{2524}',
-        (true, true, false, true) => '\u{251c}',
-        (true, false, true, true) => '\u{2534}',
-        (false, true, true, true) => '\u{252c}',
-        (true, false, false, true) => '\u{2514}',
-        (true, false, true, false) => '\u{2518}',
-        (false, true, false, true) => '\u{250c}',
-        (false, true, true, false) => '\u{2510}',
-        (true, true, false, false) => '\u{2502}',
-        (false, false, true, true) => '\u{2500}',
-        (true, false, false, false) | (false, true, false, false) => '\u{2502}',
-        (false, false, true, false) | (false, false, false, true) => '\u{2500}',
-        (false, false, false, false) => ' ',
-    }
-}
-
-/// Composes mux-managed divider cells from neighboring pane geometry.
-pub fn pane_divider_cells(
-    geometries: &[PaneGeometry],
-    include_horizontal: bool,
-) -> Vec<PaneDividerCell> {
-    if geometries.len() < 2 {
-        return Vec::new();
-    }
-    let mut cells = BTreeMap::new();
-    for (index, first) in geometries.iter().enumerate() {
-        for second in geometries.iter().skip(index.saturating_add(1)) {
-            let first_right = first.column.saturating_add(first.columns);
-            let second_right = second.column.saturating_add(second.columns);
-            let first_bottom = first.row.saturating_add(first.rows);
-            let second_bottom = second.row.saturating_add(second.rows);
-
-            if first_right == second.column || second_right == first.column {
-                let boundary = first_right.min(second_right).saturating_sub(1);
-                let start = first.row.max(second.row);
-                let end = first_bottom.min(second_bottom);
-                for row in start..end {
-                    cells
-                        .entry((boundary, row))
-                        .or_insert_with(PaneDividerConnections::default)
-                        .add_vertical(row > start, row.saturating_add(1) < end);
-                }
-            }
-            if include_horizontal && (first_bottom == second.row || second_bottom == first.row) {
-                let boundary = first_bottom.min(second_bottom).saturating_sub(1);
-                let start = first.column.max(second.column);
-                let end = first_right.min(second_right);
-                for column in start..end {
-                    cells
-                        .entry((column, boundary))
-                        .or_insert_with(PaneDividerConnections::default)
-                        .add_horizontal(column > start, column.saturating_add(1) < end);
-                }
-            }
-        }
-    }
-    connect_touching_divider_cells(&mut cells);
-    cells
-        .into_iter()
-        .map(|((column, row), connections)| PaneDividerCell {
-            column,
-            row,
-            glyph: connections.glyph(),
-        })
-        .collect()
-}
-
-fn connect_touching_divider_cells(cells: &mut BTreeMap<(u16, u16), PaneDividerConnections>) {
-    let snapshot = cells.clone();
-    for (&(column, row), connections) in &snapshot {
-        if connections.has_vertical() {
-            if let Some(below_row) = row.checked_add(1) {
-                connect_vertical_neighbors(cells, &snapshot, (column, row), (column, below_row));
-            }
-            if column > 0 {
-                connect_crossing_neighbors(
-                    cells,
-                    &snapshot,
-                    (column, row),
-                    (column.saturating_sub(1), row),
-                    true,
-                );
-            }
-            if let Some(right_column) = column.checked_add(1) {
-                connect_crossing_neighbors(
-                    cells,
-                    &snapshot,
-                    (column, row),
-                    (right_column, row),
-                    false,
-                );
-            }
-        }
-        if connections.has_horizontal() {
-            if let Some(right_column) = column.checked_add(1) {
-                connect_horizontal_neighbors(cells, &snapshot, (column, row), (right_column, row));
-            }
-            if row > 0 {
-                connect_vertical_crossing(
-                    cells,
-                    &snapshot,
-                    (column, row),
-                    (column, row.saturating_sub(1)),
-                    true,
-                );
-            }
-            if let Some(below_row) = row.checked_add(1) {
-                connect_vertical_crossing(
-                    cells,
-                    &snapshot,
-                    (column, row),
-                    (column, below_row),
-                    false,
-                );
-            }
-        }
-    }
-}
-
-fn connect_vertical_neighbors(
-    cells: &mut BTreeMap<(u16, u16), PaneDividerConnections>,
-    snapshot: &BTreeMap<(u16, u16), PaneDividerConnections>,
-    current: (u16, u16),
-    below: (u16, u16),
-) {
-    if snapshot
-        .get(&below)
-        .is_some_and(PaneDividerConnections::has_vertical)
-    {
-        cells.get_mut(&current).expect("current divider cell").down = true;
-        cells.get_mut(&below).expect("neighbor divider cell").up = true;
-    }
-}
-
-fn connect_horizontal_neighbors(
-    cells: &mut BTreeMap<(u16, u16), PaneDividerConnections>,
-    snapshot: &BTreeMap<(u16, u16), PaneDividerConnections>,
-    current: (u16, u16),
-    right: (u16, u16),
-) {
-    if snapshot
-        .get(&right)
-        .is_some_and(PaneDividerConnections::has_horizontal)
-    {
-        cells.get_mut(&current).expect("current divider cell").right = true;
-        cells.get_mut(&right).expect("neighbor divider cell").left = true;
-    }
-}
-
-fn connect_crossing_neighbors(
-    cells: &mut BTreeMap<(u16, u16), PaneDividerConnections>,
-    snapshot: &BTreeMap<(u16, u16), PaneDividerConnections>,
-    current: (u16, u16),
-    horizontal: (u16, u16),
-    is_left: bool,
-) {
-    if snapshot
-        .get(&horizontal)
-        .is_some_and(PaneDividerConnections::has_horizontal)
-    {
-        if is_left {
-            cells.get_mut(&current).expect("current divider cell").left = true;
-            cells
-                .get_mut(&horizontal)
-                .expect("neighbor divider cell")
-                .right = true;
-        } else {
-            cells.get_mut(&current).expect("current divider cell").right = true;
-            cells
-                .get_mut(&horizontal)
-                .expect("neighbor divider cell")
-                .left = true;
-        }
-    }
-}
-
-fn connect_vertical_crossing(
-    cells: &mut BTreeMap<(u16, u16), PaneDividerConnections>,
-    snapshot: &BTreeMap<(u16, u16), PaneDividerConnections>,
-    current: (u16, u16),
-    vertical: (u16, u16),
-    is_above: bool,
-) {
-    if snapshot
-        .get(&vertical)
-        .is_some_and(PaneDividerConnections::has_vertical)
-    {
-        if is_above {
-            cells.get_mut(&current).expect("current divider cell").up = true;
-            cells
-                .get_mut(&vertical)
-                .expect("neighbor divider cell")
-                .down = true;
-        } else {
-            cells.get_mut(&current).expect("current divider cell").down = true;
-            cells.get_mut(&vertical).expect("neighbor divider cell").up = true;
-        }
-    }
-}
+mod window_plan;
+pub use window_plan::*;
 
 /// Style applied to a rendered frame row when styled terminal output is used.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1311,13 +733,14 @@ mod tests {
     use super::{
         AttachedClientEndpointReadiness, AttachedClientOutputDecision, AttachedClientStepPlan,
         ClientStatusKind, ClientStatusLine, ClientViewRole, RenderedClientView,
-        TerminalCursorStyle, TerminalFramePosition, TerminalFrameStyle, apply_client_view_offset,
-        classify_attached_client_readiness, compose_client_presentation_with_styles,
-        compose_client_viewport, max_viewport_column, max_viewport_row, pane_canvas_placements,
-        pane_content_size_for_geometry, pane_divider_cells, pane_divider_glyph,
-        pane_frame_merges_into_divider, pane_render_region_size_for_geometry, place_group_frame,
-        place_window_frame, plan_attached_client_output, plan_attached_client_step,
-        plan_headless_attached_client_cycle, plan_window_render, rendered_window_body_size,
+        TerminalCursorStyle, TerminalFramePosition, TerminalFrameStyle, WindowPresentationOptions,
+        apply_client_view_offset, classify_attached_client_readiness,
+        compose_client_presentation_with_styles, compose_client_viewport, max_viewport_column,
+        max_viewport_row, pane_canvas_placements, pane_content_size_for_geometry,
+        pane_divider_cells, pane_divider_glyph, pane_frame_merges_into_divider,
+        pane_render_region_size_for_geometry, place_group_frame, place_window_frame,
+        plan_attached_client_output, plan_attached_client_step,
+        plan_headless_attached_client_cycle, plan_window_presentation, rendered_window_body_size,
     };
 
     /// Verifies neutral frame contracts retain the product's established
@@ -1690,10 +1113,11 @@ mod tests {
         assert!(resize_effects.iter().all(|effect| effect.size.rows > 0));
     }
 
-    /// Verifies window render planning owns normal and zoomed pane selection,
-    /// frame reservations, and geometry without product rendering adapters.
+    /// Verifies window presentation planning owns normal and zoomed pane
+    /// selection, frame reservations, focus, and geometry without product
+    /// rendering adapters.
     #[test]
-    fn window_render_plan_owns_normal_and_zoomed_geometry() {
+    fn window_presentation_plan_owns_normal_and_zoomed_geometry() {
         let mut session = Session::new_default(
             SessionShell::new(PathBuf::from("/bin/sh"), "fallback-bin-sh", true),
             Size::new(80, 24).unwrap(),
@@ -1703,13 +1127,12 @@ mod tests {
             .split_active_pane(&primary, SplitDirection::Vertical)
             .unwrap();
 
-        let plan = plan_window_render(
-            session.active_window().unwrap(),
-            true,
-            true,
-            TerminalFramePosition::Top,
-        )
-        .unwrap();
+        let options = WindowPresentationOptions {
+            window_frame_visible: true,
+            pane_frames_visible: true,
+            ..WindowPresentationOptions::default()
+        };
+        let plan = plan_window_presentation(session.active_window().unwrap(), options).unwrap();
         assert_eq!(plan.body_size, Size::new(80, 23).unwrap());
         assert_eq!(plan.panes.len(), 2);
         assert!(
@@ -1719,18 +1142,99 @@ mod tests {
         );
 
         session.toggle_active_pane_zoom(&primary).unwrap();
-        let zoomed = plan_window_render(
-            session.active_window().unwrap(),
-            true,
-            true,
-            TerminalFramePosition::Top,
-        )
-        .unwrap();
+        assert_eq!(plan.panes.iter().filter(|pane| pane.active).count(), 1);
+
+        let zoomed = plan_window_presentation(session.active_window().unwrap(), options).unwrap();
         assert_eq!(zoomed.panes.len(), 1);
         assert_eq!(zoomed.panes[0].geometry.column, 0);
         assert_eq!(zoomed.panes[0].geometry.row, 0);
         assert_eq!(zoomed.panes[0].render_region_size, zoomed.body_size);
         assert!(!zoomed.panes[0].frame_merges_into_divider);
+    }
+
+    /// Verifies the mux plan is the single authority for absolute group,
+    /// window, pane-frame, content, divider, focus, and hit-test placement.
+    #[test]
+    fn window_presentation_plan_maps_absolute_layers_and_content_hits() {
+        let mut session = Session::new_default(
+            SessionShell::new(PathBuf::from("/bin/sh"), "fallback-bin-sh", true),
+            Size::new(80, 24).unwrap(),
+        );
+        let primary = session.attach_primary("primary", true).unwrap();
+        session
+            .split_active_pane(&primary, SplitDirection::Vertical)
+            .unwrap();
+
+        let plan = plan_window_presentation(
+            session.active_window().unwrap(),
+            WindowPresentationOptions {
+                group_frame_visible: true,
+                window_frame_visible: true,
+                window_frame_position: TerminalFramePosition::Top,
+                pane_frames_visible: true,
+                pane_frame_position: TerminalFramePosition::Top,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(plan.group_frame_row, Some(0));
+        assert_eq!(plan.window_frame_row, Some(1));
+        assert_eq!(plan.body_row_offset, 2);
+        assert_eq!(plan.display_size, Size::new(80, 23).unwrap());
+        assert_eq!(plan.body_size, Size::new(80, 22).unwrap());
+        assert_eq!(plan.panes.len(), 2);
+        assert_eq!(plan.panes.iter().filter(|pane| pane.active).count(), 1);
+        assert_ne!(plan.panes[0].active, plan.panes[1].active);
+        assert_eq!(plan.panes[0].frame_row, Some(2));
+        assert_eq!(plan.panes[0].content_region.row, 3);
+        assert_eq!(plan.panes[0].content_region.column, 0);
+
+        assert_eq!(plan.pane_content_target_at(0, 0), None);
+        assert_eq!(plan.pane_content_target_at(1, 0), None);
+        assert_eq!(plan.pane_content_target_at(2, 0), None);
+        assert_eq!(
+            plan.pane_content_target_at(3, 0),
+            Some(super::PanePresentationTarget {
+                source_index: plan.panes[0].source_index,
+                row: 0,
+                column: 0,
+            })
+        );
+        let divider_column = plan.panes[0]
+            .geometry
+            .column
+            .saturating_add(plan.panes[0].render_region_size.columns);
+        assert_eq!(plan.pane_content_target_at(3, divider_column), None);
+    }
+
+    /// Verifies tiny authoritative bounds clip lower presentation layers to
+    /// no-op regions instead of exposing out-of-range cursor or overlay cells.
+    #[test]
+    fn window_presentation_plan_clips_fully_occluded_tiny_bounds() {
+        let session = Session::new_default(
+            SessionShell::new(PathBuf::from("/bin/sh"), "fallback-bin-sh", true),
+            Size::new(1, 1).unwrap(),
+        );
+        let plan = plan_window_presentation(
+            session.active_window().unwrap(),
+            WindowPresentationOptions {
+                group_frame_visible: true,
+                window_frame_visible: true,
+                window_frame_position: TerminalFramePosition::Top,
+                pane_frames_visible: true,
+                pane_frame_position: TerminalFramePosition::Top,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(plan.group_frame_row, Some(0));
+        assert_eq!(plan.window_frame_row, None);
+        assert_eq!(plan.panes[0].frame_row, None);
+        assert!(plan.panes[0].render_region.is_empty());
+        assert!(plan.panes[0].content_region.is_empty());
+        assert_eq!(plan.body_row_at(0), None);
+        assert_eq!(plan.pane_content_target_at(0, 0), None);
+        assert_eq!(plan.pane(usize::MAX), None);
     }
 
     /// Verifies a headless client can drive mux-owned copy navigation and use

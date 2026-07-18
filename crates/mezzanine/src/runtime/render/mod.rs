@@ -19,10 +19,6 @@ use mez_mux::overlay::{
     overlay_render_lines, overlay_rendered_line_style_spans, overlay_rendered_selection_start,
     overlay_selection_index_at_position, overlay_selection_rendition, overlay_text_at,
 };
-use mez_mux::presentation::{
-    pane_content_size_for_geometry, pane_frame_merges_into_divider,
-    pane_render_region_size_for_geometry, rendered_window_body_size,
-};
 use mez_mux::render::{modal_overlay_max_scroll, modal_overlay_page_rows};
 
 use super::service_state::{
@@ -36,19 +32,19 @@ use super::{
     ClipboardPasteSourceKind, ClipboardPolicy, ClipboardWritePlan, CopyMode, CopyModeKeyAction,
     EffectiveConfig, EventKind, HostClipboard, KeyBindings, KeyChord, MezError, MouseAction,
     MouseResizeDragState, MouseSelectionDragState, MouseWindowActionFrameCell,
-    ObserverDecisionState, PaneDescriptor, PaneGeometry, PaneInputDispatch,
-    PaneNavigationDirection, PasteBuffers, ReadlineInputDecoder, ReadlineOutcome, ReadlinePrompt,
-    ReadlinePromptKind, RenderedClientView, Result, RuntimeAgentPromptInput, RuntimeCommandBinding,
+    ObserverDecisionState, PaneDescriptor, PaneInputDispatch, PaneNavigationDirection,
+    PasteBuffers, ReadlineInputDecoder, ReadlineOutcome, ReadlinePrompt, ReadlinePromptKind,
+    RenderedClientView, Result, RuntimeAgentPromptInput, RuntimeCommandBinding,
     RuntimeSessionService, RuntimeSideEffect, RuntimeStatusPillCache, RuntimeStatusPillDefinition,
     Size, SplitDirection, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFrameContext,
     TerminalScreen, WindowFrameAction, agent_prompt_reserved_line_count, current_unix_millis,
     current_unix_seconds, json_escape, mouse_action_name, mux_action_command_prompt_prefill,
     mux_action_name, pane_navigation_direction, parse_command_sequence,
-    render_attached_client_view, rendered_pane_geometries,
-    runtime_agent_shell_command_response_json, runtime_agent_turn_duration_display,
-    runtime_agent_turn_state_name, runtime_approval_policy_name, runtime_copy_position_for_view,
-    runtime_fit_status_line, runtime_paste_bytes, select_clipboard_paste_source,
-    window_frame_action_pillbox_cells, window_frame_pillbox_cells,
+    render_attached_client_view, runtime_agent_shell_command_response_json,
+    runtime_agent_turn_duration_display, runtime_agent_turn_state_name,
+    runtime_approval_policy_name, runtime_copy_position_for_view, runtime_fit_status_line,
+    runtime_paste_bytes, select_clipboard_paste_source, window_frame_action_pillbox_cells,
+    window_frame_pillbox_cells,
 };
 /// Maximum elapsed time between two pane-content clicks recognized as a double click.
 const DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS: u64 = 500;
@@ -585,6 +581,7 @@ use mez_mux::copy::CopyPosition;
 use mez_mux::presentation::{
     TerminalFramePosition, TerminalFrameStyle, TerminalPaneFrameContext,
     TerminalWindowFrameContext, TerminalWindowGroupFrameContext, TerminalWindowStatusContext,
+    WindowPresentationOptions, WindowPresentationPlan, plan_window_presentation,
 };
 use mez_mux::readline::DEFAULT_READLINE_HISTORY_LIMIT;
 use mez_mux::selector::{SelectorCandidate, SelectorCandidateKind};

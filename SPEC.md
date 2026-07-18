@@ -697,6 +697,19 @@ Mezzanine MUST provide framing per window.
 
 Mezzanine MUST support optional framing per pane.
 
+Deterministic multiplexer presentation planning MUST be owned by `mez-mux`.
+Given a mux window plus resolved group, window-frame, and pane-frame placement
+choices, the mux plan MUST select normal or zoomed pane order, identify active
+and inactive panes, reserve group/window/pane frame rows and divider cells,
+clip pane render and content regions to authoritative terminal bounds, and map
+absolute content hits to pane-local coordinates. Fully occluded tiny bounds,
+missing pane references, and stale zoom or layout references MUST produce
+explicit empty or rejected plans rather than out-of-range cursor, overlay, or
+mouse targets. `mezzanine` MUST remain the adapter that resolves configuration
+and product metadata, supplies terminal screen and agent content, renders frame
+templates and theme styles, applies overlays, writes terminal bytes, schedules
+redraws, and handles transport, persistence, security, and audit effects.
+
 Foreground attached clients MUST render visible window and pane state by
 default. Built-in defaults MUST enable a window frame or status bar and MUST
 render either pane frames, pane borders, or an equivalent pane status surface

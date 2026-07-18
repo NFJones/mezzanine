@@ -25,9 +25,8 @@ use super::{
     frame_markdown_lines, parse_unified_diff_sections, wrap_rich_text_lines_to_width,
 };
 use crate::runtime::render::{
-    ActionResult, AgentPresentationEntry, MezError, PaneGeometry, Result, RuntimeSessionService,
-    TerminalScreen, current_unix_seconds, default_runtime_agent_prompt_input,
-    pane_content_size_for_geometry, rendered_window_body_size,
+    ActionResult, AgentPresentationEntry, MezError, Result, RuntimeSessionService, TerminalScreen,
+    current_unix_seconds, default_runtime_agent_prompt_input,
 };
 use mez_agent::{
     AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, agent_output_content_type_is_diff,
@@ -170,33 +169,8 @@ impl RuntimeSessionService {
             .panes()
             .iter()
             .find(|pane| pane.id.as_str() == pane_id)?;
-        let body_size = rendered_window_body_size(
-            window.size,
-            self.presentation.settings.window_frames_enabled,
-        );
-        let geometries = if window.zoomed_pane_id() == Some(&pane.id) {
-            vec![PaneGeometry {
-                index: pane.index,
-                column: 0,
-                row: 0,
-                columns: body_size.columns,
-                rows: body_size.rows,
-            }]
-        } else {
-            window.pane_geometries_for_size(body_size)
-        };
-        let geometry = geometries
-            .iter()
-            .find(|geometry| geometry.index == pane.index)?;
-        Some(usize::from(
-            pane_content_size_for_geometry(
-                geometry,
-                &geometries,
-                self.presentation.settings.pane_frames_enabled,
-                self.presentation.settings.pane_frame_position,
-            )
-            .columns,
-        ))
+        let plan = self.window_presentation_plan(window)?;
+        Some(usize::from(plan.pane(pane.index)?.content_size.columns))
     }
 
     /// Returns the pane width to persist with one agent presentation entry.

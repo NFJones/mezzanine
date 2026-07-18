@@ -12,18 +12,17 @@ use super::{
     ROOT_AGENT_DISPLAY_NAME, ReadlinePrompt, ReadlinePromptKind, RenderedClientView, Result,
     RunningShellTransactionKind, RuntimeDisplayOverlay, RuntimePaneAgentStatusSelector,
     RuntimePrimaryPromptInput, RuntimeSessionService, Size, TerminalClientLoopConfig,
-    TerminalFrameContext, TerminalFramePosition, TerminalPaneFrameContext, TerminalScreen,
-    TerminalStyleSpan, TerminalStyledLine, TerminalWindowFrameContext,
-    TerminalWindowGroupFrameContext, TerminalWindowStatusContext, agent_prompt_reserved_line_count,
-    compose_modal_display_overlay_lines, compose_prompt_overlay_presentation_with_styles,
-    current_unix_millis, current_unix_seconds, modal_overlay_page_rows,
-    mouse_border_cells_for_geometries, overlay_footer, overlay_render_lines,
-    overlay_rendered_line_style_spans, overlay_rendered_selection_start,
+    TerminalFrameContext, TerminalPaneFrameContext, TerminalScreen, TerminalStyleSpan,
+    TerminalStyledLine, TerminalWindowFrameContext, TerminalWindowGroupFrameContext,
+    TerminalWindowStatusContext, WindowPresentationOptions, WindowPresentationPlan,
+    agent_prompt_reserved_line_count, compose_modal_display_overlay_lines,
+    compose_prompt_overlay_presentation_with_styles, current_unix_millis, current_unix_seconds,
+    modal_overlay_page_rows, mouse_border_cells_for_geometries, overlay_footer,
+    overlay_render_lines, overlay_rendered_line_style_spans, overlay_rendered_selection_start,
     overlay_selection_rendition, overlay_styled_lines, overlay_text_at,
-    pane_content_size_for_geometry, pane_frame_agent_status_pillbox_cells,
-    pane_render_region_size_for_geometry, render_attached_client_view, rendered_pane_geometries,
-    rendered_window_body_size, runtime_agent_turn_duration_display, runtime_agent_turn_state_name,
-    runtime_fit_status_line, runtime_human_system_uptime, runtime_local_datetime_seconds_string,
+    pane_frame_agent_status_pillbox_cells, plan_window_presentation, render_attached_client_view,
+    runtime_agent_turn_duration_display, runtime_agent_turn_state_name, runtime_fit_status_line,
+    runtime_human_system_uptime, runtime_local_datetime_seconds_string,
     runtime_pane_agent_selector_rendition, runtime_pane_agent_status_selector_layout,
     runtime_selector_line, terminal_text_width, window_frame_action_pillbox_cells,
     window_frame_pillbox_cells, window_group_frame_pillbox_cells,
@@ -429,11 +428,11 @@ impl RuntimeSessionService {
         if !self.presentation.settings.window_frames_enabled {
             return Some(rows.saturating_sub(1));
         }
-        let group_top_offset = usize::from(self.session.window_groups().len() > 1);
-        Some(match self.presentation.settings.window_frame_position {
-            TerminalFramePosition::Top => group_top_offset.min(rows.saturating_sub(1)),
-            TerminalFramePosition::Bottom => rows.saturating_sub(1),
-        })
+        self.session
+            .active_window()
+            .and_then(|window| self.window_presentation_plan(window))
+            .and_then(|plan| plan.window_frame_row)
+            .map(usize::from)
     }
 
     /// Runs the overlay copy modes on view operation for this subsystem.
@@ -509,66 +508,42 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Runs the copy mode overlay region operation for this subsystem.
+    /// Builds the mux-owned absolute presentation plan for one runtime window.
     ///
-    /// The function keeps parsing, state changes, and error propagation in
-    /// the owning module so callers receive typed results instead of relying
-    /// on duplicated control-flow logic.
+    /// The runtime resolves product configuration and group visibility, while
+    /// `mez-mux` owns every deterministic geometry, focus, clipping, frame,
+    /// overlay-region, and hit-target decision in the returned plan.
+    pub(super) fn window_presentation_plan(
+        &self,
+        window: &mez_mux::layout::Window,
+    ) -> Option<WindowPresentationPlan> {
+        plan_window_presentation(
+            window,
+            WindowPresentationOptions {
+                group_frame_visible: self.session.window_groups().len() > 1,
+                window_frame_visible: self.presentation.settings.window_frames_enabled,
+                window_frame_position: self.presentation.settings.window_frame_position,
+                pane_frames_visible: self.presentation.settings.pane_frames_enabled,
+                pane_frame_position: self.presentation.settings.pane_frame_position,
+            },
+        )
+    }
+
+    /// Returns the mux-planned absolute content region for a runtime pane.
     fn pane_content_mouse_region(
         &self,
         window: &mez_mux::layout::Window,
         pane_index: usize,
     ) -> Option<(usize, usize, Size)> {
-        let window_frame_visible = self.presentation.settings.window_frames_enabled;
-        let group_top_offset = usize::from(self.session.window_groups().len() > 1);
-        let display_size = Size::new(
-            window.size.columns,
-            window
-                .size
-                .rows
-                .saturating_sub(u16::try_from(group_top_offset).ok()?)
-                .max(1),
-        )
-        .ok()?;
-        let body_size = rendered_window_body_size(display_size, window_frame_visible);
-        let geometries = if let Some(zoomed) = window.zoomed_pane_id() {
-            let pane = window.panes().iter().find(|pane| &pane.id == zoomed)?;
-            vec![mez_mux::layout::PaneGeometry {
-                index: pane.index,
-                column: 0,
-                row: 0,
-                columns: body_size.columns,
-                rows: body_size.rows,
-            }]
-        } else {
-            window.pane_geometries_for_size(body_size)
-        };
-        let geometry = geometries
-            .iter()
-            .find(|geometry| geometry.index == pane_index)?;
-        let render_region = pane_render_region_size_for_geometry(geometry, &geometries);
-        let full_content_size = pane_content_size_for_geometry(
-            geometry,
-            &geometries,
-            self.presentation.settings.pane_frames_enabled,
-            self.presentation.settings.pane_frame_position,
-        );
-        let window_top_offset = usize::from(
-            window_frame_visible
-                && self.presentation.settings.window_frame_position == TerminalFramePosition::Top,
-        );
-        let pane_top_offset = usize::from(
-            self.presentation.settings.pane_frames_enabled
-                && self.presentation.settings.pane_frame_position == TerminalFramePosition::Top
-                && full_content_size.rows < render_region.rows,
-        );
+        let plan = self.window_presentation_plan(window)?;
+        let content = plan.pane(pane_index)?.content_region;
+        if content.is_empty() {
+            return None;
+        }
         Some((
-            group_top_offset
-                .saturating_add(window_top_offset)
-                .saturating_add(usize::from(geometry.row))
-                .saturating_add(pane_top_offset),
-            usize::from(geometry.column),
-            full_content_size,
+            usize::from(content.row),
+            usize::from(content.column),
+            Size::new(content.columns, content.rows).ok()?,
         ))
     }
 
@@ -864,24 +839,10 @@ impl RuntimeSessionService {
         let Some(window) = self.session.active_window() else {
             return Vec::new();
         };
-        let window_frame_visible = self.presentation.settings.window_frames_enabled;
-        let group_top_offset = u16::from(self.session.window_groups().len() > 1);
-        let mut display_window = window.clone();
-        if group_top_offset > 0
-            && let Ok(size) = Size::new(
-                window.size.columns,
-                window.size.rows.saturating_sub(group_top_offset).max(1),
-            )
-        {
-            display_window.size = size;
-        }
-        let geometries = rendered_pane_geometries(&display_window, window_frame_visible)
-            .unwrap_or_else(|_| display_window.pane_geometries());
-        let row_offset = group_top_offset.saturating_add(u16::from(
-            window_frame_visible
-                && self.presentation.settings.window_frame_position == TerminalFramePosition::Top,
-        ));
-        mouse_border_cells_for_geometries(&geometries, row_offset)
+        let Some(plan) = self.window_presentation_plan(window) else {
+            return Vec::new();
+        };
+        mouse_border_cells_for_geometries(&plan.pane_geometries(), plan.body_row_offset)
     }
 
     /// Runs the active window mouse frame cells operation for this subsystem.
@@ -904,10 +865,11 @@ impl RuntimeSessionService {
         {
             return Vec::new();
         }
-        let group_top_offset = u16::from(self.session.window_groups().len() > 1);
-        let row = match self.presentation.settings.window_frame_position {
-            TerminalFramePosition::Top => group_top_offset,
-            TerminalFramePosition::Bottom => window.size.rows.saturating_sub(1),
+        let Some(row) = self
+            .window_presentation_plan(window)
+            .and_then(|plan| plan.window_frame_row)
+        else {
+            return Vec::new();
         };
         window_frame_pillbox_cells(frame_context, row, window.size.columns)
     }
@@ -932,10 +894,11 @@ impl RuntimeSessionService {
         {
             return Vec::new();
         }
-        let group_top_offset = u16::from(self.session.window_groups().len() > 1);
-        let row = match self.presentation.settings.window_frame_position {
-            TerminalFramePosition::Top => group_top_offset,
-            TerminalFramePosition::Bottom => window.size.rows.saturating_sub(1),
+        let Some(row) = self
+            .window_presentation_plan(window)
+            .and_then(|plan| plan.window_frame_row)
+        else {
+            return Vec::new();
         };
         window_frame_action_pillbox_cells(frame_context, row, window.size.columns)
     }
@@ -948,7 +911,13 @@ impl RuntimeSessionService {
         let Some(window) = self.session.active_window() else {
             return Vec::new();
         };
-        window_group_frame_pillbox_cells(frame_context, 0, window.size.columns)
+        let Some(row) = self
+            .window_presentation_plan(window)
+            .and_then(|plan| plan.group_frame_row)
+        else {
+            return Vec::new();
+        };
+        window_group_frame_pillbox_cells(frame_context, row, window.size.columns)
     }
 
     /// Returns mouse hit cells for pane-frame agent model and reasoning pills.
@@ -962,33 +931,14 @@ impl RuntimeSessionService {
         if !self.presentation.settings.pane_frames_enabled {
             return Vec::new();
         }
-        let group_top_offset = u16::from(self.session.window_groups().len() > 1);
-        let mut display_window = window.clone();
-        if group_top_offset > 0
-            && let Ok(size) = Size::new(
-                window.size.columns,
-                window.size.rows.saturating_sub(group_top_offset).max(1),
-            )
-        {
-            display_window.size = size;
-        }
-        let Ok(geometries) = rendered_pane_geometries(
-            &display_window,
-            self.presentation.settings.window_frames_enabled,
-        ) else {
+        let Some(plan) = self.window_presentation_plan(window) else {
             return Vec::new();
         };
-        let row_offset = group_top_offset.saturating_add(u16::from(
-            self.presentation.settings.window_frames_enabled
-                && self.presentation.settings.window_frame_position == TerminalFramePosition::Top,
-        ));
         pane_frame_agent_status_pillbox_cells(
-            &display_window,
+            window,
             frame_context,
             &self.presentation.settings.pane_frame_template,
-            self.presentation.settings.pane_frame_position,
-            row_offset,
-            &geometries,
+            &plan,
         )
     }
 

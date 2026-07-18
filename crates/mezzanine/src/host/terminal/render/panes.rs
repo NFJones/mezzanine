@@ -14,9 +14,9 @@ use super::{
 };
 use super::{
     MezError, Result, TerminalClientLoopConfig, TerminalFrameContext, TerminalFrameRenderOptions,
-    TerminalScreen, TerminalStyledLine, pane_border_rendition, pane_divider_rendition,
-    place_group_frame, place_window_frame, plan_window_render, render_styled_pane_lines,
-    rendered_window_body_size, styled_group_frame_line, styled_window_frame_line,
+    TerminalScreen, TerminalStyledLine, WindowPresentationOptions, pane_border_rendition,
+    pane_divider_rendition, place_group_frame, place_window_frame, plan_window_presentation,
+    render_styled_pane_lines, styled_group_frame_line, styled_window_frame_line,
     window_with_group_frame_space, write_styled_merged_pane_frames_on_dividers,
 };
 #[cfg(test)]
@@ -159,11 +159,15 @@ pub fn render_window_with_pane_frame_template(
     window_frame: TerminalFrameRenderOptions<'_>,
     pane_frame: TerminalFrameRenderOptions<'_>,
 ) -> Result<Vec<String>> {
-    let plan = plan_window_render(
+    let plan = plan_window_presentation(
         window,
-        window_frame.enabled,
-        pane_frame.enabled,
-        pane_frame.position,
+        WindowPresentationOptions {
+            group_frame_visible: false,
+            window_frame_visible: window_frame.enabled,
+            window_frame_position: window_frame.position,
+            pane_frames_visible: pane_frame.enabled,
+            pane_frame_position: pane_frame.position,
+        },
     )
     .ok_or_else(|| MezError::invalid_state("cannot render a window with no panes"))?;
     let geometries = plan
@@ -179,7 +183,9 @@ pub fn render_window_with_pane_frame_template(
                 .panes()
                 .iter()
                 .find(|pane| pane.index == render_plan.source_index)
-                .unwrap_or_else(|| window.active_pane());
+                .ok_or_else(|| {
+                    MezError::invalid_state("presentation plan references a missing pane")
+                })?;
             let lines = pane_inputs
                 .iter()
                 .find(|input| input.pane_id == pane.id.to_string())
@@ -252,11 +258,15 @@ pub(super) fn render_styled_window_with_pane_frame_template(
     pane_frame: TerminalFrameRenderOptions<'_>,
     ui_theme: &UiTheme,
 ) -> Result<Vec<TerminalStyledLine>> {
-    let plan = plan_window_render(
+    let plan = plan_window_presentation(
         window,
-        window_frame.enabled,
-        pane_frame.enabled,
-        pane_frame.position,
+        WindowPresentationOptions {
+            group_frame_visible: false,
+            window_frame_visible: window_frame.enabled,
+            window_frame_position: window_frame.position,
+            pane_frames_visible: pane_frame.enabled,
+            pane_frame_position: pane_frame.position,
+        },
     )
     .ok_or_else(|| MezError::invalid_state("cannot render a window with no panes"))?;
     let geometries = plan
@@ -272,7 +282,9 @@ pub(super) fn render_styled_window_with_pane_frame_template(
                 .panes()
                 .iter()
                 .find(|pane| pane.index == render_plan.source_index)
-                .unwrap_or_else(|| window.active_pane());
+                .ok_or_else(|| {
+                    MezError::invalid_state("presentation plan references a missing pane")
+                })?;
             let lines = pane_inputs
                 .iter()
                 .find(|input| input.pane_id == pane.id.to_string())
@@ -313,20 +325,6 @@ pub(super) fn render_styled_window_with_pane_frame_template(
         place_window_frame(&mut lines, frame, window_frame.position, window.size.rows);
     }
     Ok(lines)
-}
-
-/// Runs the window body size operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-/// Returns pane rectangles apportioned within the rendered window body.
-pub fn rendered_pane_geometries(
-    window: &Window,
-    window_frames_enabled: bool,
-) -> Result<Vec<PaneGeometry>> {
-    let body_size = rendered_window_body_size(window.size, window_frames_enabled);
-    Ok(window.pane_geometries_for_size(body_size))
 }
 
 /// Runs the render panes by geometry operation for this subsystem.

@@ -55,8 +55,8 @@ use crate::host::terminal::{
     AttachedTerminalClientStepPlan, CopyMode, HostClipboard, MouseAction,
     MouseWindowActionFrameCell, TerminalClientLoopAction, TerminalClientLoopConfig,
     TerminalFrameContext, WindowFrameAction, agent_prompt_reserved_line_count,
-    render_attached_client_view, rendered_pane_geometries, route_client_input_actions,
-    window_frame_action_pillbox_cells, window_frame_pillbox_cells,
+    render_attached_client_view, route_client_input_actions, window_frame_action_pillbox_cells,
+    window_frame_pillbox_cells,
 };
 use crate::integrations::agent::actions::{
     execute_mcp_action_through_runtime, execute_mcp_action_through_runtime_async,
