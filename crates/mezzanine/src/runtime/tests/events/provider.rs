@@ -97,6 +97,200 @@ fn runtime_terminal_execution_transcript_persistence_is_idempotent() {
     let _ = std::fs::remove_dir_all(transcript_root);
 }
 
+/// Verifies a routed presentation persists exactly one typed handoff summary
+/// before the visible parent answer and rehydrates both on the next turn.
+///
+/// The exact worker result and presentation instructions are turn-local. Only
+/// the summarized handoff belongs in durable context, and repeated lifecycle
+/// finalization must not duplicate its reserved transcript event.
+#[test]
+fn runtime_routed_handoff_summary_persists_once_and_rehydrates_with_parent_answer() {
+    let mut service = test_runtime_service();
+    let transcript_root = temp_root("runtime-routed-handoff-durable-context");
+    let transcript_store = AgentTranscriptStore::new(transcript_root.clone());
+    service.set_agent_transcript_store(transcript_store.clone());
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get("%1")
+        .unwrap()
+        .session_id
+        .clone();
+    let started = service
+        .start_agent_prompt_turn("%1", "route this implementation")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    service.mark_routed_presentation_turn_for_tests(&turn.turn_id);
+    let handoff = r#"{"version":1,"result_summary":"implemented durable context","decisions":[],"evidence":["focused test passed"],"changes":[],"validation":[],"assumptions":[],"unresolved_risks":[],"follow_up_context":[]}"#;
+    let context = service
+        .agent_turn_contexts_mut()
+        .get_mut(&turn.turn_id)
+        .unwrap();
+    for block in [
+        ContextBlock {
+            source: ContextSourceKind::RoutedHandoff,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "routed worker exact final result".to_string(),
+            content: "EXACT WORKER RESULT MUST NOT PERSIST".to_string(),
+        },
+        ContextBlock {
+            source: ContextSourceKind::RoutedHandoff,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "routed worker handoff context".to_string(),
+            content: handoff.to_string(),
+        },
+        ContextBlock {
+            source: ContextSourceKind::RuntimeHint,
+            placement: mez_agent::ContextPlacement::EphemeralTail,
+            label: "routed result presentation".to_string(),
+            content: "PRESENTATION INSTRUCTION MUST NOT PERSIST".to_string(),
+        },
+    ] {
+        mez_agent::insert_context_block_by_placement(&mut context.blocks, block);
+    }
+    let action = mez_agent::AgentAction {
+        id: "present-routed-result".to_string(),
+        rationale: "present the routed result".to_string(),
+        payload: mez_agent::AgentActionPayload::Say {
+            status: mez_agent::SayStatus::Final,
+            text: "The routed implementation is complete.".to_string(),
+            content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+        },
+    };
+    let execution = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response: mez_agent::ModelResponse {
+            provider: "openai".to_string(),
+            model: "test".to_string(),
+            raw_text: "The routed implementation is complete.".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Vec::new(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "present the routed result".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![action.clone()],
+                final_turn: true,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: vec![mez_agent::ActionResult::succeeded(
+            &turn,
+            &action,
+            vec!["presented".to_string()],
+            None,
+        )],
+        final_turn: true,
+        terminal_state: AgentTurnState::Completed,
+    };
+
+    let first = service
+        .persist_runtime_agent_turn_execution_transcript(&turn, &execution)
+        .unwrap();
+    let replay = service
+        .persist_runtime_agent_turn_execution_transcript(&turn, &execution)
+        .unwrap();
+    let entries = transcript_store.inspect(&conversation_id).unwrap();
+    let event_positions = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content)
+                .map(|event| (index, event))
+        })
+        .collect::<Vec<_>>();
+    let user_index = entries
+        .iter()
+        .position(|entry| entry.role == TranscriptRole::User)
+        .unwrap();
+    let assistant_index = entries
+        .iter()
+        .position(|entry| entry.role == TranscriptRole::Assistant)
+        .unwrap();
+
+    assert!(first > 0);
+    assert_eq!(replay, 0);
+    assert_eq!(event_positions.len(), 1);
+    assert!(user_index < event_positions[0].0);
+    assert!(event_positions[0].0 < assistant_index);
+    assert_eq!(
+        event_positions[0].1,
+        mez_agent::TranscriptContextEvent::RoutedHandoff {
+            content: handoff.to_string()
+        }
+    );
+    assert!(
+        entries
+            .iter()
+            .all(|entry| !entry.content.contains("EXACT WORKER RESULT"))
+    );
+    assert!(
+        entries
+            .iter()
+            .all(|entry| !entry.content.contains("PRESENTATION INSTRUCTION"))
+    );
+
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &turn,
+            AgentTurnState::Completed,
+            "routed presentation persisted",
+        )
+        .unwrap();
+    let next = service
+        .start_agent_prompt_turn("%1", "continue from the routed result")
+        .unwrap();
+    let next_context = service.agent_turn_contexts().get(&next.turn_id).unwrap();
+    assert!(next_context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::RoutedHandoff
+            && block.label == "routed worker handoff context"
+            && block.content == handoff
+    }));
+    assert!(next_context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::TranscriptAssistant
+            && block.content == "The routed implementation is complete."
+    }));
+    let ordinary_provider = RuntimeBatchProvider {
+        response: runtime_say_response_for_agent(
+            &next.turn_id,
+            &next.agent_id,
+            "Ordinary follow-up answer.",
+            true,
+        ),
+    };
+    service
+        .execute_agent_turn_with_provider(
+            &next.turn_id,
+            &ordinary_provider,
+            runtime_model_profile("runtime-batch", "test"),
+        )
+        .unwrap();
+    let event_count = transcript_store
+        .inspect(&conversation_id)
+        .unwrap()
+        .iter()
+        .filter(|entry| {
+            mez_agent::TranscriptContextEvent::from_transcript_content(&entry.content).is_some()
+        })
+        .count();
+    assert_eq!(event_count, 1);
+    let _ = std::fs::remove_dir_all(transcript_root);
+}
+
 /// Verifies provider-completion validation accepts terminal controller failure
 /// summaries.
 ///

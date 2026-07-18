@@ -1247,6 +1247,14 @@ impl RuntimeSessionService {
         self.agent.routed_presentation_turns.contains(turn_id)
     }
 
+    /// Marks one turn as a routed presentation for focused transcript tests.
+    #[cfg(test)]
+    pub(crate) fn mark_routed_presentation_turn_for_tests(&mut self, turn_id: &str) {
+        self.agent
+            .routed_presentation_turns
+            .insert(turn_id.to_string());
+    }
+
     /// Retains one macro-loop join until routed parent presentation settles.
     pub(crate) fn retain_routed_loop_completion(
         &mut self,

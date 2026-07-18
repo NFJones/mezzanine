@@ -6,13 +6,14 @@
 
 use super::{
     ActionResult, ActionStatus, AgentActionPayload, AgentTurnExecution, AgentTurnRecord, BTreeMap,
-    MezError, ModelProfile, ModelTokenUsage, ModelTokenUsageKey, ProviderQuotaUsage, Result,
-    RuntimeAgentCopyOutput, RuntimeAgentPatchRecord, RuntimeSessionService, RuntimeSideEffect,
-    TranscriptEntry, TranscriptRole, current_unix_seconds, discover_project_root,
-    next_transcript_sequence, runtime_action_status_name,
-    runtime_agent_provider_context_usage_display, runtime_unrecovered_action_failure_output,
-    transcript_entries_for_execution,
+    ContextSourceKind, MezError, ModelProfile, ModelTokenUsage, ModelTokenUsageKey,
+    ProviderQuotaUsage, Result, RuntimeAgentCopyOutput, RuntimeAgentPatchRecord,
+    RuntimeSessionService, RuntimeSideEffect, TranscriptEntry, TranscriptRole,
+    current_unix_seconds, discover_project_root, next_transcript_sequence,
+    runtime_action_status_name, runtime_agent_provider_context_usage_display,
+    runtime_unrecovered_action_failure_output, transcript_entries_for_execution,
 };
+use mez_agent::TranscriptContextEvent;
 
 /// Maximum recent execution groups retained for in-process idempotency.
 const RUNTIME_PERSISTED_EXECUTION_TRANSCRIPT_LIMIT: usize = 4096;
@@ -237,14 +238,82 @@ impl RuntimeSessionService {
             sequence = sequence.saturating_add(1);
             entries.push(entry);
         }
-        entries.extend(transcript_entries_for_execution(
+        let mut execution_entries = transcript_entries_for_execution(
             conversation_id,
             sequence,
             created_at_unix_seconds,
             turn,
             execution,
-        )?);
+        )?;
+        if execution.terminal_state == mez_agent::AgentTurnState::Completed
+            && self.routed_presentation_turn(&turn.turn_id)
+            && let Some(content) = self.routed_handoff_transcript_content(&turn.turn_id)
+        {
+            Self::insert_routed_handoff_transcript_event(
+                &mut execution_entries,
+                conversation_id,
+                created_at_unix_seconds,
+                turn,
+                content,
+            )?;
+        }
+        entries.extend(execution_entries);
         Ok(entries)
+    }
+
+    /// Returns the summarized routed handoff selected for durable replay.
+    ///
+    /// The exact worker output and presentation-only instructions use different
+    /// labels and are deliberately excluded. The summary block exists only on
+    /// the parent presentation turn while transcript persistence is running.
+    fn routed_handoff_transcript_content(&self, turn_id: &str) -> Option<String> {
+        self.agent_turn_contexts()
+            .get(turn_id)?
+            .blocks
+            .iter()
+            .rev()
+            .find(|block| {
+                block.source == ContextSourceKind::RoutedHandoff
+                    && block.label == "routed worker handoff context"
+                    && !block.content.trim().is_empty()
+            })
+            .map(|block| block.content.clone())
+    }
+
+    /// Inserts one typed routed-handoff event immediately before the visible
+    /// parent assistant entry and advances later sequence numbers.
+    fn insert_routed_handoff_transcript_event(
+        entries: &mut Vec<TranscriptEntry>,
+        conversation_id: &str,
+        created_at_unix_seconds: u64,
+        turn: &AgentTurnRecord,
+        content: String,
+    ) -> Result<()> {
+        let assistant_index = entries
+            .iter()
+            .position(|entry| entry.role == TranscriptRole::Assistant)
+            .ok_or_else(|| {
+                MezError::invalid_state(
+                    "routed presentation transcript is missing its assistant entry",
+                )
+            })?;
+        let sequence = entries[assistant_index].sequence;
+        for entry in &mut entries[assistant_index..] {
+            entry.sequence = entry.sequence.saturating_add(1);
+        }
+        let entry = TranscriptEntry {
+            conversation_id: conversation_id.to_string(),
+            sequence,
+            created_at_unix_seconds,
+            role: TranscriptRole::System,
+            turn_id: turn.turn_id.clone(),
+            agent_id: turn.agent_id.clone(),
+            pane_id: turn.pane_id.clone(),
+            content: TranscriptContextEvent::RoutedHandoff { content }.to_transcript_content(),
+        };
+        entry.validate()?;
+        entries.insert(assistant_index, entry);
+        Ok(())
     }
 
     /// Builds the one-time system transcript entry that makes saved sessions

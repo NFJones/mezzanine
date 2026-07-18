@@ -6,7 +6,7 @@
 //! control request dispatcher from also owning model-context shaping details.
 
 use super::super::{ContextBlock, ContextSourceKind, Envelope, TranscriptEntry, TranscriptRole};
-use mez_agent::ProviderTranscriptEvent;
+use mez_agent::{ProviderTranscriptEvent, TranscriptContextEvent};
 
 const AGENT_LOCAL_MESSAGE_CONTEXT_PAYLOAD_CHARS: usize = 256 * 1024;
 const AGENT_TRANSCRIPT_TOOL_CONTEXT_LIMIT_BYTES: usize = 256 * 1024;
@@ -16,15 +16,20 @@ pub(super) fn runtime_agent_transcript_context_blocks(
     pane_id: &str,
     entries: &[TranscriptEntry],
 ) -> Vec<ContextBlock> {
-    let context_entries = entries
-        .iter()
-        .filter(|entry| {
-            entry.role != TranscriptRole::System
-                || ProviderTranscriptEvent::from_transcript_content(&entry.content).is_some()
-        })
-        .collect::<Vec<_>>();
     let mut blocks = Vec::new();
-    for entry in context_entries {
+    for entry in entries {
+        if entry.role == TranscriptRole::System
+            && let Some(TranscriptContextEvent::RoutedHandoff { content }) =
+                TranscriptContextEvent::from_transcript_content(&entry.content)
+        {
+            blocks.push(ContextBlock {
+                source: ContextSourceKind::RoutedHandoff,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "routed worker handoff context".to_string(),
+                content,
+            });
+            continue;
+        }
         let Some(content) = runtime_transcript_entry_context_content(entry) else {
             continue;
         };
@@ -50,6 +55,7 @@ pub(super) fn runtime_context_block_is_compaction_refresh_owned(block: &ContextB
         ContextSourceKind::TranscriptAssistant => block
             .label
             .starts_with("previous assistant message for pane "),
+        ContextSourceKind::RoutedHandoff => block.label == "routed worker handoff context",
         ContextSourceKind::Memory => {
             block.label == "conversation compaction notice"
                 || block.label.starts_with("memory compact-")

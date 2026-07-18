@@ -30,6 +30,22 @@ This operation is shared by shell and patch results, MCP and network calls,
 memory and issue actions, messages and skills, configuration changes,
 approvals, failure correction, and joined subagent completion.
 
+## Durable routed handoffs
+
+The parent presentation turn stores one versioned routed-handoff context event
+between its current user message and visible assistant answer. The event carries
+only the validated summarized handoff. Exact worker output, presentation
+instructions, and arbitrary turn-local blocks are not durable transcript
+context.
+
+Transcript replay decodes supported events into a `RoutedHandoff`
+`ConversationAppend` block labeled `routed worker handoff context`. Later parent
+turns and ephemeral routed or forked conversations therefore receive the same
+summary and visible parent answer through the ordinary captured transcript
+high-water mark. Ordinary system records, malformed payloads, unknown event
+kinds, and unsupported versions remain filtered. Per-turn transcript
+idempotency keeps presentation retries from appending a duplicate event.
+
 ## Execution-group-safe compaction
 
 Compaction operates only on immutable chronology. One provider execution group

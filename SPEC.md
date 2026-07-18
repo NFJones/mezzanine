@@ -2577,6 +2577,14 @@ exit conditions. A terminal routed loop MUST preserve the exact worker result,
 request at most one validated structured handoff (plus the bounded repair
 allowed by the routed handoff contract), and resume the invoking parent for one
 main-profile presentation.
+The summarized routed handoff MUST be persisted exactly once as a versioned,
+typed system transcript event immediately before the visible parent assistant
+presentation. The event MUST NOT contain the worker's exact result,
+presentation instructions, or arbitrary turn-local context. Transcript replay
+MUST rehydrate supported events as `RoutedHandoff` `ConversationAppend` context
+for later parent turns and captured routed/forked conversations. Malformed
+events, unknown kinds, and unsupported versions MUST remain filtered from model
+context. Replayed presentation finalization MUST NOT duplicate the event.
 For routed `--fork` and `--new` loops, worker attempts MUST retain their
 respective captured-parent and empty-context baselines, MUST remain ephemeral,
 and MUST restore the invoking parent conversation before terminal handoff.
@@ -2853,6 +2861,10 @@ immutable and volatile token estimates, the immutable projection byte length
 and digest, the longest common immutable prefix, and an append-only flag without
 retaining prompt text. Transitions MUST distinguish new turns, compaction,
 provider switches, model switches, append-only growth, and unexpected rewrites.
+Provider-independent chronological context that is not user or assistant speech
+MUST use a reserved, versioned system transcript event contract. Only supported
+typed events may become model-visible context during replay; ordinary system
+records and malformed or unsupported reserved payloads MUST remain filtered.
 OpenAI request diagnostics MUST fingerprint the provider-visible request shape
 after unsupported local profile options are omitted. Local
 `provider_options.prompt_cache_retention` values MUST NOT affect the emitted

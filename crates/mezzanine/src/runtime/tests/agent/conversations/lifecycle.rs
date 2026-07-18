@@ -210,11 +210,13 @@ fn runtime_agent_loop_fork_option_starts_first_iteration_in_ephemeral_conversati
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies an ephemeral fork replays the complete parent projection captured
-/// at fork time without leaking parent records appended afterward.
+/// Verifies an ephemeral fork replays the complete parent projection, including
+/// typed routed handoff context, captured at fork time without leaking later
+/// parent records.
 ///
-/// A recent-tail read would replace the captured first record with the later
-/// parent record when the fork high-water mark is one.
+/// A routed or loop worker must receive both the summarized handoff and visible
+/// parent answer. A recent-tail read would replace captured records with later
+/// parent content instead of honoring the fork high-water mark.
 #[test]
 fn runtime_agent_loop_fork_context_honors_captured_parent_high_water_mark() {
     let transcript_store = AgentTranscriptStore::new(temp_root("runtime-agent-loop-fork-replay"));
@@ -242,9 +244,37 @@ fn runtime_agent_loop_fork_context_honors_captured_parent_high_water_mark() {
             content: "captured parent message".to_string(),
         })
         .unwrap();
+    let handoff = r#"{"version":1,"result_summary":"captured routed summary"}"#;
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: parent_conversation_id.clone(),
+            sequence: 2,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::System,
+            turn_id: "captured-parent-turn".to_string(),
+            agent_id: "agent".to_string(),
+            pane_id: "%1".to_string(),
+            content: mez_agent::TranscriptContextEvent::RoutedHandoff {
+                content: handoff.to_string(),
+            }
+            .to_transcript_content(),
+        })
+        .unwrap();
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: parent_conversation_id.clone(),
+            sequence: 3,
+            created_at_unix_seconds: 1,
+            role: TranscriptRole::Assistant,
+            turn_id: "captured-parent-turn".to_string(),
+            agent_id: "agent".to_string(),
+            pane_id: "%1".to_string(),
+            content: "captured parent presentation".to_string(),
+        })
+        .unwrap();
     service
         .agent_shell_store_mut()
-        .record_transcript_entries("%1", 1)
+        .record_transcript_entries("%1", 3)
         .unwrap();
     service
         .execute_agent_shell_loop_command("%1", "/loop --fork continue")
@@ -252,7 +282,7 @@ fn runtime_agent_loop_fork_context_honors_captured_parent_high_water_mark() {
     transcript_store
         .append(&TranscriptEntry {
             conversation_id: parent_conversation_id,
-            sequence: 2,
+            sequence: 4,
             created_at_unix_seconds: 2,
             role: TranscriptRole::User,
             turn_id: "later-parent-turn".to_string(),
@@ -275,6 +305,15 @@ fn runtime_agent_loop_fork_context_honors_captured_parent_high_water_mark() {
 
     assert!(replay.contains("captured parent message"), "{replay}");
     assert!(!replay.contains("later parent message"), "{replay}");
+    assert!(context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::RoutedHandoff
+            && block.label == "routed worker handoff context"
+            && block.content == handoff
+    }));
+    assert!(context.blocks.iter().any(|block| {
+        block.source == ContextSourceKind::TranscriptAssistant
+            && block.content == "captured parent presentation"
+    }));
 }
 
 /// Verifies `/loop --fork` can start from a pane conversation that has no

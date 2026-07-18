@@ -1275,21 +1275,27 @@ fn runtime_mutating_response_is_cacheable(_method: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::runtime_agent_transcript_context_blocks;
-    use mez_agent::ProviderTranscriptEvent;
     use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
+    use mez_agent::{ProviderTranscriptEvent, TranscriptContextEvent};
 
-    /// Verifies only provider-native system transcript entries become model
-    /// context.
+    /// Verifies only typed provider-native and routed-handoff system entries
+    /// become model context.
     ///
     /// Ordinary system transcript entries are durable audit records rather than
     /// chat history. DeepSeek replay metadata is also stored with the system
     /// role, but it must survive runtime transcript filtering so request
-    /// assembly can render it back into native assistant/tool messages.
+    /// assembly can render it back into native assistant/tool messages. Routed
+    /// summaries use their dedicated context source, while malformed or unknown
+    /// reserved events remain filtered with ordinary system records.
     #[test]
     fn runtime_transcript_context_preserves_provider_native_system_entries() {
         let provider_event = ProviderTranscriptEvent::DeepSeekToolResult {
             tool_call_id: "call_1".to_string(),
             content: "action result".to_string(),
+        }
+        .to_transcript_content();
+        let routed_handoff = TranscriptContextEvent::RoutedHandoff {
+            content: r#"{"version":1,"result_summary":"durable summary"}"#.to_string(),
         }
         .to_transcript_content();
         let entries = vec![
@@ -1317,6 +1323,30 @@ mod tests {
                 conversation_id: "conv1".to_string(),
                 sequence: 3,
                 created_at_unix_seconds: 100,
+                role: TranscriptRole::System,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-1".to_string(),
+                pane_id: "%1".to_string(),
+                content: routed_handoff,
+            },
+            TranscriptEntry {
+                conversation_id: "conv1".to_string(),
+                sequence: 4,
+                created_at_unix_seconds: 100,
+                role: TranscriptRole::System,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-1".to_string(),
+                pane_id: "%1".to_string(),
+                content: format!(
+                    "{}{}",
+                    mez_agent::TRANSCRIPT_CONTEXT_EVENT_MARKER,
+                    r#"{"version":"mez-transcript-context-event/v2","kind":"routed_handoff","content":"must not appear"}"#
+                ),
+            },
+            TranscriptEntry {
+                conversation_id: "conv1".to_string(),
+                sequence: 5,
+                created_at_unix_seconds: 100,
                 role: TranscriptRole::Assistant,
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-1".to_string(),
@@ -1327,9 +1357,23 @@ mod tests {
 
         let blocks = runtime_agent_transcript_context_blocks("%1", &entries);
 
-        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks.len(), 3);
         assert_eq!(blocks[0].content, provider_event);
         assert!(ProviderTranscriptEvent::from_transcript_content(&blocks[0].content).is_some());
-        assert_eq!(blocks[1].content, "visible assistant history");
+        assert_eq!(
+            blocks[1].source,
+            mez_agent::ContextSourceKind::RoutedHandoff
+        );
+        assert_eq!(blocks[1].label, "routed worker handoff context");
+        assert_eq!(
+            blocks[1].content,
+            r#"{"version":1,"result_summary":"durable summary"}"#
+        );
+        assert_eq!(blocks[2].content, "visible assistant history");
+        assert!(
+            blocks
+                .iter()
+                .all(|block| !block.content.contains("must not appear"))
+        );
     }
 }

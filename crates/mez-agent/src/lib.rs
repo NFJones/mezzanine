@@ -477,7 +477,8 @@ pub use subagent::{
 pub use subagent_output::subagent_task_output_for_execution;
 pub use surface::{AgentCapability, AllowedAction, AllowedActionSet, ModelInteractionKind};
 pub use transcript::{
-    TranscriptContractError, TranscriptEntry, TranscriptPersistence, TranscriptRole,
+    TRANSCRIPT_CONTEXT_EVENT_MARKER, TranscriptContextEvent, TranscriptContractError,
+    TranscriptEntry, TranscriptPersistence, TranscriptRole,
 };
 pub use turn::{
     AgentTurnLedgerError, AgentTurnLedgerErrorKind, AgentTurnLedgerResult, AgentTurnState,

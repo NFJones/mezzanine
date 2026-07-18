@@ -5,11 +5,13 @@
 //! retention, compression, prompt history, and terminal presentation replay.
 
 mod checkpoint;
+mod context_event;
 mod error;
 mod records;
 mod summary;
 
 pub use checkpoint::AgentSessionMetadata;
+pub use context_event::{TRANSCRIPT_CONTEXT_EVENT_MARKER, TranscriptContextEvent};
 pub use error::TranscriptContractError;
 pub use records::{TranscriptEntry, TranscriptRole, validate_conversation_id};
 pub use summary::{ConversationSummary, summarize_conversation};

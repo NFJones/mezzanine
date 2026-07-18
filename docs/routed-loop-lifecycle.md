@@ -57,6 +57,11 @@ handoff do not resolve the parent action. The dependency resolves once, after
 successful presentation, or fails once after terminal explanation or
 cancellation.
 
+Successful parent presentation persists the validated handoff summary once as
+a typed transcript context event immediately before the visible parent answer.
+Later parent turns and captured forked/routed conversations replay both records;
+the exact worker result and presentation-only instructions remain turn-local.
+
 ## Examples
 
 Reuse one routed worker until a patch-free verification pass:
