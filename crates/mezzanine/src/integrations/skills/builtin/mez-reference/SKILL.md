@@ -23,6 +23,13 @@ value, and unset/remove/delete for removing an override. Do not claim the
 change was applied until the action result confirms persistence and live
 application.
 
+Treat the effective configuration supplied alongside this skill as an
+invocation-time snapshot. A later settled `config_change` result is
+authoritative and supersedes that snapshot. Do not repeat a semantic mutation
+that already succeeded in the current turn; the runtime suppresses such a
+duplicate and terminates further provider continuation after other actions in
+the same response settle.
+
 For broad theme requests, prefer `theme.active` or a compact palette change
 through `theme.aliases.*`. Do not set every `theme.colors.*` slot unless the
 user explicitly asks for per-slot control or the requested design cannot be

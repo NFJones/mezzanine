@@ -170,6 +170,8 @@ struct RuntimeConfigMutationBatch {
     changed: bool,
     /// Whether applying the mutations requires runtime config reload.
     reload_required: bool,
+    /// Per-mutation change flags in request order.
+    mutation_changed: Vec<bool>,
 }
 
 /// Planned persisted theme update for the primary config file.
@@ -208,6 +210,8 @@ pub(crate) struct RuntimePersistedConfigMutationBatchReport {
     pub reload_required: bool,
     /// Number of scalar mutations included in the batch.
     pub mutation_count: usize,
+    /// Per-mutation change flags in request order.
+    pub mutation_changed: Vec<bool>,
     /// Whether persistence was deferred to the async side-effect writer.
     pub deferred: bool,
 }
@@ -456,6 +460,7 @@ pub(crate) fn runtime_apply_persisted_config_mutation_batch(
         changed: batch.changed,
         reload_required: batch.reload_required,
         mutation_count: mutations.len(),
+        mutation_changed: batch.mutation_changed,
         deferred: service.persistence.config_uses_adapter(),
     })
 }
@@ -516,16 +521,19 @@ fn runtime_plan_config_mutations(
     let mut text = text.to_string();
     let mut changed = false;
     let mut reload_required = false;
+    let mut mutation_changed = Vec::with_capacity(mutations.len());
     for mutation in mutations {
         let plan = plan_config_mutation(format, &text, scope, mutation.clone())?;
         changed |= plan.changed;
         reload_required |= plan.reload_required;
+        mutation_changed.push(plan.changed);
         text = plan.text;
     }
     Ok(RuntimeConfigMutationBatch {
         text,
         changed,
         reload_required,
+        mutation_changed,
     })
 }
 

@@ -8,6 +8,8 @@
 use std::error::Error;
 use std::fmt;
 
+use sha2::Digest;
+
 /// Provider-visible operation names for model-authored live config changes.
 pub const CONFIG_CHANGE_OPERATION_NAMES: &[&str] = &["set", "unset", "reset"];
 
@@ -58,6 +60,106 @@ impl ConfigChangeValue {
             Self::Boolean(value) => value.to_string(),
             Self::StringArray(values) => serde_json::json!(values).to_string(),
         }
+    }
+}
+
+/// Canonical semantic identity for one persisted configuration mutation.
+///
+/// Product runtimes use this value to detect repeated successful mutations
+/// across provider continuations even when the model assigns a different
+/// action id or uses a compatibility operation spelling. The persistent target
+/// remains an explicit input because equality is scoped to the concrete layer
+/// the product intends to mutate, not merely to the current effective value.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ConfigChangeMutationSignature {
+    operation: &'static str,
+    setting_path: String,
+    value_json: Option<String>,
+    persistent_target: String,
+}
+
+impl ConfigChangeMutationSignature {
+    /// Builds a canonical signature from one model-authored request.
+    ///
+    /// `set` values are normalized to their typed JSON representation. Unset
+    /// and reset compatibility spellings share the same value-free identity.
+    pub fn new(
+        setting_path: &str,
+        operation: &str,
+        value: Option<&str>,
+        persistent_target: impl Into<String>,
+    ) -> Result<Self, ConfigChangeError> {
+        let operation = normalize_config_change_operation(operation)?;
+        let (operation, value_json) = match operation {
+            ConfigChangeOperation::Set => (
+                "set",
+                Some(parse_config_change_value(value)?.canonical_json()),
+            ),
+            ConfigChangeOperation::Unset => ("unset", None),
+        };
+        let setting_path = setting_path.trim();
+        if setting_path.is_empty() {
+            return Err(ConfigChangeError::new(
+                "config_change setting path must not be empty",
+            ));
+        }
+        let persistent_target = persistent_target.into();
+        let persistent_target = persistent_target.trim();
+        if persistent_target.is_empty() {
+            return Err(ConfigChangeError::new(
+                "config_change persistent target must not be empty",
+            ));
+        }
+        Ok(Self {
+            operation,
+            setting_path: setting_path.to_string(),
+            value_json,
+            persistent_target: persistent_target.to_string(),
+        })
+    }
+
+    /// Returns the canonical operation name (`set` or `unset`).
+    pub fn operation(&self) -> &'static str {
+        self.operation
+    }
+
+    /// Returns the canonical dotted configuration path.
+    pub fn setting_path(&self) -> &str {
+        &self.setting_path
+    }
+
+    /// Returns the normalized typed JSON value for a set operation.
+    pub fn value_json(&self) -> Option<&str> {
+        self.value_json.as_deref()
+    }
+
+    /// Returns the product-supplied persistent target identity.
+    pub fn persistent_target(&self) -> &str {
+        &self.persistent_target
+    }
+
+    /// Returns stable versioned material suitable for an in-memory ledger key.
+    pub fn canonical_material(&self) -> String {
+        format!(
+            "config-change-signature-v1\noperation={}\npath={}\nvalue={}\ntarget={}",
+            self.operation,
+            self.setting_path,
+            self.value_json.as_deref().unwrap_or("null"),
+            self.persistent_target
+        )
+    }
+
+    /// Returns a stable opaque mutation identifier for diagnostics.
+    ///
+    /// Product runtimes remain responsible for substituting a redacted
+    /// identifier when a schema classifies the value as secret material.
+    pub fn mutation_id(&self) -> String {
+        let digest = sha2::Sha256::digest(self.canonical_material().as_bytes());
+        let digest = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        format!("config-mutation-v1-{digest}")
     }
 }
 
@@ -243,5 +345,63 @@ mod tests {
             "solarized"
         );
         assert!(config_change_string_value("theme.active", Some("true")).is_err());
+    }
+
+    #[test]
+    /// Verifies semantic signatures normalize operation aliases and typed
+    /// values while retaining the concrete persistent target boundary.
+    fn config_change_mutation_signatures_capture_semantic_identity() {
+        let first = ConfigChangeMutationSignature::new(
+            " history.lines ",
+            "replace",
+            Some("200"),
+            "user:/tmp/config.toml",
+        )
+        .unwrap();
+        let equivalent = ConfigChangeMutationSignature::new(
+            "history.lines",
+            "set",
+            Some("200"),
+            "user:/tmp/config.toml",
+        )
+        .unwrap();
+        let different_target = ConfigChangeMutationSignature::new(
+            "history.lines",
+            "set",
+            Some("200"),
+            "project:/tmp/project.toml",
+        )
+        .unwrap();
+
+        assert_eq!(first, equivalent);
+        assert_eq!(first.operation(), "set");
+        assert_eq!(first.value_json(), Some("200"));
+        assert_eq!(first.mutation_id(), equivalent.mutation_id());
+        assert_ne!(first, different_target);
+        assert_ne!(first.mutation_id(), different_target.mutation_id());
+    }
+
+    #[test]
+    /// Verifies reset and unset requests share a value-free signature so a
+    /// compatibility spelling cannot bypass duplicate suppression.
+    fn config_change_unset_signatures_ignore_irrelevant_values() {
+        let reset = ConfigChangeMutationSignature::new(
+            "history.lines",
+            "reset",
+            Some("999"),
+            "user:/tmp/config.toml",
+        )
+        .unwrap();
+        let unset = ConfigChangeMutationSignature::new(
+            "history.lines",
+            "unset",
+            None,
+            "user:/tmp/config.toml",
+        )
+        .unwrap();
+
+        assert_eq!(reset, unset);
+        assert_eq!(reset.operation(), "unset");
+        assert_eq!(reset.value_json(), None);
     }
 }

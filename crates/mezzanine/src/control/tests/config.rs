@@ -2,6 +2,29 @@
 
 use super::*;
 
+/// Verifies successful no-op persistence responses do not advance live config
+/// generation merely because a persistent target was selected.
+///
+/// Mutation responses use `persisted=true` to describe the requested target
+/// even when the explicit override was already satisfied. Only `applied=true`
+/// proves that config layers changed and therefore justifies a reload,
+/// generation increment, or `ConfigChanged` event.
+#[test]
+fn config_control_generation_advances_only_for_applied_mutations() {
+    assert!(config_response_advances_generation(
+        "config/set",
+        r#"{"result":{"applied":true,"persisted":true}}"#,
+    ));
+    assert!(!config_response_advances_generation(
+        "config/set",
+        r#"{"result":{"applied":false,"persisted":true}}"#,
+    ));
+    assert!(!config_response_advances_generation(
+        "config/set",
+        r#"{"error":{"message":"failed"},"result":{"applied":true}}"#,
+    ));
+}
+
 /// Exercises the authorized configuration control path for effective reads,
 /// validation, and reload. The protocol defines `effective` as a Boolean, so
 /// both Boolean values must be accepted while the implementation currently

@@ -190,7 +190,9 @@ macro.
 The repository currently ships built-in skills including:
 
 - `mez-reference`: Mezzanine terminal commands, slash commands, skill
-  invocation, common workflows, and supported live configuration changes.
+  invocation, common workflows, and supported live configuration changes. Its
+  effective-config block is an invocation-time snapshot; a later settled
+  `config_change` result is authoritative and explicitly supersedes it.
 - `create-skill`: guidance for creating or updating OpenAI-structured skills.
 - `create-macro`: guidance for creating or updating agent macros with
   `MACRO.md` front matter and ordered prompt steps.

@@ -675,7 +675,7 @@ pub(super) fn validate_hook_path(segments: &[&str]) -> Option<String> {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(super) fn contains_secret_material(path: &str, scope: ConfigScope) -> bool {
+pub(crate) fn contains_secret_material(path: &str, scope: ConfigScope) -> bool {
     let lower = path.to_ascii_lowercase();
     let secret_segment = lower.split('.').any(|segment| {
         matches!(

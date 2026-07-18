@@ -188,7 +188,7 @@ fn runtime_status_reports_provider_context_continuity_diagnostics() {
     );
     assert!(status.contains("sha256="), "{status}");
     assert!(
-        status.contains("| Common immutable prefix | blocks=1 tokens~"),
+        status.contains("| Common immutable prefix | blocks=2 tokens~"),
         "{status}"
     );
     let request =
@@ -555,13 +555,14 @@ fn runtime_agent_context_keeps_unconfirmed_busy_readiness_warning() {
 }
 
 /// Verifies `$mez-reference` includes live schema guidance, command indexes,
-/// and current config.
+/// and a separately labeled invocation-time config snapshot.
 ///
 /// The reference skill should not force the model to rediscover basic command
 /// names or config setting names before operating Mezzanine. Its invocation
 /// context therefore includes command indexes, the annotated schema, concrete
 /// theme color slots, reset operation, and the pane's current effective config
-/// snapshot.
+/// snapshot. The snapshot is a conversation record rather than immutable skill
+/// text so later settled `config_change` results can explicitly supersede it.
 #[test]
 fn runtime_agent_context_builtin_mez_reference_prompt_includes_current_config() {
     let mut service = test_runtime_service();
@@ -600,14 +601,32 @@ fn runtime_agent_context_builtin_mez_reference_prompt_includes_current_config() 
     assert!(
         skill_block
             .content
-            .contains("## Current effective Mezzanine config")
-    );
-    assert!(skill_block.content.contains("value path=theme.active"));
-    assert!(
-        skill_block
-            .content
             .contains("## Additional context\n\nset the prompt color"),
         "{}",
         skill_block.content
     );
+    assert_eq!(
+        skill_block.placement,
+        mez_agent::ContextPlacement::ConversationAppend
+    );
+    let snapshot_block = context
+        .blocks
+        .iter()
+        .find(|block| block.label == "explicit skill mez-reference invocation-time config snapshot")
+        .expect("missing explicit mez-reference config snapshot block");
+    assert_eq!(
+        snapshot_block.placement,
+        mez_agent::ContextPlacement::ConversationAppend
+    );
+    assert!(
+        snapshot_block
+            .content
+            .contains("Effective Mezzanine config snapshot at skill invocation time")
+    );
+    assert!(
+        snapshot_block
+            .content
+            .contains("Later settled config_change results supersede this snapshot")
+    );
+    assert!(snapshot_block.content.contains("value path=theme.active"));
 }

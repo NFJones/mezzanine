@@ -102,6 +102,9 @@ impl RuntimeSessionService {
         self.agent
             .agent_turn_network_action_history
             .remove(&turn.turn_id);
+        self.agent
+            .agent_turn_config_change_successes
+            .remove(&turn.turn_id);
         self.clear_joined_subagent_dependencies_for_turn(&turn.turn_id);
         self.clear_agent_pre_shell_hook_completions_for_turn(&turn.turn_id);
         self.agent.agent_turn_model_profiles.remove(&turn.turn_id);

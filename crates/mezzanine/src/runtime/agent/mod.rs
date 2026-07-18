@@ -161,6 +161,11 @@ pub(crate) struct RuntimeAgentComponent {
     agent_turn_shell_dispatch_history: BTreeMap<String, AgentShellDispatchHistory>,
     /// Per-turn network action history.
     agent_turn_network_action_history: BTreeMap<String, AgentNetworkActionHistory>,
+    /// Successful semantic configuration mutations keyed by turn and signature.
+    ///
+    /// This controller-owned ledger spans provider continuations within one
+    /// logical turn and is cleared with the rest of turn action bookkeeping.
+    agent_turn_config_change_successes: BTreeMap<String, BTreeMap<String, ActionResult>>,
     /// Pre-shell hooks already completed for an action.
     agent_pre_shell_hook_completions: BTreeSet<RuntimeAgentPreShellHookCompletion>,
     /// Effective provider model profile retained for each active turn.
@@ -1315,6 +1320,9 @@ impl RuntimeSessionService {
         self.agent.agent_turn_shell_dispatch_history.remove(turn_id);
         self.agent.agent_turn_network_action_history.remove(turn_id);
         self.agent
+            .agent_turn_config_change_successes
+            .remove(turn_id);
+        self.agent
             .agent_pre_shell_hook_completions
             .retain(|completion| completion.turn_id != turn_id);
     }
@@ -1324,6 +1332,7 @@ impl RuntimeSessionService {
         self.agent.agent_turn_failure_feedback_attempts.clear();
         self.agent.agent_turn_shell_dispatch_history.clear();
         self.agent.agent_turn_network_action_history.clear();
+        self.agent.agent_turn_config_change_successes.clear();
         self.agent.agent_pre_shell_hook_completions.clear();
     }
 

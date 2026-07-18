@@ -463,8 +463,7 @@ pub(crate) fn config_response_advances_generation(method: &str, response: &str) 
     if !is_config_mutation_method(method) {
         return false;
     }
-    !response.contains(r#""error""#)
-        && (response.contains(r#""applied":true"#) || response.contains(r#""persisted":true"#))
+    !response.contains(r#""error""#) && response.contains(r#""applied":true"#)
 }
 
 /// Runs the is config control method operation for this subsystem.

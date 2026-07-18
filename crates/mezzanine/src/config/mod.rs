@@ -80,11 +80,11 @@ pub use validation::{
 #[cfg(test)]
 pub use validation::{persist_config_mutation_async, validate_config_file_async};
 
+pub(crate) use extract::contains_secret_material;
 use extract::{
-    clean_key_segment, clean_value, contains_secret_material, extract_config_values,
-    extract_json_paths, extract_toml_paths, extract_yaml_paths, line_indent,
-    validate_command_rule_examples, validate_known_schema_path, validate_mcp_server_path,
-    validate_permission_value, validate_permissions_path,
+    clean_key_segment, clean_value, extract_config_values, extract_json_paths, extract_toml_paths,
+    extract_yaml_paths, line_indent, validate_command_rule_examples, validate_known_schema_path,
+    validate_mcp_server_path, validate_permission_value, validate_permissions_path,
 };
 use migration::parse_config_schema_version;
 use mutation::{

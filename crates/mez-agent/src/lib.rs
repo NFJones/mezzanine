@@ -224,8 +224,9 @@ pub use claude_code::{
 };
 pub use config_change::{
     CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_SETTING_PATH_DESCRIPTION,
-    CONFIG_CHANGE_VALUE_DESCRIPTION, ConfigChangeError, ConfigChangeOperation, ConfigChangeValue,
-    config_change_string_value, normalize_config_change_operation, parse_config_change_value,
+    CONFIG_CHANGE_VALUE_DESCRIPTION, ConfigChangeError, ConfigChangeMutationSignature,
+    ConfigChangeOperation, ConfigChangeValue, config_change_string_value,
+    normalize_config_change_operation, parse_config_change_value,
 };
 pub use context::{
     AgentContext, AgentContextError, AgentContextResult, AgentRequestAssemblyError,

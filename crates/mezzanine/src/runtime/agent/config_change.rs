@@ -15,6 +15,7 @@ use super::{
     runtime_execution_ready_for_provider_continuation, runtime_mezzanine_error_code,
     runtime_set_theme_command,
 };
+use crate::config::{compose_effective_config, contains_secret_material};
 use crate::runtime::fs;
 
 /// Runs the runtime config change control request operation for this subsystem.
@@ -74,22 +75,6 @@ fn runtime_config_change_control_request(
                 json_escape(&idempotency_key)
             ))
         }
-    }
-}
-
-/// Returns the setting path for one config-change action.
-fn runtime_config_change_setting_path(action: &AgentAction) -> Option<&str> {
-    match &action.payload {
-        AgentActionPayload::ConfigChange { setting_path, .. } => Some(setting_path.as_str()),
-        _ => None,
-    }
-}
-
-/// Returns the operation name for one config-change action.
-fn runtime_config_change_operation_name(action: &AgentAction) -> &str {
-    match &action.payload {
-        AgentActionPayload::ConfigChange { operation, .. } => operation.as_str(),
-        _ => "unknown",
     }
 }
 
@@ -204,7 +189,293 @@ fn runtime_config_change_idempotency_key(
     )
 }
 
+/// Builds the target identity shared by semantic duplicate detection and
+/// model-facing result diagnostics.
+fn runtime_config_change_persistent_target(path: &std::path::Path) -> String {
+    format!("user:{}", path.to_string_lossy())
+}
+
+/// Canonicalizes one model-authored configuration mutation for turn-local
+/// duplicate detection.
+fn runtime_config_change_signature(
+    action: &AgentAction,
+    persist_path: &std::path::Path,
+) -> Result<mez_agent::ConfigChangeMutationSignature> {
+    let AgentActionPayload::ConfigChange {
+        setting_path,
+        operation,
+        value,
+    } = &action.payload
+    else {
+        return Err(MezError::invalid_args(
+            "config_change signature requires a config_change action",
+        ));
+    };
+    Ok(mez_agent::ConfigChangeMutationSignature::new(
+        setting_path,
+        operation,
+        value.as_deref(),
+        runtime_config_change_persistent_target(persist_path),
+    )?)
+}
+
+/// Returns a canonical requested value safe for model-visible result context.
+fn runtime_config_change_requested_value_json(
+    signature: &mez_agent::ConfigChangeMutationSignature,
+) -> serde_json::Value {
+    let Some(value_json) = signature.value_json() else {
+        return serde_json::Value::Null;
+    };
+    if contains_secret_material(signature.setting_path(), ConfigScope::Primary) {
+        return serde_json::Value::String("[redacted]".to_string());
+    }
+    serde_json::from_str(value_json)
+        .unwrap_or_else(|_| serde_json::Value::String(value_json.to_string()))
+}
+
+/// Returns a stable model-facing mutation identity without deriving it from a
+/// secret value.
+fn runtime_config_change_mutation_id(
+    signature: &mez_agent::ConfigChangeMutationSignature,
+) -> String {
+    if !contains_secret_material(signature.setting_path(), ConfigScope::Primary) {
+        return signature.mutation_id();
+    }
+    let material = format!(
+        "redacted-config-change-signature-v1\noperation={}\npath={}\ntarget={}",
+        signature.operation(),
+        signature.setting_path(),
+        signature.persistent_target(),
+    );
+    let digest = exact_command_sha256(DEFAULT_COMMAND_SHELL_CLASSIFICATION, &material);
+    format!("config-mutation-redacted-v1-{digest}")
+}
+
+/// Returns the resulting effective value and source layer after mutation.
+fn runtime_config_change_effective_result_json(
+    service: &RuntimeSessionService,
+    signature: &mez_agent::ConfigChangeMutationSignature,
+) -> Result<serde_json::Value> {
+    let effective = compose_effective_config(service.integration.config_layers())?;
+    let Some(value) = effective.values().get(signature.setting_path()) else {
+        return Ok(serde_json::json!({
+            "value": serde_json::Value::Null,
+            "source_layer": serde_json::Value::Null,
+        }));
+    };
+    let redacted = contains_secret_material(signature.setting_path(), ConfigScope::Primary);
+    let source_layer = value.source_layer.clone();
+    let value = if redacted {
+        serde_json::Value::String("[redacted]".to_string())
+    } else {
+        serde_json::from_str(&value.value)
+            .unwrap_or_else(|_| serde_json::Value::String(value.value.clone()))
+    };
+    Ok(serde_json::json!({
+        "value": value,
+        "source_layer": source_layer,
+    }))
+}
+
+/// Builds the authoritative structured success result for one control-backed
+/// configuration mutation.
+fn runtime_config_change_success_json(
+    service: &RuntimeSessionService,
+    action: &AgentAction,
+    approval_state: &str,
+    signature: &mez_agent::ConfigChangeMutationSignature,
+    persistent_response: &str,
+) -> Result<String> {
+    let persistent_response_json = serde_json::from_str::<serde_json::Value>(persistent_response)
+        .unwrap_or_else(|_| serde_json::Value::String(persistent_response.to_string()));
+    let changed = persistent_response_json
+        .pointer("/result/plan/changed")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let persistence_state = if changed {
+        if service.persistence.config_uses_adapter() {
+            "queued"
+        } else {
+            "persisted"
+        }
+    } else {
+        "already_satisfied"
+    };
+    let live_state = if changed {
+        "applied"
+    } else {
+        "already_satisfied"
+    };
+    Ok(serde_json::json!({
+        "approval": {
+            "state": approval_state,
+            "kind": "config_change",
+            "action_id": action.id,
+        },
+        "config_change": {
+            "mutation_id": runtime_config_change_mutation_id(signature),
+            "operation": signature.operation(),
+            "path": signature.setting_path(),
+            "requested_value": runtime_config_change_requested_value_json(signature),
+            "value_redacted": contains_secret_material(
+                signature.setting_path(),
+                ConfigScope::Primary,
+            ),
+            "persistent_target": signature.persistent_target(),
+            "validation": { "state": "succeeded" },
+            "changed": changed,
+            "no_op": !changed,
+            "persistence": { "state": persistence_state },
+            "live_application": { "state": live_state },
+            "effective": runtime_config_change_effective_result_json(service, signature)?,
+        },
+        "persistent_control_response": persistent_response_json,
+    })
+    .to_string())
+}
+
+/// Builds explicit persistence/live failure state for one rejected control
+/// response without claiming that either effect succeeded.
+fn runtime_config_change_failure_json(
+    action: &AgentAction,
+    approval_state: &str,
+    signature: &mez_agent::ConfigChangeMutationSignature,
+    persistent_response: &str,
+) -> String {
+    let persistent_response_json = serde_json::from_str::<serde_json::Value>(persistent_response)
+        .unwrap_or_else(|_| serde_json::Value::String(persistent_response.to_string()));
+    serde_json::json!({
+        "approval": {
+            "state": approval_state,
+            "kind": "config_change",
+            "action_id": action.id,
+        },
+        "config_change": {
+            "mutation_id": runtime_config_change_mutation_id(signature),
+            "operation": signature.operation(),
+            "path": signature.setting_path(),
+            "requested_value": runtime_config_change_requested_value_json(signature),
+            "value_redacted": contains_secret_material(
+                signature.setting_path(),
+                ConfigScope::Primary,
+            ),
+            "persistent_target": signature.persistent_target(),
+            "validation": { "state": "failed" },
+            "changed": false,
+            "no_op": false,
+            "persistence": { "state": "failed" },
+            "live_application": { "state": "not_applied" },
+        },
+        "persistent_control_response": persistent_response_json,
+    })
+    .to_string()
+}
+
+/// Reports whether one result is the terminal same-turn semantic duplicate
+/// guard for a configuration mutation.
+fn runtime_config_change_result_is_suppressed_duplicate(result: &ActionResult) -> bool {
+    result.status == ActionStatus::Succeeded
+        && result
+            .structured_content_json
+            .as_deref()
+            .and_then(|content| serde_json::from_str::<serde_json::Value>(content).ok())
+            .and_then(|content| {
+                content
+                    .pointer("/guard/reason")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            })
+            .as_deref()
+            == Some("repeated_successful_config_mutation")
+}
+
+/// Reads one boolean field from the stable colon-delimited runtime command
+/// response format.
+fn runtime_config_change_command_field_bool(response: &str, field: &str) -> bool {
+    response.split(':').any(|segment| {
+        segment
+            .split_once('=')
+            .is_some_and(|(name, value)| name == field && value == "true")
+    })
+}
+
 impl RuntimeSessionService {
+    /// Returns a successful guard result when this turn already completed the
+    /// same semantic configuration mutation.
+    fn repeated_config_change_result(
+        &self,
+        turn: &AgentTurnRecord,
+        action: &AgentAction,
+        approval_state: &str,
+        signature: &mez_agent::ConfigChangeMutationSignature,
+    ) -> Option<ActionResult> {
+        let original = self
+            .agent
+            .agent_turn_config_change_successes
+            .get(&turn.turn_id)?
+            .get(&signature.canonical_material())?;
+        Some(ActionResult::succeeded(
+            turn,
+            action,
+            vec![
+                "duplicate configuration mutation skipped because the same semantic mutation already succeeded this turn"
+                    .to_string(),
+            ],
+            Some(
+                serde_json::json!({
+                    "approval": {
+                        "state": approval_state,
+                        "kind": "config_change",
+                        "action_id": action.id,
+                    },
+                    "config_change": {
+                        "mutation_id": runtime_config_change_mutation_id(signature),
+                        "operation": signature.operation(),
+                        "path": signature.setting_path(),
+                        "requested_value": runtime_config_change_requested_value_json(signature),
+                        "value_redacted": contains_secret_material(
+                            signature.setting_path(),
+                            ConfigScope::Primary,
+                        ),
+                        "persistent_target": signature.persistent_target(),
+                        "validation": { "state": "succeeded_previously" },
+                        "changed": false,
+                        "no_op": true,
+                        "persistence": { "state": "skipped_duplicate" },
+                        "live_application": { "state": "skipped_duplicate" },
+                    },
+                    "guard": {
+                        "kind": "semantic_duplicate",
+                        "reason": "repeated_successful_config_mutation",
+                        "original_action_id": original.action_id,
+                        "original_mutation_id": runtime_config_change_mutation_id(signature),
+                        "continuation": "terminated",
+                    },
+                })
+                .to_string(),
+            ),
+        ))
+    }
+
+    /// Records one successful semantic mutation for later continuations of the
+    /// same logical turn.
+    fn record_successful_config_change(
+        &mut self,
+        turn_id: &str,
+        signature: &mez_agent::ConfigChangeMutationSignature,
+        result: &ActionResult,
+    ) {
+        if result.status != ActionStatus::Succeeded {
+            return;
+        }
+        self.agent
+            .agent_turn_config_change_successes
+            .entry(turn_id.to_string())
+            .or_default()
+            .entry(signature.canonical_material())
+            .or_insert_with(|| result.clone());
+    }
+
     /// Applies one MAAP `config_change` action through the live configuration
     /// control path and maps the control response back into an action result.
     ///
@@ -233,19 +504,36 @@ impl RuntimeSessionService {
                 "config_change execution requires a config_change action",
             ));
         };
+        let persist_path = self.ensure_agent_config_change_persist_path()?;
+        let signature = match runtime_config_change_signature(action, &persist_path) {
+            Ok(signature) => signature,
+            Err(error) => {
+                return Ok(ActionResult::failed(
+                    turn,
+                    action,
+                    ActionStatus::Failed,
+                    runtime_mezzanine_error_code(error.kind()),
+                    error.message().to_string(),
+                )?);
+            }
+        };
+        if let Some(result) =
+            self.repeated_config_change_result(turn, action, approval_state, &signature)
+        {
+            return Ok(result);
+        }
         if setting_path == "theme.active"
             && mez_agent::normalize_config_change_operation(operation)?.sets_value()
         {
-            return self.execute_theme_config_change_action_for_turn(
+            let result = self.execute_theme_config_change_action_for_turn(
                 turn,
                 action,
-                setting_path,
-                operation,
-                value.as_deref(),
                 approval_state,
-            );
+                &signature,
+            )?;
+            self.record_successful_config_change(&turn.turn_id, &signature, &result);
+            return Ok(result);
         }
-        let persist_path = self.ensure_agent_config_change_persist_path()?;
         let persistent_target_json = format!(
             r#"{{"scope":"user","path":"{}"}}"#,
             json_escape(&persist_path.to_string_lossy())
@@ -263,35 +551,60 @@ impl RuntimeSessionService {
                 let persistent_response =
                     self.dispatch_runtime_control_body(&persistent_request, caller_client_id);
                 if persistent_response.contains(r#""error""#) {
+                    let public_response =
+                        if contains_secret_material(signature.setting_path(), ConfigScope::Primary)
+                        {
+                            "config_change control request failed for a redacted setting"
+                                .to_string()
+                        } else {
+                            persistent_response.clone()
+                        };
                     let mut result = ActionResult::failed(
                         turn,
                         action,
                         ActionStatus::Failed,
                         "config_change_failed",
-                        persistent_response.clone(),
+                        public_response.clone(),
                     )?;
-                    result.structured_content_json = Some(format!(
-                        r#"{{"approval":{{"state":"{}","kind":"config_change","action_id":"{}"}},"persistent_control_response":{}}}"#,
-                        json_escape(approval_state),
-                        json_escape(&action.id),
-                        persistent_response
+                    result.structured_content_json = Some(runtime_config_change_failure_json(
+                        action,
+                        approval_state,
+                        &signature,
+                        &public_response,
                     ));
                     Ok(result)
                 } else {
-                    Ok(ActionResult::succeeded(
+                    let changed = serde_json::from_str::<serde_json::Value>(&persistent_response)
+                        .ok()
+                        .and_then(|value| {
+                            value
+                                .pointer("/result/plan/changed")
+                                .and_then(serde_json::Value::as_bool)
+                        })
+                        .unwrap_or(false);
+                    let result = ActionResult::succeeded(
                         turn,
                         action,
                         vec![format!(
-                            "configuration change persisted and applied: {} {}",
-                            operation, setting_path
+                            "configuration change {}: {} {}",
+                            if changed {
+                                "persisted and applied"
+                            } else {
+                                "already satisfied"
+                            },
+                            signature.operation(),
+                            signature.setting_path()
                         )],
-                        Some(format!(
-                            r#"{{"approval":{{"state":"{}","kind":"config_change","action_id":"{}"}},"persistent_control_response":{}}}"#,
-                            json_escape(approval_state),
-                            json_escape(&action.id),
-                            persistent_response
-                        )),
-                    ))
+                        Some(runtime_config_change_success_json(
+                            self,
+                            action,
+                            approval_state,
+                            &signature,
+                            &persistent_response,
+                        )?),
+                    );
+                    self.record_successful_config_change(&turn.turn_id, &signature, &result);
+                    Ok(result)
                 }
             }
             Err(error) => Ok(ActionResult::failed(
@@ -315,44 +628,100 @@ impl RuntimeSessionService {
         &mut self,
         turn: &AgentTurnRecord,
         action: &AgentAction,
-        setting_path: &str,
-        operation: &str,
-        value: Option<&str>,
         approval_state: &str,
+        signature: &mez_agent::ConfigChangeMutationSignature,
     ) -> Result<ActionResult> {
-        let theme = match mez_agent::config_change_string_value(setting_path, value) {
-            Ok(theme) => theme,
-            Err(error) => {
-                let error = MezError::from(error);
-                return Ok(ActionResult::failed(
-                    turn,
-                    action,
-                    ActionStatus::Failed,
-                    runtime_mezzanine_error_code(error.kind()),
-                    error.message().to_string(),
-                )?);
-            }
+        let AgentActionPayload::ConfigChange { value, .. } = &action.payload else {
+            return Err(MezError::invalid_args(
+                "theme config change requires a config_change action",
+            ));
         };
+        let theme =
+            match mez_agent::config_change_string_value(signature.setting_path(), value.as_deref())
+            {
+                Ok(theme) => theme,
+                Err(error) => {
+                    let error = MezError::from(error);
+                    return Ok(ActionResult::failed(
+                        turn,
+                        action,
+                        ActionStatus::Failed,
+                        runtime_mezzanine_error_code(error.kind()),
+                        error.message().to_string(),
+                    )?);
+                }
+            };
         let invocation = CommandInvocation {
             name: "set-theme".to_string(),
             args: vec![theme.clone()],
         };
         match runtime_set_theme_command(self, &invocation) {
-            Ok(command_response) => Ok(ActionResult::succeeded(
-                turn,
-                action,
-                vec![format!(
-                    "configuration change persisted and applied: {} {}",
-                    operation, setting_path
-                )],
-                Some(format!(
-                    r#"{{"approval":{{"state":"{}","kind":"config_change","action_id":"{}"}},"runtime_command":"set-theme","theme":"{}","command_response":"{}"}}"#,
-                    json_escape(approval_state),
-                    json_escape(&action.id),
-                    json_escape(&theme),
-                    json_escape(&command_response)
-                )),
-            )),
+            Ok(command_response) => {
+                let live_changed =
+                    runtime_config_change_command_field_bool(&command_response, "changed");
+                let persisted_changed = runtime_config_change_command_field_bool(
+                    &command_response,
+                    "persisted_changed",
+                );
+                let changed = live_changed || persisted_changed;
+                let persistence_state = if persisted_changed {
+                    "persisted"
+                } else {
+                    "already_satisfied"
+                };
+                let live_state = if live_changed {
+                    "applied"
+                } else {
+                    "already_satisfied"
+                };
+                Ok(ActionResult::succeeded(
+                    turn,
+                    action,
+                    vec![format!(
+                        "configuration change {}: {} {}",
+                        if changed {
+                            "persisted and applied"
+                        } else {
+                            "already satisfied"
+                        },
+                        signature.operation(),
+                        signature.setting_path()
+                    )],
+                    Some(
+                        serde_json::json!({
+                            "approval": {
+                                "state": approval_state,
+                                "kind": "config_change",
+                                "action_id": action.id,
+                            },
+                            "config_change": {
+                                "mutation_id": runtime_config_change_mutation_id(signature),
+                                "operation": signature.operation(),
+                                "path": signature.setting_path(),
+                                "requested_value": runtime_config_change_requested_value_json(signature),
+                                "value_redacted": contains_secret_material(
+                                    signature.setting_path(),
+                                    ConfigScope::Primary,
+                                ),
+                                "persistent_target": signature.persistent_target(),
+                                "validation": { "state": "succeeded" },
+                                "changed": changed,
+                                "no_op": !changed,
+                                "persistence": { "state": persistence_state },
+                                "live_application": { "state": live_state },
+                                "effective": runtime_config_change_effective_result_json(
+                                    self,
+                                    signature,
+                                )?,
+                            },
+                            "runtime_command": "set-theme",
+                            "theme": theme,
+                            "command_response": command_response,
+                        })
+                        .to_string(),
+                    ),
+                ))
+            }
             Err(error) => {
                 let mut result = ActionResult::failed(
                     turn,
@@ -361,12 +730,11 @@ impl RuntimeSessionService {
                     runtime_mezzanine_error_code(error.kind()),
                     error.message().to_string(),
                 )?;
-                result.structured_content_json = Some(format!(
-                    r#"{{"approval":{{"state":"{}","kind":"config_change","action_id":"{}"}},"runtime_command":"set-theme","theme":"{}","error":"{}"}}"#,
-                    json_escape(approval_state),
-                    json_escape(&action.id),
-                    json_escape(&theme),
-                    json_escape(error.message())
+                result.structured_content_json = Some(runtime_config_change_failure_json(
+                    action,
+                    approval_state,
+                    signature,
+                    error.message(),
                 ));
                 Ok(result)
             }
@@ -402,50 +770,158 @@ impl RuntimeSessionService {
                 )?;
             }
         }
-        let batch_result = (|| {
-            let mutations = actions
-                .iter()
-                .map(|(_, action)| runtime_config_change_mutation_from_action(action))
-                .collect::<Result<Vec<_>>>()?;
+        let preparation = (|| -> Result<_> {
             let persist_path = self.ensure_agent_config_change_persist_path()?;
-            runtime_apply_persisted_config_mutation_batch(
-                self,
-                persist_path,
-                &mutations,
-                "agent/config_change:theme-batch",
-            )
+            let mut pending = Vec::new();
+            let mut duplicates = Vec::new();
+            for (index, action) in actions {
+                let signature = runtime_config_change_signature(action, &persist_path)?;
+                if let Some(result) =
+                    self.repeated_config_change_result(turn, action, approval_state, &signature)
+                {
+                    duplicates.push((*index, result));
+                } else {
+                    pending.push((
+                        *index,
+                        action.clone(),
+                        signature,
+                        runtime_config_change_mutation_from_action(action)?,
+                    ));
+                }
+            }
+            Ok((persist_path, pending, duplicates))
         })();
-        for (index, action) in actions {
-            execution.action_results[*index] = match &batch_result {
-                Ok(report) => ActionResult::succeeded(
-                    turn,
-                    action,
-                    vec![format!(
-                        "configuration change persisted and applied in batch: {} {}",
-                        runtime_config_change_operation_name(action),
-                        runtime_config_change_setting_path(action).unwrap_or("unknown")
-                    )],
-                    Some(format!(
-                        r#"{{"approval":{{"state":"{}","kind":"config_change","action_id":"{}"}},"persistent_batch":{{"path":"{}","changed":{},"reload_required":{},"mutation_count":{},"deferred":{}}}}}"#,
-                        json_escape(approval_state),
-                        json_escape(&action.id),
-                        json_escape(&report.path.to_string_lossy()),
-                        report.changed,
-                        report.reload_required,
-                        report.mutation_count,
-                        report.deferred
-                    )),
-                ),
-                Err(error) => ActionResult::failed(
-                    turn,
-                    action,
-                    ActionStatus::Failed,
-                    runtime_mezzanine_error_code(error.kind()),
-                    error.message().to_string(),
-                )?,
-            };
+        match preparation {
+            Ok((persist_path, pending, duplicates)) => {
+                for (index, result) in duplicates {
+                    execution.action_results[index] = result;
+                }
+                if !pending.is_empty() {
+                    let mutations = pending
+                        .iter()
+                        .map(|(_, _, _, mutation)| mutation.clone())
+                        .collect::<Vec<_>>();
+                    match runtime_apply_persisted_config_mutation_batch(
+                        self,
+                        persist_path,
+                        &mutations,
+                        "agent/config_change:theme-batch",
+                    ) {
+                        Ok(report) => {
+                            for ((index, action, signature, _), changed) in pending
+                                .into_iter()
+                                .zip(report.mutation_changed.iter().copied())
+                            {
+                                let persistence_state = if changed {
+                                    if report.deferred {
+                                        "queued"
+                                    } else {
+                                        "persisted"
+                                    }
+                                } else {
+                                    "already_satisfied"
+                                };
+                                let live_state = if changed {
+                                    "applied"
+                                } else {
+                                    "already_satisfied"
+                                };
+                                let result = ActionResult::succeeded(
+                                    turn,
+                                    &action,
+                                    vec![format!(
+                                            "configuration change {} in batch: {} {}",
+                                        if changed {
+                                            "persisted and applied"
+                                        } else {
+                                            "already satisfied"
+                                        },
+                                        signature.operation(),
+                                        signature.setting_path()
+                                    )],
+                                    Some(
+                                        serde_json::json!({
+                                            "approval": {
+                                                "state": approval_state,
+                                                "kind": "config_change",
+                                                "action_id": action.id,
+                                            },
+                                            "config_change": {
+                                                "mutation_id": runtime_config_change_mutation_id(&signature),
+                                                "operation": signature.operation(),
+                                                "path": signature.setting_path(),
+                                                "requested_value": runtime_config_change_requested_value_json(&signature),
+                                                "value_redacted": contains_secret_material(
+                                                    signature.setting_path(),
+                                                    ConfigScope::Primary,
+                                                ),
+                                                "persistent_target": signature.persistent_target(),
+                                                "validation": { "state": "succeeded" },
+                                                "changed": changed,
+                                                "no_op": !changed,
+                                                "persistence": { "state": persistence_state },
+                                                "live_application": { "state": live_state },
+                                                "effective": runtime_config_change_effective_result_json(
+                                                    self,
+                                                    &signature,
+                                                )?,
+                                            },
+                                            "persistent_batch": {
+                                                "path": report.path.to_string_lossy(),
+                                                "changed": report.changed,
+                                                "reload_required": report.reload_required,
+                                                "mutation_count": report.mutation_count,
+                                                "deferred": report.deferred,
+                                            },
+                                        })
+                                        .to_string(),
+                                    ),
+                                );
+                                self.record_successful_config_change(
+                                    &turn.turn_id,
+                                    &signature,
+                                    &result,
+                                );
+                                execution.action_results[index] = result;
+                            }
+                        }
+                        Err(error) => {
+                            for (index, action, _, _) in pending {
+                                execution.action_results[index] = ActionResult::failed(
+                                    turn,
+                                    &action,
+                                    ActionStatus::Failed,
+                                    runtime_mezzanine_error_code(error.kind()),
+                                    error.message().to_string(),
+                                )?;
+                            }
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                for (index, action) in actions {
+                    execution.action_results[*index] = ActionResult::failed(
+                        turn,
+                        action,
+                        ActionStatus::Failed,
+                        runtime_mezzanine_error_code(error.kind()),
+                        error.message().to_string(),
+                    )?;
+                }
+            }
         }
         let executed = actions.len();
+        let suppressed_duplicate = execution
+            .action_results
+            .iter()
+            .any(runtime_config_change_result_is_suppressed_duplicate);
+        if suppressed_duplicate {
+            execution.final_turn = true;
+            self.agent
+                .pending_agent_provider_tasks
+                .remove(&turn.turn_id);
+        }
         execution.terminal_state = runtime_agent_turn_state_from_action_results(
             &execution.action_results,
             execution.final_turn,
@@ -603,6 +1079,16 @@ impl RuntimeSessionService {
                 approval_state,
             )?;
             executed = executed.saturating_add(1);
+        }
+        let suppressed_duplicate = execution
+            .action_results
+            .iter()
+            .any(runtime_config_change_result_is_suppressed_duplicate);
+        if suppressed_duplicate {
+            execution.final_turn = true;
+            self.agent
+                .pending_agent_provider_tasks
+                .remove(&turn.turn_id);
         }
         execution.terminal_state = runtime_agent_turn_state_from_action_results(
             &execution.action_results,

@@ -285,6 +285,15 @@ impl RuntimeSessionService {
                 );
             }
         }
+        insert_context_block_by_placement(
+            &mut blocks,
+            ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
+                label: "user prompt".to_string(),
+                content: prompt.to_string(),
+            },
+        );
         if let Some(invocation) = parse_skill_prompt_invocation(prompt) {
             if !is_valid_skill_name(&invocation.name) {
                 return Err(MezError::invalid_args(
@@ -308,14 +317,31 @@ impl RuntimeSessionService {
                 &mut blocks,
                 ContextBlock {
                     source: ContextSourceKind::SkillInstruction,
-                    placement: mez_agent::ContextPlacement::EphemeralTail,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
                     label: format!("explicit skill {}", invocation.name),
                     content: self.runtime_skill_context_text(
-                        document,
+                        document.clone(),
                         invocation.additional_context.as_deref(),
                     )?,
                 },
             );
+            if document.summary.name == BUILTIN_MEZ_REFERENCE_SKILL_NAME {
+                insert_context_block_by_placement(
+                    &mut blocks,
+                    ContextBlock {
+                        source: ContextSourceKind::Configuration,
+                        placement: mez_agent::ContextPlacement::ConversationAppend,
+                        label: format!(
+                            "explicit skill {} invocation-time config snapshot",
+                            invocation.name
+                        ),
+                        content: format!(
+                            "Effective Mezzanine config snapshot at skill invocation time. Later settled config_change results supersede this snapshot.\n\n```text\n{}\n```",
+                            self.runtime_mez_config_skill_current_config()?
+                        ),
+                    },
+                );
+            }
             insert_context_block_by_placement(
                 &mut blocks,
                 ContextBlock {
@@ -337,15 +363,6 @@ impl RuntimeSessionService {
         {
             insert_context_block_by_placement(&mut blocks, block);
         }
-        insert_context_block_by_placement(
-            &mut blocks,
-            ContextBlock {
-                source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
-                label: "user prompt".to_string(),
-                content: prompt.to_string(),
-            },
-        );
         let context = AgentContext::new(blocks)?;
         let context = append_permission_policy_context(context)?;
         let context = append_scheduler_context(context, self.agent_scheduler())?;
@@ -356,19 +373,12 @@ impl RuntimeSessionService {
         Ok(append_memory_context(context, &prompt_memory_records, 1)?)
     }
 
-    /// Formats loaded skill context with runtime-only additions where needed.
+    /// Formats immutable skill context for one invocation.
     pub(super) fn runtime_skill_context_text(
         &self,
-        mut document: SkillDocument,
+        document: SkillDocument,
         additional_context: Option<&str>,
     ) -> Result<String> {
-        if document.summary.name == BUILTIN_MEZ_REFERENCE_SKILL_NAME {
-            document.text = format!(
-                "{}\n\n## Current effective Mezzanine config\n\n```text\n{}\n```",
-                document.text.trim_end(),
-                self.runtime_mez_config_skill_current_config()?
-            );
-        }
         Ok(skill_context_text(&document, additional_context))
     }
 

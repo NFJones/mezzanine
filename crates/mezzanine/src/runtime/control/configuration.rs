@@ -68,7 +68,7 @@ impl RuntimeSessionService {
                 self.control.idempotency_mut(),
             )
         };
-        if response.contains(r#""result""#)
+        if config_response_advances_generation(&request.method, &response)
             && runtime_config_method_applies_to_live_service(&request.method)
         {
             let previous_permission_policy = self.permission_policy().clone();

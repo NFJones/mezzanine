@@ -4247,6 +4247,25 @@ use the same runtime behavior as `set-theme`, including selected-theme
 validation and materialization of aliases and color slots into the persisted and
 live configuration state.
 
+Configuration mutation idempotence MUST be evaluated against the selected
+persistent layer, not effective-value equality alone. A `set` is already
+satisfied only when the selected layer contains the normalized typed override;
+an `unset` or `reset` is already satisfied only when that explicit override is
+absent. An already-satisfied request MUST NOT rewrite the target, reload live
+configuration, advance config generation, or emit a `ConfigChanged` event.
+
+The controller MUST retain successful `config_change` semantic identities for
+the duration of one logical agent turn. The identity MUST include canonical
+operation, canonical setting path, normalized typed value when applicable, and
+the selected persistent target and scope; provider action IDs alone are not a
+semantic identity. If a later provider continuation repeats an identity that
+already succeeded, Mezzanine MUST suppress it before persistence or live
+application, return a structured loop-guard result that references the
+original success, and make that provider response controller-final. Other
+already-running actions from the same response MUST still settle normally,
+but the completed batch MUST NOT schedule another provider continuation.
+Distinct semantic configuration transitions MUST remain executable.
+
 An `mcp_call` action MUST include server identity, tool name, and JSON
 arguments. Its audit records MUST include server identity, tool name, call
 identity, and JSON arguments for both local stdio and streamable HTTP MCP
@@ -4360,10 +4379,17 @@ For `send_message` actions, `structured_content` MUST include recipient
 identity, message identity when assigned, delivery status, and any protocol
 error returned by the local message passing protocol.
 
-For `config_change` actions, `structured_content` MUST include the setting
-path, operation, validation result, applied layer, and whether persistence was
-requested or completed. For reset operations, it MUST also make clear that the
-explicit override was removed rather than replaced with a literal default value.
+For `config_change` actions, `structured_content` MUST include a stable
+mutation identity, canonical setting path and operation, normalized requested
+value after schema-driven redaction, validation result, changed/no-op state,
+selected persistent target, persistence state, live-application state, and the
+resulting effective value and source layer. Deferred persistence MUST be
+reported as queued rather than completed, and failures MUST distinguish
+persistence from live-application state rather than claiming unconditional
+success. For reset operations, it MUST also make clear that the explicit
+override was removed rather than replaced with a literal default value. A
+suppressed same-turn duplicate MUST include its guard reason, original action
+or mutation identity, and terminal continuation decision.
 
 For `mcp_call` actions, `structured_content` MUST include server identity,
 tool name, arguments after validation, timeout state, and the MCP result or
@@ -4970,9 +4996,13 @@ Mezzanine terminal commands, pane-local agent slash commands, explicit
 value shape contract, and include the implementation's annotated
 setting-path schema so agents can make supported live configuration changes
 without rediscovering the schema from source. It MUST include supported theme
-color slot names and a current effective configuration summary when explicitly
-loaded for a user prompt so the agent can choose precise paths and values
-before proposing configuration changes. For broad theme requests, it MUST bias
+color slot names and an invocation-time effective configuration snapshot when
+explicitly loaded for a user prompt so the agent can choose precise paths and
+values before proposing configuration changes. The snapshot MUST be labeled as
+the state observed at skill invocation and MUST state that later settled
+`config_change` results supersede it. It MUST remain separate from immutable
+skill instructions so stale config text is not presented as current after a
+mutation. For broad theme requests, it MUST bias
 agents toward `theme.active` or compact `theme.aliases.*` palette changes
 before enumerating individual `theme.colors.*` slots, and it MUST remind
 agents to preserve readable diagnostic foreground/background pairs. The built-in
@@ -6742,8 +6772,12 @@ agent coordination when delegation materially helps. It MUST explain that
 that config changes follow the active approval policy like other privileged
 actions. It MUST explain that approved or policy-allowed config changes persist
 to the user config target and take effect immediately in the live session. It
-MUST explain that `mcp_call` is only for MCP tools listed as available in the
-current turn-local runtime context. The stable system prompt MUST NOT enumerate
+MUST explain that a successful same-turn semantic duplicate is suppressed and
+terminates further provider continuation after other actions in that response
+settle. It MUST treat settled `config_change` results as authoritative over any
+turn-start or skill-invocation configuration snapshot. It MUST explain that
+`mcp_call` is only for MCP tools listed as available in the current turn-local
+runtime context. The stable system prompt MUST NOT enumerate
 configured MCP servers, unavailable MCP servers, MCP tools, or MCP availability
 counts. A submitted user prompt or loaded skill MAY request MCP metadata for the
 current turn with `@<mcp-server-name>`. When runtime MCP context is injected for
