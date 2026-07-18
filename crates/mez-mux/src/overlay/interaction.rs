@@ -7,7 +7,7 @@
 use mez_terminal::{GraphicRendition, TerminalStyleSpan, terminal_emoji_width, terminal_graphemes};
 use unicode_width::UnicodeWidthStr;
 
-use crate::copy::CopyPosition;
+use crate::copy::{COPY_SKIP_LINE, COPY_WRAP_CONTINUATION, CopyPosition};
 use crate::layout::Size;
 use crate::render::{
     char_count, clipped_overlay_style_span, modal_overlay_max_scroll, modal_overlay_page_rows,
@@ -100,9 +100,15 @@ pub fn overlay_selection_prefix_columns() -> usize {
     UnicodeWidthStr::width(OVERLAY_ACTIVE_SELECTOR)
 }
 
-/// Returns the modal overlay footer text for the active overlay.
-pub fn overlay_footer(overlay: &DisplayOverlay<impl Sized>) -> String {
-    if let Some(input) = overlay.search_input.as_deref() {
+/// Returns the modal overlay footer with physical-row progress and key hints.
+pub fn overlay_footer(overlay: &DisplayOverlay<impl Sized>, size: Size) -> String {
+    let page_rows = modal_overlay_page_rows(size);
+    let max_scroll = modal_overlay_max_scroll(overlay.lines.len(), size);
+    let offset = overlay.scroll_offset.min(max_scroll);
+    let visible_count = overlay.lines.len().saturating_sub(offset).min(page_rows);
+    let start_line = usize::from(visible_count > 0).saturating_add(offset);
+    let end_line = offset.saturating_add(visible_count);
+    let navigation = if let Some(input) = overlay.search_input.as_deref() {
         format!("/{input}")
     } else if let Some(status) = overlay.search_status.as_deref() {
         status.to_string()
@@ -113,7 +119,11 @@ pub fn overlay_footer(overlay: &DisplayOverlay<impl Sized>) -> String {
         "esc: return | /: search | up/down pgup/pgdn home/end".to_string()
     } else {
         "esc: return | /: search | enter: select | arrows: choose | pgup/pgdn: scroll".to_string()
-    }
+    };
+    format!(
+        "{start_line}-{end_line}/{} | {navigation}",
+        overlay.lines.len()
+    )
 }
 
 /// Returns the themed choice style for a command-overlay selection.
@@ -418,20 +428,52 @@ pub fn overlay_copy_selection(overlay: &DisplayOverlay<impl Sized>) -> Option<St
         (end, start)
     };
     if start.line == end.line {
-        return overlay
-            .lines
-            .get(start.line)
-            .map(|line| overlay_line_slice(line, start.column, end.column));
+        let line = overlay.lines.get(start.line)?;
+        if start.column == 0 && end.column >= char_count(line) {
+            return overlay_source_copy_line(overlay, start.line)
+                .or_else(|| Some(overlay_line_slice(line, start.column, end.column)));
+        }
+        return Some(overlay_line_slice(line, start.column, end.column));
     }
     let mut copied = Vec::new();
     let first = overlay.lines.get(start.line)?;
-    copied.push(overlay_line_slice(first, start.column, char_count(first)));
+    if start.column == 0 {
+        if let Some(copy_line) = overlay_source_copy_line(overlay, start.line) {
+            copied.push(copy_line);
+        }
+    } else {
+        copied.push(overlay_line_slice(first, start.column, char_count(first)));
+    }
     for line_index in start.line.saturating_add(1)..end.line {
-        copied.push(overlay.lines.get(line_index)?.clone());
+        if let Some(copy_line) = overlay_source_copy_line(overlay, line_index) {
+            copied.push(copy_line);
+        }
     }
     let last = overlay.lines.get(end.line)?;
-    copied.push(overlay_line_slice(last, 0, end.column));
+    if end.column >= char_count(last) {
+        if let Some(copy_line) = overlay_source_copy_line(overlay, end.line) {
+            copied.push(copy_line);
+        }
+    } else {
+        copied.push(overlay_line_slice(last, 0, end.column));
+    }
     Some(copied.join("\n"))
+}
+
+/// Returns source copy text for one fully selected overlay row.
+fn overlay_source_copy_line(
+    overlay: &DisplayOverlay<impl Sized>,
+    line_index: usize,
+) -> Option<String> {
+    match overlay
+        .line_copy_texts
+        .get(line_index)
+        .and_then(|copy_text| copy_text.as_deref())
+    {
+        Some(COPY_SKIP_LINE | COPY_WRAP_CONTINUATION) => None,
+        Some(copy_text) => Some(copy_text.to_string()),
+        None => overlay.lines.get(line_index).cloned(),
+    }
 }
 
 /// Applies a signed scroll delta to a display overlay and clamps the viewport.
@@ -596,6 +638,7 @@ mod tests {
         DisplayOverlay {
             lines: lines.iter().map(|line| (*line).to_string()).collect(),
             line_style_spans: vec![Vec::new(); lines.len()],
+            line_copy_texts: vec![None; lines.len()],
             scroll_offset: 0,
             search_input: None,
             search_query: None,
@@ -649,6 +692,19 @@ mod tests {
         assert_eq!(overlay.active_selection_index, Some(1));
     }
 
+    /// Verifies overlay footers count the physical rows used by scrolling and
+    /// pagination before appending interaction hints.
+    #[test]
+    fn overlay_footer_reports_visible_physical_row_range() {
+        let mut overlay = overlay(&["one", "two", "three", "four"]);
+        overlay.scroll_offset = 1;
+
+        let footer = overlay_footer(&overlay, Size::new(20, 4).unwrap());
+
+        assert!(footer.starts_with("2-3/4 | "), "{footer}");
+        assert!(footer.contains("esc: return"), "{footer}");
+    }
+
     /// Verifies multiline mouse selections produce bounded copied text.
     #[test]
     fn overlay_copy_selection_uses_display_columns() {
@@ -660,6 +716,30 @@ mod tests {
         assert_eq!(
             overlay_copy_selection(&overlay).as_deref(),
             Some("pha\nbeta\ngam")
+        );
+    }
+
+    /// Verifies full-row overlay selections copy raw Markdown once while
+    /// presentation-only wrap continuations remain absent from copied text.
+    #[test]
+    fn overlay_copy_selection_uses_source_text_for_wrapped_markdown_rows() {
+        let mut overlay = overlay(&["rendered first", "continued", "rendered second"]);
+        overlay.line_copy_texts = vec![
+            Some("**raw first source**".to_string()),
+            Some(COPY_WRAP_CONTINUATION.to_string()),
+            Some("`raw second source`".to_string()),
+        ];
+        overlay.mouse_selection = Some((
+            CopyPosition { line: 0, column: 0 },
+            CopyPosition {
+                line: 2,
+                column: "rendered second".len(),
+            },
+        ));
+
+        assert_eq!(
+            overlay_copy_selection(&overlay).as_deref(),
+            Some("**raw first source**\n`raw second source`")
         );
     }
 

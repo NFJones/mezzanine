@@ -48,7 +48,7 @@ pub use rich_text::{
     render_markdown, rendered_line_continuation_indent, rendered_line_is_numbered_diff_row,
     style_spans_for_rich_text_segment, take_rich_text_display_segment,
     wrap_rich_text_line_to_width, wrap_rich_text_line_to_width_with_source_ranges,
-    wrap_rich_text_lines_to_width,
+    wrap_rich_text_line_to_width_with_source_ranges_hard, wrap_rich_text_lines_to_width,
 };
 pub use style::{
     agent_status_running_gradient_palette, animated_scan_background, blend_terminal_color,

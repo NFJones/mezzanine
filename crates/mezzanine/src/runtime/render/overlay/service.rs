@@ -6,6 +6,32 @@ use super::selection_adapter::*;
 use crate::runtime::render::*;
 
 impl RuntimeSessionService {
+    /// Reflows an active record browser after terminal geometry changes.
+    ///
+    /// The browser retains raw Markdown and structured navigation state, so it
+    /// can be rendered again without treating previously wrapped physical rows
+    /// as source content. Other overlays keep their already-rendered payload.
+    pub(crate) fn reflow_primary_record_browser_overlay(&mut self) -> bool {
+        let terminal_width = usize::from(self.session.authoritative_size.columns).max(1);
+        let prose_width = terminal_width
+            .min(self.presentation.settings.terminal_agent_wrap_column_cap)
+            .max(1);
+        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+            return false;
+        };
+        if overlay.record_browser.is_none() {
+            return false;
+        }
+        let changed = render_record_browser_overlay(
+            overlay,
+            &self.presentation.settings.ui_theme,
+            terminal_width,
+            prose_width,
+        );
+        clamp_overlay_scroll(overlay, self.session.authoritative_size);
+        changed
+    }
+
     /// Executes one command selected from the primary display overlay.
     pub(crate) fn execute_primary_display_overlay_selection_command(
         &mut self,
@@ -82,7 +108,8 @@ impl RuntimeSessionService {
     /// Applies one input chunk to a retained record-browser overlay, when one
     /// is active.
     fn apply_primary_record_browser_overlay_input(&mut self, input: &[u8]) -> Result<Option<bool>> {
-        let display_width = usize::from(self.session.authoritative_size.columns)
+        let terminal_width = usize::from(self.session.authoritative_size.columns).max(1);
+        let prose_width = terminal_width
             .min(self.presentation.settings.terminal_agent_wrap_column_cap)
             .max(1);
         let Some(overlay) = self.presentation.primary_display_overlay.as_ref() else {
@@ -112,7 +139,8 @@ impl RuntimeSessionService {
                 return Ok(Some(render_record_browser_overlay(
                     overlay,
                     &self.presentation.settings.ui_theme,
-                    display_width,
+                    terminal_width,
+                    prose_width,
                 )));
             }
         }
@@ -154,7 +182,8 @@ impl RuntimeSessionService {
                     let changed = render_record_browser_overlay(
                         overlay,
                         &self.presentation.settings.ui_theme,
-                        display_width,
+                        terminal_width,
+                        prose_width,
                     );
                     overlay.scroll_offset = scroll_offset.min(modal_overlay_max_scroll(
                         overlay.lines.len(),
@@ -175,7 +204,8 @@ impl RuntimeSessionService {
                     return Ok(Some(render_record_browser_overlay(
                         overlay,
                         &self.presentation.settings.ui_theme,
-                        display_width,
+                        terminal_width,
+                        prose_width,
                     )));
                 }
                 return Ok(None);
@@ -195,13 +225,15 @@ impl RuntimeSessionService {
         Ok(Some(render_record_browser_overlay(
             overlay,
             &self.presentation.settings.ui_theme,
-            display_width,
+            terminal_width,
+            prose_width,
         )))
     }
 
     /// Applies editing keys while a retained record-browser modal prompt is open.
     fn apply_primary_record_browser_prompt_input(&mut self, input: &[u8]) -> Result<bool> {
-        let display_width = usize::from(self.session.authoritative_size.columns)
+        let terminal_width = usize::from(self.session.authoritative_size.columns).max(1);
+        let prose_width = terminal_width
             .min(self.presentation.settings.terminal_agent_wrap_column_cap)
             .max(1);
         let prompt_has_selector = self
@@ -307,7 +339,8 @@ impl RuntimeSessionService {
                 Ok(render_record_browser_overlay(
                     overlay,
                     &self.presentation.settings.ui_theme,
-                    display_width,
+                    terminal_width,
+                    prose_width,
                 ))
             }
             mez_mux::record_browser::RecordBrowserOutcome::SaveSubmitted { path, markdown } => {
@@ -326,7 +359,8 @@ impl RuntimeSessionService {
                 Ok(render_record_browser_overlay(
                     overlay,
                     &self.presentation.settings.ui_theme,
-                    display_width,
+                    terminal_width,
+                    prose_width,
                 ))
             }
             _ => {
@@ -336,7 +370,8 @@ impl RuntimeSessionService {
                 Ok(render_record_browser_overlay(
                     overlay,
                     &self.presentation.settings.ui_theme,
-                    display_width,
+                    terminal_width,
+                    prose_width,
                 ))
             }
         }
@@ -618,7 +653,14 @@ impl RuntimeSessionService {
     /// fails when the runtime is no longer live.
     pub fn show_primary_display_overlay(&mut self, lines: Vec<String>) -> Result<()> {
         let line_style_spans = vec![Vec::new(); lines.len()];
-        self.show_primary_display_overlay_inner(lines, line_style_spans, Vec::new(), false)
+        let line_copy_texts = vec![None; lines.len()];
+        self.show_primary_display_overlay_inner(
+            lines,
+            line_style_spans,
+            line_copy_texts,
+            Vec::new(),
+            false,
+        )
     }
 
     /// Shows or clears the primary-client recoverable error status overlay.
@@ -658,6 +700,7 @@ impl RuntimeSessionService {
         &mut self,
         lines: Vec<String>,
         mut line_style_spans: Vec<Vec<TerminalStyleSpan>>,
+        mut line_copy_texts: Vec<Option<String>>,
         selections: Vec<OverlaySelection>,
         dismiss_on_any_input: bool,
     ) -> Result<()> {
@@ -667,10 +710,13 @@ impl RuntimeSessionService {
         } else {
             line_style_spans.truncate(lines.len());
             line_style_spans.resize(lines.len(), Vec::new());
+            line_copy_texts.truncate(lines.len());
+            line_copy_texts.resize(lines.len(), None);
             let active_selection_index = (!selections.is_empty()).then_some(0);
             Some(RuntimeDisplayOverlay {
                 lines,
                 line_style_spans,
+                line_copy_texts,
                 scroll_offset: 0,
                 search_input: None,
                 search_query: None,
@@ -727,13 +773,23 @@ impl RuntimeSessionService {
     /// Presents terminal command display content according to its feedback policy.
     pub(crate) fn present_runtime_command_display_content(
         &mut self,
-        content: RuntimeCommandDisplayOverlayContent,
+        mut content: RuntimeCommandDisplayOverlayContent,
     ) -> Result<()> {
         let should_open_overlay = runtime_command_display_should_open_overlay(&content);
         if should_open_overlay {
+            let available_width = runtime_command_overlay_available_width(
+                usize::from(self.session.authoritative_size.columns),
+                !content.selections.is_empty(),
+            );
+            content = wrap_runtime_command_display_overlay_content(
+                content,
+                available_width,
+                available_width,
+            );
             return self.show_primary_display_overlay_inner(
                 content.lines,
                 content.line_style_spans,
+                content.line_copy_texts,
                 content.selections,
                 false,
             );

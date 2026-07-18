@@ -110,18 +110,20 @@ pub(super) fn record_browser_prompt_text(
 pub(super) fn render_record_browser_overlay(
     overlay: &mut RuntimeDisplayOverlay,
     ui_theme: &mez_mux::theme::UiTheme,
-    display_width: usize,
+    terminal_width: usize,
+    prose_width: usize,
 ) -> bool {
     let Some(record_browser) = overlay.record_browser.as_ref() else {
         return false;
     };
     let page = record_browser.browser.render_page();
     let prompt_selection = record_browser.browser.prompt_selection();
-    let mut content = runtime_agent_shell_markdown_overlay_content_for_width(
+    let mut content = runtime_agent_shell_markdown_overlay_content_for_layout(
         Some(record_browser.command.clone()),
         &page.markdown,
         ui_theme,
-        Some(display_width),
+        terminal_width,
+        prose_width,
     );
     if let Some(prompt_selection) = prompt_selection {
         content.selections = content
@@ -142,6 +144,7 @@ pub(super) fn render_record_browser_overlay(
     let content = content;
     overlay.lines = content.lines;
     overlay.line_style_spans = content.line_style_spans;
+    overlay.line_copy_texts = content.line_copy_texts;
     overlay.selections = content.selections;
     overlay.active_selection_index = if overlay.selections.is_empty() {
         None

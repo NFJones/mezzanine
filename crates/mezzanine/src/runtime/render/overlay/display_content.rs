@@ -17,40 +17,64 @@ pub(crate) struct RuntimeCommandDisplayOverlayContent {
     pub(crate) lines: Vec<String>,
     /// Visible terminal styles for each rendered display line.
     pub(crate) line_style_spans: Vec<Vec<TerminalStyleSpan>>,
+    /// Rich-text structural kind retained for width-aware wrapping.
+    pub(crate) line_kinds: Vec<RichTextLineKind>,
+    /// Raw source text associated with each rendered display line.
+    pub(crate) line_copy_texts: Vec<Option<String>>,
     /// Optional command actions keyed by line index.
     pub(crate) selections: Vec<OverlaySelection>,
 }
 
 /// Wraps command-overlay rows while preserving styles and selectable ranges.
-#[cfg(test)]
 pub(crate) fn wrap_runtime_command_display_overlay_content(
     content: RuntimeCommandDisplayOverlayContent,
     display_width: usize,
+    table_display_width: usize,
 ) -> RuntimeCommandDisplayOverlayContent {
     let display_width = display_width.max(1);
+    let table_display_width = table_display_width.max(display_width);
+    let RuntimeCommandDisplayOverlayContent {
+        command,
+        lines,
+        line_style_spans,
+        line_kinds,
+        line_copy_texts,
+        selections,
+    } = content;
     let mut wrapped_content = RuntimeCommandDisplayOverlayContent {
-        command: content.command,
+        command,
         lines: Vec::new(),
         line_style_spans: Vec::new(),
+        line_kinds: Vec::new(),
+        line_copy_texts: Vec::new(),
         selections: Vec::new(),
     };
-    for (source_line_index, display) in content.lines.into_iter().enumerate() {
-        let source_selections = content
-            .selections
+    for (source_line_index, display) in lines.into_iter().enumerate() {
+        let source_selections = selections
             .iter()
             .filter(|selection| selection.line_index == source_line_index)
             .collect::<Vec<_>>();
         let line = RichTextLine {
             display,
-            style_spans: content
-                .line_style_spans
+            style_spans: line_style_spans
                 .get(source_line_index)
                 .cloned()
                 .unwrap_or_default(),
-            copy_text: None,
-            kind: RichTextLineKind::Normal,
+            copy_text: line_copy_texts
+                .get(source_line_index)
+                .cloned()
+                .unwrap_or_default(),
+            kind: line_kinds
+                .get(source_line_index)
+                .copied()
+                .unwrap_or(RichTextLineKind::Normal),
         };
-        for wrapped in wrap_rich_text_line_to_width_with_source_ranges(line, display_width) {
+        let effective_width = if markdown_rendered_line_is_table_row(&line) {
+            table_display_width
+        } else {
+            display_width
+        };
+        for wrapped in wrap_rich_text_line_to_width_with_source_ranges_hard(line, effective_width) {
             let line_index = wrapped_content.lines.len();
             for selection in &source_selections {
                 let selection_end = selection.start_column.saturating_add(selection.width);
@@ -70,11 +94,29 @@ pub(crate) fn wrap_runtime_command_display_overlay_content(
             }
             wrapped_content
                 .line_style_spans
-                .push(wrapped.line.style_spans);
+                .push(wrapped.line.style_spans.clone());
+            wrapped_content.line_kinds.push(wrapped.line.kind);
+            wrapped_content
+                .line_copy_texts
+                .push(wrapped.line.copy_text.clone());
             wrapped_content.lines.push(wrapped.line.display);
         }
     }
     wrapped_content
+}
+
+/// Returns the body width left after reserving the overlay selector gutter.
+pub(crate) fn runtime_command_overlay_available_width(
+    terminal_width: usize,
+    has_selections: bool,
+) -> usize {
+    terminal_width
+        .saturating_sub(
+            has_selections
+                .then(mez_mux::overlay::overlay_selection_prefix_columns)
+                .unwrap_or_default(),
+        )
+        .max(1)
 }
 
 /// Verifies command-overlay wrapping bounds every row while translating a
@@ -94,6 +136,8 @@ fn command_overlay_wrapping_preserves_split_selection_and_style_ranges() {
             length: 16,
             rendition,
         }]],
+        line_kinds: vec![RichTextLineKind::Normal],
+        line_copy_texts: vec![Some("prefix **alpha beta gamma** suffix".to_string())],
         selections: vec![OverlaySelection {
             line_index: 0,
             start_column: 7,
@@ -103,7 +147,7 @@ fn command_overlay_wrapping_preserves_split_selection_and_style_ranges() {
         }],
     };
 
-    let wrapped = wrap_runtime_command_display_overlay_content(content, 10);
+    let wrapped = wrap_runtime_command_display_overlay_content(content, 10, 10);
 
     assert!(wrapped.lines.len() > 1, "{wrapped:?}");
     assert!(
@@ -192,6 +236,8 @@ pub(crate) fn runtime_command_display_overlay_content(
         command: None,
         lines: Vec::new(),
         line_style_spans: Vec::new(),
+        line_kinds: Vec::new(),
+        line_copy_texts: Vec::new(),
         selections: Vec::new(),
     };
     for outcome in outcomes {
@@ -216,7 +262,7 @@ pub(crate) fn runtime_command_display_overlay_content(
             if agent_output_content_type_is_markdown(content_type)
                 || terminal_command_display_body_is_markdown(command.as_deref(), body)
             {
-                let markdown_width = if command
+                let prose_width = if command
                     .as_deref()
                     .is_some_and(|command| command.starts_with("show-"))
                 {
@@ -225,7 +271,7 @@ pub(crate) fn runtime_command_display_overlay_content(
                     terminal_width
                 }
                 .max(1);
-                content.extend_markdown_body(command, body, ui_theme, markdown_width);
+                content.extend_markdown_body(command, body, ui_theme, terminal_width, prose_width);
             } else {
                 content.extend_body(body);
             }
@@ -357,6 +403,7 @@ pub(super) fn list_themes_rendered_overlay_lines_align_headers_with_selectable_r
             "| ★ active | kanagawa |".to_string(),
         ],
         line_style_spans: vec![Vec::new(); 3],
+        line_copy_texts: vec![None; 3],
         scroll_offset: 0,
         selections: vec![OverlaySelection {
             line_index: 2,
@@ -685,18 +732,23 @@ impl RuntimeCommandDisplayOverlayContent {
         command: Option<String>,
         body: &str,
         ui_theme: &UiTheme,
-        display_width: usize,
+        terminal_width: usize,
+        prose_width: usize,
     ) {
-        let mut markdown_content = runtime_agent_shell_markdown_overlay_content_for_width(
+        let mut markdown_content = runtime_agent_shell_markdown_overlay_content_for_layout(
             command,
             body,
             ui_theme,
-            Some(display_width),
+            terminal_width,
+            prose_width,
         );
         let line_offset = self.lines.len();
         self.lines.append(&mut markdown_content.lines);
         self.line_style_spans
             .append(&mut markdown_content.line_style_spans);
+        self.line_kinds.append(&mut markdown_content.line_kinds);
+        self.line_copy_texts
+            .append(&mut markdown_content.line_copy_texts);
         self.selections.extend(
             markdown_content
                 .selections
@@ -715,6 +767,8 @@ impl RuntimeCommandDisplayOverlayContent {
                 let line_index = self.lines.len();
                 self.lines.push(display_line.text);
                 self.line_style_spans.push(display_line.style_spans);
+                self.line_kinds.push(RichTextLineKind::Normal);
+                self.line_copy_texts.push(None);
                 for choice in display_line.choices {
                     self.selections.push(OverlaySelection {
                         line_index,

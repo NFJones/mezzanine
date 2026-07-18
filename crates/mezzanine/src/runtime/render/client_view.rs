@@ -313,7 +313,7 @@ impl RuntimeSessionService {
         view.line_style_spans = vec![Vec::new(); view.lines.len()];
         if let Some(footer) = view.lines.last_mut() {
             *footer = runtime_fit_status_line(
-                &overlay_footer(overlay),
+                &overlay_footer(overlay, view.authoritative_size),
                 usize::from(view.authoritative_size.columns),
             );
         }

@@ -824,6 +824,7 @@ impl RuntimeSessionService {
                     self.show_primary_display_overlay_inner(
                         content.lines,
                         content.line_style_spans,
+                        content.line_copy_texts,
                         content.selections,
                         false,
                     )?;

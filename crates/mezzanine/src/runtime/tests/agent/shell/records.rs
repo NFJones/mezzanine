@@ -55,6 +55,77 @@ fn runtime_agent_shell_record_browser_display_retains_overlay_state() {
     assert!(service.pending_record_browser_overlays_is_empty());
 }
 
+/// Verifies retained record browsers reflow from raw Markdown when the primary
+/// terminal becomes narrower and paginate the resulting physical rows.
+///
+/// Rewrapping previously rendered strings would compound indentation and lose
+/// Markdown structure. The resize path must instead rerender the retained
+/// browser, bound every selectable body row after its two-cell gutter, and make
+/// the modal footer count the expanded physical-row collection.
+#[test]
+fn runtime_record_browser_resize_reflows_rows_and_footer_counts_physical_lines() {
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(40, 6).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    let browser = mez_mux::record_browser::RecordBrowser::new(
+        "Issues",
+        vec![mez_mux::record_browser::RecordBrowserRecord {
+            id: "issue-1".to_string(),
+            open_command: Some("/show-issues issue-1".to_string()),
+            title: "A record title with enough words to occupy several physical rows".to_string(),
+            metadata: vec![("kind".to_string(), "defect".to_string())],
+            markdown: "A detail body with enough words to wrap.".to_string(),
+        }],
+        Vec::new(),
+    )
+    .unwrap();
+    let page = browser.render_page();
+    service.register_pending_record_browser_overlay(&pane_id, "show-issues", browser, None);
+    let response = crate::runtime::runtime_agent_shell_command_response_json(
+        &pane_id,
+        "/show-issues",
+        Some(&crate::runtime::AgentShellCommandOutcome::Display {
+            command: "show-issues".to_string(),
+            body: page.raw_markdown,
+        }),
+    );
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+    let wide_line_count = service.primary_display_overlay().unwrap().lines.len();
+
+    service
+        .resize_attached_primary_terminal(&primary, Size::new(20, 6).unwrap())
+        .unwrap();
+
+    let overlay = service.primary_display_overlay().unwrap();
+    assert!(overlay.lines.len() > wide_line_count, "{overlay:?}");
+    assert!(
+        overlay
+            .lines
+            .iter()
+            .all(|line| unicode_width::UnicodeWidthStr::width(line.as_str()) <= 18),
+        "{overlay:?}"
+    );
+    let physical_line_count = overlay.lines.len();
+    let view = service
+        .render_client_view(
+            ClientViewRole::Primary,
+            Size::new(20, 6).unwrap(),
+            &TerminalClientLoopConfig::default(),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(
+        view.lines
+            .last()
+            .is_some_and(|footer| footer.contains(&format!("/{physical_line_count}"))),
+        "{view:?}"
+    );
+}
+
 /// Verifies `/show-issues` overlays expose record-browser footer help and keep
 /// Enter routed through the focused Markdown selection.
 ///

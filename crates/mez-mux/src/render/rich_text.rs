@@ -164,6 +164,28 @@ pub fn wrap_rich_text_line_to_width_with_source_ranges(
     line: RichTextLine,
     display_width: usize,
 ) -> Vec<WrappedRichTextLine> {
+    wrap_rich_text_line_to_width_with_overflow_policy(line, display_width, false)
+}
+
+/// Wraps one rich-text line and hard-splits unbreakable overflow.
+///
+/// Modal canvases cannot delegate an overwide token to terminal soft wrapping
+/// because their final fixed-width compositor would clip the hidden suffix.
+/// This variant therefore splits only that overflow at terminal grapheme
+/// boundaries while retaining styles, source columns, and copy metadata.
+pub fn wrap_rich_text_line_to_width_with_source_ranges_hard(
+    line: RichTextLine,
+    display_width: usize,
+) -> Vec<WrappedRichTextLine> {
+    wrap_rich_text_line_to_width_with_overflow_policy(line, display_width, true)
+}
+
+/// Applies the selected unbreakable-token policy to one rich-text line.
+fn wrap_rich_text_line_to_width_with_overflow_policy(
+    line: RichTextLine,
+    display_width: usize,
+    hard_split_unbreakable: bool,
+) -> Vec<WrappedRichTextLine> {
     let line = if line.kind == RichTextLineKind::MarkdownRule
         && terminal_text_width(line.display.as_str()) <= display_width
     {
@@ -198,11 +220,12 @@ pub fn wrap_rich_text_line_to_width_with_source_ranges(
         } else {
             display_start
         };
-        let Some(segment) = take_rich_text_display_segment(
+        let Some(segment) = take_rich_text_display_segment_with_overflow_policy(
             remaining,
             display_start,
             segment_width,
             minimum_break_column,
+            hard_split_unbreakable,
         ) else {
             break;
         };
@@ -324,6 +347,23 @@ pub fn take_rich_text_display_segment(
     display_width: usize,
     minimum_break_column: usize,
 ) -> Option<RichTextDisplaySegment> {
+    take_rich_text_display_segment_with_overflow_policy(
+        text,
+        start_column,
+        display_width,
+        minimum_break_column,
+        false,
+    )
+}
+
+/// Takes one bounded segment with an explicit unbreakable-token policy.
+fn take_rich_text_display_segment_with_overflow_policy(
+    text: &str,
+    start_column: usize,
+    display_width: usize,
+    minimum_break_column: usize,
+    hard_split_unbreakable: bool,
+) -> Option<RichTextDisplaySegment> {
     if text.is_empty() {
         return None;
     }
@@ -369,7 +409,7 @@ pub fn take_rich_text_display_segment(
             break;
         }
     }
-    if last_space_break.is_none() && boundary_consumed < text.len() {
+    if last_space_break.is_none() && boundary_consumed < text.len() && !hard_split_unbreakable {
         if let Some((_, grapheme)) = UnicodeSegmentation::grapheme_indices(text, true).next()
             && terminal_grapheme_width(grapheme) > display_width
         {
@@ -1821,6 +1861,29 @@ mod tests {
         assert_eq!(
             wrapped[1].copy_text.as_deref(),
             Some(COPY_WRAP_CONTINUATION)
+        );
+    }
+
+    /// Verifies fixed-width modal wrapping preserves an unbreakable token by
+    /// splitting it at grapheme boundaries instead of exposing it to the
+    /// compositor's defensive clipping path.
+    #[test]
+    fn rich_text_hard_wrapping_bounds_unbreakable_tokens() {
+        let line = RichTextLine {
+            display: "averyveryverylongtoken".to_string(),
+            style_spans: Vec::new(),
+            copy_text: Some("averyveryverylongtoken".to_string()),
+            kind: RichTextLineKind::Normal,
+        };
+
+        let wrapped = wrap_rich_text_line_to_width_with_source_ranges_hard(line, 8);
+
+        assert!(wrapped.len() > 1, "{wrapped:?}");
+        assert!(
+            wrapped
+                .iter()
+                .all(|line| terminal_text_width(line.line.display.as_str()) <= 8),
+            "{wrapped:?}"
         );
     }
 }

@@ -12,6 +12,8 @@ pub struct DisplayOverlay<Source> {
     pub lines: Vec<String>,
     /// Visible styles for each content row.
     pub line_style_spans: Vec<Vec<TerminalStyleSpan>>,
+    /// Optional source-aware copy text for each content row.
+    pub line_copy_texts: Vec<Option<String>>,
     /// First visible content row.
     pub scroll_offset: usize,
     /// Search query currently being edited.

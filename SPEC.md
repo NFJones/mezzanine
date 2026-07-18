@@ -4065,6 +4065,19 @@ markdown `say` actions. Such command displays MUST render as standalone command
 blocks rather than assistant `say` rows: they MUST NOT include an `agent>`
 speaker label, and their transcript gutters SHOULD use the neutral foreground
 color used for white frame text.
+Modal command-pager Markdown MUST be converted to physical rows before
+pagination and final canvas fitting. The available body width MUST exclude any
+selector gutter. Issue and memory browser prose MUST wrap at the smaller of
+that body width or `terminal.agent_wrap_column_cap`, while table layout MUST use
+the full available body width and MUST NOT be squeezed to the prose cap. Pager
+scroll offsets and footer ranges MUST count those physical rows. Because a
+fixed modal canvas cannot delegate overflow to terminal soft wrapping, an
+unbreakable token that exceeds the body width MUST split at terminal grapheme
+boundaries rather than be clipped. This modal-only overflow policy MUST retain
+raw Markdown for full-row copy and save operations and MUST omit visual
+continuation rows from copied text. A retained issue or memory browser MUST
+rerender from its structured Markdown source when primary terminal geometry
+changes.
 
 A `say` action MUST NOT be used to present a shell command that the model
 intends Mezzanine to execute.

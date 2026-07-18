@@ -82,6 +82,7 @@ fn display_overlay_search_highlights_only_matching_columns() {
             length: 20,
             rendition: link_rendition,
         }]],
+        line_copy_texts: vec![None],
         scroll_offset: 0,
         selections: Vec::new(),
         active_selection_index: None,
@@ -145,6 +146,7 @@ fn display_overlay_search_skips_offscreen_match_ranges() {
     let overlay = RuntimeDisplayOverlay {
         lines: vec!["visible text then hidden needle".to_string()],
         line_style_spans: vec![Vec::new()],
+        line_copy_texts: vec![None],
         scroll_offset: 0,
         selections: Vec::new(),
         active_selection_index: None,
@@ -242,6 +244,7 @@ fn display_overlay_single_selection_hit_testing_requires_link_bounds() {
     let overlay = RuntimeDisplayOverlay {
         lines: vec!["text before [open] after".to_string()],
         line_style_spans: vec![Vec::new()],
+        line_copy_texts: vec![None],
         scroll_offset: 0,
         selections: vec![OverlaySelection {
             line_index: 0,
@@ -291,6 +294,7 @@ fn display_overlay_scroll_keeps_active_selection_visible() {
             "tail".to_string(),
         ],
         line_style_spans: vec![Vec::new(); 5],
+        line_copy_texts: vec![None; 5],
         scroll_offset: 0,
         selections: vec![
             OverlaySelection {

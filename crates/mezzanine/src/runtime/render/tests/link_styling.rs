@@ -62,6 +62,7 @@ fn agent_shell_markdown_overlay_preserves_selectable_link_style_spans() {
         &RuntimeDisplayOverlay {
             lines: content.lines.clone(),
             line_style_spans: content.line_style_spans.clone(),
+            line_copy_texts: content.line_copy_texts.clone(),
             scroll_offset: 0,
             selections: content.selections.clone(),
             active_selection_index: Some(0),
@@ -109,6 +110,7 @@ fn active_markdown_overlay_link_keeps_tail_cell_link_styling() {
     let overlay = RuntimeDisplayOverlay {
         lines: content.lines.clone(),
         line_style_spans: content.line_style_spans.clone(),
+        line_copy_texts: content.line_copy_texts.clone(),
         scroll_offset: 0,
         selections: content.selections.clone(),
         active_selection_index: Some(0),
@@ -168,6 +170,7 @@ fn active_saved_session_overlay_uuid_keeps_tail_cell_link_styling() {
     let overlay = RuntimeDisplayOverlay {
         lines: content.lines.clone(),
         line_style_spans: content.line_style_spans.clone(),
+        line_copy_texts: content.line_copy_texts.clone(),
         scroll_offset: 0,
         selections: content.selections.clone(),
         active_selection_index: Some(0),
@@ -228,6 +231,7 @@ fn active_saved_session_overlay_uuid_does_not_style_previous_cell() {
     let overlay = RuntimeDisplayOverlay {
         lines: content.lines.clone(),
         line_style_spans: content.line_style_spans.clone(),
+        line_copy_texts: content.line_copy_texts.clone(),
         scroll_offset: 0,
         selections: content.selections.clone(),
         active_selection_index: Some(0),
@@ -278,6 +282,7 @@ fn active_markdown_overlay_front_of_line_link_keeps_gutter_separate() {
     let overlay = RuntimeDisplayOverlay {
         lines: content.lines.clone(),
         line_style_spans: content.line_style_spans.clone(),
+        line_copy_texts: content.line_copy_texts.clone(),
         scroll_offset: 0,
         selections: content.selections.clone(),
         active_selection_index: Some(0),
@@ -367,6 +372,7 @@ fn active_markdown_overlay_link_style_stops_before_following_cell() {
     let overlay = RuntimeDisplayOverlay {
         lines: content.lines.clone(),
         line_style_spans: content.line_style_spans.clone(),
+        line_copy_texts: content.line_copy_texts.clone(),
         scroll_offset: 0,
         selections: content.selections.clone(),
         active_selection_index: Some(0),

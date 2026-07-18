@@ -1,7 +1,8 @@
 //! Product prompt, shell-result, command-link, and status content projection.
 
 use super::display_content::{
-    RuntimeCommandDisplayOverlayContent, runtime_human_readable_display_lines,
+    RuntimeCommandDisplayOverlayContent, runtime_command_overlay_available_width,
+    runtime_human_readable_display_lines, wrap_runtime_command_display_overlay_content,
 };
 use super::record_adapter::runtime_theme_preview_style_spans;
 use crate::runtime::render::*;
@@ -153,11 +154,12 @@ pub(crate) fn runtime_agent_shell_display_output(
                 terminal_width
             }
             .max(1);
-            let content = runtime_agent_shell_markdown_overlay_content_for_width(
+            let content = runtime_agent_shell_markdown_overlay_content_for_layout(
                 command.clone(),
                 body,
                 ui_theme,
-                Some(display_width),
+                terminal_width,
+                display_width,
             );
             if runtime_command_display_should_open_overlay(&content) {
                 return Ok(RuntimeAgentShellDisplayOutput::Overlay(content));
@@ -231,6 +233,66 @@ fn show_markdown_overlay_uses_width_aware_table_layout() {
     );
 }
 
+/// Verifies `/show-*` Markdown is converted to physical pager rows before the
+/// modal compositor sees it.
+///
+/// Prose, quotes, lists, links, and unbreakable tokens must honor the configured
+/// cap after the selector gutter is reserved. Tables deliberately keep the
+/// wider terminal body width, and rich-text source metadata must survive the
+/// visual wrapping so later copy behavior does not expose presentation rows.
+#[cfg(test)]
+#[test]
+fn show_markdown_overlay_wraps_prose_but_preserves_table_width_and_copy_source() {
+    let ui_theme = mez_mux::theme::deepforest_ui_theme();
+    let markdown = "# Detail\n\nA long prose sentence with enough words to wrap repeatedly.\n\n> quoted words also need to wrap cleanly\n\n- listed words also need to wrap cleanly\n\n[open issue](mez-agent:%2Fshow-issues%20issue-1)\n\n| Field | Value |\n| --- | --- |\n| description | alpha beta gamma delta epsilon |\n\naveryveryverylongunbreakabletoken";
+    let content = runtime_agent_shell_markdown_overlay_content_for_layout(
+        Some("show-issues".to_string()),
+        markdown,
+        &ui_theme,
+        32,
+        12,
+    );
+
+    let table_rows = content
+        .lines
+        .iter()
+        .zip(&content.line_kinds)
+        .filter(|(_, kind)| matches!(kind, RichTextLineKind::MarkdownTableRow))
+        .map(|(line, _)| UnicodeWidthStr::width(line.as_str()))
+        .collect::<Vec<_>>();
+    assert!(table_rows.iter().any(|width| *width > 12), "{content:?}");
+    assert!(table_rows.iter().all(|width| *width <= 30), "{content:?}");
+    assert!(
+        content
+            .lines
+            .iter()
+            .zip(&content.line_kinds)
+            .filter(|(_, kind)| {
+                !matches!(
+                    kind,
+                    RichTextLineKind::MarkdownTableRow
+                        | RichTextLineKind::MarkdownTableContinuation
+                        | RichTextLineKind::MarkdownTableSeparator
+                )
+            })
+            .all(|(line, _)| UnicodeWidthStr::width(line.as_str()) <= 12),
+        "{content:?}"
+    );
+    assert!(
+        content
+            .selections
+            .iter()
+            .any(|selection| selection.command == "/show-issues issue-1"),
+        "{content:?}"
+    );
+    assert!(
+        content.line_copy_texts.iter().flatten().any(|copy_text| {
+            copy_text == "A long prose sentence with enough words to wrap repeatedly."
+        }),
+        "{content:?}"
+    );
+}
+
 /// Renders slash-command markdown display output into the command overlay
 /// pager while preserving clickable `mez-agent:` links.
 #[cfg(test)]
@@ -253,6 +315,8 @@ pub(crate) fn runtime_agent_shell_markdown_overlay_content_for_width(
         command,
         lines: Vec::new(),
         line_style_spans: Vec::new(),
+        line_kinds: Vec::new(),
+        line_copy_texts: Vec::new(),
         selections: Vec::new(),
     };
     for rendered in
@@ -262,7 +326,7 @@ pub(crate) fn runtime_agent_shell_markdown_overlay_content_for_width(
             display,
             mut style_spans,
             copy_text,
-            ..
+            kind,
         } = rendered;
         let line_index = content.lines.len();
         for (start_column, width, command) in agent_command_links_in_line(&display) {
@@ -309,8 +373,45 @@ pub(crate) fn runtime_agent_shell_markdown_overlay_content_for_width(
             &display,
         ));
         content.line_style_spans.push(style_spans);
+        content.line_kinds.push(kind);
+        content.line_copy_texts.push(copy_text);
         content.lines.push(display);
     }
+    content
+}
+
+/// Renders and physically wraps command Markdown for one modal overlay body.
+///
+/// Prose honors the configured wrap cap after selector chrome is reserved,
+/// while tables retain every remaining terminal column. The retained rich-text
+/// source metadata keeps wrapping presentation-only for copy and save paths.
+pub(crate) fn runtime_agent_shell_markdown_overlay_content_for_layout(
+    command: Option<String>,
+    markdown: &str,
+    ui_theme: &UiTheme,
+    terminal_width: usize,
+    prose_width: usize,
+) -> RuntimeCommandDisplayOverlayContent {
+    let initial = runtime_agent_shell_markdown_overlay_content_for_width(
+        command.clone(),
+        markdown,
+        ui_theme,
+        Some(terminal_width.max(1)),
+    );
+    let available_width =
+        runtime_command_overlay_available_width(terminal_width, !initial.selections.is_empty());
+    let mut content = if available_width == terminal_width.max(1) {
+        initial
+    } else {
+        runtime_agent_shell_markdown_overlay_content_for_width(
+            command,
+            markdown,
+            ui_theme,
+            Some(available_width),
+        )
+    };
+    let prose_width = prose_width.min(available_width).max(1);
+    content = wrap_runtime_command_display_overlay_content(content, prose_width, available_width);
     content
 }
 
