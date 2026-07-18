@@ -35,6 +35,9 @@ reference documentation.
 - [context-lifecycle-and-compaction.md](context-lifecycle-and-compaction.md):
   stable, chronological, and volatile context ownership plus execution-group
   compaction and settlement rules.
+- [routed-loop-lifecycle.md](routed-loop-lifecycle.md): route-once `/loop`
+  ownership, worker profile pinning, conversation modes, terminal handoff,
+  cancellation, and joined macro settlement.
 - [workspace-architecture.md](workspace-architecture.md): workspace package
   ownership, dependency edges, and boundary rules.
 - [workspace-ownership-matrix.md](workspace-ownership-matrix.md): audited

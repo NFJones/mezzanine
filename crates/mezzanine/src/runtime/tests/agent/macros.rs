@@ -1,6 +1,7 @@
 //! Runtime tests for agent macros behavior.
 
 use super::*;
+use crate::runtime::RuntimeRoutedWorkerSelection;
 
 /// Verifies `/list-macros` displays the effective pane macro catalog with the
 /// same `#macro` invocation syntax accepted by explicit macro prompts. This
@@ -222,6 +223,206 @@ fn runtime_agent_shell_known_macro_prompt_starts_orchestration() {
         "{orchestration_context}"
     );
 
+    service.terminate_all_pane_processes().unwrap();
+}
+
+/// Verifies a routed `/loop` macro step retains its controller join through
+/// worker execution, handoff, and final main-model presentation.
+///
+/// The logical loop result belongs to the macro child, not to an internal
+/// routed worker iteration. The macro step must remain pending until the
+/// presentation settles, resolve exactly once with the presented result, and
+/// ignore a replay of the same terminal provider execution.
+#[test]
+fn runtime_agent_macro_routed_loop_resolves_after_terminal_presentation() {
+    let config_root = temp_root("runtime-macro-routed-loop-terminal-join");
+    let macro_dir = config_root.join("macros/release-check");
+    fs::create_dir_all(&macro_dir).unwrap();
+    fs::write(
+        macro_dir.join("MACRO.md"),
+        "---\nname: release-check\ndescription: Release readiness workflow\n---\n\n# Macro: release-check\n\n## Steps\n\n1. /loop --limit 1 inspect release notes.\n",
+    )
+    .unwrap();
+    let mut service = test_runtime_service();
+    let primary = service
+        .attach_primary("primary", true, Size::new(120, 40).unwrap(), 120)
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    service.set_config_root(config_root);
+    service
+        .execute_agent_shell_command(&primary, "#release-check")
+        .unwrap();
+    let macro_parent_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.agent_id == "agent-%1")
+        .cloned()
+        .expect("parent macro orchestration turn should exist");
+    let routed_parent_turn_id = service
+        .agent_loop_turns_for_tests()
+        .keys()
+        .next()
+        .cloned()
+        .expect("macro loop should create its first work turn");
+    let routed_parent_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == routed_parent_turn_id)
+        .cloned()
+        .expect("routed parent loop turn should exist");
+    let worker_profile = service
+        .agent_turn_model_profile(&routed_parent_turn_id)
+        .expect("routed parent profile should exist")
+        .clone();
+    service
+        .apply_routed_worker_selected_transition(
+            &AgentId::opaque(routed_parent_turn.agent_id.clone()).unwrap(),
+            &routed_parent_turn_id,
+            RuntimeRoutedWorkerSelection {
+                worker_profile,
+                routing_token_usage_by_model: std::collections::BTreeMap::new(),
+                decision_summary: None,
+                fallback: None,
+            },
+        )
+        .unwrap();
+    let completed_say_execution = |turn: &mez_agent::AgentTurnRecord, text: &str| {
+        let action = mez_agent::AgentAction {
+            id: format!("say-{}", turn.turn_id),
+            rationale: "return the routed result".to_string(),
+            payload: mez_agent::AgentActionPayload::Say {
+                status: mez_agent::SayStatus::Final,
+                text: text.to_string(),
+                content_type: mez_agent::AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE.to_string(),
+            },
+        };
+        mez_agent::AgentTurnExecution {
+            request: runtime_model_request_fixture_for_agent(&turn.turn_id, &turn.agent_id),
+            response: mez_agent::ModelResponse {
+                provider: "runtime-batch".to_string(),
+                model: "test".to_string(),
+                raw_text: text.to_string(),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Default::default(),
+                action_batch: Some(mez_agent::MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: "return the routed result".to_string(),
+                    thought: None,
+                    turn_id: turn.turn_id.clone(),
+                    agent_id: turn.agent_id.clone(),
+                    actions: vec![action.clone()],
+                    final_turn: true,
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![mez_agent::ActionResult::succeeded(
+                turn,
+                &action,
+                vec![text.to_string()],
+                None,
+            )],
+            final_turn: true,
+            terminal_state: AgentTurnState::Completed,
+        }
+    };
+    let worker_turn_id = service
+        .routed_workflow_for_tests(&routed_parent_turn_id)
+        .and_then(|workflow| workflow.child_turn_id.clone())
+        .expect("selected worker turn should exist");
+    let worker_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == worker_turn_id)
+        .cloned()
+        .expect("selected worker turn should remain recorded");
+
+    service
+        .emit_subagent_task_result_for_execution(
+            &worker_turn,
+            &completed_say_execution(&worker_turn, "release notes inspected"),
+        )
+        .unwrap();
+
+    assert!(service.has_routed_loop_completion_for_tests(&routed_parent_turn_id));
+    assert!(
+        service
+            .macro_run_for_tests(&macro_parent_turn.turn_id)
+            .expect("macro run should remain active")
+            .steps[0]
+            .task_result
+            .is_none(),
+        "internal worker completion must not settle the macro step"
+    );
+    let handoff_turn_id = service
+        .routed_workflow_for_tests(&routed_parent_turn_id)
+        .and_then(|workflow| workflow.child_turn_id.clone())
+        .expect("worker completion should queue handoff");
+    let handoff_turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == handoff_turn_id)
+        .cloned()
+        .expect("handoff turn should remain recorded");
+    let handoff = r#"{"version":1,"result_summary":"Release notes inspected","decisions":[],"evidence":["inspection complete"],"changes":[],"validation":[],"assumptions":[],"unresolved_risks":[],"follow_up_context":[]}"#;
+    service
+        .emit_subagent_task_result_for_execution(
+            &handoff_turn,
+            &completed_say_execution(&handoff_turn, handoff),
+        )
+        .unwrap();
+    assert!(
+        service
+            .macro_run_for_tests(&macro_parent_turn.turn_id)
+            .expect("macro run should remain active")
+            .steps[0]
+            .task_result
+            .is_none(),
+        "handoff completion must not settle the macro step"
+    );
+    let presentation = completed_say_execution(&routed_parent_turn, "Release notes are ready.");
+
+    service
+        .emit_subagent_task_result_for_execution(&routed_parent_turn, &presentation)
+        .unwrap();
+
+    assert!(!service.has_routed_loop_completion_for_tests(&routed_parent_turn_id));
+    let task_result = service
+        .macro_run_for_tests(&macro_parent_turn.turn_id)
+        .expect("macro run should advance to judge")
+        .steps[0]
+        .task_result
+        .as_ref()
+        .expect("terminal presentation should settle the macro step");
+    assert!(task_result.success);
+    assert!(task_result.output.contains("Release notes are ready."));
+    service
+        .emit_subagent_task_result_for_execution(&routed_parent_turn, &presentation)
+        .unwrap();
+    assert_eq!(
+        service
+            .macro_run_for_tests(&macro_parent_turn.turn_id)
+            .expect("macro run should remain active")
+            .steps
+            .iter()
+            .filter(|step| step.task_result.is_some())
+            .count(),
+        1
+    );
+    assert!(
+        !service
+            .complete_routed_presentation(&routed_parent_turn_id, AgentTurnState::Completed)
+            .unwrap()
+    );
     service.terminate_all_pane_processes().unwrap();
 }
 

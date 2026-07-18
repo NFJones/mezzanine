@@ -389,17 +389,16 @@ context_window_tokens = 40000
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
-    service
-        .agent_turn_contexts_mut()
-        .get_mut("turn-1")
-        .unwrap()
-        .blocks
-        .push(ContextBlock {
+    let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
+    mez_agent::insert_context_block_by_placement(
+        &mut context.blocks,
+        ContextBlock {
             source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "synthetic provider-context-window action result".to_string(),
             content: format!("provider-context-window- {}", "cw ".repeat(10_000)),
-        });
+        },
+    );
     service.remove_pending_agent_provider_task("turn-1");
     let provider = RuntimeContextWindowErrorProvider {
         requests: RefCell::new(Vec::new()),
@@ -440,7 +439,12 @@ context_window_tokens = 40000
         "{second_request_text}"
     );
     assert!(
-        second_request_text.contains("provider-context-window-"),
+        second_request_text
+            .contains("source=action_result label=synthetic provider-context-window action result"),
+        "{second_request_text}"
+    );
+    assert!(
+        !second_request_text.contains("cw cw cw"),
         "{second_request_text}"
     );
     let retry_notice = service

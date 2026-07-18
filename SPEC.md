@@ -2566,6 +2566,26 @@ Mezzanine MUST continue running work iterations after any completed iteration
 that emitted an `apply_patch` action, and MUST terminate the loop after the
 first completed work iteration that emitted no `apply_patch` actions or when
 the configured loop limit is reached.
+When routing is enabled for the first work turn, the entire `/loop` invocation
+MUST be treated as one logical routed job. Mezzanine MUST classify the job once,
+transfer the work prompt and effective context to one managed worker without
+submitting a nested literal `/loop` command, and pin the selected worker model
+profile and reasoning effort across every internal iteration and handoff turn.
+Internal loop turns MUST NOT run another routing classification. The runtime,
+not either model, MUST evaluate `apply_patch`, patch-free, and iteration-limit
+exit conditions. A terminal routed loop MUST preserve the exact worker result,
+request at most one validated structured handoff (plus the bounded repair
+allowed by the routed handoff contract), and resume the invoking parent for one
+main-profile presentation.
+For routed `--fork` and `--new` loops, worker attempts MUST retain their
+respective captured-parent and empty-context baselines, MUST remain ephemeral,
+and MUST restore the invoking parent conversation before terminal handoff.
+Cancellation or failure MUST release controller, pane, scheduler, provider,
+authority, and child-index ownership exactly once, and late results MUST NOT
+revive or settle a terminated workflow. A joined subagent or macro dependency
+MUST remain pending through all worker iterations and handoff, then resolve
+exactly once after successful parent presentation or fail exactly once after
+terminal recovery or cancellation.
 
 The `agents.auto_sizing` subtable MUST support `router_model_profile`,
 `small_model_profile`, `medium_model_profile`, `large_model_profile`,
@@ -4585,6 +4605,12 @@ main-model step that explains the routed failure from a stored diagnostic. If
 that explanation also fails or is interrupted, the workflow MUST terminate
 without another recovery loop while retaining the diagnostic. Auto-sizing MUST
 NOT mutate persistent model-profile overrides.
+The internal continuation and handoff turns of a routed `/loop` are an explicit
+exception to per-new-turn classification: they belong to the already-classified
+logical job and MUST reuse its pinned managed worker and profile. Worker
+provider failure, continuation queue failure, patch-free completion, limit
+exhaustion, child or parent cancellation, handoff failure, and presentation
+failure MUST converge on the same exactly-once routed terminal lifecycle.
 
 Agents MUST support a permission or approval model that can restrict command
 execution, file mutation, network use, and destructive actions.
@@ -7909,6 +7935,12 @@ run before the turn is marked as using a target model profile. The request MUST
 be separate from MAAP action execution and MUST NOT expose shell, file,
 network, MCP, or subagent actions. It MUST be treated as a bounded internal
 classification step whose only valid output is an auto-sizing decision.
+Once the first work turn of a `/loop` has selected a managed routed worker, its
+later loop iterations, handoff request, handoff repair, parent presentation,
+and bounded failure explanation MUST NOT run a new auto-sizing decision. The
+worker iterations and handoff MUST use the pinned selected profile; parent
+presentation and failure explanation MUST use the invoking parent's ordinary
+profile.
 
 The auto-sizing router prompt MUST include:
 
@@ -8011,7 +8043,9 @@ current turn. If routing is disabled for a subagent, that subagent MUST
 use the model profile selected by ordinary override and inheritance rules. If
 routing is enabled for a subagent, the subagent MUST run its own router
 decision using its subagent task prompt and scope metadata rather than reusing
-the parent turn's router decision.
+the parent turn's router decision. This requirement applies to the subagent's
+new logical task; it does not reclassify internal turns of an already-routed
+`/loop` job.
 
 The user MUST be able to configure the default model profile.
 

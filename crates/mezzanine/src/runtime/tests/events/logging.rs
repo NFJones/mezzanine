@@ -182,7 +182,7 @@ fn runtime_agent_thinking_mode_injects_action_rationales() {
     service
         .start_initial_pane_process(Some("cat >/dev/null"))
         .unwrap();
-    let mut screen = TerminalScreen::new(Size::new(80, 12).unwrap(), 100).unwrap();
+    let mut screen = TerminalScreen::new(Size::new(80, 12).unwrap(), 2_000).unwrap();
     screen.feed(b"ready\n");
     service.set_pane_screen("%1".to_string(), screen);
     service

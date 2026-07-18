@@ -132,6 +132,16 @@ Common slash commands:
 Use slash commands when you want to control the agent session rather than the
 terminal layout.
 
+When routing is enabled, `/loop` is classified once as one logical job. The
+selected profile stays pinned to one managed worker for every internal
+iteration; those continuation turns do not run the router again. The runtime
+evaluates `apply_patch` and limit exit conditions, requests one structured
+handoff from the same worker, and resumes the invoking model for one terminal
+presentation. `--fork` and `--new` attempts remain ephemeral and restore the
+invoking parent conversation before handoff. See
+[Routed `/loop` lifecycle](routed-loop-lifecycle.md) for failure, cancellation,
+and macro-join behavior.
+
 ### 3. Explicit skill invocation
 
 You can invoke a skill by starting the agent prompt with:
@@ -166,6 +176,11 @@ that subagent. The runtime submits each later step after the parent model return
 bounded structured judgment: continue, continue with an adapted prompt,
 stop as failure, or finish after the final step. The model judges results;
 the harness owns step sequencing.
+
+A routed `/loop` macro step remains one joined step. Intermediate iterations
+and the worker handoff cannot complete the macro action; the step resolves only
+after the invoking model's terminal presentation, or fails after terminal
+recovery or cancellation.
 
 Use `/list-macros` to inspect the effective macro catalog before invoking a
 macro.

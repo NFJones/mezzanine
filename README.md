@@ -533,6 +533,9 @@ Credentials belong in `mez auth`, not in config files.
   reuse accounting and immutable-context continuity diagnostics.
 - [docs/context-lifecycle-and-compaction.md](docs/context-lifecycle-and-compaction.md):
   active-context phases, atomic action settlement, and safe compaction groups.
+- [docs/routed-loop-lifecycle.md](docs/routed-loop-lifecycle.md): route-once
+  `/loop` execution, worker pinning, fork/new isolation, terminal handoff, and
+  joined subagent or macro settlement.
 - [docs/examples/config.toml](docs/examples/config.toml): generated baseline
   configuration example.
 

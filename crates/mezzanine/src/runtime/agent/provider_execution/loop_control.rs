@@ -79,6 +79,16 @@ impl RuntimeSessionService {
                             &state.invoking_pane_id,
                             &state,
                         )?;
+                        if let Some(parent_turn_id) = state.routed_parent_turn_id.as_deref() {
+                            self.fail_routed_loop_continuation(
+                                parent_turn_id,
+                                &turn.turn_id,
+                                error.message(),
+                            )?;
+                            return Ok(RuntimeAgentLoopSettlement::Terminal {
+                                completion: state.completion,
+                            });
+                        }
                     }
                     return Err(error);
                 }

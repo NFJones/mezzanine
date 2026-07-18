@@ -6,9 +6,9 @@
 
 use super::{
     AgentContext, AgentId, AgentTurnExecution, AgentTurnRecord, AgentTurnState, ContextBlock,
-    ContextSourceKind, MezError, Result, RuntimeAgentLoopState, RuntimeAgentLoopTurn,
-    RuntimeRoutedWorkerSelection, RuntimeSessionService, ScheduledWork, current_unix_seconds,
-    runtime_spawn_json_agent_and_turn, runtime_subagent_placement_mode,
+    ContextSourceKind, MezError, Result, RuntimeAgentLoopCompletion, RuntimeAgentLoopState,
+    RuntimeAgentLoopTurn, RuntimeRoutedWorkerSelection, RuntimeSessionService, ScheduledWork,
+    current_unix_seconds, runtime_spawn_json_agent_and_turn, runtime_subagent_placement_mode,
     runtime_subagent_spawn_request, subagent_task_output_for_execution,
 };
 use mez_agent::routed_workflow::{
@@ -418,6 +418,42 @@ impl RuntimeSessionService {
             .get_mut(parent_turn_id)
             .ok_or_else(|| MezError::invalid_state("routed loop workflow is unavailable"))?;
         workflow.child_turn_id = Some(turn.turn_id.clone());
+        Ok(())
+    }
+
+    /// Converts a routed loop continuation queue failure into parent recovery.
+    ///
+    /// Loop settlement has already removed the controller and restored the
+    /// invoking conversation before this transition runs. The routed parent
+    /// therefore receives one bounded response-only explanation while late
+    /// results for the superseded worker turn remain handled no-ops.
+    pub(crate) fn fail_routed_loop_continuation(
+        &mut self,
+        parent_turn_id: &str,
+        child_turn_id: &str,
+        diagnostic: &str,
+    ) -> Result<()> {
+        let parent_turn = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == parent_turn_id)
+            .cloned()
+            .ok_or_else(|| MezError::invalid_state("routed loop parent turn is unavailable"))?;
+        if let Some(workflow) = self
+            .agent
+            .routed_workflows_by_parent_turn
+            .get_mut(parent_turn_id)
+        {
+            workflow.diagnostic = Some(format!("loop continuation queue: {diagnostic}"));
+        }
+        self.ready_routed_parent_for_error_explanation(
+            &parent_turn,
+            "loop continuation queue",
+            "",
+            diagnostic,
+        )?;
+        self.agent.subagent_task_routes.remove(child_turn_id);
         Ok(())
     }
 
@@ -886,6 +922,19 @@ impl RuntimeSessionService {
         else {
             return Ok(false);
         };
+        if let Some(loop_id) = self
+            .agent
+            .agent_loops_by_id
+            .values()
+            .find(|loop_state| loop_state.routed_parent_turn_id.as_deref() == Some(parent_turn_id))
+            .map(|loop_state| loop_state.loop_id.clone())
+            && let Some(loop_state) = self.remove_agent_loop_state_by_id(&loop_id)
+        {
+            self.restore_agent_loop_parent_conversation(&loop_state.invoking_pane_id, &loop_state)?;
+            if let Some(completion) = loop_state.completion {
+                self.retain_routed_loop_completion(parent_turn_id, completion)?;
+            }
+        }
         if let Some(child_agent_id) = state.child_agent_id.as_deref() {
             self.remove_subagent_authority_state(child_agent_id);
             self.integration
@@ -1158,6 +1207,30 @@ impl RuntimeSessionService {
         self.agent.routed_presentation_turns.contains(turn_id)
     }
 
+    /// Retains one macro-loop join until routed parent presentation settles.
+    pub(crate) fn retain_routed_loop_completion(
+        &mut self,
+        parent_turn_id: &str,
+        completion: RuntimeAgentLoopCompletion,
+    ) -> Result<()> {
+        if let Some(existing) = self
+            .agent
+            .routed_loop_completions_by_parent_turn
+            .get(parent_turn_id)
+        {
+            if existing == &completion {
+                return Ok(());
+            }
+            return Err(MezError::invalid_state(
+                "routed parent already owns a different loop completion",
+            ));
+        }
+        self.agent
+            .routed_loop_completions_by_parent_turn
+            .insert(parent_turn_id.to_string(), completion);
+        Ok(())
+    }
+
     /// Settles routed workflow state after the main-model presentation finishes.
     pub(crate) fn complete_routed_presentation(
         &mut self,
@@ -1168,6 +1241,34 @@ impl RuntimeSessionService {
             return Ok(false);
         };
         if !self.agent.routed_presentation_turns.contains(turn_id) {
+            return Ok(false);
+        }
+        let explaining_failure = self
+            .agent
+            .routed_workflows_by_parent_turn
+            .get(turn_id)
+            .is_some_and(|workflow| {
+                matches!(
+                    workflow.phase,
+                    RoutedWorkflowPhase::ReadyForErrorExplanation
+                        | RoutedWorkflowPhase::ExplainingError
+                )
+            });
+        if explaining_failure {
+            self.agent.routed_presentation_turns.remove(turn_id);
+            if let Some(workflow) = self.agent.routed_workflows_by_parent_turn.get_mut(turn_id) {
+                workflow.phase = RoutedWorkflowPhase::Failed;
+                if terminal_state != AgentTurnState::Completed {
+                    workflow.diagnostic = Some(match terminal_state {
+                        AgentTurnState::Failed => "routed error explanation failed".to_string(),
+                        AgentTurnState::Interrupted => {
+                            "routed error explanation was interrupted".to_string()
+                        }
+                        _ => unreachable!("terminal state was validated above"),
+                    });
+                }
+            }
+            self.clear_routed_workflow_runtime_state(turn_id);
             return Ok(false);
         }
         if terminal_phase == RoutedWorkflowPhase::Completed {

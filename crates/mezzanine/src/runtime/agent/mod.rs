@@ -4,7 +4,9 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::agent_state::{RuntimeAgentLoopSettlement, RuntimeAgentProviderClaim};
+use super::agent_state::{
+    RuntimeAgentLoopCompletion, RuntimeAgentLoopSettlement, RuntimeAgentProviderClaim,
+};
 use super::commands::RuntimeModelCatalog;
 #[cfg(test)]
 use super::runtime_execute_auto_sizing_with_provider;
@@ -238,9 +240,16 @@ pub(crate) struct RuntimeAgentComponent {
     routed_child_profiles_by_parent_turn: BTreeMap<String, ModelProfile>,
     /// Parent turns whose next provider request is respond-only presentation.
     routed_presentation_turns: BTreeSet<String>,
+    /// Macro-loop completions retained until routed parent presentation settles.
+    routed_loop_completions_by_parent_turn: BTreeMap<String, RuntimeAgentLoopCompletion>,
+    /// Routed parent task results already emitted through terminal presentation.
+    settled_routed_parent_result_turns: BTreeSet<String>,
     /// Test-only one-shot failure injected after a routed worker spawn succeeds.
     #[cfg(test)]
     fail_routed_worker_after_spawn: bool,
+    /// Test-only one-shot failure injected before a routed loop continuation queues.
+    #[cfg(test)]
+    fail_routed_loop_continuation_queue: bool,
     /// Approval continuation metadata keyed by blocked approval id.
     blocked_agent_approval_refs: BTreeMap<String, BlockedAgentApprovalRef>,
     /// Spawned child turns currently joined by parent agent actions.
@@ -625,6 +634,26 @@ impl RuntimeSessionService {
     #[cfg(test)]
     pub(crate) fn fail_next_routed_worker_after_spawn_for_tests(&mut self) {
         self.agent.fail_routed_worker_after_spawn = true;
+    }
+
+    /// Injects one routed loop continuation queue failure.
+    #[cfg(test)]
+    pub(crate) fn fail_next_routed_loop_continuation_queue_for_tests(&mut self) {
+        self.agent.fail_routed_loop_continuation_queue = true;
+    }
+
+    /// Consumes the test-only routed continuation queue failure injection.
+    #[cfg(test)]
+    pub(crate) fn take_routed_loop_continuation_queue_failure_for_tests(&mut self) -> bool {
+        std::mem::take(&mut self.agent.fail_routed_loop_continuation_queue)
+    }
+
+    /// Reports whether a routed parent retains a macro-loop completion.
+    #[cfg(test)]
+    pub(crate) fn has_routed_loop_completion_for_tests(&self, parent_turn_id: &str) -> bool {
+        self.agent
+            .routed_loop_completions_by_parent_turn
+            .contains_key(parent_turn_id)
     }
 
     /// Returns the parent macro turn for one child step turn.
@@ -1434,6 +1463,9 @@ impl RuntimeSessionService {
         self.agent
             .agent_loop_by_pane
             .retain(|_, indexed_loop_id| indexed_loop_id != loop_id);
+        self.agent
+            .agent_loop_turns
+            .retain(|_, loop_turn| loop_turn.loop_id != loop_id);
         Some(state)
     }
 

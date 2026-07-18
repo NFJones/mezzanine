@@ -443,6 +443,57 @@ impl AgentShellStore {
         )
     }
 
+    /// Restores a durable conversation while preserving one known running turn.
+    ///
+    /// Runtime-managed routed loops temporarily bind their invoking pane to an
+    /// ephemeral attempt before transferring execution to a worker. The
+    /// blocked parent turn remains the shell owner for final presentation, so
+    /// restoration must preserve that exact turn id while replacing only the
+    /// conversation binding. Any missing or different running turn is rejected
+    /// to prevent callers from orphaning unrelated provider work.
+    ///
+    /// # Parameters
+    /// - `pane_id`: Pane whose managed parent turn owns the shell session.
+    /// - `expected_running_turn_id`: Exact routed parent turn that must remain bound.
+    /// - `conversation_id`: Durable parent conversation to restore.
+    /// - `transcript_entries`: Parent transcript high-water mark.
+    /// - `prompt_cache_lineage_id`: Optional lineage captured before the attempt.
+    ///
+    /// # Errors
+    /// Returns an error when identifiers are empty, the pane session is absent,
+    /// or a different (or no) running turn owns the pane.
+    pub fn restore_conversation_for_running_turn_with_lineage(
+        &mut self,
+        pane_id: &str,
+        expected_running_turn_id: &str,
+        conversation_id: impl Into<String>,
+        transcript_entries: u64,
+        prompt_cache_lineage_id: Option<String>,
+    ) -> AgentShellSessionResult<&AgentShellSession> {
+        validate_agent_shell_required("running turn id", expected_running_turn_id)?;
+        let conversation_id = conversation_id.into();
+        validate_agent_shell_required("conversation id", &conversation_id)?;
+        if let Some(lineage_id) = prompt_cache_lineage_id.as_deref() {
+            validate_agent_shell_required("prompt cache lineage id", lineage_id)?;
+        }
+        let session = self.session_mut(pane_id)?;
+        if session.running_turn_id.as_deref() != Some(expected_running_turn_id) {
+            return Err(AgentShellSessionError::conflict(
+                "cannot restore a running conversation for a different turn",
+            ));
+        }
+        session.session_id = conversation_id;
+        if let Some(lineage_id) = prompt_cache_lineage_id {
+            session.prompt_cache_lineage_id = lineage_id;
+        }
+        session.transcript_entries = transcript_entries;
+        session.ephemeral = false;
+        session.ephemeral_transcript_source_conversation_id = None;
+        session.ephemeral_transcript_source_entries = 0;
+        session.visibility = AgentShellVisibility::Visible;
+        Ok(session)
+    }
+
     /// Binds a pane to one runtime-only conversation while optionally
     /// inheriting prompt-cache lineage from its parent.
     ///
@@ -984,6 +1035,67 @@ mod tests {
         let error = store.finish_turn("%1", "turn-2").unwrap_err();
 
         assert_eq!(error.kind(), crate::AgentShellSessionErrorKind::InvalidArgs);
+    }
+
+    /// Verifies managed restoration changes only conversation metadata while
+    /// preserving the exact routed parent turn that owns the shell session.
+    #[test]
+    fn agent_shell_restores_conversation_for_expected_running_turn() {
+        let mut store = AgentShellStore::default();
+        store.enter_or_resume("%1").unwrap();
+        store.start_turn("%1", "turn-routed-parent").unwrap();
+        let original_lineage = store.get("%1").unwrap().prompt_cache_lineage_id.clone();
+
+        let restored = store
+            .restore_conversation_for_running_turn_with_lineage(
+                "%1",
+                "turn-routed-parent",
+                "conversation-parent",
+                7,
+                Some(original_lineage.clone()),
+            )
+            .unwrap();
+
+        assert_eq!(
+            restored.running_turn_id.as_deref(),
+            Some("turn-routed-parent")
+        );
+        assert_eq!(restored.session_id, "conversation-parent");
+        assert_eq!(restored.transcript_entries, 7);
+        assert_eq!(restored.prompt_cache_lineage_id, original_lineage);
+        assert!(!restored.ephemeral);
+        assert!(
+            restored
+                .ephemeral_transcript_source_conversation_id
+                .is_none()
+        );
+    }
+
+    /// Verifies managed restoration cannot replace a conversation owned by a
+    /// different live turn, preserving the ordinary anti-orphaning guard.
+    #[test]
+    fn agent_shell_rejects_running_conversation_restore_for_wrong_turn() {
+        let mut store = AgentShellStore::default();
+        store.enter_or_resume("%1").unwrap();
+        store.start_turn("%1", "turn-current").unwrap();
+        let original_conversation = store.get("%1").unwrap().session_id.clone();
+
+        let error = store
+            .restore_conversation_for_running_turn_with_lineage(
+                "%1",
+                "turn-stale",
+                "conversation-parent",
+                3,
+                None,
+            )
+            .unwrap_err();
+
+        assert_eq!(error.kind(), crate::AgentShellSessionErrorKind::Conflict);
+        assert_eq!(store.get("%1").unwrap().session_id, original_conversation);
+        assert_eq!(
+            store.get("%1").unwrap().running_turn_id.as_deref(),
+            Some("turn-current")
+        );
     }
 
     /// Verifies that hiding an agent shell immediately returns pane input focus

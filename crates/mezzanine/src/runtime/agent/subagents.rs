@@ -9,10 +9,10 @@ use mez_agent::{MacroRunPhase, MacroStepTaskResult, normalize_subagent_spawn_rol
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentId, AgentTurnExecution,
     AgentTurnRecord, AgentTurnState, AuditActor, AuditRecord, Envelope, EventKind,
-    JoinedSubagentDependency, MezError, PaneId, Recipient, Result, RuntimeAgentLoopSettlement,
-    RuntimeSessionService, SenderIdentity, SubagentSpawnRequest, SubagentWaitPolicy,
-    TaskResultPayload, TaskState, TaskStatusPayload, current_unix_seconds, json_escape,
-    runtime_agent_terminal_preview, runtime_agent_turn_state_from_action_results,
+    JoinedSubagentDependency, MezError, PaneId, Recipient, Result, RuntimeAgentLoopCompletion,
+    RuntimeAgentLoopSettlement, RuntimeSessionService, SenderIdentity, SubagentSpawnRequest,
+    SubagentWaitPolicy, TaskResultPayload, TaskState, TaskStatusPayload, current_unix_seconds,
+    json_escape, runtime_agent_terminal_preview, runtime_agent_turn_state_from_action_results,
     runtime_agent_turn_state_name, runtime_cooperation_mode, runtime_cooperation_mode_name,
     runtime_execution_ready_for_provider_continuation, runtime_mezzanine_error_code,
     runtime_pane_by_id, runtime_spawn_json_agent_and_turn, runtime_subagent_display_label,
@@ -20,7 +20,35 @@ use super::{
     runtime_subagent_spawn_request, runtime_task_state_suffix, subagent_task_output_for_execution,
 };
 
+/// Maximum routed result idempotency keys retained by the runtime actor.
+const SETTLED_ROUTED_PARENT_RESULT_LIMIT: usize = 4096;
+
+/// Converts controller-owned loop completion metadata into the ordinary join shape.
+fn joined_dependency_from_loop_completion(
+    completion: RuntimeAgentLoopCompletion,
+) -> JoinedSubagentDependency {
+    JoinedSubagentDependency {
+        parent_turn_id: completion.parent_turn_id,
+        parent_action_id: completion.parent_action_id,
+        child_turn_id: completion.child_turn_id,
+        child_agent_id: completion.child_agent_id,
+        child_display_name: completion.child_display_name,
+    }
+}
+
 impl RuntimeSessionService {
+    /// Records a routed parent result idempotency key within a bounded set.
+    fn record_settled_routed_parent_result(&mut self, turn_id: &str) {
+        self.agent
+            .settled_routed_parent_result_turns
+            .insert(turn_id.to_string());
+        while self.agent.settled_routed_parent_result_turns.len()
+            > SETTLED_ROUTED_PARENT_RESULT_LIMIT
+        {
+            self.agent.settled_routed_parent_result_turns.pop_first();
+        }
+    }
+
     /// Clears joined-subagent dependencies owned by or waiting on a turn.
     pub(crate) fn clear_joined_subagent_dependencies_for_turn(&mut self, turn_id: &str) {
         let active_loop_agent = self
@@ -344,11 +372,37 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         execution: &AgentTurnExecution,
     ) -> Result<()> {
-        let loop_settlement = self.settle_agent_loop_after_terminal_execution(turn, execution)?;
-        if loop_settlement == RuntimeAgentLoopSettlement::Continued {
+        if self
+            .agent
+            .settled_routed_parent_result_turns
+            .contains(&turn.turn_id)
+        {
             return Ok(());
         }
+        let routed_parent_turn_id = self
+            .agent
+            .routed_workflow_by_child_turn
+            .get(&turn.turn_id)
+            .cloned();
+        let loop_settlement = self.settle_agent_loop_after_terminal_execution(turn, execution)?;
+        if loop_settlement == RuntimeAgentLoopSettlement::Continued {
+            self.agent.subagent_task_routes.remove(&turn.turn_id);
+            return Ok(());
+        }
+        if let (
+            Some(parent_turn_id),
+            RuntimeAgentLoopSettlement::Terminal {
+                completion: Some(completion),
+            },
+        ) = (routed_parent_turn_id.as_deref(), &loop_settlement)
+        {
+            self.retain_routed_loop_completion(parent_turn_id, completion.clone())?;
+        }
         if self.handle_routed_child_execution_result(turn, execution)? {
+            return Ok(());
+        }
+        if self.routed_presentation_turn(&turn.turn_id) {
+            self.emit_terminal_routed_parent_result(turn, execution)?;
             return Ok(());
         }
         let success = execution.terminal_state == AgentTurnState::Completed;
@@ -388,17 +442,101 @@ impl RuntimeSessionService {
         &mut self,
         turn: &AgentTurnRecord,
     ) -> Result<()> {
+        if self
+            .agent
+            .settled_routed_parent_result_turns
+            .contains(&turn.turn_id)
+        {
+            return Ok(());
+        }
+        let routed_parent_turn_id = self
+            .agent
+            .routed_workflow_by_child_turn
+            .get(&turn.turn_id)
+            .cloned();
+        let loop_dependency = self.take_agent_loop_dependency_for_turn(&turn.turn_id);
+        if let (Some(parent_turn_id), Some(dependency)) =
+            (routed_parent_turn_id.as_deref(), loop_dependency.as_ref())
+        {
+            self.retain_routed_loop_completion(
+                parent_turn_id,
+                RuntimeAgentLoopCompletion {
+                    parent_turn_id: dependency.parent_turn_id.clone(),
+                    parent_action_id: dependency.parent_action_id.clone(),
+                    child_turn_id: dependency.child_turn_id.clone(),
+                    child_agent_id: dependency.child_agent_id.clone(),
+                    child_display_name: dependency.child_display_name.clone(),
+                },
+            )?;
+        }
         if self.handle_routed_child_cancellation(turn)? {
             return Ok(());
         }
-        let loop_dependency = self.take_agent_loop_dependency_for_turn(&turn.turn_id);
+        let routed_loop_dependency = self
+            .agent
+            .routed_loop_completions_by_parent_turn
+            .get(&turn.turn_id)
+            .cloned()
+            .map(joined_dependency_from_loop_completion);
+        let settles_routed_parent = routed_loop_dependency.is_some();
         self.emit_subagent_task_result_with_dependency(
             turn,
-            loop_dependency,
+            routed_loop_dependency.or(loop_dependency),
             false,
             "subagent task cancelled",
             "cancelled by runtime request",
-        )
+        )?;
+        self.agent
+            .routed_loop_completions_by_parent_turn
+            .remove(&turn.turn_id);
+        if settles_routed_parent {
+            self.record_settled_routed_parent_result(&turn.turn_id);
+        }
+        Ok(())
+    }
+
+    /// Emits one routed parent result only after its presentation lifecycle settles.
+    fn emit_terminal_routed_parent_result(
+        &mut self,
+        turn: &AgentTurnRecord,
+        execution: &AgentTurnExecution,
+    ) -> Result<()> {
+        let Some(workflow) = self
+            .agent
+            .routed_workflows_by_parent_turn
+            .get(&turn.turn_id)
+        else {
+            return Ok(());
+        };
+        let explaining_failure = matches!(
+            workflow.phase,
+            mez_agent::routed_workflow::RoutedWorkflowPhase::ReadyForErrorExplanation
+                | mez_agent::routed_workflow::RoutedWorkflowPhase::ExplainingError
+        );
+        if !explaining_failure && execution.terminal_state != AgentTurnState::Completed {
+            return Ok(());
+        }
+        let success = !explaining_failure && execution.terminal_state == AgentTurnState::Completed;
+        let summary = if success {
+            "routed subagent task completed after parent presentation"
+        } else {
+            "routed subagent task failed after parent explanation"
+        };
+        let output = subagent_task_output_for_execution(execution);
+        let dependency = self
+            .agent
+            .routed_loop_completions_by_parent_turn
+            .get(&turn.turn_id)
+            .cloned()
+            .map(joined_dependency_from_loop_completion);
+        self.emit_subagent_task_result_with_dependency(
+            turn, dependency, success, summary, &output,
+        )?;
+        self.agent
+            .routed_loop_completions_by_parent_turn
+            .remove(&turn.turn_id);
+        self.record_settled_routed_parent_result(&turn.turn_id);
+        Ok(())
     }
 
     /// Runs the emit subagent task result for state operation for this subsystem.
