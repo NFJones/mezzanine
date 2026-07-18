@@ -646,13 +646,13 @@ mod tests {
         let context = skill_action_context_from_blocks(&[
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
-                placement: crate::ContextPlacement::EphemeralTail,
+                placement: crate::ContextPlacement::ConversationAppend,
                 label: "action result catalog".to_string(),
                 content: "[action_result catalog request_skills succeeded]".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::SkillInstruction,
-                placement: crate::ContextPlacement::EphemeralTail,
+                placement: crate::ContextPlacement::ConversationAppend,
                 label: "explicit skill review".to_string(),
                 content: "# Skill: review\n\nWorkflow".to_string(),
             },

@@ -8,9 +8,9 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use wait_timeout::ChildExt;
 
 use crate::error::{MezError, Result};
+use crate::host::process::wait_for_child_with_timeout;
 
 use super::types::{
     FocusedShellExecutor, HookExecutionPlan, HookExecutionResult, HookExecutionStatus, HookFailure,
@@ -52,7 +52,9 @@ pub fn execute_program_hook(plan: &HookExecutionPlan) -> Result<HookExecutionRes
         }
     }
 
-    let Some(status) = child.wait_timeout(Duration::from_millis(plan.timeout_ms))? else {
+    let Some(status) =
+        wait_for_child_with_timeout(&mut child, Duration::from_millis(plan.timeout_ms))?
+    else {
         let _ = child.kill();
         let _ = child.wait();
         return Ok(HookExecutionResult {

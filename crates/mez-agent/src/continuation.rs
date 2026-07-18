@@ -120,7 +120,10 @@ pub fn continuation_surface(
     current_actions: &AllowedActionSet,
     decisions: &[CapabilityDecision],
 ) -> (ModelInteractionKind, AllowedActionSet) {
-    let carried_execution_surface = interaction_kind == ModelInteractionKind::ActionExecution;
+    let carried_execution_surface = matches!(
+        interaction_kind,
+        ModelInteractionKind::ActionExecution | ModelInteractionKind::CapabilityContinuation
+    );
     let mut actions = if carried_execution_surface {
         current_actions.clone()
     } else {
@@ -233,6 +236,47 @@ mod tests {
         assert_eq!(interaction, ModelInteractionKind::ActionExecution);
         assert!(actions.contains(AllowedAction::ShellCommand));
         assert!(actions.contains(AllowedAction::ApplyPatch));
+    }
+
+    /// Successive capability continuations retain earlier grants so a batch
+    /// that needs more than one coarse capability cannot oscillate forever
+    /// between mutually incomplete action surfaces.
+    #[test]
+    fn capability_continuation_surface_accumulates_successive_grants() {
+        let config_decisions = decide_capabilities(
+            &[CapabilityRequest {
+                capability: AgentCapability::ConfigChange,
+                reason: "adjust runtime history".to_string(),
+            }],
+            CapabilityAvailability {
+                mcp_available: true,
+                memory_enabled: true,
+                issues_enabled: true,
+            },
+        );
+        let (interaction, config_actions) = continuation_surface(
+            ModelInteractionKind::CapabilityDecision,
+            &AllowedActionSet::capability_decision(),
+            &config_decisions,
+        );
+        let shell_decisions = decide_capabilities(
+            &[CapabilityRequest {
+                capability: AgentCapability::Shell,
+                reason: "verify the runtime change".to_string(),
+            }],
+            CapabilityAvailability {
+                mcp_available: true,
+                memory_enabled: true,
+                issues_enabled: true,
+            },
+        );
+
+        let (_, accumulated_actions) =
+            continuation_surface(interaction, &config_actions, &shell_decisions);
+
+        assert!(accumulated_actions.contains(AllowedAction::ConfigChange));
+        assert!(accumulated_actions.contains(AllowedAction::ShellCommand));
+        assert!(accumulated_actions.contains(AllowedAction::ApplyPatch));
     }
 
     /// Response acceptance rejects identity and MAAP-shape failures before

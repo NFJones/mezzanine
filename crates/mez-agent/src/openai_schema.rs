@@ -2,8 +2,8 @@
 //!
 //! This module owns cache-stable OpenAI tool-shape policy and concrete
 //! function-tool envelope construction over the canonical MAAP schema. The
-//! late controller message and runtime validation remain authoritative for the
-//! actions and MCP tools that are eligible on an individual request.
+//! compact request-state suffix and runtime validation remain authoritative
+//! for the actions and MCP tools eligible on an individual request.
 
 use crate::{
     AllowedAction, AllowedActionSet, MAAP_ACTION_BATCH_TOOL_NAME as OPENAI_MAAP_FUNCTION_TOOL_NAME,
@@ -34,8 +34,8 @@ fn openai_maap_current_action_batch_tool() -> serde_json::Value {
 /// Returns the provider-visible OpenAI action schema surface.
 ///
 /// OpenAI prompt caching is sensitive to request-body tool bytes, so normal
-/// action turns use one stable superset and rely on the late allowed-action
-/// surface plus runtime validation for actual eligibility.
+/// action turns use one stable superset and rely on compact request state plus
+/// runtime validation for actual eligibility.
 fn openai_stable_schema_action_surface() -> AllowedActionSet {
     AllowedActionSet::from_actions([
         AllowedAction::Say,

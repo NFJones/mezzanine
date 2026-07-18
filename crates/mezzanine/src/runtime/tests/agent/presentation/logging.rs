@@ -2,15 +2,14 @@
 
 use super::*;
 
-/// Verifies progress `say` messages become a bounded current-turn context ledger
-/// before provider continuation.
+/// Verifies progress `say` messages continue through durable assistant
+/// chronology without a request-local ledger.
 ///
-/// Progress `say` text is user-visible but easy for the model to paraphrase in a
-/// later action batch. The runtime keeps the recent entries as turn-volatile
-/// local context so the next provider request can suppress redundant updates
-/// without moving that changing text into the cache-stable prefix.
+/// Progress text is already an assistant event at its occurrence boundary.
+/// Replaying a second controller-generated copy would duplicate information and
+/// invalidate the reusable prefix.
 #[test]
-fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
+fn runtime_progress_say_chronology_reaches_provider_continuation_without_ledger() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -32,7 +31,7 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
-            raw_text: "progress".to_string(),
+            raw_text: String::new(),
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
@@ -67,32 +66,26 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
         .unwrap();
     assert_eq!(first_execution.terminal_state, AgentTurnState::Running);
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
-    let ledger_block = context
+    let assistant_block = context
         .blocks
         .iter()
-        .find(|block| {
-            block.source == ContextSourceKind::RuntimeHint
-                && block.label == "current-turn progress say ledger"
-        })
-        .expect("progress say ledger should be active turn context");
+        .find(|block| block.source == ContextSourceKind::TranscriptAssistant)
+        .expect("progress say should be preserved as assistant chronology");
     assert_eq!(
-        ledger_block.cache_policy(),
-        mez_agent::ContextCachePolicy::Ineligible
+        assistant_block.placement,
+        mez_agent::ContextPlacement::ConversationAppend
     );
     assert!(
-        ledger_block
+        assistant_block
             .content
-            .contains("already emitted during the current turn"),
+            .contains("The redundant updates are coming from repeated progress says."),
         "{}",
-        ledger_block.content
+        assistant_block.content
     );
-    assert!(
-        ledger_block
-            .content
-            .contains("progress_say: The redundant updates are coming"),
-        "{}",
-        ledger_block.content
-    );
+    assert!(context.validate_durable().is_ok());
+    assert!(!context.blocks.iter().any(|block| {
+        block.label.contains("ledger") || block.content.contains("progress_say:")
+    }));
 
     let second_provider = RuntimeRecordingProvider {
         provider: "runtime-batch",
@@ -115,14 +108,16 @@ fn runtime_progress_say_context_ledger_reaches_provider_continuation() {
     assert_eq!(executions.len(), 1);
     let request = second_provider.last_request.borrow().clone().unwrap();
     assert!(request.messages.iter().any(|message| {
-        message.source == ContextSourceKind::RuntimeHint
+        message.source == ContextSourceKind::TranscriptAssistant
             && message
                 .content
-                .contains("[current-turn progress say ledger]")
-            && message.content.contains("It is not a user request")
-            && message
-                .content
-                .contains("progress_say: The redundant updates are coming")
+                .contains("The redundant updates are coming from repeated progress says.")
+    }));
+    assert!(!request.messages.iter().any(|message| {
+        message
+            .content
+            .contains("[current-turn progress say ledger]")
+            || message.content.contains("progress_say:")
     }));
     assert!(!service.agent_turn_contexts().contains_key("turn-1"));
 }

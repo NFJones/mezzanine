@@ -23,7 +23,7 @@ fn openai_available_mcp_keeps_memory_on_default_surface() {
     let context = mez_agent::append_mcp_context(
         AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "use @githubcopilot to pull the latest CI results".to_string(),
         }])
@@ -136,7 +136,7 @@ fn openai_maap_schema_is_stable_across_non_mcp_action_surfaces() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "inspect the repo".to_string(),
         }])
@@ -217,7 +217,7 @@ fn openai_memory_search_schema_disallows_startup_rituals_and_repeat_searches() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "remember durable context".to_string(),
         }])
@@ -284,7 +284,7 @@ fn openai_memory_store_schema_excludes_episode_and_scratch_kinds() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "remember durable context".to_string(),
         }])
@@ -360,7 +360,7 @@ fn openai_responses_request_body_describes_apply_patch_format() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "edit a file".to_string(),
         }])
@@ -498,7 +498,7 @@ fn openai_responses_request_body_describes_config_change_schema() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "change the active theme".to_string(),
         }])
@@ -591,7 +591,7 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "Create random test data".to_string(),
         }])
@@ -639,29 +639,15 @@ fn openai_responses_request_body_exposes_granted_execution_actions_and_capabilit
     assert!(!action_types.contains(&"abort".to_string()));
     assert!(action_types.contains(&"fetch_url".to_string()));
     assert!(action_types.contains(&"web_search".to_string()));
-    let allowed_surface = value["input"].as_array().unwrap().last().unwrap()["content"][0]["text"]
+    let request_state = value["input"].as_array().unwrap().last().unwrap()["content"][0]["text"]
         .as_str()
         .unwrap();
-    assert!(allowed_surface.contains("[allowed action surface]"));
-    assert!(allowed_surface.contains("interaction_kind=action_execution"));
+    assert!(request_state.contains("[OpenAI request state]"));
+    assert!(request_state.contains("interaction_kind=action_execution"));
     assert!(
-        allowed_surface
-            .contains("allowed_actions=say,request_capability,shell_command,apply_patch")
+        request_state.contains("allowed_actions=say,request_capability,shell_command,apply_patch")
     );
-    assert!(allowed_surface.contains("active_function_tool=submit_maap_action_batch"));
-    assert!(allowed_surface.contains("Emit only action objects whose type appears"));
-    assert!(
-        !allowed_surface.contains("one canonical MAAP action-batch function"),
-        "{allowed_surface}"
-    );
-    assert!(
-        !allowed_surface.contains("required-function-call"),
-        "{allowed_surface}"
-    );
-    assert!(
-        !allowed_surface.contains("Model-selected skill lookup/loading is disabled"),
-        "{allowed_surface}"
-    );
+    assert!(!request_state.contains("Emit only"));
 
     let shell_schema = action_schemas
         .iter()
@@ -720,7 +706,7 @@ fn openai_responses_request_body_uses_auto_sizing_schema_for_router() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "classify this task".to_string(),
         }])
@@ -780,7 +766,7 @@ fn openai_responses_request_body_uses_current_schema_for_composite_action_surfac
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "inspect locally and fetch a URL".to_string(),
         }])
@@ -832,7 +818,7 @@ fn openai_responses_request_body_uses_mcp_tool_argument_schemas() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "read a file".to_string(),
         }])

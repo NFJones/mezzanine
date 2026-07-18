@@ -328,22 +328,9 @@ fn runtime_apply_patch_read_phase_truncation_dispatches_specific_error_plan() {
         .unwrap();
     assert!(!service.agent_turn_executions().contains_key("turn-1"));
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
-    let feedback = context
-        .blocks
-        .iter()
-        .rev()
-        .find(|block| {
-            block.source == ContextSourceKind::RuntimeHint
-                && block.label == "action failure feedback"
-        })
-        .expect("feedback block should be present");
-    assert!(
-        feedback
-            .content
-            .contains("transport was truncated or incomplete"),
-        "{}",
-        feedback.content
-    );
+    assert!(context.blocks.iter().all(|block| {
+        block.source != ContextSourceKind::RuntimeHint || block.label != "action failure feedback"
+    }));
     service.terminate_all_pane_processes().unwrap();
 }
 
@@ -652,128 +639,6 @@ fn runtime_agent_markdown_say_displays_raw_mez_patch_examples() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies action-pressure hints move from inspection to validation after a patch.
-///
-/// The pressure hint is meant to move read-only shell inspection toward
-/// implementation. Once the model actually emits a semantic patch action, the
-/// same single hint should stop asking for implementation and instead steer
-/// the next continuation toward execution-based validation and handoff work.
-#[test]
-fn runtime_action_pressure_shifts_after_apply_patch_success() {
-    let mut service = test_runtime_service();
-    service.set_agent_implementation_pressure_after_shell_actions(1);
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-implementation-pressure-reset","input":"patch the file"}}"#,
-        &primary,
-    );
-    assert!(start.contains(r#""state":"running""#), "{start}");
-
-    let shell_action = mez_agent::AgentAction {
-        id: "inspect".to_string(),
-        rationale: "read current owner".to_string(),
-        payload: mez_agent::AgentActionPayload::ShellCommand {
-            summary: "Inspect owner".to_string(),
-            command: "git diff -- src/runtime/mod.rs".to_string(),
-            interactive: false,
-            stateful: false,
-            timeout_ms: None,
-        },
-    };
-    service.record_shell_dispatch_history("turn-1", "git diff -- src/runtime/mod.rs");
-    service.record_shell_dispatch_success(
-        "turn-1",
-        "git diff -- src/runtime/mod.rs",
-        &shell_action,
-    );
-    assert!(
-        service
-            .agent_turn_contexts()
-            .get("turn-1")
-            .unwrap()
-            .blocks
-            .iter()
-            .any(|block| block.label == "action pressure")
-    );
-
-    let patch_action = mez_agent::AgentAction {
-        id: "patch".to_string(),
-        rationale: "apply implementation".to_string(),
-        payload: mez_agent::AgentActionPayload::ApplyPatch {
-            patch:
-                "*** Begin Patch\n*** Update File: src/runtime/mod.rs\n@@\n context\n*** End Patch"
-                    .to_string(),
-            strip: None,
-        },
-    };
-    service.record_shell_dispatch_success("turn-1", "mez apply-patch write", &patch_action);
-
-    let pressure_block = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
-        .blocks
-        .iter()
-        .find(|block| block.label == "action pressure")
-        .expect("action pressure should remain after mutation");
-    assert!(
-        pressure_block
-            .content
-            .contains("A file mutation has already succeeded this turn"),
-        "{}",
-        pressure_block.content
-    );
-    assert!(
-        pressure_block
-            .content
-            .contains("Prefer execution-based validation"),
-        "{}",
-        pressure_block.content
-    );
-
-    let validation_action = mez_agent::AgentAction {
-        id: "validate".to_string(),
-        rationale: "run validation".to_string(),
-        payload: mez_agent::AgentActionPayload::ShellCommand {
-            summary: "Run tests".to_string(),
-            command: "just test".to_string(),
-            interactive: false,
-            stateful: false,
-            timeout_ms: None,
-        },
-    };
-    service.record_shell_dispatch_success("turn-1", "just test", &validation_action);
-
-    let pressure_block = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
-        .blocks
-        .iter()
-        .find(|block| block.label == "action pressure")
-        .expect("action pressure should remain after validation");
-    assert!(
-        pressure_block
-            .content
-            .contains("at least one validation command"),
-        "{}",
-        pressure_block.content
-    );
-    assert!(
-        pressure_block
-            .content
-            .contains("remaining repository-required validation"),
-        "{}",
-        pressure_block.content
-    );
-}
-
 /// Verifies native local execution bypasses pane readiness before starting a
 /// host-side child process.
 ///
@@ -886,40 +751,8 @@ fn runtime_apply_patch_pane_input_failure_queues_model_self_correction() {
                 .contains("[action_result patch-transport apply_patch failed]")
             && block.content.contains("pane_input_write_failed")
     }));
-    let feedback = context
-        .blocks
-        .iter()
-        .rev()
-        .find(|block| {
-            block.source == ContextSourceKind::RuntimeHint
-                && block.label == "action failure feedback"
-        })
-        .expect("feedback block should be present");
-    assert!(
-        feedback
-            .content
-            .contains("runtime could not deliver the generated patch command"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback.content.contains("attempt=1 max=5"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        !feedback
-            .content
-            .contains("transport was truncated or incomplete"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        !feedback
-            .content
-            .contains("exact old-context lines were not found"),
-        "{}",
-        feedback.content
-    );
+    assert!(context.blocks.iter().all(|block| {
+        block.source != ContextSourceKind::RuntimeHint || block.label != "action failure feedback"
+    }));
     service.terminate_all_pane_processes().unwrap();
 }

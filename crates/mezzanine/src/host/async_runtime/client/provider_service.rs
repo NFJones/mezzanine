@@ -498,6 +498,7 @@ async fn execute_runtime_agent_provider_dispatch(
     let RuntimeAgentProviderDispatch {
         turn,
         context,
+        interaction_kind,
         model_profile,
         macro_judge_request,
         auto_sizing,
@@ -680,6 +681,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     turn.clone(),
                     &context,
                     loop_allowed_actions.clone(),
+                    interaction_kind,
                 )
                 .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
@@ -711,6 +713,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     turn.clone(),
                     &context,
                     loop_allowed_actions.clone(),
+                    interaction_kind,
                 )
                 .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
@@ -742,6 +745,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     turn.clone(),
                     &context,
                     loop_allowed_actions.clone(),
+                    interaction_kind,
                 )
                 .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
@@ -773,6 +777,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     turn.clone(),
                     &context,
                     loop_allowed_actions.clone(),
+                    interaction_kind,
                 )
                 .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
@@ -804,6 +809,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     turn.clone(),
                     &context,
                     loop_allowed_actions.clone(),
+                    interaction_kind,
                 )
                 .await?;
             let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;

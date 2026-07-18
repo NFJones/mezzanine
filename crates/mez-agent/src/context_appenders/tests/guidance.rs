@@ -20,7 +20,7 @@ fn project_guidance_context_is_inserted_before_user_prompt() {
         },
         ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: crate::ContextPlacement::EphemeralTail,
+            placement: crate::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "change the code".to_string(),
         },
@@ -65,22 +65,22 @@ fn project_guidance_context_is_inserted_before_user_prompt() {
 }
 
 #[test]
-/// Verifies stable project guidance is inserted before existing volatile state.
+/// Verifies stable project guidance is inserted before task environment state.
 ///
 /// Runtime prompt construction discovers repository instructions after pane and
-/// environment state. The shared appender must use the stable-phase boundary so
-/// that discovery order cannot create an ephemeral-to-stable regression.
-fn project_guidance_context_precedes_existing_volatile_configuration() {
+/// environment state. The shared appender must use the stable-phase boundary
+/// without moving the task environment after the active user event.
+fn project_guidance_context_precedes_task_environment_configuration() {
     let context = AgentContext::new(vec![
         ContextBlock {
             source: ContextSourceKind::Configuration,
-            placement: crate::ContextPlacement::EphemeralTail,
+            placement: crate::ContextPlacement::ConversationAppend,
             label: "environment signature".to_string(),
             content: "os=linux".to_string(),
         },
         ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: crate::ContextPlacement::EphemeralTail,
+            placement: crate::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "change the code".to_string(),
         },
@@ -124,7 +124,7 @@ fn project_guidance_context_replaces_existing_guidance_blocks() {
         },
         ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: crate::ContextPlacement::EphemeralTail,
+            placement: crate::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "do the task".to_string(),
         },
@@ -166,7 +166,7 @@ fn project_guidance_context_replaces_existing_guidance_blocks() {
 fn project_guidance_context_respects_file_limit_and_skips_empty_content() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
-        placement: crate::ContextPlacement::EphemeralTail,
+        placement: crate::ContextPlacement::ConversationAppend,
         label: "user".to_string(),
         content: "do the task".to_string(),
     }])
@@ -234,7 +234,7 @@ fn project_guidance_is_templated_into_system_prompt() {
     let context = append_project_guidance_context(
         AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: crate::ContextPlacement::EphemeralTail,
+            placement: crate::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "fix the bug".to_string(),
         }])
@@ -274,7 +274,7 @@ fn project_guidance_is_templated_into_system_prompt() {
 fn scheduler_context_keeps_relevant_idle_state_compact() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
-        placement: crate::ContextPlacement::EphemeralTail,
+        placement: crate::ContextPlacement::ConversationAppend,
         label: "user".to_string(),
         content: "spawn subagents for this task".to_string(),
     }])
@@ -304,7 +304,7 @@ fn scheduler_context_keeps_relevant_idle_state_compact() {
 fn scheduler_context_omits_unrelated_idle_state() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
-        placement: crate::ContextPlacement::EphemeralTail,
+        placement: crate::ContextPlacement::ConversationAppend,
         label: "user".to_string(),
         content: "do the task".to_string(),
     }])
@@ -322,13 +322,13 @@ fn scheduler_context_omits_unrelated_idle_state() {
 }
 
 #[test]
-/// Verifies scheduler context remains in the ephemeral phase before the current
-/// user prompt while permission policy stays runtime-owned.
+/// Verifies scheduler context remains in the request-local suffix after the
+/// durable user prompt while permission policy stays runtime-owned.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
 /// implementation detail.
-fn scheduler_context_follows_stable_project_context_and_precedes_user_context() {
+fn scheduler_context_follows_durable_prompt_context() {
     let context = AgentContext::new(vec![
         ContextBlock {
             source: ContextSourceKind::ProjectGuidance,
@@ -338,7 +338,7 @@ fn scheduler_context_follows_stable_project_context_and_precedes_user_context() 
         },
         ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: crate::ContextPlacement::EphemeralTail,
+            placement: crate::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "do the task".to_string(),
         },
@@ -358,8 +358,8 @@ fn scheduler_context_follows_stable_project_context_and_precedes_user_context() 
     let context = append_scheduler_context(context, &scheduler).unwrap();
 
     assert_eq!(context.blocks[0].source, ContextSourceKind::ProjectGuidance);
-    assert_eq!(context.blocks[1].label, "scheduler state");
-    assert_eq!(context.blocks[2].source, ContextSourceKind::UserInstruction);
+    assert_eq!(context.blocks[1].source, ContextSourceKind::UserInstruction);
+    assert_eq!(context.blocks[2].label, "scheduler state");
     context.validate_placement_order().unwrap();
     assert!(
         context
@@ -367,21 +367,21 @@ fn scheduler_context_follows_stable_project_context_and_precedes_user_context() 
             .iter()
             .all(|block| block.label != "permission policy")
     );
-    assert!(context.blocks[1].content.contains("queued=1"));
-    assert!(context.blocks[1].content.contains("agent-queued"));
+    assert!(context.blocks[2].content.contains("queued=1"));
+    assert!(context.blocks[2].content.contains("agent-queued"));
 }
 
 #[test]
 /// Verifies scheduler context distinguishes dependency waits from active
 /// provider capacity and queued reacquisition.
 ///
-/// Operators and model-facing diagnostics need to explain why a dependent can
-/// start under a one-slot limit and why its parent remains live after releasing
-/// that slot. The summary therefore reports both occupancy and lifecycle state.
+/// The model needs occupancy, lifecycle counts, and the affected agent identity
+/// to coordinate work. Turn IDs, pane IDs, and complete work inventories are
+/// controller bookkeeping and must stay out of request-local context.
 fn scheduler_context_reports_dependency_waits_and_reacquisition() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
-        placement: crate::ContextPlacement::EphemeralTail,
+        placement: crate::ContextPlacement::ConversationAppend,
         label: "user".to_string(),
         content: "inspect scheduler concurrency".to_string(),
     }])
@@ -406,7 +406,13 @@ fn scheduler_context_reports_dependency_waits_and_reacquisition() {
         .unwrap();
     assert!(waiting_summary.content.contains("active_capacity_used=0"));
     assert!(waiting_summary.content.contains("waiting=1"));
-    assert!(waiting_summary.content.contains("waiting_turns=parent:"));
+    assert!(
+        waiting_summary
+            .content
+            .contains("active_agents=parent-agent")
+    );
+    assert!(!waiting_summary.content.contains("turns="));
+    assert!(!waiting_summary.content.contains("parent:"));
 
     scheduler.requeue_waiting("parent").unwrap();
     let reacquiring_context = append_scheduler_context(context, &scheduler).unwrap();
@@ -424,7 +430,8 @@ fn scheduler_context_reports_dependency_waits_and_reacquisition() {
     assert!(
         reacquiring_summary
             .content
-            .contains("reacquiring_turns=parent:")
+            .contains("active_agents=parent-agent")
     );
+    assert!(!reacquiring_summary.content.contains("turns="));
     assert!(reacquiring_summary.content.contains("queued=1"));
 }

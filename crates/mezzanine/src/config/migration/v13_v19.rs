@@ -391,3 +391,60 @@ pub(super) fn migrate_json_compatible_v18_to_v19(
         ConfigFormat::Toml => unreachable!("TOML migration is handled separately"),
     }
 }
+
+/// Applies the version 19 to version 20 migration.
+///
+/// The migration removes the obsolete model-facing implementation-pressure
+/// threshold. Deterministic controller policy now decides whether work should
+/// continue without injecting pressure reminders into model context.
+///
+/// # Parameters
+/// - `format`: The concrete config file format.
+/// - `text`: The document text to migrate.
+pub(super) fn migrate_v19_to_v20(format: ConfigFormat, text: &str) -> Result<String> {
+    match format {
+        ConfigFormat::Toml => migrate_toml_v19_to_v20(text),
+        ConfigFormat::Yaml | ConfigFormat::Json => migrate_json_compatible_v19_to_v20(format, text),
+    }
+}
+
+/// Applies the version 19 to version 20 migration to TOML config files.
+pub(super) fn migrate_toml_v19_to_v20(text: &str) -> Result<String> {
+    let mut document = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|error| MezError::config(format!("invalid TOML config: {error}")))?;
+
+    remove_toml_path(
+        &mut document,
+        "agents.implementation_pressure_after_shell_actions",
+    )?;
+    set_toml_path_item(&mut document, "version", toml_edit::value(20))?;
+
+    Ok(document.to_string())
+}
+
+/// Applies the version 19 to version 20 migration to JSON and YAML config files.
+pub(super) fn migrate_json_compatible_v19_to_v20(
+    format: ConfigFormat,
+    text: &str,
+) -> Result<String> {
+    let mut document = parse_json_compatible_config(format, text)?;
+
+    remove_json_path(
+        &mut document,
+        "agents.implementation_pressure_after_shell_actions",
+    );
+    set_json_path_value(&mut document, "version", serde_json::json!(20))?;
+
+    match format {
+        ConfigFormat::Json => serde_json::to_string_pretty(&document)
+            .map(|mut rendered| {
+                rendered.push(char::from(10));
+                rendered
+            })
+            .map_err(|error| MezError::config(format!("failed to render JSON config: {error}"))),
+        ConfigFormat::Yaml => serde_norway::to_string(&document)
+            .map_err(|error| MezError::config(format!("failed to render YAML config: {error}"))),
+        ConfigFormat::Toml => unreachable!("TOML migration is handled separately"),
+    }
+}

@@ -57,6 +57,13 @@ runtime stores the stage diagnostic and may queue one response-only explanation
 on the invoking model. If that explanation fails or is interrupted, no further
 recovery request is allowed.
 
+Handoff, handoff repair, parent presentation, and failure explanation are typed
+provider interaction modes. Their static response rules use the selected
+mode-specific system instruction. Validated worker results, rejected handoffs,
+and stage diagnostics remain immutable chronological evidence or bounded
+factual live state; they are not ad-hoc user prompts and do not move the
+original parent prompt after its evidence.
+
 Child cancellation resumes the blocked parent once for an explanation. Parent
 cancellation interrupts the active worker and releases the loop controller,
 conversation indexes, provider tasks, authority, and pane-close ownership.

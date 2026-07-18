@@ -294,7 +294,17 @@ impl RuntimeSessionService {
             &mut blocks,
             ContextBlock::user_event("user prompt", prompt),
         );
-        Ok(AgentContext::new_durable(blocks)?)
+        let metadata = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| {
+                mez_agent::ModelContextMetadata::new(
+                    Some(session.session_id.clone()),
+                    Some(session.prompt_cache_lineage_id.clone()),
+                )
+            })
+            .unwrap_or_default();
+        Ok(AgentContext::new_durable(blocks)?.with_metadata(metadata))
     }
 
     /// Formats immutable skill context for one invocation.
@@ -382,7 +392,7 @@ impl RuntimeSessionService {
     /// Automatic provider recovery can compact a pane conversation while the
     /// active turn remains running. The provider retry must then see the newly
     /// written summary and shorter transcript tail without discarding same-turn
-    /// action results, steering, rationale ledgers, or execution pressure.
+    /// action results, steering, or other durable chronology.
     pub(crate) fn refresh_running_turn_context_after_conversation_compaction(
         &mut self,
         turn_id: &str,
@@ -462,14 +472,24 @@ impl RuntimeSessionService {
         blocks.retain(|block| !runtime_context_block_is_compaction_refresh_owned(block));
         let insert_at = blocks
             .iter()
-            .position(|block| block.placement == mez_agent::ContextPlacement::EphemeralTail)
+            .position(|block| {
+                matches!(
+                    block.source,
+                    ContextSourceKind::Configuration
+                        | ContextSourceKind::SkillInstruction
+                        | ContextSourceKind::UserInstruction
+                        | ContextSourceKind::TranscriptAssistant
+                        | ContextSourceKind::TranscriptTool
+                        | ContextSourceKind::ActionResult
+                ) && block.placement == mez_agent::ContextPlacement::ConversationAppend
+            })
             .unwrap_or(blocks.len());
         for (offset, block) in refreshed_blocks.into_iter().enumerate() {
             blocks.insert(insert_at + offset, block);
         }
         let refreshed_block_count = blocks.len();
         self.agent_turn_contexts_mut()
-            .insert(turn_id.to_string(), AgentContext::new(blocks)?);
+            .insert(turn_id.to_string(), AgentContext::new_durable(blocks)?);
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             turn_id,

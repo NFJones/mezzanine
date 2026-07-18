@@ -49,8 +49,6 @@ pub enum ContextSourceKind {
     TranscriptAssistant,
     /// A prior tool or action transcript entry.
     TranscriptTool,
-    /// A compact ledger of evidence already gathered in the active turn.
-    EvidenceLedger,
     /// Immutable evidence promoted from settled turn actions.
     CommittedEvidence,
     /// Routed-worker result and handoff context supplied for parent presentation.
@@ -91,7 +89,6 @@ impl TrustDomain {
             ContextSourceKind::Transcript
             | ContextSourceKind::TranscriptAssistant
             | ContextSourceKind::TranscriptTool
-            | ContextSourceKind::EvidenceLedger
             | ContextSourceKind::CommittedEvidence
             | ContextSourceKind::RoutedHandoff
             | ContextSourceKind::ActionResult => Self::ModelOutput,
@@ -334,7 +331,6 @@ impl ContextBlock {
             }
             ContextSourceKind::TranscriptAssistant => ContextSemanticKind::AssistantEvent,
             ContextSourceKind::TranscriptTool
-            | ContextSourceKind::EvidenceLedger
             | ContextSourceKind::CommittedEvidence
             | ContextSourceKind::RoutedHandoff
             | ContextSourceKind::ActionResult => ContextSemanticKind::EvidenceEvent,
@@ -378,7 +374,6 @@ impl ContextBlock {
             | ContextSourceKind::RuntimeHint => ContextRetention::Exact,
             ContextSourceKind::TranscriptAssistant
             | ContextSourceKind::TranscriptTool
-            | ContextSourceKind::EvidenceLedger
             | ContextSourceKind::CommittedEvidence
             | ContextSourceKind::RoutedHandoff
             | ContextSourceKind::ActionResult => ContextRetention::ExecutionGroup,
@@ -396,7 +391,6 @@ impl ContextBlock {
                 | ContextSourceKind::TranscriptUser
                 | ContextSourceKind::TranscriptAssistant
                 | ContextSourceKind::TranscriptTool
-                | ContextSourceKind::EvidenceLedger
                 | ContextSourceKind::CommittedEvidence
                 | ContextSourceKind::RoutedHandoff
                 | ContextSourceKind::RuntimeHint
@@ -406,25 +400,59 @@ impl ContextBlock {
     }
 }
 
+/// Typed request metadata that never becomes a model-visible context block.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ModelContextMetadata {
+    /// Live product session identity used only for diagnostics and
+    /// provider-owned conversation continuity.
+    pub prompt_cache_session_id: Option<String>,
+    /// Stable prompt-cache lineage used only for provider cache routing.
+    pub prompt_cache_lineage_id: Option<String>,
+}
+
+impl ModelContextMetadata {
+    /// Builds typed non-model-visible request metadata.
+    pub fn new(
+        prompt_cache_session_id: Option<impl Into<String>>,
+        prompt_cache_lineage_id: Option<impl Into<String>>,
+    ) -> Self {
+        Self {
+            prompt_cache_session_id: prompt_cache_session_id.map(Into::into),
+            prompt_cache_lineage_id: prompt_cache_lineage_id.map(Into::into),
+        }
+    }
+}
+
 /// Ordered context supplied to provider request assembly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentContext {
     /// Ordered model-context blocks.
     pub blocks: Vec<ContextBlock>,
+    /// Typed request metadata excluded from model-message projection.
+    pub metadata: ModelContextMetadata,
 }
 
 impl AgentContext {
     /// Creates validated non-empty agent context.
     pub fn new(blocks: Vec<ContextBlock>) -> AgentContextResult<Self> {
-        if blocks.is_empty() {
+        Self {
+            blocks,
+            metadata: ModelContextMetadata::default(),
+        }
+        .revalidate()
+    }
+
+    /// Revalidates context blocks without discarding typed request metadata.
+    pub fn revalidate(self) -> AgentContextResult<Self> {
+        if self.blocks.is_empty() {
             return Err(AgentContextError::new(
                 "agent context must contain at least one context block",
             ));
         }
-        for block in &blocks {
+        for block in &self.blocks {
             validate_context_required("context label", &block.label)?;
         }
-        Ok(Self { blocks })
+        Ok(self)
     }
 
     /// Creates durable context containing only stable and append-only blocks.
@@ -435,6 +463,12 @@ impl AgentContext {
         let context = Self::new(blocks)?;
         context.validate_durable()?;
         Ok(context)
+    }
+
+    /// Attaches typed non-model-visible metadata to this context.
+    pub fn with_metadata(mut self, metadata: ModelContextMetadata) -> Self {
+        self.metadata = metadata;
+        self
     }
 
     /// Validates the semantic and lifetime contract for stored turn context.
@@ -585,6 +619,7 @@ impl PreparedModelContext {
     pub fn to_agent_context(&self) -> AgentContext {
         AgentContext {
             blocks: self.ordered_blocks(),
+            metadata: self.durable.metadata.clone(),
         }
     }
 
@@ -970,7 +1005,7 @@ mod tests {
         };
         let action = ContextBlock {
             source: ContextSourceKind::ActionResult,
-            placement: crate::ContextPlacement::EphemeralTail,
+            placement: crate::ContextPlacement::ConversationAppend,
             label: "action result".to_string(),
             content: "command output".to_string(),
         };
@@ -1106,6 +1141,55 @@ mod tests {
         ];
 
         validate_context_semantics(&blocks).unwrap();
+    }
+
+    /// Verifies multi-action evidence and mid-turn steering retain their exact
+    /// observation order in durable chronology.
+    #[test]
+    fn context_semantics_preserve_multi_action_and_mid_turn_steering_order() {
+        let blocks = vec![
+            ContextBlock::user_event("user prompt", "implement the change"),
+            ContextBlock::assistant_event("assistant action 1", "inspect owner"),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "result 1",
+                "owner found",
+            ),
+            ContextBlock::assistant_event("assistant action 2", "edit owner"),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "result 2",
+                "edit applied",
+            ),
+            ContextBlock::user_event("user steering", "also update the specification"),
+            ContextBlock::assistant_event("assistant action 3", "update specification"),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "result 3",
+                "specification updated",
+            ),
+        ];
+
+        let context = AgentContext::new_durable(blocks).unwrap();
+        assert_eq!(
+            context
+                .blocks
+                .iter()
+                .map(|block| block.label.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "user prompt",
+                "assistant action 1",
+                "result 1",
+                "assistant action 2",
+                "result 2",
+                "user steering",
+                "assistant action 3",
+                "result 3",
+            ]
+        );
+        assert_eq!(context.blocks[5].content, "also update the specification");
+        assert_eq!(context.blocks[5].retention(), ContextRetention::Exact);
     }
 
     /// Verifies semantic validation rejects events in the request-local tail,
@@ -1260,7 +1344,7 @@ mod tests {
             },
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
-                placement: crate::ContextPlacement::EphemeralTail,
+                placement: crate::ContextPlacement::ConversationAppend,
                 label: "action result action-1".to_string(),
                 content: crate::action_result_context_content(&running),
             },

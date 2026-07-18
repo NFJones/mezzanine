@@ -167,7 +167,7 @@ async fn async_actor_applies_agent_provider_completion_events() {
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: "summarize the pane".to_string(),
             }],
         },
@@ -346,7 +346,7 @@ async fn async_actor_defers_agent_transcript_entries_to_persistence_worker() {
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: "summarize the pane".to_string(),
             }],
         },

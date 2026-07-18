@@ -1335,7 +1335,7 @@ mod tests {
 
         let context = AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user prompt".to_string(),
             content: "Need a compact summary".to_string(),
         }])

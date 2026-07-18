@@ -36,7 +36,7 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "Inspect cache stability.".to_string(),
             },
@@ -83,37 +83,37 @@ fn openai_responses_request_body_has_canonical_cache_shape_fixture() {
     eprintln!("DIAGNOSTICS {diagnostics:#?}");
     assert_eq!(
         diagnostics.prompt_cache_key,
-        "mez-fcc0c3076055b2040cb8727ead0dbe7c"
+        "mez-a4b0d51524d4da197a9dc89076e692e3"
     );
-    assert_eq!(diagnostics.instructions_bytes, 42_098);
+    assert_eq!(diagnostics.instructions_bytes, 41_863);
     assert_eq!(
         diagnostics.instructions_sha256,
-        "67594f70a5a061f3a6fff6d1ce71918378576298bcd63ff53ac3e27b04a02f6c"
+        "89112609b4af31d688c4352c4c8f56cad21c8dd90c2814ccb2ebeeb52bfe1142"
     );
     assert_eq!(diagnostics.response_format_bytes, 4);
     assert_eq!(
         diagnostics.response_format_sha256,
         "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
     );
-    assert_eq!(diagnostics.tools_bytes, 20_107);
+    assert_eq!(diagnostics.tools_bytes, 20_134);
     assert_eq!(
         diagnostics.tools_sha256,
-        "2fdeb9a8a5b07ed6fcba42376514bfb777c482d79a8bd88ff58a1a621582a47b"
+        "aea57d9da245864bc709b59e35534fd92345447c9052f600413e4b5a4f63a41f"
     );
     assert_eq!(diagnostics.tool_choice_bytes, 53);
     assert_eq!(
         diagnostics.tool_choice_sha256,
         "6667323a2b74449448aad3d609d98e5288910331b10d71e6f482da3e076eab4e"
     );
-    assert_eq!(diagnostics.stable_projection_bytes, 42_262);
+    assert_eq!(diagnostics.stable_projection_bytes, 42_284);
     assert_eq!(
         diagnostics.stable_projection_sha256,
-        "856d193d9ae77bf6c35b12bc27b490f87f7d59fb35c595401191cd77ebc95ec0"
+        "a454fe685dfd8e2c6799c1aeeca32901d0393eb62e48a413a908ea540fe0795a"
     );
-    assert_eq!(diagnostics.provider_request_shape_bytes, 20_318);
+    assert_eq!(diagnostics.provider_request_shape_bytes, 20_345);
     assert_eq!(
         diagnostics.provider_request_shape_sha256,
-        "45301d2aef59ed4df5d8affb5a4ad542783d2929e320d8128d4327377e3812b6"
+        "1a29526ca4058cf424bc531b1bb920b1754804853829a4343e1dec11937d60a3"
     );
 }
 
@@ -137,7 +137,7 @@ fn openai_responses_request_body_excludes_large_mcp_catalog_from_tools() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "use an MCP server".to_string(),
         }])
@@ -191,7 +191,7 @@ fn openai_responses_request_body_uses_stable_derived_prompt_cache_key() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "first prompt".to_string(),
         }])
@@ -203,7 +203,7 @@ fn openai_responses_request_body_uses_stable_derived_prompt_cache_key() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "different prompt".to_string(),
         }])
@@ -224,7 +224,7 @@ fn openai_responses_request_body_uses_stable_derived_prompt_cache_key() {
     let first_prefix = openai_stable_projection_material_for_request(&first).unwrap();
     let second_prefix = openai_stable_projection_material_for_request(&second).unwrap();
 
-    assert_eq!(first_prefix, second_prefix);
+    assert_ne!(first_prefix, second_prefix);
     assert_eq!(
         first_value["prompt_cache_key"],
         second_value["prompt_cache_key"]

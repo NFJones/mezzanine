@@ -167,6 +167,7 @@ impl RuntimeSessionService {
         self.agent
             .agent_turn_output_limit_recovery_attempts
             .remove(turn_id);
+        self.agent.agent_turn_interaction_kinds.remove(turn_id);
     }
 
     /// Atomically commits deterministic action results to active chronology.

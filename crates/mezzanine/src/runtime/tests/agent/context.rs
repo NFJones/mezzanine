@@ -22,10 +22,101 @@ fn prepared_context_for_prompt(
         initial_capability: None,
     };
     let mcp_summary = service.mcp_registry().prompt_summary();
+    let model_profile = runtime_model_profile("openai", "test");
     service
-        .prepare_agent_turn_model_context(&turn, context, &mcp_summary)
+        .prepare_agent_turn_model_context(&turn, context, &mcp_summary, &model_profile)
         .unwrap()
         .0
+}
+
+/// Verifies repeated provider preparation is a pure request-local operation.
+///
+/// The durable prompt must remain byte-for-byte unchanged and tail generation
+/// must be deterministic; otherwise every continuation would grow stored
+/// context or create avoidable provider cache misses.
+#[test]
+fn runtime_provider_preparation_does_not_mutate_or_grow_durable_context() {
+    let service = test_runtime_service();
+    let durable = mez_agent::AgentContext::new_durable(vec![ContextBlock::user_event(
+        "active user prompt",
+        "preserve this prompt exactly",
+    )])
+    .unwrap();
+    let original = durable.clone();
+
+    let first = prepared_context_for_prompt(&service, durable.clone());
+    let second = prepared_context_for_prompt(&service, durable.clone());
+
+    assert_eq!(durable, original);
+    assert_eq!(first.durable(), &original);
+    assert_eq!(second.durable(), &original);
+    assert_eq!(first.live_state(), second.live_state());
+    assert!(
+        original
+            .blocks
+            .iter()
+            .all(|block| block.placement != mez_agent::ContextPlacement::EphemeralTail)
+    );
+}
+
+/// Verifies session and cache-lineage identity travel as typed request metadata
+/// and never become model-visible blocks or message text.
+#[test]
+fn runtime_agent_context_keeps_cache_identity_out_of_model_text() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let session = service.agent_shell_store().get("%1").unwrap().clone();
+    let context = service
+        .agent_context_for_pane_prompt("%1", "inspect cache identity handling", 0)
+        .unwrap();
+
+    assert_eq!(
+        context.metadata.prompt_cache_session_id.as_deref(),
+        Some(session.session_id.as_str())
+    );
+    assert_eq!(
+        context.metadata.prompt_cache_lineage_id.as_deref(),
+        Some(session.prompt_cache_lineage_id.as_str())
+    );
+    assert!(!context.blocks.iter().any(|block| {
+        block.content.contains(&session.session_id)
+            || block.content.contains(&session.prompt_cache_lineage_id)
+    }));
+
+    let turn = mez_agent::AgentTurnRecord {
+        turn_id: "turn-cache-metadata".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 200,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        cooperation_mode: None,
+        state: mez_agent::AgentTurnState::Running,
+        initial_capability: None,
+    };
+    let request = crate::integrations::agent::context::assemble_model_request(
+        &runtime_model_profile("openai", "gpt-test"),
+        &turn,
+        &context,
+    )
+    .unwrap();
+    assert_eq!(
+        request.prompt_cache_session_id.as_deref(),
+        Some(session.session_id.as_str())
+    );
+    assert_eq!(
+        request.prompt_cache_lineage_id.as_deref(),
+        Some(session.prompt_cache_lineage_id.as_str())
+    );
+    assert!(!request.messages.iter().any(|message| {
+        message.content.contains(&session.session_id)
+            || message.content.contains(&session.prompt_cache_lineage_id)
+    }));
 }
 
 /// Verifies latest execution-model cache reuse stays separate from cumulative

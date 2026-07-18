@@ -2,204 +2,65 @@
 
 use super::*;
 
-/// Verifies successive shell dispatches add a gentle action-pressure hint.
+/// Verifies shell-history bookkeeping never enters durable or prepared model context.
 ///
-/// Repeated shell inspection attempts can keep a long turn localizing the same
-/// owner instead of implementing the next phase, even when those attempts do
-/// not settle successfully. The runtime should nudge the next provider
-/// continuation after the configured gentle threshold while keeping the hint
-/// volatile and advisory rather than failing the shell action.
+/// Exact dispatch history remains controller-owned for loop detection; repeated
+/// inspection alone must not create model-facing pressure reminders.
 #[test]
-fn runtime_action_pressure_context_reaches_provider_continuation() {
+fn runtime_shell_history_remains_outside_model_context() {
     let mut service = test_runtime_service();
-    service.set_agent_implementation_pressure_after_shell_actions(3);
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
         .unwrap();
-    let mut screen = TerminalScreen::new(Size::new(20, 4).unwrap(), 10).unwrap();
-    screen.feed(b"ready\n");
-    service.set_pane_screen("%1".to_string(), screen);
     service
         .agent_shell_store_mut()
         .enter_or_resume("%1")
         .unwrap();
     let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-implementation-pressure","input":"finish the backlog fixes"}}"#,
+        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-shell-history","input":"finish the backlog fixes"}}"#,
         &primary,
     );
     assert!(start.contains(r#""state":"running""#), "{start}");
 
-    service.record_shell_dispatch_history("turn-1", "sed -n '1,80p' src/runtime/mod.rs");
-    assert!(
-        !service
-            .agent_turn_contexts()
-            .get("turn-1")
-            .unwrap()
-            .blocks
-            .iter()
-            .any(|block| block.label == "action pressure")
-    );
-
-    service.record_shell_dispatch_history("turn-1", "sed -n '80,160p' src/runtime/mod.rs");
-    assert!(
-        !service
-            .agent_turn_contexts()
-            .get("turn-1")
-            .unwrap()
-            .blocks
-            .iter()
-            .any(|block| block.label == "action pressure")
-    );
-
-    service.record_shell_dispatch_history("turn-1", "sed -n '160,240p' src/runtime/mod.rs");
-    let pressure_block = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
-        .blocks
-        .iter()
-        .find(|block| block.label == "action pressure")
-        .expect("action pressure should be active turn context");
-    assert_eq!(
-        pressure_block.cache_policy(),
-        mez_agent::ContextCachePolicy::Ineligible
-    );
-    assert!(
-        pressure_block
-            .content
-            .contains("3 consecutive shell_command actions"),
-        "{}",
-        pressure_block.content
-    );
-    assert!(
-        pressure_block.content.contains("Apply gentle pressure now"),
-        "{}",
-        pressure_block.content
-    );
-    assert!(
-        pressure_block
-            .content
-            .contains("Continue following active repository guidance"),
-        "{}",
-        pressure_block.content
-    );
-    assert!(
-        pressure_block
-            .content
-            .contains("Do not edit repository instruction or guidance files merely"),
-        "{}",
-        pressure_block.content
-    );
-
-    let second_provider = RuntimeRecordingProvider {
-        provider: "runtime-batch",
-        response: mez_agent::ModelResponse {
-            provider: "runtime-batch".to_string(),
-            model: "test".to_string(),
-            raw_text: "done".to_string(),
-            usage: Default::default(),
-            latest_request_usage: None,
-            quota_usage: Default::default(),
-            action_batch: Some(runtime_complete_batch("turn-1")),
-            provider_transcript_events: Vec::new(),
-        },
-        last_request: RefCell::new(None),
-    };
-    let execution = service
-        .execute_agent_turn_with_provider(
+    for index in 0..12 {
+        service.record_shell_dispatch_history(
             "turn-1",
-            &second_provider,
-            runtime_model_profile("runtime-batch", "test"),
+            &format!("sed -n '{}p' src/runtime/mod.rs", index + 1),
+        );
+    }
+    let durable = service.agent_turn_contexts().get("turn-1").unwrap();
+    assert!(
+        durable
+            .blocks
+            .iter()
+            .all(|block| block.label != "action pressure")
+    );
+
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .cloned()
+        .unwrap();
+    let (prepared, _) = service
+        .prepare_agent_turn_model_context(
+            &turn,
+            durable.clone(),
+            &mez_agent::McpPromptSummary {
+                available_servers: Vec::new(),
+                available_tools: Vec::new(),
+                unavailable_servers: Vec::new(),
+            },
+            &runtime_model_profile("openai", "test"),
         )
         .unwrap();
-    assert_eq!(execution.terminal_state, AgentTurnState::Completed);
-    let request = second_provider.last_request.borrow().clone().unwrap();
-    assert!(request.messages.iter().any(|message| {
-        message.source == ContextSourceKind::RuntimeHint
-            && message.content.contains("[action pressure]")
-            && message
-                .content
-                .contains("Use another shell_command only for one named missing fact")
-            && message
-                .content
-                .contains("does not relax repository rules or permission/capability requirements")
-    }));
-}
-
-/// Verifies inspection pressure escalates from gentle to medium to strong as
-/// repeated shell-command dispatches continue in one turn.
-///
-/// The runtime-owned hint should become more forceful after prolonged
-/// inspection streaks while staying advisory and turn-volatile.
-#[test]
-fn runtime_action_pressure_escalates_through_stages() {
-    let mut service = test_runtime_service();
-    service.set_agent_implementation_pressure_after_shell_actions(3);
-    let primary = service
-        .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
-        .unwrap();
-    service
-        .agent_shell_store_mut()
-        .enter_or_resume("%1")
-        .unwrap();
-    let start = service.dispatch_runtime_control_body(
-        r#"{"jsonrpc":"2.0","id":"agent-prompt","method":"agent/shell/command","params":{"idempotency_key":"agent-implementation-pressure-escalation","input":"fix the owner once you have enough evidence"}}"#,
-        &primary,
-    );
-    assert!(start.contains(r#""state":"running""#), "{start}");
-
-    for index in 0..6 {
-        service.record_shell_dispatch_history(
-            "turn-1",
-            &format!("sed -n '{}p' src/runtime/mod.rs", index + 1),
-        );
-    }
-    let medium_block = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
-        .blocks
-        .iter()
-        .find(|block| block.label == "action pressure")
-        .expect("medium action pressure should be active");
     assert!(
-        medium_block.content.contains("Apply medium pressure now"),
-        "{}",
-        medium_block.content
-    );
-    assert!(
-        medium_block
-            .content
-            .contains("focused regression test, execution-based validation"),
-        "{}",
-        medium_block.content
-    );
-
-    for index in 6..10 {
-        service.record_shell_dispatch_history(
-            "turn-1",
-            &format!("sed -n '{}p' src/runtime/mod.rs", index + 1),
-        );
-    }
-    let strong_block = service
-        .agent_turn_contexts()
-        .get("turn-1")
-        .unwrap()
-        .blocks
-        .iter()
-        .find(|block| block.label == "action pressure")
-        .expect("strong action pressure should be active");
-    assert!(
-        strong_block.content.contains("Apply strong pressure now"),
-        "{}",
-        strong_block.content
-    );
-    assert!(
-        strong_block
-            .content
-            .contains("concrete justification from recent evidence"),
-        "{}",
-        strong_block.content
+        prepared
+            .to_agent_context()
+            .blocks
+            .iter()
+            .all(|block| block.label != "action pressure")
     );
 }
 
@@ -650,10 +511,11 @@ fn runtime_spawn_limit_denial_queues_model_recovery() {
                 .contains("[action_result spawn-over-capacity spawn_agent denied]")
             && block.content.contains("subagent spawn limit reached")
     }));
-    assert!(context.blocks.iter().any(|block| {
-        block.source == ContextSourceKind::RuntimeHint
-            && block.content.contains("attempt=1 max=5")
-            && block.content.contains("Spawn-agent recovery")
-    }));
+    assert!(
+        context
+            .blocks
+            .iter()
+            .all(|block| block.source != ContextSourceKind::RuntimeHint)
+    );
     service.terminate_all_pane_processes().unwrap();
 }

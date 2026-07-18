@@ -8,10 +8,7 @@ use sha2::Digest;
 use std::fmt;
 
 use crate::openai_continuity::{OpenAiRequestContinuitySnapshot, OpenAiRequestMessageDigest};
-use crate::{
-    AllowedActionSet, ContextSourceKind, ModelInteractionKind, ModelMessage, ModelMessageRole,
-    ProviderTranscriptEvent,
-};
+use crate::{ContextSourceKind, ModelMessage, ModelMessageRole, ProviderTranscriptEvent};
 
 /// Result type returned while assembling one provider request.
 pub type ProviderRequestAssemblyResult<T> = Result<T, ProviderRequestAssemblyError>;
@@ -31,24 +28,15 @@ pub struct OpenAiRenderedMessages {
 
 /// Renders provider-independent messages into OpenAI Responses input shape.
 ///
-/// `appended_message` carries optional late controller guidance that should be
-/// rendered after the request's ordinary message list without making the
-/// renderer depend on product action-surface state.
 pub fn openai_render_messages(
     messages: &[ModelMessage],
-    appended_message: Option<&ModelMessage>,
 ) -> ProviderRequestAssemblyResult<OpenAiRenderedMessages> {
     let mut instructions = Vec::new();
     let mut input = Vec::new();
     let mut stable_input = Vec::new();
     let mut volatile_input = Vec::new();
     let mut stable_input_open = true;
-    let appended_after = appended_message.and_then(|_| {
-        messages
-            .iter()
-            .rposition(|message| message.source == ContextSourceKind::UserInstruction)
-    });
-    for (index, message) in messages.iter().enumerate() {
+    for message in messages {
         if ProviderTranscriptEvent::from_transcript_content(&message.content).is_some() {
             continue;
         }
@@ -56,26 +44,6 @@ pub fn openai_render_messages(
             instructions.push(message.content.clone());
             continue;
         }
-        openai_push_input_message(
-            message,
-            &mut input,
-            &mut stable_input,
-            &mut volatile_input,
-            &mut stable_input_open,
-        );
-        if appended_after == Some(index) {
-            openai_push_input_message(
-                appended_message.expect("appended message index requires a message"),
-                &mut input,
-                &mut stable_input,
-                &mut volatile_input,
-                &mut stable_input_open,
-            );
-        }
-    }
-    if appended_after.is_none()
-        && let Some(message) = appended_message
-    {
         openai_push_input_message(
             message,
             &mut input,
@@ -94,31 +62,6 @@ pub fn openai_render_messages(
         input,
         stable_input,
         volatile_input,
-    })
-}
-
-/// Builds the late controller instruction that exposes the active action surface.
-pub fn openai_allowed_action_surface_message(
-    interaction_kind: ModelInteractionKind,
-    allowed_actions: &AllowedActionSet,
-) -> Option<ModelMessage> {
-    if interaction_kind == ModelInteractionKind::AutoSizing {
-        return None;
-    }
-    let allowed_actions = allowed_actions.action_type_names().join(",");
-    Some(ModelMessage {
-        role: ModelMessageRole::Developer,
-        source: ContextSourceKind::RuntimeHint,
-        placement: crate::ContextPlacement::EphemeralTail,
-        content: format!(
-            "[allowed action surface]\n\
-             interaction_kind={}\n\
-             allowed_actions={allowed_actions}\n\
-             active_function_tool={}\n\
-             Emit only action objects whose type appears in allowed_actions and is present in active_function_tool; disallowed action types are rejected.",
-            interaction_kind.as_str(),
-            MAAP_ACTION_BATCH_TOOL_NAME,
-        ),
     })
 }
 

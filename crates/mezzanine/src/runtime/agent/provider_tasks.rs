@@ -414,7 +414,7 @@ impl RuntimeSessionService {
                     MezError::invalid_state("runtime agent turn context is unavailable")
                 })?;
             let mcp_summary = self.mcp_registry().prompt_summary();
-            self.prepare_agent_turn_model_context(&turn, durable, &mcp_summary)?
+            self.prepare_agent_turn_model_context(&turn, durable, &mcp_summary, &model_profile)?
         };
         let provider_context = context.to_agent_context();
         let respond_only = self.routed_presentation_turn(turn_id);
@@ -565,6 +565,11 @@ impl RuntimeSessionService {
         Ok(Some(RuntimeAgentProviderDispatch {
             turn,
             context,
+            interaction_kind: self
+                .agent
+                .agent_turn_interaction_kinds
+                .get(turn_id)
+                .copied(),
             model_profile,
             macro_judge_request,
             auto_sizing,

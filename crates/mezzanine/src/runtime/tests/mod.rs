@@ -644,7 +644,7 @@ fn runtime_model_request_fixture_for_agent(
         messages: vec![mez_agent::ModelMessage {
             role: mez_agent::ModelMessageRole::User,
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             content: "initial request".to_string(),
         }],
     }

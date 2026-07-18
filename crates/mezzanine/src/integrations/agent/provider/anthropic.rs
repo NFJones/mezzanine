@@ -408,7 +408,7 @@ mod tests {
                 mez_agent::ModelMessage {
                     role: mez_agent::ModelMessageRole::User,
                     source: mez_agent::ContextSourceKind::UserInstruction,
-                    placement: mez_agent::ContextPlacement::EphemeralTail,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
                     content: "summarize this conversation".to_string(),
                 },
             ],
@@ -426,8 +426,12 @@ mod tests {
             serde_json::json!({ "type": "ephemeral" })
         );
         assert_eq!(
-            value["messages"][0]["content"],
+            value["messages"][0]["content"][0]["text"],
             "summarize this conversation"
+        );
+        assert_eq!(
+            value["messages"][0]["content"][0]["cache_control"],
+            serde_json::json!({ "type": "ephemeral" })
         );
     }
 
@@ -462,7 +466,7 @@ mod tests {
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: "summarize this conversation".to_string(),
             }],
         };
@@ -520,7 +524,7 @@ mod tests {
                 mez_agent::ModelMessage {
                     role: mez_agent::ModelMessageRole::User,
                     source: mez_agent::ContextSourceKind::UserInstruction,
-                    placement: mez_agent::ContextPlacement::EphemeralTail,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
                     content: "summarize this conversation".to_string(),
                 },
             ],
@@ -533,8 +537,12 @@ mod tests {
 
         assert!(value.get("system").is_none(), "{value}");
         assert_eq!(
-            value["messages"][0]["content"],
+            value["messages"][0]["content"][0]["text"],
             "summarize this conversation"
+        );
+        assert_eq!(
+            value["messages"][0]["content"][0]["cache_control"],
+            serde_json::json!({ "type": "ephemeral" })
         );
     }
 
@@ -574,7 +582,7 @@ mod tests {
                 mez_agent::ModelMessage {
                     role: mez_agent::ModelMessageRole::User,
                     source: mez_agent::ContextSourceKind::UserInstruction,
-                    placement: mez_agent::ContextPlacement::EphemeralTail,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
                     content: "summarize this conversation".to_string(),
                 },
             ],
@@ -613,7 +621,7 @@ mod tests {
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: "summarize this conversation".to_string(),
             }],
         };
@@ -664,7 +672,7 @@ mod tests {
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: "pick the best provider".to_string(),
             }],
         };

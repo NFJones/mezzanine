@@ -58,17 +58,17 @@ fn default_system_prompt_has_reviewed_size_budget() {
         prompt.len() <= 44_000,
         "default prompt exceeded hard byte budget"
     );
-    assert_eq!(prompt.len(), 42_313, "reviewed prompt size changed");
+    assert_eq!(prompt.len(), 41_744, "reviewed prompt size changed");
     assert_eq!(
         section_bytes,
         vec![
-            669, 2_723, 1_260, 646, 6_828, 12_419, 3_023, 1_284, 455, 651, 420, 7_285, 2_818,
+            669, 2_723, 1_260, 646, 6_828, 12_448, 3_023, 1_284, 455, 651, 420, 6_968, 2_537,
             1_832,
         ]
     );
     assert_eq!(
         digest,
-        "2765b8fdf32bf4c655dd7ff92e4cb065580492c8c7e5685fe2c44b575f733cdf"
+        "9edd94a48543360a1e0ccc468d92ce3c826c80b45f01bff881172b723e771b4a"
     );
 }
 
@@ -245,9 +245,9 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("after mutation prefer execution-based validation over rereading"));
     assert!(prompt.contains("reread only for a validation failure"));
     assert!(prompt.contains("avoid printf/echo explanations"));
-    assert!(prompt.contains("late allowed-action surface is authoritative"));
+    assert!(prompt.contains("The active provider schema is authoritative"));
     assert!(prompt.contains("only the action types named there are usable now"));
-    assert!(prompt.contains("Provider schemas may advertise inactive tools for cache stability"));
+    assert!(prompt.contains("factual OpenAI request-state context block"));
     assert!(
         prompt.contains("model-selected skill discovery and skill loading actions are disabled")
     );
@@ -415,9 +415,7 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("prior say"));
     assert!(prompt.contains("compare it to recent thinking lines, action results"));
     assert!(prompt.contains("any other text in the same response"));
-    assert!(prompt.contains("[current-turn progress say ledger]"));
-    assert!(prompt.contains("already-shown progress"));
-    assert!(prompt.contains("progress_say line"));
+    assert!(!prompt.contains("[current-turn progress say ledger]"));
     assert!(prompt.contains("omit optional action rationales"));
     assert!(prompt.contains("omit progress say"));
     assert!(prompt.contains("Use one channel per idea"));
@@ -484,7 +482,7 @@ fn system_prompt_includes_detailed_action_guidance_for_default_profile() {
     assert!(prompt.contains("validation changed the plan"));
     assert!(prompt.contains("Otherwise omit progress say"));
     assert!(prompt.contains(
-        "not already clear from recent thinking/action-result context, the [current-turn progress say ledger], or prior progress say"
+        "not already clear from recent thinking/action-result context, or prior progress say"
     ));
     assert!(
         prompt.contains("Never use progress say to restate a previously stated sequence point")
@@ -523,7 +521,7 @@ fn system_prompt_keeps_mcp_awareness_abstract() {
     })
     .unwrap();
 
-    assert!(prompt.contains("Mezzanine pane agent profile default v31"));
+    assert!(prompt.contains("Mezzanine pane agent profile default v32"));
     assert!(prompt.contains("Your name is Mez."));
     let identity_index = prompt.find("1. Identity").unwrap();
     let autonomy_index = prompt.find("2. Autonomy").unwrap();
@@ -684,9 +682,7 @@ fn system_prompt_keeps_mcp_awareness_abstract() {
     assert!(prompt.contains("prior say"));
     assert!(prompt.contains("compare it to recent thinking lines, action results"));
     assert!(prompt.contains("any other text in the same response"));
-    assert!(prompt.contains("[current-turn progress say ledger]"));
-    assert!(prompt.contains("already-shown progress"));
-    assert!(prompt.contains("progress_say line"));
+    assert!(!prompt.contains("[current-turn progress say ledger]"));
     assert!(prompt.contains("Do not rewrite the same update with different verbs"));
     assert!(prompt.contains("Progress say should be a delta"));
     assert!(prompt.contains("if no one-clause delta exists, omit it"));

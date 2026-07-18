@@ -31,7 +31,7 @@ fn turn_execution_persistence_appends_to_durable_transcript_store() {
             &turn,
             &AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "run pwd".to_string(),
             }])

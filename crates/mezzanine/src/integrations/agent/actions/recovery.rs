@@ -15,6 +15,7 @@ use crate::integrations::agent::provider::ModelProvider;
 use mez_agent::{
     AgentFailureSummaryNegotiation, AgentFailureSummaryProviderDecision,
     AgentFailureSummaryResponseDecision, AgentTurnExecution, maap_repair_request,
+    select_model_interaction_kind,
 };
 
 /// Reports whether a provider error came from malformed model MAAP output that
@@ -78,23 +79,22 @@ fn failure_summary_request(
     failed_response_raw_text: &str,
 ) -> ModelRequest {
     let mut request = previous_request.clone();
-    request.interaction_kind = ModelInteractionKind::ActionExecution;
+    select_model_interaction_kind(&mut request, ModelInteractionKind::FailureSummary);
     request.allowed_actions = AllowedActionSet::say_only();
+    request.messages.retain(|message| {
+        !(message.source == ContextSourceKind::RuntimeHint
+            && message.content.starts_with("[failure summary state]"))
+    });
     request.messages.push(ModelMessage {
-        role: ModelMessageRole::Developer,
-        source: ContextSourceKind::Configuration,
-        placement: mez_agent::ContextPlacement::StablePrefix,
+        role: ModelMessageRole::Context,
+        source: ContextSourceKind::RuntimeHint,
+        placement: mez_agent::ContextPlacement::EphemeralTail,
         content: format!(
-            "[controller failure summary]\n\
-             Mezzanine has already failed this turn at the controller/provider boundary. \
-             Return exactly one say action with status final that briefly characterizes the failure for the user. \
-             Do not request capabilities, call tools, retry work, or claim the original task succeeded. \
-             Name the failure class and the most useful next diagnostic step.\n\
-             stage={stage}\n\
-             error_kind={:?} error_message={}\n\
+            "[failure summary state]\n\
+             stage={stage}\nerror_kind={:?}\nerror_message={}\n\
              failed_response_excerpt:\n{}",
             error.kind(),
-            error.message(),
+            failure_summary_raw_text_excerpt(error.message()),
             failure_summary_raw_text_excerpt(failed_response_raw_text)
         ),
     });

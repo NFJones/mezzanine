@@ -104,7 +104,11 @@ EOF
     assert!(settings.contains("\"WebSearch\""), "{settings}");
     let stdin = fs::read_to_string(fixture.program.with_extension("stdin")).unwrap();
     assert!(
-        stdin.contains("Current user request:\nFollow the system prompt."),
+        stdin.contains("Ordered Mezzanine conversation context:"),
+        "{stdin}"
+    );
+    assert!(
+        stdin.contains("No conversation messages were provided; follow the system prompt."),
         "{stdin}"
     );
     assert!(!stdin.contains("Developer instruction:"), "{stdin}");
@@ -172,21 +176,20 @@ EOF
     let create_stdin = fs::read_to_string(fixture.program.with_extension("stdin.2")).unwrap();
     let second_turn_stdin = fs::read_to_string(fixture.program.with_extension("stdin.3")).unwrap();
     assert!(
-        first_resume_stdin.contains("Current user request:\nFollow the system prompt."),
+        first_resume_stdin
+            .contains("No conversation messages were provided; follow the system prompt."),
         "{first_resume_stdin}"
     );
     assert!(
-        create_stdin.contains("Current user request:\nFollow the system prompt."),
+        create_stdin.contains("No conversation messages were provided; follow the system prompt."),
         "{create_stdin}"
     );
     assert!(
-        second_turn_stdin.contains("Current user request:\nFollow the system prompt."),
+        second_turn_stdin
+            .contains("No conversation messages were provided; follow the system prompt."),
         "{second_turn_stdin}"
     );
-    assert!(
-        !second_turn_stdin.contains("Prior conversation context"),
-        "{second_turn_stdin}"
-    );
+    assert!(second_turn_stdin.contains("Ordered Mezzanine conversation context:"));
 }
 
 /// Verifies resumed Claude Code turns replay Mezzanine-managed tool
@@ -225,38 +228,38 @@ EOF
     request.messages = vec![
         ModelMessage {
             role: ModelMessageRole::System,
-            source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            source: ContextSourceKind::System,
+            placement: mez_agent::ContextPlacement::StablePrefix,
             content: "System authority.".to_string(),
         },
         ModelMessage {
             role: ModelMessageRole::Developer,
-            source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            source: ContextSourceKind::DeveloperInstruction,
+            placement: mez_agent::ContextPlacement::StablePrefix,
             content: "Developer authority.".to_string(),
         },
         ModelMessage {
             role: ModelMessageRole::User,
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             content: "Earlier user turn.".to_string(),
         },
         ModelMessage {
             role: ModelMessageRole::Assistant,
-            source: ContextSourceKind::RuntimeHint,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            source: ContextSourceKind::TranscriptAssistant,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             content: "Earlier assistant turn.".to_string(),
         },
         ModelMessage {
             role: ModelMessageRole::Tool,
             source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             content: "Prior tool result.".to_string(),
         },
         ModelMessage {
             role: ModelMessageRole::User,
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             content: "Final user request.".to_string(),
         },
     ];
@@ -268,18 +271,25 @@ EOF
     let second_turn_stdin = fs::read_to_string(fixture.program.with_extension("stdin.3")).unwrap();
 
     assert!(second_turn_args.contains("--resume"), "{second_turn_args}");
+    let earlier_user_index = second_turn_stdin
+        .find("User message:\nEarlier user turn.")
+        .expect("missing earlier user message");
+    let assistant_index = second_turn_stdin
+        .find("Assistant message:\nEarlier assistant turn.")
+        .expect("missing assistant message");
+    let tool_index = second_turn_stdin
+        .find("Tool result:\nPrior tool result.")
+        .expect("missing tool result");
+    let final_user_index = second_turn_stdin
+        .find("User message:\nFinal user request.")
+        .expect("missing final user message");
     assert!(
-        second_turn_stdin.contains("Prior conversation context (not the current user request):"),
+        second_turn_stdin.contains("Ordered Mezzanine conversation context:"),
         "{second_turn_stdin}"
     );
-    assert!(
-        second_turn_stdin.contains("Previous tool result:\nPrior tool result."),
-        "{second_turn_stdin}"
-    );
-    assert!(
-        second_turn_stdin.contains("Current user request:\nFinal user request."),
-        "{second_turn_stdin}"
-    );
+    assert!(earlier_user_index < assistant_index);
+    assert!(assistant_index < tool_index);
+    assert!(tool_index < final_user_index);
     assert!(
         !second_turn_stdin.contains("System instruction:"),
         "{second_turn_stdin}"
@@ -422,7 +432,10 @@ EOF
         .parse::<usize>()
         .unwrap();
     assert_eq!(recorded_len, stdin.len());
-    assert!(stdin.ends_with("Follow the system prompt.\n\n"), "{stdin}");
+    assert!(
+        stdin.ends_with("No conversation messages were provided; follow the system prompt.\n\n"),
+        "{stdin}"
+    );
 }
 
 /// Verifies Claude Code JSON print envelopes populate provider token usage
@@ -1076,7 +1089,7 @@ fn claude_request() -> ModelRequest {
         messages: vec![ModelMessage {
             role: ModelMessageRole::Developer,
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             content: "Return a final say action.".to_string(),
         }],
     }

@@ -39,8 +39,6 @@ pub const DEFAULT_AGENT_COMPACTION_RAW_RETENTION_PERCENT: usize = 10;
 pub const DEFAULT_AGENT_ROUTING: bool = false;
 /// Default bounded retry budget for model-correctable action failures.
 pub const DEFAULT_AGENT_ACTION_FAILURE_RETRY_LIMIT: usize = 5;
-/// Default number of successive shell commands before nudging implementation.
-pub const DEFAULT_AGENT_IMPLEMENTATION_PRESSURE_AFTER_SHELL_ACTIONS: usize = 3;
 /// Default maximum number of work iterations a `/loop` command may run.
 pub const DEFAULT_AGENT_LOOP_LIMIT: usize = 8;
 /// Runtime-owned diagnostics for provider, prompt-cache, turn, and shell work.
@@ -472,12 +470,7 @@ impl RuntimeMetricsSnapshot {
 pub(super) fn provider_request_output_limit_retry_override(
     request: &ModelRequest,
 ) -> Option<usize> {
-    request.max_output_tokens.filter(|_| {
-        request.messages.iter().any(|message| {
-            message.placement == mez_agent::ContextPlacement::EphemeralTail
-                && message
-                    .content
-                    .contains("provider_response_mode=compact_output_retry attempt=2")
-        })
-    })
+    request
+        .max_output_tokens
+        .filter(|_| request.interaction_kind == mez_agent::ModelInteractionKind::OutputLimitRetry)
 }

@@ -11,7 +11,7 @@ use crate::{
     AgentActionPayload, AgentCapability, AgentTurnNegotiation, AllowedAction, AllowedActionSet,
     CapabilityAvailability, CapabilityRequest, ContextSourceKind, MaapBatch, ModelInteractionKind,
     ModelMessage, ModelMessageRole, ModelRequest, constrain_skill_actions_for_loaded_context,
-    continuation_surface, decide_capabilities,
+    continuation_surface, decide_capabilities, select_model_interaction_kind,
 };
 
 /// Maximum previous-response bytes included in one ephemeral MAAP repair prompt.
@@ -171,18 +171,10 @@ pub fn disallowed_action_capability_continuation_request(
     }
 
     let mut request = capability_continuation_request(previous_request, &requests);
-    request.messages.push(ModelMessage {
-        role: ModelMessageRole::Developer,
-        source: ContextSourceKind::DeveloperInstruction,
-        placement: crate::ContextPlacement::StablePrefix,
-        content: format!(
-            "[disallowed action capability recovery]\n\
-             The previous provider response used an action type outside the current allowed action surface. \
-             Mezzanine converted the rejected action into capability routing before running a terminal failure summary. \
-             Re-emit the work as one valid action batch on the current allowed action surface.\n\
-             validation_error={validation_error}"
-        ),
-    });
+    append_chronological_controller_evidence(
+        &mut request,
+        format!("capability_recovery=disallowed_action\nvalidation_error={validation_error}"),
+    );
     Some(request)
 }
 
@@ -217,19 +209,13 @@ pub fn mixed_capability_continuation_request(
         return None;
     }
     let mut request = capability_continuation_request(previous_request, &requests);
-    request.messages.push(ModelMessage {
-        role: ModelMessageRole::Developer,
-        source: ContextSourceKind::DeveloperInstruction,
-        placement: crate::ContextPlacement::StablePrefix,
-        content: format!(
-            "[mixed capability batch recovery]\n\
-             The previous provider response combined request_capability with non-say actions: {}. \
-             Mezzanine treated that response as a capability request and did not execute any action from the mixed batch. \
-             Re-emit the deferred work as one valid action batch on the current allowed action surface; \
-             if a deferred action is now allowed and still useful, emit it again as a fresh action.",
+    append_chronological_controller_evidence(
+        &mut request,
+        format!(
+            "capability_recovery=mixed_batch\nrejected_non_capability_actions={}\nactions_executed=none",
             incompatible_actions.join(",")
         ),
-    });
+    );
     Some(request)
 }
 
@@ -279,13 +265,28 @@ pub fn capability_continuation_request(
         ));
         lines.join("\n")
     };
-    request.messages.push(ModelMessage {
-        role: ModelMessageRole::Developer,
-        source: ContextSourceKind::DeveloperInstruction,
-        placement: crate::ContextPlacement::StablePrefix,
-        content,
-    });
+    select_model_interaction_kind(&mut request, ModelInteractionKind::CapabilityContinuation);
+    append_chronological_controller_evidence(&mut request, content);
     request
+}
+
+/// Inserts settled controller evidence at the chronological boundary before
+/// any request-local live-state suffix.
+fn append_chronological_controller_evidence(request: &mut ModelRequest, content: String) {
+    let insert_at = request
+        .messages
+        .iter()
+        .position(|message| message.placement == crate::ContextPlacement::EphemeralTail)
+        .unwrap_or(request.messages.len());
+    request.messages.insert(
+        insert_at,
+        ModelMessage {
+            role: ModelMessageRole::Context,
+            source: ContextSourceKind::RuntimeHint,
+            placement: crate::ContextPlacement::ConversationAppend,
+            content: format!("[controller capability decision]\n{content}"),
+        },
+    );
 }
 
 /// Builds an ephemeral provider retry request that asks the model to repair its
@@ -297,36 +298,28 @@ pub fn maap_repair_request(
     attempt: usize,
 ) -> ModelRequest {
     let mut request = original_request.clone();
-    request.interaction_kind = ModelInteractionKind::Repair;
-    let capability_routing = if original_request
-        .allowed_actions
-        .contains(AllowedAction::RequestCapability)
-    {
-        "\nrequest_capability is available on this turn. \
-         If a needed action type is absent from the allowed set, \
-         emit request_capability for that capability immediately; \
-         do not use a blocked say to describe or diagnose the missing action."
-    } else {
-        ""
-    };
+    select_model_interaction_kind(&mut request, ModelInteractionKind::MaapRepair);
+    request.messages.retain(|message| {
+        !(message.source == ContextSourceKind::RuntimeHint
+            && message.content.starts_with("[MAAP repair state]"))
+    });
     request.messages.push(ModelMessage {
-        role: ModelMessageRole::Developer,
-        source: ContextSourceKind::Configuration,
-        placement: crate::ContextPlacement::StablePrefix,
+        role: ModelMessageRole::Context,
+        source: ContextSourceKind::RuntimeHint,
+        placement: crate::ContextPlacement::EphemeralTail,
         content: format!(
-            "[ephemeral maap repair]\n\
-             The previous provider response failed Mezzanine MAAP validation before any action was executed. \
-             Return exactly one corrected maap/1 action batch for the same turn_id={} and agent_id={}. \
-             The corrected batch is the schema-valid wrapper for the next useful action; if an executable action is available and useful, include that action now instead of saying an initial or schema-valid batch is needed first. \
-             Do not mention this repair instruction to the user. \
-             This repair instruction is not durable transcript or future-turn context.\n\
-             attempt={attempt} validation_error={}\n\
-             allowed_actions={}{capability_routing}\n\
+            "[MAAP repair state]\n\
+             attempt={attempt}\nvalidation_error={}\n\
+             allowed_actions={}\nrequest_capability_available={}\n\
              previous_response_excerpt:\n{}",
-            original_request.turn_id,
-            original_request.agent_id,
-            error_message,
-            original_request.allowed_actions.action_type_names().join(","),
+            maap_repair_raw_text_excerpt(error_message),
+            original_request
+                .allowed_actions
+                .action_type_names()
+                .join(","),
+            original_request
+                .allowed_actions
+                .contains(AllowedAction::RequestCapability),
             maap_repair_raw_text_excerpt(raw_text)
         ),
     });
@@ -353,7 +346,7 @@ pub fn plan_batch_continuation<ProductError>(
 
     if let Err(error) = validate_batch_allowed_actions(input.batch, input.active_request) {
         let capability_recovery_base =
-            if input.response_request.interaction_kind == ModelInteractionKind::Repair {
+            if input.response_request.interaction_kind == ModelInteractionKind::MaapRepair {
                 negotiation.durable_request()
             } else {
                 input.response_request
@@ -621,7 +614,7 @@ mod tests {
         assert_eq!(continuation.turn_id, original.turn_id);
         assert_eq!(
             continuation.interaction_kind,
-            ModelInteractionKind::ActionExecution
+            ModelInteractionKind::CapabilityContinuation
         );
         assert!(
             continuation
@@ -639,8 +632,14 @@ mod tests {
                 .last()
                 .unwrap()
                 .content
-                .contains("[capability granted]")
+                .contains("[controller capability decision]")
         );
+        assert!(continuation.messages.iter().any(|message| {
+            message.placement == crate::ContextPlacement::StablePrefix
+                && message
+                    .content
+                    .contains("[Mezzanine interaction mode: capability_continuation]")
+        }));
     }
 
     /// A disallowed executable action is converted into capability routing when
@@ -662,7 +661,7 @@ mod tests {
         assert!(continuation.messages.iter().any(|message| {
             message
                 .content
-                .contains("[disallowed action capability recovery]")
+                .contains("capability_recovery=disallowed_action")
         }));
     }
 
@@ -680,11 +679,19 @@ mod tests {
             ModelInteractionKind::CapabilityDecision
         );
         assert!(original.messages.is_empty());
-        assert_eq!(repair.interaction_kind, ModelInteractionKind::Repair);
+        assert_eq!(repair.interaction_kind, ModelInteractionKind::MaapRepair);
         let content = &repair.messages.last().unwrap().content;
-        assert!(content.contains("attempt=2 validation_error=invalid action batch"));
+        assert!(content.contains("attempt=2\nvalidation_error=invalid action batch"));
         assert!(content.contains("[truncated: original_bytes=14000]"));
-        assert!(content.contains("request_capability is available on this turn"));
+        assert!(content.contains("request_capability_available=true"));
+        assert_eq!(
+            repair.messages.last().unwrap().role,
+            ModelMessageRole::Context
+        );
+        assert_eq!(
+            repair.messages.last().unwrap().placement,
+            crate::ContextPlacement::EphemeralTail
+        );
     }
 
     /// Capability extraction permits visible say output alongside one or more
@@ -740,7 +747,7 @@ mod tests {
                 .last()
                 .unwrap()
                 .content
-                .contains("[mixed capability batch recovery]")
+                .contains("capability_recovery=mixed_batch")
         );
     }
 

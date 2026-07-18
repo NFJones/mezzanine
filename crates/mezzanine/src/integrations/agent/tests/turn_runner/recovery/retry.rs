@@ -63,7 +63,7 @@ fn turn_runner_retries_malformed_provider_maap_output() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "reply".to_string(),
             }])
@@ -94,7 +94,7 @@ fn turn_runner_retries_malformed_provider_maap_output() {
             .request
             .messages
             .iter()
-            .all(|message| !message.content.contains("ephemeral maap repair")),
+            .all(|message| !message.content.contains("[MAAP repair state]")),
         "{:?}",
         execution.request.messages
     );
@@ -166,7 +166,7 @@ fn turn_runner_retries_missing_provider_action_batch() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "reply".to_string(),
             }])
@@ -188,7 +188,7 @@ fn turn_runner_retries_missing_provider_action_batch() {
             .request
             .messages
             .iter()
-            .all(|message| !message.content.contains("ephemeral maap repair")),
+            .all(|message| !message.content.contains("[MAAP repair state]")),
         "{:?}",
         execution.request.messages
     );
@@ -263,7 +263,7 @@ fn turn_runner_retries_retryable_failure_summary_provider_call() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "hello".to_string(),
             }])
@@ -371,7 +371,7 @@ fn turn_runner_routes_repair_disallowed_shell_action_through_capability_recovery
             turn.clone(),
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "inspect the workspace".to_string(),
             }])
@@ -385,7 +385,7 @@ fn turn_runner_routes_repair_disallowed_shell_action_through_capability_recovery
     assert_eq!(requests.len(), 3);
     assert_eq!(
         requests[1].interaction_kind,
-        mez_agent::ModelInteractionKind::Repair
+        mez_agent::ModelInteractionKind::MaapRepair
     );
     let recovery_request = &requests[2];
     let action_types = recovery_request.allowed_actions.action_type_names();
@@ -394,13 +394,13 @@ fn turn_runner_routes_repair_disallowed_shell_action_through_capability_recovery
     assert!(recovery_request.messages.iter().any(|message| {
         message
             .content
-            .contains("[disallowed action capability recovery]")
+            .contains("capability_recovery=disallowed_action")
     }));
     assert!(
         recovery_request
             .messages
             .iter()
-            .all(|message| !message.content.contains("[ephemeral maap repair]")),
+            .all(|message| !message.content.contains("[MAAP repair state]")),
         "{:?}",
         recovery_request.messages
     );
@@ -409,7 +409,7 @@ fn turn_runner_routes_repair_disallowed_shell_action_through_capability_recovery
             .request
             .messages
             .iter()
-            .all(|message| !message.content.contains("[ephemeral maap repair]")),
+            .all(|message| !message.content.contains("[MAAP repair state]")),
         "{:?}",
         execution.request.messages
     );
@@ -484,7 +484,7 @@ fn turn_runner_summarizes_terminal_provider_failure_with_say_only_request() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "hello".to_string(),
             }])
@@ -517,10 +517,10 @@ fn turn_runner_summarizes_terminal_provider_failure_with_say_only_request() {
         requests[1]
             .messages
             .iter()
-            .find(|message| message.content.contains("[controller failure summary]"))
+            .find(|message| message.content.contains("[failure summary state]"))
             .unwrap()
             .content
-            .contains("[controller failure summary]"),
+            .contains("[failure summary state]"),
         "{:?}",
         requests[1].messages
     );

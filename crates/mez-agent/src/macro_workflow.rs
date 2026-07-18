@@ -622,14 +622,14 @@ pub fn macro_judge_policy() -> String {
     .join("\n")
 }
 
-/// Builds the user task for a structured macro judge request.
+/// Builds bounded factual evidence for a structured macro judge request.
 pub fn macro_judge_task(
     run: &MacroRunState,
     step: &MacroRunStep,
     result: &MacroStepTaskResult,
     next_step: Option<&MacroRunStep>,
 ) -> String {
-    let mut value = serde_json::json!({
+    serde_json::json!({
         "macro_name": run.macro_name,
         "macro_description": run.macro_description,
         "invocation_prompt": run.invocation_prompt,
@@ -664,11 +664,8 @@ pub fn macro_judge_task(
             "index": next_step.index,
             "scripted_prompt": next_step.scripted_prompt,
         })),
-    });
-    value["instructions"] = serde_json::json!(
-        "Judge whether the completed step satisfies the macro intent and select the next runtime action, including retry_current_step for incomplete but recoverable output."
-    );
-    value.to_string()
+    })
+    .to_string()
 }
 
 /// Builds the structured provider request for one completed macro-step judge.
@@ -712,14 +709,14 @@ pub fn macro_judge_model_request(
         messages: vec![
             ModelMessage {
                 role: ModelMessageRole::System,
-                source: ContextSourceKind::RuntimeHint,
-                placement: crate::ContextPlacement::EphemeralTail,
+                source: ContextSourceKind::System,
+                placement: crate::ContextPlacement::StablePrefix,
                 content: macro_judge_policy(),
             },
             ModelMessage {
-                role: ModelMessageRole::User,
-                source: ContextSourceKind::RuntimeHint,
-                placement: crate::ContextPlacement::EphemeralTail,
+                role: ModelMessageRole::Context,
+                source: ContextSourceKind::CommittedEvidence,
+                placement: crate::ContextPlacement::ConversationAppend,
                 content: macro_judge_task(run, step, result, next_step),
             },
         ],
@@ -1102,6 +1099,16 @@ mod tests {
         assert_eq!(request.interaction_kind, ModelInteractionKind::MacroJudge);
         assert!(request.allowed_actions.contains(crate::AllowedAction::Say));
         assert_eq!(request.messages.len(), 2);
+        assert_eq!(request.messages[0].role, ModelMessageRole::System);
+        assert_eq!(
+            request.messages[0].placement,
+            crate::ContextPlacement::StablePrefix
+        );
+        assert_eq!(request.messages[1].role, ModelMessageRole::Context);
+        assert_eq!(
+            request.messages[1].placement,
+            crate::ContextPlacement::ConversationAppend
+        );
     }
 
     #[test]

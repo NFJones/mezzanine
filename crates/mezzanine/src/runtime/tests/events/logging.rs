@@ -460,14 +460,14 @@ fn runtime_agent_debug_mode_prints_maap_without_shell_view() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies repeated same-turn investigative rationale is suppressed after the
-/// first provider continuation records it in the active-turn rationale ledger.
+/// Verifies provider continuation uses durable assistant chronology without a
+/// model-facing rationale ledger.
 ///
-/// The model should not keep replaying short owner-localization intent such as
-/// "check exact selector owner" on later continuations when the reason has not
-/// materially changed.
+/// Visible progress from the first execution is sufficient continuation
+/// context. Controller-side rationale handling must not create a request-local
+/// ledger that invalidates the reusable prefix.
 #[test]
-fn runtime_agent_suppresses_redundant_same_turn_rationale() {
+fn runtime_agent_continues_from_assistant_chronology_without_rationale_ledger() {
     let mut service = test_runtime_service();
     let primary = service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -489,7 +489,7 @@ fn runtime_agent_suppresses_redundant_same_turn_rationale() {
         response: mez_agent::ModelResponse {
             provider: "runtime-batch".to_string(),
             model: "test".to_string(),
-            raw_text: "owner located".to_string(),
+            raw_text: String::new(),
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
@@ -560,9 +560,14 @@ fn runtime_agent_suppresses_redundant_same_turn_rationale() {
 
     let request = second_provider.last_request.borrow().clone().unwrap();
     assert!(request.messages.iter().any(|message| {
-        message.source == ContextSourceKind::RuntimeHint
-            && message.content.contains("[current-turn rationale ledger]")
+        message.source == ContextSourceKind::TranscriptAssistant
             && message
+                .content
+                .contains("The selector owner is narrowed to the resume path.")
+    }));
+    assert!(!request.messages.iter().any(|message| {
+        message.content.contains("[current-turn rationale ledger]")
+            || message
                 .content
                 .contains("rationale: Check exact selector owner")
     }));
@@ -572,12 +577,6 @@ fn runtime_agent_suppresses_redundant_same_turn_rationale() {
         .unwrap()
         .normal_content_lines()
         .join("\n");
-    assert_eq!(
-        pane_text
-            .matches("thinking: Check exact selector owner")
-            .count(),
-        1
-    );
     assert!(
         pane_text.contains("The selector fix is complete."),
         "{pane_text}"

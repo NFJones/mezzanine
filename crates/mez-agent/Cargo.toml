@@ -19,4 +19,3 @@ shlex = "2"
 urlencoding = "2"
 
 [dev-dependencies]
-wait-timeout = "0.2"

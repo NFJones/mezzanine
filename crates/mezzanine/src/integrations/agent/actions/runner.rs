@@ -219,7 +219,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
         turn: AgentTurnRecord,
         context: &AgentContext,
     ) -> Result<AgentTurnExecution> {
-        self.run_turn_ref_with_allowed_actions(ledger, turn, context, None)
+        self.run_turn_ref_with_allowed_actions(ledger, turn, context, None, None)
     }
 
     /// Executes a borrowed-context turn with an optional controller-selected
@@ -230,6 +230,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
         turn: AgentTurnRecord,
         context: &AgentContext,
         allowed_actions: Option<AllowedActionSet>,
+        interaction_kind: Option<mez_agent::ModelInteractionKind>,
     ) -> Result<AgentTurnExecution> {
         let environment = SyncProductAgentTurnEnvironment { runner: self };
         run_ready_turn(mez_agent::run_agent_turn_async(
@@ -238,6 +239,7 @@ impl<'a, P: ModelProvider> AgentTurnRunner<'a, P> {
             turn,
             context,
             allowed_actions,
+            interaction_kind,
         ))
     }
 
@@ -512,7 +514,7 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         turn: AgentTurnRecord,
         context: &AgentContext,
     ) -> Result<AgentTurnExecution> {
-        self.run_turn_async_ref_with_allowed_actions(ledger, turn, context, None)
+        self.run_turn_async_ref_with_allowed_actions(ledger, turn, context, None, None)
             .await
     }
 
@@ -524,8 +526,17 @@ impl<'a, P: AsyncModelProvider> AgentTurnRunner<'a, P> {
         turn: AgentTurnRecord,
         context: &AgentContext,
         allowed_actions: Option<AllowedActionSet>,
+        interaction_kind: Option<mez_agent::ModelInteractionKind>,
     ) -> Result<AgentTurnExecution> {
         let environment = ProductAgentTurnEnvironment { runner: self };
-        mez_agent::run_agent_turn_async(&environment, ledger, turn, context, allowed_actions).await
+        mez_agent::run_agent_turn_async(
+            &environment,
+            ledger,
+            turn,
+            context,
+            allowed_actions,
+            interaction_kind,
+        )
+        .await
     }
 }

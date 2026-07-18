@@ -451,14 +451,8 @@ reasoning_profile = "high"
                 content: "policy-only context should not reach the router".to_string(),
             },
             mez_agent::ContextBlock {
-                source: ContextSourceKind::RuntimeHint,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
-                label: "active routed runtime hint".to_string(),
-                content: "runtime-hint sentinel must reach the routed worker".to_string(),
-            },
-            mez_agent::ContextBlock {
                 source: ContextSourceKind::ActionResult,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "active routed action result".to_string(),
                 content: "action-result sentinel must reach the routed worker".to_string(),
             },
@@ -489,7 +483,7 @@ reasoning_profile = "high"
         .join("\n");
     assert!(router_context.contains("implement this"));
     assert!(router_context.contains("Implement multi-file runtime auto-sizing"));
-    assert!(router_context.contains("Latest submitted task"));
+    assert!(router_context.contains("The following ordered user, assistant"));
     assert!(router_context.contains("Referential prompt detected"));
     assert!(router_context.contains("Do not choose small/low merely because"));
     assert!(router_context.contains("Model size reflects task scope"));
@@ -566,13 +560,10 @@ reasoning_profile = "high"
             && block.content == "tool-only output should not reach the router"
     }));
     assert!(child_context.blocks.iter().any(|block| {
-        block.source == ContextSourceKind::RuntimeHint
-            && block.content == "runtime-hint sentinel must reach the routed worker"
-    }));
-    assert!(child_context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block.content == "action-result sentinel must reach the routed worker"
     }));
+    assert!(child_context.validate_durable().is_ok());
     assert!(!child_context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::Policy
             && block.content == "policy-only context should not reach the router"
@@ -730,7 +721,7 @@ reasoning_profile = "high"
         },
         mez_agent::ContextBlock {
             source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "live routed worker action result".to_string(),
             content: "live action-result sentinel must reach the routed handoff".to_string(),
         },
@@ -833,12 +824,13 @@ reasoning_profile = "high"
             && block.content == "invalid handoff"
     }));
     assert!(repair_context.blocks.iter().any(|block| {
-        block.source == ContextSourceKind::RuntimeHint
+        block.source == ContextSourceKind::RoutedHandoff
             && block.label == "routed handoff validation feedback"
             && block
                 .content
                 .contains("invalid routed handoff JSON: expected value")
     }));
+    assert!(repair_context.validate_durable().is_ok());
 
     let repair_turn = service
         .agent_turn_ledger()
@@ -1228,10 +1220,11 @@ fn runtime_shell_pane_not_ready_queues_model_self_correction() {
                 .contains("[action_result shell-not-ready shell_command failed]")
             && block.content.contains("interactive-blocked")
     }));
-    assert!(context.blocks.iter().any(|block| {
+    assert!(!context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::RuntimeHint
             && block.content.contains("Shell-readiness recovery")
     }));
+    assert!(context.validate_durable().is_ok());
     let pane_text = service
         .pane_screen("%1")
         .unwrap()

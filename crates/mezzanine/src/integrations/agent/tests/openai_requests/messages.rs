@@ -31,7 +31,7 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "hello".to_string(),
             },
@@ -339,24 +339,11 @@ fn openai_responses_request_body_maps_context_to_responses_api_shape() {
             .contains("[user prompt transcript entry]")
     );
     assert_eq!(value["input"][2]["role"], "developer");
-    let allowed_surface = value["input"][2]["content"][0]["text"].as_str().unwrap();
-    assert!(allowed_surface.contains("[allowed action surface]"));
-    assert!(allowed_surface.contains("interaction_kind="));
-    assert!(allowed_surface.contains("allowed_actions=say,request_capability"));
-    assert!(allowed_surface.contains("active_function_tool=submit_maap_action_batch"));
-    assert!(allowed_surface.contains("Emit only action objects whose type appears"));
-    assert!(
-        !allowed_surface.contains("authoritative for action eligibility"),
-        "{allowed_surface}"
-    );
-    assert!(
-        !allowed_surface.contains("one canonical MAAP action-batch function"),
-        "{allowed_surface}"
-    );
-    assert!(
-        !allowed_surface.contains("Treat [executed result]"),
-        "{allowed_surface}"
-    );
+    let request_state = value["input"][2]["content"][0]["text"].as_str().unwrap();
+    assert!(request_state.contains("[OpenAI request state]"));
+    assert!(request_state.contains("interaction_kind=capability_decision"));
+    assert!(request_state.contains("allowed_actions=say,request_capability"));
+    assert!(!request_state.contains("Emit only"));
 }
 
 #[test]
@@ -381,13 +368,13 @@ fn openai_responses_request_body_marks_action_results_as_execution_evidence() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "verify the plan file exists".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "action result shell".to_string(),
                 content: "[action_result action-1 shell_command succeeded]\ncommand output marker"
                     .to_string(),
@@ -465,7 +452,7 @@ fn openai_responses_request_body_marks_prior_user_history_inactive() {
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user prompt".to_string(),
                 content: "Patch the prompt context manager".to_string(),
             },
@@ -492,14 +479,11 @@ fn openai_responses_request_body_marks_prior_user_history_inactive() {
     assert!(current_text.contains("Patch the prompt context manager"));
 
     assert_eq!(input[2]["role"], "developer");
-    let allowed_surface = input[2]["content"][0]["text"].as_str().unwrap();
-    assert!(allowed_surface.contains("[allowed action surface]"));
-    assert!(allowed_surface.contains("interaction_kind="));
-    assert!(allowed_surface.contains("allowed_actions=say,request_capability"));
-    assert!(allowed_surface.contains("active_function_tool=submit_maap_action_batch"));
     assert!(
-        !allowed_surface.contains("latest user prompt is the active task"),
-        "{allowed_surface}"
+        input[2]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("[OpenAI request state]")
     );
 }
 
@@ -530,7 +514,7 @@ fn openai_responses_request_body_preserves_assistant_history_role() {
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user prompt".to_string(),
                 content: "Do item 2".to_string(),
             },
@@ -565,6 +549,6 @@ fn openai_responses_request_body_preserves_assistant_history_role() {
         input[2]["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("[allowed action surface]")
+            .contains("[OpenAI request state]")
     );
 }

@@ -20,7 +20,7 @@ Primary config discovery looks for exactly one of these files under
 If no primary config exists, `mez config init` creates
 `~/.config/mezzanine/config.toml` with private file permissions.
 
-The current config schema version is `14`. On launch, Mezzanine migrates an
+The current config schema version is `20`. On launch, Mezzanine migrates an
 older supported primary user config to the current schema before validation,
 backfilling missing defaults, rewriting renamed settings, and removing settings
 that no longer exist. Config files declaring a schema version newer than the
@@ -40,6 +40,9 @@ Configuration is conservative:
   v1-to-v2 primary-config migration and rejected if they still appear in a
   current-schema layer; the shell executable is resolved from `$SHELL` or
   `/bin/sh`.
+- `agents.implementation_pressure_after_shell_actions` is removed by the
+  v19-to-v20 primary-config migration and rejected in current-schema layers;
+  model-facing action-pressure prompts are no longer part of runtime policy.
 - Secret material is rejected from config. Use `mez auth` and credential stores.
 - Live mutation accepts scalar strings, integers, booleans, and string arrays
   for supported paths.
@@ -60,7 +63,7 @@ entry is shown.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `version` | integer | `14` | Config schema version. Do not change this. |
+| `version` | integer | `20` | Config schema version. Do not change this. |
 | `session` | table | see below | Session lifecycle behavior. |
 | `terminal` | table | see below | Terminal compatibility and presentation. |
 | `shell` | table | see below | Shell mode and environment policy. |
@@ -425,7 +428,6 @@ description.
 | `agents.compaction_raw_retention_percent` | integer | `10` | Percent of raw context retained during manual compaction and provider context-limit recovery; 1 to 100. |
 | `agents.routing` | boolean | `false` | Enable pane-local routing selection by default. |
 | `agents.action_failure_retry_limit` | integer | `5` | Self-correction attempts per repeated correctable action failure signature other than `apply_patch`. |
-| `agents.implementation_pressure_after_shell_actions` | integer | `5` | Successive shell-action count before adding an advisory take-action hint. |
 | `agents.custom_system_prompt` | string | `""` | User-owned system prompt appended after built-in prompt content. |
 | `agents.default_personality` | string | `""` | Default personality profile id; empty means none. |
 | `agents.auto_sizing` | table | see below | Model auto-sizing settings. |

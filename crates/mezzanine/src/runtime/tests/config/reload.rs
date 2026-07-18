@@ -163,45 +163,6 @@ fn runtime_config_reload_applies_action_failure_retry_limit() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies runtime config reload applies implementation-pressure thresholds.
-///
-/// The pressure hint is intentionally runtime-owned and turn-local: changing
-/// the setting should take effect for future provider continuations without
-/// restarting the session or changing action-failure retry behavior.
-#[test]
-fn runtime_config_reload_applies_implementation_pressure_threshold() {
-    let mut service = test_runtime_service();
-    assert_eq!(
-        service.agent_implementation_pressure_after_shell_actions(),
-        3
-    );
-    let root = temp_root("runtime-implementation-pressure-threshold");
-    let path = root.join("config.toml");
-    fs::write(
-        &path,
-        "[agents]\nimplementation_pressure_after_shell_actions = 3\n",
-    )
-    .unwrap();
-
-    service
-        .replace_config_layers(vec![ConfigLayer {
-            name: "primary".to_string(),
-            path: Some(path.clone()),
-            format: ConfigFormat::Toml,
-            scope: ConfigScope::Primary,
-            trusted: true,
-            text: fs::read_to_string(&path).unwrap(),
-        }])
-        .unwrap();
-
-    assert_eq!(
-        service.agent_implementation_pressure_after_shell_actions(),
-        3
-    );
-    let _ = fs::remove_file(path);
-    let _ = fs::remove_dir_all(root);
-}
-
 /// Verifies that subagent wait policy is a validated live agent option.
 ///
 /// The default must remain join-and-wait so parent turns do not race ahead of

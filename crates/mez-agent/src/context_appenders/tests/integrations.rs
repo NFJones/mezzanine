@@ -32,13 +32,60 @@ fn mcp_summary_for_server_ids(server_ids: &[&str]) -> McpPromptSummary {
     }
 }
 
+/// Returns the generated request-local MCP block without relying on its index
+/// relative to durable prompt chronology.
+fn mcp_context_content(context: &AgentContext) -> &str {
+    &context
+        .blocks
+        .iter()
+        .find(|block| block.label == MCP_INTEGRATIONS_CONTEXT_LABEL)
+        .expect("MCP live-state block should be present")
+        .content
+}
+
+#[test]
+/// Verifies dynamic-schema providers do not receive duplicate textual MCP
+/// definitions while OpenAI Responses retains the complete late manifest its
+/// cache-stable generic MCP action cannot express.
+fn mcp_context_is_provider_aware_and_keeps_unavailability_diagnostics() {
+    let context = AgentContext::new_durable(vec![ContextBlock::user_event(
+        "user prompt",
+        "use @GitHub_2 to inspect the issue",
+    )])
+    .unwrap();
+    let summary = mcp_summary_for_server_ids(&["GitHub_2"]);
+
+    let anthropic = append_mcp_context_for_provider(context.clone(), &summary, "anthropic")
+        .expect("dynamic Anthropic tools should carry the manifest");
+    let openai = append_mcp_context_for_provider(context, &summary, "openai")
+        .expect("OpenAI Responses should receive its late manifest");
+
+    assert!(
+        anthropic
+            .blocks
+            .iter()
+            .all(|block| block.label != MCP_INTEGRATIONS_CONTEXT_LABEL)
+    );
+    let openai_manifest = openai
+        .blocks
+        .iter()
+        .find(|block| block.label == MCP_INTEGRATIONS_CONTEXT_LABEL)
+        .unwrap();
+    assert!(
+        openai_manifest
+            .content
+            .contains("available_tool=GitHub_2/lookup")
+    );
+    assert!(openai_manifest.content.contains("input_schema="));
+}
+
 #[test]
 /// Verifies explicit mentions preserve exact configured identifier casing and
 /// expose the matching server tools to both prompt context and action schemas.
 fn mcp_context_resolves_exact_mixed_case_configured_server_id() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
-        placement: crate::ContextPlacement::EphemeralTail,
+        placement: crate::ContextPlacement::ConversationAppend,
         label: "user".to_string(),
         content: "use @GitHub_2 to inspect the issue".to_string(),
     }])
@@ -50,12 +97,10 @@ fn mcp_context_resolves_exact_mixed_case_configured_server_id() {
 
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0].server_id, "GitHub_2");
+    let content = mcp_context_content(&context);
     assert!(
-        context.blocks[0]
-            .content
-            .contains("server=GitHub_2 status=available route=mcp_call"),
-        "{}",
-        context.blocks[0].content
+        content.contains("server=GitHub_2 status=available route=mcp_call"),
+        "{content}"
     );
 }
 
@@ -65,7 +110,7 @@ fn mcp_context_resolves_exact_mixed_case_configured_server_id() {
 fn mcp_context_resolves_unambiguous_case_insensitive_server_id() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
-        placement: crate::ContextPlacement::EphemeralTail,
+        placement: crate::ContextPlacement::ConversationAppend,
         label: "user".to_string(),
         content: "use @github_2 to inspect the issue".to_string(),
     }])
@@ -84,7 +129,7 @@ fn mcp_context_resolves_unambiguous_case_insensitive_server_id() {
 fn mcp_context_reports_unresolved_and_ambiguous_server_mentions() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
-        placement: crate::ContextPlacement::EphemeralTail,
+        placement: crate::ContextPlacement::ConversationAppend,
         label: "user".to_string(),
         content: "compare @missing with @GITHUB".to_string(),
     }])
@@ -93,7 +138,7 @@ fn mcp_context_reports_unresolved_and_ambiguous_server_mentions() {
 
     let tools = invoked_mcp_tools_for_context(&context, &summary);
     let context = append_mcp_context(context, &summary).unwrap();
-    let content = &context.blocks[0].content;
+    let content = mcp_context_content(&context);
 
     assert!(tools.is_empty());
     assert!(content.contains("unavailable_server=missing"), "{content}");
@@ -112,7 +157,7 @@ fn mcp_context_reports_unresolved_and_ambiguous_server_mentions() {
 fn mcp_context_prefers_exact_server_id_over_case_ambiguous_matches() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
-        placement: crate::ContextPlacement::EphemeralTail,
+        placement: crate::ContextPlacement::ConversationAppend,
         label: "user".to_string(),
         content: "use @GitHub now".to_string(),
     }])
@@ -135,7 +180,7 @@ fn mcp_context_prefers_exact_server_id_over_case_ambiguous_matches() {
 fn mcp_context_does_not_emit_routing_match_for_verbatim_server_purpose() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
-        placement: crate::ContextPlacement::EphemeralTail,
+        placement: crate::ContextPlacement::ConversationAppend,
         label: "user".to_string(),
         content: "@gitlab GitLab issue and merge request operations".to_string(),
     }])
@@ -163,18 +208,12 @@ fn mcp_context_does_not_emit_routing_match_for_verbatim_server_purpose() {
     )
     .unwrap();
 
+    let content = mcp_context_content(&context);
     assert!(
-        context.blocks[0]
-            .content
-            .contains("server=gitlab status=available route=mcp_call"),
-        "{}",
-        context.blocks[0].content
+        content.contains("server=gitlab status=available route=mcp_call"),
+        "{content}"
     );
-    assert!(
-        !context.blocks[0].content.contains("routing_match="),
-        "{}",
-        context.blocks[0].content
-    );
+    assert!(!content.contains("routing_match="), "{content}");
 }
 
 #[test]
@@ -187,7 +226,7 @@ fn mcp_context_does_not_emit_routing_match_for_verbatim_server_purpose() {
 fn mcp_context_includes_all_tools_for_explicit_server_invocation() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
-        placement: crate::ContextPlacement::EphemeralTail,
+        placement: crate::ContextPlacement::ConversationAppend,
         label: "user".to_string(),
         content: "use @fs to choose the right tool".to_string(),
     }])
@@ -217,7 +256,7 @@ fn mcp_context_includes_all_tools_for_explicit_server_invocation() {
         },
     )
     .unwrap();
-    let content = &context.blocks[0].content;
+    let content = mcp_context_content(&context);
 
     for index in 0..10 {
         assert!(
@@ -235,7 +274,7 @@ fn mcp_context_includes_all_tools_for_explicit_server_invocation() {
 fn mcp_context_preserves_complete_selected_tool_schema_and_descriptions() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
-        placement: crate::ContextPlacement::EphemeralTail,
+        placement: crate::ContextPlacement::ConversationAppend,
         label: "user".to_string(),
         content: "use @catalog to inspect an item".to_string(),
     }])
@@ -264,7 +303,7 @@ fn mcp_context_preserves_complete_selected_tool_schema_and_descriptions() {
         },
     )
     .unwrap();
-    let content = &context.blocks[0].content;
+    let content = mcp_context_content(&context);
 
     assert!(
         content.contains("available_tool=catalog/lookup_item"),
@@ -290,7 +329,7 @@ fn mcp_context_preserves_complete_selected_tool_schema_and_descriptions() {
 fn mcp_context_omits_integrations_without_explicit_server_invocation() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
-        placement: crate::ContextPlacement::EphemeralTail,
+        placement: crate::ContextPlacement::ConversationAppend,
         label: "user".to_string(),
         content: "call a tool".to_string(),
     }])
@@ -336,7 +375,7 @@ fn mcp_context_omits_integrations_without_explicit_server_invocation() {
 fn mcp_context_quotes_and_normalizes_tool_descriptions() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
-        placement: crate::ContextPlacement::EphemeralTail,
+        placement: crate::ContextPlacement::ConversationAppend,
         label: "user".to_string(),
         content: "use @fs for the fs/read_file MCP tool".to_string(),
     }])
@@ -365,16 +404,9 @@ fn mcp_context_quotes_and_normalizes_tool_descriptions() {
     )
     .unwrap();
 
-    assert!(
-        context.blocks[0]
-            .content
-            .contains("available_tool=fs/read_file")
-    );
-    assert!(
-        context.blocks[0]
-            .content
-            .contains("description=\"Read files from MCP\"")
-    );
+    let content = mcp_context_content(&context);
+    assert!(content.contains("available_tool=fs/read_file"));
+    assert!(content.contains("description=\"Read files from MCP\""));
 }
 
 #[test]
@@ -385,7 +417,7 @@ fn mcp_context_quotes_and_normalizes_tool_descriptions() {
 fn mcp_context_refresh_replaces_previous_integration_block() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
-        placement: crate::ContextPlacement::EphemeralTail,
+        placement: crate::ContextPlacement::ConversationAppend,
         label: "user".to_string(),
         content: "call @fs and then @git".to_string(),
     }])
@@ -462,7 +494,7 @@ fn mcp_context_refresh_replaces_previous_integration_block() {
 fn memory_context_accepts_sensitive_records_without_heuristic_rejection() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
-        placement: crate::ContextPlacement::EphemeralTail,
+        placement: crate::ContextPlacement::ConversationAppend,
         label: "user".to_string(),
         content: "do the task".to_string(),
     }])
@@ -477,11 +509,17 @@ fn memory_context_accepts_sensitive_records_without_heuristic_rejection() {
 
     let context = append_memory_context(context, &records, 1).unwrap();
 
-    assert_eq!(context.blocks[0].content, "api_key = sk-secret");
+    assert!(
+        context
+            .blocks
+            .iter()
+            .any(|block| block.source == ContextSourceKind::Memory
+                && block.content == "api_key = sk-secret")
+    );
 }
 
 #[test]
-/// Verifies memory context precedes the ephemeral tail in priority order.
+/// Verifies memory retrieved after the active prompt appends in priority order.
 ///
 /// This regression scenario documents the behavior being protected so a
 /// failure points at a concrete contract change rather than an incidental
@@ -489,7 +527,7 @@ fn memory_context_accepts_sensitive_records_without_heuristic_rejection() {
 fn memory_context_appends_after_active_context_in_priority_order() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
-        placement: crate::ContextPlacement::EphemeralTail,
+        placement: crate::ContextPlacement::ConversationAppend,
         label: "user".to_string(),
         content: "do the task".to_string(),
     }])
@@ -517,11 +555,12 @@ fn memory_context_appends_after_active_context_in_priority_order() {
     let context = append_memory_context(context, &records, 2).unwrap();
     let request = assemble_test_model_request(&context);
 
-    assert_eq!(context.blocks[0].source, ContextSourceKind::Memory);
-    assert!(context.blocks[0].label.contains("high"));
-    assert!(context.blocks[1].label.contains("low"));
-    assert_eq!(context.blocks[2].source, ContextSourceKind::UserInstruction);
-    assert_eq!(request.messages[3].role, ModelMessageRole::User);
+    assert_eq!(context.blocks[0].source, ContextSourceKind::UserInstruction);
+    assert_eq!(context.blocks[0].content, "do the task");
+    assert!(context.blocks[1].label.contains("high"));
+    assert!(context.blocks[2].label.contains("low"));
+    assert_eq!(request.messages[1].role, ModelMessageRole::User);
+    assert_eq!(request.messages[2].role, ModelMessageRole::Context);
 }
 
 #[test]
@@ -533,7 +572,7 @@ fn memory_context_appends_after_active_context_in_priority_order() {
 fn permission_context_is_not_model_visible() {
     let context = AgentContext::new(vec![ContextBlock {
         source: ContextSourceKind::UserInstruction,
-        placement: crate::ContextPlacement::EphemeralTail,
+        placement: crate::ContextPlacement::ConversationAppend,
         label: "user".to_string(),
         content: "edit the file".to_string(),
     }])

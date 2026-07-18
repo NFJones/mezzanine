@@ -172,8 +172,8 @@ pub fn assistant_context_content_for_execution(execution: &AgentTurnExecution) -
 /// environment details, prior transcript excerpts, action-result context, and
 /// action feedback. Persisting that whole request recursively stores prior
 /// transcript context inside the next transcript entry. Durable transcripts
-/// therefore keep only the current user instruction; assistant output and tool
-/// results are appended from the execution itself.
+/// therefore keep only exact direct-user events from the request; assistant
+/// output and tool results are appended from the execution itself.
 fn durable_request_transcript_content(message: &ModelMessage) -> Option<String> {
     if message.source != ContextSourceKind::UserInstruction
         || message.role != ModelMessageRole::User
@@ -574,7 +574,7 @@ mod tests {
         ModelMessage {
             role: ModelMessageRole::User,
             source,
-            placement: crate::ContextPlacement::EphemeralTail,
+            placement: crate::ContextPlacement::ConversationAppend,
             content: format!("[{label}]\n{content}"),
         }
     }

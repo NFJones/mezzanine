@@ -28,15 +28,6 @@ pub const ROUTED_HANDOFF_PROMPT: &str = r#"Return all context needed for the mai
 /// Response-only prompt used for the single bounded handoff repair attempt.
 pub const ROUTED_HANDOFF_REPAIR_PROMPT: &str = r#"Your previous handoff was invalid. Emit one final MAAP say action whose text is exactly one valid JSON object with version 1 and string-array fields decisions, evidence, changes, validation, assumptions, unresolved_risks, and follow_up_context, plus string result_summary. Do not use Markdown fences or call tools."#;
 
-/// Runtime hint supplied to the parent model for a routed failure explanation.
-pub const ROUTED_FAILURE_EXPLANATION_PROMPT: &str = "Explain why the routed operation failed. Use the stored diagnostic and any exact worker output as evidence, do not claim the routed operation succeeded, and respond only without executing actions.";
-
-/// Runtime hint supplied to the parent model for successful routed presentation.
-pub const ROUTED_PRESENTATION_PROMPT: &str = "Present the routed worker result to the user. Preserve material caveats, validation status, and unresolved risks. Do not claim unsupported work. Respond only; do not execute actions.";
-
-/// Runtime hint supplied after the first parent presentation request fails.
-pub const ROUTED_PRESENTATION_FAILURE_PROMPT: &str = "Explain why routed result presentation failed. Use the stored diagnostic as evidence, do not claim success, and respond only without executing actions.";
-
 /// Lifecycle phase for one runtime-managed routed worker.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -370,6 +361,9 @@ pub fn routed_worker_seed_context(
         .blocks
         .iter()
         .filter(|block| {
+            if block.placement == ContextPlacement::EphemeralTail {
+                return false;
+            }
             if block.source == ContextSourceKind::UserInstruction
                 && block.label == "user prompt"
                 && block.content == original_user_prompt
@@ -388,7 +382,10 @@ pub fn routed_worker_seed_context(
         })
         .cloned()
         .collect();
-    AgentContext { blocks }
+    AgentContext {
+        blocks,
+        metadata: Default::default(),
+    }
 }
 
 /// Parses and validates one structured routed-worker handoff.
@@ -426,12 +423,6 @@ pub fn routed_failure_context_blocks(
         label: "routed workflow failure".to_string(),
         content: format!("stage={stage}\ndiagnostic={diagnostic}"),
     });
-    blocks.push(ContextBlock {
-        source: ContextSourceKind::RuntimeHint,
-        placement: ContextPlacement::EphemeralTail,
-        label: "routed failure explanation".to_string(),
-        content: ROUTED_FAILURE_EXPLANATION_PROMPT.to_string(),
-    });
     blocks
 }
 
@@ -458,12 +449,6 @@ pub fn routed_presentation_context_blocks(
             placement: ContextPlacement::ConversationAppend,
             label: "routed worker handoff context".to_string(),
             content: handoff_content,
-        },
-        ContextBlock {
-            source: ContextSourceKind::RuntimeHint,
-            placement: ContextPlacement::EphemeralTail,
-            label: "routed result presentation".to_string(),
-            content: ROUTED_PRESENTATION_PROMPT.to_string(),
         },
     ])
 }
@@ -573,8 +558,8 @@ fn routed_handoff_repair_context_blocks(output: &str, diagnostic: &str) -> Vec<C
             content: output.to_string(),
         },
         ContextBlock {
-            source: ContextSourceKind::RuntimeHint,
-            placement: ContextPlacement::EphemeralTail,
+            source: ContextSourceKind::RoutedHandoff,
+            placement: ContextPlacement::ConversationAppend,
             label: "routed handoff validation feedback".to_string(),
             content: diagnostic.to_string(),
         },
@@ -649,20 +634,12 @@ fn plan_routed_presentation_settlement(
 
 /// Builds parent context for one bounded presentation-failure explanation.
 fn routed_presentation_failure_context_blocks(diagnostic: &str) -> Vec<ContextBlock> {
-    vec![
-        ContextBlock {
-            source: ContextSourceKind::RoutedHandoff,
-            placement: ContextPlacement::ConversationAppend,
-            label: "routed workflow failure".to_string(),
-            content: format!("stage=parent presentation\ndiagnostic={diagnostic}"),
-        },
-        ContextBlock {
-            source: ContextSourceKind::RuntimeHint,
-            placement: ContextPlacement::EphemeralTail,
-            label: "routed failure explanation".to_string(),
-            content: ROUTED_PRESENTATION_FAILURE_PROMPT.to_string(),
-        },
-    ]
+    vec![ContextBlock {
+        source: ContextSourceKind::RoutedHandoff,
+        placement: ContextPlacement::ConversationAppend,
+        label: "routed workflow failure".to_string(),
+        content: format!("stage=parent presentation\ndiagnostic={diagnostic}"),
+    }]
 }
 
 #[cfg(test)]
@@ -781,6 +758,7 @@ mod tests {
                     "do not leak",
                 ),
             ],
+            metadata: Default::default(),
         };
 
         let seed = routed_worker_seed_context(&parent, "fix routing");

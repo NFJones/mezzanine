@@ -8,7 +8,7 @@
 use super::{
     AgentId, AgentTurnExecution, AgentTurnRecord, AgentTurnState, ContextBlock, ContextSourceKind,
     MezError, ModelProfile, Result, RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile,
-    RuntimeSessionService, append_mcp_context, append_scheduler_context,
+    RuntimeSessionService, append_mcp_context_for_provider, append_scheduler_context,
     compact_model_context_for_budget_with_retained_tail_percent, invoked_mcp_tools_for_context,
     runtime_cooperation_mode_name, runtime_mezzanine_error_code, set_project_guidance_context,
 };
@@ -24,6 +24,7 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         durable: super::AgentContext,
         mcp_summary: &mez_agent::McpPromptSummary,
+        model_profile: &ModelProfile,
     ) -> Result<(super::PreparedModelContext, Vec<mez_agent::McpPromptTool>)> {
         durable.validate_durable()?;
         let mut request_context = durable.clone();
@@ -48,8 +49,8 @@ impl RuntimeSessionService {
         {
             request_context.blocks.push(ContextBlock::live_state(
                 ContextSourceKind::Configuration,
-                "provider response mode",
-                format!("provider_response_mode=compact_output_retry attempt={attempt}"),
+                "provider recovery state",
+                format!("output_limit_recovery_attempt={attempt}"),
             ));
         }
         let active_subagent_scopes = self.active_subagent_write_scopes();
@@ -73,7 +74,8 @@ impl RuntimeSessionService {
             ));
         }
         request_context = append_scheduler_context(request_context, self.agent_scheduler())?;
-        request_context = append_mcp_context(request_context, mcp_summary)?;
+        request_context =
+            append_mcp_context_for_provider(request_context, mcp_summary, &model_profile.provider)?;
         let available_mcp_tools = invoked_mcp_tools_for_context(&durable, mcp_summary);
 
         let tail_start = request_context
@@ -330,6 +332,10 @@ impl RuntimeSessionService {
         self.agent
             .agent_turn_output_limit_recovery_attempts
             .insert(turn_id.to_string(), attempt.max(1));
+        self.agent.agent_turn_interaction_kinds.insert(
+            turn_id.to_string(),
+            mez_agent::ModelInteractionKind::OutputLimitRetry,
+        );
         let status_text = if let Some(retry_tokens) = retry_tokens {
             format!(
                 "agent: provider response hit output limit again; retrying compactly attempt={} max_output_tokens={}",

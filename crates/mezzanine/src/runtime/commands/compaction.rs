@@ -702,7 +702,6 @@ pub(super) fn runtime_context_source_kind_name(source: ContextSourceKind) -> &'s
         ContextSourceKind::TranscriptUser => "transcript-user",
         ContextSourceKind::TranscriptAssistant => "transcript-assistant",
         ContextSourceKind::TranscriptTool => "transcript-tool",
-        ContextSourceKind::EvidenceLedger => "evidence-ledger",
         ContextSourceKind::CommittedEvidence => "committed-evidence",
         ContextSourceKind::RoutedHandoff => "routed-handoff",
         ContextSourceKind::ActionResult => "action-result",

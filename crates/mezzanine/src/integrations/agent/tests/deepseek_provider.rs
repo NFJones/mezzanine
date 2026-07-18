@@ -32,7 +32,7 @@ fn deepseek_chat_completions_request_body_disables_thinking_when_profile_toggle_
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "spawn two subagents".to_string(),
         }])
@@ -96,7 +96,7 @@ fn deepseek_chat_completions_request_body_dispatches_default_mcp_actions_on_init
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "use the GitLab MCP server to inspect an issue".to_string(),
         }])
@@ -240,7 +240,7 @@ fn deepseek_chat_completions_request_body_enables_thinking_without_reasoning_eff
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "spawn two subagents".to_string(),
         }])
@@ -299,7 +299,7 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "spawn two subagents".to_string(),
         }])
@@ -385,7 +385,7 @@ fn deepseek_chat_completions_request_body_forces_maap_tool_without_thinking_for_
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "spawn two subagents".to_string(),
         }])
@@ -464,7 +464,7 @@ fn deepseek_chat_completions_request_body_omits_tool_choice_for_no_tool_thinking
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "classify this prompt size".to_string(),
         }])
@@ -519,7 +519,7 @@ fn deepseek_chat_completions_request_body_uses_auto_maap_tool_with_thinking_when
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "spawn two subagents".to_string(),
         }])
@@ -579,7 +579,7 @@ fn deepseek_provider_accepts_openai_compatible_provider_identity() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "say hello".to_string(),
         }])
@@ -672,7 +672,7 @@ fn deepseek_provider_rejects_missing_maap_after_strict_retry() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "say hello".to_string(),
         }])
@@ -779,7 +779,7 @@ fn deepseek_provider_retries_strict_maap_when_thinking_auto_tool_returns_prose()
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "say hello".to_string(),
         }])

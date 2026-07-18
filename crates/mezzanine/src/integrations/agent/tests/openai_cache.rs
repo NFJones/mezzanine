@@ -7,13 +7,13 @@ use super::*;
 
 #[test]
 /// Verifies current-turn action results remain after the latest user request
-/// while historical tool transcript entries stay reusable stable prefix
-/// context.
+/// while both historical and newly settled evidence stay in the append-only
+/// reusable prefix.
 ///
-/// Execution evidence for the active instruction must stay in the volatile
-/// suffix so the provider sees it after the latest user request and does not
-/// reuse it as immutable prefix material.
-fn openai_current_action_results_remain_volatile_suffix() {
+/// Execution evidence for the active instruction is chronological settled
+/// context, not request-local live state. Only the provider request-state
+/// narrowing block belongs in the volatile suffix.
+fn openai_current_action_results_remain_append_only_before_volatile_suffix() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
@@ -35,13 +35,13 @@ fn openai_current_action_results_remain_volatile_suffix() {
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "use the prior output".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "action result".to_string(),
                 content: "action_id=action-4\noutput: fresh evidence".to_string(),
             },
@@ -73,7 +73,7 @@ fn openai_current_action_results_remain_volatile_suffix() {
     let prefix = openai_stable_projection_material_for_request(&request).unwrap();
     assert!(prefix.contains("[executed result transcript entry]"));
     assert!(prefix.contains("cached evidence"));
-    assert!(!prefix.contains("fresh evidence"));
+    assert!(prefix.contains("fresh evidence"));
     assert!(input.iter().any(|message| {
         message["content"][0]["text"].as_str().is_some_and(|text| {
             text.contains("[executed result transcript entry]") && text.contains("cached evidence")
@@ -113,7 +113,7 @@ fn openai_promoted_conversation_entries_keep_complete_input_bytes() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "inspect cache continuity".to_string(),
         }])
@@ -138,7 +138,7 @@ fn openai_promoted_conversation_entries_keep_complete_input_bytes() {
             },
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "action result".to_string(),
                 content: "action_id=action-1\noutput: continuity evidence".to_string(),
             },
@@ -154,7 +154,19 @@ fn openai_promoted_conversation_entries_keep_complete_input_bytes() {
     let first_input = first_body["input"].as_array().unwrap();
     let second_input = second_body["input"].as_array().unwrap();
 
-    assert_eq!(second_input[..first_input.len()], first_input[..]);
+    assert_eq!(second_input[0], first_input[0]);
+    assert!(
+        first_input.last().unwrap()["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("[OpenAI request state]")
+    );
+    assert!(
+        second_input.last().unwrap()["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("[OpenAI request state]")
+    );
 
     let first_diagnostics = openai_prompt_cache_diagnostics_for_request(&first).unwrap();
     let second_diagnostics = openai_prompt_cache_diagnostics_for_request(&second).unwrap();
@@ -163,20 +175,19 @@ fn openai_promoted_conversation_entries_keep_complete_input_bytes() {
         &second_diagnostics.continuity_snapshot,
     );
     assert_eq!(continuity.category, "messages");
-    assert_eq!(continuity.message_index, Some(first_input.len()));
-    assert_eq!(continuity.common_message_prefix, first_input.len());
-    assert!(continuity.messages_append_only);
+    assert_eq!(continuity.message_index, Some(1));
+    assert_eq!(continuity.common_message_prefix, 1);
+    assert!(!continuity.messages_append_only);
 }
 
 #[test]
-/// Verifies volatile controller state remains out of OpenAI `instructions` and
-/// out of the stable input prefix.
+/// Verifies settled controller decisions remain out of OpenAI `instructions`
+/// and preserve their chronological developer-input position.
 ///
-/// Dynamic capability decisions are authoritative controller context, but
-/// rendering them at the front of the prompt would invalidate cache reuse for
-/// otherwise identical follow-up requests. They should stay model-visible as
-/// late developer input.
-fn openai_dynamic_controller_state_is_late_developer_input() {
+/// Capability decisions are authoritative controller evidence. Once settled,
+/// they belong in append-only conversation context; only request-local live
+/// state remains in the volatile suffix.
+fn openai_settled_controller_state_is_chronological_developer_input() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
@@ -191,7 +202,7 @@ fn openai_dynamic_controller_state_is_late_developer_input() {
         &turn(),
         &AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "inspect the repo".to_string(),
         }])
@@ -199,9 +210,9 @@ fn openai_dynamic_controller_state_is_late_developer_input() {
     )
     .unwrap();
     request.messages.push(super::ModelMessage {
-        role: ModelMessageRole::Developer,
-        source: ContextSourceKind::DeveloperInstruction,
-        placement: mez_agent::ContextPlacement::StablePrefix,
+        role: ModelMessageRole::Context,
+        source: ContextSourceKind::RuntimeHint,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
         content: "[capability shell]\ncapability=shell\nallowed_actions=say,shell_command"
             .to_string(),
     });
@@ -220,17 +231,17 @@ fn openai_dynamic_controller_state_is_late_developer_input() {
 
     let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
     assert!(diagnostics.volatile_input_bytes > 2);
-    assert_eq!(diagnostics.stable_input_bytes, 2);
+    assert!(diagnostics.stable_input_bytes > 2);
 }
 
 #[test]
-/// Verifies historical tool transcript entries replay as ordinary provider
-/// input outside the reusable stable prefix.
+/// Verifies historical tool transcript entries replay as ordinary append-only
+/// provider input inside the reusable prefix.
 ///
 /// Historical tool output should stay available as regular context so later
 /// turns can reference exact prior command evidence without routing through a
 /// generated summary layer.
-fn openai_historical_tool_results_replay_outside_stable_prefix() {
+fn openai_historical_tool_results_replay_in_shared_append_only_prefix() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
         model: "gpt-test".to_string(),
@@ -265,7 +276,7 @@ fn openai_historical_tool_results_replay_outside_stable_prefix() {
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "first follow-up".to_string(),
             },
@@ -298,7 +309,7 @@ fn openai_historical_tool_results_replay_outside_stable_prefix() {
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "second follow-up".to_string(),
             },
@@ -328,15 +339,20 @@ fn openai_historical_tool_results_replay_outside_stable_prefix() {
     let second_prefix = openai_stable_projection_material_for_request(&second).unwrap();
     assert!(first_prefix.contains("[executed result transcript entry]"));
     assert!(first_prefix.contains("stable evidence"));
-    assert_eq!(first_prefix, second_prefix);
+    assert_ne!(first_prefix, second_prefix);
+    let (_, first_stable_input) = openai_test_stable_prefix_parts(&first);
+    let (_, second_stable_input) = openai_test_stable_prefix_parts(&second);
+    assert_eq!(first_stable_input.len(), second_stable_input.len());
+    assert_eq!(first_stable_input[..3], second_stable_input[..3]);
+    assert_ne!(first_stable_input[3], second_stable_input[3]);
     let first_diagnostics = openai_prompt_cache_diagnostics_for_request(&first).unwrap();
     let second_diagnostics = openai_prompt_cache_diagnostics_for_request(&second).unwrap();
     assert!(first_diagnostics.stable_input_bytes > 2);
-    assert_eq!(
+    assert_ne!(
         first_diagnostics.stable_input_sha256,
         second_diagnostics.stable_input_sha256
     );
-    assert_ne!(
+    assert_eq!(
         first_diagnostics.volatile_input_sha256,
         second_diagnostics.volatile_input_sha256
     );
@@ -395,13 +411,13 @@ fn openai_long_session_keeps_observed_action_results_raw_without_committed_evide
     }
     blocks.push(ContextBlock {
         source: ContextSourceKind::UserInstruction,
-        placement: mez_agent::ContextPlacement::EphemeralTail,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
         label: "user".to_string(),
         content: "Compare the provider evidence and continue from the current fetch.".to_string(),
     });
     blocks.push(ContextBlock {
         source: ContextSourceKind::ActionResult,
-        placement: mez_agent::ContextPlacement::EphemeralTail,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
         label: "current fetch result".to_string(),
         content: "[action_result fetch-current fetch_url succeeded]\ncontent:\nCURRENT_RAW_RESULT_MUST_REMAIN_VOLATILE".to_string(),
     });
@@ -476,9 +492,9 @@ fn openai_long_session_keeps_observed_action_results_raw_without_committed_evide
 /// asserts that every stable input item from the previous request remains the
 /// byte-for-byte leading sequence of the next request.
 ///
-/// The current user instruction is intentionally not part of the reusable
-/// prefix for its own turn. It should become durable transcript context only
-/// on the following request, alongside the assistant output it produced.
+/// The current user instruction is part of the ordered reusable prefix in its
+/// own turn. Promotion on the following request must preserve its exact wire
+/// bytes, then append the assistant output and next user instruction.
 fn openai_long_session_stable_prefix_is_append_only_until_compaction() {
     let profile = ModelProfile {
         provider: "openai".to_string(),
@@ -502,30 +518,28 @@ fn openai_long_session_stable_prefix_is_append_only_until_compaction() {
             "current-user-turn-{turn_index}: investigate cache continuity {}",
             "with stable transcript replay ".repeat(8)
         );
-        let mut blocks = vec![
-            ContextBlock {
-                source: ContextSourceKind::Configuration,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                label: "session identity".to_string(),
-                content: "session_id=session-cache-continuity session_name=cache-test".to_string(),
-            },
-            ContextBlock {
-                source: ContextSourceKind::ProjectGuidance,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                label: "project guidance".to_string(),
-                content: "keep provider request prefixes byte stable".to_string(),
-            },
-        ];
+        let mut blocks = vec![ContextBlock {
+            source: ContextSourceKind::ProjectGuidance,
+            placement: mez_agent::ContextPlacement::StablePrefix,
+            label: "project guidance".to_string(),
+            content: "keep provider request prefixes byte stable".to_string(),
+        }];
         blocks.extend(transcript.clone());
         blocks.push(ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: current_user.clone(),
         });
 
-        let request =
-            assemble_model_request(&profile, &turn, &AgentContext::new(blocks).unwrap()).unwrap();
+        let context =
+            AgentContext::new(blocks)
+                .unwrap()
+                .with_metadata(mez_agent::ModelContextMetadata::new(
+                    Some("session-cache-continuity"),
+                    Option::<String>::None,
+                ));
+        let request = assemble_model_request(&profile, &turn, &context).unwrap();
         let (instructions, stable_input) = openai_test_stable_prefix_parts(&request);
         let diagnostics = openai_prompt_cache_diagnostics_for_request(&request).unwrap();
         let initial_len = *initial_stable_input_len.get_or_insert(stable_input.len());
@@ -581,8 +595,8 @@ fn openai_long_session_stable_prefix_is_append_only_until_compaction() {
 
         let stable_material = openai_stable_projection_material_for_request(&request).unwrap();
         assert!(
-            !stable_material.contains(&current_user),
-            "turn {turn_index} leaked current user input into its own stable prefix"
+            stable_material.contains(&current_user),
+            "turn {turn_index} omitted current user input from its ordered stable prefix"
         );
         if turn_index > 0 {
             assert!(
@@ -644,7 +658,7 @@ fn openai_prompt_cache_diagnostics_fingerprint_provider_prefix_parts() {
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "fix cache hits".to_string(),
             },
@@ -676,7 +690,7 @@ fn openai_prompt_cache_diagnostics_fingerprint_provider_prefix_parts() {
     assert_eq!(diagnostics.response_format_sha256.len(), 64);
     assert!(diagnostics.tools_bytes > 2);
     assert_eq!(diagnostics.tools_sha256.len(), 64);
-    assert_eq!(diagnostics.stable_input_bytes, 2);
+    assert!(diagnostics.stable_input_bytes > 2);
     assert_eq!(diagnostics.stable_input_sha256.len(), 64);
     assert!(diagnostics.volatile_input_bytes > 2);
     assert_eq!(diagnostics.volatile_input_sha256.len(), 64);
@@ -726,32 +740,17 @@ fn openai_prompt_cache_diagnostics_ignore_prompt_cache_retention_option() {
 /// provider compatibility targets must not share one routing key.
 fn openai_prompt_cache_key_uses_lineage_provider_and_model_namespace() {
     let context_for_session = |session_id: &str, lineage_id: Option<&str>| {
-        let mut blocks = vec![
-            ContextBlock {
-                source: ContextSourceKind::Configuration,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                label: "session identity".to_string(),
-                content: format!("session_id={session_id} session_name=default"),
-            },
-            ContextBlock {
-                source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
-                label: "user".to_string(),
-                content: "inspect the repo".to_string(),
-            },
-        ];
-        if let Some(lineage_id) = lineage_id {
-            blocks.insert(
-                1,
-                ContextBlock {
-                    source: ContextSourceKind::Configuration,
-                    placement: mez_agent::ContextPlacement::StablePrefix,
-                    label: "prompt cache lineage".to_string(),
-                    content: lineage_id.to_string(),
-                },
-            );
-        }
-        AgentContext::new(blocks).unwrap()
+        AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "inspect the repo".to_string(),
+        }])
+        .unwrap()
+        .with_metadata(mez_agent::ModelContextMetadata::new(
+            Some(session_id),
+            lineage_id,
+        ))
     };
     let profile = |provider: &str, model: &str| ModelProfile {
         provider: provider.to_string(),
@@ -881,7 +880,7 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "first prompt".to_string(),
             },
@@ -901,7 +900,7 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "second prompt".to_string(),
             },
@@ -921,7 +920,7 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "first prompt".to_string(),
             },
@@ -951,7 +950,7 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
         .unwrap()
         .0;
 
-    assert_eq!(
+    assert_ne!(
         openai_stable_projection_material_for_request(&stable_a).unwrap(),
         openai_stable_projection_material_for_request(&stable_a_different_user).unwrap()
     );
@@ -981,21 +980,17 @@ fn openai_prompt_cache_key_uses_stable_namespace_not_rendered_prefix_hash() {
 /// lineage namespace plus provider identity instead of volatile session ids.
 fn openai_prompt_cache_key_uses_unknown_lineage_without_session_identity() {
     let context_for_session = |session_id: &str| {
-        AgentContext::new(vec![
-            ContextBlock {
-                source: ContextSourceKind::Configuration,
-                placement: mez_agent::ContextPlacement::StablePrefix,
-                label: "session identity".to_string(),
-                content: format!("session_id={session_id} session_name=default"),
-            },
-            ContextBlock {
-                source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
-                label: "user".to_string(),
-                content: "inspect the repo".to_string(),
-            },
-        ])
+        AgentContext::new(vec![ContextBlock {
+            source: ContextSourceKind::UserInstruction,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            label: "user".to_string(),
+            content: "inspect the repo".to_string(),
+        }])
         .unwrap()
+        .with_metadata(mez_agent::ModelContextMetadata::new(
+            Some(session_id),
+            Option::<String>::None,
+        ))
     };
     let profile = |provider: &str, model: &str| ModelProfile {
         provider: provider.to_string(),
@@ -1063,25 +1058,25 @@ fn openai_replays_current_turn_read_results_without_synthetic_ledger() {
         &AgentContext::new(vec![
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "Patch the overlay style helper.".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "action result read-1".to_string(),
                 content: "[action_result read-1 shell_command succeeded]\ncommand: sed -n '300,420p' src/runtime/render/overlay.rs\noutput:\nowner body".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "action result read-2".to_string(),
                 content: "[action_result read-2 shell_command succeeded]\ncommand: sed -n '1148,1238p' src/runtime/render/overlay.rs\noutput:\nhelper body".to_string(),
             },
             ContextBlock {
                 source: ContextSourceKind::ActionResult,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "action result read-3".to_string(),
                 content: "[action_result read-3 shell_command succeeded]\ncommand: rg -n \"overlay style\" \"docs/reference/issue backlog.md\"\nread_observation_json: {\"kind\":\"search\",\"target\":\"docs/reference/issue backlog.md\",\"ranges\":[],\"query\":\"overlay style\"}\noutput:\n120: overlay style".to_string(),
             },
@@ -1155,7 +1150,7 @@ fn openai_stable_prefix_excludes_injected_mcp_integration_context() {
         },
         ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "inspect cache reuse".to_string(),
         },

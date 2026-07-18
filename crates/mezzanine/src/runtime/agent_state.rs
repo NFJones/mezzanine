@@ -128,6 +128,8 @@ pub struct RuntimeAgentProviderDispatch {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub context: PreparedModelContext,
+    /// Controller-selected exceptional interaction for this provider request.
+    pub interaction_kind: Option<mez_agent::ModelInteractionKind>,
     /// Stores the model profile value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

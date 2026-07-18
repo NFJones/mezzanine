@@ -156,7 +156,7 @@ fn runtime_agent_prompt_refreshes_project_overlay_and_project_skills_from_pane_c
     fs::create_dir_all(&nested).unwrap();
     fs::create_dir_all(&skill_dir).unwrap();
     let overlay_path = overlay_dir.join("config.toml");
-    fs::write(&overlay_path, "version = 19\n[history]\nlines = 11\n").unwrap();
+    fs::write(&overlay_path, "version = 20\n[history]\nlines = 11\n").unwrap();
     fs::write(
         skill_dir.join("SKILL.md"),
         "---\nname: review\ndescription: Project review workflow\n---\n\nReview this repository.\n",
@@ -299,18 +299,11 @@ fn runtime_agent_context_builtin_create_skill_prompt_loads_builtin_context() {
             .content
             .contains("## Additional context\n\ncreate a project skill for release notes")
     );
-    let invocation_block = context
-        .blocks
-        .iter()
-        .find(|block| block.label == "explicit skill invocation create-skill")
-        .expect("missing explicit skill invocation block");
-    assert_eq!(invocation_block.source, ContextSourceKind::RuntimeHint);
     assert!(
-        invocation_block
-            .content
-            .contains("The selected skill context has already been loaded above"),
-        "{}",
-        invocation_block.content
+        context
+            .blocks
+            .iter()
+            .all(|block| block.label != "explicit skill invocation create-skill")
     );
 }
 

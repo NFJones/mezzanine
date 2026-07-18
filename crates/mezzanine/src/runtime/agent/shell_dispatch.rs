@@ -16,14 +16,12 @@ use super::{
     apply_patch_transaction_phase, apply_patch_write_plan_from_read_output,
     apply_patch_write_plan_from_read_outputs, decode_shell_output_transport_with_diagnostics,
     json_escape, local_action_plan, runtime_action_result_is_suppressed_duplicate_file_mutation,
-    runtime_agent_action_has_runtime_visible_effect,
     runtime_agent_action_rejects_duplicate_success, runtime_agent_context_command,
     runtime_agent_execution_prompt_display_lines, runtime_agent_terminal_preview,
     runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
     runtime_mezzanine_error_code, runtime_pane_readiness_state_name,
     runtime_pre_shell_hook_payload,
 };
-use mez_agent::shell_command_looks_like_validation;
 
 impl RuntimeSessionService {
     /// Appends one transported read chunk to an active apply-patch batch.
@@ -194,50 +192,12 @@ impl RuntimeSessionService {
 
     /// Records a shell command that exited successfully for loop detection and
     /// mutation/validation phase tracking.
-    pub(crate) fn record_shell_dispatch_success(
-        &mut self,
-        turn_id: &str,
-        command: &str,
-        action: &AgentAction,
-    ) {
+    pub(crate) fn record_shell_dispatch_success(&mut self, turn_id: &str, command: &str) {
         self.agent
             .agent_turn_shell_dispatch_history
             .entry(turn_id.to_string())
             .or_default()
-            .record_success(
-                command.to_string(),
-                action,
-                shell_command_looks_like_validation(command),
-            );
-    }
-
-    /// Resets the inspection streak when a provider batch takes a different
-    /// runtime-visible action.
-    pub(super) fn reset_action_pressure_after_non_shell_effects(
-        &mut self,
-        turn: &AgentTurnRecord,
-        execution: &AgentTurnExecution,
-    ) {
-        let has_non_shell_effect = execution
-            .response
-            .action_batch
-            .as_ref()
-            .is_some_and(|batch| {
-                batch.actions.iter().any(|action| {
-                    runtime_agent_action_has_runtime_visible_effect(action)
-                        && !matches!(action.payload, AgentActionPayload::ShellCommand { .. })
-                })
-            });
-        if !has_non_shell_effect {
-            return;
-        }
-        if let Some(history) = self
-            .agent
-            .agent_turn_shell_dispatch_history
-            .get_mut(&turn.turn_id)
-        {
-            history.reset_successive_shell_commands();
-        }
+            .record_success(command.to_string());
     }
 
     /// Keeps the network action dispatch boundary symmetrical with shell

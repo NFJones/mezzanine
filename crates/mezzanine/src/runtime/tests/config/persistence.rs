@@ -349,7 +349,7 @@ fn runtime_control_config_project_persistence_requires_trusted_root() {
     let project_config_dir = root.join(".mezzanine");
     let project_path = project_config_dir.join("config.toml");
     fs::create_dir_all(&project_config_dir).unwrap();
-    fs::write(&project_path, "version = 19\n[history]\nlines = 10\n").unwrap();
+    fs::write(&project_path, "version = 20\n[history]\nlines = 10\n").unwrap();
     service.set_project_trust_store(ProjectTrustStore::default(), None);
     service
         .replace_config_layers(vec![ConfigLayer {

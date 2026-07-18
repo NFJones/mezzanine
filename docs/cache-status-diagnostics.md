@@ -1,53 +1,75 @@
 # Cache Status and Continuity Diagnostics
 
-Mezzanine exposes prompt-cache behavior without adding diagnostic text to the
-model request. Use `/status` for the current pane and `/copy-trace-log` after
-enabling debug or trace logging when request-by-request detail is needed.
+Mezzanine exposes cache and context behavior without adding diagnostic text to
+the model request. Use `/status` for pane-level summaries and
+`/copy-trace-log` at debug or trace level for request detail.
 
 ## Cache reuse metrics
 
-`Cumulative cache hit` is the token-weighted ratio across all provider samples
-retained for the pane. It includes cold starts and earlier uncached requests, so
-it can stay low even after the provider cache becomes warm. The per-model token
-tables use the same cumulative semantics and label the column explicitly.
+`Cumulative cache hit` is the token-weighted ratio across retained provider
+samples. It includes cold starts and auxiliary router/model-sizing requests.
+`Latest request cache hit` describes the latest concrete execution-model
+request only. A missing provider counter is `unknown`; an explicit zero is
+`0.00%`.
 
-`Latest request cache hit` describes exactly one concrete request from the
-execution model. Routing and automatic model-sizing calls contribute to their
-own cumulative provider/model accounting rows but do not replace this latest
-execution sample. An omitted provider cache counter is shown as `unknown`; an
-explicitly reported zero is shown as `0.00%`.
+Compaction creates a new immutable request shape and can make the next request
+cold. A later warm request replaces only the latest sample; it does not erase
+the cold request from cumulative accounting.
 
-Compaction intentionally creates a new immutable summary epoch and can make the
-first request afterward cold. A later warm latest-request value does not erase
-that cold request from the cumulative value.
+## Context contribution diagnostics
 
-## Immutable-context continuity
+For every canonical block, trace diagnostics expose only metadata and digests:
 
-The status and provider trace surfaces report sensitive-content-free context
-diagnostics:
+- index, placement, semantic kind, and retention;
+- canonical role and provider-projected role;
+- source and stable block-identity SHA-256;
+- byte and approximate token counts;
+- reusable-prefix participation; and
+- request-local status.
 
-- approximate immutable and volatile token counts;
-- the byte length and SHA-256 digest of the immutable projection;
-- the longest exact immutable block prefix shared with the previous request;
-- whether immutable chronology is append-only; and
-- a transition reason: `new_turn`, `compaction`, `provider_switch`,
-  `model_switch`, `append_only`, or `unexpected_rewrite`.
+Aggregate fields report stable-prefix, append-only, and live-state sizes; counts
+and sizes by semantic category; the first volatile block; exact and normalized
+near-duplicate counts; immutable and provider-projection hashes; and the
+expected cache-break reason for typed exceptional modes.
 
-The projection covers stable instructions plus settled chronological evidence.
-Ephemeral pane, scheduler, approval, retry, and readiness state is excluded.
-Only lengths, roles, lifecycle metadata, and cryptographic digests are retained;
-the diagnostics do not copy prompt or transcript text.
+The continuity digest includes placement, source, semantic kind, retention,
+canonical role, label, and content. A change in authorship or protection policy
+therefore cannot masquerade as identical context. Prompt and transcript text is
+not retained in diagnostic state.
 
-`unexpected_rewrite` means previously settled immutable chronology no longer
-matches and no compaction or provider/model transition explains the change. It
-is a correctness diagnostic, not proof that the provider cache itself accepted
-or rejected a prefix.
+## Continuity classification
 
-## Provider trace fields
+Request comparison reports:
 
-Provider response traces contain separate `usage` and `latest_request_usage`
-objects. The first labels its cache ratio as cumulative; the second reports the
-latest request ratio while preserving unknown versus explicit-zero counters.
-Request traces include `context_continuity` with the same token estimates,
-projection digest, common-prefix measurements, append-only flag, and break
-classification shown by `/status`.
+- the longest exact immutable block prefix;
+- whether durable chronology grew append-only;
+- immutable and volatile byte/token estimates; and
+- `new_turn`, `compaction`, `provider_switch`, `model_switch`, `append_only`, or
+  `unexpected_rewrite`.
+
+`unexpected_rewrite` means settled immutable chronology changed without an
+explaining compaction or provider/model transition. It is a correctness signal,
+not proof of a provider-side cache decision.
+
+Typed interactions such as capability continuation, MAAP repair, output-limit
+retry, failure summary, routed handoff/repair/presentation/failure explanation,
+auto-sizing, and macro judging intentionally select different instruction
+profiles. Diagnostics label their interaction kind as the expected cache-break
+reason.
+
+## Provider request shape
+
+OpenAI traces separately fingerprint front-loaded instructions, response/tool
+schemas, stable input, volatile input, the complete cacheable prefix, and the
+provider projection. The compact OpenAI request-state narrowing block is the
+first volatile contribution when no earlier live state exists.
+
+Anthropic cache breakpoints close after the latest immutable message and before
+neutral live state. OpenAI Chat, DeepSeek, and Claude Code lack the same
+explicit breakpoint controls, but their provider-projection digest and ordered
+per-block roles still expose a late insertion, false user projection, or
+duplicate context block.
+
+Changing only CWD, readiness, scheduler state, write conflicts, recovery state,
+or required MCP live state should preserve the stable and append-only prefix.
+No-op preparation should produce identical durable and provider-shape hashes.

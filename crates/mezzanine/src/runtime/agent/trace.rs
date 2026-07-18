@@ -198,12 +198,19 @@ impl RuntimeSessionService {
             .agent_context_continuity_snapshot_by_conversation
             .get(&conversation_id)
             .cloned();
-        let continuity = mez_agent::context_continuity_diagnostics(
+        let interaction_kind = self
+            .agent
+            .agent_turn_interaction_kinds
+            .get(&turn.turn_id)
+            .copied()
+            .unwrap_or(mez_agent::ModelInteractionKind::CapabilityDecision);
+        let continuity = mez_agent::context_continuity_diagnostics_for_interaction(
             context,
             &model_profile.provider,
             &model_profile.model,
             &turn.turn_id,
             previous.as_ref(),
+            interaction_kind,
         );
         self.record_agent_context_continuity(&conversation_id, continuity);
         let Ok(mut request) = assemble_model_request(model_profile, turn, context) else {
@@ -329,7 +336,6 @@ pub(super) fn runtime_context_source_kind_name(source: ContextSourceKind) -> &'s
         ContextSourceKind::TranscriptUser => "transcript_user",
         ContextSourceKind::TranscriptAssistant => "transcript_assistant",
         ContextSourceKind::TranscriptTool => "transcript_tool",
-        ContextSourceKind::EvidenceLedger => "evidence_ledger",
         ContextSourceKind::CommittedEvidence => "committed_evidence",
         ContextSourceKind::RoutedHandoff => "routed_handoff",
         ContextSourceKind::ActionResult => "action_result",
@@ -1046,12 +1052,48 @@ fn runtime_context_continuity_trace_json(
     serde_json::json!({
         "immutable_token_estimate": diagnostics.snapshot.immutable_token_estimate,
         "volatile_token_estimate": diagnostics.snapshot.volatile_token_estimate,
+        "stable_prefix_bytes": diagnostics.snapshot.stable_prefix_bytes,
+        "append_only_bytes": diagnostics.snapshot.append_only_bytes,
+        "live_state_bytes": diagnostics.snapshot.live_state_bytes,
+        "stable_prefix_token_estimate": diagnostics.snapshot.stable_prefix_token_estimate,
+        "append_only_token_estimate": diagnostics.snapshot.append_only_token_estimate,
+        "live_state_token_estimate": diagnostics.snapshot.live_state_token_estimate,
+        "first_volatile_block": diagnostics.snapshot.first_volatile_block,
+        "exact_duplicate_blocks": diagnostics.snapshot.exact_duplicate_blocks,
+        "near_duplicate_blocks": diagnostics.snapshot.near_duplicate_blocks,
         "stable_projection_bytes": diagnostics.snapshot.stable_projection_bytes,
         "stable_projection_sha256": diagnostics.snapshot.stable_projection_sha256,
+        "provider_projection_sha256": diagnostics.snapshot.provider_projection_sha256,
+        "semantic_aggregates": diagnostics.snapshot.semantic_aggregates.iter().map(|aggregate| {
+            serde_json::json!({
+                "semantic_kind": format!("{:?}", aggregate.semantic_kind),
+                "blocks": aggregate.blocks,
+                "bytes": aggregate.bytes,
+                "token_estimate": aggregate.token_estimate,
+            })
+        }).collect::<Vec<_>>(),
+        "blocks": diagnostics.snapshot.blocks.iter().map(|block| {
+            serde_json::json!({
+                "index": block.index,
+                "placement": format!("{:?}", block.placement),
+                "semantic_kind": format!("{:?}", block.semantic_kind),
+                "retention": format!("{:?}", block.retention),
+                "canonical_role": block.canonical_role,
+                "provider_role": block.provider_role,
+                "source": format!("{:?}", block.source),
+                "block_identity_sha256": block.block_identity_sha256,
+                "bytes": block.bytes,
+                "token_estimate": block.token_estimate,
+                "reusable_prefix": block.reusable_prefix,
+                "request_local": block.request_local,
+                "sha256": block.sha256,
+            })
+        }).collect::<Vec<_>>(),
         "common_immutable_prefix_blocks": diagnostics.common_immutable_prefix_blocks,
         "common_immutable_prefix_tokens": diagnostics.common_immutable_prefix_tokens,
         "immutable_append_only": diagnostics.immutable_append_only,
         "break_reason": diagnostics.break_reason.as_str(),
+        "expected_cache_break_reason": diagnostics.expected_cache_break_reason,
     })
 }
 

@@ -220,7 +220,7 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         "{response}"
     );
     assert!(
-        response.contains("| Prompt profile | default v30 |"),
+        response.contains("| Prompt profile | default v32 |"),
         "{response}"
     );
     assert!(
@@ -231,7 +231,7 @@ fn runtime_agent_shell_status_reports_live_runtime_state() {
         response.contains("| src | agent-%1 | owned-write |"),
         "{response}"
     );
-    assert!(response.contains("| Context | 6 blocks"), "{response}");
+    assert!(response.contains("| Context | 1 blocks"), "{response}");
     assert!(
         response.contains("| Pane agent tokens | 2 models; see Pane Agent Token Usage |"),
         "{response}"

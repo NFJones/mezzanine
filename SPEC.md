@@ -2424,7 +2424,7 @@ The top-level configuration object MUST support the following keys:
 - `extensions`
 
 The `version` key MUST identify the configuration schema version. Mezzanine
-schema version 17 is the current configuration schema version for this
+schema version 20 is the current configuration schema version for this
 specification revision. Implementations MUST reject a configuration file whose
 declared schema version is greater than the newest schema version understood by
 the binary.
@@ -2488,6 +2488,13 @@ configuration keys that had no runtime effect, including the former `session`,
 plus obsolete no-op fields such as `history.search_mode`, memory storage path
 and injection placeholders, `issues.storage`, `agents.prompt_profile`,
 `agents.default_agent_role`, and `audit.redact_secrets`.
+
+The version 19 to version 20 primary-config migration MUST remove
+`agents.implementation_pressure_after_shell_actions`. If a schema-version-20
+configuration layer still contains that key, Mezzanine MUST reject the layer
+with an actionable removed-setting diagnostic. Model-facing action pressure is
+not part of current runtime policy; deterministic loop and failed-action limits
+remain controller-owned.
 
 `terminal.clipboard_copy_command` and `terminal.clipboard_paste_command` MAY be
 omitted. When present, each value MUST be either a command string parsed with
@@ -2567,8 +2574,7 @@ The `issues` table MUST support `enabled` and `database_path`.
 
 The `agents` table MUST support `default_provider`, `default_model_profile`,
 `shell_only`, `compaction_raw_retention_percent`, `routing`,
-`action_failure_retry_limit`, `implementation_pressure_after_shell_actions`,
-`loop_limit`,
+`action_failure_retry_limit`, `loop_limit`,
 `custom_system_prompt`, `default_personality`, `subagent_placement`,
 `max_concurrent_agents`, `max_root_subagents`, `max_subagents_per_subagent`,
 `max_subagent_panes_per_window`, `subagent_wait_policy`, and `max_depth`.
@@ -2585,11 +2591,6 @@ excluded from this bounded recovery budget and MAY be retried until they succeed
 or some other blocker ends the turn. Non-hunk `apply_patch` validation,
 transport, readiness, and precondition failures MUST remain bounded by the
 normal failed-action correction budget.
-`agents.implementation_pressure_after_shell_actions` MUST be a positive integer
-and MUST default to `3`. It defines the gentle shell-command inspection
-pressure threshold; runtime-owned inspection pressure MUST escalate to medium at
-the greater of `6` or twice the configured threshold, and to strong at the
-greater of `10` or three times the configured threshold.
 `agents.loop_limit` MUST be a positive integer and MUST default to `8`. It
 bounds the number of work iterations a single `/loop` command may run before
 Mezzanine stops automatic continuation and reports that the iteration limit was
@@ -2840,7 +2841,9 @@ CLI with `--effort` using the local Claude Code levels `low`, `medium`,
 present, and fall back to fenced `mezzanine-action-json` parsing when the CLI
 does not return structured data. Auto-sizing and other requests without a
 Mezzanine prompt-cache session or lineage id MUST remain one-shot Claude Code
-print invocations.
+print invocations. Claude Code request construction MUST iterate canonical
+conversation events in their stored order and MUST NOT relocate the latest user
+message after assistant actions, tool results, steering, or other evidence.
 The `deepseek-chat-completions` adapter MUST keep DeepSeek wire-format and
 policy behaviors scoped to the DeepSeek dialect.
 Completions and Responses compatibility adapters MUST treat missing provider
@@ -2883,23 +2886,63 @@ Static invariant agent behavior SHOULD remain in the front-loaded OpenAI
 repair hints, compaction notices, and current action eligibility SHOULD be
 rendered as later role-preserving model input rather than mutating the static
 instructions prefix.
-Every model-visible context producer MUST explicitly select a provider-neutral
-placement independent of provenance, trust, provider role, labels, and rendered
-text. `StablePrefix` is reserved for invariant instructions and configuration;
-`ConversationAppend` contains immutable chronological transcript, committed
-evidence, and compaction-summary epochs; and `EphemeralTail` contains regenerated
-controller and current-turn state. Assembly MUST reject contexts whose placements regress from ephemeral tail to
-conversation append or stable prefix, or from conversation append to stable
-prefix. It MUST NOT reorder malformed context because doing so can alter
-transcript or tool-event semantics. Valid contexts MUST preserve producer order
-within each class. Mutable policy and runtime state, including scheduler state,
-active subagent write scopes, pane readiness and identity, environment state,
-pending local messages, capability eligibility, and repair or retry hints, MUST
-use `EphemeralTail`. Provider cache diagnostics and cache breakpoints MUST consume
-this explicit placement directly and MUST NOT infer cache lifecycle from source
-kinds, labels, or message text. Late developer-role content retains developer
-authority; placement changes cache and ordering lifecycle, not instruction
-priority.
+Every model-visible context producer MUST explicitly select provider-neutral
+placement, semantic kind, retention, provenance, and canonical role. These are
+independent properties. `StablePrefix` is reserved for invariant ambient
+instructions and stable configuration. `ConversationAppend` contains immutable
+chronological task preludes, direct user events, assistant events, evidence,
+neutral references, and compaction-summary epochs. `EphemeralTail` contains only
+factual request-local live state that can change the correctness of the next
+provider response and is not already represented by a typed provider field or
+durable event.
+
+Direct user prompts and mid-turn steering MUST be exact `UserEvent` chronology.
+The initial prompt MUST be appended once before the assistant actions and
+evidence it causes. Steering MUST be appended at the exact boundary where it is
+received, without synthetic timestamps, turn ids, precedence prose, or a late
+prompt restatement. Assistant actions, settled results, controller results,
+local/delegated messages, and routed evidence MUST remain in occurrence order.
+Repository guidance, memory, local messages, controller facts, and other
+neutral context MUST NOT be classified as direct user speech. Provider adapters
+MAY use a supported transport-role wrapper, but the wrapper MUST explicitly
+identify the material as non-user-authored and MUST NOT move it across canonical
+events.
+
+Durable `AgentContext` MUST contain only `StablePrefix` and
+`ConversationAppend`; provider preparation MUST construct and discard a
+separate live-state suffix without mutating durable context. Assembly MUST
+reject placement regression or semantic/lifetime mismatches and MUST NOT sort a
+malformed context. Tail blocks MUST use live-state semantics and request-local
+retention. Conversation events, action results, user prompts, steering, skill
+instructions, memories, and transcript records MUST NOT enter the tail.
+
+Allowlisted tail state consists only of relevant abnormal pane readiness, the
+authoritative current working directory, active write conflicts, a compact
+relevant scheduler summary, OpenAI action-superset narrowing, provider-required
+MCP manifest or unavailable-integration diagnostics, and bounded factual
+recovery-mode payloads. Session/pane/cache identity, environment hashes, host
+diagnostics, progress or rationale ledgers, action pressure, generic failure
+coaching, resolved-skill hints, permission policy, full scheduler inventories,
+and duplicate MCP schemas MUST stay out of model context. Session and cache
+lineage travel as typed non-model-visible request metadata.
+
+Provider cache diagnostics and cache breakpoints MUST consume explicit
+placement and semantic metadata rather than infer lifecycle from sources,
+labels, or text. OpenAI Responses MAY keep a stable action-schema superset and
+append one compact neutral request-state block that identifies the current
+interaction kind and allowed subset. Providers with dynamic tool schemas MUST
+not duplicate complete action or MCP descriptions in text. All provider
+families, including auto-sizing and Claude Code, MUST preserve canonical order
+and MUST NOT manufacture a late user restatement.
+
+Capability continuation, MAAP repair, output-limit retry, failure summary,
+routed handoff and repair, routed presentation and failure explanation,
+auto-sizing, and macro judging MUST be represented by typed interaction modes.
+Mode-static behavioral rules belong in the mode's system instruction profile;
+dynamic errors and prior output belong in chronological evidence or one bounded
+factual live-state block. The runtime MUST replace older state for the same
+mode rather than accumulate retry prompts. Context diagnostics MUST label the
+intentional instruction-profile change as an expected cache break.
 Once deterministic action evidence settles, it MUST be committed exactly once
 to append-only `ConversationAppend` chronology and any volatile copy MUST be
 removed atomically. A settlement batch containing a running action or blocked
@@ -4664,34 +4707,41 @@ Agents MUST support model-generated conversation compaction or summarization
 when explicit user action or provider feedback shows that context reduction is
 needed. The agent harness MUST NOT block prompt submission or provider request
 assembly solely because a local fallback estimate predicts high context
-pressure. Compaction MUST use the same bulk shape regardless of trigger: older
-compacted context MUST be represented by one or more immutable memory-style
-summary epochs at the start of model-visible context, followed by uncompacted
-recent blocks retained as a raw tail. Once emitted, an epoch MUST remain
-byte-stable during later provider context-limit recovery; later recovery MAY
-append another summary epoch for newly compacted raw blocks and MAY shrink the
-raw tail. Local context reduction MUST prefer compact summaries over partial
-block truncation so the model does not reason from silently incomplete context.
-Only `StablePrefix` and closed `ConversationAppend` execution groups may
-participate in this operation. `EphemeralTail` controller state MUST remain
-exact and outside summary input. Assistant blocks, provider-native tool events,
-and their settled result blocks MUST move across the summary boundary only as
+pressure. Compaction MUST operate on durable context before request-local live
+state is attached. Exact user prompts, every user-steering event, active
+skill/task preludes, delegated or routed task statements required to interpret
+the work, and existing summary epochs MUST be non-crossable barriers. The
+compactor MUST split chronology at those barriers, form closed
+assistant/action/result execution groups only within each segment, and prefer
+the oldest eligible groups for summarization. Assistant blocks,
+provider-native tool events, and their settled results MUST move together as
 one indivisible group.
-Compaction MUST retain a bounded raw recent transcript tail alongside the
-summary epochs so exact recent references remain available after context
-reduction.
+
+Each summary MUST replace its selected contiguous range at the range's original
+position. It MUST NOT be moved to the start or end of the conversation or
+across a user/task barrier. Existing epochs MUST remain byte-stable during later
+provider context-limit recovery. Direct user and task instructions MUST remain
+byte-for-byte exact. Local context reduction MUST prefer compact summaries over
+partial block truncation so the model never reasons from silently incomplete
+events. `EphemeralTail` state MUST remain outside summary input and MUST be
+recomputed only after compaction completes.
+
+Within each barrier-delimited segment, compaction MUST retain a bounded recent
+raw suffix of complete execution groups so exact recent references remain
+available after context reduction.
 The raw tail size MUST follow `agents.compaction_raw_retention_percent`, which
 defaults to retaining approximately the newest 10% of the active model context
 budget by estimated replay word count.
 If the provider rejects a request because the input context exceeds a
 provider or model limit, Mezzanine MUST treat that failure as recoverable while
 the turn remains running, MUST NOT ask the provider for a failure-summary
-response with the same oversized context, and MUST locally compact or omit
-recoverable active-turn context before retrying within the bounded provider
-retry policy. This recovery MUST preserve the durable turn and latest user
-instruction; it SHOULD prefer compacting or omitting recoverable action-result,
-tool, transcript, and other explicit observation context over dropping recent
-user steering wholesale. If the provider still rejects the retried request,
+response with the same oversized context, and MUST locally compact eligible
+active-turn execution groups before retrying within the bounded provider retry
+policy. This recovery MUST preserve every exact user, steering, and active task
+instruction in place. If protected exact content plus the minimum required
+request state cannot fit the provider context window, Mezzanine MUST report an
+explicit unrecoverable-context overflow and MUST NOT truncate or summarize the
+protected instructions. If the provider still rejects the retried request,
 Mezzanine MUST continue provider context-limit recovery with successively
 smaller explicit compaction budgets until the provider accepts the request,
 the bounded retry policy is exhausted, or no further recoverable compaction can

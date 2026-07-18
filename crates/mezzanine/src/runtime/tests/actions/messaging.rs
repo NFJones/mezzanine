@@ -254,12 +254,12 @@ fn runtime_rejects_send_message_action_with_invalid_mmp_payload_metadata() {
                     .contains("[action_result msg-1 send_message failed]")
                 && block.content.contains("invalid_message_payload")
         }));
-        assert!(context.blocks.iter().any(|block| {
-            block.source == ContextSourceKind::RuntimeHint
-                && block.content.contains("Message recovery")
-                && block.content.contains("Next step:")
-                && block.content.contains("content_type and payload shape")
-        }));
+        assert!(
+            context
+                .blocks
+                .iter()
+                .all(|block| block.source != ContextSourceKind::RuntimeHint)
+        );
     }
 }
 

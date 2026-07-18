@@ -12,10 +12,9 @@ use super::{
     discover_project_root, fs, json_escape, runtime_agent_action_failure_retry_limit_from_config,
     runtime_agent_auto_sizing_from_config,
     runtime_agent_compaction_raw_retention_percent_from_config,
-    runtime_agent_custom_system_prompt_from_config,
-    runtime_agent_implementation_pressure_after_shell_actions_from_config,
-    runtime_agent_loop_limit_from_config, runtime_agent_personality_profiles_from_config,
-    runtime_agent_routing_from_config, runtime_audit_config_present, runtime_audit_log_from_config,
+    runtime_agent_custom_system_prompt_from_config, runtime_agent_loop_limit_from_config,
+    runtime_agent_personality_profiles_from_config, runtime_agent_routing_from_config,
+    runtime_audit_config_present, runtime_audit_log_from_config,
     runtime_default_agent_personality_from_config, runtime_default_models_for_provider,
     runtime_effective_config_value, runtime_history_limit_from_config,
     runtime_history_rotate_lines_from_config, runtime_hook_definitions_from_config,
@@ -324,9 +323,6 @@ impl RuntimeSessionService {
         self.set_agent_default_routing(runtime_agent_routing_from_config(&structured)?);
         self.set_agent_action_failure_retry_limit(
             runtime_agent_action_failure_retry_limit_from_config(&structured)?,
-        );
-        self.set_agent_implementation_pressure_after_shell_actions(
-            runtime_agent_implementation_pressure_after_shell_actions_from_config(&structured)?,
         );
         self.set_agent_loop_limit(runtime_agent_loop_limit_from_config(&structured)?);
         self.integration.set_provider_auth_refresh_leeway_seconds(

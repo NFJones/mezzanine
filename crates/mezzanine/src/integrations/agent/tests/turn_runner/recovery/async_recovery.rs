@@ -109,7 +109,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "inspect missing mcp state".to_string(),
             }])
@@ -125,7 +125,7 @@ async fn async_turn_runner_retries_maap_validation_error_without_persisting_repa
             .request
             .messages
             .iter()
-            .all(|message| !message.content.contains("ephemeral maap repair")),
+            .all(|message| !message.content.contains("[MAAP repair state]")),
         "{:?}",
         execution.request.messages
     );
@@ -196,7 +196,7 @@ async fn async_turn_runner_retries_missing_provider_action_batch() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "reply".to_string(),
             }])
@@ -219,7 +219,7 @@ async fn async_turn_runner_retries_missing_provider_action_batch() {
             .request
             .messages
             .iter()
-            .all(|message| !message.content.contains("ephemeral maap repair")),
+            .all(|message| !message.content.contains("[MAAP repair state]")),
         "{:?}",
         execution.request.messages
     );
@@ -291,7 +291,7 @@ async fn turn_runner_bubbles_context_limit_failure_to_runtime_recovery() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "hello".to_string(),
             }])
@@ -377,7 +377,7 @@ async fn turn_runner_bubbles_provider_controller_retry_hint_to_runtime_retry() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "hello".to_string(),
             }])
@@ -455,7 +455,7 @@ async fn turn_runner_bubbles_retryable_provider_failure_to_runtime_retry() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "hello".to_string(),
             }])

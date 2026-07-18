@@ -67,7 +67,7 @@ fn turn_runner_accepts_memory_search_with_matched_mcp_available() {
     let context = mez_agent::append_mcp_context(
         AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "use githubcopilot and recall the durable project preference".to_string(),
         }])
@@ -166,13 +166,13 @@ fn turn_runner_accepts_memory_store_after_prior_store_context() {
             AgentContext::new(vec![
                 ContextBlock {
                     source: ContextSourceKind::UserInstruction,
-                    placement: mez_agent::ContextPlacement::EphemeralTail,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
                     label: "user".to_string(),
                     content: "store this repeatedly".to_string(),
                 },
                 ContextBlock {
                     source: ContextSourceKind::ActionResult,
-                    placement: mez_agent::ContextPlacement::EphemeralTail,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
                     label: "action result memory-store-1".to_string(),
                     content: "[action_result memory-store-1 memory_store succeeded]\ncontent:\nmemory_store persisted 1 record".to_string(),
                 },
@@ -269,7 +269,7 @@ fn turn_runner_accepts_memory_store_for_runtime_execution() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "remember this for later".to_string(),
             }])
@@ -354,19 +354,19 @@ fn turn_runner_counts_prior_memory_search_results_from_context() {
             AgentContext::new(vec![
                 ContextBlock {
                     source: ContextSourceKind::UserInstruction,
-                    placement: mez_agent::ContextPlacement::EphemeralTail,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
                     label: "user".to_string(),
                     content: "search memory repeatedly".to_string(),
                 },
                 ContextBlock {
                     source: ContextSourceKind::ActionResult,
-                    placement: mez_agent::ContextPlacement::EphemeralTail,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
                     label: "action result memory-search-1".to_string(),
                     content: "[action_result memory-search-1 memory_search succeeded]\ncontent:\nmemory_search returned 0 records".to_string(),
                 },
                 ContextBlock {
                     source: ContextSourceKind::ActionResult,
-                    placement: mez_agent::ContextPlacement::EphemeralTail,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
                     label: "action result memory-search-2".to_string(),
                     content: "[action_result memory-search-2 memory_search succeeded]\ncontent:\nmemory_search returned 0 records".to_string(),
                 },
@@ -464,7 +464,7 @@ fn turn_runner_skips_memory_search_used_as_action_wrapper_placeholder() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "use memory only if it is needed".to_string(),
             }])
@@ -569,7 +569,7 @@ fn turn_runner_skips_memory_searches_after_per_turn_limit() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "search memory repeatedly".to_string(),
             }])

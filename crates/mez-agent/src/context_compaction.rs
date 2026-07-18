@@ -6,8 +6,8 @@
 //! summaries without product runtime or persistence dependencies.
 
 use crate::{
-    AgentContext, AgentContextResult, ContextBlock, ContextSourceKind,
-    ModelContextCompactionReport, model_context_block_header,
+    AgentContext, AgentContextError, AgentContextResult, ContextBlock, ContextRetention,
+    ContextSourceKind, ModelContextCompactionReport, model_context_block_header,
 };
 use std::ops::Range;
 
@@ -36,13 +36,16 @@ pub fn compact_model_context_for_budget_with_retained_tail_percent(
     context_budget_words: usize,
     retained_tail_percent: usize,
 ) -> AgentContextResult<(AgentContext, ModelContextCompactionReport)> {
+    context.validate_durable()?;
     let (blocks, report) = compact_model_context_blocks(
         &context.blocks,
         context_budget_words,
         true,
         retained_tail_percent,
-    );
-    AgentContext::new(blocks).map(|context| (context, report))
+    )?;
+    AgentContext::new_durable(blocks)
+        .map(|compacted| compacted.with_metadata(context.metadata))
+        .map(|context| (context, report))
 }
 
 /// Counts whitespace-delimited words for context budgeting.
@@ -56,7 +59,7 @@ fn compact_model_context_blocks(
     context_budget_words: usize,
     force: bool,
     retained_tail_percent: usize,
-) -> (Vec<ContextBlock>, ModelContextCompactionReport) {
+) -> AgentContextResult<(Vec<ContextBlock>, ModelContextCompactionReport)> {
     let retained_tail_percent =
         normalize_model_context_retained_tail_percent(retained_tail_percent);
     let mut report = ModelContextCompactionReport::default();
@@ -65,7 +68,7 @@ fn compact_model_context_blocks(
         .iter()
         .any(|block| block.content.len() > MODEL_CONTEXT_BLOCK_LIMIT_BYTES);
     if !force && total_words <= context_budget_words && !oversized_block_present {
-        return (blocks.to_vec(), report);
+        return Ok((blocks.to_vec(), report));
     }
 
     let stable_prefix = blocks
@@ -78,58 +81,113 @@ fn compact_model_context_blocks(
         .filter(|block| block.placement == crate::ContextPlacement::ConversationAppend)
         .cloned()
         .collect::<Vec<_>>();
-    let volatile_tail = blocks
+    let protected_words = stable_prefix
         .iter()
-        .filter(|block| block.placement == crate::ContextPlacement::EphemeralTail)
-        .cloned()
-        .collect::<Vec<_>>();
+        .chain(
+            immutable_chronology
+                .iter()
+                .filter(|block| model_context_block_is_protected_barrier(block)),
+        )
+        .map(model_context_block_words)
+        .fold(0usize, usize::saturating_add);
+    if protected_words > context_budget_words {
+        return Err(AgentContextError::new(format!(
+            "unrecoverable model context overflow: protected exact context requires {protected_words} words but provider budget is {context_budget_words}; direct user and task instructions cannot be truncated or summarized"
+        )));
+    }
     let execution_groups = model_context_execution_group_ranges(&immutable_chronology);
+    let eligible_groups = execution_groups
+        .iter()
+        .enumerate()
+        .filter(|(_, group)| {
+            !immutable_chronology[(*group).clone()]
+                .iter()
+                .any(model_context_block_is_protected_barrier)
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if eligible_groups.is_empty() {
+        return Ok((blocks.to_vec(), report));
+    }
     let tail_budget =
         model_context_retained_tail_budget_words(context_budget_words, retained_tail_percent);
-    let tail_group_start =
-        model_context_tail_start_group(&immutable_chronology, &execution_groups, tail_budget);
-    if tail_group_start == 0 {
-        return (blocks.to_vec(), report);
-    }
-    let compacted_end = execution_groups
-        .get(tail_group_start)
-        .map_or(immutable_chronology.len(), |group| group.start);
-    let compacted_blocks = &immutable_chronology[..compacted_end];
-    let retained_tail = &immutable_chronology[compacted_end..];
-    let mut prior_summary_epochs = Vec::new();
-    let mut summarizable_blocks = Vec::new();
-    for block in compacted_blocks.iter().cloned() {
-        if model_context_block_is_compaction_summary(&block) {
-            prior_summary_epochs.push(block);
-        } else {
-            summarizable_blocks.push(block);
-        }
-    }
-    if summarizable_blocks.is_empty() {
-        return (blocks.to_vec(), report);
-    }
-
-    report.compacted_blocks = summarizable_blocks.len();
-    let mut prepared = Vec::with_capacity(
-        stable_prefix
-            .len()
-            .saturating_add(prior_summary_epochs.len())
-            .saturating_add(retained_tail.len())
-            .saturating_add(volatile_tail.len())
-            .saturating_add(1),
+    let retained_groups = model_context_retained_group_indexes(
+        &immutable_chronology,
+        &execution_groups,
+        &eligible_groups,
+        tail_budget,
     );
+    let retained_tail = retained_groups
+        .iter()
+        .flat_map(|index| {
+            immutable_chronology[execution_groups[*index].clone()]
+                .iter()
+                .cloned()
+        })
+        .collect::<Vec<_>>();
+    let mut prepared = Vec::with_capacity(blocks.len().saturating_add(execution_groups.len()));
     prepared.extend(stable_prefix);
-    prepared.extend(prior_summary_epochs);
-    prepared.push(bulk_compacted_model_context_block(
-        &summarizable_blocks,
-        retained_tail,
+    let mut pending_compacted = Vec::new();
+    for (group_index, group) in execution_groups.iter().enumerate() {
+        let group_blocks = &immutable_chronology[group.clone()];
+        let protected = group_blocks
+            .iter()
+            .any(model_context_block_is_protected_barrier);
+        if !protected && !retained_groups.contains(&group_index) {
+            pending_compacted.extend(group_blocks.iter().cloned());
+            continue;
+        }
+        flush_compacted_context_run(
+            &mut prepared,
+            &mut pending_compacted,
+            &retained_tail,
+            tail_budget,
+            retained_tail_percent,
+            &mut report,
+        );
+        prepared.extend(group_blocks.iter().cloned());
+    }
+    flush_compacted_context_run(
+        &mut prepared,
+        &mut pending_compacted,
+        &retained_tail,
         tail_budget,
         retained_tail_percent,
-    ));
-    prepared.extend(retained_tail.iter().cloned());
-    prepared.extend(volatile_tail);
+        &mut report,
+    );
+    if report.compacted_blocks == 0 {
+        return Ok((blocks.to_vec(), report));
+    }
+    let compacted_words = model_context_total_words(&prepared);
+    if compacted_words > context_budget_words {
+        return Err(AgentContextError::new(format!(
+            "unrecoverable model context overflow: minimum barrier-preserving compacted context requires {compacted_words} words but provider budget is {context_budget_words}"
+        )));
+    }
 
-    (prepared, report)
+    Ok((prepared, report))
+}
+
+/// Emits one compacted summary at the original position of its replaced run.
+fn flush_compacted_context_run(
+    prepared: &mut Vec<ContextBlock>,
+    pending: &mut Vec<ContextBlock>,
+    retained_tail: &[ContextBlock],
+    tail_budget_words: usize,
+    retained_tail_percent: usize,
+    report: &mut ModelContextCompactionReport,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    report.compacted_blocks = report.compacted_blocks.saturating_add(pending.len());
+    prepared.push(bulk_compacted_model_context_block(
+        pending,
+        retained_tail,
+        tail_budget_words,
+        retained_tail_percent,
+    ));
+    pending.clear();
 }
 
 /// Groups immutable chronology at indivisible provider-execution boundaries.
@@ -144,12 +202,16 @@ fn model_context_execution_group_ranges(blocks: &[ContextBlock]) -> Vec<Range<us
     let mut has_assistant = false;
     let mut has_native_tool = false;
     for (index, block) in blocks.iter().enumerate() {
+        let protected = model_context_block_is_protected_barrier(block);
         let attaches_to_previous = match block.source {
             ContextSourceKind::TranscriptTool => has_assistant,
             ContextSourceKind::ActionResult => has_assistant || has_native_tool,
             _ => false,
         };
-        if index > start && !attaches_to_previous {
+        let current_group_protected = blocks[start..index]
+            .iter()
+            .any(model_context_block_is_protected_barrier);
+        if index > start && (protected || current_group_protected || !attaches_to_previous) {
             groups.push(start..index);
             start = index;
             has_assistant = false;
@@ -162,6 +224,11 @@ fn model_context_execution_group_ranges(blocks: &[ContextBlock]) -> Vec<Range<us
         groups.push(start..blocks.len());
     }
     groups
+}
+
+/// Returns whether a block is an exact, non-crossable compaction barrier.
+fn model_context_block_is_protected_barrier(block: &ContextBlock) -> bool {
+    block.retention() == ContextRetention::Exact || model_context_block_is_compaction_summary(block)
 }
 
 /// Returns whether a block is an immutable local compaction summary epoch.
@@ -204,34 +271,31 @@ fn normalize_model_context_retained_tail_percent(retained_tail_percent: usize) -
 }
 
 /// Finds the first complete execution group in the retained raw suffix.
-fn model_context_tail_start_group(
+fn model_context_retained_group_indexes(
     blocks: &[ContextBlock],
     groups: &[Range<usize>],
+    eligible_groups: &[usize],
     tail_budget_words: usize,
-) -> usize {
+) -> Vec<usize> {
     let mut retained_words = 0usize;
-    let mut tail_group_start = groups.len();
-    for (group_index, group) in groups.iter().enumerate().rev() {
-        if tail_group_start == groups.len()
-            && blocks[group.clone()]
-                .iter()
-                .any(|block| block.content.len() > MODEL_CONTEXT_BLOCK_LIMIT_BYTES)
+    let mut retained = Vec::new();
+    for group_index in eligible_groups.iter().copied().rev() {
+        let group = &groups[group_index];
+        if blocks[group.clone()]
+            .iter()
+            .any(|block| block.content.len() > MODEL_CONTEXT_BLOCK_LIMIT_BYTES)
         {
-            break;
+            continue;
         }
         let group_words = model_context_total_words(&blocks[group.clone()]);
-        if tail_group_start == groups.len() && group_words > tail_budget_words {
-            break;
-        }
-        if tail_group_start < groups.len()
-            && retained_words.saturating_add(group_words) > tail_budget_words
-        {
-            break;
+        if retained_words.saturating_add(group_words) > tail_budget_words {
+            continue;
         }
         retained_words = retained_words.saturating_add(group_words);
-        tail_group_start = group_index;
+        retained.push(group_index);
     }
-    tail_group_start
+    retained.sort_unstable();
+    retained
 }
 
 /// Builds the memory-style block representing compacted context.
@@ -301,7 +365,6 @@ fn model_context_source_kind_name(source: ContextSourceKind) -> &'static str {
         ContextSourceKind::TranscriptUser => "transcript_user",
         ContextSourceKind::TranscriptAssistant => "transcript_assistant",
         ContextSourceKind::TranscriptTool => "transcript_tool",
-        ContextSourceKind::EvidenceLedger => "evidence_ledger",
         ContextSourceKind::CommittedEvidence => "committed_evidence",
         ContextSourceKind::RoutedHandoff => "routed_handoff",
         ContextSourceKind::ActionResult => "action_result",
@@ -364,23 +427,12 @@ mod tests {
     /// provider-limit compaction drop the newest raw action-result evidence.
     #[test]
     fn explicit_context_compaction_protects_guidance_and_recent_action_result() {
-        let mut blocks = vec![
-            ContextBlock {
-                source: ContextSourceKind::ProjectGuidance,
-                placement: crate::ContextPlacement::StablePrefix,
-                label: "project guidance".to_string(),
-                content: "run just test before handoff".to_string(),
-            },
-            ContextBlock {
-                source: ContextSourceKind::ActionResult,
-                placement: crate::ContextPlacement::EphemeralTail,
-                label: "action result".to_string(),
-                content: format!(
-                    "[action_result a1 shell_command succeeded]\ncommand: rg cache\noutput: fresh evidence large-action-marker {}",
-                    "large exact evidence ".repeat(2_000)
-                ),
-            },
-        ];
+        let mut blocks = vec![ContextBlock {
+            source: ContextSourceKind::ProjectGuidance,
+            placement: crate::ContextPlacement::StablePrefix,
+            label: "project guidance".to_string(),
+            content: "run just test before handoff".to_string(),
+        }];
         for index in 0..40 {
             blocks.push(ContextBlock {
                 source: ContextSourceKind::Memory,
@@ -389,6 +441,15 @@ mod tests {
                 content: "old unrelated context ".repeat(20),
             });
         }
+        blocks.push(ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            placement: crate::ContextPlacement::ConversationAppend,
+            label: "action result".to_string(),
+            content: format!(
+                "[action_result a1 shell_command succeeded]\ncommand: rg cache\noutput: fresh evidence large-action-marker {}",
+                "recent exact evidence ".repeat(8)
+            ),
+        });
 
         let (context, report) = compact_model_context_for_budget_with_retained_tail_percent(
             AgentContext::new(blocks).unwrap(),
@@ -568,8 +629,7 @@ mod tests {
         }];
         blocks.extend(old_group.clone());
         blocks.extend(retained_group.clone());
-        blocks.push(volatile.clone());
-        let original = AgentContext::new(blocks).unwrap();
+        let original = AgentContext::new_durable(blocks).unwrap();
         let previous = crate::context_continuity_snapshot(&original, "openai", "gpt", "turn-1");
 
         let (mut compacted, report) =
@@ -587,7 +647,10 @@ mod tests {
             .position(|window| window == retained_group.as_slice())
             .expect("complete recent execution group should remain exact");
         assert!(retained_start > 0);
-        assert_eq!(compacted.blocks.last(), Some(&volatile));
+        assert!(!compacted.blocks.contains(&volatile));
+        let prepared = crate::PreparedModelContext::new(compacted.clone(), vec![volatile.clone()])
+            .expect("live state should attach only after durable compaction");
+        assert_eq!(prepared.live_state(), &[volatile]);
         let summaries = compacted
             .blocks
             .iter()
@@ -628,5 +691,85 @@ mod tests {
             crate::ContextContinuityBreakReason::AppendOnly
         );
         assert!(appended_diagnostics.immutable_append_only);
+    }
+
+    /// Verifies user prompts and mid-turn steering are exact, non-crossable
+    /// barriers and each summarized execution range stays at its own original
+    /// chronological position.
+    #[test]
+    fn context_compaction_preserves_prompt_and_steering_barriers_in_place() {
+        let prompt = ContextBlock::user_event("user prompt", "implement the chronology change");
+        let steering = ContextBlock::user_event("user steering 1", "also preserve exact evidence");
+        let first_execution = vec![
+            ContextBlock::assistant_event(
+                "assistant response 1",
+                format!("first action {}", "reason ".repeat(80)),
+            ),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "action result 1",
+                format!("first evidence {}", "output ".repeat(80)),
+            ),
+        ];
+        let second_execution = vec![
+            ContextBlock::assistant_event(
+                "assistant response 2",
+                format!("second action {}", "reason ".repeat(80)),
+            ),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "action result 2",
+                format!("second evidence {}", "output ".repeat(80)),
+            ),
+        ];
+        let mut blocks = vec![prompt.clone()];
+        blocks.extend(first_execution);
+        blocks.push(steering.clone());
+        blocks.extend(second_execution);
+
+        let (first, report) = compact_model_context_for_budget_with_retained_tail_percent(
+            AgentContext::new_durable(blocks).unwrap(),
+            1_000,
+            1,
+        )
+        .unwrap();
+
+        assert_eq!(report.compacted_blocks, 4);
+        assert_eq!(first.blocks[0], prompt);
+        assert!(model_context_block_is_compaction_summary(&first.blocks[1]));
+        assert_eq!(first.blocks[2], steering);
+        assert!(model_context_block_is_compaction_summary(&first.blocks[3]));
+
+        let (second, repeated_report) =
+            compact_model_context_for_budget_with_retained_tail_percent(first.clone(), 1_000, 1)
+                .unwrap();
+        assert!(!repeated_report.changed());
+        assert_eq!(second.blocks, first.blocks);
+    }
+
+    /// Verifies protected task context that cannot fit fails explicitly.
+    ///
+    /// Direct user text is never truncated or summarized merely to force a
+    /// provider retry through a smaller context window.
+    #[test]
+    fn context_compaction_rejects_unrecoverable_exact_context_overflow() {
+        let context = AgentContext::new_durable(vec![ContextBlock::user_event(
+            "user prompt",
+            "required exact instruction ".repeat(100),
+        )])
+        .unwrap();
+
+        let error = compact_model_context_for_budget(context, 10).unwrap_err();
+
+        assert!(
+            error
+                .message()
+                .contains("unrecoverable model context overflow")
+        );
+        assert!(
+            error
+                .message()
+                .contains("cannot be truncated or summarized")
+        );
     }
 }

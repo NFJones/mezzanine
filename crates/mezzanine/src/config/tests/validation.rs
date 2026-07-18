@@ -462,29 +462,23 @@ fn rejects_invalid_action_failure_retry_limit_values() {
     );
 }
 
-/// Verifies rejects invalid implementation-pressure shell-action thresholds.
+/// Verifies schema 20 rejects the removed implementation-pressure setting.
 ///
-/// A zero threshold would make every turn carry pressure before any shell
-/// evidence exists, so validation requires the advisory trigger to be a
-/// positive integer like other agent loop-control settings.
+/// Primary migration deletes the schema-19 key before validation. A document
+/// that already claims schema 20 must not silently retain obsolete behavior.
 #[test]
-fn rejects_invalid_implementation_pressure_after_shell_actions_values() {
+fn rejects_removed_implementation_pressure_setting_in_schema_20() {
     let validation = validate_config_text(
         ConfigFormat::Toml,
-        "[agents]\nimplementation_pressure_after_shell_actions = 0\n",
+        "version = 20\n[agents]\nimplementation_pressure_after_shell_actions = 3\n",
         ConfigScope::Primary,
     );
 
     assert!(!validation.valid);
-    assert_eq!(
-        validation.diagnostics[0].path,
-        "agents.implementation_pressure_after_shell_actions"
-    );
-    assert!(
-        validation.diagnostics[0]
-            .message
-            .contains("positive integer")
-    );
+    assert!(validation.diagnostics.iter().any(|diagnostic| {
+        diagnostic.path == "agents.implementation_pressure_after_shell_actions"
+            && diagnostic.message.contains("unknown")
+    }));
 }
 
 /// Verifies rejects invalid agent loop iteration limits.

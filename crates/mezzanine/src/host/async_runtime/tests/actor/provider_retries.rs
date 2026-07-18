@@ -1191,7 +1191,7 @@ async fn async_actor_dispatches_provider_retry_after_file_action_failure_feedbac
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: mez_agent::ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: "write then inspect".to_string(),
             }],
         },

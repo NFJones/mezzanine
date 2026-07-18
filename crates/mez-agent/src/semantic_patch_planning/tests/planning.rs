@@ -5,8 +5,7 @@
 use super::*;
 use std::fs::File;
 use std::process::Stdio;
-use std::time::Duration;
-use wait_timeout::ChildExt;
+use std::time::{Duration, Instant};
 
 #[test]
 /// Verifies semantic patch lowering accepts related multi-file patch batches.
@@ -183,14 +182,18 @@ fn semantic_apply_patch_plan_rejects_fifo_targets_without_blocking() {
         .spawn()
         .unwrap();
 
-    let status = child
-        .wait_timeout(Duration::from_secs(2))
-        .unwrap()
-        .unwrap_or_else(|| {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
             panic!("apply_patch command blocked on a FIFO target");
-        });
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
     assert!(
         status.success(),
         "snapshotting FIFO metadata should not block"

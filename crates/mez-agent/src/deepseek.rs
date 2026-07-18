@@ -580,7 +580,7 @@ mod tests {
     #[test]
     fn deepseek_repair_request_inherits_thinking_strategy() {
         let mut request = deepseek_test_request(Vec::new());
-        request.interaction_kind = ModelInteractionKind::Repair;
+        request.interaction_kind = ModelInteractionKind::MaapRepair;
 
         let strategy = deepseek_maap_request_strategy(&request);
         let body_text =
@@ -604,7 +604,7 @@ mod tests {
         let mut request = deepseek_test_request(Vec::new());
         request.reasoning_effort = None;
         request.thinking_enabled = Some(false);
-        request.interaction_kind = ModelInteractionKind::Repair;
+        request.interaction_kind = ModelInteractionKind::MaapRepair;
 
         let strategy = deepseek_maap_request_strategy(&request);
         let body_text =
@@ -672,7 +672,7 @@ mod tests {
             ModelMessage {
                 role: ModelMessageRole::User,
                 source: ContextSourceKind::UserInstruction,
-                placement: crate::ContextPlacement::EphemeralTail,
+                placement: crate::ContextPlacement::ConversationAppend,
                 content: "continue".to_string(),
             },
         ]);

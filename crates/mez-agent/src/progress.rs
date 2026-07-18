@@ -1,32 +1,21 @@
 //! Current-turn progress and rationale de-duplication helpers.
 //!
-//! This module keeps current-turn progress updates and investigative rationale
-//! compact and non-redundant before they are persisted back into
-//! model-visible context. It is pure text normalization and ledger logic;
-//! product runtime state changes remain in the root adapter.
+//! This module normalizes model-authored progress and rationale and suppresses
+//! redundant rationale fields within one response. It deliberately does not
+//! serialize controller bookkeeping back into model-visible context: durable
+//! assistant events already preserve the chronology needed for continuation.
 
 use std::collections::BTreeSet;
 
-use crate::{
-    AgentActionPayload, AgentTurnExecution, ContextBlock, ContextSourceKind, MaapBatch, SayStatus,
-};
+use crate::{AgentActionPayload, AgentTurnExecution, MaapBatch, SayStatus};
 
-/// Label for ephemeral active-turn context that tracks visible progress output.
-pub const PROGRESS_SAY_LEDGER_LABEL: &str = "current-turn progress say ledger";
-/// Label for ephemeral active-turn context that tracks already-emitted
-/// investigative rationale.
-pub const RATIONALE_LEDGER_LABEL: &str = "current-turn rationale ledger";
-/// Maximum progress `say` entries retained for one active turn.
-pub const PROGRESS_SAY_LEDGER_ENTRY_LIMIT: usize = 3;
-/// Maximum rationale entries retained for one active turn.
-pub const RATIONALE_LEDGER_ENTRY_LIMIT: usize = 6;
-/// Maximum characters retained from one progress `say` entry.
-pub const PROGRESS_SAY_LEDGER_ENTRY_CHAR_LIMIT: usize = 512;
-/// Maximum characters retained from one rationale entry.
-pub const RATIONALE_LEDGER_ENTRY_CHAR_LIMIT: usize = 256;
+/// Maximum characters retained while comparing one progress `say` entry.
+const PROGRESS_ENTRY_CHAR_LIMIT: usize = 512;
+/// Maximum characters retained while comparing one rationale entry.
+const RATIONALE_ENTRY_CHAR_LIMIT: usize = 256;
 /// Minimum shared significant tokens for treating two progress updates as the
 /// same sequence point.
-pub const PROGRESS_SAY_REDUNDANT_SHARED_TOKEN_FLOOR: usize = 5;
+const PROGRESS_REDUNDANT_SHARED_TOKEN_FLOOR: usize = 5;
 
 /// Rationale entries removed from one provider action batch.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -109,7 +98,7 @@ pub fn normalize_progress_say_entry(text: &str) -> Option<String> {
     }
     Some(truncate_context_entry(
         &normalized,
-        PROGRESS_SAY_LEDGER_ENTRY_CHAR_LIMIT,
+        PROGRESS_ENTRY_CHAR_LIMIT,
     ))
 }
 
@@ -121,7 +110,7 @@ pub fn normalize_rationale_entry(text: &str) -> Option<String> {
     }
     Some(truncate_context_entry(
         &normalized,
-        RATIONALE_LEDGER_ENTRY_CHAR_LIMIT,
+        RATIONALE_ENTRY_CHAR_LIMIT,
     ))
 }
 
@@ -139,39 +128,8 @@ pub fn truncate_context_entry(text: &str, limit: usize) -> String {
     output
 }
 
-/// Parses progress entries from an existing active-turn ledger block.
-///
-/// # Parameters
-/// - `content`: The previous ledger block content.
-pub fn progress_say_entries_from_ledger(content: &str) -> Vec<String> {
-    content
-        .lines()
-        .filter_map(|line| line.strip_prefix("progress_say: "))
-        .filter_map(normalize_progress_say_entry)
-        .collect()
-}
-
-/// Parses rationale entries from an existing active-turn ledger block.
-pub fn rationale_entries_from_ledger(content: &str) -> Vec<String> {
-    content
-        .lines()
-        .filter_map(|line| line.strip_prefix("rationale: "))
-        .filter_map(normalize_rationale_entry)
-        .collect()
-}
-
-/// Extracts already-visible rationale entries from active context ledgers.
-pub fn rationale_entries_from_context_blocks(blocks: &[ContextBlock]) -> Vec<String> {
-    blocks
-        .iter()
-        .filter(|block| {
-            block.source == ContextSourceKind::RuntimeHint && block.label == RATIONALE_LEDGER_LABEL
-        })
-        .flat_map(|block| rationale_entries_from_ledger(&block.content))
-        .collect()
-}
-
-/// Clears batch and action rationale that repeats already-visible turn intent.
+/// Clears batch and action rationale that repeats earlier intent in the same
+/// response or an explicitly supplied controller-side comparison set.
 ///
 /// New rationale in the same batch becomes visible to later action rationale,
 /// preserving the original deterministic suppression order. The returned
@@ -202,49 +160,6 @@ pub fn suppress_redundant_batch_rationale(
         visible_entries.push(entry);
     }
     suppression
-}
-
-/// Merges previous and newly emitted progress entries under the active-turn cap.
-///
-/// # Parameters
-/// - `previous`: The previous ledger entries.
-/// - `new_entries`: The progress entries emitted by the latest provider
-///   execution.
-pub fn merge_progress_say_entries(previous: Vec<String>, new_entries: Vec<String>) -> Vec<String> {
-    let mut entries = previous;
-    for entry in new_entries {
-        if let Some(position) = entries
-            .iter()
-            .position(|existing| progress_say_entries_are_redundant(existing, &entry))
-        {
-            entries.remove(position);
-        }
-        entries.push(entry);
-    }
-    if entries.len() > PROGRESS_SAY_LEDGER_ENTRY_LIMIT {
-        entries.split_off(entries.len() - PROGRESS_SAY_LEDGER_ENTRY_LIMIT)
-    } else {
-        entries
-    }
-}
-
-/// Merges previous and newly emitted rationale entries under the active-turn cap.
-pub fn merge_rationale_entries(previous: Vec<String>, new_entries: Vec<String>) -> Vec<String> {
-    let mut entries = previous;
-    for entry in new_entries {
-        if let Some(position) = entries
-            .iter()
-            .position(|existing| rationale_entries_are_redundant(existing, &entry))
-        {
-            entries.remove(position);
-        }
-        entries.push(entry);
-    }
-    if entries.len() > RATIONALE_LEDGER_ENTRY_LIMIT {
-        entries.split_off(entries.len() - RATIONALE_LEDGER_ENTRY_LIMIT)
-    } else {
-        entries
-    }
 }
 
 /// Reports whether a rationale entry repeats one already visible in the turn.
@@ -286,7 +201,7 @@ pub fn progress_say_entries_are_redundant(left: &str, right: &str) -> bool {
         return false;
     }
     let shared = left_tokens.intersection(&right_tokens).count();
-    if shared < PROGRESS_SAY_REDUNDANT_SHARED_TOKEN_FLOOR {
+    if shared < PROGRESS_REDUNDANT_SHARED_TOKEN_FLOOR {
         return false;
     }
     let smaller = left_tokens.len().min(right_tokens.len());
@@ -366,16 +281,6 @@ pub fn push_progress_say_token(tokens: &mut BTreeSet<String>, token: &mut String
     tokens.insert(stemmed);
 }
 
-/// Builds the provider-visible content for the active-turn rationale ledger.
-pub fn rationale_ledger_content(entries: &[String]) -> String {
-    let mut lines = vec![
-        "Already-emitted same-turn investigative intent. Avoid repeating these rationale lines unless the next action batch materially changes the reason."
-            .to_string(),
-    ];
-    lines.extend(entries.iter().map(|entry| format!("rationale: {entry}")));
-    lines.join("\n")
-}
-
 /// Applies light suffix normalization for progress comparison tokens.
 ///
 /// # Parameters
@@ -442,19 +347,6 @@ pub fn progress_say_token_is_stopword(token: &str) -> bool {
     )
 }
 
-/// Formats the active-turn progress ledger for model context.
-///
-/// # Parameters
-/// - `entries`: The bounded progress entries to include.
-pub fn progress_say_ledger_content(entries: &[String]) -> String {
-    let mut content = vec![
-        "This is a bounded ledger of user-visible progress say messages already emitted during the current turn.".to_string(),
-        "It is not a user request. Before emitting another progress say, compare against these lines and omit progress if it would restate the same owner, diagnosis, direction, phase, blocker, or validation result.".to_string(),
-    ];
-    content.extend(entries.iter().map(|entry| format!("progress_say: {entry}")));
-    content.join("\n")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,38 +358,7 @@ mod tests {
         let normalized = normalize_progress_say_entry(&text).unwrap();
         assert!(normalized.starts_with("checking "));
         assert!(normalized.ends_with("..."));
-        assert_eq!(
-            normalized.chars().count(),
-            PROGRESS_SAY_LEDGER_ENTRY_CHAR_LIMIT + 3
-        );
-    }
-
-    /// Verifies semantically overlapping progress updates replace older entries.
-    #[test]
-    fn progress_say_merge_replaces_redundant_sequence_points() {
-        let previous = vec![
-            "Inspecting provider routing and model profile fallback behavior".to_string(),
-            "Checking unrelated terminal rendering".to_string(),
-        ];
-        let new_entries =
-            vec!["Inspected provider routing and model profile fallback behavior".to_string()];
-        let merged = merge_progress_say_entries(previous, new_entries);
-        assert_eq!(merged.len(), 2);
-        assert_eq!(
-            merged.last().unwrap(),
-            "Inspected provider routing and model profile fallback behavior"
-        );
-    }
-
-    /// Verifies ledger parsing and formatting preserve bounded rationale entries.
-    #[test]
-    fn rationale_ledger_round_trip_preserves_entries() {
-        let entries = vec![
-            "Trace the state owner before changing the adapter".to_string(),
-            "Validate the lower contract directly".to_string(),
-        ];
-        let content = rationale_ledger_content(&entries);
-        assert_eq!(rationale_entries_from_ledger(&content), entries);
+        assert_eq!(normalized.chars().count(), PROGRESS_ENTRY_CHAR_LIMIT + 3);
     }
 
     /// Verifies canonical suppression clears rationale repeated from prior

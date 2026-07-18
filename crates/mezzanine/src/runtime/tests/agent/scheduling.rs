@@ -518,7 +518,7 @@ context_window_tokens = 64000
         .blocks
         .push(ContextBlock {
             source: ContextSourceKind::ActionResult,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
             label: "synthetic in-turn action result".to_string(),
             content: format!(
                 "turn-context-pressure- {}",
@@ -607,6 +607,24 @@ fn runtime_prompt_during_running_turn_becomes_steering_context() {
         &primary,
     );
     assert!(first.contains(r#""state":"running""#), "{first}");
+    {
+        let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
+        context.blocks.extend([
+            ContextBlock::assistant_event("assistant action 1", "inspect action"),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "result 1",
+                "inspection evidence",
+            ),
+            ContextBlock::assistant_event("assistant action 2", "edit action"),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "result 2",
+                "edit evidence",
+            ),
+        ]);
+        context.validate_durable().unwrap();
+    }
     let second = service.dispatch_runtime_control_body(
         r#"{"jsonrpc":"2.0","id":"agent-prompt-2","method":"agent/shell/command","params":{"idempotency_key":"agent-provider-turn-2","input":"second prompt"}}"#,
         &primary,
@@ -617,6 +635,31 @@ fn runtime_prompt_during_running_turn_becomes_steering_context() {
     assert_eq!(service.agent_turn_ledger().turns().len(), 1);
     assert_eq!(service.agent_scheduler().snapshot().queued, 0);
     assert_eq!(service.agent_scheduler().snapshot().running, 1);
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == "turn-1")
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        service
+            .drain_pending_agent_turn_steering_context(&turn)
+            .unwrap(),
+        1
+    );
+    {
+        let context = service.agent_turn_contexts_mut().get_mut("turn-1").unwrap();
+        context.blocks.extend([
+            ContextBlock::assistant_event("assistant action 3", "spec action"),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "result 3",
+                "spec evidence",
+            ),
+        ]);
+        context.validate_durable().unwrap();
+    }
     let provider = RuntimeRecordingProvider {
         provider: "runtime-batch",
         response: runtime_say_response("turn-1", "Acknowledged.", true),
@@ -643,8 +686,41 @@ fn runtime_prompt_during_running_turn_becomes_steering_context() {
         "{request_context}"
     );
     assert!(
-        request_context.contains("[user steering input during active turn]"),
+        request_context.contains("[user steering 1]\nsecond prompt"),
         "{request_context}"
+    );
+    assert!(!request_context.contains("submitted_at_unix_seconds"));
+    assert_eq!(request_context.matches("first prompt").count(), 1);
+    assert_eq!(request_context.matches("second prompt").count(), 1);
+    let ordered_markers = [
+        "first prompt",
+        "inspect action",
+        "inspection evidence",
+        "edit action",
+        "edit evidence",
+        "second prompt",
+        "spec action",
+        "spec evidence",
+    ];
+    let positions = ordered_markers
+        .iter()
+        .map(|marker| {
+            request
+                .messages
+                .iter()
+                .position(|message| message.content.contains(marker))
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    let steering_index = positions[5];
+    assert_eq!(
+        request.messages[steering_index].source,
+        ContextSourceKind::UserInstruction
+    );
+    assert_eq!(
+        request.messages[steering_index].placement,
+        mez_agent::ContextPlacement::ConversationAppend
     );
     assert!(
         !service

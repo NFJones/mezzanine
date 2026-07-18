@@ -73,10 +73,11 @@ use mez_agent::{
     ActiveWriteScope, AgentContext, AgentNetworkActionHistory, AgentShellDispatchHistory,
     AgentShellStore, AgentTurnLedger, AgentTurnSteering, AutoSizingWorkerSelection,
     DEFAULT_PROVIDER_TIMEOUT_MS, EnvironmentSignature, MaapBatch, MacroManagedSubagent,
-    MacroRunState, ModelTokenUsage, ModelTokenUsageKey, PreparedModelContext,
+    MacroRunState, ModelInteractionKind, ModelTokenUsage, ModelTokenUsageKey, PreparedModelContext,
     ProviderApiCompatibility, ProviderQuotaUsage, SayStatus, ToolDiscoveryCache, ToolInventory,
-    append_mcp_context, append_scheduler_context, assistant_context_content_for_execution,
-    invoked_mcp_tools_for_context, set_project_guidance_context,
+    append_mcp_context_for_provider, append_scheduler_context,
+    assistant_context_content_for_execution, invoked_mcp_tools_for_context,
+    set_project_guidance_context,
 };
 use mez_mux::command::CommandInvocation;
 
@@ -159,8 +160,6 @@ pub(crate) struct RuntimeAgentComponent {
     agent_loop_turns: BTreeMap<String, RuntimeAgentLoopTurn>,
     /// Per-signature correction retry limit for failed model actions.
     agent_action_failure_retry_limit: usize,
-    /// Successful shell streak that activates implementation-pressure hints.
-    agent_implementation_pressure_after_shell_actions: usize,
     /// Per-failure-signature correction attempts keyed by turn/signature.
     agent_turn_failure_feedback_attempts: BTreeMap<String, usize>,
     /// Output-limit recovery attempt currently shaping each active request.
@@ -169,6 +168,8 @@ pub(crate) struct RuntimeAgentComponent {
     /// chronology. Provider preparation projects it into a concise live-state
     /// flag only while the corresponding retry remains active.
     agent_turn_output_limit_recovery_attempts: BTreeMap<String, u32>,
+    /// Exceptional provider interaction selected for each active turn.
+    agent_turn_interaction_kinds: BTreeMap<String, ModelInteractionKind>,
     /// Per-turn successful shell dispatch history.
     agent_turn_shell_dispatch_history: BTreeMap<String, AgentShellDispatchHistory>,
     /// Per-turn network action history.
@@ -323,7 +324,6 @@ impl RuntimeAgentComponent {
         agent_compaction_raw_retention_percent: usize,
         agent_loop_limit: usize,
         agent_action_failure_retry_limit: usize,
-        agent_implementation_pressure_after_shell_actions: usize,
     ) -> Self {
         Self {
             agent_routing,
@@ -331,7 +331,6 @@ impl RuntimeAgentComponent {
             agent_compaction_raw_retention_percent,
             agent_loop_limit,
             agent_action_failure_retry_limit,
-            agent_implementation_pressure_after_shell_actions,
             max_subagent_panes_per_window: DEFAULT_MAX_SUBAGENT_PANES_PER_WINDOW,
             max_root_subagents: DEFAULT_MAX_ROOT_SUBAGENTS,
             max_subagents_per_subagent: DEFAULT_MAX_SUBAGENTS_PER_SUBAGENT,
@@ -1341,6 +1340,7 @@ impl RuntimeSessionService {
     pub(crate) fn clear_all_agent_action_bookkeeping(&mut self) {
         self.agent.agent_turn_failure_feedback_attempts.clear();
         self.agent.agent_turn_output_limit_recovery_attempts.clear();
+        self.agent.agent_turn_interaction_kinds.clear();
         self.agent.agent_turn_shell_dispatch_history.clear();
         self.agent.agent_turn_network_action_history.clear();
         self.agent.agent_turn_config_change_successes.clear();
@@ -1392,21 +1392,6 @@ impl RuntimeSessionService {
     /// Replaces the bounded model-correction retry limit.
     pub(crate) fn set_agent_action_failure_retry_limit(&mut self, limit: usize) {
         self.agent.agent_action_failure_retry_limit = limit;
-    }
-
-    /// Returns the shell streak that activates implementation-pressure hints.
-    pub(crate) fn agent_implementation_pressure_after_shell_actions(&self) -> usize {
-        self.agent
-            .agent_implementation_pressure_after_shell_actions
-            .max(1)
-    }
-
-    /// Replaces the implementation-pressure shell streak.
-    pub(crate) fn set_agent_implementation_pressure_after_shell_actions(
-        &mut self,
-        threshold: usize,
-    ) {
-        self.agent.agent_implementation_pressure_after_shell_actions = threshold;
     }
 
     /// Returns the configured loop iteration limit.
@@ -1795,10 +1780,7 @@ use mez_agent::outcome::{
     runtime_unrecovered_failure_reason, runtime_validate_provider_completion_execution,
     runtime_validate_provider_completion_identity,
 };
-use mez_agent::progress::{
-    rationale_entries_from_context_blocks as runtime_rationale_entries_from_context_blocks,
-    suppress_redundant_batch_rationale as runtime_suppress_redundant_batch_rationale,
-};
+use mez_agent::progress::suppress_redundant_batch_rationale as runtime_suppress_redundant_batch_rationale;
 use mez_agent::subagent_task_output_for_execution;
 use outcome::{
     runtime_agent_action_outcome_line, runtime_agent_action_rationale_repeats_visible_summary,

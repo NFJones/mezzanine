@@ -23,8 +23,11 @@ pub enum ModelInteractionKind {
     /// The model may emit only the executable MAAP actions exposed through the
     /// request's allowed-action set.
     ActionExecution,
+    /// The controller has settled capability decisions and the model is
+    /// continuing on the resulting concrete action surface.
+    CapabilityContinuation,
     /// The model is repairing malformed MAAP for the same interaction surface.
-    Repair,
+    MaapRepair,
     /// The model is producing an internal automatic sizing decision. The
     /// response is parsed as structured JSON and is not replayed as ordinary
     /// conversation context.
@@ -33,6 +36,22 @@ pub enum ModelInteractionKind {
     /// constrained JSON decision that the runtime validates and executes; it is
     /// not a MAAP action batch and is not replayed as conversation content.
     MacroJudge,
+    /// The model is retrying after provider output exhaustion and must return
+    /// one minimal complete action batch or final answer.
+    OutputLimitRetry,
+    /// A routed worker is returning the structured handoff requested by its
+    /// controller task context.
+    RoutedHandoff,
+    /// A routed worker is correcting a rejected structured handoff.
+    RoutedHandoffRepair,
+    /// The parent model is presenting completed routed-worker evidence to the
+    /// original user.
+    RoutedPresentation,
+    /// The parent model is explaining a routed workflow failure to the user.
+    RoutedFailureExplanation,
+    /// The model is producing a bounded user-facing summary of a terminal
+    /// provider or controller failure.
+    FailureSummary,
 }
 
 impl ModelInteractionKind {
@@ -41,9 +60,16 @@ impl ModelInteractionKind {
         match self {
             ModelInteractionKind::CapabilityDecision => "capability_decision",
             ModelInteractionKind::ActionExecution => "action_execution",
-            ModelInteractionKind::Repair => "repair",
+            ModelInteractionKind::CapabilityContinuation => "capability_continuation",
+            ModelInteractionKind::MaapRepair => "maap_repair",
             ModelInteractionKind::AutoSizing => "auto_sizing",
             ModelInteractionKind::MacroJudge => "macro_judge",
+            ModelInteractionKind::OutputLimitRetry => "output_limit_retry",
+            ModelInteractionKind::RoutedHandoff => "routed_handoff",
+            ModelInteractionKind::RoutedHandoffRepair => "routed_handoff_repair",
+            ModelInteractionKind::RoutedPresentation => "routed_presentation",
+            ModelInteractionKind::RoutedFailureExplanation => "routed_failure_explanation",
+            ModelInteractionKind::FailureSummary => "failure_summary",
         }
     }
 
@@ -53,7 +79,14 @@ impl ModelInteractionKind {
             self,
             ModelInteractionKind::CapabilityDecision
                 | ModelInteractionKind::ActionExecution
-                | ModelInteractionKind::Repair
+                | ModelInteractionKind::CapabilityContinuation
+                | ModelInteractionKind::MaapRepair
+                | ModelInteractionKind::OutputLimitRetry
+                | ModelInteractionKind::RoutedHandoff
+                | ModelInteractionKind::RoutedHandoffRepair
+                | ModelInteractionKind::RoutedPresentation
+                | ModelInteractionKind::RoutedFailureExplanation
+                | ModelInteractionKind::FailureSummary
         )
     }
 
@@ -63,6 +96,61 @@ impl ModelInteractionKind {
             self,
             ModelInteractionKind::AutoSizing | ModelInteractionKind::MacroJudge
         )
+    }
+
+    /// Returns the stable mode-specific system instruction for exceptional
+    /// interactions that share the ordinary MAAP response envelope.
+    pub fn system_instruction(self) -> Option<&'static str> {
+        match self {
+            ModelInteractionKind::CapabilityContinuation => Some(
+                "Continue the active task using the appended controller capability decisions and the currently allowed action surface. Do not repeat the capability request or describe the controller negotiation unless it affects the user-facing result.",
+            ),
+            ModelInteractionKind::MaapRepair => Some(
+                "The previous provider response failed MAAP validation before any action executed. Return exactly one corrected MAAP action batch on the currently allowed surface. Do not mention the repair process to the user.",
+            ),
+            ModelInteractionKind::OutputLimitRetry => Some(
+                "The previous response hit the provider output limit. Return one minimal complete MAAP batch when work remains or one short final answer when it does not. Omit progress prose, plans, evidence recaps, command logs, and explanations from this retry.",
+            ),
+            ModelInteractionKind::RoutedHandoff => Some(
+                "Complete the routed handoff task from controller-origin context. Return only the requested structured handoff through the currently allowed response action; do not continue implementation or address the end user.",
+            ),
+            ModelInteractionKind::RoutedHandoffRepair => Some(
+                "Correct the routed handoff using the appended invalid-output and validation evidence. Return only the requested corrected structured handoff through the currently allowed response action.",
+            ),
+            ModelInteractionKind::RoutedPresentation => Some(
+                "Answer the original user from the appended routed-worker result and handoff evidence. Preserve the worker's facts, do not redo its work, and do not discuss internal routing unless it is necessary to explain the result.",
+            ),
+            ModelInteractionKind::RoutedFailureExplanation => Some(
+                "Give the original user one concise, accurate explanation of the routed workflow failure using the appended evidence. Do not claim success, invent missing results, or retry the routed work.",
+            ),
+            ModelInteractionKind::FailureSummary => Some(
+                "Return one concise user-facing summary of the terminal failure evidence. State what failed and any concrete next step without inventing completion or emitting executable actions.",
+            ),
+            ModelInteractionKind::CapabilityDecision
+            | ModelInteractionKind::ActionExecution
+            | ModelInteractionKind::AutoSizing
+            | ModelInteractionKind::MacroJudge => None,
+        }
+    }
+
+    /// Returns the diagnostic reason when this mode intentionally changes the
+    /// request's stable instruction profile.
+    pub fn expected_cache_break_reason(self) -> Option<&'static str> {
+        match self {
+            ModelInteractionKind::CapabilityDecision | ModelInteractionKind::ActionExecution => {
+                None
+            }
+            ModelInteractionKind::CapabilityContinuation
+            | ModelInteractionKind::MaapRepair
+            | ModelInteractionKind::AutoSizing
+            | ModelInteractionKind::MacroJudge
+            | ModelInteractionKind::OutputLimitRetry
+            | ModelInteractionKind::RoutedHandoff
+            | ModelInteractionKind::RoutedHandoffRepair
+            | ModelInteractionKind::RoutedPresentation
+            | ModelInteractionKind::RoutedFailureExplanation
+            | ModelInteractionKind::FailureSummary => Some(self.as_str()),
+        }
     }
 }
 

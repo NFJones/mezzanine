@@ -37,7 +37,6 @@ toml_edit = "0.25"
 unicode-segmentation = "1.12"
 unicode-width = "0.2"
 urlencoding = "2"
-wait-timeout = "0.2"
 zeroize = "1.8"
 zstd = "0.13"
 

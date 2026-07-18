@@ -784,7 +784,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                 messages: vec![mez_agent::ModelMessage {
                     role: mez_agent::ModelMessageRole::User,
                     source: mez_agent::ContextSourceKind::UserInstruction,
-                    placement: mez_agent::ContextPlacement::EphemeralTail,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
                     content: "print a marker".to_string(),
                 }],
             },
@@ -930,7 +930,7 @@ async fn async_pane_worker_keeps_shell_alive_after_first_agent_command() {
                 messages: vec![mez_agent::ModelMessage {
                     role: mez_agent::ModelMessageRole::User,
                     source: mez_agent::ContextSourceKind::UserInstruction,
-                    placement: mez_agent::ContextPlacement::EphemeralTail,
+                    placement: mez_agent::ContextPlacement::ConversationAppend,
                     content: "print a second marker".to_string(),
                 }],
             },

@@ -28,7 +28,7 @@ fn turn_execution_can_be_converted_to_transcript_entries() {
             &turn,
             &AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "run pwd".to_string(),
             }])

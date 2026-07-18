@@ -73,7 +73,6 @@ impl RuntimeSessionService {
             execution.latest_response_usage,
         )?;
         self.suppress_redundant_rationale_entries(turn, &mut execution)?;
-        self.reset_action_pressure_after_non_shell_effects(turn, &execution);
         self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         self.append_agent_execution_assistant_context(turn, &execution)?;
         self.record_agent_copy_output(turn, &execution);

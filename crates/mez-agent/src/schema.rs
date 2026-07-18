@@ -102,7 +102,7 @@ pub fn maap_current_action_batch_description(
 /// Returns the request-independent OpenAI Responses MAAP tool description.
 pub fn maap_cache_stable_action_batch_description() -> String {
     maap_action_batch_description_with_mcp_manifest(
-        "The schema includes a generic mcp_call action. The late allowed-action surface and injected MCP context identify whether MCP is active and which server/tool pairs are callable; runtime validation rejects unavailable tools and invalid arguments.",
+        "The schema includes a generic mcp_call action. The OpenAI request-state suffix identifies the currently allowed actions, and injected MCP context identifies callable server/tool pairs when MCP is active; runtime validation rejects unavailable tools and invalid arguments.",
     )
 }
 

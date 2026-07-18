@@ -11,7 +11,7 @@
 /// Keeping this value documented makes the contract explicit at the module
 /// boundary and avoids relying on call-site inference.
 pub const DEFAULT_CONFIG_TOML: &str = r##"# Mezzanine default configuration.
-version = 19
+version = 20
 
 [terminal]
 profile = "xterm-compatible"
@@ -173,7 +173,6 @@ shell_only = true
 compaction_raw_retention_percent = 10
 routing = false
 action_failure_retry_limit = 5
-implementation_pressure_after_shell_actions = 3
 loop_limit = 8
 custom_system_prompt = ""
 default_personality = ""

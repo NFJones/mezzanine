@@ -688,7 +688,10 @@ impl RuntimeSessionService {
                             .get(&parent_turn_id)
                             .cloned()
                     })
-                    .unwrap_or(AgentContext { blocks: Vec::new() });
+                    .unwrap_or(AgentContext {
+                        blocks: Vec::new(),
+                        metadata: Default::default(),
+                    });
                 insert_routed_context_blocks(&mut repair_context, context_blocks);
                 let repair_turn = match self.queue_routed_child_turn(RoutedChildTurnRequest {
                     parent_turn: &parent_turn,
@@ -980,6 +983,11 @@ impl RuntimeSessionService {
             context,
             routed_failure_context_blocks(stage, child_output, diagnostic),
         );
+        context.validate_durable()?;
+        self.agent.agent_turn_interaction_kinds.insert(
+            parent_turn.turn_id.clone(),
+            mez_agent::ModelInteractionKind::RoutedFailureExplanation,
+        );
         if let Some(workflow) = self
             .agent
             .routed_workflows_by_parent_turn
@@ -1020,6 +1028,11 @@ impl RuntimeSessionService {
             .get_mut(&parent_turn.turn_id)
             .ok_or_else(|| MezError::invalid_state("routed parent context is unavailable"))?;
         insert_routed_context_blocks(context, context_blocks);
+        context.validate_durable()?;
+        self.agent.agent_turn_interaction_kinds.insert(
+            parent_turn.turn_id.clone(),
+            mez_agent::ModelInteractionKind::RoutedPresentation,
+        );
         if let Some(workflow) = self
             .agent
             .routed_workflows_by_parent_turn
@@ -1164,6 +1177,11 @@ impl RuntimeSessionService {
                         MezError::invalid_state("routed parent context is unavailable")
                     })?;
                 insert_routed_context_blocks(context, context_blocks);
+                context.validate_durable()?;
+                self.agent.agent_turn_interaction_kinds.insert(
+                    turn_id.to_string(),
+                    mez_agent::ModelInteractionKind::RoutedFailureExplanation,
+                );
                 if let Some(workflow) = self.agent.routed_workflows_by_parent_turn.get_mut(turn_id)
                 {
                     workflow.phase = RoutedWorkflowPhase::ExplainingError;
@@ -1219,22 +1237,48 @@ impl RuntimeSessionService {
             initial_capability,
             reason,
         } = request;
-        let context = match seed_context {
+        let mut context = match seed_context {
             Some(mut context) => {
-                context.blocks.push(ContextBlock {
-                    source: ContextSourceKind::UserInstruction,
-                    placement: mez_agent::ContextPlacement::EphemeralTail,
-                    label: "routed workflow prompt".to_string(),
-                    content: prompt.to_string(),
-                });
-                AgentContext::new(context.blocks)?
+                context.blocks.push(ContextBlock::reference_event(
+                    ContextSourceKind::LocalMessage,
+                    "routed controller task",
+                    prompt,
+                ));
+                AgentContext::new_durable(context.blocks)?
             }
             None => {
-                let context = self.agent_context_for_pane_prompt(child_pane_id, prompt, 100)?;
-                self.apply_agent_shell_preference_context(child_pane_id, context)?
+                let mut context = self.agent_context_for_pane_prompt(child_pane_id, prompt, 100)?;
+                let prompt_block = context
+                    .blocks
+                    .iter_mut()
+                    .find(|block| {
+                        block.source == ContextSourceKind::UserInstruction
+                            && block.label == "user prompt"
+                            && block.content == prompt
+                    })
+                    .ok_or_else(|| {
+                        MezError::invalid_state("routed child prompt context is unavailable")
+                    })?;
+                *prompt_block = ContextBlock::reference_event(
+                    ContextSourceKind::LocalMessage,
+                    "routed controller task",
+                    prompt,
+                );
+                let context = self.apply_agent_shell_preference_context(child_pane_id, context)?;
+                AgentContext::new_durable(context.blocks)?
             }
         };
-        context.validate_placement_order()?;
+        context.metadata = self
+            .agent_shell_store()
+            .get(child_pane_id)
+            .map(|session| {
+                mez_agent::ModelContextMetadata::new(
+                    Some(session.session_id.clone()),
+                    Some(session.prompt_cache_lineage_id.clone()),
+                )
+            })
+            .unwrap_or_default();
+        context.validate_durable()?;
         let turn_id = self.next_agent_turn_id();
         let turn = AgentTurnRecord {
             turn_id: turn_id.clone(),
@@ -1253,6 +1297,17 @@ impl RuntimeSessionService {
         self.agent_turn_ledger_mut().queue_turn(turn.clone())?;
         self.agent_turn_contexts_mut()
             .insert(turn_id.clone(), context);
+        if let Some(interaction_kind) = match reason {
+            "routed_worker_handoff" => Some(mez_agent::ModelInteractionKind::RoutedHandoff),
+            "routed_worker_handoff_repair" => {
+                Some(mez_agent::ModelInteractionKind::RoutedHandoffRepair)
+            }
+            _ => None,
+        } {
+            self.agent
+                .agent_turn_interaction_kinds
+                .insert(turn_id.clone(), interaction_kind);
+        }
         self.agent
             .agent_turn_model_profiles
             .insert(turn_id.clone(), model_profile);

@@ -84,7 +84,7 @@ fn turn_runner_denies_issues_capability_when_issue_tracking_disabled() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "list project issues".to_string(),
             }])
@@ -97,7 +97,7 @@ fn turn_runner_denies_issues_capability_when_issue_tracking_disabled() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].interaction_kind,
-        mez_agent::ModelInteractionKind::CapabilityDecision
+        mez_agent::ModelInteractionKind::CapabilityContinuation
     );
     assert_eq!(
         requests[1].allowed_actions.action_type_names(),
@@ -190,7 +190,7 @@ fn turn_runner_exposes_mcp_actions_on_initial_surface_when_available() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "use any helpful MCP integration before answering".to_string(),
             }])
@@ -271,7 +271,7 @@ fn turn_runner_exposes_memory_actions_on_initial_surface_when_enabled() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "use any helpful memory before answering".to_string(),
             }])
@@ -388,7 +388,7 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "where am I".to_string(),
             }])
@@ -420,7 +420,7 @@ fn turn_runner_exposes_shell_actions_only_after_capability_request() {
     assert!(!initial_actions.contains(&"fetch_url"));
     assert_eq!(
         requests[1].interaction_kind,
-        mez_agent::ModelInteractionKind::ActionExecution
+        mez_agent::ModelInteractionKind::CapabilityContinuation
     );
     let execution_actions = requests[1].allowed_actions.action_type_names();
     assert!(execution_actions.contains(&"shell_command"));
@@ -520,7 +520,7 @@ fn turn_runner_grants_fetch_capability_without_context_url() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "hello".to_string(),
             }])
@@ -533,7 +533,7 @@ fn turn_runner_grants_fetch_capability_without_context_url() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].interaction_kind,
-        mez_agent::ModelInteractionKind::ActionExecution
+        mez_agent::ModelInteractionKind::CapabilityContinuation
     );
     let allowed_actions = requests[1].allowed_actions.action_type_names();
     assert!(allowed_actions.contains(&"fetch_url"));

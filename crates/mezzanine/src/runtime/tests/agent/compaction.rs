@@ -748,7 +748,8 @@ max_output_tokens = 4096
         "{second_request_text}"
     );
     assert!(
-        second_request_text.contains("provider_response_mode=compact_output_retry attempt=1"),
+        second_request_text.contains("Mezzanine interaction mode: output_limit_retry")
+            && second_request_text.contains("output_limit_recovery_attempt=1"),
         "{second_request_text}"
     );
     assert!(
@@ -762,7 +763,8 @@ max_output_tokens = 4096
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        third_request_text.contains("provider_response_mode=compact_output_retry attempt=2"),
+        third_request_text.contains("Mezzanine interaction mode: output_limit_retry")
+            && third_request_text.contains("output_limit_recovery_attempt=2"),
         "{third_request_text}"
     );
     assert!(

@@ -2,7 +2,7 @@
 //!
 //! This module owns context-to-message projection, repository-guidance
 //! placement, provider transcript preservation, prompt
-//! cache identity extraction, default action surfaces, and provider-specific
+//! typed cache identity, default action surfaces, and provider-specific
 //! request defaults. Product code supplies stable turn identity and prompt
 //! assets without exposing runtime records or filesystem access.
 
@@ -11,7 +11,8 @@ use crate::{
     AllowedActionSet, ContextBlock, ContextPlacement, ContextSourceKind, ModelInteractionKind,
     ModelMessage, ModelMessageRole, ModelProfile, ModelRequest, ProviderTranscriptEvent,
     assemble_agent_system_prompt, constrain_skill_actions_for_loaded_context,
-    model_context_block_header, validate_context_placement_order, validate_model_profile_request,
+    model_context_block_header, validate_context_placement_order, validate_context_semantics,
+    validate_model_profile_request,
 };
 
 /// Stable product identity required to assemble one provider request.
@@ -34,6 +35,7 @@ pub fn assemble_model_request_from_context(
 ) -> AgentRequestAssemblyResult<ModelRequest> {
     validate_model_profile_request(profile, identity.turn_id)?;
     validate_context_placement_order(&context.blocks)?;
+    validate_context_semantics(&context.blocks)?;
 
     let blocks = context.blocks.clone();
     let repository_instruction_blocks = blocks
@@ -78,14 +80,6 @@ pub fn assemble_model_request_from_context(
         if block.source == ContextSourceKind::ProjectGuidance {
             continue;
         }
-        if block.source == ContextSourceKind::Configuration
-            && matches!(
-                block.label.as_str(),
-                "session identity" | "pane identity" | "prompt cache lineage"
-            )
-        {
-            continue;
-        }
         messages.push(ModelMessage {
             role: role_for_context_block(block),
             source: block.source,
@@ -117,8 +111,8 @@ pub fn assemble_model_request_from_context(
                     None
                 }
             }),
-        prompt_cache_session_id: prompt_cache_session_id_from_blocks(&blocks),
-        prompt_cache_lineage_id: prompt_cache_lineage_id_from_blocks(&blocks),
+        prompt_cache_session_id: context.metadata.prompt_cache_session_id.clone(),
+        prompt_cache_lineage_id: context.metadata.prompt_cache_lineage_id.clone(),
         turn_id: identity.turn_id.to_string(),
         agent_id: identity.agent_id.to_string(),
         available_mcp_tools: Vec::new(),
@@ -164,36 +158,6 @@ pub fn role_for_context_block(block: &ContextBlock) -> ModelMessageRole {
         | crate::ContextSemanticKind::ReferenceEvent
         | crate::ContextSemanticKind::LiveState => ModelMessageRole::Context,
     }
-}
-
-/// Extracts the live Mezzanine session id from hidden identity context.
-fn prompt_cache_session_id_from_blocks(blocks: &[ContextBlock]) -> Option<String> {
-    blocks
-        .iter()
-        .find(|block| {
-            block.source == ContextSourceKind::Configuration && block.label == "session identity"
-        })
-        .and_then(|block| {
-            block
-                .content
-                .split_whitespace()
-                .find_map(|field| field.strip_prefix("session_id="))
-        })
-        .filter(|session_id| !session_id.trim().is_empty())
-        .map(ToOwned::to_owned)
-}
-
-/// Extracts stable prompt-cache lineage from hidden metadata.
-fn prompt_cache_lineage_id_from_blocks(blocks: &[ContextBlock]) -> Option<String> {
-    blocks
-        .iter()
-        .find(|block| {
-            block.source == ContextSourceKind::Configuration
-                && block.label == "prompt cache lineage"
-        })
-        .map(|block| block.content.trim())
-        .filter(|lineage_id| !lineage_id.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 /// Returns the system-prompt pointer used for DeepSeek repository guidance.
@@ -243,21 +207,15 @@ mod tests {
     }
 
     /// Verifies lower request assembly preserves hidden provider events and
-    /// extracts cache identity without exposing hidden blocks as messages.
+    /// carries typed cache identity without projecting it as model text.
     #[test]
-    fn model_request_assembly_preserves_hidden_context_contracts() {
+    fn model_request_assembly_preserves_typed_metadata_and_provider_events() {
         let event = ProviderTranscriptEvent::DeepSeekToolResult {
             tool_call_id: "call-1".to_string(),
             content: "result".to_string(),
         }
         .to_transcript_content();
         let context = AgentContext::new(vec![
-            ContextBlock {
-                source: ContextSourceKind::Configuration,
-                placement: crate::ContextPlacement::StablePrefix,
-                label: "session identity".to_string(),
-                content: "session_id=session-1".to_string(),
-            },
             ContextBlock {
                 source: ContextSourceKind::Transcript,
                 placement: crate::ContextPlacement::ConversationAppend,
@@ -266,12 +224,16 @@ mod tests {
             },
             ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: crate::ContextPlacement::EphemeralTail,
+                placement: crate::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "continue".to_string(),
             },
         ])
-        .unwrap();
+        .unwrap()
+        .with_metadata(crate::ModelContextMetadata::new(
+            Some("session-1"),
+            Some("lineage-1"),
+        ));
         let request = assemble_model_request_from_context(
             &model_profile("deepseek"),
             ModelRequestIdentity {
@@ -287,6 +249,17 @@ mod tests {
         assert_eq!(
             request.prompt_cache_session_id.as_deref(),
             Some("session-1")
+        );
+        assert_eq!(
+            request.prompt_cache_lineage_id.as_deref(),
+            Some("lineage-1")
+        );
+        assert!(
+            !request
+                .messages
+                .iter()
+                .any(|message| message.content.contains("session-1")
+                    || message.content.contains("lineage-1"))
         );
         assert!(
             request

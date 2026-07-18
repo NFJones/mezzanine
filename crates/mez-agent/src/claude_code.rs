@@ -140,21 +140,9 @@ pub fn claude_code_system_prompt(
 }
 
 /// Builds the text prompt passed to the Claude Code CLI stdin channel.
-pub fn claude_code_prompt(request: &ModelRequest, retry_instruction: Option<&str>) -> String {
-    let final_user_index = request
-        .messages
-        .iter()
-        .rposition(|message| message.role == crate::ModelMessageRole::User);
+pub fn claude_code_prompt(request: &ModelRequest, _retry_instruction: Option<&str>) -> String {
     let mut prompt = String::new();
-    append_claude_code_prior_context(&mut prompt, request, final_user_index);
-    append_claude_code_current_user_prompt(&mut prompt, request, final_user_index);
-    if let Some(retry_instruction) = retry_instruction {
-        append_claude_code_section(
-            &mut prompt,
-            "Developer retry instruction",
-            retry_instruction,
-        );
-    }
+    append_claude_code_ordered_context(&mut prompt, request);
     prompt
 }
 
@@ -201,57 +189,39 @@ fn append_claude_code_instruction_framing(
     }
 }
 
-/// Appends prior non-instruction messages as conversation context.
-fn append_claude_code_prior_context(
-    prompt: &mut String,
-    request: &ModelRequest,
-    final_user_index: Option<usize>,
-) {
-    let mut wrote_heading = false;
-    for (index, message) in request.messages.iter().enumerate() {
-        if Some(index) == final_user_index
-            || matches!(
-                message.role,
-                crate::ModelMessageRole::System | crate::ModelMessageRole::Developer
-            )
-        {
+/// Appends every non-instruction message in canonical order.
+///
+/// Claude Code accepts one stdin prompt rather than a native message array, so
+/// role labels delimit events without selecting and relocating a "current"
+/// user message. System and developer instructions travel through the CLI's
+/// dedicated system-prompt channel.
+fn append_claude_code_ordered_context(prompt: &mut String, request: &ModelRequest) {
+    if request.interaction_kind == crate::ModelInteractionKind::AutoSizing {
+        prompt.push_str("Ordered conversation context to classify (do not answer it):\n");
+    } else {
+        prompt.push_str("Ordered Mezzanine conversation context:\n");
+    }
+    let mut wrote_message = false;
+    for message in &request.messages {
+        if matches!(
+            message.role,
+            crate::ModelMessageRole::System | crate::ModelMessageRole::Developer
+        ) {
             continue;
         }
-        if !wrote_heading {
-            prompt.push_str("Prior conversation context (not the current user request):\n");
-            wrote_heading = true;
-        }
         let label = match message.role {
-            crate::ModelMessageRole::User => "Previous user message",
-            crate::ModelMessageRole::Assistant => "Previous assistant message",
-            crate::ModelMessageRole::Tool => "Previous tool result",
+            crate::ModelMessageRole::User => "User message",
+            crate::ModelMessageRole::Assistant => "Assistant message",
+            crate::ModelMessageRole::Tool => "Tool result",
             crate::ModelMessageRole::Context => "Mezzanine context (not user-authored)",
             crate::ModelMessageRole::System | crate::ModelMessageRole::Developer => unreachable!(),
         };
         append_claude_code_section(prompt, label, &message.content);
+        wrote_message = true;
     }
-}
-
-/// Appends the final user message or an instruction-only fallback.
-fn append_claude_code_current_user_prompt(
-    prompt: &mut String,
-    request: &ModelRequest,
-    final_user_index: Option<usize>,
-) {
-    if request.interaction_kind == crate::ModelInteractionKind::AutoSizing {
-        prompt
-            .push_str("Latest user message to classify for internal routing (do not answer it):\n");
-    } else {
-        prompt.push_str("Current user request:\n");
+    if !wrote_message {
+        prompt.push_str("No conversation messages were provided; follow the system prompt.\n\n");
     }
-    if let Some(index) = final_user_index {
-        prompt.push_str(&request.messages[index].content);
-    } else if request.interaction_kind == crate::ModelInteractionKind::AutoSizing {
-        prompt.push_str("No explicit user message was provided. Classify from the remaining instruction and context only.");
-    } else {
-        prompt.push_str("Follow the system prompt.");
-    }
-    prompt.push_str("\n\n");
 }
 
 /// Appends one labeled plaintext prompt section.
@@ -1043,48 +1013,53 @@ mod tests {
     }
 
     /// Verifies Claude Code prompt construction respects the CLI's single
-    /// stdin prompt contract by framing authoritative instructions separately,
-    /// preserving prior turns only as context, and isolating the final user
-    /// message as the current request.
+    /// stdin prompt contract by framing authoritative instructions separately
+    /// and preserving every conversation event in canonical order.
     #[test]
-    fn claude_code_prompt_isolates_final_user_request() {
+    fn claude_code_prompt_preserves_canonical_message_order() {
         let mut request = claude_request();
         request.messages = vec![
             ModelMessage {
                 role: ModelMessageRole::System,
-                source: ContextSourceKind::UserInstruction,
-                placement: crate::ContextPlacement::EphemeralTail,
+                source: ContextSourceKind::System,
+                placement: crate::ContextPlacement::StablePrefix,
                 content: "System authority.".to_string(),
             },
             ModelMessage {
                 role: ModelMessageRole::Developer,
-                source: ContextSourceKind::UserInstruction,
-                placement: crate::ContextPlacement::EphemeralTail,
+                source: ContextSourceKind::DeveloperInstruction,
+                placement: crate::ContextPlacement::StablePrefix,
                 content: "Developer authority.".to_string(),
             },
             ModelMessage {
                 role: ModelMessageRole::User,
                 source: ContextSourceKind::UserInstruction,
-                placement: crate::ContextPlacement::EphemeralTail,
+                placement: crate::ContextPlacement::ConversationAppend,
                 content: "Earlier user turn.".to_string(),
             },
             ModelMessage {
                 role: ModelMessageRole::Assistant,
-                source: ContextSourceKind::RuntimeHint,
-                placement: crate::ContextPlacement::EphemeralTail,
+                source: ContextSourceKind::TranscriptAssistant,
+                placement: crate::ContextPlacement::ConversationAppend,
                 content: "Earlier assistant turn.".to_string(),
             },
             ModelMessage {
                 role: ModelMessageRole::Tool,
                 source: ContextSourceKind::ActionResult,
-                placement: crate::ContextPlacement::EphemeralTail,
+                placement: crate::ContextPlacement::ConversationAppend,
                 content: "Prior tool result.".to_string(),
             },
             ModelMessage {
                 role: ModelMessageRole::User,
                 source: ContextSourceKind::UserInstruction,
-                placement: crate::ContextPlacement::EphemeralTail,
+                placement: crate::ContextPlacement::ConversationAppend,
                 content: "Final user request.".to_string(),
+            },
+            ModelMessage {
+                role: ModelMessageRole::Context,
+                source: ContextSourceKind::RuntimeHint,
+                placement: crate::ContextPlacement::EphemeralTail,
+                content: "Current factual live state.".to_string(),
             },
         ];
 
@@ -1101,14 +1076,23 @@ mod tests {
         assert!(system_prompt.contains("Claude Code direct-tool boundary:"));
         assert!(system_prompt.contains("MAAP action mapping:"));
         assert!(system_prompt.contains("edit file contents through apply_patch"));
-        assert!(prompt.contains("Prior conversation context (not the current user request):"));
-        assert!(prompt.contains("Previous user message:\nEarlier user turn."));
-        assert!(prompt.contains("Previous assistant message:\nEarlier assistant turn."));
-        assert!(prompt.contains("Previous tool result:\nPrior tool result."));
-        assert!(prompt.contains("Current user request:\nFinal user request."));
+        assert!(prompt.contains("Ordered Mezzanine conversation context:"));
+        assert!(prompt.contains("User message:\nEarlier user turn."));
+        assert!(prompt.contains("Assistant message:\nEarlier assistant turn."));
+        assert!(prompt.contains("Tool result:\nPrior tool result."));
+        assert!(prompt.contains("User message:\nFinal user request."));
+        let earlier_user = prompt.find("Earlier user turn.").unwrap();
+        let assistant = prompt.find("Earlier assistant turn.").unwrap();
+        let evidence = prompt.find("Prior tool result.").unwrap();
+        let final_user = prompt.find("Final user request.").unwrap();
+        let live_state = prompt.find("Current factual live state.").unwrap();
+        assert!(earlier_user < assistant);
+        assert!(assistant < evidence);
+        assert!(evidence < final_user);
+        assert!(final_user < live_state);
         assert!(!prompt.contains("System instruction:"));
         assert!(!prompt.contains("Developer instruction:"));
-        assert!(prompt.contains("Developer retry instruction:\nRetry with a valid MAAP batch."));
+        assert!(!prompt.contains("Developer retry instruction:"));
     }
 
     /// Verifies Claude Code auto-sizing prompt construction frames the latest
@@ -1122,19 +1106,19 @@ mod tests {
             ModelMessage {
                 role: ModelMessageRole::User,
                 source: ContextSourceKind::UserInstruction,
-                placement: crate::ContextPlacement::EphemeralTail,
+                placement: crate::ContextPlacement::ConversationAppend,
                 content: "Earlier user turn.".to_string(),
             },
             ModelMessage {
                 role: ModelMessageRole::Assistant,
-                source: ContextSourceKind::RuntimeHint,
-                placement: crate::ContextPlacement::EphemeralTail,
+                source: ContextSourceKind::TranscriptAssistant,
+                placement: crate::ContextPlacement::ConversationAppend,
                 content: "Earlier assistant turn.".to_string(),
             },
             ModelMessage {
                 role: ModelMessageRole::User,
                 source: ContextSourceKind::UserInstruction,
-                placement: crate::ContextPlacement::EphemeralTail,
+                placement: crate::ContextPlacement::ConversationAppend,
                 content: "Implement the runtime change.".to_string(),
             },
         ];
@@ -1149,37 +1133,40 @@ mod tests {
             system_prompt.contains("Return exactly one JSON object matching the requested schema")
         );
         assert!(!system_prompt.contains("MAAP action mapping:"));
-        assert!(prompt.contains("Latest user message to classify for internal routing (do not answer it):\nImplement the runtime change."));
-        assert!(!prompt.contains("Current user request:"));
+        assert!(prompt.contains("Ordered conversation context to classify (do not answer it):"));
+        assert!(prompt.contains("User message:\nImplement the runtime change."));
     }
 
-    /// Verifies corrective retry guidance is replayed through both stdin prompt
-    /// paths so fresh and resumed attempts do not depend only on system text.
+    /// Verifies corrective retry guidance stays in Claude Code's authoritative
+    /// system channel instead of being duplicated after ordered chronology.
     #[test]
-    fn claude_code_retry_instruction_reaches_stdin_prompts() {
+    fn claude_code_retry_instruction_stays_in_system_prompt() {
         let request = claude_request();
+        let system_prompt =
+            claude_code_system_prompt(&request, Some(CLAUDE_CODE_MAAP_RETRY_INSTRUCTION));
         let prompt = claude_code_prompt(&request, Some(CLAUDE_CODE_MAAP_RETRY_INSTRUCTION));
         let resume_prompt =
             claude_code_resume_prompt(&request, Some(CLAUDE_CODE_MAAP_RETRY_INSTRUCTION));
 
         assert!(
-            prompt.contains("Developer retry instruction:\nYour previous response was invalid")
-        );
-        assert!(
-            resume_prompt
+            system_prompt
                 .contains("Developer retry instruction:\nYour previous response was invalid")
         );
+        assert!(!prompt.contains("Developer retry instruction:"));
+        assert!(!resume_prompt.contains("Developer retry instruction:"));
     }
 
-    /// Verifies instruction-only Claude Code requests still produce a current
-    /// request section instead of recreating role-tagged transcript blocks.
+    /// Verifies instruction-only Claude Code requests produce an explicit
+    /// empty-conversation marker without recreating role-tagged transcript.
     #[test]
     fn claude_code_prompt_handles_instruction_only_requests() {
         let system_prompt = claude_code_system_prompt(&claude_request(), None);
         let prompt = claude_code_prompt(&claude_request(), None);
 
         assert!(system_prompt.contains("Developer instruction:\nReturn a final say action."));
-        assert!(prompt.contains("Current user request:\nFollow the system prompt."));
+        assert!(
+            prompt.contains("No conversation messages were provided; follow the system prompt.")
+        );
         assert!(!prompt.contains("Developer instruction:"));
         assert!(!prompt.contains("<developer>"));
     }
@@ -1409,7 +1396,7 @@ mod tests {
             messages: vec![ModelMessage {
                 role: ModelMessageRole::Developer,
                 source: ContextSourceKind::UserInstruction,
-                placement: crate::ContextPlacement::EphemeralTail,
+                placement: crate::ContextPlacement::ConversationAppend,
                 content: "Return a final say action.".to_string(),
             }],
         }

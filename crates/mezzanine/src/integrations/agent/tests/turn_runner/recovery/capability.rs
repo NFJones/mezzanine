@@ -50,7 +50,7 @@ fn turn_runner_fails_response_without_action_batch() {
             turn.clone(),
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "summarize".to_string(),
             }])
@@ -146,7 +146,7 @@ fn turn_runner_recovers_mixed_capability_and_execution_batch_without_effects() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "inspect the repository".to_string(),
             }])
@@ -165,7 +165,7 @@ fn turn_runner_recovers_mixed_capability_and_execution_batch_without_effects() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].interaction_kind,
-        mez_agent::ModelInteractionKind::ActionExecution
+        mez_agent::ModelInteractionKind::CapabilityContinuation
     );
     let execution_actions = requests[1].allowed_actions.action_type_names();
     assert!(execution_actions.contains(&"shell_command"));
@@ -174,11 +174,7 @@ fn turn_runner_recovers_mixed_capability_and_execution_batch_without_effects() {
     let recovery_context = requests[1]
         .messages
         .iter()
-        .find(|message| {
-            message
-                .content
-                .contains("[mixed capability batch recovery]")
-        })
+        .find(|message| message.content.contains("capability_recovery=mixed_batch"))
         .expect("missing mixed capability recovery context");
     assert!(recovery_context.content.contains("shell_command"));
 }
@@ -273,7 +269,7 @@ fn turn_runner_recovers_mixed_capability_batch_before_heredoc_validation() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "write a short Rust program".to_string(),
             }])
@@ -294,22 +290,18 @@ fn turn_runner_recovers_mixed_capability_batch_before_heredoc_validation() {
             .request
             .messages
             .iter()
-            .all(|message| !message.content.contains("ephemeral maap repair"))
+            .all(|message| !message.content.contains("[MAAP repair state]"))
     );
     let requests = provider.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(
         requests[1].interaction_kind,
-        mez_agent::ModelInteractionKind::ActionExecution
+        mez_agent::ModelInteractionKind::CapabilityContinuation
     );
     let recovery_context = requests[1]
         .messages
         .iter()
-        .find(|message| {
-            message
-                .content
-                .contains("[mixed capability batch recovery]")
-        })
+        .find(|message| message.content.contains("capability_recovery=mixed_batch"))
         .expect("missing mixed capability recovery context");
     assert!(recovery_context.content.contains("shell_command"));
     assert!(
@@ -422,7 +414,7 @@ fn turn_runner_repairs_legacy_complete_during_capability_decision() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "inspect the workspace".to_string(),
             }])
@@ -435,7 +427,7 @@ fn turn_runner_repairs_legacy_complete_during_capability_decision() {
     assert_eq!(requests.len(), 3);
     assert_eq!(
         requests[1].interaction_kind,
-        mez_agent::ModelInteractionKind::Repair
+        mez_agent::ModelInteractionKind::MaapRepair
     );
     assert!(
         requests[1].messages.iter().any(|message| message

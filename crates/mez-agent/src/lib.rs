@@ -104,7 +104,7 @@ pub mod openai_schema;
 pub mod outcome;
 /// Agent-facing permission identity contracts.
 pub mod permissions;
-/// Provider-independent current-turn progress and rationale ledgers.
+/// Provider-independent progress and rationale de-duplication helpers.
 pub mod progress;
 /// Provider-neutral prompt profile contracts.
 pub mod prompt;
@@ -234,15 +234,15 @@ pub use context::{
     AgentContext, AgentContextError, AgentContextResult, AgentRequestAssemblyError,
     AgentRequestAssemblyErrorKind, AgentRequestAssemblyResult, ContextBlock, ContextCachePolicy,
     ContextPlacement, ContextRetention, ContextSemanticKind, ContextSourceKind, ContextStability,
-    ModelContextCompactionReport, ModelMessage, ModelMessageRole, ModelRequest,
-    PreparedModelContext, TrustDomain, context_placement_insertion_index,
+    ModelContextCompactionReport, ModelContextMetadata, ModelMessage, ModelMessageRole,
+    ModelRequest, PreparedModelContext, TrustDomain, context_placement_insertion_index,
     insert_context_block_by_placement, model_context_block_header,
     validate_context_placement_order, validate_context_required, validate_context_semantics,
 };
 pub use context_appenders::{
-    append_mcp_context, append_memory_context, append_permission_policy_context,
-    append_project_guidance_context, append_scheduler_context, invoked_mcp_tools_for_context,
-    memory_context_blocks, set_project_guidance_context,
+    append_mcp_context, append_mcp_context_for_provider, append_memory_context,
+    append_permission_policy_context, append_project_guidance_context, append_scheduler_context,
+    invoked_mcp_tools_for_context, memory_context_blocks, set_project_guidance_context,
 };
 pub use context_assembly::{
     ModelRequestIdentity, assemble_model_request_from_context, role_for_context_block,
@@ -252,8 +252,10 @@ pub use context_compaction::{
     compact_model_context_for_budget_with_retained_tail_percent, model_context_text_word_count,
 };
 pub use context_continuity::{
-    ContextContinuityBreakReason, ContextContinuityDiagnostics, ContextContinuitySnapshot,
-    ImmutableContextBlockDigest, context_continuity_diagnostics, context_continuity_snapshot,
+    ContextBlockDiagnostics, ContextContinuityBreakReason, ContextContinuityDiagnostics,
+    ContextContinuitySnapshot, ContextSemanticAggregate, ImmutableContextBlockDigest,
+    context_continuity_diagnostics, context_continuity_diagnostics_for_interaction,
+    context_continuity_snapshot,
 };
 pub use context_skills::constrain_skill_actions_for_loaded_context;
 pub use continuation::{
@@ -371,17 +373,11 @@ pub use permissions::{
     AgentShellPermissionSummary, ApprovalPolicy, PermissionPlanning, PermissionPreset, RuleDecision,
 };
 pub use progress::{
-    PROGRESS_SAY_LEDGER_ENTRY_CHAR_LIMIT, PROGRESS_SAY_LEDGER_ENTRY_LIMIT,
-    PROGRESS_SAY_LEDGER_LABEL, PROGRESS_SAY_REDUNDANT_SHARED_TOKEN_FLOOR,
-    RATIONALE_LEDGER_ENTRY_CHAR_LIMIT, RATIONALE_LEDGER_ENTRY_LIMIT, RATIONALE_LEDGER_LABEL,
-    RationaleSuppression, merge_progress_say_entries, merge_rationale_entries,
-    normalize_progress_say_entry, normalize_rationale_entry, progress_say_entries_are_redundant,
-    progress_say_entries_for_execution, progress_say_entries_from_ledger,
-    progress_say_ledger_content, progress_say_significant_tokens, progress_say_stem_token,
-    progress_say_token_is_stopword, push_progress_say_token, rationale_entries_are_redundant,
-    rationale_entries_for_execution, rationale_entries_from_context_blocks,
-    rationale_entries_from_ledger, rationale_entry_repeats_existing, rationale_ledger_content,
-    suppress_redundant_batch_rationale, truncate_context_entry,
+    RationaleSuppression, normalize_progress_say_entry, normalize_rationale_entry,
+    progress_say_entries_are_redundant, progress_say_entries_for_execution,
+    progress_say_significant_tokens, progress_say_stem_token, progress_say_token_is_stopword,
+    push_progress_say_token, rationale_entries_are_redundant, rationale_entries_for_execution,
+    rationale_entry_repeats_existing, suppress_redundant_batch_rationale, truncate_context_entry,
 };
 pub use prompt::{
     AGENT_PROMPT_PROFILE_NAME, AGENT_PROMPT_PROFILE_VERSION, AgentPromptAssetSource,
@@ -398,17 +394,16 @@ pub use provider::{
     ProviderModelCatalogParseError, ProviderModelInfo, ProviderRequestAssemblyError,
     ProviderRequestAssemblyErrorKind, ProviderRequestAssemblyResult, ProviderResponseError,
     ProviderResponseErrorKind, ProviderResponseResult, known_model_context_window_tokens,
-    known_provider_model_context_window_tokens, openai_allowed_action_surface_message,
-    openai_auto_sizing_response_format, openai_current_action_result_entry_text,
-    openai_current_user_prompt_entry_text, openai_default_reasoning_levels_for_model,
-    openai_executed_result_entry_text, openai_historical_action_result_entry_text,
-    openai_historical_user_prompt_entry_text, openai_macro_judge_response_format,
-    openai_models_endpoint_for_responses_endpoint, openai_prompt_cache_diagnostics,
-    openai_prompt_cache_key, openai_render_messages, openai_request_options,
-    openai_responses_endpoint_for_base_url, openai_service_tier_for_latency_preference,
-    openai_stable_projection_material, parse_openai_models_http_body,
-    parse_openai_models_http_body_with, provider_catalog_reasoning_levels, resolve_provider_api,
-    validate_provider_request_required,
+    known_provider_model_context_window_tokens, openai_auto_sizing_response_format,
+    openai_current_action_result_entry_text, openai_current_user_prompt_entry_text,
+    openai_default_reasoning_levels_for_model, openai_executed_result_entry_text,
+    openai_historical_action_result_entry_text, openai_historical_user_prompt_entry_text,
+    openai_macro_judge_response_format, openai_models_endpoint_for_responses_endpoint,
+    openai_prompt_cache_diagnostics, openai_prompt_cache_key, openai_render_messages,
+    openai_request_options, openai_responses_endpoint_for_base_url,
+    openai_service_tier_for_latency_preference, openai_stable_projection_material,
+    parse_openai_models_http_body, parse_openai_models_http_body_with,
+    provider_catalog_reasoning_levels, resolve_provider_api, validate_provider_request_required,
 };
 pub use provider_diagnostics::{
     ProviderMalformedOutputError, provider_error_detail, provider_failure_event_json,
@@ -495,13 +490,11 @@ pub use turn::{
     AgentTurnTrigger, validate_turn_required,
 };
 pub use turn_activity::{
-    ActionPressurePhase, ActionPressureSeverity, AgentNetworkActionHistory,
-    AgentShellDispatchHistory, AgentTurnSteering, action_pressure_context_content,
-    action_pressure_phase, action_pressure_severity, agent_turn_steering_context_content,
-    shell_command_looks_like_validation,
+    AgentNetworkActionHistory, AgentShellDispatchHistory, AgentTurnSteering,
+    agent_turn_steering_context_content, shell_command_looks_like_validation,
 };
 pub use turn_ledger::{AgentTurnLedger, AgentTurnRecord};
 pub use turn_runner::{
     AgentTurnEnvironment, AgentTurnProviderFailure, DEFAULT_MAAP_REPAIR_ATTEMPT_LIMIT,
-    run_agent_turn_async,
+    run_agent_turn_async, select_model_interaction_kind,
 };

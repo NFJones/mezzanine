@@ -573,6 +573,16 @@ fn runtime_routed_loop_continues_in_one_worker_before_terminal_handoff() {
         .find(|turn| turn.turn_id == second_worker_turn_id)
         .cloned()
         .expect("continued worker turn should exist");
+    let completion_batch = runtime_complete_batch_for(
+        second_worker_turn_id.clone(),
+        second_worker_turn.agent_id.clone(),
+    );
+    let completion_result = mez_agent::ActionResult::succeeded(
+        &second_worker_turn,
+        &completion_batch.actions[0],
+        vec!["Done.".to_string()],
+        None,
+    );
     let patch_free_execution = mez_agent::AgentTurnExecution {
         request: runtime_model_request_fixture(&second_worker_turn_id),
         response: mez_agent::ModelResponse {
@@ -582,15 +592,12 @@ fn runtime_routed_loop_continues_in_one_worker_before_terminal_handoff() {
             usage: Default::default(),
             latest_request_usage: None,
             quota_usage: Default::default(),
-            action_batch: Some(runtime_complete_batch_for(
-                second_worker_turn_id.clone(),
-                second_worker_turn.agent_id.clone(),
-            )),
+            action_batch: Some(completion_batch),
             provider_transcript_events: Vec::new(),
         },
         latest_response_usage: Default::default(),
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
-        action_results: Vec::new(),
+        action_results: vec![completion_result],
         final_turn: true,
         terminal_state: AgentTurnState::Completed,
     };
@@ -603,7 +610,8 @@ fn runtime_routed_loop_continues_in_one_worker_before_terminal_handoff() {
         .expect("patch-free iteration should queue a terminal handoff");
     assert_eq!(
         workflow.phase,
-        mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForHandoff
+        mez_agent::routed_workflow::RoutedWorkflowPhase::WaitingForHandoff,
+        "{workflow:?}"
     );
     assert_ne!(
         workflow.child_turn_id.as_deref(),

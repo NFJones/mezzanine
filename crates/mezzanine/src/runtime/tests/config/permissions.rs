@@ -459,7 +459,7 @@ fn runtime_project_trust_decision_applies_and_removes_project_overlays() {
     let overlay_path = overlay_dir.join("config.toml");
     fs::write(
         &overlay_path,
-        "version = 19\n[history]\nlines = 7\n[permissions]\napproval_policy = \"ask\"\n",
+        "version = 20\n[history]\nlines = 7\n[permissions]\napproval_policy = \"ask\"\n",
     )
     .unwrap();
     let trust_path = root.join("trust.tsv");
@@ -645,7 +645,7 @@ fn runtime_agent_trust_command_logs_and_persists_project_trust_request() {
     let overlay_path = overlay_dir.join("config.toml");
     fs::write(
         &overlay_path,
-        "version = 19\n[history]\nlines = 11\n[permissions]\napproval_policy = \"ask\"\n",
+        "version = 20\n[history]\nlines = 11\n[permissions]\napproval_policy = \"ask\"\n",
     )
     .unwrap();
     service.set_project_trust_store(ProjectTrustStore::default(), None);

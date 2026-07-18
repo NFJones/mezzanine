@@ -78,7 +78,7 @@ async fn turn_runner_repairs_malformed_failure_summary_response() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "hello".to_string(),
             }])
@@ -98,13 +98,13 @@ async fn turn_runner_repairs_malformed_failure_summary_response() {
     assert_eq!(requests.len(), 3);
     assert_eq!(
         requests[2].interaction_kind,
-        mez_agent::ModelInteractionKind::Repair
+        mez_agent::ModelInteractionKind::MaapRepair
     );
     assert!(
         requests[2]
             .messages
             .iter()
-            .any(|message| message.content.contains("[ephemeral maap repair]")),
+            .any(|message| message.content.contains("[MAAP repair state]")),
         "{:?}",
         requests[2].messages
     );
@@ -206,7 +206,7 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
             turn,
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "inspect the workspace".to_string(),
             }])
@@ -219,7 +219,7 @@ fn turn_runner_repairs_model_authored_abort_during_capability_decision() {
     assert_eq!(requests.len(), 3);
     assert_eq!(
         requests[1].interaction_kind,
-        mez_agent::ModelInteractionKind::Repair
+        mez_agent::ModelInteractionKind::MaapRepair
     );
     assert!(
         requests[1]
@@ -349,7 +349,7 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
             turn.clone(),
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "write a short Rust program".to_string(),
             }])
@@ -376,11 +376,11 @@ fn turn_runner_repairs_shell_command_heredoc_validation_error() {
     let repair_message = &requests[2]
         .messages
         .iter()
-        .find(|message| message.content.contains("ephemeral maap repair"))
+        .find(|message| message.content.contains("[MAAP repair state]"))
         .unwrap()
         .content;
     assert!(
-        repair_message.contains("ephemeral maap repair"),
+        repair_message.contains("[MAAP repair state]"),
         "{repair_message}"
     );
     assert!(
@@ -499,7 +499,7 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
             turn.clone(),
             AgentContext::new(vec![ContextBlock {
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 label: "user".to_string(),
                 content: "inspect missing mcp state".to_string(),
             }])
@@ -515,7 +515,7 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
             .messages
             .iter()
             .all(|message| !message.content.contains("maap_validation_error")
-                && !message.content.contains("ephemeral maap repair")),
+                && !message.content.contains("[MAAP repair state]")),
         "{:?}",
         execution.request.messages
     );
@@ -525,10 +525,10 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
         requests[2]
             .messages
             .iter()
-            .find(|message| message.content.contains("ephemeral maap repair"))
+            .find(|message| message.content.contains("[MAAP repair state]"))
             .unwrap()
             .content
-            .contains("ephemeral maap repair"),
+            .contains("[MAAP repair state]"),
         "{:?}",
         requests[2].messages
     );
@@ -536,7 +536,7 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
         requests[2]
             .messages
             .iter()
-            .find(|message| message.content.contains("ephemeral maap repair"))
+            .find(|message| message.content.contains("[MAAP repair state]"))
             .unwrap()
             .content
             .contains("unavailable server"),
@@ -547,17 +547,17 @@ fn turn_runner_retries_maap_validation_error_without_persisting_repair_context()
         requests[2]
             .messages
             .iter()
-            .find(|message| message.content.contains("ephemeral maap repair"))
+            .find(|message| message.content.contains("[MAAP repair state]"))
             .unwrap()
             .content
-            .contains("The corrected batch is the schema-valid wrapper for the next useful action"),
+            .contains("request_capability_available="),
         "{:?}",
         requests[2].messages
     );
     let entries = transcript_entries_for_execution("conv1", 1, 200, &turn, &execution).unwrap();
     assert!(
         entries.iter().all(|entry| {
-            !entry.content.contains("ephemeral maap repair")
+            !entry.content.contains("[MAAP repair state]")
                 && !entry.content.contains("maap_validation_error")
                 && !entry.content.contains("invalid unavailable mcp action")
         }),

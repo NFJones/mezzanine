@@ -175,8 +175,12 @@ fn runtime_agent_context_dump_for_pane(
         .get(&turn_id)
         .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
     let mcp_summary = service.mcp_registry().prompt_summary();
-    let (context, available_mcp_tools) =
-        service.prepare_agent_turn_model_context(&turn, durable.clone(), &mcp_summary)?;
+    let (context, available_mcp_tools) = service.prepare_agent_turn_model_context(
+        &turn,
+        durable.clone(),
+        &mcp_summary,
+        &model_profile,
+    )?;
     let context = context.into_agent_context();
     let mut request = assemble_model_request(&model_profile, &turn, &context)?;
     request.available_mcp_tools = available_mcp_tools;
@@ -226,7 +230,7 @@ fn runtime_idle_agent_context_dump_for_pane(
         initial_capability: None,
     };
     let (context, available_mcp_tools) =
-        service.prepare_agent_turn_model_context(&turn, context, &mcp_summary)?;
+        service.prepare_agent_turn_model_context(&turn, context, &mcp_summary, &model_profile)?;
     let context = context.into_agent_context();
     let mut request = assemble_model_request(&model_profile, &turn, &context)?;
     request.available_mcp_tools = available_mcp_tools;
@@ -596,7 +600,6 @@ fn runtime_context_source_name(source: ContextSourceKind) -> &'static str {
         ContextSourceKind::TranscriptUser => "transcript-user",
         ContextSourceKind::TranscriptAssistant => "transcript-assistant",
         ContextSourceKind::TranscriptTool => "transcript-tool",
-        ContextSourceKind::EvidenceLedger => "evidence-ledger",
         ContextSourceKind::CommittedEvidence => "committed-evidence",
         ContextSourceKind::RoutedHandoff => "routed-handoff",
         ContextSourceKind::ActionResult => "action-result",

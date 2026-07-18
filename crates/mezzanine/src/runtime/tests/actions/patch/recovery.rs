@@ -2,6 +2,14 @@
 
 use super::*;
 
+/// Verifies controller retry coaching is not persisted beside factual action
+/// evidence in durable model chronology.
+fn assert_no_persisted_failure_feedback(context: &mez_agent::AgentContext) {
+    assert!(context.blocks.iter().all(|block| {
+        block.source != ContextSourceKind::RuntimeHint || block.label != "action failure feedback"
+    }));
+}
+
 /// Verifies an `apply_patch` validation failure is eligible for model
 /// correction.
 ///
@@ -118,34 +126,7 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
                 .contains("[action_result patch-invalid apply_patch failed]")
             && block.content.contains("Mezzanine patch blocks starting")
     }));
-    let feedback = context
-        .blocks
-        .iter()
-        .rev()
-        .find(|block| {
-            block.source == ContextSourceKind::RuntimeHint
-                && block.label == "action failure feedback"
-        })
-        .expect("feedback block should be present");
-    assert!(
-        feedback
-            .content
-            .contains("patch payload was rejected by Mezzanine validation before execution"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback.content.contains("attempt=1 max=5"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        !feedback
-            .content
-            .contains("exact old-context lines were not found"),
-        "{}",
-        feedback.content
-    );
+    assert_no_persisted_failure_feedback(context);
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
@@ -159,14 +140,14 @@ fn runtime_apply_patch_invalid_params_queues_model_self_correction() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies `apply_patch` hunk mismatches receive specific recovery guidance.
+/// Verifies `apply_patch` hunk mismatches preserve exact factual evidence.
 ///
 /// A generic "action failed" continuation is not enough for patch hunk
 /// mismatches because replaying the same patch will deterministically fail.
 /// The model should be steered to inspect the current file and generate a fresh
 /// Mezzanine patch block instead.
 #[test]
-fn runtime_apply_patch_hunk_mismatch_recovery_guides_context_refresh() {
+fn runtime_apply_patch_hunk_mismatch_recovery_preserves_failure_evidence() {
     let mut service = test_runtime_service();
     service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -256,86 +237,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_guides_context_refresh() {
 
     assert!(queued);
     let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
-    let feedback = context
-        .blocks
-        .iter()
-        .find(|block| {
-            block.source == ContextSourceKind::RuntimeHint
-                && block.label == "action failure feedback"
-        })
-        .expect("feedback block should be present");
-    assert!(
-        !feedback.content.contains("attempt="),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback.content.contains("Mutation-evidence rule"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback
-            .content
-            .contains("no successful mutation has occurred"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback
-            .content
-            .contains("Reads, git status, and git diff after a failed mutation"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback
-            .content
-            .contains("the current file/diff shows that state"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback
-            .content
-            .contains("Do not retry substantially the same patch"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback
-            .content
-            .contains("Next step: first inspect the affected path(s) with a bounded shell_command"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback.content.contains("reported line number(s)"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback
-            .content
-            .contains("not necessarily a stale-file condition"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback.content.contains("fresh Mezzanine"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback.content.contains("emit a smaller fresh Mezzanine"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback.content.contains("src/driver/mod.rs"),
-        "{}",
-        feedback.content
-    );
+    assert_no_persisted_failure_feedback(context);
     assert!(context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block
@@ -355,15 +257,14 @@ fn runtime_apply_patch_hunk_mismatch_recovery_guides_context_refresh() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies replacement-present patch mismatches steer recovery toward
-/// reconciling already-applied current file state.
+/// Verifies replacement-present patch mismatches retain their diagnostic.
 ///
 /// Matcher diagnostics can report that the replacement block or distinctive
 /// added lines are already present. Runtime feedback should preserve that
 /// subtype so the model inspects current file state instead of replaying the
 /// same stale patch.
 #[test]
-fn runtime_apply_patch_replacement_hint_recovery_guides_reconcile_or_skip() {
+fn runtime_apply_patch_replacement_hint_recovery_preserves_diagnostic() {
     let mut service = test_runtime_service();
     service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -453,39 +354,7 @@ fn runtime_apply_patch_replacement_hint_recovery_guides_reconcile_or_skip() {
             .unwrap()
     );
     let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
-    let feedback = context
-        .blocks
-        .iter()
-        .rev()
-        .find(|block| {
-            block.source == ContextSourceKind::RuntimeHint
-                && block.label == "action failure feedback"
-        })
-        .expect("feedback block should be present");
-    assert!(
-        feedback
-            .content
-            .contains("intended replacement may already be present"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback
-            .content
-            .contains("skip the stale hunk or report the current file state"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        !feedback.content.contains("reported line number(s)"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback.content.contains("src/driver/mod.rs"),
-        "{}",
-        feedback.content
-    );
+    assert_no_persisted_failure_feedback(context);
     service.terminate_all_pane_processes().unwrap();
 }
 
@@ -496,7 +365,7 @@ fn runtime_apply_patch_replacement_hint_recovery_guides_reconcile_or_skip() {
 /// be found in order. Runtime feedback should preserve that signal so the model
 /// repairs the anchor instead of treating the failure as a generic reread case.
 #[test]
-fn runtime_apply_patch_missing_anchor_recovery_guides_anchor_refresh() {
+fn runtime_apply_patch_missing_anchor_recovery_preserves_diagnostic() {
     let mut service = test_runtime_service();
     service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -586,34 +455,7 @@ fn runtime_apply_patch_missing_anchor_recovery_guides_anchor_refresh() {
             .unwrap()
     );
     let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
-    let feedback = context
-        .blocks
-        .iter()
-        .rev()
-        .find(|block| {
-            block.source == ContextSourceKind::RuntimeHint
-                && block.label == "action failure feedback"
-        })
-        .expect("feedback block should be present");
-    assert!(
-        feedback
-            .content
-            .contains("hunk header anchor was not found in order"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback
-            .content
-            .contains("refresh or correct the @@ header anchor"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback.content.contains("src/driver/mod.rs"),
-        "{}",
-        feedback.content
-    );
+    assert_no_persisted_failure_feedback(context);
     service.terminate_all_pane_processes().unwrap();
 }
 
@@ -624,7 +466,7 @@ fn runtime_apply_patch_missing_anchor_recovery_guides_anchor_refresh() {
 /// feedback should preserve that ambiguity and avoid collapsing the next step
 /// back to one generic owner-range reread.
 #[test]
-fn runtime_apply_patch_candidate_region_recovery_guides_ambiguous_ranges() {
+fn runtime_apply_patch_candidate_region_recovery_preserves_diagnostic() {
     let mut service = test_runtime_service();
     service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -713,37 +555,7 @@ fn runtime_apply_patch_candidate_region_recovery_guides_ambiguous_ranges() {
             .unwrap()
     );
     let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
-    let feedback = context
-        .blocks
-        .iter()
-        .rev()
-        .find(|block| {
-            block.source == ContextSourceKind::RuntimeHint
-                && block.label == "action failure feedback"
-        })
-        .expect("feedback block should be present");
-    assert!(
-        feedback
-            .content
-            .contains("repeated or ambiguous candidate regions"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback
-            .content
-            .contains("inspect the suggested candidate range(s)"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback.content.contains(
-            "Do not retry substantially the same patch or focus only on one generic line range"
-        ),
-        "{}",
-        feedback.content
-    );
-    assert!(feedback.content.contains("note.rs"), "{}", feedback.content);
+    assert_no_persisted_failure_feedback(context);
     service.terminate_all_pane_processes().unwrap();
 }
 
@@ -843,27 +655,7 @@ fn runtime_apply_patch_write_phase_hunk_mismatch_queues_model_recovery() {
             .any(|turn| turn.turn_id == "turn-1" && turn.state == AgentTurnState::Running)
     );
     let context = service.agent_turn_contexts().get("turn-1").unwrap();
-    let feedback = context
-        .blocks
-        .iter()
-        .rev()
-        .find(|block| {
-            block.source == ContextSourceKind::RuntimeHint
-                && block.label == "action failure feedback"
-        })
-        .expect("feedback block should be present");
-    assert!(
-        feedback.content.contains("Apply-patch recovery"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback
-            .content
-            .contains("tests/standard_config_consumer_test.rs"),
-        "{}",
-        feedback.content
-    );
+    assert_no_persisted_failure_feedback(context);
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
@@ -1024,34 +816,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_is_unbounded_and_hides_retry_budge
         vec![8]
     );
     let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
-    let feedback = context
-        .blocks
-        .iter()
-        .rev()
-        .find(|block| {
-            block.source == ContextSourceKind::RuntimeHint
-                && block.label == "action failure feedback"
-        })
-        .expect("second feedback block should be present");
-    assert!(
-        !feedback.content.contains("attempt="),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback.content.contains(
-            "five consecutive apply_patch failures reached the shell-edit fallback threshold"
-        ),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback
-            .content
-            .contains("use a bounded shell_command with conventional file-edit tooling"),
-        "{}",
-        feedback.content
-    );
+    assert_no_persisted_failure_feedback(context);
     let pane_text = service
         .pane_screen("%1")
         .unwrap()
@@ -1072,7 +837,7 @@ fn runtime_apply_patch_hunk_mismatch_recovery_is_unbounded_and_hides_retry_budge
 /// corrective continuation should include the rejected path, the best-known CWD,
 /// and a clear note that this restriction is specific to `apply_patch` headers.
 #[test]
-fn runtime_apply_patch_unsafe_path_recovery_guides_relative_headers() {
+fn runtime_apply_patch_unsafe_path_recovery_preserves_diagnostic() {
     let mut service = test_runtime_service();
     service
         .attach_primary("primary", true, Size::new(80, 24).unwrap(), 120)
@@ -1174,43 +939,7 @@ fn runtime_apply_patch_unsafe_path_recovery_guides_relative_headers() {
             .any(|task| task.turn_id == turn.turn_id)
     );
     let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
-    let feedback = context
-        .blocks
-        .iter()
-        .find(|block| {
-            block.source == ContextSourceKind::RuntimeHint
-                && block.label == "action failure feedback"
-        })
-        .expect("feedback block should be present");
-    assert!(
-        feedback.content.contains("unsafe patch path"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback.content.contains(unsafe_path),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback
-            .content
-            .contains("Current pane working directory: /home/neil/Documents/repos/chimera"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback
-            .content
-            .contains("relative to the pane current working directory"),
-        "{}",
-        feedback.content
-    );
-    assert!(
-        feedback.content.contains("`src/conf/document.rs`"),
-        "{}",
-        feedback.content
-    );
+    assert_no_persisted_failure_feedback(context);
     assert!(context.blocks.iter().any(|block| {
         block.source == ContextSourceKind::ActionResult
             && block

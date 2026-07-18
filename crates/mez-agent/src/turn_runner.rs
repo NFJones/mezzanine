@@ -13,9 +13,10 @@ use crate::{
     AgentTurnLedgerError, AgentTurnNegotiation, AgentTurnProviderFailureDecision, AgentTurnRecord,
     AgentTurnResponseDecision, AgentTurnState, AllowedActionSet, BatchContinuationError,
     BatchContinuationInput, BatchContinuationPlan, BatchValidationFailure, MaapBatch,
-    McpPromptTool, ModelInteractionKind, ModelRequest, ModelResponse, ProviderErrorRetryClass,
-    ProviderResponseAcceptance, apply_default_action_gates, failed_turn_execution_without_batch,
-    maap_repair_request, plan_batch_continuation, plan_turn_execution_from_batch,
+    McpPromptTool, ModelInteractionKind, ModelMessage, ModelRequest, ModelResponse,
+    ProviderErrorRetryClass, ProviderResponseAcceptance, apply_default_action_gates,
+    failed_turn_execution_without_batch, maap_repair_request, plan_batch_continuation,
+    plan_turn_execution_from_batch,
 };
 
 /// Default number of ephemeral repairs accepted during one provider negotiation phase.
@@ -122,12 +123,18 @@ pub async fn run_agent_turn_async<E: AgentTurnEnvironment>(
     turn: AgentTurnRecord,
     context: &AgentContext,
     allowed_actions: Option<AllowedActionSet>,
+    interaction_kind: Option<ModelInteractionKind>,
 ) -> Result<AgentTurnExecution, E::Error> {
     project_ledger_result(ledger.start_turn(turn.clone()))?;
     let mut request = environment.assemble_request(&turn, context)?;
     if let Some(allowed_actions) = allowed_actions {
-        request.interaction_kind = ModelInteractionKind::ActionExecution;
+        if interaction_kind.is_none() {
+            request.interaction_kind = ModelInteractionKind::ActionExecution;
+        }
         request.allowed_actions = allowed_actions;
+    }
+    if let Some(interaction_kind) = interaction_kind {
+        select_model_interaction_kind(&mut request, interaction_kind);
     }
     apply_default_action_gates(
         &mut request,
@@ -178,7 +185,7 @@ pub async fn run_agent_turn_async<E: AgentTurnEnvironment>(
             &response_request,
             environment.provider_id(),
             &response.provider,
-            response_request.interaction_kind == ModelInteractionKind::Repair,
+            response_request.interaction_kind == ModelInteractionKind::MaapRepair,
             response.action_batch.is_some(),
             response.usage,
             response.latest_request_usage,
@@ -315,6 +322,39 @@ pub async fn run_agent_turn_async<E: AgentTurnEnvironment>(
     Ok(execution)
 }
 
+/// Applies one controller-owned exceptional interaction before provider gates
+/// or recovery progression can clone the active request.
+pub fn select_model_interaction_kind(
+    request: &mut ModelRequest,
+    interaction_kind: ModelInteractionKind,
+) {
+    request.messages.retain(|message| {
+        !(message.source == crate::ContextSourceKind::System
+            && message.content.starts_with("[Mezzanine interaction mode:"))
+    });
+    request.interaction_kind = interaction_kind;
+    let Some(instruction) = interaction_kind.system_instruction() else {
+        return;
+    };
+    let insert_at = request
+        .messages
+        .iter()
+        .position(|message| message.placement != crate::ContextPlacement::StablePrefix)
+        .unwrap_or(request.messages.len());
+    request.messages.insert(
+        insert_at,
+        ModelMessage {
+            role: crate::ModelMessageRole::System,
+            source: crate::ContextSourceKind::System,
+            placement: crate::ContextPlacement::StablePrefix,
+            content: format!(
+                "[Mezzanine interaction mode: {}]\n{instruction}",
+                interaction_kind.as_str()
+            ),
+        },
+    );
+}
+
 /// Builds a terminal validation failure and lets the product adapter summarize it.
 async fn failed_validation_execution_with_summary<E: AgentTurnEnvironment>(
     environment: &E,
@@ -418,7 +458,7 @@ mod tests {
                 messages: vec![ModelMessage {
                     role: ModelMessageRole::User,
                     source: ContextSourceKind::UserInstruction,
-                    placement: crate::ContextPlacement::EphemeralTail,
+                    placement: crate::ContextPlacement::ConversationAppend,
                     content: "finish the task".to_string(),
                 }],
             })
@@ -567,7 +607,7 @@ mod tests {
         };
         let context = AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: crate::ContextPlacement::EphemeralTail,
+            placement: crate::ContextPlacement::ConversationAppend,
             label: "request".to_string(),
             content: "finish the task".to_string(),
         }])
@@ -579,6 +619,7 @@ mod tests {
             &mut ledger,
             turn,
             &context,
+            None,
             None,
         ))
         .expect("canonical turn should complete");

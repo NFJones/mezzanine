@@ -3,7 +3,7 @@
 use super::super::{
     AgentTurnExecution, AgentTurnRecord, ContextBlock, ContextSourceKind, MezError, Result,
     RuntimeSessionService, assistant_context_content_for_execution,
-    runtime_rationale_entries_from_context_blocks, runtime_suppress_redundant_batch_rationale,
+    runtime_suppress_redundant_batch_rationale,
 };
 
 impl RuntimeSessionService {
@@ -55,23 +55,17 @@ impl RuntimeSessionService {
     /// Suppresses batch/action rationale that repeats already-emitted same-turn intent.
     ///
     /// Repeated investigative rationale is visible to the user in verbose
-    /// thinking mode and can indirectly bias the next provider turn. Once a
-    /// current-turn rationale ledger records that intent, later batches should
-    /// mention only a materially new reason.
+    /// thinking mode. This suppresses duplicates within the current response
+    /// without replaying a controller ledger into later model requests.
     pub(super) fn suppress_redundant_rationale_entries(
         &mut self,
         turn: &AgentTurnRecord,
         execution: &mut AgentTurnExecution,
     ) -> Result<usize> {
-        let visible_entries = self
-            .agent_turn_contexts()
-            .get(&turn.turn_id)
-            .map(|context| runtime_rationale_entries_from_context_blocks(&context.blocks))
-            .unwrap_or_default();
         let Some(batch) = execution.response.action_batch.as_mut() else {
             return Ok(0);
         };
-        let suppression = runtime_suppress_redundant_batch_rationale(batch, &visible_entries);
+        let suppression = runtime_suppress_redundant_batch_rationale(batch, &[]);
         if suppression.batch_suppressed {
             self.append_agent_trace_turn_event(
                 &turn.pane_id,

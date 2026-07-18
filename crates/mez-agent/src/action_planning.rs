@@ -602,7 +602,7 @@ mod tests {
     fn context() -> AgentContext {
         AgentContext::new(vec![ContextBlock {
             source: ContextSourceKind::UserInstruction,
-            placement: crate::ContextPlacement::EphemeralTail,
+            placement: crate::ContextPlacement::ConversationAppend,
             label: "user".to_string(),
             content: "complete the task".to_string(),
         }])

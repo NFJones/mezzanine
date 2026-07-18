@@ -4,5 +4,6 @@
 //! and concrete effect execution are isolated from deterministic lower engines.
 
 pub(crate) mod async_runtime;
+pub(crate) mod process;
 pub(crate) mod shell;
 pub(crate) mod terminal;

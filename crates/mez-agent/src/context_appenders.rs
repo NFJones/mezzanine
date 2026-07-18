@@ -5,6 +5,8 @@
 //! policy, and scheduler state. Keeping these helpers together preserves the
 //! ordering contracts used before provider request assembly.
 
+use std::collections::BTreeSet;
+
 use crate::instructions::DiscoveredInstructionFile;
 use crate::{
     AgentContext, AgentContextResult, AgentScheduler, ContextBlock, ContextSourceKind,
@@ -27,7 +29,7 @@ pub fn append_memory_context(
     for block in memory_blocks {
         insert_context_block_by_placement(&mut context.blocks, block);
     }
-    AgentContext::new(context.blocks)
+    context.revalidate()
 }
 
 /// Selects deterministic memory reference blocks without choosing their
@@ -81,9 +83,26 @@ pub fn append_mcp_context(
         && invocation.available_tools.is_empty()
         && invocation.unavailable_servers.is_empty()
     {
-        return AgentContext::new(context.blocks);
+        return context.revalidate();
     }
-    append_filtered_mcp_context(context, &invocation)
+    append_filtered_mcp_context(context, &invocation, true)
+}
+
+/// Replaces MCP live state using only information absent from the provider's
+/// typed tool schema.
+///
+/// OpenAI Responses deliberately keeps one cache-stable generic MCP action and
+/// therefore needs the complete invoked manifest in late context. Providers
+/// with dynamic schemas already carry complete definitions and receive only
+/// unavailable-server diagnostics in text.
+pub fn append_mcp_context_for_provider(
+    mut context: AgentContext,
+    summary: &McpPromptSummary,
+    provider: &str,
+) -> AgentContextResult<AgentContext> {
+    context.blocks.retain(|block| !is_mcp_context_block(block));
+    let invocation = explicit_mcp_invocation_summary(&context, summary);
+    append_filtered_mcp_context(context, &invocation, provider == "openai")
 }
 
 /// Returns the MCP tools that should be callable for this turn.
@@ -98,19 +117,27 @@ pub fn invoked_mcp_tools_for_context(
 fn append_filtered_mcp_context(
     mut context: AgentContext,
     summary: &McpPromptSummary,
+    include_available_manifest: bool,
 ) -> AgentContextResult<AgentContext> {
-    if summary.available_servers.is_empty()
-        && summary.available_tools.is_empty()
-        && summary.unavailable_servers.is_empty()
+    if summary.unavailable_servers.is_empty()
+        && (!include_available_manifest
+            || summary.available_servers.is_empty() && summary.available_tools.is_empty())
     {
-        return AgentContext::new(context.blocks);
+        return context.revalidate();
     }
-    let mut lines = vec![format!(
-        "available_servers={} available_tools={} unavailable_servers={}",
-        summary.available_servers.len(),
-        summary.available_tools.len(),
-        summary.unavailable_servers.len()
-    )];
+    let mut lines = if include_available_manifest {
+        vec![format!(
+            "available_servers={} available_tools={} unavailable_servers={}",
+            summary.available_servers.len(),
+            summary.available_tools.len(),
+            summary.unavailable_servers.len()
+        )]
+    } else {
+        vec![format!(
+            "unavailable_servers={}",
+            summary.unavailable_servers.len()
+        )]
+    };
     let mut available_servers = summary.available_servers.clone();
     available_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
     let mut available_tools = summary.available_tools.clone();
@@ -121,7 +148,7 @@ fn append_filtered_mcp_context(
     });
     let mut unavailable_servers = summary.unavailable_servers.clone();
     unavailable_servers.sort_by(|left, right| left.server_id.cmp(&right.server_id));
-    if !available_servers.is_empty() {
+    if include_available_manifest && !available_servers.is_empty() {
         let invoked_servers = available_servers
             .iter()
             .map(|server| server.server_id.as_str())
@@ -132,24 +159,26 @@ fn append_filtered_mcp_context(
             mcp_context_quoted_value(&invoked_servers)
         ));
     }
-    let detailed_tools = mcp_context_selected_tool_details(
-        &context,
-        &available_servers,
-        &available_tools,
-        usize::MAX,
-    );
-    for server in &available_servers {
-        lines.push(mcp_available_server_line(server));
-    }
-    for tool in &detailed_tools {
-        lines.push(format!(
-            "available_tool={}/{} route=mcp_call callable=true required_arguments={} input_schema={} description={}",
-            tool.server_id,
-            tool.tool_name,
-            mcp_context_quoted_value(&mcp_required_argument_summary(tool)),
-            mcp_context_complete_input_schema(&tool.input_schema_json),
-            mcp_context_quoted_value(&tool.description)
-        ));
+    if include_available_manifest {
+        let detailed_tools = mcp_context_selected_tool_details(
+            &context,
+            &available_servers,
+            &available_tools,
+            usize::MAX,
+        );
+        for server in &available_servers {
+            lines.push(mcp_available_server_line(server));
+        }
+        for tool in &detailed_tools {
+            lines.push(format!(
+                "available_tool={}/{} route=mcp_call callable=true required_arguments={} input_schema={} description={}",
+                tool.server_id,
+                tool.tool_name,
+                mcp_context_quoted_value(&mcp_required_argument_summary(tool)),
+                mcp_context_complete_input_schema(&tool.input_schema_json),
+                mcp_context_quoted_value(&tool.description)
+            ));
+        }
     }
     for server in &unavailable_servers {
         lines.push(format!(
@@ -161,19 +190,8 @@ fn append_filtered_mcp_context(
             mcp_context_quoted_value(&server.reason)
         ));
     }
-    let insert_at = context
-        .blocks
-        .iter()
-        .position(|block| {
-            block.placement == crate::ContextPlacement::EphemeralTail
-                && block.source == ContextSourceKind::UserInstruction
-        })
-        .unwrap_or_else(|| {
-            context_placement_insertion_index(
-                &context.blocks,
-                crate::ContextPlacement::EphemeralTail,
-            )
-        });
+    let insert_at =
+        context_placement_insertion_index(&context.blocks, crate::ContextPlacement::EphemeralTail);
     context.blocks.insert(
         insert_at,
         ContextBlock {
@@ -183,7 +201,7 @@ fn append_filtered_mcp_context(
             content: lines.join("\n"),
         },
     );
-    AgentContext::new(context.blocks)
+    context.revalidate()
 }
 
 /// Returns true when a context block is runtime-injected MCP prompt context.
@@ -584,7 +602,7 @@ pub fn append_project_guidance_context(
     for block in guidance_blocks {
         insert_context_block_by_placement(&mut context.blocks, block);
     }
-    AgentContext::new(context.blocks)
+    context.revalidate()
 }
 
 /// Builds the model-facing body for one project instruction file.
@@ -654,7 +672,7 @@ pub fn append_scheduler_context(
         && snapshot.queued == 0
         && runnable_agents.is_empty();
     if scheduler_idle && !idle_scheduler_context_is_relevant(&context) {
-        return AgentContext::new(context.blocks);
+        return context.revalidate();
     }
     let content = if scheduler_idle {
         format!(
@@ -663,73 +681,21 @@ pub fn append_scheduler_context(
         )
     } else {
         let runnable = runnable_agents.into_iter().collect::<Vec<_>>().join(",");
-        let running = scheduler
+        let mut active_agents = BTreeSet::new();
+        for work in scheduler
             .running_turns()
-            .map(|work| {
-                format!(
-                    "{}:{}:{}:{:?}",
-                    work.turn_id,
-                    work.agent_id,
-                    work.pane_id.as_deref().unwrap_or("-"),
-                    work.kind
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        let queued = scheduler
-            .queued_turns()
-            .map(|work| {
-                format!(
-                    "{}:{}:{}:{:?}",
-                    work.turn_id,
-                    work.agent_id,
-                    work.pane_id.as_deref().unwrap_or("-"),
-                    work.kind
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        let blocked = scheduler
-            .blocked_turns()
-            .map(|work| {
-                format!(
-                    "{}:{}:{}:{:?}",
-                    work.turn_id,
-                    work.agent_id,
-                    work.pane_id.as_deref().unwrap_or("-"),
-                    work.kind
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        let waiting = scheduler
-            .waiting_turns()
-            .map(|work| {
-                format!(
-                    "{}:{}:{}:{:?}",
-                    work.turn_id,
-                    work.agent_id,
-                    work.pane_id.as_deref().unwrap_or("-"),
-                    work.kind
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        let reacquiring = scheduler
-            .reacquiring_turns()
-            .map(|work| {
-                format!(
-                    "{}:{}:{}:{:?}",
-                    work.turn_id,
-                    work.agent_id,
-                    work.pane_id.as_deref().unwrap_or("-"),
-                    work.kind
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(",");
+            .chain(scheduler.blocked_turns())
+            .chain(scheduler.waiting_turns())
+            .chain(scheduler.reacquiring_turns())
+        {
+            active_agents.insert(work.agent_id.as_str());
+        }
+        for work in scheduler.queued_turns() {
+            active_agents.insert(work.agent_id.as_str());
+        }
+        let active_agents = active_agents.into_iter().collect::<Vec<_>>().join(",");
         format!(
-            "active_capacity_used={}\nrunning={}\nblocked={}\nwaiting={}\nreacquiring={}\nqueued={}\nmax_concurrent_agents={}\nrunnable_agents={}\nrunning_turns={}\nblocked_turns={}\nwaiting_turns={}\nreacquiring_turns={}\nqueued_turns={}",
+            "state=active\nactive_capacity_used={}\nrunning={}\nblocked={}\nwaiting={}\nreacquiring={}\nqueued={}\nmax_concurrent_agents={}\nrunnable_agents={}\nactive_agents={}",
             snapshot.active_capacity_used,
             snapshot.running,
             snapshot.blocked,
@@ -742,15 +708,11 @@ pub fn append_scheduler_context(
             } else {
                 &runnable
             },
-            if running.is_empty() { "none" } else { &running },
-            if blocked.is_empty() { "none" } else { &blocked },
-            if waiting.is_empty() { "none" } else { &waiting },
-            if reacquiring.is_empty() {
+            if active_agents.is_empty() {
                 "none"
             } else {
-                &reacquiring
-            },
-            if queued.is_empty() { "none" } else { &queued }
+                &active_agents
+            }
         )
     };
     let block = ContextBlock {
@@ -759,8 +721,8 @@ pub fn append_scheduler_context(
         label: "scheduler state".to_string(),
         content,
     };
-    insert_ephemeral_context_before_current_user(&mut context.blocks, block);
-    AgentContext::new(context.blocks)
+    insert_context_block_by_placement(&mut context.blocks, block);
+    context.revalidate()
 }
 
 /// Returns whether an otherwise idle scheduler summary is relevant.
@@ -791,23 +753,6 @@ fn scheduler_context_text_is_relevant(content: &str) -> bool {
     ]
     .iter()
     .any(|needle| normalized.contains(needle))
-}
-
-/// Inserts turn-local controller state before the current user prompt.
-fn insert_ephemeral_context_before_current_user(
-    blocks: &mut Vec<ContextBlock>,
-    block: ContextBlock,
-) {
-    let insert_at = blocks
-        .iter()
-        .position(|existing| {
-            existing.placement == crate::ContextPlacement::EphemeralTail
-                && existing.source == ContextSourceKind::UserInstruction
-        })
-        .unwrap_or_else(|| {
-            context_placement_insertion_index(blocks, crate::ContextPlacement::EphemeralTail)
-        });
-    blocks.insert(insert_at, block);
 }
 
 #[cfg(test)]

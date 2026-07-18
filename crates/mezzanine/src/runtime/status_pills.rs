@@ -7,8 +7,8 @@
 //! `frames.window.right_status` template.
 
 use super::{BTreeMap, Command, Duration, MezError, Result, Stdio, Value, current_unix_millis};
+use crate::host::process::wait_for_child_with_timeout;
 use std::io::Read;
-use wait_timeout::ChildExt;
 
 /// Default timeout for one status pill command execution.
 pub(super) const DEFAULT_STATUS_PILL_TIMEOUT_MS: u64 = 750;
@@ -361,17 +361,17 @@ fn runtime_status_pill_command_output(
         .stderr(Stdio::null())
         .spawn()
         .map_err(|_| ())?;
-    let status = match child
-        .wait_timeout(Duration::from_millis(definition.timeout_ms))
-        .map_err(|_| ())?
-    {
-        Some(status) => status,
-        None => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(());
-        }
-    };
+    let status =
+        match wait_for_child_with_timeout(&mut child, Duration::from_millis(definition.timeout_ms))
+            .map_err(|_| ())?
+        {
+            Some(status) => status,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(());
+            }
+        };
     if !status.success() {
         return Err(());
     }

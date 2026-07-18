@@ -14,8 +14,8 @@ use super::{
     RuleDecision, RuntimeHookPipelineBlock, RuntimeMcpTransportSet, RuntimeSessionService, Stdio,
     current_unix_millis, exact_command_sha256, json_escape,
 };
+use crate::host::process::wait_for_child_with_timeout;
 use mez_agent::{posix_shell_history_suppression_finish, posix_shell_history_suppression_start};
-use wait_timeout::ChildExt;
 
 // Runtime hook result, hook executor, and MCP executor support.
 
@@ -441,7 +441,9 @@ pub(super) fn run_external_shell_hook_command(
                 ),
             )
         })?;
-    let Some(status) = child.wait_timeout(Duration::from_millis(plan.timeout_ms))? else {
+    let Some(status) =
+        wait_for_child_with_timeout(&mut child, Duration::from_millis(plan.timeout_ms))?
+    else {
         let _ = child.kill();
         let _ = child.wait();
         return Ok(FocusedShellHookOutput {

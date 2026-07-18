@@ -1058,13 +1058,15 @@ mod tests {
         }
     }
 
-    /// Verifies volatile developer guidance remains after the static Anthropic cache breakpoint.
+    /// Verifies volatile neutral state remains after Anthropic's reusable
+    /// immutable-message cache breakpoint.
     ///
-    /// Continuation ledgers change between provider calls. They must remain
-    /// model-visible without changing the preceding cache-marked system block.
+    /// Request-local facts can change between provider calls. They must remain
+    /// model-visible after the durable user event without changing the cached
+    /// stable system block or immutable conversation prefix.
     #[test]
-    fn anthropic_cache_breakpoint_precedes_volatile_developer_guidance() {
-        let request = |ledger: &str| {
+    fn anthropic_cache_breakpoint_precedes_volatile_neutral_state() {
+        let request = |state: &str| {
             anthropic_cache_test_request(vec![
                 crate::ModelMessage {
                     role: ModelMessageRole::System,
@@ -1073,16 +1075,16 @@ mod tests {
                     content: "stable system prompt".to_string(),
                 },
                 crate::ModelMessage {
-                    role: ModelMessageRole::Developer,
-                    source: crate::ContextSourceKind::RuntimeHint,
-                    placement: crate::ContextPlacement::EphemeralTail,
-                    content: format!("[progress ledger]\n{ledger}"),
-                },
-                crate::ModelMessage {
                     role: ModelMessageRole::User,
                     source: crate::ContextSourceKind::UserInstruction,
-                    placement: crate::ContextPlacement::EphemeralTail,
+                    placement: crate::ContextPlacement::ConversationAppend,
                     content: "continue".to_string(),
+                },
+                crate::ModelMessage {
+                    role: ModelMessageRole::Context,
+                    source: crate::ContextSourceKind::RuntimeHint,
+                    placement: crate::ContextPlacement::EphemeralTail,
+                    content: format!("[runtime state]\n{state}"),
                 },
             ])
         };
@@ -1111,21 +1113,26 @@ mod tests {
             first["system"][0]["cache_control"],
             serde_json::json!({ "type": "ephemeral" })
         );
+        assert_eq!(first["messages"][0]["content"][0]["text"], "continue");
         assert_eq!(
-            first["system"][1]["text"],
-            "[progress ledger]\nfirst update"
+            first["messages"][0]["content"][0]["cache_control"],
+            serde_json::json!({ "type": "ephemeral" })
         );
-        assert!(first["system"][1].get("cache_control").is_none());
         assert_eq!(
-            second["system"][1]["text"],
-            "[progress ledger]\nsecond update"
+            first["messages"][1]["content"],
+            "[Mezzanine context; not user-authored]\n[runtime state]\nfirst update"
+        );
+        assert_eq!(
+            second["messages"][1]["content"],
+            "[Mezzanine context; not user-authored]\n[runtime state]\nsecond update"
         );
     }
 
     /// Verifies Anthropic marks the latest immutable transcript turn as a second cache boundary.
     ///
     /// Historical user and assistant content should remain reusable while the
-    /// current user request stays after the breakpoint as a volatile suffix.
+    /// current user request remains immutable and request-local state stays
+    /// after the breakpoint as a volatile suffix.
     #[test]
     fn anthropic_cache_breakpoint_marks_latest_immutable_transcript_message() {
         let request = anthropic_cache_test_request(vec![
@@ -1150,8 +1157,14 @@ mod tests {
             crate::ModelMessage {
                 role: ModelMessageRole::User,
                 source: crate::ContextSourceKind::UserInstruction,
-                placement: crate::ContextPlacement::EphemeralTail,
+                placement: crate::ContextPlacement::ConversationAppend,
                 content: "current request".to_string(),
+            },
+            crate::ModelMessage {
+                role: ModelMessageRole::Context,
+                source: crate::ContextSourceKind::RuntimeHint,
+                placement: crate::ContextPlacement::EphemeralTail,
+                content: "cwd=/repo".to_string(),
             },
         ]);
 
@@ -1162,15 +1175,19 @@ mod tests {
         .unwrap();
 
         assert_eq!(value["messages"][0]["content"], "historical request");
+        assert_eq!(value["messages"][1]["content"], "historical answer");
         assert_eq!(
-            value["messages"][1]["content"][0]["text"],
-            "historical answer"
+            value["messages"][2]["content"][0]["text"],
+            "current request"
         );
         assert_eq!(
-            value["messages"][1]["content"][0]["cache_control"],
+            value["messages"][2]["content"][0]["cache_control"],
             serde_json::json!({ "type": "ephemeral" })
         );
-        assert_eq!(value["messages"][2]["content"], "current request");
+        assert_eq!(
+            value["messages"][3]["content"],
+            "[Mezzanine context; not user-authored]\ncwd=/repo"
+        );
     }
 
     /// Verifies options from incompatible provider APIs fail at the lower

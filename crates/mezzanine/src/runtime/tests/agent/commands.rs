@@ -86,12 +86,7 @@ fn runtime_show_metrics_reports_provider_tokens_by_model() {
         );
     let mut request = runtime_model_request_fixture("turn-output-budget");
     request.max_output_tokens = Some(16_384);
-    request.messages.push(mez_agent::ModelMessage {
-        role: mez_agent::ModelMessageRole::Context,
-        source: ContextSourceKind::Configuration,
-        placement: mez_agent::ContextPlacement::EphemeralTail,
-        content: "provider_response_mode=compact_output_retry attempt=2".to_string(),
-    });
+    request.interaction_kind = mez_agent::ModelInteractionKind::OutputLimitRetry;
     service
         .integration
         .runtime_metrics_mut()

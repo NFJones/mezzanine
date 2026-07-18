@@ -169,7 +169,7 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
             messages: vec![mez_agent::ModelMessage {
                 role: mez_agent::ModelMessageRole::User,
                 source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
+                placement: mez_agent::ContextPlacement::ConversationAppend,
                 content: "research docs".to_string(),
             }],
         },
@@ -271,12 +271,11 @@ fn runtime_network_action_failures_get_additional_model_feedback_budget() {
                 .contains("[action_result fetch-missing fetch_url failed]")
             && block.content.contains("network request returned HTTP 404")
     }));
-    assert!(context.blocks.iter().any(|block| {
-        block.source == ContextSourceKind::RuntimeHint && block.content.contains("attempt=1 max=5")
-    }));
-    assert!(context.blocks.iter().all(|block| {
-        block.source != ContextSourceKind::RuntimeHint
-            || !block.content.contains("Mutation-evidence rule")
-    }));
+    assert!(
+        context
+            .blocks
+            .iter()
+            .all(|block| block.source != ContextSourceKind::RuntimeHint)
+    );
     service.terminate_all_pane_processes().unwrap();
 }
