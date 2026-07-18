@@ -5,6 +5,33 @@ use mez_terminal::TerminalStyleSpan;
 use crate::copy::CopyPosition;
 use crate::record_browser::RecordBrowser;
 
+/// Anchored selector state with product-defined field identity.
+///
+/// Mux owns item navigation, viewport state, and terminal placement. The
+/// generic field lets the product identify what applying a selection means
+/// without importing product configuration or runtime types into this crate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnchoredSelector<Field> {
+    /// Stable pane identity targeted by the selector.
+    pub pane_id: String,
+    /// Pane index targeted by rendered mouse cells.
+    pub pane_index: usize,
+    /// Product-defined field being selected.
+    pub field: Field,
+    /// Available values in display and selection order.
+    pub items: Vec<String>,
+    /// Item currently highlighted by hover or keyboard navigation.
+    pub active_index: usize,
+    /// First item currently visible in the selector viewport.
+    pub scroll_offset: usize,
+    /// Column of the source control used to place the selector.
+    pub anchor_column: u16,
+    /// Row of the source control used to place the selector.
+    pub anchor_row: u16,
+    /// Width of the source control used as a minimum selector width.
+    pub anchor_width: u16,
+}
+
 /// Actor-owned full-window display overlay state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DisplayOverlay<Source> {

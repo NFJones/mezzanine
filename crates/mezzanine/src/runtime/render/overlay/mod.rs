@@ -26,7 +26,6 @@ pub(crate) use product_content::{
     runtime_primary_prompt_input,
 };
 pub(crate) use selection_adapter::{
-    runtime_pane_agent_status_selector_keep_active_visible,
     runtime_pane_agent_status_selector_layout, runtime_selector_line,
 };
 pub(crate) use service::runtime_pane_agent_selector_rendition;

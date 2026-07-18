@@ -16,10 +16,8 @@ use mez_mux::overlay::{
 use mez_mux::overlay::{
     OverlaySelection, OverlaySelectionKind, apply_overlay_scroll_delta, clamp_overlay_scroll,
     overlay_copy_selection, overlay_footer, overlay_line_prefix_columns, overlay_link_rendition,
-    overlay_next_search_match, overlay_render_lines, overlay_rendered_line_style_spans,
-    overlay_rendered_selection_start, overlay_selection_index_at_position,
-    overlay_selection_index_is_visible, overlay_selection_rendition, overlay_text_at,
-    scroll_overlay_to_line,
+    overlay_render_lines, overlay_rendered_line_style_spans, overlay_rendered_selection_start,
+    overlay_selection_index_at_position, overlay_selection_rendition, overlay_text_at,
 };
 use mez_mux::presentation::{
     pane_content_size_for_geometry, pane_frame_merges_into_divider,
@@ -605,10 +603,12 @@ mod paste;
 mod presentation;
 mod time;
 
-use input::{
-    RuntimeDisplayOverlayInputAction, RuntimeSelectorInputAction,
-    runtime_display_overlay_input_action, runtime_selector_input_action,
-    runtime_selector_step_index,
+use input::{runtime_display_overlay_input_action, runtime_selector_input_action};
+use mez_mux::overlay::{
+    OverlayInputAction as RuntimeDisplayOverlayInputAction, OverlayInputOutcome,
+    SelectorInputAction as RuntimeSelectorInputAction, SelectorInputOutcome, apply_overlay_input,
+    apply_selector_input, scroll_selector as runtime_scroll_selector,
+    set_selector_index as runtime_set_selector_index,
 };
 #[cfg(test)]
 use mez_mux::render::wrap_rich_text_line_to_width;
@@ -622,8 +622,8 @@ use overlay::{
     agent_shell_mcp_display_state_name, default_runtime_agent_prompt_input,
     runtime_agent_shell_display_output, runtime_agent_shell_visibility,
     runtime_command_display_overlay_content, runtime_command_display_should_open_overlay,
-    runtime_pane_agent_selector_rendition, runtime_pane_agent_status_selector_keep_active_visible,
-    runtime_pane_agent_status_selector_layout, runtime_primary_prompt_input, runtime_selector_line,
+    runtime_pane_agent_selector_rendition, runtime_pane_agent_status_selector_layout,
+    runtime_primary_prompt_input, runtime_selector_line,
 };
 #[cfg(test)]
 use overlay::{runtime_agent_shell_markdown_overlay_content, runtime_human_readable_display_lines};

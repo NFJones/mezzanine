@@ -94,32 +94,9 @@ pub(crate) enum RuntimeRecordBrowserOverlaySource {
     },
 }
 
-/// Pane-local drop-down selector for agent model and reasoning status pills.
-///
-/// The selector is actor-owned UI state: mouse routing receives cell hits from
-/// the terminal client loop, while rendering uses this record to draw the
-/// current list and highlight the row under the pointer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RuntimePaneAgentStatusSelector {
-    /// Stable pane identity targeted by the selector.
-    pub(crate) pane_id: String,
-    /// Pane index targeted by rendered mouse cells.
-    pub(crate) pane_index: usize,
-    /// Status field being selected.
-    pub(crate) field: PaneAgentStatusField,
-    /// Available values in display and selection order.
-    pub(crate) items: Vec<String>,
-    /// Item currently highlighted by hover or initial active value.
-    pub(crate) active_index: usize,
-    /// First item currently visible in the drop-down viewport.
-    pub(crate) scroll_offset: usize,
-    /// Column of the source pill used to place the drop-down.
-    pub(crate) anchor_column: u16,
-    /// Row of the source pill used to place the drop-down.
-    pub(crate) anchor_row: u16,
-    /// Width of the source pill used as a minimum drop-down width.
-    pub(crate) anchor_width: u16,
-}
+/// Pane-local mux selector specialized with product agent-status identity.
+pub(crate) type RuntimePaneAgentStatusSelector =
+    mez_mux::overlay::AnchoredSelector<PaneAgentStatusField>;
 
 /// Carries Pane Descriptor state for this subsystem.
 ///

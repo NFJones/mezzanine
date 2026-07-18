@@ -59,24 +59,6 @@ pub(crate) fn runtime_pane_agent_status_selector_layout(
     }
 }
 
-/// Adjusts selector scroll so keyboard-selected rows stay reachable.
-pub(crate) fn runtime_pane_agent_status_selector_keep_active_visible(
-    selector: &mut RuntimePaneAgentStatusSelector,
-    visible_rows: usize,
-) {
-    let visible_rows = visible_rows.max(1);
-    let max_offset = selector.items.len().saturating_sub(visible_rows);
-    if selector.active_index < selector.scroll_offset {
-        selector.scroll_offset = selector.active_index;
-    } else if selector.active_index >= selector.scroll_offset.saturating_add(visible_rows) {
-        selector.scroll_offset = selector
-            .active_index
-            .saturating_add(1)
-            .saturating_sub(visible_rows);
-    }
-    selector.scroll_offset = selector.scroll_offset.min(max_offset);
-}
-
 /// Builds one padded selector row clipped to the available terminal width.
 pub(crate) fn runtime_selector_line(marker: &str, value: &str, width: usize) -> String {
     let mut line = format!("{marker} {value}");

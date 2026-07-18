@@ -390,230 +390,38 @@ impl RuntimeSessionService {
         let Some(overlay) = self.presentation.primary_display_overlay.as_ref() else {
             return Ok(false);
         };
-        if overlay.dismiss_on_any_input && !input.is_empty() {
-            self.presentation.primary_display_overlay = None;
-            return Ok(true);
-        }
-        if overlay.search_input.is_some() {
-            return self.apply_primary_display_overlay_search_input(input);
-        }
-        if let Some(changed) = self.apply_primary_record_browser_overlay_input(input)? {
+        if overlay.search_input.is_none()
+            && let Some(changed) = self.apply_primary_record_browser_overlay_input(input)?
+        {
             return Ok(changed);
         }
-        match runtime_display_overlay_input_action(input) {
-            RuntimeDisplayOverlayInputAction::Exit => {
+        let action = runtime_display_overlay_input_action(input);
+        let input_text = matches!(action, RuntimeDisplayOverlayInputAction::EditSearchText)
+            .then(|| std::str::from_utf8(input).ok())
+            .flatten();
+        let outcome = {
+            let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                return Ok(false);
+            };
+            apply_overlay_input(
+                overlay,
+                action,
+                input_text,
+                !input.is_empty(),
+                self.session.authoritative_size,
+            )
+        };
+        match outcome {
+            OverlayInputOutcome::Close => {
                 self.presentation.primary_display_overlay = None;
                 Ok(true)
             }
-            RuntimeDisplayOverlayInputAction::StartSearch => {
-                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
-                    return Ok(false);
-                };
-                overlay.search_input = Some(String::new());
-                overlay.search_status = None;
-                Ok(true)
+            OverlayInputOutcome::Invoke { command } => {
+                self.execute_primary_display_overlay_selection_command(primary_client_id, &command)
             }
-            RuntimeDisplayOverlayInputAction::EditSearchText
-            | RuntimeDisplayOverlayInputAction::EditSearchBackspace => Ok(false),
-            RuntimeDisplayOverlayInputAction::SelectActive => {
-                let size = self.session.authoritative_size;
-                let command = self
-                    .presentation
-                    .primary_display_overlay
-                    .as_ref()
-                    .and_then(|overlay| {
-                        let index = overlay.active_selection_index?;
-                        overlay_selection_index_is_visible(overlay, index, size)
-                            .then(|| overlay.selections.get(index))
-                            .flatten()
-                    })
-                    .map(|selection| selection.command.clone());
-                if let Some(command) = command {
-                    self.execute_primary_display_overlay_selection_command(
-                        primary_client_id,
-                        &command,
-                    )
-                } else {
-                    Ok(false)
-                }
-            }
-            RuntimeDisplayOverlayInputAction::SelectPrevious => {
-                self.move_primary_display_overlay_selection(-1)
-            }
-            RuntimeDisplayOverlayInputAction::SelectNext => {
-                self.move_primary_display_overlay_selection(1)
-            }
-            RuntimeDisplayOverlayInputAction::SelectFirst => {
-                self.set_primary_display_overlay_selection_index(0)
-            }
-            RuntimeDisplayOverlayInputAction::SelectLast => {
-                let Some(overlay) = self.presentation.primary_display_overlay.as_ref() else {
-                    return Ok(false);
-                };
-                self.set_primary_display_overlay_selection_index(
-                    overlay.selections.len().saturating_sub(1),
-                )
-            }
-            RuntimeDisplayOverlayInputAction::ScrollBy(delta) if delta < 0 => {
-                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
-                    return Ok(false);
-                };
-                Ok(apply_overlay_scroll_delta(
-                    overlay,
-                    delta,
-                    self.session.authoritative_size,
-                ))
-            }
-            RuntimeDisplayOverlayInputAction::ScrollBy(delta) => {
-                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
-                    return Ok(false);
-                };
-                Ok(apply_overlay_scroll_delta(
-                    overlay,
-                    delta,
-                    self.session.authoritative_size,
-                ))
-            }
-            RuntimeDisplayOverlayInputAction::Ignore => Ok(false),
+            OverlayInputOutcome::Updated => Ok(true),
+            OverlayInputOutcome::Unchanged | OverlayInputOutcome::Ignored => Ok(false),
         }
-    }
-
-    /// Applies one input chunk while the command-output pager search prompt is active.
-    pub(crate) fn apply_primary_display_overlay_search_input(
-        &mut self,
-        input: &[u8],
-    ) -> Result<bool> {
-        match runtime_display_overlay_input_action(input) {
-            RuntimeDisplayOverlayInputAction::Exit => {
-                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
-                    return Ok(false);
-                };
-                overlay.search_input = None;
-                overlay.search_status = None;
-                Ok(true)
-            }
-            RuntimeDisplayOverlayInputAction::SelectActive => {
-                self.submit_primary_display_overlay_search()
-            }
-            RuntimeDisplayOverlayInputAction::EditSearchBackspace => {
-                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
-                    return Ok(false);
-                };
-                let Some(search_input) = overlay.search_input.as_mut() else {
-                    return Ok(false);
-                };
-                let changed = search_input.pop().is_some();
-                Ok(changed)
-            }
-            RuntimeDisplayOverlayInputAction::EditSearchText => {
-                let Ok(text) = std::str::from_utf8(input) else {
-                    return Ok(false);
-                };
-                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
-                    return Ok(false);
-                };
-                let Some(search_input) = overlay.search_input.as_mut() else {
-                    return Ok(false);
-                };
-                search_input.push_str(text);
-                Ok(!text.is_empty())
-            }
-            RuntimeDisplayOverlayInputAction::StartSearch
-            | RuntimeDisplayOverlayInputAction::SelectPrevious
-            | RuntimeDisplayOverlayInputAction::SelectNext
-            | RuntimeDisplayOverlayInputAction::SelectFirst
-            | RuntimeDisplayOverlayInputAction::SelectLast
-            | RuntimeDisplayOverlayInputAction::ScrollBy(_)
-            | RuntimeDisplayOverlayInputAction::Ignore => Ok(false),
-        }
-    }
-
-    /// Submits the active command-output pager search query.
-    pub(crate) fn submit_primary_display_overlay_search(&mut self) -> Result<bool> {
-        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
-            return Ok(false);
-        };
-        let submitted = overlay.search_input.take().unwrap_or_default();
-        let query = if submitted.is_empty() {
-            let Some(query) = overlay.search_query.clone() else {
-                overlay.search_status = Some("search: enter a query".to_string());
-                return Ok(true);
-            };
-            query
-        } else {
-            overlay.search_query = Some(submitted.clone());
-            submitted
-        };
-        let start_line = overlay
-            .search_match
-            .map(|search_match| search_match.line_index)
-            .or_else(|| overlay.scroll_offset.checked_sub(1))
-            .unwrap_or(overlay.scroll_offset);
-        let Some(search_match) = overlay_next_search_match(overlay, &query, start_line) else {
-            overlay.search_status = Some(format!("pattern not found: {query}"));
-            return Ok(true);
-        };
-        overlay.search_match = Some(search_match);
-        overlay.scroll_offset = search_match.line_index;
-        clamp_overlay_scroll(overlay, self.session.authoritative_size);
-        overlay.search_status = None;
-        Ok(true)
-    }
-
-    /// Moves the active command overlay selection and keeps it visible.
-    pub(crate) fn move_primary_display_overlay_selection(&mut self, delta: isize) -> Result<bool> {
-        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
-            return Ok(false);
-        };
-        if overlay.selections.is_empty() {
-            return Ok(apply_overlay_scroll_delta(
-                overlay,
-                delta,
-                self.session.authoritative_size,
-            ));
-        }
-        let previous = overlay.active_selection_index.unwrap_or(0);
-        let next = runtime_selector_step_index(previous, overlay.selections.len(), delta);
-        overlay.active_selection_index = Some(next);
-        if let Some(line_index) = overlay
-            .selections
-            .get(next)
-            .map(|selection| selection.line_index)
-        {
-            scroll_overlay_to_line(overlay, line_index, self.session.authoritative_size);
-        }
-        Ok(next != previous)
-    }
-
-    /// Sets the active command overlay selection and keeps it visible.
-    pub(crate) fn set_primary_display_overlay_selection_index(
-        &mut self,
-        index: usize,
-    ) -> Result<bool> {
-        let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
-            return Ok(false);
-        };
-        if overlay.selections.is_empty() {
-            let next = if index == 0 {
-                0
-            } else {
-                modal_overlay_max_scroll(overlay.lines.len(), self.session.authoritative_size)
-            };
-            let changed = next != overlay.scroll_offset;
-            overlay.scroll_offset = next;
-            return Ok(changed);
-        }
-        let previous = overlay.active_selection_index.unwrap_or(0);
-        let next = index.min(overlay.selections.len().saturating_sub(1));
-        overlay.active_selection_index = Some(next);
-        if let Some(line_index) = overlay
-            .selections
-            .get(next)
-            .map(|selection| selection.line_index)
-        {
-            scroll_overlay_to_line(overlay, line_index, self.session.authoritative_size);
-        }
-        Ok(next != previous)
     }
 }
 

@@ -8,16 +8,15 @@ use super::{
     CopyMode, CopyPosition, DOUBLE_CLICK_WORD_SELECTION_HIGHLIGHT_MS,
     DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS, MezError, MouseAction, MousePaneTarget,
     MouseSelectionDragState, MouseSelectionEdge, MouseSelectionTarget, PaneAgentStatusField,
-    Result, RuntimeMouseClickState, RuntimePaneAgentStatusSelector, RuntimeSelectorInputAction,
-    RuntimeSessionService, Size, TerminalClientLoopAction, TerminalFramePosition,
-    WindowFrameAction, WindowFrameCommandKind, agent_command_link_at_line_column,
-    agent_prompt_error_display_lines, current_unix_millis, pane_frame_merges_into_divider,
+    Result, RuntimeMouseClickState, RuntimePaneAgentStatusSelector, RuntimeSessionService,
+    SelectorInputOutcome, Size, TerminalClientLoopAction, TerminalFramePosition, WindowFrameAction,
+    WindowFrameCommandKind, agent_command_link_at_line_column, agent_prompt_error_display_lines,
+    apply_selector_input, current_unix_millis, pane_frame_merges_into_divider,
     pane_render_region_size_for_geometry, rendered_pane_geometries,
     runtime_agent_shell_command_response_json, runtime_agent_shell_display_output,
     runtime_agent_shell_visibility, runtime_approval_policy_name, runtime_copy_position_for_view,
-    runtime_pane_agent_status_selector_keep_active_visible,
-    runtime_pane_agent_status_selector_layout, runtime_selector_input_action,
-    runtime_selector_step_index,
+    runtime_pane_agent_status_selector_layout, runtime_scroll_selector,
+    runtime_selector_input_action, runtime_set_selector_index,
 };
 use crate::runtime::{MIN_PANE_COLUMNS, MIN_PANE_ROWS, MouseResizeDragState, PaneGeometry};
 use mez_mux::layout::range_overlap_u16;
@@ -666,66 +665,36 @@ impl RuntimeSessionService {
         let TerminalClientLoopAction::ForwardToPane(input) = action else {
             return Ok(false);
         };
-        match runtime_selector_input_action(input) {
-            RuntimeSelectorInputAction::Exit => {
+        let selector_action = runtime_selector_input_action(input);
+        let visible_rows = self.pane_agent_status_selector_visible_rows();
+        let outcome = {
+            let Some(selector) = self.presentation.pane_agent_status_selector.as_mut() else {
+                return Ok(false);
+            };
+            apply_selector_input(selector, selector_action, visible_rows)
+        };
+        match outcome {
+            SelectorInputOutcome::Close => {
                 self.presentation.pane_agent_status_selector = None;
                 Ok(true)
             }
-            RuntimeSelectorInputAction::Previous => {
-                self.move_pane_agent_status_selector(-1);
-                Ok(true)
-            }
-            RuntimeSelectorInputAction::Next => {
-                self.move_pane_agent_status_selector(1);
-                Ok(true)
-            }
-            RuntimeSelectorInputAction::First => {
-                self.set_pane_agent_status_selector_index(0);
-                Ok(true)
-            }
-            RuntimeSelectorInputAction::Last => {
-                if let Some(selector) = self.presentation.pane_agent_status_selector.as_ref() {
-                    self.set_pane_agent_status_selector_index(
-                        selector.items.len().saturating_sub(1),
-                    );
-                }
-                Ok(true)
-            }
-            RuntimeSelectorInputAction::Select => {
+            SelectorInputOutcome::Select { index } => {
                 let Some(selector) = self.presentation.pane_agent_status_selector.as_ref() else {
                     return Ok(false);
                 };
+                let pane_index = selector.pane_index;
+                let field = selector.field;
                 self.select_pane_agent_status_selector(
                     primary_client_id,
-                    selector.pane_index,
-                    selector.field,
-                    selector.active_index,
+                    pane_index,
+                    field,
+                    index,
                 )?;
                 Ok(true)
             }
-            RuntimeSelectorInputAction::Ignore => Ok(false),
+            SelectorInputOutcome::Updated | SelectorInputOutcome::Unchanged => Ok(true),
+            SelectorInputOutcome::Ignored => Ok(false),
         }
-    }
-
-    /// Moves the open pane-frame selector highlight by one row.
-    fn move_pane_agent_status_selector(&mut self, delta: isize) {
-        let visible_rows = self.pane_agent_status_selector_visible_rows();
-        let Some(selector) = self.presentation.pane_agent_status_selector.as_mut() else {
-            return;
-        };
-        selector.active_index =
-            runtime_selector_step_index(selector.active_index, selector.items.len(), delta);
-        runtime_pane_agent_status_selector_keep_active_visible(selector, visible_rows);
-    }
-
-    /// Sets the open pane-frame selector highlight to a bounded item index.
-    fn set_pane_agent_status_selector_index(&mut self, item_index: usize) {
-        let visible_rows = self.pane_agent_status_selector_visible_rows();
-        let Some(selector) = self.presentation.pane_agent_status_selector.as_mut() else {
-            return;
-        };
-        selector.active_index = item_index.min(selector.items.len().saturating_sub(1));
-        runtime_pane_agent_status_selector_keep_active_visible(selector, visible_rows);
     }
 
     /// Scrolls the open pane-frame selector without changing pane scrollback.
@@ -742,15 +711,7 @@ impl RuntimeSessionService {
         if selector.pane_index != pane_index || selector.field != field {
             return;
         }
-        let max_offset = selector.items.len().saturating_sub(visible_rows.max(1));
-        if lines.is_negative() {
-            selector.scroll_offset = selector.scroll_offset.saturating_sub(lines.unsigned_abs());
-        } else {
-            selector.scroll_offset = selector
-                .scroll_offset
-                .saturating_add(lines as usize)
-                .min(max_offset);
-        }
+        runtime_scroll_selector(selector, lines, visible_rows);
     }
 
     /// Returns the current selector's visible row count for the active window.
@@ -889,7 +850,7 @@ impl RuntimeSessionService {
         });
         let visible_rows = self.pane_agent_status_selector_visible_rows();
         if let Some(selector) = self.presentation.pane_agent_status_selector.as_mut() {
-            runtime_pane_agent_status_selector_keep_active_visible(selector, visible_rows);
+            runtime_set_selector_index(selector, active_index, visible_rows);
         }
         Ok(())
     }
@@ -901,11 +862,12 @@ impl RuntimeSessionService {
         field: PaneAgentStatusField,
         item_index: usize,
     ) {
+        let visible_rows = self.pane_agent_status_selector_visible_rows();
         let Some(selector) = self.presentation.pane_agent_status_selector.as_mut() else {
             return;
         };
         if selector.pane_index == pane_index && selector.field == field {
-            selector.active_index = item_index.min(selector.items.len().saturating_sub(1));
+            runtime_set_selector_index(selector, item_index, visible_rows);
         }
     }
 

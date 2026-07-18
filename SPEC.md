@@ -1640,6 +1640,14 @@ implementation records that use `key=value:key=value` or
 labels and values before being shown in terminal overlays or pane-local agent
 command displays.
 
+Product-independent command-overlay and anchored-selector state snapshots,
+navigation, search, viewport clamping, accept/cancel behavior, and typed effect
+intents MUST be owned by `mez-mux`. The product runtime MUST remain the adapter
+that translates terminal input into mux events and executes returned opaque
+close, select, or command intents. Mux transition reduction MUST NOT call
+product runtime services or import product configuration, persistence, or audit
+state.
+
 ### 7.4 Agent Shell Toggle
 
 Mezzanine MUST provide a key binding that enters the agent shell for the active

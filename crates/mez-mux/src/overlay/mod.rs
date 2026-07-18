@@ -5,9 +5,15 @@
 //! product crate can retain issue and memory query adapters without creating a
 //! dependency from mux presentation to the agent domain.
 
+mod input;
 mod interaction;
 mod state;
 
+pub use input::{
+    OverlayInputAction, OverlayInputOutcome, SelectorInputAction, SelectorInputOutcome,
+    apply_overlay_input, apply_selector_input, keep_selector_active_visible, move_selector,
+    scroll_selector, selector_step_index, set_selector_index,
+};
 pub use interaction::{
     OVERLAY_ACTIVE_SELECTOR, OVERLAY_INACTIVE_SELECTOR, apply_overlay_scroll_delta,
     clamp_overlay_scroll, overlay_active_line_index, overlay_body_style_spans,
@@ -20,6 +26,6 @@ pub use interaction::{
     scroll_overlay_to_line, update_overlay_active_selection_for_viewport,
 };
 pub use state::{
-    DisplayOverlay, OverlaySearchMatch, OverlaySelection, OverlaySelectionKind,
+    AnchoredSelector, DisplayOverlay, OverlaySearchMatch, OverlaySelection, OverlaySelectionKind,
     RecordBrowserOverlayFrame, RecordBrowserOverlayState,
 };
