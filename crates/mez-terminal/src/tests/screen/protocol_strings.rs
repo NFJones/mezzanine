@@ -100,12 +100,94 @@ fn terminal_screen_parses_osc52_clipboard_payloads() {
 
     assert_eq!(
         screen.drain_osc_events(),
-        vec![TerminalOscEvent::ClipboardSet {
-            selection: "c".to_string(),
-            content: "hello".to_string(),
-        }]
+        vec![TerminalOscEvent::Clipboard(
+            crate::protocol::TerminalClipboardRequest::Write {
+                selection: crate::protocol::TerminalClipboardSelection::new("c"),
+                content: crate::protocol::TerminalClipboardContent::new("hello"),
+            }
+        )]
     );
     assert_eq!(screen.visible_lines()[0], "after");
+}
+
+/// Verifies an empty OSC 52 write remains a valid typed write with the default
+/// empty selection parameter.
+///
+/// Empty content is distinct from a malformed protocol payload: downstream
+/// policy may intentionally clear an internal or external clipboard and must
+/// receive the operation rather than having the parser silently discard it.
+#[test]
+fn terminal_screen_preserves_empty_osc52_clipboard_writes() {
+    let mut screen = TerminalScreen::new(Size::new(20, 2).unwrap(), 10).unwrap();
+
+    screen.feed(b"\x1b]52;;\x07after");
+
+    assert_eq!(
+        screen.drain_osc_events(),
+        vec![TerminalOscEvent::Clipboard(
+            crate::protocol::TerminalClipboardRequest::Write {
+                selection: crate::protocol::TerminalClipboardSelection::new(""),
+                content: crate::protocol::TerminalClipboardContent::new(""),
+            }
+        )]
+    );
+    assert_eq!(screen.visible_lines()[0], "after");
+}
+
+/// Verifies terminal screen distinguishes OSC 52 clipboard queries from
+/// writes without reading or returning clipboard data inside the parser.
+///
+/// Query authorization and response effects belong outside `mez-terminal`, so
+/// the protocol surface must retain only the selection requested by the pane.
+#[test]
+fn terminal_screen_parses_osc52_clipboard_queries_as_typed_requests() {
+    let mut screen = TerminalScreen::new(Size::new(20, 2).unwrap(), 10).unwrap();
+
+    screen.feed(b"\x1b]52;p;?\x07after");
+
+    assert_eq!(
+        screen.drain_osc_events(),
+        vec![TerminalOscEvent::Clipboard(
+            crate::protocol::TerminalClipboardRequest::Query {
+                selection: crate::protocol::TerminalClipboardSelection::new("p"),
+            }
+        )]
+    );
+    assert_eq!(screen.visible_lines()[0], "after");
+}
+
+/// Verifies malformed base64 and decoded binary OSC 52 writes are discarded.
+///
+/// The clipboard event contract carries UTF-8 text. Silently replacing binary
+/// bytes or dispatching malformed content would corrupt the clipboard and blur
+/// the terminal/product boundary, so both inputs must produce no event.
+#[test]
+fn terminal_screen_drops_malformed_and_binary_osc52_clipboard_writes() {
+    let mut screen = TerminalScreen::new(Size::new(20, 2).unwrap(), 10).unwrap();
+
+    screen.feed(b"\x1b]52;c;not-base64!\x07");
+    screen.feed(b"\x1b]52;c;/w==\x07after");
+
+    assert_eq!(screen.drain_osc_events(), Vec::<TerminalOscEvent>::new());
+    assert_eq!(screen.visible_lines()[0], "after");
+}
+
+/// Verifies debug output reports clipboard payload size without revealing the
+/// clipboard text itself.
+///
+/// Terminal protocol events routinely appear in assertion and diagnostic
+/// output, so a sensitive OSC 52 payload must not leak through derived debug
+/// formatting even though authorized adapters can still read it explicitly.
+#[test]
+fn terminal_clipboard_content_debug_output_is_redacted() {
+    let event = TerminalOscEvent::Clipboard(crate::protocol::TerminalClipboardRequest::Write {
+        selection: crate::protocol::TerminalClipboardSelection::new("c"),
+        content: crate::protocol::TerminalClipboardContent::new("secret-token"),
+    });
+
+    let diagnostic = format!("{event:?}");
+    assert!(diagnostic.contains("bytes: 12"), "{diagnostic}");
+    assert!(!diagnostic.contains("secret-token"), "{diagnostic}");
 }
 
 /// Verifies oversized OSC payloads are dropped instead of dispatched in

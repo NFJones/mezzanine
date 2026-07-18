@@ -262,12 +262,21 @@ impl TerminalScreen {
             });
         } else if command == "52"
             && let Some((selection, encoded)) = text.split_once(';')
-            && let Some(content) = decode_standard_base64_utf8(encoded)
         {
-            self.osc_events.push(TerminalOscEvent::ClipboardSet {
-                selection: selection.to_string(),
-                content,
-            });
+            let selection = crate::protocol::TerminalClipboardSelection::new(selection);
+            let request = if encoded == "?" {
+                Some(crate::protocol::TerminalClipboardRequest::Query { selection })
+            } else {
+                decode_standard_base64_utf8(encoded).map(|content| {
+                    crate::protocol::TerminalClipboardRequest::Write {
+                        selection,
+                        content: crate::protocol::TerminalClipboardContent::new(content),
+                    }
+                })
+            };
+            if let Some(request) = request {
+                self.osc_events.push(TerminalOscEvent::Clipboard(request));
+            }
         }
     }
 

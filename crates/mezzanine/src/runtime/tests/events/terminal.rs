@@ -2,6 +2,137 @@
 
 use super::*;
 
+/// Builds one typed terminal clipboard write event for runtime policy tests.
+///
+/// Keeping construction local makes each test focus on product effect behavior
+/// rather than repeating terminal-protocol wrapper details.
+fn terminal_clipboard_write_event(selection: &str, content: &str) -> TerminalOscEvent {
+    TerminalOscEvent::Clipboard(mez_terminal::TerminalClipboardRequest::Write {
+        selection: mez_terminal::TerminalClipboardSelection::new(selection),
+        content: mez_terminal::TerminalClipboardContent::new(content),
+    })
+}
+
+/// Verifies external terminal clipboard policy stores OSC 52 writes internally,
+/// attempts the host effect, ignores host failure, and rejects queries.
+///
+/// This integration guard proves the product adapter executes mux effect
+/// intents in order without allowing a failed host transport or unsupported
+/// query to erase internal state or disclose host clipboard data.
+#[test]
+fn runtime_external_terminal_clipboard_executes_typed_effect_plan_best_effort() {
+    let _clipboard_guard = TEST_HOST_CLIPBOARD_TEST_LOCK.lock().unwrap();
+    TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().clear();
+    let mut service = test_runtime_service();
+    *service.host_clipboard_mut_for_tests() =
+        HostClipboard::new(record_failed_host_clipboard_copy, empty_host_clipboard_read);
+    let events = [
+        TerminalOscEvent::Clipboard(mez_terminal::TerminalClipboardRequest::Query {
+            selection: mez_terminal::TerminalClipboardSelection::new("c"),
+        }),
+        terminal_clipboard_write_event("c", "secret-text"),
+    ];
+
+    let applied = service.apply_terminal_osc_events(&events).unwrap();
+
+    assert_eq!(applied, 1);
+    assert_eq!(service.paste_buffers().get("osc52"), Some("secret-text"));
+    assert_eq!(
+        TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().as_slice(),
+        ["secret-text"]
+    );
+}
+
+/// Verifies internal terminal clipboard policy updates only mux paste-buffer
+/// state and never invokes the product host clipboard adapter.
+///
+/// The former raw-string branch accepted the internal mode but reused a helper
+/// that always attempted host I/O. Typed policy must keep that mode truly local.
+#[test]
+fn runtime_internal_terminal_clipboard_omits_host_effect() {
+    let _clipboard_guard = TEST_HOST_CLIPBOARD_TEST_LOCK.lock().unwrap();
+    TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().clear();
+    let mut service = test_runtime_service();
+    *service.host_clipboard_mut_for_tests() =
+        HostClipboard::new(record_host_clipboard_copy, empty_host_clipboard_read);
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\nclipboard = \"internal\"\n".to_string(),
+        }])
+        .unwrap();
+
+    let applied = service
+        .apply_terminal_osc_events(&[terminal_clipboard_write_event("p", "internal-text")])
+        .unwrap();
+
+    assert_eq!(applied, 1);
+    assert_eq!(service.paste_buffers().get("osc52"), Some("internal-text"));
+    assert!(TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().is_empty());
+}
+
+/// Verifies disabled terminal clipboard policy rejects OSC 52 writes before
+/// either internal storage or product host effects occur.
+///
+/// Pane-originated clipboard bytes are untrusted input, so an explicit product
+/// denial must result in a stable no-effect outcome rather than a partial copy.
+#[test]
+fn runtime_disabled_terminal_clipboard_rejects_all_write_effects() {
+    let _clipboard_guard = TEST_HOST_CLIPBOARD_TEST_LOCK.lock().unwrap();
+    TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().clear();
+    let mut service = test_runtime_service();
+    *service.host_clipboard_mut_for_tests() =
+        HostClipboard::new(record_host_clipboard_copy, empty_host_clipboard_read);
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[terminal]\nclipboard = \"disabled\"\n".to_string(),
+        }])
+        .unwrap();
+
+    let applied = service
+        .apply_terminal_osc_events(&[terminal_clipboard_write_event("c", "denied-text")])
+        .unwrap();
+
+    assert_eq!(applied, 0);
+    assert_eq!(service.paste_buffers().get("osc52"), None);
+    assert!(TEST_HOST_CLIPBOARD_WRITES.lock().unwrap().is_empty());
+}
+
+/// Verifies product host-read unavailability feeds the mux fallback decision
+/// and selects the most recent non-empty internal paste buffer.
+///
+/// The mux owns deterministic precedence, but the product must still perform
+/// host I/O and internal-buffer lookup before routing the selected content to a
+/// prompt or pane effect.
+#[test]
+fn runtime_clipboard_paste_source_falls_back_after_host_read_failure() {
+    let mut service = test_runtime_service();
+    *service.host_clipboard_mut_for_tests() = HostClipboard::disabled();
+    service
+        .paste_buffers_mut()
+        .set_with_origin("recent", "fallback-text", Some("test".to_string()))
+        .unwrap();
+
+    let source = service.clipboard_or_most_recent_paste_source().unwrap();
+
+    assert_eq!(
+        source.kind(),
+        &ClipboardPasteSourceKind::PasteBuffer {
+            name: "recent".to_string()
+        }
+    );
+    assert_eq!(source.content(), "fallback-text");
+}
+
 /// Verifies pane environment accepts explicit term selection.
 ///
 /// This regression scenario documents the behavior being protected so a

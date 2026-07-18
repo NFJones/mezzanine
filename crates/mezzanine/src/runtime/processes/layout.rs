@@ -884,12 +884,3 @@ fn requested_percent_dimension(total: u16, percent: u16, axis: &'static str) -> 
         MezError::invalid_args(format!("percent pane creation size {axis} is out of range"))
     })
 }
-
-/// Runs the terminal clipboard policy accepts osc52 operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn terminal_clipboard_policy_accepts_osc52(policy: &str) -> bool {
-    matches!(policy, "external" | "host" | "internal")
-}

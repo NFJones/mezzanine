@@ -1024,6 +1024,13 @@ Right-click paste MUST paste host clipboard text when available and fall back to
 the most recent internal paste buffer when host clipboard text is unavailable,
 unless the pane application has captured mouse input.
 
+Host clipboard reads and pane-input writes MUST remain product effects. The
+multiplexer policy MUST select only non-empty content, prefer observed host
+clipboard text, and otherwise select the most recently updated non-empty
+internal paste buffer. Invalid host clipboard UTF-8, unavailable host transport,
+and empty host output MUST be treated as unavailable so internal fallback can
+proceed.
+
 Mezzanine MUST support mouse scrolling within pane history buffers.
 When scroll-mode or copy-mode history scrolling reaches the live bottom and no
 selection is active, Mezzanine MUST exit that mode automatically so subsequent
@@ -1157,6 +1164,22 @@ including SGR mouse encoding, title setting, clipboard sequences when enabled by
 policy, and save/restore mode behavior. The profile MUST explicitly mark DCS
 string controls and any other unimplemented xterm capabilities as unsupported
 unless Mezzanine implements, documents, and tests them.
+
+OSC 52 clipboard parsing MUST retain at most 4,096 bytes for one control
+payload, consume and discard an oversized sequence through its terminator, and
+emit only typed UTF-8 write or query requests. Malformed base64 writes and
+writes whose decoded bytes are not UTF-8 MUST be ignored. Clipboard payload
+contents MUST NOT be exposed through ordinary event diagnostics.
+
+`terminal.clipboard` MUST accept `external`, `internal`, and `disabled`.
+`external` MUST route an accepted OSC 52 write to the internal `osc52` paste
+buffer before attempting a best-effort host clipboard copy. `internal` MUST
+route the write only to that internal buffer and MUST NOT invoke host clipboard
+I/O. `disabled` MUST reject the request without internal or host effects.
+Mezzanine MUST NOT answer OSC 52 clipboard queries or read host clipboard data
+in response to a pane-originated query. Product security authorization MUST
+remain explicit input to clipboard effect planning, and denied requests MUST
+produce no effects.
 
 Mezzanine MUST set the `TERM` value visible to panes to a value consistent with
 the active terminal compatibility profile.

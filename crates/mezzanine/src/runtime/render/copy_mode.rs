@@ -82,12 +82,40 @@ impl RuntimeSessionService {
         content: String,
         origin: String,
     ) -> Result<()> {
-        self.presentation.copy.paste_buffers.set_with_origin(
+        self.apply_clipboard_write_plan(
             name,
             content.as_str(),
-            Some(origin),
+            origin,
+            &super::ClipboardWritePlan::text_selection(),
         )?;
-        let _ = self.presentation.copy.host_clipboard.copy(content.as_str());
+        Ok(())
+    }
+
+    /// Executes one mux-approved clipboard plan through product-owned effects.
+    ///
+    /// Internal storage remains mux state while host access remains a
+    /// best-effort product adapter. The payload is not included in diagnostics.
+    pub(crate) fn apply_clipboard_write_plan(
+        &mut self,
+        name: &str,
+        content: &str,
+        origin: String,
+        plan: &super::ClipboardWritePlan,
+    ) -> Result<()> {
+        for intent in plan.intents() {
+            match intent {
+                super::ClipboardEffectIntent::StoreInternal => {
+                    self.presentation.copy.paste_buffers.set_with_origin(
+                        name,
+                        content,
+                        Some(origin.clone()),
+                    )?;
+                }
+                super::ClipboardEffectIntent::CopyToHost => {
+                    let _ = self.presentation.copy.host_clipboard.copy(content);
+                }
+            }
+        }
         Ok(())
     }
 

@@ -55,7 +55,7 @@ impl RuntimeSessionService {
             };
             match event {
                 TerminalOscEvent::ShellIntegration { .. } => {}
-                TerminalOscEvent::TitleChanged { .. } | TerminalOscEvent::ClipboardSet { .. } => {}
+                TerminalOscEvent::TitleChanged { .. } | TerminalOscEvent::Clipboard(_) => {}
                 TerminalOscEvent::ShellPromptStart => {
                     if !observed_harness_transaction_end {
                         observed =

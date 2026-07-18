@@ -9,25 +9,26 @@ mod pane_pipes;
 mod startup;
 mod transactions;
 
-use layout::terminal_clipboard_policy_accepts_osc52;
 use mez_mux::presentation::{pane_content_size_for_geometry, rendered_window_body_size};
 
 use super::{
     ActionContentBlock, ActionResult, ActionStatus, ActivePanePipe, AgentId, AgentTurnRecord,
-    AgentTurnState, AuditActor, BTreeSet, CommandInvocation, CommandOutcome, EnvironmentSignature,
-    EventKind, ExitedPaneProcess, HookEvent, HookExecutionResult, HookExecutionStatus, HookFailure,
-    HookFailureKind, MezError, PaneDescriptor, PaneExitRecord, PaneExitStatus, PaneExitUpdate,
-    PaneId, PaneOutputUpdate, PaneProcessManager, PaneProcessOutput, PaneProcessStart,
-    PaneReadinessState, PaneResizeUpdate, PaneSizeSpec, Path, PathBuf, ReadinessOverrideRevocation,
-    ResizeAxis, ResizeDirection, Result, RunningShellTransactionKind, RunningShellTransactionRef,
-    RuntimeHookPipelineBlock, RuntimeLifecycleState, RuntimeSessionService,
-    RuntimeShellTransactionActionFailure, RuntimeShellTransactionTimerKind,
-    RuntimeShellTransactionTimerRef, SessionSnapshotPayload, ShellClassification, ShellTransaction,
-    Size, SplitDirection, StoppedPanePipe, TerminalOscEvent, TerminalScreen, WindowId,
-    current_unix_millis, current_unix_seconds, decode_shell_output_transport_with_diagnostics,
-    execute_mark_pane_ready_command, focused_shell_pre_action_timeout_result,
-    hook_execution_audit_record, json_escape, local_action_plan, optional_i32_json,
-    pane_environment_with_term, postprocess_shell_action_success_output,
+    AgentTurnState, AuditActor, BTreeSet, ClipboardAuthorization, ClipboardDecision,
+    CommandInvocation, CommandOutcome, EnvironmentSignature, EventKind, ExitedPaneProcess,
+    HookEvent, HookExecutionResult, HookExecutionStatus, HookFailure, HookFailureKind, MezError,
+    PaneDescriptor, PaneExitRecord, PaneExitStatus, PaneExitUpdate, PaneId, PaneOutputUpdate,
+    PaneProcessManager, PaneProcessOutput, PaneProcessStart, PaneReadinessState, PaneResizeUpdate,
+    PaneSizeSpec, Path, PathBuf, ReadinessOverrideRevocation, ResizeAxis, ResizeDirection, Result,
+    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeHookPipelineBlock,
+    RuntimeLifecycleState, RuntimeSessionService, RuntimeShellTransactionActionFailure,
+    RuntimeShellTransactionTimerKind, RuntimeShellTransactionTimerRef, SessionSnapshotPayload,
+    ShellClassification, ShellTransaction, Size, SplitDirection, StoppedPanePipe,
+    TerminalClipboardOperation, TerminalClipboardRequest, TerminalOscEvent, TerminalScreen,
+    WindowId, current_unix_millis, current_unix_seconds,
+    decode_shell_output_transport_with_diagnostics, execute_mark_pane_ready_command,
+    focused_shell_pre_action_timeout_result, hook_execution_audit_record, json_escape,
+    local_action_plan, optional_i32_json, pane_environment_with_term,
+    plan_terminal_clipboard_request, postprocess_shell_action_success_output,
     runtime_agent_turn_state_from_action_results, runtime_agent_turn_state_name,
     runtime_execution_ready_for_provider_continuation, runtime_hook_event_name,
     runtime_hook_execution_status_name, runtime_marker_for_action,

@@ -161,6 +161,11 @@ use mez_agent::{
     ShellTransactionOutputTransport, agent_subshell_enter_command,
 };
 use mez_core::ids::{AgentId, ClientId, PaneId, SessionId, WindowId};
+use mez_mux::clipboard::{
+    ClipboardAuthorization, ClipboardDecision, ClipboardEffectIntent, ClipboardPasteSource,
+    ClipboardPasteSourceKind, ClipboardPolicy, ClipboardWritePlan, TerminalClipboardOperation,
+    plan_terminal_clipboard_request, select_clipboard_paste_source,
+};
 use mez_mux::command::{CommandInvocation, parse_command_sequence};
 use mez_mux::copy::CopyModeKeyAction;
 use mez_mux::copy::{CopyPosition, SearchDirection};
@@ -182,7 +187,7 @@ use mez_mux::session::{ClientRole, ClientState, ObserverDecisionState, Session};
 use mez_mux::theme::{UiThemeDefinition, builtin_ui_theme_definition, resolve_ui_theme};
 #[cfg(test)]
 use mez_terminal::DEFAULT_PANE_TERM;
-use mez_terminal::{TerminalOscEvent, TerminalScreen};
+use mez_terminal::{TerminalClipboardRequest, TerminalOscEvent, TerminalScreen};
 
 /// Coordinates the seven private application runtime components.
 ///

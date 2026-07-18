@@ -12,6 +12,7 @@ use crate::error::{MezError, Result};
 use crate::host::terminal::DEFAULT_AGENT_WRAP_COLUMN_CAP;
 use crate::host::terminal::{HostClipboard, HostClipboardCommand};
 use crate::storage::transcript::DEFAULT_SAVED_AGENT_SESSION_LIMIT;
+use mez_mux::clipboard::ClipboardPolicy;
 use mez_mux::presentation::TerminalCursorStyle;
 use mez_terminal::{
     DEFAULT_HISTORY_LIMIT, DEFAULT_HISTORY_ROTATE_LINES, DEFAULT_PANE_TERM, TerminalEmojiWidth,
@@ -302,22 +303,19 @@ pub(crate) fn runtime_terminal_reduced_motion_from_config(root: &Value) -> Resul
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-pub(crate) fn runtime_terminal_clipboard_from_config(root: &Value) -> Result<String> {
+pub(crate) fn runtime_terminal_clipboard_from_config(root: &Value) -> Result<ClipboardPolicy> {
     let Some(terminal) = runtime_json_object(root, "terminal") else {
-        return Ok("external".to_string());
+        return Ok(ClipboardPolicy::External);
     };
     let Some(value) = terminal.get("clipboard") else {
-        return Ok("external".to_string());
+        return Ok(ClipboardPolicy::External);
     };
     let Some(clipboard) = runtime_json_string(Some(value)) else {
         return Err(MezError::config("terminal.clipboard must be a string"));
     };
-    match clipboard {
-        "external" | "host" | "internal" | "disabled" | "off" | "none" => Ok(clipboard.to_string()),
-        _ => Err(MezError::config(
-            "terminal.clipboard must be external, internal, or disabled",
-        )),
-    }
+    ClipboardPolicy::from_config_value(clipboard).ok_or_else(|| {
+        MezError::config("terminal.clipboard must be external, internal, or disabled")
+    })
 }
 
 /// Runs the runtime host clipboard from config operation for this subsystem.

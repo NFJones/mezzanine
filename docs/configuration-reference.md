@@ -106,7 +106,7 @@ entry is shown.
 | `terminal.true_color` | boolean | `true` | Enable true-color presentation where supported. |
 | `terminal.mouse` | boolean | `true` | Enable mouse reporting, selection, scrolling, UI clicks, and explicit visible alternate-screen selection when pane applications have not captured mouse input. |
 | `terminal.bracketed_paste` | boolean | `true` | Enable bracketed paste handling. |
-| `terminal.clipboard` | string | `"external"` | Clipboard integration mode. |
+| `terminal.clipboard` | string | `"external"` | Pane-originated OSC 52 write policy: `external` stores internally then attempts a best-effort host copy, `internal` stores only in the internal `osc52` buffer, and `disabled` rejects the write. Clipboard queries are not answered. |
 | `terminal.clipboard_copy_command` | string or string array | omitted | Host copy command; receives content on stdin. |
 | `terminal.clipboard_paste_command` | string or string array | omitted | Host paste command; writes content to stdout. |
 | `terminal.alternate_screen` | boolean | `true` | Support alternate-screen applications. |

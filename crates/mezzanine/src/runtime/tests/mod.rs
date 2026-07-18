@@ -42,6 +42,7 @@ use base64::Engine;
 use mez_agent::AgentLogLevel;
 use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
 use mez_agent::{ScheduledWork, ScheduledWorkKind, SubagentSpawnRequest};
+use mez_mux::clipboard::ClipboardPasteSourceKind;
 use mez_mux::copy::CopyPosition;
 use mez_mux::input::{MuxAction, PaneFocusDirection};
 use mez_mux::presentation::ClientViewRole;
@@ -169,6 +170,18 @@ fn record_host_clipboard_copy(content: &str) -> bool {
         .unwrap()
         .push(content.to_string());
     true
+}
+
+/// Records a host clipboard copy attempt while reporting adapter failure.
+///
+/// Runtime clipboard tests use this backend to prove that the mux-approved
+/// internal effect survives a failed best-effort product host effect.
+fn record_failed_host_clipboard_copy(content: &str) -> bool {
+    TEST_HOST_CLIPBOARD_WRITES
+        .lock()
+        .unwrap()
+        .push(content.to_string());
+    false
 }
 
 /// Runs the empty host clipboard read operation for this subsystem.

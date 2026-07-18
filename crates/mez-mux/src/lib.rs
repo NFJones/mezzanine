@@ -6,6 +6,7 @@
 //! independent of the agent harness and product composition crate.
 
 pub mod attached_client;
+pub mod clipboard;
 pub mod command;
 pub mod copy;
 mod error;

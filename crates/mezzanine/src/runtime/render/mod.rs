@@ -32,21 +32,23 @@ use super::service_state::{
 };
 use super::{
     AgentShellVisibility, AgentTurnRecord, AgentTurnState, AttachedClientStepApplication,
-    AttachedTerminalClientStepPlan, ClientViewRole, CopyMode, CopyModeKeyAction, EffectiveConfig,
-    EventKind, HostClipboard, KeyBindings, KeyChord, MezError, MouseAction, MouseResizeDragState,
-    MouseSelectionDragState, MouseWindowActionFrameCell, ObserverDecisionState, PaneDescriptor,
-    PaneGeometry, PaneInputDispatch, PaneNavigationDirection, PasteBuffers, ReadlineInputDecoder,
-    ReadlineOutcome, ReadlinePrompt, ReadlinePromptKind, RenderedClientView, Result,
-    RuntimeAgentPromptInput, RuntimeCommandBinding, RuntimeSessionService, RuntimeSideEffect,
-    RuntimeStatusPillCache, RuntimeStatusPillDefinition, Size, SplitDirection,
-    TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFrameContext, TerminalScreen,
-    WindowFrameAction, agent_prompt_reserved_line_count, current_unix_millis, current_unix_seconds,
-    json_escape, mouse_action_name, mux_action_command_prompt_prefill, mux_action_name,
-    pane_navigation_direction, parse_command_sequence, render_attached_client_view,
-    rendered_pane_geometries, runtime_agent_shell_command_response_json,
-    runtime_agent_turn_duration_display, runtime_agent_turn_state_name,
-    runtime_approval_policy_name, runtime_copy_position_for_view, runtime_fit_status_line,
-    runtime_paste_bytes, window_frame_action_pillbox_cells, window_frame_pillbox_cells,
+    AttachedTerminalClientStepPlan, ClientViewRole, ClipboardEffectIntent, ClipboardPasteSource,
+    ClipboardPasteSourceKind, ClipboardPolicy, ClipboardWritePlan, CopyMode, CopyModeKeyAction,
+    EffectiveConfig, EventKind, HostClipboard, KeyBindings, KeyChord, MezError, MouseAction,
+    MouseResizeDragState, MouseSelectionDragState, MouseWindowActionFrameCell,
+    ObserverDecisionState, PaneDescriptor, PaneGeometry, PaneInputDispatch,
+    PaneNavigationDirection, PasteBuffers, ReadlineInputDecoder, ReadlineOutcome, ReadlinePrompt,
+    ReadlinePromptKind, RenderedClientView, Result, RuntimeAgentPromptInput, RuntimeCommandBinding,
+    RuntimeSessionService, RuntimeSideEffect, RuntimeStatusPillCache, RuntimeStatusPillDefinition,
+    Size, SplitDirection, TerminalClientLoopAction, TerminalClientLoopConfig, TerminalFrameContext,
+    TerminalScreen, WindowFrameAction, agent_prompt_reserved_line_count, current_unix_millis,
+    current_unix_seconds, json_escape, mouse_action_name, mux_action_command_prompt_prefill,
+    mux_action_name, pane_navigation_direction, parse_command_sequence,
+    render_attached_client_view, rendered_pane_geometries,
+    runtime_agent_shell_command_response_json, runtime_agent_turn_duration_display,
+    runtime_agent_turn_state_name, runtime_approval_policy_name, runtime_copy_position_for_view,
+    runtime_fit_status_line, runtime_paste_bytes, select_clipboard_paste_source,
+    window_frame_action_pillbox_cells, window_frame_pillbox_cells,
 };
 /// Maximum elapsed time between two pane-content clicks recognized as a double click.
 const DOUBLE_CLICK_WORD_SELECTION_WINDOW_MS: u64 = 500;
@@ -105,7 +107,7 @@ pub(crate) struct RuntimePresentationSettings {
     /// Configured prefix-table command bindings keyed by chord.
     command_bindings: std::collections::BTreeMap<KeyChord, RuntimeCommandBinding>,
     /// Clipboard policy used for OSC 52 terminal writes.
-    terminal_clipboard: String,
+    terminal_clipboard: ClipboardPolicy,
 }
 
 impl Default for RuntimePresentationSettings {
@@ -140,7 +142,7 @@ impl Default for RuntimePresentationSettings {
             ui_theme: UiTheme::default(),
             key_bindings: KeyBindings::default(),
             command_bindings: std::collections::BTreeMap::new(),
-            terminal_clipboard: "external".to_string(),
+            terminal_clipboard: ClipboardPolicy::External,
         }
     }
 }
@@ -459,8 +461,8 @@ impl RuntimeSessionService {
     }
 
     /// Returns the configured OSC 52 terminal clipboard policy.
-    pub(crate) fn terminal_clipboard(&self) -> &str {
-        &self.presentation.settings.terminal_clipboard
+    pub(crate) fn terminal_clipboard(&self) -> ClipboardPolicy {
+        self.presentation.settings.terminal_clipboard
     }
 
     /// Removes one active agent prompt editor and returns its state.

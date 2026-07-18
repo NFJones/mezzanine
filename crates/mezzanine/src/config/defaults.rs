@@ -19,6 +19,8 @@ term = "screen-256color"
 true_color = true
 mouse = true
 bracketed_paste = true
+# OSC 52 writes: "external" stores internally and attempts a host copy;
+# "internal" stores only in the internal buffer; "disabled" rejects writes.
 clipboard = "external"
 # Optional explicit host clipboard commands. Copy commands receive content on
 # stdin; paste commands return clipboard text on stdout.

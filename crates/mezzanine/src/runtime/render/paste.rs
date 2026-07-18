@@ -1,24 +1,14 @@
 //! Runtime render paste helpers.
 //!
-//! This module owns paste-source metadata and readline paste framing used by
-//! the runtime render/input layer. RuntimeSessionService remains responsible
-//! for choosing the paste source and routing the resulting input bytes.
+//! This module owns readline paste framing and executes mux-selected paste
+//! sources through product prompt or pane-input adapters. Host clipboard reads
+//! remain product I/O while deterministic source precedence belongs to mux.
 
 use super::{
-    AgentShellVisibility, EventKind, PaneDescriptor, Result, RuntimeSessionService, json_escape,
-    runtime_paste_bytes,
+    AgentShellVisibility, ClipboardPasteSource, ClipboardPasteSourceKind, EventKind,
+    PaneDescriptor, Result, RuntimeSessionService, json_escape, runtime_paste_bytes,
+    select_clipboard_paste_source,
 };
-
-/// Source metadata for paste operations routed through runtime render input.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct RuntimePasteSource {
-    /// Human-readable paste source label.
-    pub(super) label: String,
-    /// Optional named paste buffer source.
-    pub(super) buffer_name: Option<String>,
-    /// Text content to paste.
-    pub(super) content: String,
-}
 
 /// Wraps pasted text for the readline decoder as one bracketed-paste payload.
 ///
@@ -89,13 +79,10 @@ impl RuntimeSessionService {
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         descriptor: &PaneDescriptor,
-        source: RuntimePasteSource,
+        source: ClipboardPasteSource,
         queue_for_adapter: bool,
     ) -> Result<bool> {
-        if source.content.is_empty() {
-            return Ok(false);
-        }
-        let paste_bytes = runtime_readline_paste_bytes(source.content.as_str());
+        let paste_bytes = runtime_readline_paste_bytes(source.content());
         if self.presentation.primary_prompt_input.is_some() {
             return self.apply_primary_prompt_input(
                 primary_client_id,
@@ -122,21 +109,11 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(super) fn clipboard_or_most_recent_paste_source(&self) -> Option<RuntimePasteSource> {
-        if let Some(content) = self
-            .presentation
-            .copy
-            .host_clipboard
-            .read()
-            .filter(|content| !content.is_empty())
-        {
-            return Some(RuntimePasteSource {
-                label: "host-clipboard".to_string(),
-                buffer_name: None,
-                content,
-            });
-        }
-        self.most_recent_paste_buffer_source()
+    pub(crate) fn clipboard_or_most_recent_paste_source(&self) -> Option<ClipboardPasteSource> {
+        select_clipboard_paste_source(
+            self.presentation.copy.host_clipboard.read(),
+            self.most_recent_paste_buffer_candidate(),
+        )
     }
 
     /// Runs the most recent paste buffer source operation for this subsystem.
@@ -144,7 +121,12 @@ impl RuntimeSessionService {
     /// The function keeps parsing, state changes, and error propagation in
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
-    pub(super) fn most_recent_paste_buffer_source(&self) -> Option<RuntimePasteSource> {
+    pub(super) fn most_recent_paste_buffer_source(&self) -> Option<ClipboardPasteSource> {
+        select_clipboard_paste_source(None, self.most_recent_paste_buffer_candidate())
+    }
+
+    /// Reads the most recent mux paste-buffer value for pure source selection.
+    fn most_recent_paste_buffer_candidate(&self) -> Option<(String, String)> {
         let buffer_name = self
             .presentation
             .copy
@@ -157,11 +139,7 @@ impl RuntimeSessionService {
             .paste_buffers
             .get(&buffer_name)?
             .to_string();
-        Some(RuntimePasteSource {
-            label: "paste-buffer".to_string(),
-            buffer_name: Some(buffer_name),
-            content,
-        })
+        Some((buffer_name, content))
     }
 
     /// Runs the paste source to pane operation for this subsystem.
@@ -173,14 +151,11 @@ impl RuntimeSessionService {
         &mut self,
         primary_client_id: &mez_core::ids::ClientId,
         descriptor: &PaneDescriptor,
-        source: RuntimePasteSource,
+        source: ClipboardPasteSource,
     ) -> Result<bool> {
-        if source.content.is_empty() {
-            return Ok(false);
-        }
         let paste_bytes = runtime_paste_bytes(
             self.pane_screen(descriptor.pane_id.as_str()),
-            source.content.as_str(),
+            source.content(),
         );
         let dispatch = self.write_input_to_pane(
             primary_client_id,
@@ -192,12 +167,16 @@ impl RuntimeSessionService {
             format!(
                 r#"{{"pane_id":"{}","paste_source":"{}","paste_buffer":{},"input_bytes":{}}}"#,
                 json_escape(&dispatch.pane_id),
-                json_escape(&source.label),
-                source
-                    .buffer_name
-                    .as_ref()
-                    .map(|name| format!(r#""{}""#, json_escape(name)))
-                    .unwrap_or_else(|| "null".to_string()),
+                match source.kind() {
+                    ClipboardPasteSourceKind::Host => "host-clipboard",
+                    ClipboardPasteSourceKind::PasteBuffer { .. } => "paste-buffer",
+                },
+                match source.kind() {
+                    ClipboardPasteSourceKind::Host => "null".to_string(),
+                    ClipboardPasteSourceKind::PasteBuffer { name } => {
+                        format!(r#""{}""#, json_escape(name))
+                    }
+                },
                 dispatch.bytes_written
             ),
         )?;

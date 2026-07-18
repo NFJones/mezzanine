@@ -1,13 +1,13 @@
 //! Passive shell readiness and readiness-probe transitions.
 
 use super::{
-    AgentTurnRecord, AgentTurnState, EventKind, MezError, PaneReadinessState,
-    RUNTIME_READINESS_PROBE_TIMEOUT_MS, ReadinessOverrideRevocation, Result,
-    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeSessionService,
-    ShellTransaction, TerminalOscEvent, current_unix_millis, json_escape,
+    AgentTurnRecord, AgentTurnState, ClipboardAuthorization, ClipboardDecision, EventKind,
+    MezError, PaneReadinessState, RUNTIME_READINESS_PROBE_TIMEOUT_MS, ReadinessOverrideRevocation,
+    Result, RunningShellTransactionKind, RunningShellTransactionRef, RuntimeSessionService,
+    ShellTransaction, TerminalClipboardOperation, TerminalClipboardRequest, TerminalOscEvent,
+    current_unix_millis, json_escape, plan_terminal_clipboard_request,
     readiness_probe_command_for_classification, runtime_execution_ready_for_provider_continuation,
     runtime_marker_for_action, runtime_pane_readiness_state_name,
-    terminal_clipboard_policy_accepts_osc52,
 };
 
 impl RuntimeSessionService {
@@ -23,18 +23,31 @@ impl RuntimeSessionService {
         let mut applied = 0usize;
         for event in events {
             match event {
-                TerminalOscEvent::ClipboardSet { selection, content }
-                    if terminal_clipboard_policy_accepts_osc52(self.terminal_clipboard()) =>
-                {
-                    self.copy_text_to_buffer_and_host_clipboard(
-                        "osc52",
-                        content.clone(),
-                        format!("terminal-osc52:{selection}"),
-                    )?;
-                    applied = applied.saturating_add(1);
+                TerminalOscEvent::Clipboard(request) => {
+                    let operation = match request {
+                        TerminalClipboardRequest::Write { .. } => TerminalClipboardOperation::Write,
+                        TerminalClipboardRequest::Query { .. } => TerminalClipboardOperation::Query,
+                    };
+                    let decision = plan_terminal_clipboard_request(
+                        self.terminal_clipboard(),
+                        ClipboardAuthorization::Allowed,
+                        operation,
+                    );
+                    if let (
+                        ClipboardDecision::Write(plan),
+                        TerminalClipboardRequest::Write { selection, content },
+                    ) = (decision, request)
+                    {
+                        self.apply_clipboard_write_plan(
+                            "osc52",
+                            content.as_str(),
+                            format!("terminal-osc52:{}", selection.as_str()),
+                            &plan,
+                        )?;
+                        applied = applied.saturating_add(1);
+                    }
                 }
                 TerminalOscEvent::TitleChanged { .. }
-                | TerminalOscEvent::ClipboardSet { .. }
                 | TerminalOscEvent::ShellIntegration { .. }
                 | TerminalOscEvent::ShellPromptStart
                 | TerminalOscEvent::ShellPromptEnd
