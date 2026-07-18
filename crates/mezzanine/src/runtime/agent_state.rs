@@ -12,7 +12,7 @@ use super::{
     RuntimeAutoSizingDispatch, SessionApprovalStore, SubagentScopeDeclaration,
 };
 use crate::integrations::agent::provider::{AnthropicMessagesProvider, ClaudeCodeProvider};
-use mez_agent::McpPromptTool;
+use mez_agent::{AutoSizingWorkerSelection, McpPromptTool};
 
 /// Carries Runtime Agent Provider Task state for this subsystem.
 ///
@@ -194,31 +194,13 @@ pub struct RuntimeAgentProviderDispatch {
     pub loop_turn: Option<RuntimeAgentLoopTurn>,
 }
 
-/// Actor-owned result of the routing classifier before worker execution.
-///
-/// Provider workers return this payload instead of executing the parent turn
-/// with the routed profile. The runtime actor uses it to create the managed
-/// child workflow while preserving the parent's ordinary model profile.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeRoutedWorkerSelection {
-    /// Model and reasoning profile pinned to the managed routed worker.
-    pub worker_profile: ModelProfile,
-    /// Router token usage retained for parent-turn accounting.
-    pub routing_token_usage_by_model:
-        std::collections::BTreeMap<mez_agent::ModelTokenUsageKey, mez_agent::ModelTokenUsage>,
-    /// Bounded user-visible routing decision summary when classification succeeded.
-    pub decision_summary: Option<String>,
-    /// Bounded fallback diagnostic when the default profile was selected.
-    pub fallback: Option<String>,
-}
-
 /// Result produced by one provider worker before actor-owned state mutation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeAgentProviderWorkerOutcome {
     /// A normal provider execution ready for runtime application.
     Execution(Box<AgentTurnExecution>),
     /// A routing decision that must create a managed child in the runtime actor.
-    RoutedWorkerSelected(Box<RuntimeRoutedWorkerSelection>),
+    RoutedWorkerSelected(Box<AutoSizingWorkerSelection>),
 }
 
 /// Identifies the role of one runtime turn owned by a `/loop` command.

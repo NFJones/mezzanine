@@ -204,14 +204,14 @@ pub use anthropic::{
 };
 pub use auth::{ProviderAuthMetadata, ProviderCredentialKind, ProviderCredentialSource};
 pub use auto_sizing::{
-    AutoSizingConfig, AutoSizingDecision, AutoSizingDispatch, AutoSizingError,
+    AutoSizingConfig, AutoSizingDecision, AutoSizingDispatch, AutoSizingError, AutoSizingExecution,
     AutoSizingFallbackPolicy, AutoSizingResult, AutoSizingSelection, AutoSizingTargetProfile,
-    DEFAULT_AUTO_SIZING_FALLBACK_POLICY, DEFAULT_AUTO_SIZING_LARGE_PROFILE,
-    DEFAULT_AUTO_SIZING_MEDIUM_PROFILE, DEFAULT_AUTO_SIZING_ROUTER_PROFILE,
-    DEFAULT_AUTO_SIZING_SMALL_PROFILE, apply_auto_sizing_execution_profile,
-    auto_sizing_fallback_selection, auto_sizing_minimum_context_profile,
-    auto_sizing_reasoning_levels_for_profile, auto_sizing_request,
-    auto_sizing_selection_from_response,
+    AutoSizingWorkerSelection, DEFAULT_AUTO_SIZING_FALLBACK_POLICY,
+    DEFAULT_AUTO_SIZING_LARGE_PROFILE, DEFAULT_AUTO_SIZING_MEDIUM_PROFILE,
+    DEFAULT_AUTO_SIZING_ROUTER_PROFILE, DEFAULT_AUTO_SIZING_SMALL_PROFILE,
+    apply_auto_sizing_execution_profile, auto_sizing_fallback_selection,
+    auto_sizing_minimum_context_profile, auto_sizing_reasoning_levels_for_profile,
+    auto_sizing_request, auto_sizing_selection_from_response,
 };
 pub use claude_code::{
     CLAUDE_CODE_EMPTY_OUTPUT_RETRY_INSTRUCTION, CLAUDE_CODE_MAAP_RETRY_INSTRUCTION,

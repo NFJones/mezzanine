@@ -8,11 +8,11 @@
 //! `mez-agent::routed_workflow` and interpreted here against runtime services.
 
 use super::{
-    AgentContext, AgentId, AgentTurnExecution, AgentTurnRecord, AgentTurnState, ContextBlock,
-    ContextSourceKind, MezError, Result, RuntimeAgentLoopCompletion, RuntimeAgentLoopState,
-    RuntimeAgentLoopTurn, RuntimeRoutedWorkerSelection, RuntimeSessionService, ScheduledWork,
-    current_unix_seconds, runtime_spawn_json_agent_and_turn, runtime_subagent_placement_mode,
-    runtime_subagent_spawn_request,
+    AgentContext, AgentId, AgentTurnExecution, AgentTurnRecord, AgentTurnState,
+    AutoSizingWorkerSelection, ContextBlock, ContextSourceKind, MezError, Result,
+    RuntimeAgentLoopCompletion, RuntimeAgentLoopState, RuntimeAgentLoopTurn, RuntimeSessionService,
+    ScheduledWork, current_unix_seconds, runtime_spawn_json_agent_and_turn,
+    runtime_subagent_placement_mode, runtime_subagent_spawn_request,
 };
 use mez_agent::routed_workflow::{
     RoutedFailurePlan, RoutedPresentationCompletionPlan, RoutedWorkerCompletionPlan,
@@ -98,7 +98,7 @@ impl RuntimeSessionService {
         &mut self,
         agent_id: &AgentId,
         turn_id: &str,
-        selection: RuntimeRoutedWorkerSelection,
+        selection: AutoSizingWorkerSelection,
     ) -> Result<crate::runtime::RuntimeTransition> {
         let turn = self
             .agent_turn_ledger()
@@ -139,7 +139,7 @@ impl RuntimeSessionService {
         &mut self,
         agent_id: &AgentId,
         turn_id: &str,
-        selection: RuntimeRoutedWorkerSelection,
+        selection: AutoSizingWorkerSelection,
     ) -> Result<crate::runtime::RuntimeTransition> {
         let turn = self
             .agent_turn_ledger()

@@ -2,8 +2,7 @@
 
 use super::super::{
     AgentId, AgentTurnExecution, AgentTurnState, MezError, Result, RuntimeSessionService,
-    runtime_apply_auto_sizing_execution_profile, runtime_validate_provider_completion_execution,
-    runtime_validate_provider_completion_identity,
+    runtime_validate_provider_completion_execution, runtime_validate_provider_completion_identity,
 };
 
 impl RuntimeSessionService {
@@ -109,8 +108,10 @@ impl RuntimeSessionService {
             );
             return Ok(true);
         }
-        let execution_profile =
-            runtime_apply_auto_sizing_execution_profile(model_profile.clone(), &execution.request);
+        let execution_profile = mez_agent::apply_auto_sizing_execution_profile(
+            model_profile.clone(),
+            &execution.request,
+        );
         if execution_profile != model_profile {
             self.agent
                 .agent_turn_model_profiles

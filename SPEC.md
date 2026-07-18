@@ -4708,6 +4708,13 @@ reducer's typed handoff, repair, presentation, explanation, and terminal effect
 plans, and retain ownership of provider dispatch, scheduler and pane mutation,
 persistence, cancellation I/O, security, and cross-domain orchestration. A pure
 routed-workflow transition MUST NOT claim that any product effect succeeded.
+Auto-sizing request construction, bounded context projection, response and
+fallback validation, profile selection, router-usage projection, decision
+summary construction, and conversion to the routed-worker selection MUST be
+owned by `mez-agent`. The product runtime MUST resolve configuration and model
+profiles, select and call the concrete provider, pass observed usage to the
+lower contract, translate provider failures with their diagnostic metadata,
+apply the typed result to actor state, and emit telemetry and presentation.
 
 Agents MUST support a permission or approval model that can restrict command
 execution, file mutation, network use, and destructive actions.

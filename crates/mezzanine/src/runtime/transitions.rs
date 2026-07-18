@@ -205,7 +205,7 @@ pub enum AgentProviderEvent {
         /// Parent turn identity and routed workflow identity.
         turn_id: String,
         /// Provider-independent routed worker selection.
-        selection: Box<crate::runtime::RuntimeRoutedWorkerSelection>,
+        selection: Box<mez_agent::AutoSizingWorkerSelection>,
     },
     /// Provider work completed outside the runtime actor and the runtime should
     /// apply the produced turn execution.

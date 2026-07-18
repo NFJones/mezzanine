@@ -1,62 +1,16 @@
 //! Product adapter for provider-independent automatic model sizing.
 //!
 //! `mez_agent::auto_sizing` owns request construction, context bounding,
-//! response validation, profile selection, and fallback policy. This module
-//! invokes concrete product providers, preserves provider diagnostics, and
-//! attaches router token usage to runtime accounting.
+//! response validation, profile selection, fallback policy, usage projection,
+//! and routed-worker conversion. This module invokes concrete product
+//! providers, passes observed usage into the lower contract, and preserves
+//! product provider diagnostics.
 
-use super::RuntimeAutoSizingDecision;
 use super::{
-    AgentContext, AgentTurnRecord, AsyncModelProvider, MezError, ModelProfile, ModelRequest,
-    ModelTokenUsage, ModelTokenUsageKey, Result, RuntimeAutoSizingDispatch, RuntimeProviderConfig,
+    AgentContext, AgentTurnRecord, AsyncModelProvider, MezError, ModelTokenUsage, Result,
+    RuntimeAutoSizingDispatch,
 };
-
-/// Result of one internal auto-sizing router provider invocation.
-#[derive(Debug, Clone)]
-pub(crate) struct RuntimeAutoSizingExecution {
-    /// Effective profile selected for the user-visible provider turn.
-    pub(crate) selected_profile: ModelProfile,
-    /// Parsed router decision when the router returned valid JSON.
-    pub(crate) decision: Option<RuntimeAutoSizingDecision>,
-    /// Fallback reason when routing could not select a valid target.
-    pub(crate) fallback: Option<String>,
-    /// Provider/model key for the router request.
-    pub(crate) router_token_usage_key: ModelTokenUsageKey,
-    /// Token usage reported by the router request.
-    pub(crate) router_token_usage: ModelTokenUsage,
-}
-
-impl RuntimeAutoSizingExecution {
-    /// Returns router usage as a per-model accounting map.
-    pub(crate) fn token_usage_by_model(
-        &self,
-    ) -> std::collections::BTreeMap<ModelTokenUsageKey, ModelTokenUsage> {
-        if self.router_token_usage.is_zero() {
-            return std::collections::BTreeMap::new();
-        }
-        std::collections::BTreeMap::from([(
-            self.router_token_usage_key.clone(),
-            self.router_token_usage,
-        )])
-    }
-
-    /// Converts the classifier result into the actor-owned routed-worker payload.
-    pub(crate) fn into_routed_worker_selection(self) -> super::RuntimeRoutedWorkerSelection {
-        let routing_token_usage_by_model = self.token_usage_by_model();
-        let decision_summary = self.decision.as_ref().map(|decision| {
-            format!(
-                "{} reasoning on {}",
-                decision.reasoning_effort, self.selected_profile.model
-            )
-        });
-        super::RuntimeRoutedWorkerSelection {
-            worker_profile: self.selected_profile,
-            routing_token_usage_by_model,
-            decision_summary,
-            fallback: self.fallback,
-        }
-    }
-}
+use mez_agent::AutoSizingExecution;
 
 /// Executes an internal auto-sizing request with an async product provider.
 pub(crate) async fn runtime_execute_auto_sizing_with_async_provider<P: AsyncModelProvider>(
@@ -64,11 +18,11 @@ pub(crate) async fn runtime_execute_auto_sizing_with_async_provider<P: AsyncMode
     auto_sizing: &RuntimeAutoSizingDispatch,
     turn: &AgentTurnRecord,
     context: &AgentContext,
-) -> Result<RuntimeAutoSizingExecution> {
+) -> Result<AutoSizingExecution> {
     let request = match mez_agent::auto_sizing_request(auto_sizing, turn, context) {
         Ok(request) => request,
         Err(error) => {
-            return Ok(runtime_auto_sizing_execution_from_selection(
+            return Ok(AutoSizingExecution::from_selection(
                 auto_sizing,
                 mez_agent::auto_sizing_fallback_selection(auto_sizing, error.message()),
                 ModelTokenUsage::default(),
@@ -76,7 +30,7 @@ pub(crate) async fn runtime_execute_auto_sizing_with_async_provider<P: AsyncMode
         }
     };
     match provider.send_request_async(&request).await {
-        Ok(response) => Ok(runtime_auto_sizing_execution_from_selection(
+        Ok(response) => Ok(AutoSizingExecution::from_selection(
             auto_sizing,
             mez_agent::auto_sizing_selection_from_response(auto_sizing, &response),
             response.usage,
@@ -94,11 +48,11 @@ pub(crate) fn runtime_execute_auto_sizing_with_provider<
     auto_sizing: &RuntimeAutoSizingDispatch,
     turn: &AgentTurnRecord,
     context: &AgentContext,
-) -> Result<RuntimeAutoSizingExecution> {
+) -> Result<AutoSizingExecution> {
     let request = match mez_agent::auto_sizing_request(auto_sizing, turn, context) {
         Ok(request) => request,
         Err(error) => {
-            return Ok(runtime_auto_sizing_execution_from_selection(
+            return Ok(AutoSizingExecution::from_selection(
                 auto_sizing,
                 mez_agent::auto_sizing_fallback_selection(auto_sizing, error.message()),
                 ModelTokenUsage::default(),
@@ -106,46 +60,12 @@ pub(crate) fn runtime_execute_auto_sizing_with_provider<
         }
     };
     match provider.send_request(&request) {
-        Ok(response) => Ok(runtime_auto_sizing_execution_from_selection(
+        Ok(response) => Ok(AutoSizingExecution::from_selection(
             auto_sizing,
             mez_agent::auto_sizing_selection_from_response(auto_sizing, &response),
             response.usage,
         )),
         Err(error) => Err(runtime_auto_sizing_provider_error(auto_sizing, error)),
-    }
-}
-
-/// Applies the effective provider request identity to actor-owned profile state.
-pub(crate) fn runtime_apply_auto_sizing_execution_profile(
-    current: ModelProfile,
-    request: &ModelRequest,
-) -> ModelProfile {
-    mez_agent::apply_auto_sizing_execution_profile(current, request)
-}
-
-/// Returns provider-compatible reasoning levels for one target profile.
-pub(crate) fn runtime_auto_sizing_reasoning_levels_for_profile(
-    provider_config: Option<&RuntimeProviderConfig>,
-    profile: &ModelProfile,
-) -> Vec<String> {
-    mez_agent::auto_sizing_reasoning_levels_for_profile(provider_config, profile)
-}
-
-/// Projects a lower selection and provider usage into runtime accounting state.
-fn runtime_auto_sizing_execution_from_selection(
-    auto_sizing: &RuntimeAutoSizingDispatch,
-    selection: mez_agent::AutoSizingSelection,
-    router_token_usage: ModelTokenUsage,
-) -> RuntimeAutoSizingExecution {
-    RuntimeAutoSizingExecution {
-        selected_profile: selection.selected_profile,
-        decision: selection.decision,
-        fallback: selection.fallback,
-        router_token_usage_key: ModelTokenUsageKey::new(
-            auto_sizing.router_profile.provider.clone(),
-            auto_sizing.router_profile.model.clone(),
-        ),
-        router_token_usage,
     }
 }
 

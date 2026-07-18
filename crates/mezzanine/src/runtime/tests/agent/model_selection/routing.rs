@@ -1,7 +1,7 @@
 //! Runtime tests for agent model_selection routing behavior.
 
 use super::*;
-use crate::runtime::RuntimeRoutedWorkerSelection;
+use mez_agent::AutoSizingWorkerSelection;
 
 /// Starts a routed loop and returns its blocked parent plus selected worker turn.
 fn selected_routed_loop(
@@ -39,7 +39,7 @@ fn selected_routed_loop(
         .apply_routed_worker_selected_transition(
             &AgentId::opaque("agent-%1").unwrap(),
             &parent_turn_id,
-            RuntimeRoutedWorkerSelection {
+            AutoSizingWorkerSelection {
                 worker_profile,
                 routing_token_usage_by_model: std::collections::BTreeMap::new(),
                 decision_summary: None,
@@ -138,7 +138,7 @@ fn runtime_routed_worker_presents_child_prompt_status_and_output() {
         .agent_turn_model_profile("turn-1")
         .expect("parent profile should exist")
         .clone();
-    let selection = RuntimeRoutedWorkerSelection {
+    let selection = AutoSizingWorkerSelection {
         worker_profile: parent_profile,
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
         decision_summary: Some("large/high".to_string()),
@@ -255,7 +255,7 @@ fn runtime_routed_selection_setup_failure_recovers_once() {
         .retain(|block| {
             block.source != ContextSourceKind::UserInstruction || block.label != "user prompt"
         });
-    let selection = RuntimeRoutedWorkerSelection {
+    let selection = AutoSizingWorkerSelection {
         worker_profile: parent_profile,
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
         decision_summary: Some("large/high".to_string()),
@@ -347,7 +347,7 @@ fn runtime_routed_selection_post_spawn_failure_removes_worker() {
         .expect("parent profile should exist")
         .clone();
     service.fail_next_routed_worker_after_spawn_for_tests();
-    let selection = RuntimeRoutedWorkerSelection {
+    let selection = AutoSizingWorkerSelection {
         worker_profile: parent_profile,
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
         decision_summary: Some("large/high".to_string()),
@@ -414,7 +414,7 @@ fn runtime_routed_loop_transfers_work_turn_ownership_to_selected_worker() {
         .agent_turn_model_profile(&parent_turn_id)
         .expect("parent profile should exist")
         .clone();
-    let selection = RuntimeRoutedWorkerSelection {
+    let selection = AutoSizingWorkerSelection {
         worker_profile: parent_profile.clone(),
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
         decision_summary: None,
@@ -482,7 +482,7 @@ fn runtime_routed_loop_continues_in_one_worker_before_terminal_handoff() {
         .apply_routed_worker_selected_transition(
             &AgentId::opaque("agent-%1").unwrap(),
             &parent_turn_id,
-            RuntimeRoutedWorkerSelection {
+            AutoSizingWorkerSelection {
                 worker_profile: parent_profile,
                 routing_token_usage_by_model: std::collections::BTreeMap::new(),
                 decision_summary: None,
@@ -850,7 +850,7 @@ fn runtime_routed_selection_missing_parent_context_fails_cleanly() {
         .expect("parent profile should exist")
         .clone();
     service.agent_turn_contexts_mut().remove("turn-1");
-    let selection = RuntimeRoutedWorkerSelection {
+    let selection = AutoSizingWorkerSelection {
         worker_profile: parent_profile,
         routing_token_usage_by_model: std::collections::BTreeMap::new(),
         decision_summary: Some("large/high".to_string()),

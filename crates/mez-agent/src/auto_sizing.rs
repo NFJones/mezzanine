@@ -5,6 +5,7 @@
 //! control data, not conversation transcript content, so helpers in this module
 //! return only the effective model profile and a bounded decision summary.
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
@@ -12,8 +13,8 @@ use serde::Deserialize;
 
 use crate::{
     AgentContext, AgentTurnRecord, AllowedActionSet, ContextSourceKind, ModelInteractionKind,
-    ModelMessage, ModelMessageRole, ModelProfile, ModelRequest, ModelResponse,
-    ProviderApiCompatibility, model_context_text_word_count,
+    ModelMessage, ModelMessageRole, ModelProfile, ModelRequest, ModelResponse, ModelTokenUsage,
+    ModelTokenUsageKey, ProviderApiCompatibility, model_context_text_word_count,
     openai_default_reasoning_levels_for_model,
 };
 
@@ -174,6 +175,84 @@ pub struct AutoSizingSelection {
     /// Parsed router decision when the response was valid.
     pub decision: Option<AutoSizingDecision>,
     /// Fallback diagnostic when the default profile was selected.
+    pub fallback: Option<String>,
+}
+
+/// Complete provider-independent result of one auto-sizing router invocation.
+///
+/// Product adapters supply the resolved dispatch, lower selection, and observed
+/// provider usage. This type owns deterministic conversion to accounting and
+/// routed-worker payloads without depending on a provider client or runtime
+/// service.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AutoSizingExecution {
+    /// Effective profile selected for the user-visible provider turn.
+    pub selected_profile: ModelProfile,
+    /// Parsed router decision when the router returned valid JSON.
+    pub decision: Option<AutoSizingDecision>,
+    /// Fallback reason when routing could not select a valid target.
+    pub fallback: Option<String>,
+    /// Provider/model key for the router request.
+    pub router_token_usage_key: ModelTokenUsageKey,
+    /// Token usage observed for the router request.
+    pub router_token_usage: ModelTokenUsage,
+}
+
+impl AutoSizingExecution {
+    /// Projects a lower selection and observed provider usage into one result.
+    pub fn from_selection(
+        auto_sizing: &AutoSizingDispatch,
+        selection: AutoSizingSelection,
+        router_token_usage: ModelTokenUsage,
+    ) -> Self {
+        Self {
+            selected_profile: selection.selected_profile,
+            decision: selection.decision,
+            fallback: selection.fallback,
+            router_token_usage_key: ModelTokenUsageKey::new(
+                auto_sizing.router_profile.provider.clone(),
+                auto_sizing.router_profile.model.clone(),
+            ),
+            router_token_usage,
+        }
+    }
+
+    /// Returns nonzero router usage keyed by its actual provider and model.
+    pub fn token_usage_by_model(&self) -> BTreeMap<ModelTokenUsageKey, ModelTokenUsage> {
+        if self.router_token_usage.is_zero() {
+            return BTreeMap::new();
+        }
+        BTreeMap::from([(self.router_token_usage_key.clone(), self.router_token_usage)])
+    }
+
+    /// Converts this classifier result into a managed-worker selection.
+    pub fn into_worker_selection(self) -> AutoSizingWorkerSelection {
+        let routing_token_usage_by_model = self.token_usage_by_model();
+        let decision_summary = self.decision.as_ref().map(|decision| {
+            format!(
+                "{} reasoning on {}",
+                decision.reasoning_effort, self.selected_profile.model
+            )
+        });
+        AutoSizingWorkerSelection {
+            worker_profile: self.selected_profile,
+            routing_token_usage_by_model,
+            decision_summary,
+            fallback: self.fallback,
+        }
+    }
+}
+
+/// Agent-domain payload transferred from a sizing worker to routed execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoSizingWorkerSelection {
+    /// Model and reasoning profile pinned to the managed routed worker.
+    pub worker_profile: ModelProfile,
+    /// Router token usage retained for parent-turn accounting.
+    pub routing_token_usage_by_model: BTreeMap<ModelTokenUsageKey, ModelTokenUsage>,
+    /// Bounded user-visible routing decision summary when classification succeeded.
+    pub decision_summary: Option<String>,
+    /// Bounded fallback diagnostic when the default profile was selected.
     pub fallback: Option<String>,
 }
 
@@ -712,6 +791,7 @@ fn dedupe_auto_sizing_strings(values: Vec<String>) -> Vec<String> {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AutoSizingDecisionJson {
     version: u32,
     size: String,
@@ -863,5 +943,139 @@ mod tests {
         assert_eq!(selection.selected_profile.model, "default");
         assert!(selection.decision.is_none());
         assert!(selection.fallback.unwrap().contains("malformed JSON"));
+    }
+
+    /// Verifies every bounded router-decision field rejects invalid values and
+    /// unknown fields through the same configured fallback path.
+    #[test]
+    fn auto_sizing_response_falls_back_on_invalid_decision_boundaries() {
+        for (raw_text, expected) in [
+            (
+                r#"{"version":2,"size":"large","reasoning_effort":"high","confidence":0.9,"rationale":"valid"}"#,
+                "unsupported version",
+            ),
+            (
+                r#"{"version":1,"size":"giant","reasoning_effort":"high","confidence":0.9,"rationale":"valid"}"#,
+                "unknown size bucket",
+            ),
+            (
+                r#"{"version":1,"size":"large","reasoning_effort":"max","confidence":0.9,"rationale":"valid"}"#,
+                "unsupported reasoning effort",
+            ),
+            (
+                r#"{"version":1,"size":"large","reasoning_effort":"high","confidence":1.01,"rationale":"valid"}"#,
+                "confidence outside",
+            ),
+            (
+                r#"{"version":1,"size":"large","reasoning_effort":"high","confidence":0.9,"rationale":""}"#,
+                "invalid rationale",
+            ),
+            (
+                r#"{"version":1,"size":"large","reasoning_effort":"high","confidence":0.9,"rationale":"valid","extra":true}"#,
+                "unknown field",
+            ),
+        ] {
+            let selection = auto_sizing_selection_from_response(&dispatch(), &response(raw_text));
+
+            assert_eq!(selection.selected_profile.model, "default");
+            assert!(selection.decision.is_none());
+            assert!(
+                selection
+                    .fallback
+                    .as_deref()
+                    .is_some_and(|fallback| fallback.contains(expected)),
+                "expected {expected:?} in {:?}",
+                selection.fallback
+            );
+        }
+    }
+
+    /// Verifies globally disallowed and target-unsupported reasoning efforts
+    /// cannot escape resolved sizing constraints.
+    #[test]
+    fn auto_sizing_response_enforces_resolved_reasoning_constraints() {
+        let globally_disallowed = auto_sizing_selection_from_response(
+            &dispatch(),
+            &response(
+                r#"{"version":1,"size":"large","reasoning_effort":"low","confidence":0.9,"rationale":"simple"}"#,
+            ),
+        );
+        assert!(
+            globally_disallowed
+                .fallback
+                .as_deref()
+                .is_some_and(|fallback| fallback.contains("disallowed reasoning effort `low`"))
+        );
+
+        let mut target_limited = dispatch();
+        target_limited.large.supported_reasoning_efforts = vec!["medium".to_string()];
+        let target_unsupported = auto_sizing_selection_from_response(
+            &target_limited,
+            &response(
+                r#"{"version":1,"size":"large","reasoning_effort":"high","confidence":0.9,"rationale":"complex"}"#,
+            ),
+        );
+        assert!(
+            target_unsupported
+                .fallback
+                .as_deref()
+                .is_some_and(|fallback| fallback.contains("unsupported by `large`"))
+        );
+    }
+
+    /// Verifies successful sizing conversion preserves the selected profile,
+    /// canonical decision summary, and actual router usage identity.
+    #[test]
+    fn auto_sizing_execution_projects_accounting_and_worker_selection() {
+        let dispatch = dispatch();
+        let selection = auto_sizing_selection_from_response(
+            &dispatch,
+            &response(
+                r#"{"version":1,"size":"large","reasoning_effort":"high","confidence":0.9,"rationale":"cross-module implementation"}"#,
+            ),
+        );
+        let usage = ModelTokenUsage {
+            input_tokens: 120,
+            output_tokens: 20,
+            reasoning_tokens: 5,
+            cached_input_tokens: Some(40),
+            cache_write_input_tokens: Some(10),
+        };
+        let execution = AutoSizingExecution::from_selection(&dispatch, selection, usage);
+
+        assert_eq!(
+            execution.token_usage_by_model(),
+            BTreeMap::from([(ModelTokenUsageKey::new("openai", "router"), usage)])
+        );
+        let worker = execution.into_worker_selection();
+        assert_eq!(worker.worker_profile.model, "large");
+        assert_eq!(
+            worker.worker_profile.reasoning_profile.as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            worker.decision_summary.as_deref(),
+            Some("high reasoning on large")
+        );
+        assert!(worker.fallback.is_none());
+    }
+
+    /// Verifies fallback conversion omits all-zero router accounting and never
+    /// fabricates a successful decision summary.
+    #[test]
+    fn auto_sizing_execution_preserves_fallback_without_zero_usage_row() {
+        let dispatch = dispatch();
+        let selection = auto_sizing_fallback_selection(&dispatch, "invalid resolved constraints");
+        let execution =
+            AutoSizingExecution::from_selection(&dispatch, selection, ModelTokenUsage::default());
+
+        assert!(execution.token_usage_by_model().is_empty());
+        let worker = execution.into_worker_selection();
+        assert_eq!(worker.worker_profile.model, "default");
+        assert!(worker.decision_summary.is_none());
+        assert_eq!(
+            worker.fallback.as_deref(),
+            Some("invalid resolved constraints")
+        );
     }
 }

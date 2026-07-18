@@ -353,7 +353,6 @@ pub use agent_state::{
     RuntimeAgentLoopTurn, RuntimeAgentLoopTurnKind, RuntimeAgentProviderDispatch,
     RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask,
     RuntimeAgentProviderWorkerOutcome, RuntimeAgentRememberDispatch, RuntimeAgentRememberTask,
-    RuntimeRoutedWorkerSelection,
 };
 pub use deferred::AttachedClientStepApplication;
 pub use env::{
@@ -363,6 +362,7 @@ pub use env::{
 pub use fanout::{RuntimeEventConnectionTable, RuntimeEventWakeup};
 #[cfg(test)]
 pub use fanout::{RuntimeEventFanoutSink, RuntimeFocusedShellHookRun, flush_runtime_event_wakeups};
+#[cfg(test)]
 use mez_agent::AutoSizingDecision as RuntimeAutoSizingDecision;
 use mez_agent::{
     AutoSizingConfig as RuntimeAutoSizingConfig, AutoSizingDispatch as RuntimeAutoSizingDispatch,
@@ -410,12 +410,9 @@ pub use transitions::{
     TimerEvent,
 };
 
+pub(crate) use auto_sizing::runtime_execute_auto_sizing_with_async_provider;
 #[cfg(test)]
 pub(crate) use auto_sizing::runtime_execute_auto_sizing_with_provider;
-pub(crate) use auto_sizing::{
-    runtime_apply_auto_sizing_execution_profile, runtime_auto_sizing_reasoning_levels_for_profile,
-    runtime_execute_auto_sizing_with_async_provider,
-};
 
 use commands_support::{
     execute_runtime_command_sequence, execute_runtime_command_sequence_async,

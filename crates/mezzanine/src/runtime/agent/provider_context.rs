@@ -9,8 +9,7 @@ use super::{
     AgentId, AgentTurnExecution, AgentTurnRecord, AgentTurnState, ContextBlock, ContextSourceKind,
     MezError, ModelProfile, RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LABEL, Result,
     RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile, RuntimeSessionService,
-    compact_model_context_for_budget_with_retained_tail_percent,
-    runtime_auto_sizing_reasoning_levels_for_profile, runtime_cooperation_mode_name,
+    compact_model_context_for_budget_with_retained_tail_percent, runtime_cooperation_mode_name,
     runtime_mezzanine_error_code, set_project_guidance_context,
 };
 #[cfg(test)]
@@ -448,7 +447,7 @@ impl RuntimeSessionService {
         Ok(RuntimeAutoSizingTargetProfile {
             size: size.to_string(),
             profile_name: profile_name.to_string(),
-            supported_reasoning_efforts: runtime_auto_sizing_reasoning_levels_for_profile(
+            supported_reasoning_efforts: mez_agent::auto_sizing_reasoning_levels_for_profile(
                 provider_config,
                 &profile,
             ),

@@ -1,7 +1,7 @@
 //! Runtime tests for agent macros behavior.
 
 use super::*;
-use crate::runtime::RuntimeRoutedWorkerSelection;
+use mez_agent::AutoSizingWorkerSelection;
 
 /// Verifies `/list-macros` displays the effective pane macro catalog with the
 /// same `#macro` invocation syntax accepted by explicit macro prompts. This
@@ -287,7 +287,7 @@ fn runtime_agent_macro_routed_loop_resolves_after_terminal_presentation() {
         .apply_routed_worker_selected_transition(
             &AgentId::opaque(routed_parent_turn.agent_id.clone()).unwrap(),
             &routed_parent_turn_id,
-            RuntimeRoutedWorkerSelection {
+            AutoSizingWorkerSelection {
                 worker_profile,
                 routing_token_usage_by_model: std::collections::BTreeMap::new(),
                 decision_summary: None,

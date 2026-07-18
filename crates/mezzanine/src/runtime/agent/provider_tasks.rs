@@ -1274,7 +1274,7 @@ impl RuntimeSessionService {
                     self.apply_routed_worker_selected_transition(
                         &agent_id,
                         &turn_id,
-                        auto_sizing_execution.into_routed_worker_selection(),
+                        auto_sizing_execution.into_worker_selection(),
                     )?;
                     continue;
                 }

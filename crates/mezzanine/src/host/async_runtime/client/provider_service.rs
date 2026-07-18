@@ -652,7 +652,7 @@ async fn execute_runtime_agent_provider_dispatch(
             )));
         };
         return Ok(RuntimeAgentProviderWorkerOutcome::RoutedWorkerSelected(
-            Box::new(auto_sizing_execution.into_routed_worker_selection()),
+            Box::new(auto_sizing_execution.into_worker_selection()),
         ));
     }
     match provider {

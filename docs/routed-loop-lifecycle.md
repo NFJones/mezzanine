@@ -17,6 +17,13 @@ persistence effects. Internal iterations are not independent routed turns.
 | Exit and handoff | `mez-agent` policy, product runtime, and managed worker | Continue after a completed iteration that emitted `apply_patch`; otherwise stop after the first patch-free completion or at the limit. Preserve the exact final output and request one structured handoff from the same worker. |
 | Presentation | Invoking model | Queue the waiting parent for fair capacity reacquisition, then resume it on its ordinary profile and present one result. A joined subagent or macro dependency remains pending through this phase. |
 
+For classification, the product resolves configured profiles and calls the
+concrete provider. `mez-agent` builds the bounded router request, validates the
+response or fallback, selects the profile, projects actual router usage, and
+constructs the managed-worker selection returned to the runtime actor. Provider
+credentials, transport errors, telemetry, and actor mutation remain product
+effects.
+
 The worker receives a structured transfer of the loop prompt and context. It
 does not receive a new literal `/loop` command, so it cannot accidentally
 create a nested controller. Routing is disabled for the managed worker's
