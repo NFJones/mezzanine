@@ -73,10 +73,10 @@ use mez_agent::{
     ActiveWriteScope, AgentContext, AgentNetworkActionHistory, AgentShellDispatchHistory,
     AgentShellStore, AgentTurnLedger, AgentTurnSteering, AutoSizingWorkerSelection,
     DEFAULT_PROVIDER_TIMEOUT_MS, EnvironmentSignature, MaapBatch, MacroManagedSubagent,
-    MacroRunState, ModelTokenUsage, ModelTokenUsageKey, ProviderApiCompatibility,
-    ProviderQuotaUsage, SayStatus, ToolDiscoveryCache, ToolInventory, append_mcp_context,
-    assistant_context_content_for_execution, invoked_mcp_tools_for_context,
-    set_project_guidance_context,
+    MacroRunState, ModelTokenUsage, ModelTokenUsageKey, PreparedModelContext,
+    ProviderApiCompatibility, ProviderQuotaUsage, SayStatus, ToolDiscoveryCache, ToolInventory,
+    append_mcp_context, append_scheduler_context, assistant_context_content_for_execution,
+    invoked_mcp_tools_for_context, set_project_guidance_context,
 };
 use mez_mux::command::CommandInvocation;
 
@@ -163,6 +163,12 @@ pub(crate) struct RuntimeAgentComponent {
     agent_implementation_pressure_after_shell_actions: usize,
     /// Per-failure-signature correction attempts keyed by turn/signature.
     agent_turn_failure_feedback_attempts: BTreeMap<String, usize>,
+    /// Output-limit recovery attempt currently shaping each active request.
+    ///
+    /// This controller state is intentionally not stored in model-visible
+    /// chronology. Provider preparation projects it into a concise live-state
+    /// flag only while the corresponding retry remains active.
+    agent_turn_output_limit_recovery_attempts: BTreeMap<String, u32>,
     /// Per-turn successful shell dispatch history.
     agent_turn_shell_dispatch_history: BTreeMap<String, AgentShellDispatchHistory>,
     /// Per-turn network action history.
@@ -1334,6 +1340,7 @@ impl RuntimeSessionService {
     /// Clears all action bookkeeping when the live session is replaced.
     pub(crate) fn clear_all_agent_action_bookkeeping(&mut self) {
         self.agent.agent_turn_failure_feedback_attempts.clear();
+        self.agent.agent_turn_output_limit_recovery_attempts.clear();
         self.agent.agent_turn_shell_dispatch_history.clear();
         self.agent.agent_turn_network_action_history.clear();
         self.agent.agent_turn_config_change_successes.clear();
@@ -1782,8 +1789,6 @@ use mez_agent::outcome::{
     runtime_action_result_is_terminal_failure, runtime_action_status_name,
     runtime_action_type_is_shell_backed, runtime_execution_can_feed_failure_to_model,
     runtime_execution_uses_unbounded_apply_patch_recovery, runtime_failure_feedback_attempt_keys,
-    runtime_failure_feedback_evidence_guidance, runtime_failure_feedback_loop_guard_aggregate_note,
-    runtime_failure_feedback_repeat_guidance, runtime_failure_feedback_specific_guidance,
     runtime_failure_feedback_status_line, runtime_loop_guard_failure_label,
     runtime_loop_guard_failure_summary_line, runtime_provider_audit_error_message,
     runtime_unrecovered_action_failure_output, runtime_unrecovered_failure_output_lines,
@@ -1791,17 +1796,7 @@ use mez_agent::outcome::{
     runtime_validate_provider_completion_identity,
 };
 use mez_agent::progress::{
-    PROGRESS_SAY_LEDGER_LABEL as RUNTIME_PROGRESS_SAY_LEDGER_LABEL,
-    RATIONALE_LEDGER_LABEL as RUNTIME_RATIONALE_LEDGER_LABEL,
-    merge_progress_say_entries as runtime_merge_progress_say_entries,
-    merge_rationale_entries as runtime_merge_rationale_entries,
-    progress_say_entries_for_execution as runtime_progress_say_entries_for_execution,
-    progress_say_entries_from_ledger as runtime_progress_say_entries_from_ledger,
-    progress_say_ledger_content as runtime_progress_say_ledger_content,
-    rationale_entries_for_execution as runtime_rationale_entries_for_execution,
     rationale_entries_from_context_blocks as runtime_rationale_entries_from_context_blocks,
-    rationale_entries_from_ledger as runtime_rationale_entries_from_ledger,
-    rationale_ledger_content as runtime_rationale_ledger_content,
     suppress_redundant_batch_rationale as runtime_suppress_redundant_batch_rationale,
 };
 use mez_agent::subagent_task_output_for_execution;
@@ -1826,5 +1821,3 @@ const RUNTIME_PROVIDER_CONTEXT_LIMIT_RETRY_LIMIT: u32 = 3;
 /// Maximum in-process provider output-limit retries for test providers.
 #[cfg(test)]
 const RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LIMIT: u32 = 2;
-/// Label for ephemeral active-turn context that guides output-limit retries.
-const RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LABEL: &str = "provider output-limit retry guidance";

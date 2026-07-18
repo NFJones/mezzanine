@@ -73,8 +73,6 @@ impl RuntimeSessionService {
         self.reset_action_pressure_after_non_shell_effects(turn, &execution);
         self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
         self.append_agent_execution_assistant_context(turn, &execution)?;
-        self.append_agent_execution_progress_say_ledger_context(turn, &execution)?;
-        self.append_agent_execution_rationale_ledger_context(turn, &execution)?;
         self.record_agent_copy_output(turn, &execution);
         let skill_actions_executed =
             self.execute_running_skill_actions_for_turn(turn, &mut execution)?;

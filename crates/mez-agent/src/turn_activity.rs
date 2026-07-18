@@ -1,9 +1,9 @@
 //! Provider-independent volatile activity state for one agent turn.
 //!
 //! This module owns shell and network action history, advisory implementation
-//! pressure, validation-command recognition, and mid-turn user-steering
-//! context. Product runtime code retains the maps that scope these values to
-//! live turns and owns pane dispatch, clocks, context insertion, and tracing.
+//! pressure, validation-command recognition, and mid-turn user-steering state.
+//! Product runtime code retains the maps that scope these values to live turns
+//! and owns pane dispatch, clocks, context insertion, and tracing.
 
 use crate::{AgentAction, AgentActionPayload};
 
@@ -16,18 +16,13 @@ pub struct AgentTurnSteering {
     pub submitted_at_unix_seconds: u64,
 }
 
-/// Builds canonical model-facing context for one mid-turn steering input.
+/// Returns the exact user-authored text for one mid-turn steering event.
+///
+/// Timestamps remain controller metadata. Stable prompt authority already
+/// defines instruction precedence, so chronology does not need synthetic
+/// coaching wrapped around the user's words.
 pub fn agent_turn_steering_context_content(steering: &AgentTurnSteering) -> String {
-    format!(
-        "[user steering input during active turn]\n\
-submitted_at_unix_seconds={}\n\
-The user added this instruction while the current turn was already in progress.\n\
-Incorporate it into the current task from this point forward. Do not restart\n\
-completed work unless necessary. If this conflicts with earlier instructions,\n\
-the newer user instruction takes precedence.\n\n\
-User input:\n{}",
-        steering.submitted_at_unix_seconds, steering.input
-    )
+    steering.input.clone()
 }
 
 /// Shell dispatch history for one active agent turn.
@@ -311,15 +306,16 @@ mod tests {
         );
     }
 
-    /// Verifies steering context preserves user text and precedence guidance.
+    /// Verifies steering context preserves only the exact user text while the
+    /// timestamp remains available in typed controller state.
     #[test]
-    fn steering_context_preserves_input_and_timestamp() {
-        let content = agent_turn_steering_context_content(&AgentTurnSteering {
+    fn steering_context_preserves_exact_input_without_metadata() {
+        let steering = AgentTurnSteering {
             input: "Focus on the parser".to_string(),
             submitted_at_unix_seconds: 42,
-        });
-        assert!(content.contains("submitted_at_unix_seconds=42"));
-        assert!(content.contains("newer user instruction takes precedence"));
-        assert!(content.ends_with("Focus on the parser"));
+        };
+        let content = agent_turn_steering_context_content(&steering);
+        assert_eq!(content, "Focus on the parser");
+        assert_eq!(steering.submitted_at_unix_seconds, 42);
     }
 }

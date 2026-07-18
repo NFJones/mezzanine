@@ -87,7 +87,7 @@ pub fn assemble_model_request_from_context(
             continue;
         }
         messages.push(ModelMessage {
-            role: role_for_context_source(block.source),
+            role: role_for_context_block(block),
             source: block.source,
             placement: block.placement,
             content: format!("{}{}", model_context_block_header(block), block.content),
@@ -139,28 +139,30 @@ pub fn assemble_model_request_from_context(
     Ok(request)
 }
 
-/// Maps context provenance to provider-neutral message roles.
-pub fn role_for_context_source(source: ContextSourceKind) -> ModelMessageRole {
-    match source {
-        ContextSourceKind::System => ModelMessageRole::System,
-        ContextSourceKind::DeveloperInstruction
-        | ContextSourceKind::Policy
-        | ContextSourceKind::Configuration
-        | ContextSourceKind::RuntimeHint
-        | ContextSourceKind::EvidenceLedger
-        | ContextSourceKind::CommittedEvidence
-        | ContextSourceKind::RoutedHandoff => ModelMessageRole::Developer,
-        ContextSourceKind::ActionResult | ContextSourceKind::TranscriptTool => {
+/// Maps canonical context semantics to provider-neutral message roles.
+pub fn role_for_context_block(block: &ContextBlock) -> ModelMessageRole {
+    match block.semantic_kind() {
+        crate::ContextSemanticKind::AmbientInstruction => {
+            if block.source == ContextSourceKind::System {
+                ModelMessageRole::System
+            } else {
+                ModelMessageRole::Developer
+            }
+        }
+        crate::ContextSemanticKind::UserEvent => ModelMessageRole::User,
+        crate::ContextSemanticKind::AssistantEvent => ModelMessageRole::Assistant,
+        crate::ContextSemanticKind::EvidenceEvent
+            if matches!(
+                block.source,
+                ContextSourceKind::ActionResult | ContextSourceKind::TranscriptTool
+            ) =>
+        {
             ModelMessageRole::Tool
         }
-        ContextSourceKind::TranscriptAssistant => ModelMessageRole::Assistant,
-        ContextSourceKind::UserInstruction
-        | ContextSourceKind::SkillInstruction
-        | ContextSourceKind::LocalMessage
-        | ContextSourceKind::ProjectGuidance
-        | ContextSourceKind::Memory
-        | ContextSourceKind::Transcript
-        | ContextSourceKind::TranscriptUser => ModelMessageRole::User,
+        crate::ContextSemanticKind::TaskPrelude
+        | crate::ContextSemanticKind::EvidenceEvent
+        | crate::ContextSemanticKind::ReferenceEvent
+        | crate::ContextSemanticKind::LiveState => ModelMessageRole::Context,
     }
 }
 
@@ -196,7 +198,7 @@ fn prompt_cache_lineage_id_from_blocks(blocks: &[ContextBlock]) -> Option<String
 
 /// Returns the system-prompt pointer used for DeepSeek repository guidance.
 fn deepseek_repository_instructions_system_prompt_pointer() -> String {
-    "DeepSeek provider note: active repository instructions are provided in a dedicated user message immediately after this system prompt. Treat that block as the authoritative repository instruction contents for this turn; do not reread repository instruction files merely because the full text is reinforced outside section 3.".to_string()
+    "DeepSeek provider note: active repository instructions are provided in a dedicated neutral-context message immediately after this system prompt. The provider may transport that block through a user-compatible envelope, but it is not user-authored. Treat it as the authoritative repository instruction contents for this turn; do not reread repository instruction files merely because the full text is reinforced outside section 3.".to_string()
 }
 
 /// Builds the fixed-position repository-guidance message used by DeepSeek.
@@ -209,7 +211,7 @@ fn deepseek_repository_instructions_message(
         content.push_str("\n\n");
     }
     ModelMessage {
-        role: ModelMessageRole::User,
+        role: ModelMessageRole::Context,
         source: ContextSourceKind::ProjectGuidance,
         placement: ContextPlacement::StablePrefix,
         content,

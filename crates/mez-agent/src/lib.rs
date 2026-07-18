@@ -233,18 +233,19 @@ pub use config_change::{
 pub use context::{
     AgentContext, AgentContextError, AgentContextResult, AgentRequestAssemblyError,
     AgentRequestAssemblyErrorKind, AgentRequestAssemblyResult, ContextBlock, ContextCachePolicy,
-    ContextPlacement, ContextSourceKind, ContextStability, ModelContextCompactionReport,
-    ModelMessage, ModelMessageRole, ModelRequest, TrustDomain, context_placement_insertion_index,
+    ContextPlacement, ContextRetention, ContextSemanticKind, ContextSourceKind, ContextStability,
+    ModelContextCompactionReport, ModelMessage, ModelMessageRole, ModelRequest,
+    PreparedModelContext, TrustDomain, context_placement_insertion_index,
     insert_context_block_by_placement, model_context_block_header,
-    validate_context_placement_order, validate_context_required,
+    validate_context_placement_order, validate_context_required, validate_context_semantics,
 };
 pub use context_appenders::{
     append_mcp_context, append_memory_context, append_permission_policy_context,
     append_project_guidance_context, append_scheduler_context, invoked_mcp_tools_for_context,
-    set_project_guidance_context,
+    memory_context_blocks, set_project_guidance_context,
 };
 pub use context_assembly::{
-    ModelRequestIdentity, assemble_model_request_from_context, role_for_context_source,
+    ModelRequestIdentity, assemble_model_request_from_context, role_for_context_block,
 };
 pub use context_compaction::{
     DEFAULT_MODEL_CONTEXT_RETAINED_TAIL_PERCENT, compact_model_context_for_budget,

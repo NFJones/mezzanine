@@ -65,7 +65,7 @@ fn assemble_model_request(
 /// the system prompt, while ordinary user transcript content remains unchanged.
 /// Section 3 still explains where those active instructions live so the model
 /// does not treat the empty section as permission to reread instruction files.
-fn assemble_model_request_points_deepseek_system_prompt_to_user_repository_instructions() {
+fn assemble_model_request_points_deepseek_system_prompt_to_neutral_repository_instructions() {
     let request = assemble_model_request(
         &ModelProfile {
             provider: "deepseek".to_string(),
@@ -101,7 +101,7 @@ fn assemble_model_request_points_deepseek_system_prompt_to_user_repository_instr
 
     assert!(system.contains("3. Repository Instructions"));
     assert!(system.contains("DeepSeek provider note"));
-    assert!(system.contains("dedicated user message"));
+    assert!(system.contains("dedicated neutral-context message"));
     assert!(!system.contains("Run just test before handoff."));
     assert!(
         repository_guidance
@@ -149,7 +149,7 @@ fn assemble_model_request_keeps_deepseek_repository_guidance_without_user_prompt
     .unwrap();
 
     assert_eq!(request.messages.len(), 2);
-    assert_eq!(request.messages[1].role, ModelMessageRole::User);
+    assert_eq!(request.messages[1].role, ModelMessageRole::Context);
     assert_eq!(
         request.messages[1].source,
         ContextSourceKind::ProjectGuidance
@@ -415,7 +415,7 @@ fn model_request_keeps_context_sources_distinct() {
     assert_eq!(request.messages[2].source, ContextSourceKind::Transcript);
     assert_eq!(request.messages[3].source, ContextSourceKind::LocalMessage);
     assert_eq!(request.messages[4].source, ContextSourceKind::RuntimeHint);
-    assert_eq!(request.messages[4].role, ModelMessageRole::Developer);
+    assert_eq!(request.messages[4].role, ModelMessageRole::Context);
 }
 
 #[test]

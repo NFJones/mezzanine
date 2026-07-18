@@ -176,22 +176,31 @@ pub fn anthropic_messages_request_body(
             }
             ModelMessageRole::Assistant => "assistant",
             ModelMessageRole::User | ModelMessageRole::Tool => "user",
+            ModelMessageRole::Context => "user",
         };
         if message.content.is_empty() {
             continue;
         }
         let cache_disposition = message.cache_disposition();
+        let content = if message.role == ModelMessageRole::Context {
+            format!(
+                "[Mezzanine context; not user-authored]\n{}",
+                message.content
+            )
+        } else {
+            message.content.clone()
+        };
         if let Some(last) = rendered_messages.last_mut()
             && last.role == role
             && last.placement == cache_disposition
         {
             last.content.push_str("\n\n");
-            last.content.push_str(&message.content);
+            last.content.push_str(&content);
             continue;
         }
         rendered_messages.push(AnthropicRenderedMessage {
             role,
-            content: message.content.clone(),
+            content,
             placement: cache_disposition,
         });
     }

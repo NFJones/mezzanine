@@ -11,7 +11,7 @@ use super::super::{
     current_unix_seconds, json_escape,
 };
 use crate::integrations::agent::context::assemble_model_request;
-use mez_agent::{ContextSourceKind, ModelMessageRole, ModelRequest, append_mcp_context};
+use mez_agent::{ContextSourceKind, ModelMessageRole, ModelRequest};
 
 /// Captures one assembled model request dump before it is written to a target.
 struct RuntimeAgentContextDump {
@@ -170,14 +170,16 @@ fn runtime_agent_context_dump_for_pane(
         });
     };
     service.refresh_agent_turn_project_guidance_context(&turn)?;
-    let context = service
+    let durable = service
         .agent_turn_contexts()
         .get(&turn_id)
         .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
     let mcp_summary = service.mcp_registry().prompt_summary();
-    let context = append_mcp_context(context.clone(), &mcp_summary)?;
+    let (context, available_mcp_tools) =
+        service.prepare_agent_turn_model_context(&turn, durable.clone(), &mcp_summary)?;
+    let context = context.into_agent_context();
     let mut request = assemble_model_request(&model_profile, &turn, &context)?;
-    request.available_mcp_tools = mcp_summary.available_tools.clone();
+    request.available_mcp_tools = available_mcp_tools;
     let dump = runtime_model_request_context_dump(&pane_id, &turn_id, &request)?;
     let message_count = request.messages.len();
     Ok(RuntimeAgentContextDumpResult::Written(
@@ -209,7 +211,6 @@ fn runtime_idle_agent_context_dump_for_pane(
     )?;
     let context = service.apply_agent_shell_preference_context(pane_id, context)?;
     let mcp_summary = service.mcp_registry().prompt_summary();
-    let context = append_mcp_context(context, &mcp_summary)?;
     let turn_id = format!("idle-context-preview-{pane_id}");
     let turn = AgentTurnRecord {
         turn_id: turn_id.clone(),
@@ -224,8 +225,11 @@ fn runtime_idle_agent_context_dump_for_pane(
         state: AgentTurnState::Queued,
         initial_capability: None,
     };
+    let (context, available_mcp_tools) =
+        service.prepare_agent_turn_model_context(&turn, context, &mcp_summary)?;
+    let context = context.into_agent_context();
     let mut request = assemble_model_request(&model_profile, &turn, &context)?;
-    request.available_mcp_tools = mcp_summary.available_tools.clone();
+    request.available_mcp_tools = available_mcp_tools;
     let dump = runtime_model_request_context_dump(pane_id, &turn_id, &request)?;
     let message_count = request.messages.len();
     Ok(RuntimeAgentContextDump {
@@ -607,5 +611,6 @@ fn runtime_model_message_role_name_for_dump(role: ModelMessageRole) -> &'static 
         ModelMessageRole::User => "user",
         ModelMessageRole::Assistant => "assistant",
         ModelMessageRole::Tool => "tool",
+        ModelMessageRole::Context => "context",
     }
 }

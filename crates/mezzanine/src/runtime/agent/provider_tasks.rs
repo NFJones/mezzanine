@@ -21,9 +21,8 @@ use super::{
     AgentId, AgentTurnState, DEFAULT_PROVIDER_TIMEOUT_MS, EventKind, HookEvent, MezError,
     ProviderApiCompatibility, ReqwestProviderHttpTransport, Result, RuntimeAgentProviderClaim,
     RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask,
-    RuntimeProviderConfig, RuntimeSessionService, append_mcp_context, assemble_model_request,
-    current_unix_millis, deepseek_chat_completions_provider_from_auth_store_with_provider_options,
-    invoked_mcp_tools_for_context, json_escape,
+    RuntimeProviderConfig, RuntimeSessionService, assemble_model_request, current_unix_millis,
+    deepseek_chat_completions_provider_from_auth_store_with_provider_options, json_escape,
     openai_compatible_provider_from_auth_store_with_provider_options,
     openai_responses_provider_from_auth_store_with_provider_options, resolve_provider_api,
     runtime_agent_turn_start_hook_payload, runtime_mezzanine_error_code,
@@ -393,19 +392,21 @@ impl RuntimeSessionService {
             .agent_turn_model_profiles
             .insert(turn_id.to_string(), model_profile.clone());
         let (context, available_mcp_tools) = if macro_judge_step_index.is_some() {
+            let durable = self
+                .agent_turn_contexts()
+                .get(turn_id)
+                .cloned()
+                .ok_or_else(|| {
+                    MezError::invalid_state("runtime agent turn context is unavailable")
+                })?;
             (
-                self.agent_turn_contexts()
-                    .get(turn_id)
-                    .cloned()
-                    .ok_or_else(|| {
-                        MezError::invalid_state("runtime agent turn context is unavailable")
-                    })?,
+                mez_agent::PreparedModelContext::from_durable(durable)?,
                 Vec::new(),
             )
         } else {
             self.refresh_agent_turn_project_guidance_context(&turn)?;
             self.drain_pending_agent_turn_steering_context(&turn)?;
-            let context = self
+            let durable = self
                 .agent_turn_contexts()
                 .get(turn_id)
                 .cloned()
@@ -413,12 +414,9 @@ impl RuntimeSessionService {
                     MezError::invalid_state("runtime agent turn context is unavailable")
                 })?;
             let mcp_summary = self.mcp_registry().prompt_summary();
-            let context = append_mcp_context(context, &mcp_summary)?;
-            let available_mcp_tools = invoked_mcp_tools_for_context(&context, &mcp_summary);
-            self.agent_turn_contexts_mut()
-                .insert(turn_id.to_string(), context.clone());
-            (context, available_mcp_tools)
+            self.prepare_agent_turn_model_context(&turn, durable, &mcp_summary)?
         };
+        let provider_context = context.to_agent_context();
         let respond_only = self.routed_presentation_turn(turn_id);
         let auto_sizing = if macro_judge_step_index.is_some() || respond_only {
             None
@@ -507,19 +505,19 @@ impl RuntimeSessionService {
                 "provider_request started provider={} model={} context_blocks={}",
                 provider.provider_id(),
                 model_profile.model,
-                context.blocks.len()
+                context.len()
             ),
         )?;
         self.record_runtime_provider_request_shape_for_context(
             &model_profile,
             &turn,
-            &context,
+            &provider_context,
             &available_mcp_tools,
             self.runtime_persistent_memory_enabled(),
             super::issues::runtime_issues_enabled(self),
         );
         if self.agent_debug_enabled(&turn.pane_id) {
-            match assemble_model_request(&model_profile, &turn, &context) {
+            match assemble_model_request(&model_profile, &turn, &provider_context) {
                 Ok(mut request) => {
                     mez_agent::apply_default_action_gates(
                         &mut request,

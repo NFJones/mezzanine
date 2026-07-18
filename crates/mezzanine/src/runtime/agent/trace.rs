@@ -304,6 +304,7 @@ pub(super) fn runtime_model_message_role_name(role: ModelMessageRole) -> &'stati
         ModelMessageRole::User => "user",
         ModelMessageRole::Assistant => "assistant",
         ModelMessageRole::Tool => "tool",
+        ModelMessageRole::Context => "context",
     }
 }
 

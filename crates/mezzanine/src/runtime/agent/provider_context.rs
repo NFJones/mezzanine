@@ -7,15 +7,92 @@
 
 use super::{
     AgentId, AgentTurnExecution, AgentTurnRecord, AgentTurnState, ContextBlock, ContextSourceKind,
-    MezError, ModelProfile, RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LABEL, Result,
-    RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile, RuntimeSessionService,
-    compact_model_context_for_budget_with_retained_tail_percent, runtime_cooperation_mode_name,
-    runtime_mezzanine_error_code, set_project_guidance_context,
+    MezError, ModelProfile, Result, RuntimeAutoSizingDispatch, RuntimeAutoSizingTargetProfile,
+    RuntimeSessionService, append_mcp_context, append_scheduler_context,
+    compact_model_context_for_budget_with_retained_tail_percent, invoked_mcp_tools_for_context,
+    runtime_cooperation_mode_name, runtime_mezzanine_error_code, set_project_guidance_context,
 };
 #[cfg(test)]
 use crate::runtime::RuntimeAutoSizingDecision;
+use crate::runtime::control::runtime_agent_pane_readiness_context_block;
 
 impl RuntimeSessionService {
+    /// Prepares the next provider request from durable chronology and a fresh
+    /// allowlisted live-state suffix without mutating stored turn context.
+    pub(crate) fn prepare_agent_turn_model_context(
+        &self,
+        turn: &AgentTurnRecord,
+        durable: super::AgentContext,
+        mcp_summary: &mez_agent::McpPromptSummary,
+    ) -> Result<(super::PreparedModelContext, Vec<mez_agent::McpPromptTool>)> {
+        durable.validate_durable()?;
+        let mut request_context = durable.clone();
+
+        if let Some(block) = runtime_agent_pane_readiness_context_block(
+            &turn.pane_id,
+            self.pane_readiness_state(&turn.pane_id),
+        ) {
+            request_context.blocks.push(block);
+        }
+        if let Some(current_directory) = self.pane_current_working_directory(&turn.pane_id) {
+            request_context.blocks.push(ContextBlock::live_state(
+                ContextSourceKind::RuntimeHint,
+                "runtime state",
+                format!("cwd={}", current_directory.to_string_lossy()),
+            ));
+        }
+        if let Some(attempt) = self
+            .agent
+            .agent_turn_output_limit_recovery_attempts
+            .get(&turn.turn_id)
+        {
+            request_context.blocks.push(ContextBlock::live_state(
+                ContextSourceKind::Configuration,
+                "provider response mode",
+                format!("provider_response_mode=compact_output_retry attempt={attempt}"),
+            ));
+        }
+        let active_subagent_scopes = self.active_subagent_write_scopes();
+        if !active_subagent_scopes.is_empty() {
+            request_context.blocks.push(ContextBlock::live_state(
+                ContextSourceKind::Policy,
+                "active write conflicts",
+                active_subagent_scopes
+                    .iter()
+                    .map(|scope| {
+                        format!(
+                            "agent={} mode={} scope={} serial_lock={}",
+                            scope.agent_id,
+                            runtime_cooperation_mode_name(scope.mode),
+                            scope.scope,
+                            scope.serial_lock.as_deref().unwrap_or("none")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ));
+        }
+        request_context = append_scheduler_context(request_context, self.agent_scheduler())?;
+        request_context = append_mcp_context(request_context, mcp_summary)?;
+        let available_mcp_tools = invoked_mcp_tools_for_context(&durable, mcp_summary);
+
+        let tail_start = request_context
+            .blocks
+            .iter()
+            .position(|block| block.placement == mez_agent::ContextPlacement::EphemeralTail)
+            .unwrap_or(request_context.blocks.len());
+        let live_state = request_context.blocks.split_off(tail_start);
+        if request_context != durable {
+            return Err(MezError::invalid_state(
+                "provider preparation modified durable context while building live state",
+            ));
+        }
+        Ok((
+            super::PreparedModelContext::new(durable, live_state)?,
+            available_mcp_tools,
+        ))
+    }
+
     /// Refreshes project guidance blocks on a stored turn context.
     ///
     /// Provider continuations can happen after file mutations and shell output
@@ -38,17 +115,14 @@ impl RuntimeSessionService {
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let context = set_project_guidance_context(context, &instruction_files, 2)?;
+        context.validate_durable()?;
         self.agent_turn_contexts_mut()
             .insert(turn.turn_id.clone(), context);
         Ok(())
     }
 
-    /// Drains user steering prompts into the next provider-bound context.
-    ///
-    /// Mid-turn input is intentionally not treated as a new conversation turn.
-    /// The block template tells the model that the text was submitted while
-    /// the current turn was already active and should be incorporated from the
-    /// next action boundary forward.
+    /// Drains exact user steering into immutable chronology at its observed
+    /// action boundary without adding controller prose or timestamp metadata.
     pub(crate) fn drain_pending_agent_turn_steering_context(
         &mut self,
         turn: &AgentTurnRecord,
@@ -62,17 +136,12 @@ impl RuntimeSessionService {
             .get_mut(&turn.turn_id)
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         for (index, steering) in steering.into_iter().enumerate() {
-            context.blocks.push(ContextBlock {
-                source: ContextSourceKind::UserInstruction,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
-                label: format!(
-                    "user steering input {} for active turn {}",
-                    index + 1,
-                    turn.turn_id
-                ),
-                content: mez_agent::agent_turn_steering_context_content(&steering),
-            });
+            context.blocks.push(ContextBlock::user_event(
+                format!("user steering {}", index + 1),
+                mez_agent::agent_turn_steering_context_content(&steering),
+            ));
         }
+        context.validate_durable()?;
         self.append_agent_trace_turn_event(
             &turn.pane_id,
             &turn.turn_id,
@@ -201,13 +270,15 @@ impl RuntimeSessionService {
         Ok(true)
     }
 
-    /// Adds compact-output retry guidance after a provider cuts generation off
-    /// at its output-token limit.
+    /// Records compact-output retry controller state after a provider cuts
+    /// generation off at its output-token limit.
     ///
     /// This recovery path deliberately does not compact context: the provider
     /// accepted the input, but the model spent too much output budget. The
-    /// durable active turn first retries with compact-output guidance only,
-    /// then escalates the `max_output_tokens` provider option on a later retry.
+    /// durable chronology remains unchanged. Provider preparation exposes a
+    /// request-local mode flag whose behavior is defined by stable format
+    /// policy, then escalates the `max_output_tokens` provider option on a
+    /// later retry.
     pub(crate) fn recover_agent_provider_output_limit_failure(
         &mut self,
         agent_id: &AgentId,
@@ -251,49 +322,14 @@ impl RuntimeSessionService {
                 .insert(turn_id.to_string(), model_profile);
         }
 
-        let context = self
-            .agent_turn_contexts_mut()
-            .get_mut(turn_id)
-            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        context.blocks.retain(|block| {
-            block.source != ContextSourceKind::Configuration
-                || block.label != RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LABEL
-        });
-        let guidance = if let Some(retry_tokens) = retry_tokens {
-            format!(
-                "[ephemeral provider output-limit retry]\n\
-                 The previous provider response was still incomplete because generation hit max_output_tokens. \
-                 Return one complete compact MAAP batch or one short final say. \
-                 Do not include progress prose, plans, evidence lists, command logs, or explanations. \
-                 Prefer the next focused executable action when work remains. \
-                 This retry instruction is not durable transcript or future-turn context.\n\
-                 attempt={} max_output_tokens={} error_kind={} error_message={}",
-                attempt.max(1),
-                retry_tokens,
-                runtime_mezzanine_error_code(error.kind()),
-                error.message()
-            )
-        } else {
-            format!(
-                "[ephemeral provider output-limit retry]\n\
-                 The previous provider response was incomplete because generation hit max_output_tokens. \
-                 Retry once with a much shorter complete response before Mezzanine escalates recovery. \
-                 Return one minimal complete MAAP batch or one short final say. \
-                 Do not include progress prose, plans, evidence lists, command logs, or explanations. \
-                 Prefer the next focused executable action when work remains. \
-                 This retry instruction is not durable transcript or future-turn context.\n\
-                 attempt={} error_kind={} error_message={}",
-                attempt.max(1),
-                runtime_mezzanine_error_code(error.kind()),
-                error.message()
-            )
-        };
-        context.blocks.push(ContextBlock {
-            source: ContextSourceKind::Configuration,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
-            label: RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LABEL.to_string(),
-            content: guidance,
-        });
+        if !self.agent_turn_contexts().contains_key(turn_id) {
+            return Err(MezError::invalid_state(
+                "runtime agent turn context is unavailable",
+            ));
+        }
+        self.agent
+            .agent_turn_output_limit_recovery_attempts
+            .insert(turn_id.to_string(), attempt.max(1));
         let status_text = if let Some(retry_tokens) = retry_tokens {
             format!(
                 "agent: provider response hit output limit again; retrying compactly attempt={} max_output_tokens={}",

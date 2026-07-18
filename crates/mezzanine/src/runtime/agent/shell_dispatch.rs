@@ -8,15 +8,14 @@
 
 use super::{
     ActionResult, ActionStatus, AgentAction, AgentActionPayload, AgentTurnExecution,
-    AgentTurnRecord, AgentTurnState, ApplyPatchTransactionPhase, BTreeSet, ContextBlock,
-    ContextSourceKind, EventKind, HookEvent, MezError, PaneReadinessState,
-    PendingFocusedShellHookContinuation, Result, RunningShellTransactionKind,
-    RunningShellTransactionRef, RuntimeApplyPatchBatchState, RuntimeHookPipelineBlock,
-    RuntimeHookPipelineDecision, RuntimeSessionService, apply_patch_error_plan,
-    apply_patch_read_plan_for_paths, apply_patch_touched_paths, apply_patch_transaction_phase,
-    apply_patch_write_plan_from_read_output, apply_patch_write_plan_from_read_outputs,
-    decode_shell_output_transport_with_diagnostics, json_escape, local_action_plan,
-    runtime_action_result_is_suppressed_duplicate_file_mutation,
+    AgentTurnRecord, AgentTurnState, ApplyPatchTransactionPhase, BTreeSet, EventKind, HookEvent,
+    MezError, PaneReadinessState, PendingFocusedShellHookContinuation, Result,
+    RunningShellTransactionKind, RunningShellTransactionRef, RuntimeApplyPatchBatchState,
+    RuntimeHookPipelineBlock, RuntimeHookPipelineDecision, RuntimeSessionService,
+    apply_patch_error_plan, apply_patch_read_plan_for_paths, apply_patch_touched_paths,
+    apply_patch_transaction_phase, apply_patch_write_plan_from_read_output,
+    apply_patch_write_plan_from_read_outputs, decode_shell_output_transport_with_diagnostics,
+    json_escape, local_action_plan, runtime_action_result_is_suppressed_duplicate_file_mutation,
     runtime_agent_action_has_runtime_visible_effect,
     runtime_agent_action_rejects_duplicate_success, runtime_agent_context_command,
     runtime_agent_execution_prompt_display_lines, runtime_agent_terminal_preview,
@@ -24,13 +23,7 @@ use super::{
     runtime_mezzanine_error_code, runtime_pane_readiness_state_name,
     runtime_pre_shell_hook_payload,
 };
-use mez_agent::{
-    action_pressure_context_content, action_pressure_phase, shell_command_looks_like_validation,
-};
-
-/// Label for the turn-volatile context block that nudges concrete action after
-/// repeated shell dispatch or successful mutation.
-const RUNTIME_ACTION_PRESSURE_LABEL: &str = "action pressure";
+use mez_agent::shell_command_looks_like_validation;
 
 impl RuntimeSessionService {
     /// Appends one transported read chunk to an active apply-patch batch.
@@ -197,7 +190,6 @@ impl RuntimeSessionService {
             .entry(turn_id.to_string())
             .or_default()
             .record(command.to_string());
-        self.refresh_agent_action_pressure_context(turn_id);
     }
 
     /// Records a shell command that exited successfully for loop detection and
@@ -217,7 +209,6 @@ impl RuntimeSessionService {
                 action,
                 shell_command_looks_like_validation(command),
             );
-        self.refresh_agent_action_pressure_context(turn_id);
     }
 
     /// Resets the inspection streak when a provider batch takes a different
@@ -246,32 +237,6 @@ impl RuntimeSessionService {
             .get_mut(&turn.turn_id)
         {
             history.reset_successive_shell_commands();
-        }
-        self.refresh_agent_action_pressure_context(&turn.turn_id);
-    }
-
-    /// Updates the active-turn action-pressure context block.
-    fn refresh_agent_action_pressure_context(&mut self, turn_id: &str) {
-        let threshold = self.agent_implementation_pressure_after_shell_actions();
-        let phase = self
-            .agent
-            .agent_turn_shell_dispatch_history
-            .get(turn_id)
-            .and_then(|history| action_pressure_phase(history, threshold));
-        let Some(context) = self.agent_turn_contexts_mut().get_mut(turn_id) else {
-            return;
-        };
-        context.blocks.retain(|block| {
-            block.source != ContextSourceKind::RuntimeHint
-                || block.label != RUNTIME_ACTION_PRESSURE_LABEL
-        });
-        if let Some(phase) = phase {
-            context.blocks.push(ContextBlock {
-                source: ContextSourceKind::RuntimeHint,
-                placement: mez_agent::ContextPlacement::EphemeralTail,
-                label: RUNTIME_ACTION_PRESSURE_LABEL.to_string(),
-                content: action_pressure_context_content(phase),
-            });
         }
     }
 

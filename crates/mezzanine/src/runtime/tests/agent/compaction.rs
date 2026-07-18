@@ -660,13 +660,13 @@ context_window_tokens = 40000
     );
 }
 
-/// Verifies provider output-limit incomplete responses first trigger compact
-/// retry guidance, then max-output escalation, without compacting active-turn
-/// context.
+/// Verifies provider output-limit incomplete responses first trigger a compact
+/// request-local mode, then max-output escalation, without mutating durable
+/// active-turn context.
 ///
 /// Output exhaustion means the provider accepted the input but cut generation
-/// off, so the recovery path should first ask for a smaller complete response
-/// before escalating the output budget or discarding context.
+/// off, so the recovery path should first select the stable compact-response
+/// behavior before escalating the output budget or discarding chronology.
 #[test]
 fn runtime_provider_output_limit_error_guides_then_escalates_without_compaction() {
     let mut service = test_runtime_service();
@@ -748,11 +748,11 @@ max_output_tokens = 4096
         "{second_request_text}"
     );
     assert!(
-        second_request_text.contains("[ephemeral provider output-limit retry]"),
+        second_request_text.contains("provider_response_mode=compact_output_retry attempt=1"),
         "{second_request_text}"
     );
     assert!(
-        second_request_text.contains("much shorter complete response"),
+        !second_request_text.contains("error_message="),
         "{second_request_text}"
     );
     let third_request_text = requests[2]
@@ -762,7 +762,7 @@ max_output_tokens = 4096
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        third_request_text.contains("one complete compact MAAP batch"),
+        third_request_text.contains("provider_response_mode=compact_output_retry attempt=2"),
         "{third_request_text}"
     );
     assert!(

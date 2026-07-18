@@ -466,17 +466,18 @@ impl RuntimeMetricsSnapshot {
     }
 }
 
-/// Returns the output-limit retry override token value when the provider request
-/// carries second-stage retry guidance that raises the provider-visible budget.
+/// Returns the output-limit retry override token value when the provider
+/// request carries the second-stage request-local recovery mode that raises
+/// the provider-visible budget.
 pub(super) fn provider_request_output_limit_retry_override(
     request: &ModelRequest,
 ) -> Option<usize> {
     request.max_output_tokens.filter(|_| {
         request.messages.iter().any(|message| {
-            message
-                .content
-                .contains("[ephemeral provider output-limit retry]")
-                && message.content.contains("max_output_tokens=")
+            message.placement == mez_agent::ContextPlacement::EphemeralTail
+                && message
+                    .content
+                    .contains("provider_response_mode=compact_output_retry attempt=2")
         })
     })
 }

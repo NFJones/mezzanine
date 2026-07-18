@@ -390,16 +390,23 @@ fn openai_chat_completions_messages(
         .messages
         .iter()
         .map(|message| {
-            let role = match message.role {
-                ModelMessageRole::System => "system",
-                ModelMessageRole::Developer => developer_role.as_str(),
-                ModelMessageRole::User => "user",
-                ModelMessageRole::Assistant => "assistant",
-                ModelMessageRole::Tool => "tool",
+            let (role, content) = match message.role {
+                ModelMessageRole::System => ("system", message.content.clone()),
+                ModelMessageRole::Developer => (developer_role.as_str(), message.content.clone()),
+                ModelMessageRole::User => ("user", message.content.clone()),
+                ModelMessageRole::Assistant => ("assistant", message.content.clone()),
+                ModelMessageRole::Tool => ("tool", message.content.clone()),
+                ModelMessageRole::Context => (
+                    developer_role.as_str(),
+                    format!(
+                        "[Mezzanine context; not user-authored]\n{}",
+                        message.content
+                    ),
+                ),
             };
             serde_json::json!({
                 "role": role,
-                "content": message.content
+                "content": content
             })
         })
         .collect()

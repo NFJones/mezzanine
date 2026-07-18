@@ -5,9 +5,8 @@ use super::super::{AgentId, AgentTurnExecution, Result, RuntimeSessionService};
 use super::super::{
     AgentTurnLedger, AgentTurnState, HookEvent, MezError, ModelProfile,
     RUNTIME_PROVIDER_CONTEXT_LIMIT_RETRY_LIMIT, RUNTIME_PROVIDER_OUTPUT_LIMIT_RETRY_LIMIT,
-    append_mcp_context, assemble_model_request, invoked_mcp_tools_for_context,
-    runtime_agent_turn_start_hook_payload, runtime_execute_auto_sizing_with_provider,
-    runtime_mezzanine_error_code,
+    assemble_model_request, runtime_agent_turn_start_hook_payload,
+    runtime_execute_auto_sizing_with_provider, runtime_mezzanine_error_code,
 };
 #[cfg(test)]
 use crate::integrations::agent::actions::AgentTurnRunner;
@@ -85,16 +84,15 @@ impl RuntimeSessionService {
         }
         self.refresh_agent_turn_project_guidance_context(&turn)?;
         self.drain_pending_agent_turn_steering_context(&turn)?;
-        let context = self
+        let durable = self
             .agent_turn_contexts()
             .get(turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let mcp_summary = self.mcp_registry().prompt_summary();
-        let context = append_mcp_context(context, &mcp_summary)?;
-        let available_mcp_tools = invoked_mcp_tools_for_context(&context, &mcp_summary);
-        self.agent_turn_contexts_mut()
-            .insert(turn_id.to_string(), context.clone());
+        let (prepared_context, available_mcp_tools) =
+            self.prepare_agent_turn_model_context(&turn, durable, &mcp_summary)?;
+        let context = prepared_context.into_agent_context();
         let mut routing_token_usage_by_model = std::collections::BTreeMap::new();
         if let Some(auto_sizing) =
             self.runtime_auto_sizing_dispatch_for_turn(&turn, &model_profile)?
@@ -284,7 +282,7 @@ impl RuntimeSessionService {
                             &error,
                             context_limit_recovery_attempts,
                         )? {
-                            provider_context = self
+                            let durable = self
                                 .agent_turn_contexts()
                                 .get(turn_id)
                                 .cloned()
@@ -293,6 +291,10 @@ impl RuntimeSessionService {
                                         "runtime agent turn context is unavailable",
                                     )
                                 })?;
+                            provider_context = self
+                                .prepare_agent_turn_model_context(&turn, durable, &mcp_summary)?
+                                .0
+                                .into_agent_context();
                             self.append_agent_trace_turn_event(
                                 &turn.pane_id,
                                 &turn.turn_id,
@@ -320,7 +322,7 @@ impl RuntimeSessionService {
                             &error,
                             output_limit_recovery_attempts,
                         )? {
-                            provider_context = self
+                            let durable = self
                                 .agent_turn_contexts()
                                 .get(turn_id)
                                 .cloned()
@@ -329,6 +331,10 @@ impl RuntimeSessionService {
                                         "runtime agent turn context is unavailable",
                                     )
                                 })?;
+                            provider_context = self
+                                .prepare_agent_turn_model_context(&turn, durable, &mcp_summary)?
+                                .0
+                                .into_agent_context();
                             model_profile = self
                                 .agent
                                 .agent_turn_model_profiles
@@ -407,16 +413,17 @@ impl RuntimeSessionService {
                 step_index,
             );
         }
-        let context = self
+        self.refresh_agent_turn_project_guidance_context(&turn)?;
+        self.drain_pending_agent_turn_steering_context(&turn)?;
+        let durable = self
             .agent_turn_contexts()
             .get(turn_id)
             .cloned()
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
         let mcp_summary = self.mcp_registry().prompt_summary();
-        let context = append_mcp_context(context, &mcp_summary)?;
-        let available_mcp_tools = invoked_mcp_tools_for_context(&context, &mcp_summary);
-        self.agent_turn_contexts_mut()
-            .insert(turn_id.to_string(), context.clone());
+        let (prepared_context, available_mcp_tools) =
+            self.prepare_agent_turn_model_context(&turn, durable, &mcp_summary)?;
+        let context = prepared_context.into_agent_context();
         let mut routing_token_usage_by_model = std::collections::BTreeMap::new();
         if let Some(auto_sizing) =
             self.runtime_auto_sizing_dispatch_for_turn(&turn, &model_profile)?
@@ -572,7 +579,7 @@ impl RuntimeSessionService {
                             &error,
                             context_limit_recovery_attempts,
                         )? {
-                            provider_context = self
+                            let durable = self
                                 .agent_turn_contexts()
                                 .get(turn_id)
                                 .cloned()
@@ -581,6 +588,10 @@ impl RuntimeSessionService {
                                         "runtime agent turn context is unavailable",
                                     )
                                 })?;
+                            provider_context = self
+                                .prepare_agent_turn_model_context(&turn, durable, &mcp_summary)?
+                                .0
+                                .into_agent_context();
                             self.append_agent_trace_turn_event(
                                 &turn.pane_id,
                                 &turn.turn_id,
@@ -608,7 +619,7 @@ impl RuntimeSessionService {
                             &error,
                             output_limit_recovery_attempts,
                         )? {
-                            provider_context = self
+                            let durable = self
                                 .agent_turn_contexts()
                                 .get(turn_id)
                                 .cloned()
@@ -617,6 +628,10 @@ impl RuntimeSessionService {
                                         "runtime agent turn context is unavailable",
                                     )
                                 })?;
+                            provider_context = self
+                                .prepare_agent_turn_model_context(&turn, durable, &mcp_summary)?
+                                .0
+                                .into_agent_context();
                             model_profile = self
                                 .agent
                                 .agent_turn_model_profiles

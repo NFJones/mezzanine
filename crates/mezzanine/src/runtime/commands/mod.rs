@@ -710,7 +710,7 @@ impl RuntimeSessionService {
                 },
             );
         }
-        Ok(AgentContext::new(context.blocks)?)
+        Ok(AgentContext::new_durable(context.blocks)?)
     }
 
     /// Runs the start agent prompt turn operation for this subsystem.

@@ -1,14 +1,9 @@
-//! Assistant, progress, and rationale context ledger updates.
+//! Assistant chronology and controller-side rationale suppression.
 
 use super::super::{
-    AgentTurnExecution, AgentTurnRecord, ContextBlock, ContextSourceKind, MezError,
-    RUNTIME_PROGRESS_SAY_LEDGER_LABEL, RUNTIME_RATIONALE_LEDGER_LABEL, Result,
+    AgentTurnExecution, AgentTurnRecord, ContextBlock, ContextSourceKind, MezError, Result,
     RuntimeSessionService, assistant_context_content_for_execution,
-    runtime_merge_progress_say_entries, runtime_merge_rationale_entries,
-    runtime_progress_say_entries_for_execution, runtime_progress_say_entries_from_ledger,
-    runtime_progress_say_ledger_content, runtime_rationale_entries_for_execution,
-    runtime_rationale_entries_from_context_blocks, runtime_rationale_entries_from_ledger,
-    runtime_rationale_ledger_content, runtime_suppress_redundant_batch_rationale,
+    runtime_rationale_entries_from_context_blocks, runtime_suppress_redundant_batch_rationale,
 };
 
 impl RuntimeSessionService {
@@ -57,47 +52,6 @@ impl RuntimeSessionService {
         Ok(())
     }
 
-    /// Appends or updates the active-turn progress `say` ledger.
-    ///
-    /// # Parameters
-    /// - `turn`: The running agent turn receiving the ledger context block.
-    /// - `execution`: The provider execution whose progress `say` actions should
-    ///   become explicit context for later continuations.
-    pub(super) fn append_agent_execution_progress_say_ledger_context(
-        &mut self,
-        turn: &AgentTurnRecord,
-        execution: &AgentTurnExecution,
-    ) -> Result<()> {
-        let new_entries = runtime_progress_say_entries_for_execution(execution);
-        if new_entries.is_empty() {
-            return Ok(());
-        }
-        let context = self
-            .agent_turn_contexts_mut()
-            .get_mut(&turn.turn_id)
-            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        let mut previous_entries = Vec::new();
-        context.blocks.retain(|block| {
-            let is_progress_say_ledger = block.source == ContextSourceKind::RuntimeHint
-                && block.label == RUNTIME_PROGRESS_SAY_LEDGER_LABEL;
-            if is_progress_say_ledger {
-                previous_entries.extend(runtime_progress_say_entries_from_ledger(&block.content));
-            }
-            !is_progress_say_ledger
-        });
-        let entries = runtime_merge_progress_say_entries(previous_entries, new_entries);
-        if entries.is_empty() {
-            return Ok(());
-        }
-        context.blocks.push(ContextBlock {
-            source: ContextSourceKind::RuntimeHint,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
-            label: RUNTIME_PROGRESS_SAY_LEDGER_LABEL.to_string(),
-            content: runtime_progress_say_ledger_content(&entries),
-        });
-        Ok(())
-    }
-
     /// Suppresses batch/action rationale that repeats already-emitted same-turn intent.
     ///
     /// Repeated investigative rationale is visible to the user in verbose
@@ -135,46 +89,5 @@ impl RuntimeSessionService {
             )?;
         }
         Ok(suppression.count())
-    }
-
-    /// Appends or updates the active-turn rationale ledger.
-    ///
-    /// # Parameters
-    /// - `turn`: The running agent turn receiving the ledger context block.
-    /// - `execution`: The provider execution whose retained rationale should
-    ///   become explicit same-turn context for later continuations.
-    pub(super) fn append_agent_execution_rationale_ledger_context(
-        &mut self,
-        turn: &AgentTurnRecord,
-        execution: &AgentTurnExecution,
-    ) -> Result<()> {
-        let new_entries = runtime_rationale_entries_for_execution(execution);
-        if new_entries.is_empty() {
-            return Ok(());
-        }
-        let context = self
-            .agent_turn_contexts_mut()
-            .get_mut(&turn.turn_id)
-            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        let mut previous_entries = Vec::new();
-        context.blocks.retain(|block| {
-            let is_rationale_ledger = block.source == ContextSourceKind::RuntimeHint
-                && block.label == RUNTIME_RATIONALE_LEDGER_LABEL;
-            if is_rationale_ledger {
-                previous_entries.extend(runtime_rationale_entries_from_ledger(&block.content));
-            }
-            !is_rationale_ledger
-        });
-        let entries = runtime_merge_rationale_entries(previous_entries, new_entries);
-        if entries.is_empty() {
-            return Ok(());
-        }
-        context.blocks.push(ContextBlock {
-            source: ContextSourceKind::RuntimeHint,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
-            label: RUNTIME_RATIONALE_LEDGER_LABEL.to_string(),
-            content: runtime_rationale_ledger_content(&entries),
-        });
-        Ok(())
     }
 }

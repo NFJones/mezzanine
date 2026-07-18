@@ -2,6 +2,32 @@
 
 use super::*;
 
+/// Prepares one synthetic provider request from prompt chronology without
+/// starting a scheduler-owned turn.
+fn prepared_context_for_prompt(
+    service: &RuntimeSessionService,
+    context: mez_agent::AgentContext,
+) -> mez_agent::PreparedModelContext {
+    let turn = mez_agent::AgentTurnRecord {
+        turn_id: "turn-context-test".to_string(),
+        agent_id: "agent-%1".to_string(),
+        pane_id: "%1".to_string(),
+        trigger: mez_agent::AgentTurnTrigger::UserPrompt,
+        started_at_unix_seconds: 200,
+        policy_profile: "default".to_string(),
+        model_profile: "default".to_string(),
+        parent_turn_id: None,
+        cooperation_mode: None,
+        state: mez_agent::AgentTurnState::Running,
+        initial_capability: None,
+    };
+    let mcp_summary = service.mcp_registry().prompt_summary();
+    service
+        .prepare_agent_turn_model_context(&turn, context, &mcp_summary)
+        .unwrap()
+        .0
+}
+
 /// Verifies latest execution-model cache reuse stays separate from cumulative
 /// accounting and cannot be overwritten by auxiliary routing usage.
 ///
@@ -188,7 +214,7 @@ fn runtime_status_reports_provider_context_continuity_diagnostics() {
     );
     assert!(status.contains("sha256="), "{status}");
     assert!(
-        status.contains("| Common immutable prefix | blocks=2 tokens~"),
+        status.contains("| Common immutable prefix | blocks=1 tokens~"),
         "{status}"
     );
     let request =
@@ -459,8 +485,8 @@ context_window_tokens = 40000
     );
 }
 
-/// Verifies agent prompt context includes pane readiness diagnostics before the
-/// model plans shell-backed work.
+/// Verifies provider preparation includes non-ready pane diagnostics without
+/// persisting volatile readiness in durable chronology.
 ///
 /// If the pane is already known `interactive-blocked`, the model needs that
 /// runtime fact in context before it chooses shell actions. Without this hint,
@@ -471,17 +497,19 @@ fn runtime_agent_context_reports_nonready_pane_readiness() {
     let mut service = test_runtime_service();
     service.set_pane_readiness("%1", PaneReadinessState::InteractiveBlocked);
 
-    let context = service
+    let durable = service
         .agent_context_for_pane_prompt("%1", "inspect the status pager styling", 0)
         .unwrap();
+    let prepared = prepared_context_for_prompt(&service, durable.clone());
 
-    assert!(context.blocks.iter().any(|block| {
-        block.label == "pane identity"
-            && block
-                .content
-                .contains("readiness_state=interactive-blocked")
-    }));
-    assert!(context.blocks.iter().any(|block| {
+    assert!(durable.validate_durable().is_ok());
+    assert!(
+        !durable
+            .blocks
+            .iter()
+            .any(|block| { block.label == "pane identity" || block.label == "pane readiness" })
+    );
+    assert!(prepared.live_state().iter().any(|block| {
         block.source == ContextSourceKind::RuntimeHint
             && block.label == "pane readiness"
             && block
@@ -490,8 +518,8 @@ fn runtime_agent_context_reports_nonready_pane_readiness() {
     }));
 }
 
-/// Verifies prompt construction settles recoverable passive readiness before it
-/// becomes durable model guidance for the next provider turn.
+/// Verifies prompt construction settles recoverable passive readiness before
+/// provider preparation and keeps the ready state out of both context regions.
 ///
 /// Post-shell recovery can briefly leave the pane at `prompt-candidate` even
 /// though host process metadata already shows the primary shell back in the
@@ -504,25 +532,33 @@ fn runtime_agent_context_settles_recoverable_prompt_candidate_readiness() {
     wait_until_primary_shell_foreground(&mut service, "%1");
     service.set_pane_readiness("%1", PaneReadinessState::PromptCandidate);
 
-    let context = service
+    let durable = service
         .agent_context_for_pane_prompt("%1", "inspect the repo status", 0)
         .unwrap();
+    let prepared = prepared_context_for_prompt(&service, durable.clone());
 
     assert_eq!(
         service.pane_readiness_state("%1"),
         PaneReadinessState::Ready
     );
-    assert!(context.blocks.iter().any(|block| {
-        block.label == "pane identity" && block.content.contains("readiness_state=ready")
-    }));
-    assert!(!context.blocks.iter().any(|block| {
-        block.source == ContextSourceKind::RuntimeHint && block.label == "pane readiness"
-    }));
+    assert!(durable.validate_durable().is_ok());
+    assert!(
+        !durable
+            .blocks
+            .iter()
+            .any(|block| { block.label == "pane identity" || block.label == "pane readiness" })
+    );
+    assert!(
+        !prepared
+            .live_state()
+            .iter()
+            .any(|block| block.label == "pane readiness")
+    );
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies prompt construction keeps the readiness warning when no shell-state
-/// evidence can reconcile a passive non-ready pane.
+/// Verifies provider preparation keeps a request-local readiness warning when
+/// no shell-state evidence can reconcile a passive non-ready pane.
 ///
 /// A stale `busy` state should only settle away when host process metadata
 /// proves the primary shell owns the foreground again. Without that evidence,
@@ -532,16 +568,21 @@ fn runtime_agent_context_keeps_unconfirmed_busy_readiness_warning() {
     let mut service = test_runtime_service();
     service.set_pane_readiness("%1", PaneReadinessState::Busy);
 
-    let context = service
+    let durable = service
         .agent_context_for_pane_prompt("%1", "inspect the repo status", 0)
         .unwrap();
+    let prepared = prepared_context_for_prompt(&service, durable.clone());
 
     assert_eq!(service.pane_readiness_state("%1"), PaneReadinessState::Busy);
-    assert!(context.blocks.iter().any(|block| {
-        block.label == "pane identity" && block.content.contains("readiness_state=busy")
-    }));
-    let block = context
-        .blocks
+    assert!(durable.validate_durable().is_ok());
+    assert!(
+        !durable
+            .blocks
+            .iter()
+            .any(|block| { block.label == "pane identity" || block.label == "pane readiness" })
+    );
+    let block = prepared
+        .live_state()
         .iter()
         .find(|block| {
             block.source == ContextSourceKind::RuntimeHint && block.label == "pane readiness"

@@ -23,10 +23,23 @@ pub fn append_memory_context(
     records: &[MemoryContextRecord],
     max_records: usize,
 ) -> AgentContextResult<AgentContext> {
-    if max_records == 0 || records.is_empty() {
-        return Ok(context);
+    let memory_blocks = memory_context_blocks(records, max_records);
+    for block in memory_blocks {
+        insert_context_block_by_placement(&mut context.blocks, block);
     }
+    AgentContext::new(context.blocks)
+}
 
+/// Selects deterministic memory reference blocks without choosing their
+/// insertion boundary. Initial context construction uses this helper to place
+/// compacted older history before the retained raw transcript.
+pub fn memory_context_blocks(
+    records: &[MemoryContextRecord],
+    max_records: usize,
+) -> Vec<ContextBlock> {
+    if max_records == 0 || records.is_empty() {
+        return Vec::new();
+    }
     let mut selected = records.to_vec();
     selected.sort_by(|left, right| {
         right
@@ -39,7 +52,7 @@ pub fn append_memory_context(
             })
             .then_with(|| left.id.cmp(&right.id))
     });
-    let memory_blocks = selected
+    selected
         .iter()
         .take(max_records)
         .map(|record| ContextBlock {
@@ -47,11 +60,8 @@ pub fn append_memory_context(
             placement: crate::ContextPlacement::ConversationAppend,
             label: format!("memory {} ({})", record.id, record.scope.summary()),
             content: record.content.clone(),
-        });
-    for block in memory_blocks {
-        insert_context_block_by_placement(&mut context.blocks, block);
-    }
-    AgentContext::new(context.blocks)
+        })
+        .collect()
 }
 
 /// Replaces MCP availability context with turn-local explicitly invoked servers.

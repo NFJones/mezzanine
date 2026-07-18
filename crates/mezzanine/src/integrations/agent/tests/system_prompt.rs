@@ -58,17 +58,17 @@ fn default_system_prompt_has_reviewed_size_budget() {
         prompt.len() <= 44_000,
         "default prompt exceeded hard byte budget"
     );
-    assert_eq!(prompt.len(), 41_979, "reviewed prompt size changed");
+    assert_eq!(prompt.len(), 42_313, "reviewed prompt size changed");
     assert_eq!(
         section_bytes,
         vec![
-            669, 2_723, 1_260, 646, 6_828, 12_419, 3_023, 1_284, 455, 651, 420, 7_285, 2_484,
+            669, 2_723, 1_260, 646, 6_828, 12_419, 3_023, 1_284, 455, 651, 420, 7_285, 2_818,
             1_832,
         ]
     );
     assert_eq!(
         digest,
-        "f7de3f1173c5b76098566c75f4e52214d2a547b4c4266a18db2697542d6ad325"
+        "2765b8fdf32bf4c655dd7ff92e4cb065580492c8c7e5685fe2c44b575f733cdf"
     );
 }
 
@@ -523,7 +523,7 @@ fn system_prompt_keeps_mcp_awareness_abstract() {
     })
     .unwrap();
 
-    assert!(prompt.contains("Mezzanine pane agent profile default v30"));
+    assert!(prompt.contains("Mezzanine pane agent profile default v31"));
     assert!(prompt.contains("Your name is Mez."));
     let identity_index = prompt.find("1. Identity").unwrap();
     let autonomy_index = prompt.find("2. Autonomy").unwrap();

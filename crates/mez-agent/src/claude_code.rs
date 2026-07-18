@@ -189,7 +189,8 @@ fn append_claude_code_instruction_framing(
             crate::ModelMessageRole::Developer => Some("Developer instruction"),
             crate::ModelMessageRole::User
             | crate::ModelMessageRole::Assistant
-            | crate::ModelMessageRole::Tool => None,
+            | crate::ModelMessageRole::Tool
+            | crate::ModelMessageRole::Context => None,
         };
         if let Some(label) = label {
             append_claude_code_section(prompt, label, &message.content);
@@ -224,6 +225,7 @@ fn append_claude_code_prior_context(
             crate::ModelMessageRole::User => "Previous user message",
             crate::ModelMessageRole::Assistant => "Previous assistant message",
             crate::ModelMessageRole::Tool => "Previous tool result",
+            crate::ModelMessageRole::Context => "Mezzanine context (not user-authored)",
             crate::ModelMessageRole::System | crate::ModelMessageRole::Developer => unreachable!(),
         };
         append_claude_code_section(prompt, label, &message.content);

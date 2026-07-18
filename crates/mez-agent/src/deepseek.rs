@@ -134,15 +134,21 @@ pub fn deepseek_chat_completions_request_body_with_strategy(
             messages.push(deepseek_provider_transcript_event_message(&event));
             continue;
         }
-        let role = match message.role {
-            ModelMessageRole::System => "system",
-            ModelMessageRole::User => "user",
-            ModelMessageRole::Assistant => "assistant",
-            _ => "user",
+        let (role, content) = match message.role {
+            ModelMessageRole::System => ("system", message.content.clone()),
+            ModelMessageRole::User => ("user", message.content.clone()),
+            ModelMessageRole::Assistant => ("assistant", message.content.clone()),
+            ModelMessageRole::Developer | ModelMessageRole::Context | ModelMessageRole::Tool => (
+                "user",
+                format!(
+                    "[Mezzanine context; not user-authored]\n{}",
+                    message.content
+                ),
+            ),
         };
         messages.push(serde_json::json!({
             "role": role,
-            "content": message.content
+            "content": content
         }));
     }
     let mut body = serde_json::json!({

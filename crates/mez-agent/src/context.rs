@@ -150,6 +150,43 @@ pub enum ContextPlacement {
     EphemeralTail,
 }
 
+/// Model-facing meaning of one context block, independent of provider role.
+///
+/// Providers may need to wrap neutral context in a supported transport role,
+/// but they must preserve this canonical meaning and cannot turn controller or
+/// repository context into direct user authorship.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextSemanticKind {
+    /// Invariant system, developer, policy, or project instructions.
+    AmbientInstruction,
+    /// Task-scoped instructions and references known before the active prompt.
+    TaskPrelude,
+    /// An event authored directly by a user.
+    UserEvent,
+    /// An event authored by the assistant.
+    AssistantEvent,
+    /// Settled tool, action, controller, or routed-workflow evidence.
+    EvidenceEvent,
+    /// Neutral historical, memory, or agent-to-agent reference material.
+    ReferenceEvent,
+    /// Mutable factual state needed only for the next provider request.
+    LiveState,
+}
+
+/// Retention and compaction treatment for one context block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextRetention {
+    /// Preserve the block byte-for-byte across request preparation and active
+    /// turn compaction.
+    Exact,
+    /// Compact the block only with the closed execution group it belongs to.
+    ExecutionGroup,
+    /// The block may participate in chronological historical summarization.
+    Summarizable,
+    /// The block exists only in one prepared request and is never persisted.
+    RequestLocal,
+}
+
 /// One ordered unit of model-visible context.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextBlock {
@@ -164,6 +201,96 @@ pub struct ContextBlock {
 }
 
 impl ContextBlock {
+    /// Builds one invariant instruction in the stable reusable prefix.
+    pub fn stable_instruction(
+        source: ContextSourceKind,
+        label: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        Self {
+            source,
+            placement: ContextPlacement::StablePrefix,
+            label: label.into(),
+            content: content.into(),
+        }
+    }
+
+    /// Builds one exact task prelude appended before the active user prompt.
+    pub fn task_prelude(
+        source: ContextSourceKind,
+        label: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        Self {
+            source,
+            placement: ContextPlacement::ConversationAppend,
+            label: label.into(),
+            content: content.into(),
+        }
+    }
+
+    /// Builds one exact direct-user event in immutable chronology.
+    pub fn user_event(label: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            source: ContextSourceKind::UserInstruction,
+            placement: ContextPlacement::ConversationAppend,
+            label: label.into(),
+            content: content.into(),
+        }
+    }
+
+    /// Builds one assistant-authored chronological event.
+    pub fn assistant_event(label: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            source: ContextSourceKind::TranscriptAssistant,
+            placement: ContextPlacement::ConversationAppend,
+            label: label.into(),
+            content: content.into(),
+        }
+    }
+
+    /// Builds one settled evidence event in immutable chronology.
+    pub fn evidence_event(
+        source: ContextSourceKind,
+        label: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        Self {
+            source,
+            placement: ContextPlacement::ConversationAppend,
+            label: label.into(),
+            content: content.into(),
+        }
+    }
+
+    /// Builds one neutral reference event in immutable chronology.
+    pub fn reference_event(
+        source: ContextSourceKind,
+        label: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        Self {
+            source,
+            placement: ContextPlacement::ConversationAppend,
+            label: label.into(),
+            content: content.into(),
+        }
+    }
+
+    /// Builds one factual request-local live-state block.
+    pub fn live_state(
+        source: ContextSourceKind,
+        label: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        Self {
+            source,
+            placement: ContextPlacement::EphemeralTail,
+            label: label.into(),
+            content: content.into(),
+        }
+    }
+
     /// Returns the block's derived trust domain.
     pub fn trust_domain(&self) -> TrustDomain {
         TrustDomain::for_source(self.source)
@@ -197,6 +324,68 @@ impl ContextBlock {
     /// Returns the explicit cache lifecycle placement used for request ordering.
     pub fn cache_disposition(&self) -> ContextPlacement {
         self.placement
+    }
+
+    /// Returns the canonical semantic meaning of this block.
+    pub fn semantic_kind(&self) -> ContextSemanticKind {
+        match self.source {
+            ContextSourceKind::UserInstruction | ContextSourceKind::TranscriptUser => {
+                ContextSemanticKind::UserEvent
+            }
+            ContextSourceKind::TranscriptAssistant => ContextSemanticKind::AssistantEvent,
+            ContextSourceKind::TranscriptTool
+            | ContextSourceKind::EvidenceLedger
+            | ContextSourceKind::CommittedEvidence
+            | ContextSourceKind::RoutedHandoff
+            | ContextSourceKind::ActionResult => ContextSemanticKind::EvidenceEvent,
+            ContextSourceKind::SkillInstruction => ContextSemanticKind::TaskPrelude,
+            ContextSourceKind::LocalMessage
+            | ContextSourceKind::Memory
+            | ContextSourceKind::Transcript => ContextSemanticKind::ReferenceEvent,
+            ContextSourceKind::System
+            | ContextSourceKind::DeveloperInstruction
+            | ContextSourceKind::ProjectGuidance => {
+                if self.placement == ContextPlacement::StablePrefix {
+                    ContextSemanticKind::AmbientInstruction
+                } else {
+                    ContextSemanticKind::TaskPrelude
+                }
+            }
+            ContextSourceKind::Policy
+            | ContextSourceKind::Configuration
+            | ContextSourceKind::RuntimeHint => match self.placement {
+                ContextPlacement::StablePrefix => ContextSemanticKind::AmbientInstruction,
+                ContextPlacement::ConversationAppend => ContextSemanticKind::TaskPrelude,
+                ContextPlacement::EphemeralTail => ContextSemanticKind::LiveState,
+            },
+        }
+    }
+
+    /// Returns the canonical retention treatment of this block.
+    pub fn retention(&self) -> ContextRetention {
+        if self.placement == ContextPlacement::EphemeralTail {
+            return ContextRetention::RequestLocal;
+        }
+        match self.source {
+            ContextSourceKind::UserInstruction
+            | ContextSourceKind::SkillInstruction
+            | ContextSourceKind::LocalMessage
+            | ContextSourceKind::System
+            | ContextSourceKind::DeveloperInstruction
+            | ContextSourceKind::Policy
+            | ContextSourceKind::Configuration
+            | ContextSourceKind::ProjectGuidance
+            | ContextSourceKind::RuntimeHint => ContextRetention::Exact,
+            ContextSourceKind::TranscriptAssistant
+            | ContextSourceKind::TranscriptTool
+            | ContextSourceKind::EvidenceLedger
+            | ContextSourceKind::CommittedEvidence
+            | ContextSourceKind::RoutedHandoff
+            | ContextSourceKind::ActionResult => ContextRetention::ExecutionGroup,
+            ContextSourceKind::Memory
+            | ContextSourceKind::Transcript
+            | ContextSourceKind::TranscriptUser => ContextRetention::Summarizable,
+        }
     }
 
     /// Returns whether exact content can be recovered outside model context.
@@ -236,6 +425,35 @@ impl AgentContext {
             validate_context_required("context label", &block.label)?;
         }
         Ok(Self { blocks })
+    }
+
+    /// Creates durable context containing only stable and append-only blocks.
+    ///
+    /// Runtime turn storage must use this constructor so request-local state
+    /// cannot accidentally survive into later provider calls.
+    pub fn new_durable(blocks: Vec<ContextBlock>) -> AgentContextResult<Self> {
+        let context = Self::new(blocks)?;
+        context.validate_durable()?;
+        Ok(context)
+    }
+
+    /// Validates the semantic and lifetime contract for stored turn context.
+    pub fn validate_durable(&self) -> AgentContextResult<()> {
+        validate_context_placement_order(&self.blocks)?;
+        validate_context_semantics(&self.blocks)?;
+        if let Some((index, block)) = self
+            .blocks
+            .iter()
+            .enumerate()
+            .find(|(_, block)| block.placement == ContextPlacement::EphemeralTail)
+        {
+            return Err(context_semantic_error(
+                index,
+                block,
+                "durable agent context cannot contain ephemeral-tail blocks",
+            ));
+        }
+        Ok(())
     }
 
     /// Validates that blocks advance monotonically through cache lifecycle phases.
@@ -313,6 +531,78 @@ impl AgentContext {
     }
 }
 
+/// One provider-bound view composed from durable chronology and request-local
+/// live state.
+///
+/// The live state is validated separately and is discarded after the request;
+/// it never mutates or becomes part of the stored [`AgentContext`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreparedModelContext {
+    durable: AgentContext,
+    live_state: Vec<ContextBlock>,
+}
+
+impl PreparedModelContext {
+    /// Builds and validates one prepared provider context.
+    pub fn new(durable: AgentContext, live_state: Vec<ContextBlock>) -> AgentContextResult<Self> {
+        durable.validate_durable()?;
+        let prepared = Self {
+            durable,
+            live_state,
+        };
+        let ordered = prepared.ordered_blocks();
+        validate_context_placement_order(&ordered)?;
+        validate_context_semantics(&ordered)?;
+        Ok(prepared)
+    }
+
+    /// Builds a prepared context with no request-local live state.
+    pub fn from_durable(durable: AgentContext) -> AgentContextResult<Self> {
+        Self::new(durable, Vec::new())
+    }
+
+    /// Returns the immutable stored portion of the request context.
+    pub fn durable(&self) -> &AgentContext {
+        &self.durable
+    }
+
+    /// Returns the request-local live-state suffix.
+    pub fn live_state(&self) -> &[ContextBlock] {
+        &self.live_state
+    }
+
+    /// Returns the number of blocks visible to the provider.
+    pub fn len(&self) -> usize {
+        self.durable.blocks.len() + self.live_state.len()
+    }
+
+    /// Reports whether the prepared request has no model-visible blocks.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Clones the canonical provider-visible sequence without changing order.
+    pub fn to_agent_context(&self) -> AgentContext {
+        AgentContext {
+            blocks: self.ordered_blocks(),
+        }
+    }
+
+    /// Consumes the prepared view and joins its two already validated phases.
+    pub fn into_agent_context(mut self) -> AgentContext {
+        self.durable.blocks.append(&mut self.live_state);
+        self.durable
+    }
+
+    /// Clones stable/append chronology followed by the live-state suffix.
+    fn ordered_blocks(&self) -> Vec<ContextBlock> {
+        let mut blocks = Vec::with_capacity(self.len());
+        blocks.extend(self.durable.blocks.iter().cloned());
+        blocks.extend(self.live_state.iter().cloned());
+        blocks
+    }
+}
+
 /// Extracts the action id from canonical and legacy result-block labels.
 fn action_result_block_id(block: &ContextBlock) -> Option<&str> {
     block
@@ -358,6 +648,71 @@ pub fn validate_context_placement_order(blocks: &[ContextBlock]) -> AgentContext
     Ok(())
 }
 
+/// Rejects semantic, retention, and authorship combinations that would make a
+/// provider request ambiguous or move durable events into request-local state.
+pub fn validate_context_semantics(blocks: &[ContextBlock]) -> AgentContextResult<()> {
+    let mut active_user_seen = false;
+    for (index, block) in blocks.iter().enumerate() {
+        validate_context_required("context label", &block.label)?;
+        let semantic = block.semantic_kind();
+        let retention = block.retention();
+        let invalid_reason = match block.placement {
+            ContextPlacement::StablePrefix
+                if semantic != ContextSemanticKind::AmbientInstruction =>
+            {
+                Some("stable-prefix blocks must be ambient instructions")
+            }
+            ContextPlacement::ConversationAppend
+                if semantic == ContextSemanticKind::LiveState
+                    || retention == ContextRetention::RequestLocal =>
+            {
+                Some("append-only blocks cannot contain request-local live state")
+            }
+            ContextPlacement::EphemeralTail
+                if semantic != ContextSemanticKind::LiveState
+                    || retention != ContextRetention::RequestLocal =>
+            {
+                Some("ephemeral-tail blocks must be request-local live state")
+            }
+            _ => None,
+        };
+        if let Some(reason) = invalid_reason {
+            return Err(context_semantic_error(index, block, reason));
+        }
+        if block.source == ContextSourceKind::UserInstruction {
+            if block.placement != ContextPlacement::ConversationAppend
+                || retention != ContextRetention::Exact
+            {
+                return Err(context_semantic_error(
+                    index,
+                    block,
+                    "direct user instructions must be exact append-only user events",
+                ));
+            }
+            active_user_seen = true;
+        } else if active_user_seen && semantic == ContextSemanticKind::TaskPrelude {
+            return Err(context_semantic_error(
+                index,
+                block,
+                "task prelude cannot appear after the active user prompt",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Builds one detailed semantic-validation failure.
+fn context_semantic_error(index: usize, block: &ContextBlock, reason: &str) -> AgentContextError {
+    AgentContextError::new(format!(
+        "context semantic violation at block index {index}: label={:?} source={:?} placement={:?} semantic={:?} retention={:?}: {reason}",
+        block.label,
+        block.source,
+        block.placement,
+        block.semantic_kind(),
+        block.retention()
+    ))
+}
+
 /// Counts deterministic compaction performed on provider-bound context.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ModelContextCompactionReport {
@@ -400,6 +755,8 @@ pub enum ModelMessageRole {
     Assistant,
     /// Tool or action evidence.
     Tool,
+    /// Neutral controller, reference, or live context that is not user speech.
+    Context,
 }
 
 /// Provider-independent message supplied to model request rendering.
@@ -573,8 +930,9 @@ pub fn validate_context_required(field: &str, value: &str) -> AgentContextResult
 mod tests {
     use super::{
         AgentContext, AgentContextError, AgentRequestAssemblyError, AgentRequestAssemblyErrorKind,
-        ContextBlock, ContextCachePolicy, ContextSourceKind, ContextStability,
-        validate_context_required,
+        ContextBlock, ContextCachePolicy, ContextRetention, ContextSemanticKind, ContextSourceKind,
+        ContextStability, PreparedModelContext, validate_context_required,
+        validate_context_semantics,
     };
     use crate::{ActionContentBlock, ActionResult, ActionStatus, AgentPromptError};
 
@@ -660,6 +1018,193 @@ mod tests {
         assert_eq!(pane_identity.cache_policy(), ContextCachePolicy::Ineligible);
         assert!(!pane_identity.stable_prefix_eligible());
         assert!(action.recoverable_for_compaction());
+    }
+
+    /// Verifies the narrow block constructors assign the canonical semantic
+    /// and retention contracts without conflating those contracts with cache
+    /// placement or provider transport role.
+    #[test]
+    fn context_block_constructors_expose_semantic_and_retention_contracts() {
+        let stable = ContextBlock::stable_instruction(
+            ContextSourceKind::Policy,
+            "stable policy",
+            "invariant=true",
+        );
+        let skill = ContextBlock::task_prelude(
+            ContextSourceKind::SkillInstruction,
+            "active skill",
+            "follow the workflow",
+        );
+        let user = ContextBlock::user_event("user prompt", "perform the task");
+        let assistant = ContextBlock::assistant_event("assistant action", "run tests");
+        let evidence = ContextBlock::evidence_event(
+            ContextSourceKind::ActionResult,
+            "action result action-1",
+            "tests passed",
+        );
+        let reference = ContextBlock::reference_event(
+            ContextSourceKind::LocalMessage,
+            "local message",
+            "agent-%2: avoid file.rs",
+        );
+        let live = ContextBlock::live_state(
+            ContextSourceKind::RuntimeHint,
+            "runtime state",
+            "cwd=/workspace",
+        );
+
+        assert_eq!(
+            stable.semantic_kind(),
+            ContextSemanticKind::AmbientInstruction
+        );
+        assert_eq!(stable.retention(), ContextRetention::Exact);
+        assert_eq!(skill.semantic_kind(), ContextSemanticKind::TaskPrelude);
+        assert_eq!(skill.retention(), ContextRetention::Exact);
+        assert_eq!(user.semantic_kind(), ContextSemanticKind::UserEvent);
+        assert_eq!(user.retention(), ContextRetention::Exact);
+        assert_eq!(
+            assistant.semantic_kind(),
+            ContextSemanticKind::AssistantEvent
+        );
+        assert_eq!(assistant.retention(), ContextRetention::ExecutionGroup);
+        assert_eq!(evidence.semantic_kind(), ContextSemanticKind::EvidenceEvent);
+        assert_eq!(evidence.retention(), ContextRetention::ExecutionGroup);
+        assert_eq!(
+            reference.semantic_kind(),
+            ContextSemanticKind::ReferenceEvent
+        );
+        assert_eq!(reference.retention(), ContextRetention::Exact);
+        assert_eq!(live.semantic_kind(), ContextSemanticKind::LiveState);
+        assert_eq!(live.retention(), ContextRetention::RequestLocal);
+    }
+
+    /// Verifies semantic validation accepts one complete canonical request
+    /// chronology with an exact task prelude, direct user prompt, execution
+    /// group, later reference event, and final factual live state.
+    #[test]
+    fn context_semantics_accept_canonical_chronology() {
+        let blocks = vec![
+            ContextBlock::stable_instruction(ContextSourceKind::Policy, "policy", "stable"),
+            ContextBlock::task_prelude(
+                ContextSourceKind::SkillInstruction,
+                "skill",
+                "task workflow",
+            ),
+            ContextBlock::user_event("user prompt", "do the work"),
+            ContextBlock::assistant_event("assistant action", "run command"),
+            ContextBlock::evidence_event(
+                ContextSourceKind::ActionResult,
+                "action result action-1",
+                "succeeded",
+            ),
+            ContextBlock::reference_event(
+                ContextSourceKind::LocalMessage,
+                "local message",
+                "avoid overlap",
+            ),
+            ContextBlock::live_state(ContextSourceKind::RuntimeHint, "live state", "cwd=/repo"),
+        ];
+
+        validate_context_semantics(&blocks).unwrap();
+    }
+
+    /// Verifies semantic validation rejects events in the request-local tail,
+    /// non-instructions in the stable prefix, and task preludes inserted after
+    /// the active prompt, with enough diagnostics to identify the producer.
+    #[test]
+    fn context_semantics_reject_ambiguous_lifetime_and_authorship() {
+        let invalid_cases = [
+            vec![ContextBlock {
+                source: ContextSourceKind::UserInstruction,
+                placement: crate::ContextPlacement::EphemeralTail,
+                label: "late user restatement".to_string(),
+                content: "do the work".to_string(),
+            }],
+            vec![ContextBlock {
+                source: ContextSourceKind::Memory,
+                placement: crate::ContextPlacement::StablePrefix,
+                label: "memory".to_string(),
+                content: "historical note".to_string(),
+            }],
+            vec![
+                ContextBlock::user_event("user prompt", "do the work"),
+                ContextBlock::task_prelude(
+                    ContextSourceKind::SkillInstruction,
+                    "late skill",
+                    "workflow",
+                ),
+            ],
+        ];
+
+        for blocks in invalid_cases {
+            let error = validate_context_semantics(&blocks).unwrap_err();
+            assert!(error.message().contains("context semantic violation"));
+            assert!(error.message().contains("semantic="));
+            assert!(error.message().contains("retention="));
+        }
+    }
+
+    /// Verifies prepared request construction joins live state after immutable
+    /// chronology without mutating the durable context retained by the runtime.
+    #[test]
+    fn prepared_model_context_keeps_live_state_out_of_durable_context() {
+        let durable = AgentContext::new_durable(vec![
+            ContextBlock::stable_instruction(ContextSourceKind::Policy, "policy", "stable"),
+            ContextBlock::user_event("user prompt", "do the work"),
+        ])
+        .unwrap();
+        let original = durable.clone();
+        let prepared = PreparedModelContext::new(
+            durable,
+            vec![ContextBlock::live_state(
+                ContextSourceKind::RuntimeHint,
+                "runtime state",
+                "cwd=/repo",
+            )],
+        )
+        .unwrap();
+
+        assert_eq!(prepared.durable(), &original);
+        assert_eq!(prepared.live_state().len(), 1);
+        assert_eq!(prepared.len(), 3);
+        let ordered = prepared.to_agent_context();
+        assert_eq!(ordered.blocks[1].source, ContextSourceKind::UserInstruction);
+        assert_eq!(
+            ordered.blocks[2].semantic_kind(),
+            ContextSemanticKind::LiveState
+        );
+        assert!(
+            prepared
+                .durable()
+                .blocks
+                .iter()
+                .all(|block| { block.placement != crate::ContextPlacement::EphemeralTail })
+        );
+    }
+
+    /// Verifies prepared request construction rejects event-like tail blocks
+    /// and rejects durable storage that already contains request-local state.
+    #[test]
+    fn prepared_model_context_rejects_invalid_phase_ownership() {
+        let durable =
+            AgentContext::new_durable(vec![ContextBlock::user_event("user prompt", "do the work")])
+                .unwrap();
+        let event_tail = ContextBlock {
+            source: ContextSourceKind::ActionResult,
+            placement: crate::ContextPlacement::EphemeralTail,
+            label: "action result action-1".to_string(),
+            content: "succeeded".to_string(),
+        };
+        let error = PreparedModelContext::new(durable, vec![event_tail]).unwrap_err();
+        assert!(error.message().contains("ephemeral-tail blocks"));
+
+        let error = AgentContext::new_durable(vec![ContextBlock::live_state(
+            ContextSourceKind::RuntimeHint,
+            "runtime state",
+            "cwd=/repo",
+        )])
+        .unwrap_err();
+        assert!(error.message().contains("durable agent context"));
     }
 
     /// Required context validation accepts substantive values and rejects

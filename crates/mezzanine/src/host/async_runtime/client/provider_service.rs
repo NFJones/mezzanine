@@ -514,6 +514,7 @@ async fn execute_runtime_agent_provider_dispatch(
         respond_only,
         loop_turn: _,
     } = dispatch;
+    let context = context.into_agent_context();
     let routing_token_usage_by_model = std::collections::BTreeMap::new();
     let loop_allowed_actions = respond_only.then(|| {
         mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly)

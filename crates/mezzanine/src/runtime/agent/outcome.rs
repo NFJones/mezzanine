@@ -7,16 +7,13 @@
 
 use super::{
     ActionPresentationInput, ActionResult, ActionStatus, AgentAction, AgentActionPayload,
-    AgentTurnExecution, AgentTurnRecord, AgentTurnState, BlockedApprovalRequest, ContextBlock,
-    ContextSourceKind, MezError, Result, RuntimeSessionService, action_outcome_line,
-    action_rationale_repeats_visible_summary, action_summary, current_unix_seconds,
-    local_action_plan, network_action_plan, runtime_action_result_is_feedback_candidate,
-    runtime_action_type_is_shell_backed, runtime_agent_terminal_preview,
-    runtime_agent_turn_duration_display, runtime_agent_turn_state_name,
-    runtime_execution_can_feed_failure_to_model,
+    AgentTurnExecution, AgentTurnRecord, AgentTurnState, BlockedApprovalRequest, MezError, Result,
+    RuntimeSessionService, action_outcome_line, action_rationale_repeats_visible_summary,
+    action_summary, current_unix_seconds, local_action_plan, network_action_plan,
+    runtime_action_result_is_feedback_candidate, runtime_action_type_is_shell_backed,
+    runtime_agent_terminal_preview, runtime_agent_turn_duration_display,
+    runtime_agent_turn_state_name, runtime_execution_can_feed_failure_to_model,
     runtime_execution_uses_unbounded_apply_patch_recovery, runtime_failure_feedback_attempt_keys,
-    runtime_failure_feedback_evidence_guidance, runtime_failure_feedback_loop_guard_aggregate_note,
-    runtime_failure_feedback_repeat_guidance, runtime_failure_feedback_specific_guidance,
     runtime_failure_feedback_status_line, runtime_mezzanine_error_code,
     runtime_provider_audit_error_message,
 };
@@ -74,9 +71,6 @@ impl RuntimeSessionService {
             )?;
             return Ok(false);
         }
-        let pane_cwd = self
-            .pane_current_working_directory(&turn.pane_id)
-            .map(|path| path.to_string_lossy().into_owned());
         let settled_results = execution
             .action_results
             .iter()
@@ -84,44 +78,6 @@ impl RuntimeSessionService {
             .cloned()
             .collect::<Vec<_>>();
         self.commit_settled_action_results_context(&turn.turn_id, &settled_results)?;
-        let context = self
-            .agent_turn_contexts_mut()
-            .get_mut(&turn.turn_id)
-            .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        let specific_guidance =
-            runtime_failure_feedback_specific_guidance(execution, pane_cwd.as_deref())
-                .map(|guidance| format!("\n{guidance}"))
-                .unwrap_or_default();
-        let repeat_guidance =
-            runtime_failure_feedback_repeat_guidance(execution, attempt).unwrap_or_default();
-        let evidence_guidance = runtime_failure_feedback_evidence_guidance(execution)
-            .map(|guidance| format!("\n{guidance}"))
-            .unwrap_or_default();
-        let aggregate_guidance = runtime_failure_feedback_loop_guard_aggregate_note(execution)
-            .map(|guidance| format!("\n{guidance}"))
-            .unwrap_or_default();
-        let budget_header = if unbounded_apply_patch_recovery {
-            String::new()
-        } else {
-            format!(
-                "attempt={} max={}\n                 ",
-                attempt, attempt_limit
-            )
-        };
-        context.blocks.push(ContextBlock {
-            source: ContextSourceKind::RuntimeHint,
-            placement: mez_agent::ContextPlacement::EphemeralTail,
-            label: "action failure feedback".to_string(),
-            content: format!(
-                "[ephemeral action failure feedback]\n\
-                 {}One or more actions failed during this turn. Use the action result context above to correct the plan for the same user request. Do not repeat an identical failed action unless you changed the inputs or can explain why the repeat is necessary. Emit a new MAAP action batch with a visible or executable next step.{}{}{}{}",
-                budget_header,
-                evidence_guidance,
-                specific_guidance,
-                repeat_guidance,
-                aggregate_guidance
-            ),
-        });
         execution.final_turn = false;
         execution.terminal_state = AgentTurnState::Running;
         self.agent
@@ -202,12 +158,15 @@ impl RuntimeSessionService {
             && !self.agent_action_has_running_shell_transaction(turn_id, &result.action_id)
     }
 
-    /// Removes all failure-feedback attempt counters owned by one turn.
+    /// Removes all request-recovery attempt counters owned by one turn.
     pub(crate) fn clear_agent_failure_feedback_attempts_for_turn(&mut self, turn_id: &str) {
         let scoped_prefix = format!("{turn_id}:");
         self.agent
             .agent_turn_failure_feedback_attempts
             .retain(|key, _| key != turn_id && !key.starts_with(&scoped_prefix));
+        self.agent
+            .agent_turn_output_limit_recovery_attempts
+            .remove(turn_id);
     }
 
     /// Atomically commits deterministic action results to active chronology.

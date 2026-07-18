@@ -163,6 +163,16 @@ fn openai_input_message_value(message: &ModelMessage) -> serde_json::Value {
             "role": "user",
             "content": [{ "type": "input_text", "text": openai_tool_result_input_text(message) }]
         }),
+        ModelMessageRole::Context => serde_json::json!({
+            "role": "developer",
+            "content": [{
+                "type": "input_text",
+                "text": format!(
+                    "[Mezzanine context; not user-authored]\n{}",
+                    message.content
+                )
+            }]
+        }),
     }
 }
 

@@ -6,13 +6,13 @@
 //! describe queued or claimed work across async boundaries.
 
 use super::{
-    AgentContext, AgentTurnExecution, AgentTurnRecord, DeepSeekChatCompletionsProvider,
-    MemoryScope, ModelProfile, ModelRequest, OpenAiCompatibleChatCompletionsProvider,
-    OpenAiResponsesProvider, PathScopes, PermissionPolicy, ReqwestProviderHttpTransport,
-    RuntimeAutoSizingDispatch, SessionApprovalStore, SubagentScopeDeclaration,
+    AgentTurnExecution, AgentTurnRecord, DeepSeekChatCompletionsProvider, MemoryScope,
+    ModelProfile, ModelRequest, OpenAiCompatibleChatCompletionsProvider, OpenAiResponsesProvider,
+    PathScopes, PermissionPolicy, ReqwestProviderHttpTransport, RuntimeAutoSizingDispatch,
+    SessionApprovalStore, SubagentScopeDeclaration,
 };
 use crate::integrations::agent::provider::{AnthropicMessagesProvider, ClaudeCodeProvider};
-use mez_agent::{AutoSizingWorkerSelection, McpPromptTool};
+use mez_agent::{AutoSizingWorkerSelection, McpPromptTool, PreparedModelContext};
 
 /// Carries Runtime Agent Provider Task state for this subsystem.
 ///
@@ -127,7 +127,7 @@ pub struct RuntimeAgentProviderDispatch {
     ///
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
-    pub context: AgentContext,
+    pub context: PreparedModelContext,
     /// Stores the model profile value for this data structure.
     ///
     /// The field is part of the structured state exchanged across this module

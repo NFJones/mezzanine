@@ -76,7 +76,7 @@ pub fn validate_agent_prompt_required(field: &str, value: &str) -> AgentPromptRe
 pub const AGENT_PROMPT_PROFILE_NAME: &str = "default";
 
 /// Current version of the default agent prompt profile.
-pub const AGENT_PROMPT_PROFILE_VERSION: u32 = 30;
+pub const AGENT_PROMPT_PROFILE_VERSION: u32 = 31;
 
 /// Provider-neutral state used to assemble one agent system prompt.
 #[derive(Debug, Clone, PartialEq, Eq)]
