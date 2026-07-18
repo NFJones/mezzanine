@@ -8,11 +8,10 @@
 use super::DEFAULT_PANE_TERM;
 use super::{
     AsRawFd, AuxiliarySocketKind, BorrowedFd, Component, DirBuilder, DirBuilderExt, FileTypeExt,
-    MEZ_ENV_FIELD_SEPARATOR, MIN_PANE_COLUMNS, MIN_PANE_ROWS, MetadataExt, MezError, OsString,
-    PaneEnvironment, PaneId, Path, PathBuf, PermissionsExt, RawFd, Result, RuntimeEnv,
-    RuntimeLifecycleState, RuntimeRegistryUpdatePlan, SessionId, SessionRegistry, Size,
-    SocketDirectory, SocketDirectorySource, UnixListener, UnixStream, WindowId, fs, geteuid,
-    socket_peercred,
+    MEZ_ENV_FIELD_SEPARATOR, MetadataExt, MezError, OsString, PaneEnvironment, PaneId, Path,
+    PathBuf, PermissionsExt, RawFd, Result, RuntimeEnv, RuntimeLifecycleState,
+    RuntimeRegistryUpdatePlan, SessionId, SessionRegistry, SocketDirectory, SocketDirectorySource,
+    UnixListener, UnixStream, WindowId, fs, geteuid, socket_peercred,
 };
 #[cfg(test)]
 use super::{
@@ -512,21 +511,6 @@ pub fn pane_environment_with_term(
         term: term.to_string(),
     })
 }
-/// Runs the validate pane size for resize operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-pub(super) fn validate_pane_size_for_resize(size: Size) -> Result<()> {
-    if size.columns < MIN_PANE_COLUMNS || size.rows < MIN_PANE_ROWS {
-        Err(MezError::invalid_args(
-            "pane size is below the minimum pane dimensions",
-        ))
-    } else {
-        Ok(())
-    }
-}
-
 /// Runs the non empty path operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

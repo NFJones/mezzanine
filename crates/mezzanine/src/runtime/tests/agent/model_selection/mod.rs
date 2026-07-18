@@ -5,4 +5,5 @@ use super::*;
 mod catalog;
 mod frame_context;
 mod routing;
+mod routing_policy;
 mod selectors;

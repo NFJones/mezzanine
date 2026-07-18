@@ -602,11 +602,10 @@ mod paste;
 mod presentation;
 mod time;
 
-use input::{runtime_display_overlay_input_action, runtime_selector_input_action};
 use mez_mux::overlay::{
-    OverlayInputAction as RuntimeDisplayOverlayInputAction, OverlayInputOutcome,
-    SelectorInputAction as RuntimeSelectorInputAction, SelectorInputOutcome, apply_overlay_input,
-    apply_selector_input, scroll_selector as runtime_scroll_selector,
+    OverlayInputAction, OverlayInputOutcome, SelectorInputAction, SelectorInputOutcome,
+    apply_overlay_input, apply_selector_input, overlay_input_action,
+    scroll_selector as runtime_scroll_selector, selector_input_action,
     set_selector_index as runtime_set_selector_index,
 };
 #[cfg(test)]

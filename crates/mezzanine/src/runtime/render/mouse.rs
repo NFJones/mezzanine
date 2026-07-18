@@ -14,8 +14,8 @@ use super::{
     apply_selector_input, current_unix_millis, runtime_agent_shell_command_response_json,
     runtime_agent_shell_display_output, runtime_agent_shell_visibility,
     runtime_approval_policy_name, runtime_copy_position_for_view,
-    runtime_pane_agent_status_selector_layout, runtime_scroll_selector,
-    runtime_selector_input_action, runtime_set_selector_index,
+    runtime_pane_agent_status_selector_layout, runtime_scroll_selector, runtime_set_selector_index,
+    selector_input_action,
 };
 use crate::runtime::{MIN_PANE_COLUMNS, MIN_PANE_ROWS, MouseResizeDragState, PaneGeometry};
 use mez_mux::layout::range_overlap_u16;
@@ -664,7 +664,7 @@ impl RuntimeSessionService {
         let TerminalClientLoopAction::ForwardToPane(input) = action else {
             return Ok(false);
         };
-        let selector_action = runtime_selector_input_action(input);
+        let selector_action = selector_input_action(input);
         let visible_rows = self.pane_agent_status_selector_visible_rows();
         let outcome = {
             let Some(selector) = self.presentation.pane_agent_status_selector.as_mut() else {

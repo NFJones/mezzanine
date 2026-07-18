@@ -34,8 +34,10 @@ mod types;
 /// declaration makes the boundary available to the crate.
 mod window;
 
-pub use sizing::split_size;
-pub use sizing::{EVEN_GRID_TARGET_COLUMNS, EVEN_GRID_TARGET_ROWS, even_layout_minimum_pane_size};
+pub use sizing::{
+    EVEN_GRID_TARGET_COLUMNS, EVEN_GRID_TARGET_ROWS, even_layout_minimum_pane_size,
+    new_window_pane_size, split_size, validate_pane_size,
+};
 pub use tree::LayoutNode;
 pub use types::RestoredWindowLayout;
 pub use types::{
@@ -61,7 +63,7 @@ pub fn range_overlap_u16(
 }
 
 use sizing::{
-    even_grid_dimensions, percent_size_for_axis, split_dimension_evenly, split_size_with_spec,
+    even_grid_dimensions, resize_pane_size, split_dimension_evenly, split_size_with_spec,
 };
 use targeting::pane_matches_target;
 

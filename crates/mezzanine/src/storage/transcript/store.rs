@@ -26,7 +26,7 @@ use super::fs::{
 use super::types::{AgentPresentationEntry, AgentTranscriptStore};
 use mez_agent::transcript::{
     AgentSessionMetadata, ConversationSummary, TranscriptEntry, TranscriptRole,
-    summarize_conversation, validate_conversation_id,
+    bounded_summary_text, summarize_conversation, validate_conversation_id,
 };
 
 /// Defines the SESSION TRANSCRIPT FILE NAME const used by this subsystem.
@@ -1461,15 +1461,4 @@ fn transcript_entry_project_root(entry: &TranscriptEntry) -> Option<String> {
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
     })
-}
-
-/// Bounds a summary prompt preview without splitting UTF-8 code points.
-fn bounded_summary_text(text: &str, max_chars: usize) -> String {
-    let mut preview = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if preview.chars().count() <= max_chars {
-        return preview;
-    }
-    preview = preview.chars().take(max_chars.saturating_sub(1)).collect();
-    preview.push('…');
-    preview
 }

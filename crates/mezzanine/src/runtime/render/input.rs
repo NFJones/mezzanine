@@ -8,61 +8,15 @@
 use super::{
     AgentTerminalPresentationStyle, AgentTurnState, DEFAULT_READLINE_HISTORY_LIMIT,
     ReadlineOutcome, ReadlinePromptKind, Result, RuntimeAgentShellDisplayOutput,
-    RuntimeDisplayOverlayInputAction, RuntimeSelectorInputAction, RuntimeSessionService,
-    RuntimeSideEffect, SelectorCandidate, SelectorCandidateKind, SelectorExtraCandidate,
-    SelectorSurface, TerminalClientLoopAction, agent_display_lines_are_error,
-    agent_display_lines_are_low_level_status, agent_prompt_error_display_lines,
-    agent_shell_mcp_display_state_name, current_unix_millis, default_runtime_agent_prompt_input,
-    runtime_agent_shell_display_output, runtime_agent_shell_visibility,
-    runtime_command_display_overlay_content, runtime_command_display_should_open_overlay,
+    RuntimeSessionService, RuntimeSideEffect, SelectorCandidate, SelectorCandidateKind,
+    SelectorExtraCandidate, SelectorSurface, TerminalClientLoopAction,
+    agent_display_lines_are_error, agent_display_lines_are_low_level_status,
+    agent_prompt_error_display_lines, agent_shell_mcp_display_state_name, current_unix_millis,
+    default_runtime_agent_prompt_input, runtime_agent_shell_display_output,
+    runtime_agent_shell_visibility, runtime_command_display_overlay_content,
+    runtime_command_display_should_open_overlay,
 };
 use crate::runtime::service_state::RuntimeRecordBrowserOverlayState;
-
-/// Converts raw terminal input into a mux-owned display-overlay event.
-pub(super) fn runtime_display_overlay_input_action(
-    input: &[u8],
-) -> RuntimeDisplayOverlayInputAction {
-    if input == b"q" {
-        return RuntimeDisplayOverlayInputAction::Exit;
-    }
-    if input == b"/" {
-        return RuntimeDisplayOverlayInputAction::StartSearch;
-    }
-    if input == b"\x7f" || input == b"\x08" {
-        return RuntimeDisplayOverlayInputAction::EditSearchBackspace;
-    }
-    if std::str::from_utf8(input)
-        .is_ok_and(|text| !text.is_empty() && text.chars().all(|ch| !ch.is_control()))
-    {
-        return RuntimeDisplayOverlayInputAction::EditSearchText;
-    }
-    match runtime_selector_input_action(input) {
-        RuntimeSelectorInputAction::Exit => RuntimeDisplayOverlayInputAction::Exit,
-        RuntimeSelectorInputAction::Select => RuntimeDisplayOverlayInputAction::SelectActive,
-        RuntimeSelectorInputAction::Previous => RuntimeDisplayOverlayInputAction::SelectPrevious,
-        RuntimeSelectorInputAction::Next => RuntimeDisplayOverlayInputAction::SelectNext,
-        RuntimeSelectorInputAction::First => RuntimeDisplayOverlayInputAction::SelectFirst,
-        RuntimeSelectorInputAction::Last => RuntimeDisplayOverlayInputAction::SelectLast,
-        RuntimeSelectorInputAction::Ignore => match input {
-            b"\x1b[5~" => RuntimeDisplayOverlayInputAction::ScrollBy(-10),
-            b"\x1b[6~" => RuntimeDisplayOverlayInputAction::ScrollBy(10),
-            _ => RuntimeDisplayOverlayInputAction::Ignore,
-        },
-    }
-}
-
-/// Converts raw terminal input into a mux-owned selector event.
-pub(super) fn runtime_selector_input_action(input: &[u8]) -> RuntimeSelectorInputAction {
-    match input {
-        b"\x1b" | b"\x03" => RuntimeSelectorInputAction::Exit,
-        b"\r" | b"\n" => RuntimeSelectorInputAction::Select,
-        b"\x1b[A" | b"\x1bOA" | b"\x1b[D" | b"\x1bOD" => RuntimeSelectorInputAction::Previous,
-        b"\x1b[B" | b"\x1bOB" | b"\x1b[C" | b"\x1bOC" => RuntimeSelectorInputAction::Next,
-        b"\x1b[H" | b"\x1b[1~" => RuntimeSelectorInputAction::First,
-        b"\x1b[F" | b"\x1b[4~" => RuntimeSelectorInputAction::Last,
-        _ => RuntimeSelectorInputAction::Ignore,
-    }
-}
 
 impl RuntimeSessionService {
     /// Runs the apply primary prompt terminal action operation for this subsystem.
@@ -804,37 +758,5 @@ impl RuntimeSessionService {
             self.presentation.settings.terminal_agent_wrap_column_cap,
         )?;
         self.set_agent_prompt_display_output(pane_id, display_output)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Verifies the product terminal adapter translates navigation, search,
-    /// paging, cancellation, and unknown byte sequences into mux events without
-    /// performing any mux state transition itself.
-    #[test]
-    fn runtime_overlay_and_selector_input_decoding_returns_mux_events() {
-        assert_eq!(
-            runtime_selector_input_action(b"\x1b[A"),
-            RuntimeSelectorInputAction::Previous
-        );
-        assert_eq!(
-            runtime_selector_input_action(b"\x1b[6~"),
-            RuntimeSelectorInputAction::Ignore
-        );
-        assert_eq!(
-            runtime_display_overlay_input_action(b"/"),
-            RuntimeDisplayOverlayInputAction::StartSearch
-        );
-        assert_eq!(
-            runtime_display_overlay_input_action(b"\x1b[6~"),
-            RuntimeDisplayOverlayInputAction::ScrollBy(10)
-        );
-        assert_eq!(
-            runtime_display_overlay_input_action(b"\0"),
-            RuntimeDisplayOverlayInputAction::Ignore
-        );
     }
 }

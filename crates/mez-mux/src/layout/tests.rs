@@ -2,8 +2,94 @@
 
 use super::{
     IdFactory, LayoutPolicy, Pane, PaneGeometry, PaneId, PaneNavigationDirection, PaneSizeSpec,
-    PaneTitleSource, Size, SplitDirection, Window, WindowId, range_overlap_u16,
+    PaneTitleSource, ResizeAxis, ResizeDirection, Size, SplitDirection, Window, WindowId,
+    new_window_pane_size, range_overlap_u16,
 };
+
+/// Verifies new-window pane sizing resolves absolute, percentage, and
+/// directional requests before the product creates a process-backed window.
+///
+/// This keeps the arithmetic in the mux domain while allowing the product
+/// adapter to apply one already-validated size as part of its rollback-aware
+/// window and PTY creation flow.
+#[test]
+fn new_window_pane_size_resolves_every_request_shape() {
+    let window_size = Size::new(80, 24).unwrap();
+
+    assert_eq!(
+        new_window_pane_size(
+            window_size,
+            PaneSizeSpec::Cells {
+                columns: Some(60),
+                rows: None,
+            },
+        )
+        .unwrap(),
+        Size::new(60, 24).unwrap()
+    );
+    assert_eq!(
+        new_window_pane_size(
+            window_size,
+            PaneSizeSpec::Percent {
+                percent: 50,
+                axis: ResizeAxis::Both,
+            },
+        )
+        .unwrap(),
+        Size::new(40, 12).unwrap()
+    );
+    assert_eq!(
+        new_window_pane_size(
+            window_size,
+            PaneSizeSpec::Edge {
+                edge: ResizeDirection::Left,
+                amount: 10,
+            },
+        )
+        .unwrap(),
+        Size::new(70, 24).unwrap()
+    );
+}
+
+/// Verifies new-window pane sizing rejects zero and out-of-window requests
+/// before the product mutates session state or starts a PTY.
+///
+/// The failure cases protect the lower-owned validation boundary that replaced
+/// the product's duplicate percentage and directional arithmetic.
+#[test]
+fn new_window_pane_size_rejects_invalid_requests_without_effects() {
+    let window_size = Size::new(80, 24).unwrap();
+
+    let zero_percent = new_window_pane_size(
+        window_size,
+        PaneSizeSpec::Percent {
+            percent: 0,
+            axis: ResizeAxis::Columns,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(zero_percent.kind(), crate::MuxErrorKind::InvalidArgs);
+
+    let outside_window = new_window_pane_size(
+        window_size,
+        PaneSizeSpec::Percent {
+            percent: 101,
+            axis: ResizeAxis::Columns,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(outside_window.kind(), crate::MuxErrorKind::InvalidArgs);
+
+    let zero_direction = new_window_pane_size(
+        window_size,
+        PaneSizeSpec::Delta {
+            direction: ResizeDirection::Down,
+            amount: 0,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(zero_direction.kind(), crate::MuxErrorKind::InvalidArgs);
+}
 
 /// Verifies half-open range overlap uses terminal-cell geometry semantics.
 ///

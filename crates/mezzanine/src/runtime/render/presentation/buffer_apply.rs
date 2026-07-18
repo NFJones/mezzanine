@@ -17,8 +17,8 @@ use super::text::{
     agent_say_text_is_displayed_patch_block, append_styled_agent_terminal_line,
     append_styled_agent_terminal_rendered_line, bounded_agent_terminal_presentation_columns,
     command_preview_terminal_rendered_lines, fit_agent_terminal_text_width,
-    markdown_block_copy_lines, prefixed_agent_terminal_lines, render_agent_markdown_body_lines,
-    sanitized_agent_terminal_line, wrapped_prefixed_agent_terminal_lines,
+    prefixed_agent_terminal_lines, render_agent_markdown_body_lines, sanitized_agent_terminal_line,
+    wrapped_prefixed_agent_terminal_lines,
 };
 use super::{
     AGENT_COPY_SKIP_LINE, AgentAction, RichTextLine, UnicodeWidthStr, diff_section_path,
@@ -32,6 +32,7 @@ use mez_agent::{
     AGENT_OUTPUT_TEXT_PLAIN_CONTENT_TYPE, agent_output_content_type_is_diff,
     agent_output_content_type_is_markdown,
 };
+use mez_mux::render::markdown_block_copy_lines;
 
 impl RuntimeSessionService {
     /// Runs the append agent user prompt to terminal buffer operation for this subsystem.
@@ -344,6 +345,7 @@ impl RuntimeSessionService {
             rendered_lines.as_slice(),
             body_rendered_count,
             raw_copy_lines,
+            AGENT_TERMINAL_MESSAGE_PREFIX,
         );
         self.append_agent_terminal_rendered_lines_to_buffer(
             pane_id,

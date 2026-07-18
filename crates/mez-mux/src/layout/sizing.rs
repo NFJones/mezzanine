@@ -21,6 +21,44 @@ pub const EVEN_GRID_TARGET_COLUMNS: u16 = 40;
 /// preventing compact terminals from falling back to the hard pane minimum.
 pub const EVEN_GRID_TARGET_ROWS: u16 = 8;
 
+/// Resolves and validates the requested initial pane size for a new window.
+///
+/// The returned size is guaranteed to meet mux pane minimums and fit within
+/// the authoritative window. The caller remains responsible for creating the
+/// window and applying the returned size to its initial pane.
+pub fn new_window_pane_size(window_size: Size, spec: PaneSizeSpec) -> Result<Size> {
+    let size = resolve_size_spec(
+        window_size,
+        window_size,
+        spec,
+        PaneSizeErrorMessages {
+            empty_cells: None,
+            percent_positive: "percent pane creation size requires a positive percent",
+            percent_range: "percent pane creation size",
+            direction_positive: "directional pane creation size amount must be positive",
+            direction_range: "pane creation size",
+        },
+    )?;
+    validate_pane_size(size)?;
+    if size.columns > window_size.columns || size.rows > window_size.rows {
+        return Err(MezError::invalid_args(
+            "pane creation size must fit inside the new window",
+        ));
+    }
+    Ok(size)
+}
+
+/// Validates the hard minimum dimensions shared by pane resize operations.
+pub fn validate_pane_size(size: Size) -> Result<()> {
+    if size.columns < MIN_PANE_COLUMNS || size.rows < MIN_PANE_ROWS {
+        Err(MezError::invalid_args(
+            "pane size is below the minimum pane dimensions",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// Runs the split size operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in
@@ -136,25 +174,95 @@ pub fn split_size_with_spec(
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
 fn split_requested_size(original: Size, default_created: Size, spec: PaneSizeSpec) -> Result<Size> {
+    resolve_size_spec(
+        original,
+        default_created,
+        spec,
+        PaneSizeErrorMessages {
+            empty_cells: None,
+            percent_positive: "percent split size requires a positive percent",
+            percent_range: "percent split size",
+            direction_positive: "directional split size amount must be positive",
+            direction_range: "split size",
+        },
+    )
+}
+
+/// Resolves one existing-pane resize request without mutating window state.
+pub(super) fn resize_pane_size(
+    window_size: Size,
+    current: Size,
+    spec: PaneSizeSpec,
+) -> Result<Size> {
+    resolve_size_spec(
+        window_size,
+        current,
+        spec,
+        PaneSizeErrorMessages {
+            empty_cells: Some("cells resize requires columns or rows"),
+            percent_positive: "percent resize requires a positive percent",
+            percent_range: "percent resize",
+            direction_positive: "directional resize amount must be positive",
+            direction_range: "resize",
+        },
+    )
+}
+
+/// Diagnostic wording for one pane-size request surface.
+#[derive(Debug, Clone, Copy)]
+struct PaneSizeErrorMessages {
+    /// Optional rejection used when an absolute request names neither axis.
+    empty_cells: Option<&'static str>,
+    /// Diagnostic for a zero percent.
+    percent_positive: &'static str,
+    /// Prefix for percent overflow diagnostics.
+    percent_range: &'static str,
+    /// Diagnostic for a zero directional amount.
+    direction_positive: &'static str,
+    /// Prefix for directional range diagnostics.
+    direction_range: &'static str,
+}
+
+/// Resolves one pane-size specification against explicit source and fallback sizes.
+fn resolve_size_spec(
+    source: Size,
+    fallback: Size,
+    spec: PaneSizeSpec,
+    messages: PaneSizeErrorMessages,
+) -> Result<Size> {
     match spec {
-        PaneSizeSpec::Cells { columns, rows } => Size::new(
-            columns.unwrap_or(default_created.columns),
-            rows.unwrap_or(default_created.rows),
-        )
-        .map_err(MezError::from),
+        PaneSizeSpec::Cells { columns, rows } => {
+            if columns.is_none()
+                && rows.is_none()
+                && let Some(message) = messages.empty_cells
+            {
+                return Err(MezError::invalid_args(message));
+            }
+            Size::new(
+                columns.unwrap_or(fallback.columns),
+                rows.unwrap_or(fallback.rows),
+            )
+            .map_err(MezError::from)
+        }
         PaneSizeSpec::Percent { percent, axis } => percent_size_for_axis(
-            original,
-            default_created,
+            source,
+            fallback,
             percent,
             axis,
-            "percent split size requires a positive percent",
-            "percent split size",
+            messages.percent_positive,
+            messages.percent_range,
         ),
         PaneSizeSpec::Delta { direction, amount }
         | PaneSizeSpec::Edge {
             edge: direction,
             amount,
-        } => split_size_from_direction(default_created, direction, amount),
+        } => size_from_direction(
+            fallback,
+            direction,
+            amount,
+            messages.direction_positive,
+            messages.direction_range,
+        ),
     }
 }
 
@@ -187,51 +295,46 @@ pub(super) fn percent_size_for_axis(
     Size::new(columns, rows).map_err(MezError::from)
 }
 
-/// Runs the split size from direction operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn split_size_from_direction(
+/// Applies one directional amount to a size with surface-specific diagnostics.
+fn size_from_direction(
     current: Size,
     direction: ResizeDirection,
     amount: u16,
+    positive_error: &'static str,
+    range_error_prefix: &'static str,
 ) -> Result<Size> {
     if amount == 0 {
-        return Err(MezError::invalid_args(
-            "directional split size amount must be positive",
-        ));
+        return Err(MezError::invalid_args(positive_error));
     }
     match direction {
         ResizeDirection::Left => Size::new(
             current.columns.checked_sub(amount).ok_or_else(|| {
-                MezError::invalid_args("split size would reduce columns below zero")
+                MezError::invalid_args(format!(
+                    "{range_error_prefix} would reduce columns below zero"
+                ))
             })?,
             current.rows,
         )
         .map_err(MezError::from),
         ResizeDirection::Right => Size::new(
-            current
-                .columns
-                .checked_add(amount)
-                .ok_or_else(|| MezError::invalid_args("split size columns are out of range"))?,
+            current.columns.checked_add(amount).ok_or_else(|| {
+                MezError::invalid_args(format!("{range_error_prefix} columns are out of range"))
+            })?,
             current.rows,
         )
         .map_err(MezError::from),
         ResizeDirection::Up => Size::new(
             current.columns,
-            current
-                .rows
-                .checked_sub(amount)
-                .ok_or_else(|| MezError::invalid_args("split size would reduce rows below zero"))?,
+            current.rows.checked_sub(amount).ok_or_else(|| {
+                MezError::invalid_args(format!("{range_error_prefix} would reduce rows below zero"))
+            })?,
         )
         .map_err(MezError::from),
         ResizeDirection::Down => Size::new(
             current.columns,
-            current
-                .rows
-                .checked_add(amount)
-                .ok_or_else(|| MezError::invalid_args("split size rows are out of range"))?,
+            current.rows.checked_add(amount).ok_or_else(|| {
+                MezError::invalid_args(format!("{range_error_prefix} rows are out of range"))
+            })?,
         )
         .map_err(MezError::from),
     }

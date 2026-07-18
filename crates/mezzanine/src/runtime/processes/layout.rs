@@ -8,8 +8,8 @@
 
 use super::{
     EventKind, MezError, PaneDescriptor, PaneId, PaneProcessStart, PaneResizeUpdate, PaneSizeSpec,
-    Path, ResizeAxis, ResizeDirection, Result, RuntimeSessionService, RuntimeSideEffect, Size,
-    SplitDirection, WindowId, current_unix_seconds, json_escape, validate_pane_size_for_resize,
+    Path, Result, RuntimeSessionService, RuntimeSideEffect, Size, SplitDirection, WindowId,
+    current_unix_seconds, json_escape, new_window_pane_size, validate_pane_size,
 };
 
 impl RuntimeSessionService {
@@ -54,15 +54,15 @@ impl RuntimeSessionService {
             return Err(MezError::forbidden("operation requires the primary client"));
         }
         validate_runtime_start_directory(start_directory)?;
-        if let Some(spec) = requested_size {
-            validate_new_window_requested_pane_size(self.session.authoritative_size, spec)?;
-        }
+        let requested_size = requested_size
+            .map(|spec| new_window_pane_size(self.session.authoritative_size, spec))
+            .transpose()?;
         let previous_session = self.session.clone();
         let window_id = self.session.new_window(primary_client_id, name, select)?;
         self.session
             .window_created_at_unix_seconds_mut()
             .insert(window_id.to_string(), current_unix_seconds());
-        if let Some(spec) = requested_size {
+        if let Some(size) = requested_size {
             let pane_id = self
                 .session
                 .windows()
@@ -76,13 +76,13 @@ impl RuntimeSessionService {
                         "created pane not found",
                     )
                 })?;
-            let pane = self.session.resize_pane_in_window_with_spec(
+            let pane = self.session.resize_pane_in_window(
                 primary_client_id,
                 &window_id,
                 &pane_id,
-                spec,
+                size,
             )?;
-            validate_pane_size_for_resize(pane.size)?;
+            validate_pane_size(pane.size)?;
         }
         let window = self
             .session
@@ -504,7 +504,7 @@ impl RuntimeSessionService {
         if self.session.primary_client_id() != Some(primary_client_id) {
             return Err(MezError::forbidden("operation requires the primary client"));
         }
-        validate_pane_size_for_resize(size)?;
+        validate_pane_size(size)?;
         let descriptor = self.active_window_pane_descriptor(target)?;
         let target_pane_id = descriptor.pane_id.to_string();
         if self
@@ -717,7 +717,7 @@ impl RuntimeSessionService {
         size: Size,
     ) -> Result<Vec<PaneResizeUpdate>> {
         self.require_live()?;
-        validate_pane_size_for_resize(size)?;
+        validate_pane_size(size)?;
         let effects = self
             .session
             .resize_authoritative_terminal_transition(primary_client_id, size)?;
@@ -767,120 +767,4 @@ fn validate_runtime_start_directory(start_directory: Option<&Path>) -> Result<()
         )));
     }
     Ok(())
-}
-
-/// Runs the validate new window requested pane size operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn validate_new_window_requested_pane_size(window_size: Size, spec: PaneSizeSpec) -> Result<()> {
-    let size = requested_new_window_pane_size(window_size, spec)?;
-    validate_pane_size_for_resize(size)?;
-    if size.columns > window_size.columns || size.rows > window_size.rows {
-        return Err(MezError::invalid_args(
-            "pane creation size must fit inside the new window",
-        ));
-    }
-    Ok(())
-}
-
-/// Runs the requested new window pane size operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn requested_new_window_pane_size(window_size: Size, spec: PaneSizeSpec) -> Result<Size> {
-    match spec {
-        PaneSizeSpec::Cells { columns, rows } => Size::new(
-            columns.unwrap_or(window_size.columns),
-            rows.unwrap_or(window_size.rows),
-        )
-        .map_err(MezError::from),
-        PaneSizeSpec::Percent { percent, axis } => {
-            if percent == 0 {
-                return Err(MezError::invalid_args(
-                    "percent pane creation size requires a positive percent",
-                ));
-            }
-            let columns = if matches!(axis, ResizeAxis::Columns | ResizeAxis::Both) {
-                requested_percent_dimension(window_size.columns, percent, "columns")?
-            } else {
-                window_size.columns
-            };
-            let rows = if matches!(axis, ResizeAxis::Rows | ResizeAxis::Both) {
-                requested_percent_dimension(window_size.rows, percent, "rows")?
-            } else {
-                window_size.rows
-            };
-            Size::new(columns, rows).map_err(MezError::from)
-        }
-        PaneSizeSpec::Delta { direction, amount }
-        | PaneSizeSpec::Edge {
-            edge: direction,
-            amount,
-        } => requested_new_window_pane_size_from_direction(window_size, direction, amount),
-    }
-}
-
-/// Runs the requested new window pane size from direction operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn requested_new_window_pane_size_from_direction(
-    current: Size,
-    direction: ResizeDirection,
-    amount: u16,
-) -> Result<Size> {
-    if amount == 0 {
-        return Err(MezError::invalid_args(
-            "directional pane creation size amount must be positive",
-        ));
-    }
-    match direction {
-        ResizeDirection::Left => Size::new(
-            current.columns.checked_sub(amount).ok_or_else(|| {
-                MezError::invalid_args("pane creation size would reduce columns below zero")
-            })?,
-            current.rows,
-        )
-        .map_err(MezError::from),
-        ResizeDirection::Right => Size::new(
-            current.columns.checked_add(amount).ok_or_else(|| {
-                MezError::invalid_args("pane creation size columns are out of range")
-            })?,
-            current.rows,
-        )
-        .map_err(MezError::from),
-        ResizeDirection::Up => Size::new(
-            current.columns,
-            current.rows.checked_sub(amount).ok_or_else(|| {
-                MezError::invalid_args("pane creation size would reduce rows below zero")
-            })?,
-        )
-        .map_err(MezError::from),
-        ResizeDirection::Down => Size::new(
-            current.columns,
-            current.rows.checked_add(amount).ok_or_else(|| {
-                MezError::invalid_args("pane creation size rows are out of range")
-            })?,
-        )
-        .map_err(MezError::from),
-    }
-}
-
-/// Runs the requested percent dimension operation for this subsystem.
-///
-/// The function keeps parsing, state changes, and error propagation in
-/// the owning module so callers receive typed results instead of relying
-/// on duplicated control-flow logic.
-fn requested_percent_dimension(total: u16, percent: u16, axis: &'static str) -> Result<u16> {
-    let scaled = u32::from(total)
-        .saturating_mul(u32::from(percent))
-        .saturating_add(99)
-        / 100;
-    u16::try_from(scaled.max(1)).map_err(|_| {
-        MezError::invalid_args(format!("percent pane creation size {axis} is out of range"))
-    })
 }

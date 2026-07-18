@@ -10,9 +10,8 @@ use super::{
     MARKDOWN_LIGHT_NEUTRAL_FOREGROUND, RenderedClientView, RichTextLine, RichTextLineKind,
     RichTextTheme, ShellClassification, TerminalColor, TerminalStyleSpan, TerminalStyledLine,
     UiTheme, UnicodeSegmentation, UnicodeWidthStr, agent_wrap_column_cap, append_syntax_spans,
-    mux_markdown_block_copy_lines, overlay_fixed_column_style_spans, overlay_text_cells,
-    prefix_rich_text_lines, render_markdown, runtime_mezzanine_error_code, terminal_grapheme_width,
-    wrap_rich_text_lines_to_width,
+    overlay_fixed_column_style_spans, overlay_text_cells, prefix_rich_text_lines, render_markdown,
+    runtime_mezzanine_error_code, terminal_grapheme_width, wrap_rich_text_lines_to_width,
 };
 use crate::error::MezError;
 use mez_mux::render::{push_or_extend_style_span, terminal_color_luminance};
@@ -199,20 +198,6 @@ pub(crate) fn markdown_surface_is_light(ui_theme: &UiTheme) -> bool {
     terminal_color_luminance(ui_theme.colors.agent_transcript_assistant.background)
         .or_else(|| terminal_color_luminance(ui_theme.colors.frame_fill.background))
         .is_some_and(|luminance| luminance >= 140)
-}
-
-/// Builds product copy rows for a rendered Markdown block.
-pub(crate) fn markdown_block_copy_lines(
-    rendered_lines: &[RichTextLine],
-    body_rendered_count: usize,
-    raw_body_copy_lines: Vec<String>,
-) -> Vec<String> {
-    mux_markdown_block_copy_lines(
-        rendered_lines,
-        body_rendered_count,
-        raw_body_copy_lines,
-        AGENT_TERMINAL_MESSAGE_PREFIX,
-    )
 }
 
 /// Runs the command preview terminal lines operation for this subsystem.

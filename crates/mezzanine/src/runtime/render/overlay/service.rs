@@ -161,18 +161,10 @@ impl RuntimeSessionService {
                 mez_mux::record_browser::RecordBrowserFilterField::Text,
             )),
             b"s" => Some(mez_mux::record_browser::RecordBrowserAction::StartSave),
-            _ if matches!(
-                runtime_selector_input_action(input),
-                RuntimeSelectorInputAction::Select
-            ) =>
-            {
+            _ if matches!(selector_input_action(input), SelectorInputAction::Select) => {
                 Some(mez_mux::record_browser::RecordBrowserAction::OpenActive)
             }
-            _ if matches!(
-                runtime_selector_input_action(input),
-                RuntimeSelectorInputAction::Exit
-            ) =>
-            {
+            _ if matches!(selector_input_action(input), SelectorInputAction::Exit) => {
                 if let Some(frame) = record_browser.stack.pop() {
                     record_browser.command = frame.command;
                     record_browser.source = frame.source;
@@ -252,41 +244,41 @@ impl RuntimeSessionService {
             .map(record_browser_prompt_text)
             .unwrap_or_default();
         let action = if prompt_has_selector {
-            match runtime_selector_input_action(input) {
-                RuntimeSelectorInputAction::Exit => {
+            match selector_input_action(input) {
+                SelectorInputAction::Exit => {
                     mez_mux::record_browser::RecordBrowserAction::BackToList
                 }
-                RuntimeSelectorInputAction::Select => {
+                SelectorInputAction::Select => {
                     mez_mux::record_browser::RecordBrowserAction::SubmitPrompt
                 }
-                RuntimeSelectorInputAction::Previous => {
+                SelectorInputAction::Previous => {
                     mez_mux::record_browser::RecordBrowserAction::MovePromptSelection(-1)
                 }
-                RuntimeSelectorInputAction::Next => {
+                SelectorInputAction::Next => {
                     mez_mux::record_browser::RecordBrowserAction::MovePromptSelection(1)
                 }
-                RuntimeSelectorInputAction::First => {
+                SelectorInputAction::First => {
                     mez_mux::record_browser::RecordBrowserAction::SelectPromptFirst
                 }
-                RuntimeSelectorInputAction::Last => {
+                SelectorInputAction::Last => {
                     mez_mux::record_browser::RecordBrowserAction::SelectPromptLast
                 }
-                RuntimeSelectorInputAction::Ignore => return Ok(false),
+                SelectorInputAction::Ignore => return Ok(false),
             }
         } else {
-            match runtime_display_overlay_input_action(input) {
-                RuntimeDisplayOverlayInputAction::Exit => {
+            match overlay_input_action(input) {
+                OverlayInputAction::Exit => {
                     mez_mux::record_browser::RecordBrowserAction::BackToList
                 }
-                RuntimeDisplayOverlayInputAction::SelectActive => {
+                OverlayInputAction::SelectActive => {
                     mez_mux::record_browser::RecordBrowserAction::SubmitPrompt
                 }
-                RuntimeDisplayOverlayInputAction::EditSearchBackspace => {
+                OverlayInputAction::EditSearchBackspace => {
                     let mut text = prompt_text;
                     text.pop();
                     mez_mux::record_browser::RecordBrowserAction::EditPrompt(text)
                 }
-                RuntimeDisplayOverlayInputAction::EditSearchText => {
+                OverlayInputAction::EditSearchText => {
                     let Ok(input) = std::str::from_utf8(input) else {
                         return Ok(false);
                     };
@@ -294,13 +286,13 @@ impl RuntimeSessionService {
                     text.push_str(input);
                     mez_mux::record_browser::RecordBrowserAction::EditPrompt(text)
                 }
-                RuntimeDisplayOverlayInputAction::StartSearch
-                | RuntimeDisplayOverlayInputAction::SelectPrevious
-                | RuntimeDisplayOverlayInputAction::SelectNext
-                | RuntimeDisplayOverlayInputAction::SelectFirst
-                | RuntimeDisplayOverlayInputAction::SelectLast
-                | RuntimeDisplayOverlayInputAction::ScrollBy(_)
-                | RuntimeDisplayOverlayInputAction::Ignore => return Ok(false),
+                OverlayInputAction::StartSearch
+                | OverlayInputAction::SelectPrevious
+                | OverlayInputAction::SelectNext
+                | OverlayInputAction::SelectFirst
+                | OverlayInputAction::SelectLast
+                | OverlayInputAction::ScrollBy(_)
+                | OverlayInputAction::Ignore => return Ok(false),
             }
         };
         let outcome = {
@@ -395,8 +387,8 @@ impl RuntimeSessionService {
         {
             return Ok(changed);
         }
-        let action = runtime_display_overlay_input_action(input);
-        let input_text = matches!(action, RuntimeDisplayOverlayInputAction::EditSearchText)
+        let action = overlay_input_action(input);
+        let input_text = matches!(action, OverlayInputAction::EditSearchText)
             .then(|| std::str::from_utf8(input).ok())
             .flatten();
         let outcome = {
@@ -671,9 +663,8 @@ impl RuntimeSessionService {
                     return true;
                 }
                 matches!(
-                    runtime_display_overlay_input_action(input),
-                    RuntimeDisplayOverlayInputAction::Exit
-                        | RuntimeDisplayOverlayInputAction::SelectActive
+                    overlay_input_action(input),
+                    OverlayInputAction::Exit | OverlayInputAction::SelectActive
                 ) && self
                     .presentation
                     .primary_display_overlay

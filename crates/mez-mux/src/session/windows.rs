@@ -1121,23 +1121,6 @@ impl Session {
         Ok(pane)
     }
 
-    /// Resizes a pane in a specific window from a spec without changing focus.
-    pub fn resize_pane_in_window_with_spec(
-        &mut self,
-        primary_client_id: &ClientId,
-        window_id: &WindowId,
-        pane_id: &PaneId,
-        spec: PaneSizeSpec,
-    ) -> Result<Pane> {
-        self.require_primary(primary_client_id)?;
-        let index = self.window_index_or_active(Some(window_id.as_str()))?;
-        let pane = self.windows[index]
-            .resize_pane_with_spec(Some(pane_id.as_str()), spec)?
-            .clone();
-        self.record_event();
-        Ok(pane)
-    }
-
     /// Updates the primary terminal size and reapportions every window to match it.
     pub fn resize_authoritative_terminal(
         &mut self,

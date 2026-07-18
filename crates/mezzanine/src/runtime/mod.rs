@@ -175,7 +175,7 @@ use mez_mux::input::{
 };
 use mez_mux::layout::{
     MIN_PANE_COLUMNS, MIN_PANE_ROWS, PaneGeometry, PaneNavigationDirection, PaneSizeSpec,
-    ResizeAxis, ResizeDirection, Size, SplitDirection,
+    ResizeAxis, ResizeDirection, Size, SplitDirection, new_window_pane_size, validate_pane_size,
 };
 use mez_mux::paste::{PasteBuffer, PasteBuffers};
 use mez_mux::process::{
@@ -306,14 +306,6 @@ pub(crate) use persistence::RuntimePersistenceComponent;
 /// declaration makes the boundary available to the crate.
 mod processes;
 pub(crate) use processes::RuntimeProcessComponent;
-/// Exposes runtime provider registry and model preset records.
-///
-/// The nested module keeps provider configuration records out of the central
-/// runtime service state.
-/// Exposes reusable pager state for record-oriented agent-shell browsers.
-///
-/// The module keeps list/detail navigation, prompt state, and save payloads
-/// independent from issue and memory adapters.
 /// Exposes the render module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
@@ -509,7 +501,7 @@ use service_state::{
 };
 #[cfg(test)]
 use sockets::effective_uid;
-use sockets::{ensure_absolute, ensure_no_mez_separator, validate_pane_size_for_resize};
+use sockets::{ensure_absolute, ensure_no_mez_separator};
 
 pub(crate) use service_state::{
     RuntimeSnapshotControlAsyncOutcome, RuntimeSnapshotControlAsyncWork,

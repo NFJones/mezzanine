@@ -6,9 +6,9 @@
 use super::{
     IdFactory, LayoutNode, LayoutPolicy, MIN_PANE_COLUMNS, MIN_PANE_ROWS, MezError, MuxErrorKind,
     Pane, PaneGeometry, PaneId, PaneNavigationDirection, PaneSizeSpec, PaneTitleSource,
-    ResizeDirection, RestoredWindowLayout, Result, Size, SplitDirection, Window, WindowId,
-    WindowNameSource, even_grid_dimensions, pane_matches_target, percent_size_for_axis,
-    range_overlap_u16, split_dimension_evenly, split_size, split_size_with_spec,
+    RestoredWindowLayout, Result, Size, SplitDirection, Window, WindowId, WindowNameSource,
+    even_grid_dimensions, pane_matches_target, range_overlap_u16, resize_pane_size,
+    split_dimension_evenly, split_size, split_size_with_spec,
 };
 
 impl Window {
@@ -823,11 +823,7 @@ impl Window {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     pub fn resize_active_pane(&mut self, size: Size) -> Result<()> {
-        if size.columns < MIN_PANE_COLUMNS || size.rows < MIN_PANE_ROWS {
-            return Err(MezError::invalid_args(
-                "pane size is below the minimum pane dimensions",
-            ));
-        }
+        super::validate_pane_size(size)?;
         self.panes[self.active_pane_index].size = size;
         self.refresh_pane_geometries();
         Ok(())
@@ -873,11 +869,7 @@ impl Window {
     /// the owning module so callers receive typed results instead of relying
     /// on duplicated control-flow logic.
     fn resize_pane_at_index(&mut self, index: usize, size: Size) -> Result<&Pane> {
-        if size.columns < MIN_PANE_COLUMNS || size.rows < MIN_PANE_ROWS {
-            return Err(MezError::invalid_args(
-                "pane size is below the minimum pane dimensions",
-            ));
-        }
+        super::validate_pane_size(size)?;
         self.panes[index].size = size;
         self.refresh_pane_geometries();
         Ok(&self.panes[index])
@@ -934,33 +926,7 @@ impl Window {
             .get(index)
             .ok_or_else(|| MezError::invalid_state("pane index is outside the window"))?
             .size;
-        match spec {
-            PaneSizeSpec::Cells { columns, rows } => {
-                if columns.is_none() && rows.is_none() {
-                    return Err(MezError::invalid_args(
-                        "cells resize requires columns or rows",
-                    ));
-                }
-                Size::new(
-                    columns.unwrap_or(current.columns),
-                    rows.unwrap_or(current.rows),
-                )
-                .map_err(MezError::from)
-            }
-            PaneSizeSpec::Percent { percent, axis } => percent_size_for_axis(
-                self.size,
-                current,
-                percent,
-                axis,
-                "percent resize requires a positive percent",
-                "percent resize",
-            ),
-            PaneSizeSpec::Delta { direction, amount }
-            | PaneSizeSpec::Edge {
-                edge: direction,
-                amount,
-            } => size_from_direction(current, direction, amount),
-        }
+        resize_pane_size(self.size, current, spec)
     }
 
     /// Runs the set active pane index operation for this subsystem.
@@ -1505,48 +1471,6 @@ fn abs_delta(first: u32, second: u32) -> u32 {
 /// The function keeps parsing, state changes, and error propagation in
 /// the owning module so callers receive typed results instead of relying
 /// on duplicated control-flow logic.
-fn size_from_direction(current: Size, direction: ResizeDirection, amount: u16) -> Result<Size> {
-    if amount == 0 {
-        return Err(MezError::invalid_args(
-            "directional resize amount must be positive",
-        ));
-    }
-    match direction {
-        ResizeDirection::Left => Size::new(
-            current
-                .columns
-                .checked_sub(amount)
-                .ok_or_else(|| MezError::invalid_args("resize would reduce columns below zero"))?,
-            current.rows,
-        )
-        .map_err(MezError::from),
-        ResizeDirection::Right => Size::new(
-            current
-                .columns
-                .checked_add(amount)
-                .ok_or_else(|| MezError::invalid_args("resize columns are out of range"))?,
-            current.rows,
-        )
-        .map_err(MezError::from),
-        ResizeDirection::Up => Size::new(
-            current.columns,
-            current
-                .rows
-                .checked_sub(amount)
-                .ok_or_else(|| MezError::invalid_args("resize would reduce rows below zero"))?,
-        )
-        .map_err(MezError::from),
-        ResizeDirection::Down => Size::new(
-            current.columns,
-            current
-                .rows
-                .checked_add(amount)
-                .ok_or_else(|| MezError::invalid_args("resize rows are out of range"))?,
-        )
-        .map_err(MezError::from),
-    }
-}
-
 /// Runs the inferred pane rects operation for this subsystem.
 ///
 /// The function keeps parsing, state changes, and error propagation in

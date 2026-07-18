@@ -691,6 +691,13 @@ available in the requested direction.
 Mezzanine MUST support deterministic pane indexes within a window and window
 indexes within a session.
 
+Deterministic pane-size resolution and minimum/bounds validation for new
+windows, splits, and resizes MUST be owned by `mez-mux`. The product runtime
+MUST pass explicit window and pane dimensions to that policy and apply the
+returned size while retaining ownership of start-directory filesystem checks,
+session rollback, PTY creation and resize effects, persistence, auditing, and
+render invalidation.
+
 ### 6.4 Frames
 
 Mezzanine MUST provide framing per window.
@@ -1677,12 +1684,12 @@ labels and values before being shown in terminal overlays or pane-local agent
 command displays.
 
 Product-independent command-overlay and anchored-selector state snapshots,
-navigation, search, viewport clamping, accept/cancel behavior, and typed effect
-intents MUST be owned by `mez-mux`. The product runtime MUST remain the adapter
-that translates terminal input into mux events and executes returned opaque
-close, select, or command intents. Mux transition reduction MUST NOT call
-product runtime services or import product configuration, persistence, or audit
-state.
+raw terminal-input decoding, navigation, search, viewport clamping,
+accept/cancel behavior, and typed effect intents MUST be owned by `mez-mux`.
+The product runtime MUST supply terminal input bytes and execute returned
+opaque close, select, or command intents. Mux decoding and transition reduction
+MUST NOT call product runtime services or import product configuration,
+persistence, or audit state.
 
 ### 7.4 Agent Shell Toggle
 

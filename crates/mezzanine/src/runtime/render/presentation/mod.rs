@@ -21,9 +21,7 @@ use mez_mux::render::{
 };
 use mez_mux::render::{
     MARKDOWN_DARK_MUTED_FOREGROUND, MARKDOWN_DARK_NEUTRAL_FOREGROUND,
-    MARKDOWN_LIGHT_NEUTRAL_FOREGROUND, RichTextTheme,
-    markdown_block_copy_lines as mux_markdown_block_copy_lines, prefix_rich_text_lines,
-    render_markdown,
+    MARKDOWN_LIGHT_NEUTRAL_FOREGROUND, RichTextTheme, prefix_rich_text_lines, render_markdown,
 };
 use mez_mux::render::{
     SyntaxHighlighter, SyntaxTheme, SyntaxThemePalette, syntax_highlighter_for_extension,

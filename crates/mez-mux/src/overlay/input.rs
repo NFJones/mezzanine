@@ -58,6 +58,54 @@ pub enum SelectorInputAction {
     Ignore,
 }
 
+/// Decodes raw terminal input into one modal-overlay action.
+///
+/// Printable UTF-8 is reported as search-editor input without retaining the
+/// bytes. The caller supplies the original text to `apply_overlay_input`, so
+/// the mux reducer remains independent from product transport buffering.
+pub fn overlay_input_action(input: &[u8]) -> OverlayInputAction {
+    if input == b"q" {
+        return OverlayInputAction::Exit;
+    }
+    if input == b"/" {
+        return OverlayInputAction::StartSearch;
+    }
+    if input == b"\x7f" || input == b"\x08" {
+        return OverlayInputAction::EditSearchBackspace;
+    }
+    if std::str::from_utf8(input)
+        .is_ok_and(|text| !text.is_empty() && text.chars().all(|ch| !ch.is_control()))
+    {
+        return OverlayInputAction::EditSearchText;
+    }
+    match selector_input_action(input) {
+        SelectorInputAction::Exit => OverlayInputAction::Exit,
+        SelectorInputAction::Select => OverlayInputAction::SelectActive,
+        SelectorInputAction::Previous => OverlayInputAction::SelectPrevious,
+        SelectorInputAction::Next => OverlayInputAction::SelectNext,
+        SelectorInputAction::First => OverlayInputAction::SelectFirst,
+        SelectorInputAction::Last => OverlayInputAction::SelectLast,
+        SelectorInputAction::Ignore => match input {
+            b"\x1b[5~" => OverlayInputAction::ScrollBy(-10),
+            b"\x1b[6~" => OverlayInputAction::ScrollBy(10),
+            _ => OverlayInputAction::Ignore,
+        },
+    }
+}
+
+/// Decodes raw terminal input into one anchored-selector action.
+pub fn selector_input_action(input: &[u8]) -> SelectorInputAction {
+    match input {
+        b"\x1b" | b"\x03" => SelectorInputAction::Exit,
+        b"\r" | b"\n" => SelectorInputAction::Select,
+        b"\x1b[A" | b"\x1bOA" | b"\x1b[D" | b"\x1bOD" => SelectorInputAction::Previous,
+        b"\x1b[B" | b"\x1bOB" | b"\x1b[C" | b"\x1bOC" => SelectorInputAction::Next,
+        b"\x1b[H" | b"\x1b[1~" => SelectorInputAction::First,
+        b"\x1b[F" | b"\x1b[4~" => SelectorInputAction::Last,
+        _ => SelectorInputAction::Ignore,
+    }
+}
+
 /// Typed effect or state result from one overlay action.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OverlayInputOutcome {
@@ -416,6 +464,26 @@ mod tests {
             dismiss_on_any_input: false,
             record_browser: None,
         }
+    }
+
+    /// Verifies terminal bytes decode to mux-owned navigation, search, paging,
+    /// cancellation, and unknown-input actions before product state is read.
+    #[test]
+    fn overlay_and_selector_input_decoding_is_product_independent() {
+        assert_eq!(
+            selector_input_action(b"\x1b[A"),
+            SelectorInputAction::Previous
+        );
+        assert_eq!(
+            selector_input_action(b"\x1b[6~"),
+            SelectorInputAction::Ignore
+        );
+        assert_eq!(overlay_input_action(b"/"), OverlayInputAction::StartSearch);
+        assert_eq!(
+            overlay_input_action(b"\x1b[6~"),
+            OverlayInputAction::ScrollBy(10)
+        );
+        assert_eq!(overlay_input_action(b"\0"), OverlayInputAction::Ignore);
     }
 
     /// Verifies selector transitions clamp empty and boundary state, keep the

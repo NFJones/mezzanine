@@ -86,8 +86,12 @@ fn conversation_directory(entries: &[TranscriptEntry]) -> Option<String> {
     cwd
 }
 
-/// Bounds a prompt preview without splitting UTF-8 code points.
-fn bounded_summary_text(text: &str, max_chars: usize) -> String {
+/// Collapses whitespace and bounds a conversation prompt preview without
+/// splitting UTF-8 code points.
+///
+/// Callers use this when incrementally maintaining product persistence indexes
+/// so sidecars and summaries share the canonical agent transcript projection.
+pub fn bounded_summary_text(text: &str, max_chars: usize) -> String {
     let mut preview = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if preview.chars().count() <= max_chars {
         return preview;

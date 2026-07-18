@@ -12,7 +12,8 @@ mod state;
 pub use input::{
     OverlayInputAction, OverlayInputOutcome, SelectorInputAction, SelectorInputOutcome,
     apply_overlay_input, apply_selector_input, keep_selector_active_visible, move_selector,
-    scroll_selector, selector_step_index, set_selector_index,
+    overlay_input_action, scroll_selector, selector_input_action, selector_step_index,
+    set_selector_index,
 };
 pub use interaction::{
     OVERLAY_ACTIVE_SELECTOR, OVERLAY_INACTIVE_SELECTOR, apply_overlay_scroll_delta,
