@@ -4,7 +4,7 @@
 //! blocked, cancelled, and concurrency-limited agent work. The scheduler field
 //! remains private to `RuntimeAgentComponent`.
 
-use super::{AgentScheduler, Result, RuntimeSessionService, ScheduledWork};
+use super::{AgentScheduler, ProviderRetryScheduler, Result, RuntimeSessionService, ScheduledWork};
 
 impl RuntimeSessionService {
     /// Returns the agent scheduler for read-only diagnostics and prompt context.
@@ -16,6 +16,12 @@ impl RuntimeSessionService {
     #[cfg(test)]
     pub(crate) fn agent_scheduler_mut(&mut self) -> &mut AgentScheduler {
         &mut self.agent.agent_scheduler
+    }
+
+    /// Returns mutable provider-retry reducer access to crate-local tests.
+    #[cfg(test)]
+    pub(crate) fn provider_retry_scheduler_mut(&mut self) -> &mut ProviderRetryScheduler {
+        &mut self.agent.provider_retry_scheduler
     }
 
     /// Applies the configured global agent concurrency limit.
@@ -40,8 +46,9 @@ impl RuntimeSessionService {
         self.agent.agent_scheduler.cancel(turn_id).is_ok()
     }
 
-    /// Restores an empty scheduler with the repository default limit.
+    /// Restores empty work and provider-retry schedulers with default policy.
     pub(crate) fn reset_agent_scheduler(&mut self) {
         self.agent.agent_scheduler = AgentScheduler::with_default_limit();
+        self.agent.provider_retry_scheduler = ProviderRetryScheduler::default();
     }
 }

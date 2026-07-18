@@ -424,7 +424,9 @@ pub use routing::{
     ProviderRoutingResult,
 };
 pub use scheduler::{
-    AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, RunningWork, ScheduledWork, ScheduledWorkKind,
+    AgentScheduler, DEFAULT_MAX_CONCURRENT_AGENTS, ProviderRetryDispatchResult,
+    ProviderRetryEffect, ProviderRetryEvent, ProviderRetryRecovery, ProviderRetryRecoveryResult,
+    ProviderRetryScheduler, ProviderRetryTransition, RunningWork, ScheduledWork, ScheduledWorkKind,
     SchedulerCancellation, SchedulerError, SchedulerErrorKind, SchedulerResult, SchedulerSnapshot,
     runnable_agent_ids,
 };

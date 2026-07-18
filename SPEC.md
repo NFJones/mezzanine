@@ -4578,6 +4578,13 @@ Rate-limit, transient overload or temporary unavailability responses, and
 retryable transport failures MUST use the runtime retry scheduler's bounded
 exponential backoff policy. The default policy MUST attempt up to five retries
 for one active turn before surfacing the provider failure as terminal.
+Provider retry attempt, phase, stale-event, eligibility, and backoff decisions
+MUST be owned by the provider-independent `mez-agent` scheduler. The product
+runtime MUST interpret recovery, timer, and dispatch effects using its runtime
+services and MUST feed observed recovery, timer, dispatch, cancellation, and
+turn-settlement events back to that scheduler. A pure scheduler transition MUST
+NOT claim that a product timer, provider dispatch, persistence write, or
+recovery mutation succeeded.
 
 Every completed turn MUST persist enough state to resume the conversation,
 audit actions, and explain the final result after detach and reattach.

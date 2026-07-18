@@ -10,7 +10,10 @@ use crate::integrations::agent::provider::{
     ClaudeCodeProvider, anthropic_provider_from_auth_store_with_provider_options,
 };
 use crate::runtime::{RuntimeSideEffect, RuntimeTimerKey, RuntimeTimerKind, RuntimeTransition};
-use mez_agent::{DEFAULT_PROVIDER_RETRY_POLICY, ProviderErrorRetryClass};
+use mez_agent::{
+    ProviderErrorRetryClass, ProviderRetryDispatchResult, ProviderRetryEffect, ProviderRetryEvent,
+    ProviderRetryRecovery, ProviderRetryRecoveryResult, ProviderRetryTransition,
+};
 
 #[cfg(test)]
 use super::AgentTurnExecution;
@@ -30,40 +33,18 @@ use super::{
 use crate::integrations::agent::provider::ModelProvider;
 
 impl RuntimeSessionService {
-    /// Returns whether one provider failure remains eligible for retry.
-    pub(crate) fn agent_provider_failure_should_retry(
-        &self,
-        turn_id: &str,
-        retry_class: ProviderErrorRetryClass,
-    ) -> bool {
-        DEFAULT_PROVIDER_RETRY_POLICY
-            .should_retry(self.agent_provider_retry_attempt(turn_id), retry_class)
-    }
-
-    /// Returns the recorded retry attempt for one provider turn.
-    pub(crate) fn agent_provider_retry_attempt(&self, turn_id: &str) -> u32 {
-        self.agent
-            .agent_provider_retry_attempts
-            .get(turn_id)
-            .copied()
-            .unwrap_or(0)
-    }
-
-    /// Records the current retry attempt for one provider turn.
-    pub(crate) fn set_agent_provider_retry_attempt(&mut self, turn_id: String, attempt: u32) {
-        self.agent
-            .agent_provider_retry_attempts
-            .insert(turn_id, attempt);
-    }
-
     /// Clears retry-attempt state for one provider turn.
     pub(crate) fn clear_agent_provider_retry_attempt(&mut self, turn_id: &str) {
-        self.agent.agent_provider_retry_attempts.remove(turn_id);
+        self.agent
+            .provider_retry_scheduler
+            .apply(ProviderRetryEvent::TurnSettled {
+                turn_id: turn_id.to_string(),
+            });
     }
 
     /// Returns provider turns whose progress is represented by retry policy state.
     pub(crate) fn agent_provider_retry_turn_ids(&self) -> impl Iterator<Item = &String> {
-        self.agent.agent_provider_retry_attempts.keys()
+        self.agent.provider_retry_scheduler.turn_ids()
     }
 
     /// Builds the desired provider-poll timer transition for an external timer adapter.
@@ -103,48 +84,115 @@ impl RuntimeSessionService {
         retry_class: ProviderErrorRetryClass,
         error: &MezError,
     ) -> Result<Option<RuntimeTransition>> {
-        if !self.agent_provider_failure_should_retry(turn_id, retry_class) {
-            return Ok(None);
-        }
-        let attempt = self.agent_provider_retry_attempt(turn_id).saturating_add(1);
-        let delay_ms = DEFAULT_PROVIDER_RETRY_POLICY.delay_ms(attempt);
-        let recovered = match retry_class {
-            ProviderErrorRetryClass::ContextLimit => self
+        let decision =
+            self.agent
+                .provider_retry_scheduler
+                .apply(ProviderRetryEvent::FailureObserved {
+                    turn_id: turn_id.to_string(),
+                    retry_class,
+                });
+        let ProviderRetryTransition::Effect(ProviderRetryEffect::Recover {
+            recovery,
+            attempt,
+            max_attempts,
+            delay_ms,
+            ..
+        }) = decision
+        else {
+            return match decision {
+                ProviderRetryTransition::Terminal => Ok(None),
+                ProviderRetryTransition::Ignored
+                | ProviderRetryTransition::Applied
+                | ProviderRetryTransition::Abandoned => Ok(Some(RuntimeTransition::default())),
+                ProviderRetryTransition::Effect(_) => Err(MezError::invalid_state(
+                    "provider retry failure produced an unexpected scheduler effect",
+                )),
+            };
+        };
+        let recovered = match recovery {
+            ProviderRetryRecovery::ContextLimit => self
                 .recover_agent_provider_context_limit_failure(agent_id, turn_id, error, attempt)?,
-            ProviderErrorRetryClass::OutputLimit => {
+            ProviderRetryRecovery::OutputLimit => {
                 self.recover_agent_provider_output_limit_failure(agent_id, turn_id, error, attempt)?
             }
-            ProviderErrorRetryClass::RetryableTransport => true,
-            _ => return Ok(None),
+            ProviderRetryRecovery::None => true,
         };
         if !recovered {
-            self.clear_agent_provider_retry_attempt(turn_id);
+            self.agent
+                .provider_retry_scheduler
+                .apply(ProviderRetryEvent::RecoveryCompleted {
+                    turn_id: turn_id.to_string(),
+                    attempt,
+                    result: ProviderRetryRecoveryResult::Failed,
+                });
             return Ok(None);
         }
-        let applied = self.record_agent_provider_retry_event(
+        let applied = match self.record_agent_provider_retry_event(
             agent_id,
             turn_id,
             error,
             attempt,
-            DEFAULT_PROVIDER_RETRY_POLICY.max_attempts,
+            max_attempts,
             delay_ms,
-        )?;
+        ) {
+            Ok(applied) => applied,
+            Err(error) => {
+                self.agent
+                    .provider_retry_scheduler
+                    .apply(ProviderRetryEvent::RecoveryCompleted {
+                        turn_id: turn_id.to_string(),
+                        attempt,
+                        result: ProviderRetryRecoveryResult::TurnUnavailable,
+                    });
+                return Err(error);
+            }
+        };
         if !applied {
-            self.clear_agent_provider_retry_attempt(turn_id);
-            return Ok(Some(RuntimeTransition::default()));
+            let completion =
+                self.agent
+                    .provider_retry_scheduler
+                    .apply(ProviderRetryEvent::RecoveryCompleted {
+                        turn_id: turn_id.to_string(),
+                        attempt,
+                        result: ProviderRetryRecoveryResult::TurnUnavailable,
+                    });
+            return match completion {
+                ProviderRetryTransition::Abandoned | ProviderRetryTransition::Ignored => {
+                    Ok(Some(RuntimeTransition::default()))
+                }
+                _ => Err(MezError::invalid_state(
+                    "unavailable provider retry turn produced an invalid scheduler transition",
+                )),
+            };
         }
-        self.set_agent_provider_retry_attempt(turn_id.to_string(), attempt);
-        Ok(Some(RuntimeTransition {
-            applied: true,
-            side_effects: vec![RuntimeSideEffect::ScheduleTimer {
-                key: RuntimeTimerKey::new(
-                    RuntimeTimerKind::ProviderRetry,
-                    turn_id,
-                    u64::from(attempt),
-                ),
+        let completion =
+            self.agent
+                .provider_retry_scheduler
+                .apply(ProviderRetryEvent::RecoveryCompleted {
+                    turn_id: turn_id.to_string(),
+                    attempt,
+                    result: ProviderRetryRecoveryResult::Ready,
+                });
+        match completion {
+            ProviderRetryTransition::Effect(ProviderRetryEffect::ScheduleTimer {
+                turn_id,
+                attempt,
                 delay_ms,
-            }],
-        }))
+            }) => Ok(Some(RuntimeTransition {
+                applied: true,
+                side_effects: vec![RuntimeSideEffect::ScheduleTimer {
+                    key: RuntimeTimerKey::new(
+                        RuntimeTimerKind::ProviderRetry,
+                        turn_id,
+                        u64::from(attempt),
+                    ),
+                    delay_ms,
+                }],
+            })),
+            _ => Err(MezError::invalid_state(
+                "provider retry recovery produced an invalid scheduler transition",
+            )),
+        }
     }
 
     /// Builds a runtime provider dispatch from one configured provider API.
@@ -702,7 +750,7 @@ impl RuntimeSessionService {
     pub(crate) fn queue_agent_provider_retry_task(
         &mut self,
         turn_id: &str,
-        attempt: u64,
+        attempt: u32,
     ) -> Result<bool> {
         let Some(turn) = self
             .agent_turn_ledger()
@@ -749,13 +797,72 @@ impl RuntimeSessionService {
         turn_id: &str,
         attempt: u64,
     ) -> Result<RuntimeTransition> {
-        if !self.queue_agent_provider_retry_task(turn_id, attempt)? {
-            self.clear_agent_provider_retry_attempt(turn_id);
+        let Ok(attempt) = u32::try_from(attempt) else {
             return Ok(RuntimeTransition::default());
+        };
+        let decision =
+            self.agent
+                .provider_retry_scheduler
+                .apply(ProviderRetryEvent::TimerElapsed {
+                    turn_id: turn_id.to_string(),
+                    attempt,
+                });
+        let ProviderRetryTransition::Effect(ProviderRetryEffect::DispatchProvider { .. }) =
+            decision
+        else {
+            return match decision {
+                ProviderRetryTransition::Ignored | ProviderRetryTransition::Abandoned => {
+                    Ok(RuntimeTransition::default())
+                }
+                _ => Err(MezError::invalid_state(
+                    "provider retry timer produced an invalid scheduler transition",
+                )),
+            };
+        };
+        let queued = match self.queue_agent_provider_retry_task(turn_id, attempt) {
+            Ok(queued) => queued,
+            Err(error) => {
+                self.agent
+                    .provider_retry_scheduler
+                    .apply(ProviderRetryEvent::DispatchCompleted {
+                        turn_id: turn_id.to_string(),
+                        attempt,
+                        result: ProviderRetryDispatchResult::TurnUnavailable,
+                    });
+                return Err(error);
+            }
+        };
+        let completion =
+            self.agent
+                .provider_retry_scheduler
+                .apply(ProviderRetryEvent::DispatchCompleted {
+                    turn_id: turn_id.to_string(),
+                    attempt,
+                    result: if queued {
+                        ProviderRetryDispatchResult::Ready
+                    } else {
+                        ProviderRetryDispatchResult::TurnUnavailable
+                    },
+                });
+        if !queued {
+            return match completion {
+                ProviderRetryTransition::Abandoned | ProviderRetryTransition::Ignored => {
+                    Ok(RuntimeTransition::default())
+                }
+                _ => Err(MezError::invalid_state(
+                    "unavailable provider retry dispatch produced an invalid scheduler transition",
+                )),
+            };
         }
-        let task = self
-            .runtime_agent_provider_task(turn_id)
-            .ok_or_else(|| MezError::invalid_state("queued provider retry has no dispatch task"))?;
+        if completion != ProviderRetryTransition::Applied {
+            return Err(MezError::invalid_state(
+                "provider retry dispatch produced an invalid scheduler transition",
+            ));
+        }
+        let task = self.runtime_agent_provider_task(turn_id).ok_or_else(|| {
+            self.clear_agent_provider_retry_attempt(turn_id);
+            MezError::invalid_state("queued provider retry has no dispatch task")
+        })?;
         let agent_id = AgentId::opaque(task.agent_id).ok_or_else(|| {
             MezError::invalid_state("queued provider retry has an invalid agent id")
         })?;

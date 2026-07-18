@@ -106,6 +106,7 @@ mod subagents;
 mod trace;
 mod turn_state;
 
+use mez_agent::ProviderRetryScheduler;
 use mez_agent::messaging::task_state_name as runtime_task_state_suffix;
 
 /// Owns application-side agent execution state and lifecycle invariants.
@@ -117,6 +118,8 @@ use mez_agent::messaging::task_state_name as runtime_task_state_suffix;
 pub(crate) struct RuntimeAgentComponent {
     /// Fair scheduling state for queued, running, and blocked agent turns.
     agent_scheduler: AgentScheduler,
+    /// Provider retry attempts and effect-boundary phase owned by `mez-agent`.
+    provider_retry_scheduler: ProviderRetryScheduler,
     /// Panes whose visible agent session is scoped to a child shell.
     agent_subshell_panes: BTreeSet<String>,
     /// Interrupted subshells that must exit with a line-oriented command.
@@ -170,8 +173,6 @@ pub(crate) struct RuntimeAgentComponent {
     agent_pre_shell_hook_completions: BTreeSet<RuntimeAgentPreShellHookCompletion>,
     /// Effective provider model profile retained for each active turn.
     agent_turn_model_profiles: BTreeMap<String, ModelProfile>,
-    /// Provider retry attempt number retained by turn id.
-    agent_provider_retry_attempts: BTreeMap<String, u32>,
     /// Provider turns queued for worker dispatch.
     pending_agent_provider_tasks: BTreeSet<String>,
     /// Provider turns claimed by workers but not yet settled.

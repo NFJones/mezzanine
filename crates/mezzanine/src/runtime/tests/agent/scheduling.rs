@@ -250,6 +250,37 @@ fn runtime_config_reload_applies_agent_scheduler_limit() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies terminal turn cleanup feeds settlement into the provider-independent
+/// provider retry reducer, so a cancelled turn cannot remain reachable only
+/// through a stale actor timer.
+#[test]
+fn runtime_turn_settlement_clears_provider_retry_scheduler_state() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let turn = service
+        .start_agent_prompt_turn("%1", "inspect retry cleanup")
+        .unwrap();
+    assert!(matches!(
+        service.provider_retry_scheduler_mut().apply(
+            mez_agent::ProviderRetryEvent::FailureObserved {
+                turn_id: turn.turn_id.clone(),
+                retry_class: mez_agent::ProviderErrorRetryClass::RetryableTransport,
+            }
+        ),
+        mez_agent::ProviderRetryTransition::Effect(mez_agent::ProviderRetryEffect::Recover { .. })
+    ));
+    assert_eq!(service.agent_provider_retry_turn_ids().count(), 1);
+
+    service
+        .finish_agent_turn("%1", &turn.turn_id, AgentTurnState::Interrupted)
+        .unwrap();
+
+    assert_eq!(service.agent_provider_retry_turn_ids().count(), 0);
+}
+
 /// Verifies that a live config reload starts queued agent work when the new
 /// scheduler limit makes that work runnable. Updating the limit without
 /// draining newly available scheduler capacity would leave prompt turns queued
