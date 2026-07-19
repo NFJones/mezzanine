@@ -86,6 +86,323 @@ fn runtime_provider_execution_identity_is_request_scoped_and_idempotent() {
     );
 }
 
+/// Verifies response-local MAAP ordinals become distinct causal action ids
+/// across consecutive provider completions in one logical turn.
+///
+/// Every real provider response is parsed independently and therefore starts
+/// its local numbering at `action-1`. The first continuation below owns one
+/// action, the second owns a mixed `action-1`/`action-2` batch, and the third
+/// owns one `action-1`. This covers both the partial-registration failure and
+/// its single-id stable-owner mismatch sibling while proving late results still
+/// settle under the assistant execution that produced them.
+#[test]
+fn runtime_provider_action_ids_are_scoped_to_each_execution() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "continue through repeated local action ids")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+
+    let build_execution = |sequence: usize, action_count: usize| {
+        let actions = (1..=action_count)
+            .map(|ordinal| mez_agent::AgentAction {
+                id: format!("action-{ordinal}"),
+                rationale: format!("execution {sequence} action {ordinal}"),
+                payload: mez_agent::AgentActionPayload::IssueQuery {
+                    kind: None,
+                    state: Some("open".to_string()),
+                    text: Some(format!("execution-{sequence}-action-{ordinal}")),
+                    limit: Some(1),
+                    refresh: false,
+                },
+            })
+            .collect::<Vec<_>>();
+        let action_results = actions
+            .iter()
+            .map(|action| {
+                mez_agent::ActionResult::succeeded(
+                    &turn,
+                    action,
+                    vec![format!("execution {sequence} result")],
+                    Some(
+                        serde_json::json!({
+                            "action_id": action.id,
+                            "nested": {"original_action_id": action.id},
+                        })
+                        .to_string(),
+                    ),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut request = runtime_model_request_fixture(&turn.turn_id);
+        request.messages.push(mez_agent::ModelMessage {
+            role: mez_agent::ModelMessageRole::Context,
+            source: ContextSourceKind::CommittedEvidence,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            content: format!("[settled execution {sequence}]\ncontinue"),
+        });
+        mez_agent::AgentTurnExecution {
+            request,
+            response: mez_agent::ModelResponse {
+                provider: "openai".to_string(),
+                model: "test".to_string(),
+                raw_text: format!("provider execution {sequence}"),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Vec::new(),
+                action_batch: Some(mez_agent::MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: format!("provider execution {sequence}"),
+                    thought: None,
+                    turn_id: turn.turn_id.clone(),
+                    agent_id: turn.agent_id.clone(),
+                    actions,
+                    final_turn: false,
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results,
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        }
+    };
+
+    let mut first = build_execution(1, 1);
+    service
+        .scope_provider_execution_action_ids(&turn, &mut first)
+        .unwrap();
+    let scoped_first_replay = first.clone();
+    service
+        .scope_provider_execution_action_ids(&turn, &mut first)
+        .unwrap();
+    assert_eq!(first, scoped_first_replay);
+    let first_id = first.response.action_batch.as_ref().unwrap().actions[0]
+        .id
+        .clone();
+    assert!(first_id.starts_with("action-1~mez~"));
+    assert_eq!(first.action_results[0].action_id, first_id);
+    let first_structured: serde_json::Value = serde_json::from_str(
+        first.action_results[0]
+            .structured_content_json
+            .as_deref()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(first_structured["action_id"], first_id);
+    assert_eq!(first_structured["nested"]["original_action_id"], first_id);
+    service
+        .append_agent_execution_chronology(&turn, &first)
+        .unwrap();
+
+    let mut second = build_execution(2, 2);
+    service
+        .scope_provider_execution_action_ids(&turn, &mut second)
+        .unwrap();
+    let second_ids = second
+        .response
+        .action_batch
+        .as_ref()
+        .unwrap()
+        .actions
+        .iter()
+        .map(|action| action.id.clone())
+        .collect::<Vec<_>>();
+    assert_ne!(second_ids[0], first_id);
+    service
+        .append_agent_execution_chronology(&turn, &second)
+        .unwrap();
+
+    let mut third = build_execution(3, 1);
+    service
+        .scope_provider_execution_action_ids(&turn, &mut third)
+        .unwrap();
+    let third_id = third.response.action_batch.as_ref().unwrap().actions[0]
+        .id
+        .clone();
+    assert_ne!(third_id, first_id);
+    assert_ne!(third_id, second_ids[0]);
+    service
+        .append_agent_execution_chronology(&turn, &third)
+        .unwrap();
+
+    let mut settled_results = first.action_results.clone();
+    settled_results.extend(second.action_results.clone());
+    settled_results.extend(third.action_results.clone());
+    assert_eq!(
+        service
+            .commit_settled_action_results_context(&turn.turn_id, &settled_results)
+            .unwrap(),
+        4
+    );
+
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    for (execution, scoped_ids) in [
+        (&first, vec![first_id]),
+        (&second, second_ids),
+        (&third, vec![third_id]),
+    ] {
+        let rationale = execution
+            .response
+            .action_batch
+            .as_ref()
+            .unwrap()
+            .rationale
+            .as_str();
+        let assistant = context
+            .chronology()
+            .iter()
+            .find(|event| {
+                event.block().source == ContextSourceKind::TranscriptAssistant
+                    && event.block().content.contains(rationale)
+            })
+            .unwrap();
+        for scoped_id in scoped_ids {
+            let result = context
+                .chronology()
+                .iter()
+                .find(|event| event.block().label == format!("action result {scoped_id}"))
+                .unwrap();
+            assert_eq!(result.execution_group_id(), assistant.execution_group_id());
+        }
+    }
+}
+
+/// Verifies asynchronous provider-completion ingress scopes repeated
+/// response-local action ids before it registers causal ownership.
+///
+/// The first progress response settles and queues continuation in the same
+/// logical turn. Applying another response whose parser-local id is again
+/// `action-1` must retain two distinct assistant/result groups without exposing
+/// either ownership validator error.
+#[tokio::test]
+async fn runtime_provider_application_accepts_reused_local_action_id_on_continuation() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "apply two continued provider responses")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let build_execution = |sequence: usize| {
+        let action = mez_agent::AgentAction {
+            id: "action-1".to_string(),
+            rationale: format!("report provider progress {sequence}"),
+            payload: mez_agent::AgentActionPayload::Say {
+                status: mez_agent::SayStatus::Progress,
+                text: format!("provider progress {sequence}"),
+                content_type: "text/plain; charset=utf-8".to_string(),
+            },
+        };
+        let mut request = runtime_model_request_fixture(&turn.turn_id);
+        request.messages.push(mez_agent::ModelMessage {
+            role: mez_agent::ModelMessageRole::Context,
+            source: ContextSourceKind::CommittedEvidence,
+            placement: mez_agent::ContextPlacement::ConversationAppend,
+            content: format!("[continued provider request {sequence}]\ncontinue"),
+        });
+        mez_agent::AgentTurnExecution {
+            request,
+            response: mez_agent::ModelResponse {
+                provider: "openai".to_string(),
+                model: "test".to_string(),
+                raw_text: format!("provider progress response {sequence}"),
+                usage: Default::default(),
+                latest_request_usage: None,
+                quota_usage: Vec::new(),
+                action_batch: Some(mez_agent::MaapBatch {
+                    protocol: "maap/1".to_string(),
+                    rationale: format!("provider progress execution {sequence}"),
+                    thought: None,
+                    turn_id: turn.turn_id.clone(),
+                    agent_id: turn.agent_id.clone(),
+                    actions: vec![action.clone()],
+                    final_turn: false,
+                }),
+                provider_transcript_events: Vec::new(),
+            },
+            latest_response_usage: Default::default(),
+            routing_token_usage_by_model: std::collections::BTreeMap::new(),
+            action_results: vec![mez_agent::ActionResult::succeeded(
+                &turn,
+                &action,
+                vec![format!("provider progress {sequence}")],
+                None,
+            )],
+            final_turn: false,
+            terminal_state: AgentTurnState::Running,
+        }
+    };
+    let agent_id = AgentId::opaque(turn.agent_id.clone()).unwrap();
+    assert!(
+        service
+            .apply_agent_provider_completed_event(&agent_id, &turn.turn_id, build_execution(1))
+            .await
+            .unwrap()
+    );
+    let first = service
+        .agent_turn_executions()
+        .get(&turn.turn_id)
+        .cloned()
+        .unwrap();
+    assert!(
+        service
+            .apply_agent_provider_completed_event(&agent_id, &turn.turn_id, build_execution(2))
+            .await
+            .unwrap()
+    );
+    let second = service
+        .agent_turn_executions()
+        .get(&turn.turn_id)
+        .cloned()
+        .unwrap();
+    let first_id = &first.response.action_batch.as_ref().unwrap().actions[0].id;
+    let second_id = &second.response.action_batch.as_ref().unwrap().actions[0].id;
+    assert!(first_id.starts_with("action-1~mez~"));
+    assert!(second_id.starts_with("action-1~mez~"));
+    assert_ne!(first_id, second_id);
+
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    for (sequence, action_id) in [(1, first_id), (2, second_id)] {
+        let assistant = context
+            .chronology()
+            .iter()
+            .find(|event| {
+                event.block().source == ContextSourceKind::TranscriptAssistant
+                    && event
+                        .block()
+                        .content
+                        .contains(&format!("provider progress execution {sequence}"))
+            })
+            .unwrap();
+        let result = context
+            .chronology()
+            .iter()
+            .find(|event| event.block().label == format!("action result {action_id}"))
+            .unwrap();
+        assert_eq!(result.execution_group_id(), assistant.execution_group_id());
+    }
+}
+
 /// Verifies a late result keeps its original execution owner even after
 /// steering and another assistant response advance chronology.
 ///

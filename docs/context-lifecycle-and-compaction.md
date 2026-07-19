@@ -114,10 +114,15 @@ exactly once to `ConversationAppend`:
 Assistant output, provider-native tool events, and their settled results share
 one causal execution owner derived from the accepted request/response identity.
 Exact replay is idempotent, but equal response text from different consumed
-request histories creates different owners. Every synthesized action id is
-registered to its owner, and a result commits to that owner even if another
-assistant response has since arrived. They remain complete and ordered during
-persistence and compaction. An owner may straddle steering when
+request histories creates different owners. Provider parsers restart local
+action numbering for each response, so runtime acceptance adds a compact suffix
+to those parser-generated ordinals, derived from that causal execution owner,
+before an action reaches audit, approval, dispatch, or settlement. Explicitly
+unique runtime-owned action ids do not need another namespace. Every resulting
+turn-unique action id is registered to its owner, and a result commits to that
+owner even if another assistant response has since arrived. They remain
+complete and ordered during persistence and compaction. An owner may straddle
+steering when
 already-dispatched work settles later; that fact does not permit compaction to
 gather records across the barrier.
 

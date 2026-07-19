@@ -168,10 +168,12 @@ pub(crate) struct RuntimeAgentComponent {
     agent_turn_output_limit_recovery_attempts: BTreeMap<String, u32>,
     /// Exceptional provider interaction selected for each active turn.
     agent_turn_interaction_kinds: BTreeMap<String, ModelInteractionKind>,
-    /// Causal execution group keyed by turn and locally synthesized action id.
+    /// Causal execution group keyed by turn and execution-scoped action id.
     ///
-    /// Late results use this ownership map instead of attaching to whichever
-    /// assistant execution happens to be newest when they settle.
+    /// Provider response-local action ordinals receive a stable execution
+    /// suffix before registration. Late results use this ownership map instead
+    /// of attaching to whichever assistant execution happens to be newest when
+    /// they settle.
     agent_execution_groups_by_turn:
         BTreeMap<String, BTreeMap<String, mez_agent::ContextExecutionGroupId>>,
     /// DeepSeek-native tool-call ids keyed by turn and causal execution group.

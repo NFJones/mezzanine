@@ -11,8 +11,69 @@ use sha2::{Digest, Sha256};
 
 const CAPABILITY_DECISION_LABEL: &str = "controller capability decision";
 const CAPABILITY_DECISION_PREFIX: &str = "[controller capability decision]\n";
+const PROVIDER_ACTION_EXECUTION_SEPARATOR: &str = "~mez~";
+const PROVIDER_ACTION_EXECUTION_DIGEST_LEN: usize = 16;
 
 impl RuntimeSessionService {
+    /// Replaces response-local MAAP action ordinals with execution-scoped ids.
+    ///
+    /// Provider parsers deliberately synthesize ordinal ids such as `action-1`
+    /// for each independently parsed response. Those ordinals are not unique
+    /// across provider continuations in one logical turn. This boundary adds a
+    /// compact suffix derived from the accepted request/response execution
+    /// identity before traces, approvals, dispatch, or result settlement can
+    /// retain an ambiguous id.
+    ///
+    /// Explicit runtime-owned ids are already unique and remain unchanged.
+    /// Existing execution suffixes are replaced rather than nested, making an
+    /// exact replay of the same execution idempotent. Preplanned results for
+    /// parser-generated actions are remapped together with their actions so
+    /// every downstream adapter sees one identity.
+    pub(crate) fn scope_provider_execution_action_ids(
+        &self,
+        turn: &AgentTurnRecord,
+        execution: &mut AgentTurnExecution,
+    ) -> Result<()> {
+        let identity_content = provider_execution_identity_content(execution);
+        let group_id = provider_execution_group_id(turn, execution, &identity_content)?;
+        let execution_digest = provider_execution_action_digest(&group_id)?;
+        let Some(batch) = execution.response.action_batch.as_mut() else {
+            return Ok(());
+        };
+
+        let mut remapped_ids = BTreeMap::new();
+        for action in &mut batch.actions {
+            let original_id = action.id.clone();
+            let local_id = provider_execution_local_action_id(&original_id).to_string();
+            if !provider_response_local_action_id(&local_id) {
+                continue;
+            }
+            let scoped_id =
+                format!("{local_id}{PROVIDER_ACTION_EXECUTION_SEPARATOR}{execution_digest}");
+            remapped_ids.insert(original_id, scoped_id.clone());
+            remapped_ids.insert(local_id, scoped_id.clone());
+            action.id = scoped_id;
+        }
+        for result in &mut execution.action_results {
+            let local_id = provider_execution_local_action_id(&result.action_id).to_string();
+            let Some(scoped_id) = remapped_ids
+                .get(&result.action_id)
+                .or_else(|| remapped_ids.get(&local_id))
+                .cloned()
+            else {
+                continue;
+            };
+            let original_id = std::mem::replace(&mut result.action_id, scoped_id.clone());
+            if let Some(structured_content) = result.structured_content_json.as_mut() {
+                remap_structured_action_ids(structured_content, &original_id, &scoped_id)?;
+                if original_id != local_id {
+                    remap_structured_action_ids(structured_content, &local_id, &scoped_id)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Appends settled controller decisions and the provider response to a
     /// running turn before any action results are observed.
     ///
@@ -74,8 +135,9 @@ impl RuntimeSessionService {
             new_decisions.push(content.to_string());
         }
 
+        let identity_content = provider_execution_identity_content(execution);
+        let group_id = provider_execution_group_id(turn, execution, &identity_content)?;
         let content = assistant_context_content_for_execution(execution);
-        let group_id = provider_execution_group_id(turn, execution, &content)?;
         let action_ids = execution
             .response
             .action_batch
@@ -184,6 +246,113 @@ impl RuntimeSessionService {
                 .insert(group_id, provider_tool_call_ids);
         }
         Ok(())
+    }
+}
+
+/// Returns assistant content with execution suffixes removed for identity hashing.
+///
+/// Action ids contain a digest of the provider execution that owns them. The
+/// digest cannot itself depend on those suffixed ids, so identity hashing uses
+/// the parser-local ordinal while durable assistant context retains the fully
+/// scoped id shown by action results and audit records.
+fn provider_execution_identity_content(execution: &AgentTurnExecution) -> String {
+    let mut canonical = execution.clone();
+    if let Some(batch) = canonical.response.action_batch.as_mut() {
+        for action in &mut batch.actions {
+            action.id = provider_execution_local_action_id(&action.id).to_string();
+        }
+    }
+    assistant_context_content_for_execution(&canonical)
+}
+
+/// Returns the parser-local portion of an execution-scoped action id.
+fn provider_execution_local_action_id(action_id: &str) -> &str {
+    let Some((local_id, suffix)) = action_id.rsplit_once(PROVIDER_ACTION_EXECUTION_SEPARATOR)
+    else {
+        return action_id;
+    };
+    if !provider_response_local_action_id(local_id)
+        || suffix.len() != PROVIDER_ACTION_EXECUTION_DIGEST_LEN
+        || !suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return action_id;
+    }
+    local_id
+}
+
+/// Returns whether an id is the ordinal synthesized by provider parsing.
+fn provider_response_local_action_id(action_id: &str) -> bool {
+    let Some(ordinal) = action_id.strip_prefix("action-") else {
+        return false;
+    };
+    !ordinal.is_empty()
+        && ordinal.bytes().all(|byte| byte.is_ascii_digit())
+        && ordinal.bytes().any(|byte| byte != b'0')
+}
+
+/// Returns the compact digest suffix used to namespace one execution's actions.
+fn provider_execution_action_digest(group_id: &ContextExecutionGroupId) -> Result<&str> {
+    let digest = group_id
+        .as_str()
+        .rsplit_once(":provider-response:")
+        .map(|(_, digest)| digest)
+        .ok_or_else(|| {
+            MezError::invalid_state("provider execution group is missing its response digest")
+        })?;
+    if digest.len() < PROVIDER_ACTION_EXECUTION_DIGEST_LEN {
+        return Err(MezError::invalid_state(
+            "provider execution group response digest is too short",
+        ));
+    }
+    Ok(&digest[digest.len() - PROVIDER_ACTION_EXECUTION_DIGEST_LEN..])
+}
+
+/// Rewrites action-identity fields in one structured result payload.
+fn remap_structured_action_ids(
+    structured_content: &mut String,
+    original_id: &str,
+    scoped_id: &str,
+) -> Result<()> {
+    let mut value: serde_json::Value = serde_json::from_str(structured_content).map_err(|error| {
+        MezError::invalid_state(format!(
+            "action result structured content is not valid JSON while scoping its identity: {error}"
+        ))
+    })?;
+    remap_structured_action_id_value(&mut value, original_id, scoped_id);
+    *structured_content = serde_json::to_string(&value).map_err(|error| {
+        MezError::invalid_state(format!(
+            "action result structured content could not be serialized after scoping its identity: {error}"
+        ))
+    })?;
+    Ok(())
+}
+
+/// Recursively rewrites explicit action-id fields without changing payload text.
+fn remap_structured_action_id_value(
+    value: &mut serde_json::Value,
+    original_id: &str,
+    scoped_id: &str,
+) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                remap_structured_action_id_value(value, original_id, scoped_id);
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            for (name, value) in fields {
+                if matches!(name.as_str(), "action_id" | "original_action_id")
+                    && value.as_str() == Some(original_id)
+                {
+                    *value = serde_json::Value::String(scoped_id.to_string());
+                } else {
+                    remap_structured_action_id_value(value, original_id, scoped_id);
+                }
+            }
+        }
+        _ => {}
     }
 }
 

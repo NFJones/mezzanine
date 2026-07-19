@@ -2996,9 +2996,13 @@ events plus terminal action results share one causal execution owner. That
 owner MUST be stable for one accepted provider request/response pair: exact
 replay is idempotent, while identical response text produced from different
 consumed request chronology MUST create distinct owners. Every synthesized
-action id MUST be registered to that owner before execution, and each terminal
-result MUST commit to the registered owner rather than whichever response is
-most recent when the result arrives. If an
+action id MUST be unique within the logical turn. Because provider response
+parsers restart local action ordinals for every response, the runtime MUST
+scope each local ordinal to the stable accepted provider-execution owner before
+audit, presentation, approval, dispatch, or result generation. The
+execution-scoped action id MUST be registered to that owner before execution,
+and each terminal result MUST commit to the registered owner rather than
+whichever response is most recent when the result arrives. If an
 exact user or message event arrives after dispatch and before a result settles,
 the owner MAY occur on both sides of that barrier; chronology MUST remain
 unchanged and compaction MUST NOT gather those fragments into one replacement
@@ -4024,10 +4028,16 @@ approval, the shell `summary` MAY serve as the model-authored action-local
 reason when a separate per-action rationale is absent.
 
 Mezzanine MUST synthesize a stable turn-local action identity for every action
-before producing action results or audit records. Provider-facing schemas MUST
-NOT require or advertise model-supplied action identifiers. If compatibility
-parsing encounters an `id` field in model output, Mezzanine MUST ignore it and
-use the locally synthesized identity instead. Future action types that need to
+before producing action results or audit records. A response-local ordinal such
+as `action-1` is not by itself a turn-local identity: before the accepted action
+leaves provider execution, Mezzanine MUST namespace that ordinal with the
+stable identity of the accepted request/response pair. Exact replay MUST
+produce the same namespaced action identity, while a later provider execution
+in the same turn MUST produce a different identity even when its local ordinal
+and action payload are identical. Provider-facing schemas MUST NOT require or
+advertise model-supplied action identifiers. If compatibility parsing
+encounters an `id` field in model output, Mezzanine MUST ignore it and use the
+locally synthesized identity instead. Future action types that need to
 reference another model-proposed action MUST define explicit action data for
 that reference rather than relying on model-generated bookkeeping identifiers.
 
