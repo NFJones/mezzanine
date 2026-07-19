@@ -241,20 +241,6 @@ default_model = "claude-fable-5"
 # anthropic_version = "2023-06-01"
 # default_max_tokens = 4096
 
-[providers.claude-code]
-kind = "claude-code"
-api = "claude-code"
-auth_profile = "default"
-# Claude Code uses authentication and transport configured outside Mezzanine.
-# Mezzanine passes the selected model id and reasoning effort to the local Claude Code CLI.
-models = [
-    "claude-fable-5",
-    "claude-opus-4-8",
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5-20251001",
-]
-default_model = "claude-fable-5"
-
 # Example local OpenAI-compatible Chat Completions backend, such as LM Studio.
 # Uncomment and select this provider from a model profile when a local server is
 # listening on the configured base URL. Missing stored auth metadata is allowed;
@@ -335,34 +321,6 @@ fallback_profiles = []
 
 [model_profiles.anthropic-fast.provider_options]
 prompt_caching = "enabled"
-
-[model_profiles.claude-code-default]
-provider = "claude-code"
-model = "claude-fable-5"
-reasoning_profile = "high"
-latency_preference = "default"
-multimodal_required = false
-context_window_tokens = 1000000
-max_output_tokens = 128000
-safety_tier = "high"
-privacy_tier = "standard"
-residency = "global"
-approval_policy = "ask"
-fallback_profiles = []
-
-[model_profiles.claude-code-fast]
-provider = "claude-code"
-model = "claude-sonnet-4-6"
-reasoning_profile = "medium"
-latency_preference = "fast"
-multimodal_required = false
-context_window_tokens = 1000000
-max_output_tokens = 128000
-safety_tier = "high"
-privacy_tier = "standard"
-residency = "global"
-approval_policy = "ask"
-fallback_profiles = []
 
 [model_profiles.default]
 provider = "openai"
@@ -499,14 +457,6 @@ auto_sizing_small_model_profile = "anthropic-fast"
 auto_sizing_medium_model_profile = "anthropic-default"
 auto_sizing_large_model_profile = "anthropic-default"
 allowed_reasoning_efforts = ["high"]
-
-[model_presets.claude-code]
-default_model_profile = "claude-code-fast"
-auto_sizing_router_model_profile = "claude-code-fast"
-auto_sizing_small_model_profile = "claude-code-fast"
-auto_sizing_medium_model_profile = "claude-code-default"
-auto_sizing_large_model_profile = "claude-code-default"
-allowed_reasoning_efforts = ["medium", "high"]
 
 [permissions]
 approval_policy = "ask"

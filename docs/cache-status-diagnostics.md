@@ -65,7 +65,7 @@ provider projection. The compact OpenAI request-state narrowing block is the
 first volatile contribution when no earlier live state exists.
 
 Anthropic cache breakpoints close after the latest immutable message and before
-neutral live state. OpenAI Chat, DeepSeek, and Claude Code lack the same
+neutral live state. OpenAI Chat and DeepSeek lack the same
 explicit breakpoint controls, but their provider-projection digest and ordered
 per-block roles still expose a late insertion, false user projection, or
 duplicate context block.

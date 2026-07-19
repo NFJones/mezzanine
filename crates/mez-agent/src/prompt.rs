@@ -195,7 +195,6 @@ pub fn assemble_agent_system_prompt(
     let provider_fragment = match profile.provider.as_deref() {
         Some("deepseek") => Some(("15. DeepSeek Provider", "deepseek.md")),
         Some("anthropic") => Some(("15. Anthropic Provider", "anthropic.md")),
-        Some("claude-code") => Some(("15. Claude Code Provider", "claude_code.md")),
         _ => None,
     };
     if let Some((title, path)) = provider_fragment {
@@ -289,7 +288,6 @@ mod tests {
         fn provider_fragment<'a>(&'a self, path: &str) -> AgentPromptResult<&'a str> {
             Ok(match path {
                 "anthropic.md" => "anthropic contract",
-                "claude_code.md" => "claude code contract",
                 "deepseek.md" => "deepseek contract",
                 _ => {
                     return Err(AgentPromptError::invalid_state(
@@ -331,7 +329,7 @@ mod tests {
     #[test]
     fn prompt_assembly_selects_provider_and_subagent_scope() {
         let mut profile =
-            AgentPromptProfile::default_for("agent-1", "%1").with_provider("claude-code");
+            AgentPromptProfile::default_for("agent-1", "%1").with_provider("anthropic");
         profile.cooperation_mode = Some("isolated".to_string());
         profile.read_scopes = vec!["src".to_string()];
 
@@ -340,8 +338,7 @@ mod tests {
         assert!(prompt.contains("10. Subagents\nsubagent contract Subagent scope:"));
         assert!(prompt.contains("cooperation_mode=isolated"));
         assert!(prompt.contains("Read scopes: src; Write scopes: none."));
-        assert!(prompt.contains("15. Claude Code Provider\nclaude code contract"));
-        assert!(!prompt.contains("anthropic contract"));
+        assert!(prompt.contains("15. Anthropic Provider\nanthropic contract"));
         assert!(!prompt.contains("deepseek contract"));
     }
 

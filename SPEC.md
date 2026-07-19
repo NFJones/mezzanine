@@ -2776,7 +2776,7 @@ entry MUST support `kind`, `api`, `auth_profile`, `base_url` when applicable,
 identify the provider brand/default profile, while `api` MUST identify the wire
 API compatibility implementation. Supported API compatibility identifiers are
 `openai-responses`, `openai-chat-completions`, `anthropic-messages`,
-`deepseek-chat-completions`, and `claude-code` compatibility mode.
+`deepseek-chat-completions`.
 The schema version 7 to version 8 migration MUST
 backfill missing provider `api` values from historical provider-kind defaults:
 `openai` to `openai-responses`, `openai-compatible` to
@@ -2822,28 +2822,13 @@ The `anthropic-messages` adapter MUST use Anthropic Messages semantics, send
 Anthropic Console API-key credentials with `x-api-key`, send an
 `anthropic-version` header, map profile `max_output_tokens` to Anthropic wire
 `max_tokens`, and carry MAAP action batches through one Anthropic-native
-`tool_use` block named `submit_maap_action_batch`. Claude subscription or
-Claude Code browser-login credentials MUST NOT be sent to the
-`anthropic-messages` endpoint. Anthropic provider options MAY include
+`tool_use` block named `submit_maap_action_batch`. Anthropic provider options MAY include
 `anthropic_version`, `reasoning_effort`, and a fallback
 `default_max_tokens`/`max_tokens` value; the adapter MUST serialize non-empty
 reasoning effort as `output_config.effort` and MUST reject OpenAI-compatible
 and DeepSeek-only options such as `maap_output`, `structured_output`,
 `tool_choice`, `parallel_tool_calls`, `output_token_field`, `maap_surface`,
 `prompt_cache_retention`, and `thinking`.
-The `claude-code` adapter MUST bind normal prompt-cacheable conversation turns
-to a stable Claude Code session id, resume existing Claude Code conversations
-with `--resume`, create the session with `--session-id` only when Claude
-reports the resume target is missing, pass selected reasoning efforts to the
-CLI with `--effort` using the local Claude Code levels `low`, `medium`,
-`high`, `xhigh`, and `max`, request the active MAAP batch schema with
-`--json-schema` for MAAP turns, prefer Claude Code `structured_output` when
-present, and fall back to fenced `mezzanine-action-json` parsing when the CLI
-does not return structured data. Auto-sizing and other requests without a
-Mezzanine prompt-cache session or lineage id MUST remain one-shot Claude Code
-print invocations. Claude Code request construction MUST iterate canonical
-conversation events in their stored order and MUST NOT relocate the latest user
-message after assistant actions, tool results, steering, or other evidence.
 The `deepseek-chat-completions` adapter MUST keep DeepSeek wire-format and
 policy behaviors scoped to the DeepSeek dialect.
 Completions and Responses compatibility adapters MUST treat missing provider
@@ -2963,8 +2948,7 @@ placement and semantic metadata rather than infer lifecycle from sources,
 labels, or text. OpenAI Responses MAY keep a stable action-schema superset and
 append one compact neutral request-state block that identifies the current
 interaction kind and allowed subset. Providers with dynamic tool schemas MUST
-not duplicate complete action or MCP descriptions in text. All provider
-families, including auto-sizing and Claude Code, MUST preserve canonical order
+not duplicate complete action or MCP descriptions in text. All provider families, including auto-sizing, MUST preserve canonical order
 and MUST NOT manufacture a late user restatement.
 
 Capability continuation, MAAP repair, output-limit retry, failure summary,
@@ -6505,9 +6489,7 @@ by default when an interactive terminal is available. It MUST also provide an
 explicit device-code ChatGPT sign-in option for out-of-band authentication and
 an explicit API-key option for users or environments that require API keys,
 including Anthropic Console API-key credentials for the `anthropic-messages`
-provider API. Claude subscription access, when supported, MUST be modeled as a
-separate Claude Code-backed authentication and provider mode rather than as an
-Anthropic Console API key.
+provider API.
 Noninteractive API-key setup MUST require an explicit API-key method and an
 out-of-band secret source such as an API-key file.
 Browser-based and device-code ChatGPT sign-in MUST request only OAuth scopes
@@ -6558,14 +6540,7 @@ verbose or debug view. Status output MAY report coarse non-secret fields such as
 authenticated state, provider identity, credential kind, selected model profile,
 and token expiration metadata.
 
-Mezzanine MUST distinguish Anthropic Console API-key credentials from Claude
-Code or Claude subscription browser-auth credentials. Anthropic Console API keys
-MUST be used only with `anthropic-messages` unless a user explicitly configures
-a compatible API-key endpoint override. Claude Code subscription credentials
-MUST be used only by a Claude Code-backed provider mode that relies on Claude
-Code for browser login, token refresh, subscription entitlement checks, and
-provider transport; Mezzanine MUST NOT convert Claude subscription credentials
-into `x-api-key` requests.
+Anthropic Console API keys MUST be used only with `anthropic-messages` unless a user explicitly configures a compatible API-key endpoint override.
 
 Mezzanine MUST distinguish direct OpenAI API-key credentials from ChatGPT
 browser/device-code OAuth credentials. OpenAI ChatGPT browser/device-code login
@@ -8225,9 +8200,7 @@ Provider-backed browser authentication does not imply that the provider exposes
 the same model-catalog endpoint as API-key authentication. Mezzanine MUST NOT
 derive or call undocumented model-catalog URLs from provider response endpoints;
 when a browser-authenticated provider lacks an explicit catalog endpoint,
-`/model list` MUST use configured provider models instead. A Claude Code-backed
-provider mode MUST use configured models unless Claude Code exposes a documented
-model-catalog mechanism for the adapter to call.
+`/model list` MUST use configured provider models instead.
 
 When provider metadata exposes supported reasoning levels, `/model` MUST
 validate the requested reasoning level against that metadata. When provider

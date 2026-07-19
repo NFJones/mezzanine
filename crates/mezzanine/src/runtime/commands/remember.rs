@@ -7,14 +7,14 @@
 
 use super::compaction;
 use super::{
-    AgentActionPayload, AgentContext, AgentShellCommandOutcome, AllowedActionSet,
-    ClaudeCodeProvider, ConfigFormat, ConfigMutation, ConfigMutationOperation, ConfigMutationValue,
-    ConfigPaths, ConfigScope, ContextSourceKind, DEFAULT_PROVIDER_TIMEOUT_MS, MemoryRecord,
-    MemoryScope, MemorySource, MezError, ModelInteractionKind, ModelMessage, ModelMessageRole,
-    ModelProfile, ModelRequest, ModelResponse, ProviderApiCompatibility,
-    ReqwestProviderHttpTransport, Result, RuntimeAgentProviderDispatchProvider,
-    RuntimeAgentRememberDispatch, RuntimeAgentRememberTask, RuntimeSessionService,
-    current_unix_seconds, deepseek_chat_completions_provider_from_auth_store_with_provider_options,
+    AgentActionPayload, AgentContext, AgentShellCommandOutcome, AllowedActionSet, ConfigFormat,
+    ConfigMutation, ConfigMutationOperation, ConfigMutationValue, ConfigPaths, ConfigScope,
+    ContextSourceKind, DEFAULT_PROVIDER_TIMEOUT_MS, MemoryRecord, MemoryScope, MemorySource,
+    MezError, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile, ModelRequest,
+    ModelResponse, ProviderApiCompatibility, ReqwestProviderHttpTransport, Result,
+    RuntimeAgentProviderDispatchProvider, RuntimeAgentRememberDispatch, RuntimeAgentRememberTask,
+    RuntimeSessionService, current_unix_seconds,
+    deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     discover_project_root, json_escape,
     openai_compatible_provider_from_auth_store_with_provider_options,
     openai_responses_provider_from_auth_store_with_provider_options, parse_slash_command,
@@ -806,10 +806,6 @@ impl RuntimeSessionService {
                     ReqwestProviderHttpTransport,
                 )
                 .map(RuntimeAgentProviderDispatchProvider::Anthropic)
-            }
-            ProviderApiCompatibility::ClaudeCode => {
-                ClaudeCodeProvider::new(&model_profile.provider, DEFAULT_PROVIDER_TIMEOUT_MS)
-                    .map(RuntimeAgentProviderDispatchProvider::ClaudeCode)
             }
         };
         match provider_result {

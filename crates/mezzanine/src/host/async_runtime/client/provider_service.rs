@@ -531,9 +531,6 @@ async fn execute_runtime_agent_provider_dispatch(
             RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
                 provider.send_request_async(&request).await?
             }
-            RuntimeAgentProviderDispatchProvider::ClaudeCode(provider) => {
-                provider.send_request_async(&request).await?
-            }
         };
         return Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
             super::AgentTurnExecution {
@@ -586,15 +583,6 @@ async fn execute_runtime_agent_provider_dispatch(
                     )
                     .await?
                 }
-                RuntimeAgentProviderDispatchProvider::ClaudeCode(provider) => {
-                    runtime_execute_auto_sizing_with_async_provider(
-                        provider,
-                        auto_sizing,
-                        &turn,
-                        &context,
-                    )
-                    .await?
-                }
             }
         } else if auto_sizing.router_profile.provider == provider.provider_id() {
             match &provider {
@@ -626,15 +614,6 @@ async fn execute_runtime_agent_provider_dispatch(
                     .await?
                 }
                 RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
-                    runtime_execute_auto_sizing_with_async_provider(
-                        provider,
-                        auto_sizing,
-                        &turn,
-                        &context,
-                    )
-                    .await?
-                }
-                RuntimeAgentProviderDispatchProvider::ClaudeCode(provider) => {
                     runtime_execute_auto_sizing_with_async_provider(
                         provider,
                         auto_sizing,
@@ -783,38 +762,6 @@ async fn execute_runtime_agent_provider_dispatch(
                 execution,
             )))
         }
-        RuntimeAgentProviderDispatchProvider::ClaudeCode(provider) => {
-            let mut ledger = AgentTurnLedger::new(false);
-            let runner = AgentTurnRunner {
-                provider: &provider,
-                model_profile,
-                permissions: &crate::security::permissions::ProductPermissionPlanning::new(
-                    &permission_policy,
-                    &session_approvals,
-                    path_scopes.as_ref(),
-                ),
-                subagent_scope: subagent_scope.as_ref(),
-                subagent_scope_enforcement: &mez_agent::DEFAULT_SUBAGENT_SCOPE_ENFORCEMENT,
-                available_mcp_servers,
-                available_mcp_tools: &available_mcp_tools,
-                memory_actions_enabled,
-                issue_actions_enabled,
-            };
-            let execution = runner
-                .run_turn_async_ref_with_allowed_actions(
-                    &mut ledger,
-                    turn.clone(),
-                    &context,
-                    allowed_actions.clone(),
-                    interaction_kind,
-                )
-                .await?;
-            let mut execution = execute_provider_worker_network_actions(&turn, execution).await?;
-            execution.routing_token_usage_by_model = routing_token_usage_by_model;
-            Ok(RuntimeAgentProviderWorkerOutcome::Execution(Box::new(
-                execution,
-            )))
-        }
     }
 }
 
@@ -906,14 +853,6 @@ async fn execute_runtime_agent_compaction_dispatch(
             )
             .await
         }
-        RuntimeAgentProviderDispatchProvider::ClaudeCode(provider) => {
-            runtime_send_compaction_request_with_output_limit_retry(
-                &provider,
-                task.request,
-                &task.model_profile,
-            )
-            .await
-        }
     }
 }
 
@@ -933,9 +872,6 @@ async fn execute_runtime_agent_remember_dispatch(
             provider.send_request_async(&task.request).await
         }
         RuntimeAgentProviderDispatchProvider::OpenAiCompatible(provider) => {
-            provider.send_request_async(&task.request).await
-        }
-        RuntimeAgentProviderDispatchProvider::ClaudeCode(provider) => {
             provider.send_request_async(&task.request).await
         }
     }

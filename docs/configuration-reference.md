@@ -456,8 +456,8 @@ description.
 
 | Field | Type | Default declaration | Description |
 | --- | --- | --- | --- |
-| `providers.<name>.kind` | string | `providers.openai.kind = "openai"` | Provider brand/default profile kind. Built-ins include `openai`, `anthropic`, `claude-code`, `deepseek`, and legacy `openai-compatible`. |
-| `providers.<name>.api` | string | `providers.openai.api = "openai-responses"` | Wire API compatibility: `openai-responses`, `openai-chat-completions`, `anthropic-messages`, `deepseek-chat-completions`, or `claude-code`. |
+| `providers.<name>.kind` | string | `providers.openai.kind = "openai"` | Provider brand/default profile kind. Built-ins include `openai`, `anthropic`, `deepseek`, and legacy `openai-compatible`. |
+| `providers.<name>.api` | string | `providers.openai.api = "openai-responses"` | Wire API compatibility: `openai-responses`, `openai-chat-completions`, `anthropic-messages`, or `deepseek-chat-completions`. |
 | `providers.<name>.auth_profile` | string | `providers.openai.auth_profile = "default"` | Auth profile id. |
 | `providers.<name>.base_url` | string | `providers.openai.base_url = ""` | Optional API base URL. Empty uses provider default. |
 | `providers.<name>.models` | string array | see below | Selectable model ids. Empty may use provider built-ins. |
@@ -480,12 +480,6 @@ Default `providers.anthropic.models`:
 ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"]
 ```
 
-Default `providers.claude-code.models`:
-
-```toml
-["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"]
-```
-
 Default `providers.deepseek.models`:
 
 ```toml
@@ -496,8 +490,7 @@ Provider `api` selects the reusable wire adapter independently from provider
 brand/defaults. Use `openai-responses` for Responses-compatible backends,
 `openai-chat-completions` for generic Chat Completions-compatible backends,
 `anthropic-messages` for the Anthropic Messages dialect,
-`deepseek-chat-completions` for the DeepSeek Chat Completions dialect, and
-`claude-code` for a Claude Code subprocess backend. Configure
+`deepseek-chat-completions` for the DeepSeek Chat Completions dialect. Configure
 one provider entry per backend, set `base_url` to the backend API base such as
 `https://api.example.com/v1`, and provide `models` plus `default_model` unless
 the backend's `/models` endpoint is sufficient for live catalog refresh.
@@ -523,25 +516,11 @@ The native `anthropic-messages` adapter uses Anthropic `tool_use` as the MAAP
 carrier, maps profile `max_output_tokens` to wire `max_tokens`, and accepts
 provider options `anthropic_version`, `reasoning_effort`, plus
 `default_max_tokens`. It serializes non-empty reasoning effort as Anthropic
-`output_config.effort`. It uses Anthropic Console API-key credentials; Claude
-Code or Claude subscription browser-login credentials belong to the
-`claude-code` provider mode and are not valid `x-api-key` material for
-`anthropic-messages`. Anthropic providers reject OpenAI-compatible or
+`output_config.effort`. It uses Anthropic Console API-key credentials.
+Anthropic providers reject OpenAI-compatible or
 DeepSeek-only provider options such as `maap_output`, `structured_output`,
 `tool_choice`, `parallel_tool_calls`, `output_token_field`, `maap_surface`,
 `prompt_cache_retention`, and `thinking`.
-
-The `claude-code` provider mode is configured as a separate provider entry, uses
-Claude Code authentication established outside Mez, relies on configured model
-ids because no documented Claude Code catalog is available, and keeps Mez shell,
-patch, approval, and audit paths as the only action executor. For normal
-conversation turns with Mezzanine prompt-cache identity, Mez resumes existing
-Claude Code conversations with `--resume` and creates the session with
-`--session-id` only when Claude reports the resume target is missing. Selected
-reasoning efforts are passed to Claude Code as `--effort`; configured fallback
-metadata exposes the local CLI levels `low`, `medium`, `high`, `xhigh`, and
-`max`. Auto-sizing and requests without prompt-cache identity remain one-shot
-print invocations.
 
 Example LM Studio-compatible provider:
 

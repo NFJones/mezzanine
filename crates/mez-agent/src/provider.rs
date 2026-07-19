@@ -799,8 +799,6 @@ pub const OPENAI_CHAT_COMPLETIONS_API: &str = "openai-chat-completions";
 pub const DEEPSEEK_CHAT_COMPLETIONS_API: &str = "deepseek-chat-completions";
 /// API compatibility id for the Anthropic Messages API.
 pub const ANTHROPIC_MESSAGES_API: &str = "anthropic-messages";
-/// API compatibility id for the Claude Code subprocess adapter.
-pub const CLAUDE_CODE_API: &str = "claude-code";
 
 /// Wire API compatibility selected for one configured provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -813,8 +811,6 @@ pub enum ProviderApiCompatibility {
     DeepSeekChatCompletions,
     /// Anthropic Messages request, response, and tool-use shape.
     AnthropicMessages,
-    /// Claude Code subprocess request and response shape.
-    ClaudeCode,
 }
 
 impl ProviderApiCompatibility {
@@ -825,7 +821,6 @@ impl ProviderApiCompatibility {
             Self::OpenAiChatCompletions => OPENAI_CHAT_COMPLETIONS_API,
             Self::DeepSeekChatCompletions => DEEPSEEK_CHAT_COMPLETIONS_API,
             Self::AnthropicMessages => ANTHROPIC_MESSAGES_API,
-            Self::ClaudeCode => CLAUDE_CODE_API,
         }
     }
 
@@ -836,7 +831,6 @@ impl ProviderApiCompatibility {
             OPENAI_CHAT_COMPLETIONS_API => Some(Self::OpenAiChatCompletions),
             DEEPSEEK_CHAT_COMPLETIONS_API => Some(Self::DeepSeekChatCompletions),
             ANTHROPIC_MESSAGES_API => Some(Self::AnthropicMessages),
-            CLAUDE_CODE_API => Some(Self::ClaudeCode),
             _ => None,
         }
     }
@@ -848,7 +842,6 @@ impl ProviderApiCompatibility {
             "openai-compatible" => Some(Self::OpenAiChatCompletions),
             "deepseek" => Some(Self::DeepSeekChatCompletions),
             "anthropic" => Some(Self::AnthropicMessages),
-            "claude-code" => Some(Self::ClaudeCode),
             _ => None,
         }
     }
@@ -926,17 +919,6 @@ impl ProviderCapabilities {
                 supports_prompt_cache_retention: false,
                 supports_streaming: true,
                 supports_tool_calls: true,
-                supports_parallel_tool_calls: false,
-            },
-            ProviderApiCompatibility::ClaudeCode => Self {
-                supports_responses_api: false,
-                supports_max_output_tokens: false,
-                supports_reasoning_controls: true,
-                supports_thinking_toggle: false,
-                supports_service_tier: false,
-                supports_prompt_cache_retention: false,
-                supports_streaming: false,
-                supports_tool_calls: false,
                 supports_parallel_tool_calls: false,
             },
         }
@@ -1615,7 +1597,7 @@ impl fmt::Display for ProviderApiCompatibilityError {
         match self {
             Self::UnsupportedApi(api) => write!(
                 formatter,
-                "unsupported provider API compatibility `{api}`; use {OPENAI_RESPONSES_API}, {OPENAI_CHAT_COMPLETIONS_API}, {DEEPSEEK_CHAT_COMPLETIONS_API}, {ANTHROPIC_MESSAGES_API}, or {CLAUDE_CODE_API}"
+                "unsupported provider API compatibility `{api}`; use {OPENAI_RESPONSES_API}, {OPENAI_CHAT_COMPLETIONS_API}, {DEEPSEEK_CHAT_COMPLETIONS_API}, or {ANTHROPIC_MESSAGES_API}"
             ),
             Self::MissingApiForKind(kind) => write!(
                 formatter,
@@ -1761,23 +1743,6 @@ mod tests {
         assert!(!capabilities.supports_prompt_cache_retention);
         assert!(capabilities.supports_streaming);
         assert!(capabilities.supports_tool_calls);
-        assert!(!capabilities.supports_parallel_tool_calls);
-    }
-
-    /// Verifies Claude Code advertises only the local CLI reasoning control it
-    /// can map to subprocess arguments.
-    #[test]
-    fn claude_code_capabilities_expose_cli_reasoning_only() {
-        let capabilities = ProviderCapabilities::for_api(ProviderApiCompatibility::ClaudeCode);
-
-        assert!(!capabilities.supports_responses_api);
-        assert!(!capabilities.supports_max_output_tokens);
-        assert!(capabilities.supports_reasoning_controls);
-        assert!(!capabilities.supports_thinking_toggle);
-        assert!(!capabilities.supports_service_tier);
-        assert!(!capabilities.supports_prompt_cache_retention);
-        assert!(!capabilities.supports_streaming);
-        assert!(!capabilities.supports_tool_calls);
         assert!(!capabilities.supports_parallel_tool_calls);
     }
 

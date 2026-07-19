@@ -477,13 +477,6 @@ fn projected_context_role(provider: &str, role: ModelMessageRole) -> &'static st
                 "user_neutral_wrapper"
             }
         },
-        "claude-code" => match role {
-            ModelMessageRole::System | ModelMessageRole::Developer => "system_prompt",
-            ModelMessageRole::User => "stdin_user_section",
-            ModelMessageRole::Assistant => "stdin_assistant_section",
-            ModelMessageRole::Tool => "stdin_tool_section",
-            ModelMessageRole::Context => "stdin_neutral_context_section",
-        },
         _ => match role {
             ModelMessageRole::System => "system",
             ModelMessageRole::Developer => "developer_or_system",

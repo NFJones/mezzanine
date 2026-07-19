@@ -154,15 +154,15 @@ fn transcript_store_wraps_presentation_rows_to_recorded_terminal_width() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Verifies presentation row normalization caps wide terminal widths at 120
-/// columns, matching the agent-mode log rendering contract.
+/// Verifies presentation row normalization wraps rows at the recorded terminal
+/// width, independently of the process-wide agent log wrap configuration.
 #[test]
-fn transcript_store_caps_presentation_rows_at_120_columns() {
+fn transcript_store_wraps_presentation_rows_at_recorded_width() {
     let root = temp_root("presentation-cap");
     let _ = fs::remove_dir_all(&root);
     let store = AgentTranscriptStore::new(root.clone());
     let mut entry = presentation("conv1", 1);
-    entry.terminal_width = 200;
+    entry.terminal_width = 120;
     entry.style_names = vec!["assistant".to_string()];
     entry.display_lines = vec!["x".repeat(130)];
     entry.copy_lines = entry.display_lines.clone();

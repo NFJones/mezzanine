@@ -118,7 +118,7 @@ pub(super) async fn run_auth<W: Write>(
                 AuthMethod::Browser => {
                     if provider != "openai" {
                         return Err(MezError::invalid_args(
-                            "browser-based login is only supported for OpenAI in Mez auth; use `mez auth login --provider anthropic --api-key` for Anthropic Console API-key auth, or authenticate Claude Code separately for planned Claude Code subscription-backed providers",
+                            "browser-based login is only supported for OpenAI in Mez auth; use `mez auth login --provider anthropic --api-key` for Anthropic Console API-key auth",
                         ));
                     }
                     if !interactive {
@@ -145,7 +145,7 @@ pub(super) async fn run_auth<W: Write>(
                 AuthMethod::DeviceCode => {
                     if provider != "openai" {
                         return Err(MezError::invalid_args(
-                            "device-code login is only supported for OpenAI in Mez auth; use `mez auth login --provider anthropic --api-key` for Anthropic Console API-key auth, or authenticate Claude Code separately for planned Claude Code subscription-backed providers",
+                            "device-code login is only supported for OpenAI in Mez auth; use `mez auth login --provider anthropic --api-key` for Anthropic Console API-key auth",
                         ));
                     }
                     let credential = run_openai_device_code_login_async().await?;
@@ -306,9 +306,8 @@ fn noninteractive_browser_login_error() -> MezError {
     MezError::invalid_args(
         "auth login defaults to browser-based ChatGPT sign-in and requires an \
          interactive terminal; use `mez auth login --device-code` for out-of-band \
-         ChatGPT sign-in, `mez auth login --provider anthropic --api-key \
-         --api-key-file PATH` for Anthropic Console API-key auth, or external \
-         Claude Code login for planned Claude subscription-backed providers",
+         ChatGPT sign-in or `mez auth login --provider anthropic --api-key \
+         --api-key-file PATH` for Anthropic Console API-key auth",
     )
 }
 

@@ -116,7 +116,7 @@ impl ModelProfile {
     /// Returns the reasoning label UI surfaces should display for the profile.
     ///
     /// Pane status and selector displays prefer the explicit top-level
-    /// `reasoning_profile` value. Providers such as Anthropic and Claude Code
+    /// `reasoning_profile` value. Providers such as Anthropic
     /// may carry the active effort only in `provider_options.reasoning_effort`,
     /// so UI callers fall back to that value when the display field is unset.
     pub fn reasoning_display_value(&self) -> Option<String> {

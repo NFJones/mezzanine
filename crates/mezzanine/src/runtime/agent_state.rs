@@ -11,7 +11,7 @@ use super::{
     PathScopes, PermissionPolicy, ReqwestProviderHttpTransport, RuntimeAutoSizingDispatch,
     SessionApprovalStore, SubagentScopeDeclaration,
 };
-use crate::integrations::agent::provider::{AnthropicMessagesProvider, ClaudeCodeProvider};
+use crate::integrations::agent::provider::AnthropicMessagesProvider;
 use mez_agent::{AutoSizingWorkerSelection, McpPromptTool, PreparedModelContext};
 
 /// Carries Runtime Agent Provider Task state for this subsystem.
@@ -84,11 +84,6 @@ pub enum RuntimeAgentProviderDispatchProvider {
     /// Callers use this variant to describe one explicit state or command path
     /// without relying on stringly typed status values.
     Anthropic(AnthropicMessagesProvider<ReqwestProviderHttpTransport>),
-    /// Represents the Claude Code subprocess provider case.
-    ///
-    /// Callers use this variant for configured provider instances that rely on
-    /// a local Claude Code session instead of direct API credentials.
-    ClaudeCode(ClaudeCodeProvider),
     /// Represents a named OpenAI-compatible Chat Completions provider.
     ///
     /// Callers use this variant for configured provider instances that share
@@ -108,7 +103,6 @@ impl RuntimeAgentProviderDispatchProvider {
             Self::OpenAi(provider) => provider.provider_id(),
             Self::DeepSeek(provider) => provider.provider_id(),
             Self::Anthropic(provider) => provider.provider_id(),
-            Self::ClaudeCode(provider) => provider.provider_id(),
             Self::OpenAiCompatible(provider) => provider.provider_id(),
         }
     }

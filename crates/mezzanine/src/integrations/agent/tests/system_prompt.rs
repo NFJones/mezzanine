@@ -96,32 +96,6 @@ fn embedded_prompt_fragments_are_loaded_from_markdown_assets() {
     assert!(prompt.contains(action_fragment));
     assert!(prompt.contains("15. Anthropic Provider"));
     assert!(prompt.contains(provider_fragment));
-    assert_eq!(
-        super::prompt::provider_prompt_fragment("claude_code.md").unwrap(),
-        include_str!("../prompt/providers/claude_code.md").trim_end_matches('\n')
-    );
-}
-
-#[test]
-/// Verifies Claude Code system prompts reinforce MAAP-only execution.
-///
-/// Claude Code normally expects native tools, so this regression keeps the
-/// provider-specific prompt branch explicit about emitting MAAP actions and
-/// using StructuredOutput only as the response carrier.
-fn system_prompt_adds_claude_code_provider_guidance() {
-    let prompt = build_agent_system_prompt(
-        &AgentPromptProfile::default_for("agent-1", "%1").with_provider("claude-code"),
-    )
-    .unwrap();
-
-    assert!(prompt.contains("15. Claude Code Provider"));
-    assert!(prompt.contains("Claude Code CLI print API"));
-    assert!(prompt.contains("does not have direct authority to inspect files"));
-    assert!(prompt.contains("emit the corresponding Mezzanine MAAP actions instead"));
-    assert!(prompt.contains("StructuredOutput is only the carrier for returning the action batch"));
-    assert!(prompt.contains(
-        "Do not end the turn until you return one validated Mezzanine MAAP action batch"
-    ));
 }
 
 #[test]

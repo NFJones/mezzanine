@@ -8,10 +8,10 @@
 
 use super::{
     AGENT_COMPACT_TRANSCRIPT_ENTRY_CONTEXT_OVERHEAD_WORDS, AgentActionPayload, AgentContext,
-    AgentId, AgentShellCommandOutcome, AgentTurnState, AllowedActionSet, ClaudeCodeProvider,
-    ContextBlock, ContextSourceKind, DEFAULT_PROVIDER_TIMEOUT_MS, MemoryRecord, MemoryScope,
-    MemorySource, MezError, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile,
-    ModelRequest, ModelResponse, ProviderApiCompatibility, ReqwestProviderHttpTransport, Result,
+    AgentId, AgentShellCommandOutcome, AgentTurnState, AllowedActionSet, ContextBlock,
+    ContextSourceKind, DEFAULT_PROVIDER_TIMEOUT_MS, MemoryRecord, MemoryScope, MemorySource,
+    MezError, ModelInteractionKind, ModelMessage, ModelMessageRole, ModelProfile, ModelRequest,
+    ModelResponse, ProviderApiCompatibility, ReqwestProviderHttpTransport, Result,
     RuntimeAgentCompactionDispatch, RuntimeAgentCompactionTask,
     RuntimeAgentProviderDispatchProvider, RuntimeSessionService, TranscriptEntry, TranscriptRole,
     append_mcp_context, current_unix_seconds,
@@ -385,10 +385,6 @@ impl RuntimeSessionService {
                     ReqwestProviderHttpTransport,
                 )
                 .map(RuntimeAgentProviderDispatchProvider::Anthropic)
-            }
-            ProviderApiCompatibility::ClaudeCode => {
-                ClaudeCodeProvider::new(&task.model_profile.provider, DEFAULT_PROVIDER_TIMEOUT_MS)
-                    .map(RuntimeAgentProviderDispatchProvider::ClaudeCode)
             }
         }?;
         self.append_credential_access_audit(

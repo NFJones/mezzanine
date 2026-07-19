@@ -4,9 +4,7 @@
 //! state transitions and helper routines localized so neighboring modules
 //! interact through typed APIs instead of duplicating subsystem details.
 
-use super::{
-    BTreeMap, ExposeSecret, MaapBatch, MezError, ModelInteractionKind, Result, SecretString,
-};
+use super::{BTreeMap, ExposeSecret, MaapBatch, MezError, Result, SecretString};
 use std::future::Future;
 use std::pin::Pin;
 
@@ -23,14 +21,12 @@ fn validate_non_empty(field: &str, value: &str) -> Result<()> {
 
 mod anthropic;
 mod chat_completions;
-mod claude_code;
 mod deepseek;
 mod errors;
 mod http;
 mod openai_chat_completions;
 use anthropic::AnthropicMessagesDialect;
 pub use chat_completions::ChatCompletionsProvider;
-pub use claude_code::ClaudeCodeProvider;
 use deepseek::DeepSeekChatCompletionsDialect;
 #[cfg(test)]
 pub use deepseek::build_deepseek_chat_completions_http_request;
@@ -45,9 +41,9 @@ pub use http::{AsyncProviderHttpTransport, ReqwestProviderHttpTransport};
 use mez_agent::parse_openai_models_http_body;
 use mez_agent::provider_quota_usage_from_headers;
 use mez_agent::{
-    DEFAULT_PROVIDER_TIMEOUT_MS, ModelRequest, ModelResponse, ModelTokenUsage,
-    ProviderAuthMetadata, ProviderCredentialKind, ProviderCredentialSource, ProviderHttpRequest,
-    ProviderHttpResponse, ProviderModelCatalog,
+    DEFAULT_PROVIDER_TIMEOUT_MS, ModelRequest, ModelResponse, ProviderAuthMetadata,
+    ProviderCredentialKind, ProviderCredentialSource, ProviderHttpRequest, ProviderHttpResponse,
+    ProviderModelCatalog,
 };
 use mez_agent::{
     openai_models_endpoint_for_responses_endpoint, openai_responses_endpoint_for_base_url,

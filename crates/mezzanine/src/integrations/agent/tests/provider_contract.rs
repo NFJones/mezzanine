@@ -45,7 +45,7 @@ fn model_provider_trait_returns_model_response() {
 /// controller context distinguishable from direct user speech.
 ///
 /// The same uniquely marked request is rendered through OpenAI Responses,
-/// OpenAI Chat, Anthropic, DeepSeek, and Claude Code. Any adapter that moves the
+/// OpenAI Chat, Anthropic, and DeepSeek. Any adapter that moves the
 /// user prompt after its evidence or relabels neutral state as user-authored
 /// will fail this shared request-shape contract.
 fn provider_projection_matrix_preserves_chronology_and_neutral_authorship() {
@@ -139,7 +139,6 @@ fn provider_projection_matrix_preserves_chronology_and_neutral_authorship() {
             )
             .unwrap(),
         ),
-        ("claude-code", mez_agent::claude_code_prompt(&request, None)),
     ];
 
     for (provider, body) in rendered {
@@ -219,13 +218,7 @@ fn provider_effective_payloads_omit_foreign_native_events_without_reordering() {
         safety_tier: None,
     };
 
-    for provider in [
-        "openai",
-        "openai-chat",
-        "anthropic",
-        "deepseek",
-        "claude-code",
-    ] {
+    for provider in ["openai", "openai-chat", "anthropic", "deepseek"] {
         let request = assemble_model_request(&profile(provider), &turn(), &context).unwrap();
         let body = match provider {
             "openai" => mez_agent::openai_responses_request_body(&request).unwrap(),
@@ -246,7 +239,6 @@ fn provider_effective_payloads_omit_foreign_native_events_without_reordering() {
                 mez_agent::DeepSeekMaapRequestStrategy::NoTool,
             )
             .unwrap(),
-            "claude-code" => mez_agent::claude_code_prompt(&request, None),
             _ => unreachable!(),
         };
         let prompt = body.find("SWITCH_PROMPT_MARKER").unwrap();

@@ -343,7 +343,6 @@ Abstract feature labels in the table mean:
 | Provider / family   | Status      | API shape                                                                    | Streaming | Tools | Structured output | Reasoning controls | Catalog refresh |
 | ------------------- | ----------- | ---------------------------------------------------------------------------- | --------- | ----- | ----------------- | ------------------ | --------------- |
 | OpenAI              | Supported   | Native Responses API                                                         | Yes       | Yes   | Yes               | Partial            | Yes             |
-| Claude Code         | Supported   | Native Claude Code CLI subprocess adapter                                    | No        | Yes   | Yes               | Yes                | No              |
 | Generic OpenAI API  | Supported   | OpenAI-compatible Chat Completions API                                        | No        | Yes   | Partial           | No                 | Partial         |
 | DeepSeek            | Supported   | Native Chat Completions API                                                  | Partial   | Yes   | Partial           | Yes                | Partial         |
 | Anthropic           | Supported   | Native Messages API                                                          | Yes       | Yes   | No                | Yes                | No              |

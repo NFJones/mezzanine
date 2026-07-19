@@ -324,8 +324,7 @@ pub fn auto_sizing_reasoning_levels_for_profile(
                     levels.extend(["high".to_string(), "xhigh".to_string()]);
                 }
                 ProviderApiCompatibility::OpenAiChatCompletions
-                | ProviderApiCompatibility::AnthropicMessages
-                | ProviderApiCompatibility::ClaudeCode => {}
+                | ProviderApiCompatibility::AnthropicMessages => {}
             }
         }
     }

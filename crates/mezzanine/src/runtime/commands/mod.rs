@@ -40,7 +40,7 @@ use super::{
     shell_command_from_argv, unix_seconds_to_rfc3339,
 };
 use crate::integrations::agent::provider::{
-    AsyncModelProvider, ClaudeCodeProvider, ReqwestProviderHttpTransport,
+    AsyncModelProvider, ReqwestProviderHttpTransport,
     deepseek_chat_completions_provider_from_auth_store_with_provider_options,
     openai_compatible_provider_from_auth_store_with_provider_options,
     openai_responses_provider_from_auth_store_with_provider_options,

@@ -28,8 +28,6 @@ pub mod anthropic;
 pub mod auth;
 /// Provider-independent automatic model-sizing policy.
 pub mod auto_sizing;
-/// Provider-independent Claude Code CLI policy.
-pub mod claude_code;
 /// Model-facing live configuration mutation contracts.
 pub mod config_change;
 /// Provider-independent agent context validation contracts.
@@ -213,15 +211,6 @@ pub use auto_sizing::{
     auto_sizing_minimum_context_profile, auto_sizing_reasoning_levels_for_profile,
     auto_sizing_request, auto_sizing_selection_from_response,
 };
-pub use claude_code::{
-    CLAUDE_CODE_EMPTY_OUTPUT_RETRY_INSTRUCTION, CLAUDE_CODE_MAAP_RETRY_INSTRUCTION,
-    CLAUDE_CODE_STRUCTURED_OUTPUT_TOOL, ClaudeCodeOutput, ClaudeCodeResponseError,
-    ClaudeCodeResponseResult, bound_claude_code_text, claude_code_auto_sizing_json_schema,
-    claude_code_corrective_retry_instruction, claude_code_empty_output_error,
-    claude_code_maap_json_schema, claude_code_macro_judge_json_schema, claude_code_prompt,
-    claude_code_system_prompt, parse_claude_code_json_output, parse_claude_code_maap_output,
-    redact_claude_code_text, validate_claude_code_auto_sizing_output,
-};
 pub use config_change::{
     CONFIG_CHANGE_OPERATION_NAMES, CONFIG_CHANGE_SETTING_PATH_DESCRIPTION,
     CONFIG_CHANGE_VALUE_DESCRIPTION, ConfigChangeError, ConfigChangeMutationSignature,
@@ -387,12 +376,12 @@ pub use prompt::{
     assemble_agent_system_prompt, validate_agent_prompt_required,
 };
 pub use provider::{
-    ANTHROPIC_MESSAGES_API, CHATGPT_RESPONSES_ENDPOINT, CLAUDE_CODE_API,
-    DEEPSEEK_CHAT_COMPLETIONS_API, MAAP_ACTION_BATCH_TOOL_NAME, OPENAI_CHAT_COMPLETIONS_API,
-    OPENAI_MODELS_ENDPOINT, OPENAI_RESPONSES_API, OPENAI_RESPONSES_ENDPOINT,
-    OpenAiPromptCacheDiagnostics, OpenAiRenderedMessages, OpenAiRequestOptions,
-    ProviderApiCompatibility, ProviderApiCompatibilityError, ProviderCapabilities,
-    ProviderEndpointError, ProviderEndpointErrorKind, ProviderEndpointResult, ProviderModelCatalog,
+    ANTHROPIC_MESSAGES_API, CHATGPT_RESPONSES_ENDPOINT, DEEPSEEK_CHAT_COMPLETIONS_API,
+    MAAP_ACTION_BATCH_TOOL_NAME, OPENAI_CHAT_COMPLETIONS_API, OPENAI_MODELS_ENDPOINT,
+    OPENAI_RESPONSES_API, OPENAI_RESPONSES_ENDPOINT, OpenAiPromptCacheDiagnostics,
+    OpenAiRenderedMessages, OpenAiRequestOptions, ProviderApiCompatibility,
+    ProviderApiCompatibilityError, ProviderCapabilities, ProviderEndpointError,
+    ProviderEndpointErrorKind, ProviderEndpointResult, ProviderModelCatalog,
     ProviderModelCatalogParseError, ProviderModelInfo, ProviderRequestAssemblyError,
     ProviderRequestAssemblyErrorKind, ProviderRequestAssemblyResult, ProviderResponseError,
     ProviderResponseErrorKind, ProviderResponseResult, known_model_context_window_tokens,

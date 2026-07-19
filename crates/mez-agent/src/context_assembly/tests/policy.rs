@@ -228,7 +228,7 @@ fn assemble_model_request_preserves_hidden_provider_transcript_events_without_la
 ///
 /// DeepSeek is currently the only adapter with native continuity payloads.
 /// The switch matrix therefore projects the same stored chronology through
-/// OpenAI, Anthropic, Claude Code, and an OpenAI-compatible provider and proves
+/// OpenAI, Anthropic, and an OpenAI-compatible provider and proves
 /// each receives the neutral user event but never the opaque DeepSeek record.
 fn assemble_model_request_omits_deepseek_continuity_for_all_nonowners() {
     let event_content = ProviderTranscriptEvent::DeepSeekAssistantToolCall {
@@ -252,7 +252,7 @@ fn assemble_model_request_omits_deepseek_continuity_for_all_nonowners() {
     ])
     .unwrap();
 
-    for provider in ["openai", "anthropic", "claude-code", "compatible-chat"] {
+    for provider in ["openai", "anthropic", "compatible-chat"] {
         let request = assemble_model_request(
             &ModelProfile {
                 provider: provider.to_string(),

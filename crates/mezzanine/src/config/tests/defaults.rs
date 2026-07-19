@@ -166,38 +166,6 @@ fn default_config_includes_anthropic_provider_defaults() {
             "claude-haiku-4-5-20251001",
         ]
     );
-
-    let claude_code = parsed
-        .get("providers")
-        .and_then(toml::Value::as_table)
-        .and_then(|providers| providers.get("claude-code"))
-        .and_then(toml::Value::as_table)
-        .unwrap();
-
-    assert_eq!(
-        claude_code.get("kind").and_then(toml::Value::as_str),
-        Some("claude-code")
-    );
-    assert_eq!(
-        claude_code.get("api").and_then(toml::Value::as_str),
-        Some("claude-code")
-    );
-    assert_eq!(
-        claude_code
-            .get("default_model")
-            .and_then(toml::Value::as_str),
-        Some("claude-fable-5")
-    );
-
-    let claude_code_models = claude_code
-        .get("models")
-        .and_then(toml::Value::as_array)
-        .unwrap()
-        .iter()
-        .map(|value| value.as_str().unwrap())
-        .collect::<Vec<_>>();
-
-    assert_eq!(claude_code_models, models);
 }
 
 /// Verifies generated defaults use provider-aware output token caps for known agent profiles.
