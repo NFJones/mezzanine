@@ -208,7 +208,12 @@ The repository currently ships built-in skills including:
 - `add-research`: guidance for saving durable research findings to memory as
   readable Markdown using the `research` memory kind.
 - `fix-issues`: guidance for working the local Mez issue tracker in dependency
-  order until verified fixes are removed.
+  order until verified fixes are removed. Within one direct invocation or one
+  `/loop` iteration it reuses the current successful issue snapshot, records the
+  chosen issue id in rationale and a durable `Active issue: <id>` thought, and
+  does not query the backlog again during inspection, implementation,
+  documentation, or validation. Resolving, blocking, or otherwise mutating an
+  issue invalidates that evidence and permits the next query.
 
 ## Where skills and macros live
 

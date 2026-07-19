@@ -140,12 +140,12 @@ impl RuntimeSessionService {
         };
 
         let visible_action_texts = runtime_agent_batch_visible_action_texts(batch);
-        if !batch.rationale.trim().is_empty()
+        let batch_rationale_was_presented = !batch.rationale.trim().is_empty()
             && !runtime_agent_batch_rationale_repeats_visible_batch_text(
                 batch,
                 &visible_action_texts,
-            )
-        {
+            );
+        if batch_rationale_was_presented {
             self.append_agent_thinking_text_to_terminal_buffer(pane_id, batch.rationale.trim())?;
         }
         if self.agent_verbose_enabled(pane_id)
@@ -157,6 +157,10 @@ impl RuntimeSessionService {
         let mut emitted_user_visible_action = false;
         let mut pending_runtime_visible_action = false;
         let mut emitted_action_rationale_keys = BTreeSet::new();
+        if batch_rationale_was_presented {
+            emitted_action_rationale_keys
+                .insert(normalize_agent_user_visible_text(&batch.rationale));
+        }
         let has_runtime_visible_action = batch
             .actions
             .iter()

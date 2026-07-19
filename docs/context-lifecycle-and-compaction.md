@@ -63,8 +63,16 @@ context.
 During a turn, assistant action requests, settled results, controller results,
 local or routed messages, and user steering are appended at their actual
 occurrence boundaries. Steering preserves only the exact user text. The prompt
-is never repeated after its evidence and no adapter may relocate a later
-transport-level user message to the end.
+is the last event only when it is first committed; later assistant output and
+evidence follow it. It is never repeated after its evidence and no adapter may
+timestamp-sort events or relocate a transport-level user message to the end.
+
+Accepted assistant output is projected once into provider-neutral causal text:
+batch `rationale`, optional durable `thinking`, action-local rationale, raw
+conversational text, and bounded action summaries in provider order. Raw MAAP
+JSON and unbounded action payloads are omitted. Terminal presentation may hide
+duplicate rationale, but it cannot rewrite the canonical projection. The same
+projection is persisted byte-for-byte for restoration.
 
 Every provider task claims the highest event sequence in the snapshot it
 consumed. Steering and local messages commit at actor receipt. A response from
@@ -104,10 +112,28 @@ exactly once to `ConversationAppend`:
 - replay does not duplicate or reorder evidence.
 
 Assistant output, provider-native tool events, and their settled results share
-one causal execution owner. They remain complete and ordered during persistence
-and compaction. An owner may straddle steering when already-dispatched work
-settles later; that fact does not permit compaction to gather records across the
-barrier.
+one causal execution owner derived from the accepted request/response identity.
+Exact replay is idempotent, but equal response text from different consumed
+request histories creates different owners. Every synthesized action id is
+registered to its owner, and a result commits to that owner even if another
+assistant response has since arrived. They remain complete and ordered during
+persistence and compaction. An owner may straddle steering when
+already-dispatched work settles later; that fact does not permit compaction to
+gather records across the barrier.
+
+Canonical storage keeps two projections when a provider requires native tool
+continuity: the neutral assistant/action-result sequence and typed native
+assistant/tool events. Assembly sends only the native projection back to its
+owning provider and only the neutral projection after a provider switch.
+Persistence orders the neutral assistant, native call/result records, and
+generic results so compatibility restoration reconstructs one execution group
+before choosing a projection.
+
+Issue-query evidence has a logical-turn freshness key built from the normalized
+project, kind, state, text, and limit. A repeated successful query is answered
+by a structured skipped result pointing at the prior action result. Successful
+issue mutations invalidate the keys; failed queries do not create them. The
+explicit `refresh` flag bypasses reuse only for an externally changed store.
 
 ## Capability continuation across provider workers
 
@@ -160,7 +186,9 @@ consumed boundary remain raw. If one execution owner appears on both sides of a
 barrier, both fragments remain raw. Each new summary replaces its original
 contiguous range in place. It cannot move across a task/user barrier. Protected
 blocks and existing epochs remain byte-for-byte stable. A configured recent raw
-suffix is retained only in complete groups.
+suffix is retained only in complete groups. An open group retains its exact
+assistant rationale, thought, action rationale, native replay records, and
+settled results; compaction cannot summarize only part of that causal record.
 
 Each summary contains a semantic recovery index accounting for every replaced
 record, including outcomes, errors, decisions, artifacts, unresolved

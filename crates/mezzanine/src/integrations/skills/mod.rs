@@ -905,6 +905,19 @@ mod tests {
         assert!(fix_issues_document.text.contains(
             "mark the issue `resolved` with `issue_update` so history remains queryable"
         ));
+        assert!(fix_issues_document.text.contains(
+            "do not repeat the query merely because another capability, inspection, edit, test, or provider call occurred"
+        ));
+        assert!(
+            fix_issues_document
+                .text
+                .contains("record `Active issue: <id>`")
+        );
+        assert!(
+            fix_issues_document
+                .text
+                .contains("within one `/loop` iteration, reuse current query evidence")
+        );
 
         let reference_document =
             load_skill_document(catalog.get(BUILTIN_MEZ_REFERENCE_SKILL_NAME).unwrap()).unwrap();

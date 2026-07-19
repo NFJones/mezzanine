@@ -34,7 +34,7 @@ pub(super) fn runtime_agent_transcript_context_blocks(
             continue;
         };
         blocks.push(ContextBlock {
-            source: runtime_transcript_context_source_kind(entry.role),
+            source: runtime_transcript_context_source_kind(entry),
             placement: mez_agent::ContextPlacement::ConversationAppend,
             label: format!(
                 "previous {} message for pane {pane_id}",
@@ -52,6 +52,9 @@ pub(super) fn runtime_context_block_is_compaction_refresh_owned(block: &ContextB
         ContextSourceKind::Transcript
         | ContextSourceKind::TranscriptUser
         | ContextSourceKind::TranscriptTool => true,
+        ContextSourceKind::ActionResult => {
+            block.label.starts_with("previous tool message for pane ")
+        }
         ContextSourceKind::TranscriptAssistant => block
             .label
             .starts_with("previous assistant message for pane "),
@@ -66,11 +69,19 @@ pub(super) fn runtime_context_block_is_compaction_refresh_owned(block: &ContextB
 
 /// Maps a stored transcript role to a model-context source that preserves the
 /// role across request assembly.
-fn runtime_transcript_context_source_kind(role: TranscriptRole) -> ContextSourceKind {
-    match role {
+fn runtime_transcript_context_source_kind(entry: &TranscriptEntry) -> ContextSourceKind {
+    match entry.role {
         TranscriptRole::User => ContextSourceKind::TranscriptUser,
         TranscriptRole::Assistant => ContextSourceKind::TranscriptAssistant,
+        TranscriptRole::Tool if entry.content.trim_start().starts_with("[action_result ") => {
+            ContextSourceKind::ActionResult
+        }
         TranscriptRole::Tool => ContextSourceKind::TranscriptTool,
+        TranscriptRole::System
+            if ProviderTranscriptEvent::from_transcript_content(&entry.content).is_some() =>
+        {
+            ContextSourceKind::TranscriptTool
+        }
         TranscriptRole::System => ContextSourceKind::Transcript,
     }
 }

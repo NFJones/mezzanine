@@ -769,6 +769,7 @@ pub(super) fn runtime_maap_action_payload_trace_json(
             state,
             text,
             limit,
+            refresh,
         } => {
             data.insert("kind".to_string(), serde_json::json!(kind));
             data.insert("state".to_string(), serde_json::json!(state));
@@ -779,6 +780,7 @@ pub(super) fn runtime_maap_action_payload_trace_json(
                     .unwrap_or(serde_json::Value::Null),
             );
             data.insert("limit".to_string(), serde_json::json!(limit));
+            data.insert("refresh".to_string(), serde_json::json!(refresh));
         }
         AgentActionPayload::IssueDelete { id } => {
             data.insert("id".to_string(), runtime_bounded_trace_string_value(id));

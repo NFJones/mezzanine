@@ -152,6 +152,7 @@ pub(crate) fn agent_action_execution_display_header(action: &AgentAction) -> Opt
             state,
             text,
             limit,
+            refresh,
         } => {
             let mut header = match kind
                 .as_deref()
@@ -176,6 +177,9 @@ pub(crate) fn agent_action_execution_display_header(action: &AgentAction) -> Opt
             if let Some(limit) = limit {
                 header.push_str(" limit=");
                 header.push_str(&limit.to_string());
+            }
+            if *refresh {
+                header.push_str(" refresh=true");
             }
             header
         }

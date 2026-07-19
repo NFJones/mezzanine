@@ -79,6 +79,17 @@ pub fn transcript_entries_for_execution(
         });
         sequence = sequence.saturating_add(1);
     }
+    entries.push(TranscriptEntry {
+        conversation_id: conversation_id.to_string(),
+        sequence,
+        created_at_unix_seconds,
+        role: TranscriptRole::Assistant,
+        turn_id: turn.turn_id.clone(),
+        agent_id: turn.agent_id.clone(),
+        pane_id: turn.pane_id.clone(),
+        content: assistant_transcript_content(execution),
+    });
+    sequence = sequence.saturating_add(1);
     for event in provider_transcript_entries_for_execution(execution) {
         entries.push(TranscriptEntry {
             conversation_id: conversation_id.to_string(),
@@ -92,17 +103,6 @@ pub fn transcript_entries_for_execution(
         });
         sequence = sequence.saturating_add(1);
     }
-    entries.push(TranscriptEntry {
-        conversation_id: conversation_id.to_string(),
-        sequence,
-        created_at_unix_seconds,
-        role: TranscriptRole::Assistant,
-        turn_id: turn.turn_id.clone(),
-        agent_id: turn.agent_id.clone(),
-        pane_id: turn.pane_id.clone(),
-        content: assistant_transcript_content(execution),
-    });
-    sequence = sequence.saturating_add(1);
 
     for result in &execution.action_results {
         entries.push(TranscriptEntry {
@@ -158,10 +158,10 @@ fn provider_tool_result_content_for_execution(execution: &AgentTurnExecution) ->
 /// Returns the assistant-history context produced by one model execution.
 ///
 /// The returned text is the same assistant content durable transcript storage
-/// would persist for the execution: visible `say` text is retained, non-visible
-/// actions are summarized, and only explicit durable `thought` notes are
-/// preserved as `thinking:` lines without retaining raw protocol JSON or inline
-/// file payloads.
+/// persists for the execution. It preserves the complete model-authored causal
+/// response: batch rationale, durable thought, action-local rationale, visible
+/// conversational text, and bounded action summaries. Raw protocol JSON and
+/// inline action payloads remain excluded.
 pub fn assistant_context_content_for_execution(execution: &AgentTurnExecution) -> String {
     assistant_transcript_content(execution)
 }
@@ -211,14 +211,15 @@ fn transcript_label_is_expanded_skill(label: &str) -> bool {
     label.starts_with("explicit skill ") || label.starts_with("explicit skill invocation ")
 }
 
-/// Returns durable assistant transcript text without copying raw protocol JSON
-/// or inline file payloads into long-lived transcript storage.
+/// Returns canonical assistant transcript text without copying raw protocol
+/// JSON or inline file payloads into long-lived transcript storage.
 ///
-/// Routine batch/action rationale is intentionally omitted from durable
-/// assistant history because it is usually immediate execution intent such as
-/// "read exact anchors" or "check test lines" that causes future requests to
-/// over-weight investigation churn. Only explicit durable `thought` notes are
-/// persisted as `thinking:` lines.
+/// Rationale is part of the accepted assistant response and therefore part of
+/// the causal history consumed by later provider calls. Presentation may hide
+/// redundant rationale from the terminal, but transcript projection must not
+/// discard or rewrite it. Closed execution groups remain eligible for atomic
+/// compaction through the context lifecycle instead of being made incomplete
+/// at this boundary.
 const EMPTY_ASSISTANT_TRANSCRIPT_CONTENT: &str =
     "[assistant response contained no visible content]";
 
@@ -230,40 +231,35 @@ fn assistant_transcript_content(execution: &AgentTurnExecution) -> String {
             execution.response.raw_text.clone()
         };
     };
-    let mut thinking_lines = assistant_transcript_durable_thinking_lines(batch);
+    let mut lines = assistant_transcript_rationale_lines("rationale", &batch.rationale);
+    lines.extend(assistant_transcript_durable_thinking_lines(batch));
     if !execution.response.raw_text.trim().is_empty()
         && !assistant_raw_text_looks_like_maap_payload(&execution.response.raw_text)
     {
-        if thinking_lines.is_empty() {
-            return execution.response.raw_text.clone();
-        }
-        thinking_lines.push(execution.response.raw_text.clone());
-        return thinking_lines.join("\n");
+        lines.push(execution.response.raw_text.clone());
     }
-    if let Some(visible_text) = assistant_visible_action_transcript_content(batch) {
-        if thinking_lines.is_empty() {
-            return visible_text;
-        }
-        thinking_lines.push(visible_text);
-        return thinking_lines.join("\n");
+    lines.extend(assistant_action_transcript_lines(batch));
+    if lines.is_empty() {
+        EMPTY_ASSISTANT_TRANSCRIPT_CONTENT.to_string()
+    } else {
+        lines.join("\n")
     }
-    thinking_lines.push(format!(
-        "[assistant emitted MAAP actions; action_count={}]",
-        batch.actions.len()
-    ));
-    for action in &batch.actions {
-        thinking_lines.push(format!("- {}", assistant_transcript_action_summary(action)));
-    }
-    thinking_lines.join("\n")
+}
+
+/// Prefixes each non-empty model-authored rationale line for causal replay.
+fn assistant_transcript_rationale_lines(label: &str, text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| format!("{label}: {line}"))
+        .collect()
 }
 
 /// Returns durable model-authored thinking notes as transcript-visible lines.
 ///
-/// The explicit `thought` field is the only durable assistant work-note
-/// channel. Batch/action rationale remains available in runtime logs and action
-/// results for the current turn, but it is not replayed into future assistant
-/// context because it tends to encode transient execution intent rather than
-/// stable decisions.
+/// `thought` remains the explicit durable work-note channel. Rationale is also
+/// retained as causal execution context, but it is labeled separately so later
+/// providers can distinguish immediate intent from longer-lived learning.
 fn assistant_transcript_durable_thinking_lines(batch: &MaapBatch) -> Vec<String> {
     let mut lines = Vec::new();
     if let Some(thought) = batch.thought.as_deref()
@@ -284,40 +280,39 @@ fn assistant_transcript_thinking_lines(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Returns the user-visible assistant text carried by a MAAP action batch.
+/// Returns action-local rationale and bounded action summaries in provider
+/// order.
 ///
-/// `say` actions are conversational output from the user's perspective.
-/// Persisting only their compact action summaries breaks later references such
-/// as "do item 2"; this helper preserves that text while still summarizing
-/// non-conversational actions.
-fn assistant_visible_action_transcript_content(batch: &MaapBatch) -> Option<String> {
-    let mut visible_lines = Vec::new();
-    let mut hidden_action_summaries = Vec::new();
+/// `say` actions retain exact conversational text so later references such as
+/// "do item 2" remain meaningful. Other action payloads are summarized to
+/// avoid copying commands, patches, generated files, or request bodies into
+/// model history.
+fn assistant_action_transcript_lines(batch: &MaapBatch) -> Vec<String> {
+    let mut lines = Vec::new();
     for action in &batch.actions {
+        let rationale_label = format!("action rationale {} ({})", action.id, action.action_type());
+        lines.extend(assistant_transcript_rationale_lines(
+            &rationale_label,
+            &action.rationale,
+        ));
         match &action.payload {
-            AgentActionPayload::Say { text, .. } => visible_lines.push(text.trim().to_string()),
-            AgentActionPayload::Abort { reason } => {
-                visible_lines.push(format!("aborted: {}", reason.trim()));
+            AgentActionPayload::Say { text, .. } => {
+                let text = text.trim();
+                if !text.is_empty() {
+                    lines.push(text.to_string());
+                }
             }
-            _ => hidden_action_summaries.push(assistant_transcript_action_summary(action)),
+            AgentActionPayload::Abort { reason } => {
+                lines.push(format!("aborted: {}", reason.trim()));
+            }
+            _ => lines.push(format!(
+                "action {}: {}",
+                action.id,
+                assistant_transcript_action_summary(action)
+            )),
         }
     }
-    visible_lines.retain(|line| !line.is_empty());
-    if visible_lines.is_empty() {
-        return None;
-    }
-    if !hidden_action_summaries.is_empty() {
-        visible_lines.push(format!(
-            "[assistant also emitted MAAP actions; action_count={}]",
-            hidden_action_summaries.len()
-        ));
-        visible_lines.extend(
-            hidden_action_summaries
-                .into_iter()
-                .map(|summary| format!("- {summary}")),
-        );
-    }
-    Some(visible_lines.join("\n"))
+    lines
 }
 
 /// Detects provider text that is the MAAP envelope itself rather than
@@ -451,14 +446,16 @@ fn assistant_transcript_action_summary(action: &AgentAction) -> String {
             state,
             text,
             limit,
+            refresh,
         } => format!(
-            "issue_query kind={} state={} text_bytes={} limit={}",
+            "issue_query kind={} state={} text_bytes={} limit={} refresh={}",
             kind.as_deref().unwrap_or("any"),
             state.as_deref().unwrap_or("open"),
             text.as_deref().map(str::len).unwrap_or(0),
             limit
                 .map(|value| value.to_string())
-                .unwrap_or_else(|| "default".to_string())
+                .unwrap_or_else(|| "default".to_string()),
+            refresh
         ),
         AgentActionPayload::IssueDelete { id } => {
             format!("issue_delete id={}", bounded_transcript_field(id))
@@ -763,7 +760,13 @@ mod tests {
             .find(|entry| entry.role == TranscriptRole::Assistant)
             .unwrap();
 
-        assert_eq!(assistant.content, visible_text);
+        assert!(assistant.content.contains("rationale: reply"));
+        assert!(
+            assistant
+                .content
+                .contains("action rationale say-1 (say): reply")
+        );
+        assert!(assistant.content.ends_with(visible_text));
         assert!(!assistant.content.contains("say text="));
     }
 
@@ -802,6 +805,20 @@ mod tests {
         );
 
         let entries = transcript_entries_for_execution("conv1", 1, 200, &turn, &execution).unwrap();
+        let assistant_index = entries
+            .iter()
+            .position(|entry| entry.role == TranscriptRole::Assistant)
+            .unwrap();
+        let first_native_index = entries
+            .iter()
+            .position(|entry| entry.role == TranscriptRole::System)
+            .unwrap();
+        let generic_result_index = entries
+            .iter()
+            .position(|entry| entry.role == TranscriptRole::Tool)
+            .unwrap();
+        assert!(assistant_index < first_native_index);
+        assert!(first_native_index < generic_result_index);
         let hidden = entries
             .iter()
             .filter(|entry| entry.role == TranscriptRole::System)
@@ -832,8 +849,8 @@ mod tests {
     /// Verifies assistant transcript entries summarize MAAP action batches
     /// without retaining inline patch payloads from raw provider JSON.
     ///
-    /// Durable history preserves explicit thought notes and bounded action
-    /// shape while omitting generated file bytes and transient rationale.
+    /// Durable history preserves rationale, explicit thought notes, and bounded
+    /// action shape while omitting generated file bytes.
     fn turn_execution_transcript_summarizes_maap_action_batches() {
         let patch =
             "*** Begin Patch\n*** Add File: note.txt\n+large-inline-file-content\n*** End Patch";
@@ -877,9 +894,57 @@ mod tests {
             .unwrap();
 
         assert!(assistant.content.contains("thinking: The patch summary"));
+        assert!(
+            assistant
+                .content
+                .contains("rationale: transient batch rationale")
+        );
+        assert!(
+            assistant
+                .content
+                .contains("action rationale patch-1 (apply_patch): write note file")
+        );
         assert!(assistant.content.contains("apply_patch patch_bytes="));
-        assert!(!assistant.content.contains("transient batch rationale"));
         assert!(!assistant.content.contains("large-inline-file-content"));
+    }
+
+    #[test]
+    /// Verifies conversational provider text cannot short-circuit structured
+    /// rationale and action projection.
+    ///
+    /// Some adapters expose a compact conversational `raw_text` value beside a
+    /// parsed MAAP batch. Both belong to the accepted response and must reach a
+    /// later continuation without retaining the raw action envelope.
+    fn assistant_context_preserves_raw_text_and_structured_rationale_together() {
+        let batch = MaapBatch {
+            protocol: "maap/1".to_string(),
+            rationale: "Select issue iss-42 before inspecting its owner".to_string(),
+            thought: Some("Active issue: iss-42".to_string()),
+            turn_id: "turn-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            actions: vec![shell_action()],
+            final_turn: false,
+        };
+        let execution = execution(
+            vec![message(
+                ContextSourceKind::UserInstruction,
+                "user",
+                "fix the issue backlog",
+            )],
+            "I selected the highest-priority issue.",
+            Some(batch),
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let content = assistant_context_content_for_execution(&execution);
+
+        assert!(content.contains("rationale: Select issue iss-42"));
+        assert!(content.contains("thinking: Active issue: iss-42"));
+        assert!(content.contains("I selected the highest-priority issue."));
+        assert!(content.contains("action rationale a1 (shell_command): inspect"));
+        assert!(content.contains("action a1: shell_command"));
+        assert!(!content.contains("\"actions\""));
     }
 
     #[test]

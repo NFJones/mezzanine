@@ -7,12 +7,13 @@
 
 use super::{
     ActionPresentationInput, ActionResult, ActionStatus, AgentAction, AgentActionPayload,
-    AgentTurnExecution, AgentTurnRecord, AgentTurnState, BlockedApprovalRequest, MezError, Result,
-    RuntimeSessionService, action_outcome_line, action_rationale_repeats_visible_summary,
-    action_summary, current_unix_seconds, local_action_plan, network_action_plan,
-    runtime_action_result_is_feedback_candidate, runtime_action_type_is_shell_backed,
-    runtime_agent_terminal_preview, runtime_agent_turn_duration_display,
-    runtime_agent_turn_state_name, runtime_execution_can_feed_failure_to_model,
+    AgentTurnExecution, AgentTurnRecord, AgentTurnState, BlockedApprovalRequest, ContextSourceKind,
+    MezError, Result, RuntimeSessionService, action_outcome_line,
+    action_rationale_repeats_visible_summary, action_summary, current_unix_seconds,
+    local_action_plan, network_action_plan, runtime_action_result_is_feedback_candidate,
+    runtime_action_type_is_shell_backed, runtime_agent_terminal_preview,
+    runtime_agent_turn_duration_display, runtime_agent_turn_state_name,
+    runtime_execution_can_feed_failure_to_model,
     runtime_execution_uses_unbounded_apply_patch_recovery, runtime_failure_feedback_attempt_keys,
     runtime_failure_feedback_status_line, runtime_mezzanine_error_code,
     runtime_provider_audit_error_message,
@@ -210,13 +211,100 @@ impl RuntimeSessionService {
         turn_id: &str,
         results: &[ActionResult],
     ) -> Result<usize> {
+        let action_ownership = self
+            .agent
+            .agent_execution_groups_by_turn
+            .get(turn_id)
+            .cloned()
+            .unwrap_or_default();
+        let provider_tool_calls = self
+            .agent
+            .agent_provider_tool_calls_by_turn
+            .get(turn_id)
+            .cloned()
+            .unwrap_or_default();
+        let execution_groups = results
+            .iter()
+            .map(|result| action_ownership.get(&result.action_id).cloned())
+            .collect::<Vec<_>>();
         let context = self
             .agent_turn_contexts_mut()
             .get_mut(turn_id)
             .ok_or_else(|| MezError::invalid_state("runtime agent turn context is unavailable"))?;
-        context
-            .commit_settled_action_results(results)
-            .map_err(|error| MezError::invalid_state(error.to_string()))
+        let mut committed = 0usize;
+        let mut touched_groups = Vec::new();
+        for (result, execution_group) in results.iter().zip(execution_groups) {
+            if let Some(group) = execution_group.as_ref()
+                && !touched_groups.contains(group)
+            {
+                touched_groups.push(group.clone());
+            }
+            committed = committed.saturating_add(
+                match execution_group {
+                    Some(group) => context.commit_settled_action_results_in_group(
+                        std::slice::from_ref(result),
+                        group,
+                    ),
+                    None => context.commit_settled_action_results(std::slice::from_ref(result)),
+                }
+                .map_err(|error| MezError::invalid_state(error.to_string()))?,
+            );
+        }
+        for group in touched_groups {
+            let Some(tool_call_ids) = provider_tool_calls.get(&group) else {
+                continue;
+            };
+            let owned_action_ids = action_ownership
+                .iter()
+                .filter(|(_, owner)| *owner == &group)
+                .map(|(action_id, _)| action_id.as_str())
+                .collect::<Vec<_>>();
+            let all_actions_settled = owned_action_ids.iter().all(|action_id| {
+                context.chronology().iter().any(|event| {
+                    event.execution_group_id() == Some(&group)
+                        && event.block().source == ContextSourceKind::ActionResult
+                        && event.block().label == format!("action result {action_id}")
+                })
+            });
+            if !all_actions_settled {
+                continue;
+            }
+            let tool_result_content = context
+                .chronology()
+                .iter()
+                .filter(|event| {
+                    event.execution_group_id() == Some(&group)
+                        && event.block().source == ContextSourceKind::ActionResult
+                })
+                .map(|event| event.block().content.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            for tool_call_id in tool_call_ids {
+                let event = mez_agent::ProviderTranscriptEvent::DeepSeekToolResult {
+                    tool_call_id: tool_call_id.clone(),
+                    content: tool_result_content.clone(),
+                };
+                let content = event.to_transcript_content();
+                if context
+                    .blocks()
+                    .iter()
+                    .any(|block| block.content == content)
+                {
+                    continue;
+                }
+                context
+                    .append_evidence_event(
+                        ContextSourceKind::TranscriptTool,
+                        format!("provider tool result {tool_call_id}"),
+                        content,
+                        group.clone(),
+                        Some(mez_agent::ProviderContinuityOwner::DeepSeek),
+                        true,
+                    )
+                    .map_err(|error| MezError::invalid_state(error.to_string()))?;
+            }
+        }
+        Ok(committed)
     }
 
     /// Commits one deterministic action result if it is not already recorded.

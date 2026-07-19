@@ -268,16 +268,14 @@ fn runtime_provider_execution_completes_running_prompt_turn() {
         .iter()
         .find(|entry| entry.role == mez_agent::transcript::TranscriptRole::Assistant)
         .expect("assistant transcript entry should be persisted");
-    assert_eq!(assistant_entry.content, "done");
-    assert!(
-        !assistant_entry
-            .content
-            .contains("thinking: test action batch rationale")
-    );
-    assert!(
-        !assistant_entry
-            .content
-            .contains("thinking: finish the turn")
+    assert_eq!(
+        assistant_entry.content,
+        concat!(
+            "rationale: test action batch rationale\n",
+            "done\n",
+            "action rationale say-1 (say): report completion\n",
+            "Done."
+        )
     );
     assert!(
         entries

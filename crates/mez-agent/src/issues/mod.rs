@@ -12,7 +12,8 @@ mod validation;
 
 pub use error::{IssueError, IssueResult};
 pub use presentation::{
-    issue_delete_action_result, issue_query_action_result, issue_record_action_result,
+    issue_delete_action_result, issue_query_action_result, issue_query_freshness_key,
+    issue_query_freshness_skip_action_result, issue_query_json, issue_record_action_result,
     issue_record_json, issue_update_action_result,
 };
 pub use types::{

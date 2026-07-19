@@ -1174,17 +1174,19 @@ fn runtime_mutating_response_is_cacheable(_method: &str) -> bool {
 mod tests {
     use super::runtime_agent_transcript_context_blocks;
     use mez_agent::transcript::{TranscriptEntry, TranscriptRole};
-    use mez_agent::{ProviderTranscriptEvent, TranscriptContextEvent};
+    use mez_agent::{AgentContext, ProviderTranscriptEvent, TranscriptContextEvent};
 
-    /// Verifies only typed provider-native and routed-handoff system entries
-    /// become model context.
+    /// Verifies typed provider events and canonical assistant rationale survive
+    /// transcript restoration into model context.
     ///
     /// Ordinary system transcript entries are durable audit records rather than
     /// chat history. DeepSeek replay metadata is also stored with the system
     /// role, but it must survive runtime transcript filtering so request
     /// assembly can render it back into native assistant/tool messages. Routed
     /// summaries use their dedicated context source, while malformed or unknown
-    /// reserved events remain filtered with ordinary system records.
+    /// reserved events remain filtered with ordinary system records. Canonical
+    /// assistant text must be imported byte-for-byte so issue selection and
+    /// action intent remain available after restoration.
     #[test]
     fn runtime_transcript_context_preserves_provider_native_system_entries() {
         let provider_event = ProviderTranscriptEvent::DeepSeekToolResult {
@@ -1249,14 +1251,33 @@ mod tests {
                 turn_id: "turn-1".to_string(),
                 agent_id: "agent-1".to_string(),
                 pane_id: "%1".to_string(),
-                content: "visible assistant history".to_string(),
+                content: concat!(
+                    "rationale: selected iss-42 because it is the oldest unblocked issue\n",
+                    "thinking: Active issue: iss-42\n",
+                    "action rationale query-1 (issue_query): inspect the selected issue"
+                )
+                .to_string(),
+            },
+            TranscriptEntry {
+                conversation_id: "conv1".to_string(),
+                sequence: 6,
+                created_at_unix_seconds: 100,
+                role: TranscriptRole::Tool,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-1".to_string(),
+                pane_id: "%1".to_string(),
+                content: "[action_result query-1 issue_query succeeded]".to_string(),
             },
         ];
 
         let blocks = runtime_agent_transcript_context_blocks("%1", &entries);
 
-        assert_eq!(blocks.len(), 3);
+        assert_eq!(blocks.len(), 4);
         assert_eq!(blocks[0].content, provider_event);
+        assert_eq!(
+            blocks[0].source,
+            mez_agent::ContextSourceKind::TranscriptTool
+        );
         assert!(ProviderTranscriptEvent::from_transcript_content(&blocks[0].content).is_some());
         assert_eq!(
             blocks[1].source,
@@ -1267,11 +1288,96 @@ mod tests {
             blocks[1].content,
             r#"{"version":1,"result_summary":"durable summary"}"#
         );
-        assert_eq!(blocks[2].content, "visible assistant history");
+        assert_eq!(
+            blocks[2].content,
+            concat!(
+                "rationale: selected iss-42 because it is the oldest unblocked issue\n",
+                "thinking: Active issue: iss-42\n",
+                "action rationale query-1 (issue_query): inspect the selected issue"
+            )
+        );
+        assert_eq!(blocks[3].source, mez_agent::ContextSourceKind::ActionResult);
+        assert_eq!(
+            blocks[3].content,
+            "[action_result query-1 issue_query succeeded]"
+        );
         assert!(
             blocks
                 .iter()
                 .all(|block| !block.content.contains("must not appear"))
         );
+    }
+
+    /// Verifies persisted neutral and provider-native records restore as one
+    /// complete causal execution group.
+    ///
+    /// Terminal persistence deliberately stores the neutral assistant first,
+    /// then hidden native continuity records, then the generic action result.
+    /// Runtime transcript conversion and compatibility import must preserve
+    /// that order and infer one owner so provider assembly can select either
+    /// the native or neutral projection without mixing them.
+    #[test]
+    fn runtime_transcript_restoration_recovers_provider_execution_group() {
+        let native_assistant = ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+            content: String::new(),
+            reasoning_content: Some("query issues".to_string()),
+            tool_calls: vec![serde_json::json!({
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": "submit_maap_action_batch",
+                    "arguments": "{}"
+                }
+            })],
+        }
+        .to_transcript_content();
+        let native_result = ProviderTranscriptEvent::DeepSeekToolResult {
+            tool_call_id: "call-1".to_string(),
+            content: "[action_result query-1 issue_query succeeded]".to_string(),
+        }
+        .to_transcript_content();
+        let contents = [
+            (
+                TranscriptRole::Assistant,
+                "rationale: inspect issues\nthinking: Active issue: iss-42".to_string(),
+            ),
+            (TranscriptRole::System, native_assistant),
+            (TranscriptRole::System, native_result),
+            (
+                TranscriptRole::Tool,
+                "[action_result query-1 issue_query succeeded]".to_string(),
+            ),
+        ];
+        let entries = contents
+            .into_iter()
+            .enumerate()
+            .map(|(index, (role, content))| TranscriptEntry {
+                conversation_id: "conv1".to_string(),
+                sequence: u64::try_from(index).unwrap().saturating_add(1),
+                created_at_unix_seconds: 100,
+                role,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-1".to_string(),
+                pane_id: "%1".to_string(),
+                content,
+            })
+            .collect::<Vec<_>>();
+
+        let blocks = runtime_agent_transcript_context_blocks("%1", &entries);
+        let context = AgentContext::import_durable_blocks(blocks).unwrap();
+        let group_ids = context
+            .chronology()
+            .iter()
+            .map(|event| event.execution_group_id().cloned())
+            .collect::<Vec<_>>();
+
+        assert!(group_ids[0].is_some());
+        assert!(group_ids.iter().all(|group| group == &group_ids[0]));
+        assert_eq!(
+            context.chronology()[3].block().source,
+            mez_agent::ContextSourceKind::ActionResult
+        );
+        assert!(context.chronology()[1].provider_owner().is_some());
+        assert!(context.chronology()[2].provider_owner().is_some());
     }
 }

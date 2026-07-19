@@ -1058,12 +1058,12 @@ fn runtime_shell_action_nonzero_exit_queues_model_visible_result() {
     assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::TranscriptAssistant
             && block.content.contains("failing shell")
-            && !block
+            && block
                 .content
-                .contains("thinking: test action batch rationale")
-            && !block
+                .contains("rationale: test action batch rationale")
+            && block
                 .content
-                .contains("thinking: exercise failure feedback")
+                .contains("action rationale shell-fail (shell_command): exercise failure feedback")
     }));
     assert!(context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::ActionResult

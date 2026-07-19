@@ -2,6 +2,291 @@
 
 use super::*;
 
+/// Verifies provider execution identity is idempotent for exact replay while
+/// preserving textually identical responses reached from different requests.
+///
+/// Response text is not a valid event identity. The consumed request
+/// chronology distinguishes later executions, while replay of the same
+/// request/response pair must not append a duplicate assistant event.
+#[test]
+fn runtime_provider_execution_identity_is_request_scoped_and_idempotent() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "preserve identical response events")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let response = mez_agent::ModelResponse {
+        provider: "openai".to_string(),
+        model: "test".to_string(),
+        raw_text: "same assistant response".to_string(),
+        usage: Default::default(),
+        latest_request_usage: None,
+        quota_usage: Vec::new(),
+        action_batch: None,
+        provider_transcript_events: Vec::new(),
+    };
+    let first = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response: response.clone(),
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: Vec::new(),
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+
+    service
+        .append_agent_execution_chronology(&turn, &first)
+        .unwrap();
+    service
+        .append_agent_execution_chronology(&turn, &first)
+        .unwrap();
+
+    let mut second = first.clone();
+    second.request.messages.push(mez_agent::ModelMessage {
+        role: mez_agent::ModelMessageRole::Context,
+        source: ContextSourceKind::CommittedEvidence,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
+        content: "[new settled evidence]\nrequest chronology advanced".to_string(),
+    });
+    service
+        .append_agent_execution_chronology(&turn, &second)
+        .unwrap();
+
+    let assistant_events = service
+        .agent_turn_contexts()
+        .get(&turn.turn_id)
+        .unwrap()
+        .chronology()
+        .iter()
+        .filter(|event| event.block().source == ContextSourceKind::TranscriptAssistant)
+        .collect::<Vec<_>>();
+    assert_eq!(assistant_events.len(), 2);
+    assert_eq!(
+        assistant_events[0].block().content,
+        "same assistant response"
+    );
+    assert_eq!(
+        assistant_events[1].block().content,
+        "same assistant response"
+    );
+    assert_ne!(
+        assistant_events[0].execution_group_id(),
+        assistant_events[1].execution_group_id()
+    );
+}
+
+/// Verifies a late result keeps its original execution owner even after
+/// steering and another assistant response advance chronology.
+///
+/// The same execution group also owns the provider-neutral assistant record,
+/// DeepSeek-native tool-call pair, and generic action result. This lets the
+/// provider adapter select one representation without losing causal identity.
+#[test]
+fn runtime_late_result_retains_original_provider_execution_group() {
+    let mut service = test_runtime_service();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume("%1")
+        .unwrap();
+    let started = service
+        .start_agent_prompt_turn("%1", "inspect one issue")
+        .unwrap();
+    let turn = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == started.turn_id)
+        .cloned()
+        .unwrap();
+    let first_action = mez_agent::AgentAction {
+        id: "query-original".to_string(),
+        rationale: "Load the selected issue evidence".to_string(),
+        payload: mez_agent::AgentActionPayload::IssueQuery {
+            kind: None,
+            state: Some("open".to_string()),
+            text: Some("selected".to_string()),
+            limit: Some(10),
+            refresh: false,
+        },
+    };
+    let first = mez_agent::AgentTurnExecution {
+        request: runtime_model_request_fixture(&turn.turn_id),
+        response: mez_agent::ModelResponse {
+            provider: "deepseek".to_string(),
+            model: "test".to_string(),
+            raw_text: "executing".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Vec::new(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "Continue active issue iss-42".to_string(),
+                thought: Some("Active issue: iss-42".to_string()),
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![first_action.clone()],
+                final_turn: false,
+            }),
+            provider_transcript_events: vec![
+                mez_agent::ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+                    content: String::new(),
+                    reasoning_content: Some("Continue active issue iss-42".to_string()),
+                    tool_calls: vec![serde_json::json!({
+                        "id": "call-original",
+                        "type": "function",
+                        "function": {
+                            "name": "submit_maap_action_batch",
+                            "arguments": "{}"
+                        }
+                    })],
+                },
+            ],
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: Vec::new(),
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .append_agent_execution_chronology(&turn, &first)
+        .unwrap();
+
+    service
+        .agent_turn_contexts_mut()
+        .get_mut(&turn.turn_id)
+        .unwrap()
+        .append_user_event("steering", "also retain causal ownership")
+        .unwrap();
+
+    let second_action = mez_agent::AgentAction {
+        id: "query-later".to_string(),
+        rationale: "Record a later assistant execution".to_string(),
+        payload: mez_agent::AgentActionPayload::IssueQuery {
+            kind: None,
+            state: Some("open".to_string()),
+            text: Some("later".to_string()),
+            limit: Some(10),
+            refresh: false,
+        },
+    };
+    let mut second_request = runtime_model_request_fixture(&turn.turn_id);
+    second_request.messages.push(mez_agent::ModelMessage {
+        role: mez_agent::ModelMessageRole::User,
+        source: ContextSourceKind::UserInstruction,
+        placement: mez_agent::ContextPlacement::ConversationAppend,
+        content: "also retain causal ownership".to_string(),
+    });
+    let second = mez_agent::AgentTurnExecution {
+        request: second_request,
+        response: mez_agent::ModelResponse {
+            provider: "openai".to_string(),
+            model: "test".to_string(),
+            raw_text: "later response".to_string(),
+            usage: Default::default(),
+            latest_request_usage: None,
+            quota_usage: Vec::new(),
+            action_batch: Some(mez_agent::MaapBatch {
+                protocol: "maap/1".to_string(),
+                rationale: "Handle later evidence".to_string(),
+                thought: None,
+                turn_id: turn.turn_id.clone(),
+                agent_id: turn.agent_id.clone(),
+                actions: vec![second_action],
+                final_turn: false,
+            }),
+            provider_transcript_events: Vec::new(),
+        },
+        latest_response_usage: Default::default(),
+        routing_token_usage_by_model: std::collections::BTreeMap::new(),
+        action_results: Vec::new(),
+        final_turn: false,
+        terminal_state: AgentTurnState::Running,
+    };
+    service
+        .append_agent_execution_chronology(&turn, &second)
+        .unwrap();
+    service
+        .commit_settled_action_results_context(
+            &turn.turn_id,
+            &[mez_agent::ActionResult::succeeded(
+                &turn,
+                &first_action,
+                vec!["original result".to_string()],
+                None,
+            )],
+        )
+        .unwrap();
+
+    let context = service.agent_turn_contexts().get(&turn.turn_id).unwrap();
+    let original_assistant = context
+        .chronology()
+        .iter()
+        .find(|event| {
+            event.block().source == ContextSourceKind::TranscriptAssistant
+                && event.block().content.contains("Active issue: iss-42")
+        })
+        .unwrap();
+    let later_assistant = context
+        .chronology()
+        .iter()
+        .find(|event| {
+            event.block().source == ContextSourceKind::TranscriptAssistant
+                && event.block().content.contains("Handle later evidence")
+        })
+        .unwrap();
+    let original_result = context
+        .chronology()
+        .iter()
+        .find(|event| event.block().label == "action result query-original")
+        .unwrap();
+    assert_eq!(
+        original_result.execution_group_id(),
+        original_assistant.execution_group_id()
+    );
+    assert_ne!(
+        original_result.execution_group_id(),
+        later_assistant.execution_group_id()
+    );
+    let provider_events = context
+        .chronology()
+        .iter()
+        .filter(|event| {
+            mez_agent::ProviderTranscriptEvent::from_transcript_content(&event.block().content)
+                .is_some()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(provider_events.len(), 2);
+    assert!(
+        provider_events
+            .iter()
+            .all(|event| { event.execution_group_id() == original_assistant.execution_group_id() })
+    );
+    assert!(
+        context
+            .chronology()
+            .iter()
+            .position(|event| event.block().label == "action result query-original")
+            .unwrap()
+            > context
+                .chronology()
+                .iter()
+                .position(|event| event.block().content.contains("Handle later evidence"))
+                .unwrap()
+    );
+}
+
 /// Verifies actor-accepted steering invalidates every older in-flight provider
 /// decision instead of reordering it around the newer user event.
 ///

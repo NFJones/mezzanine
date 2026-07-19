@@ -695,6 +695,37 @@ mod tests {
         );
     }
 
+    /// Verifies active execution rationale remains byte-exact until the owning
+    /// action result settles.
+    ///
+    /// Compaction cannot preserve causal meaning by retaining a future result
+    /// after discarding the assistant rationale that selected the action. An
+    /// assistant-only execution group is therefore ineligible for replacement.
+    #[test]
+    fn context_compaction_preserves_open_execution_rationale() {
+        let mut context = AgentContext::new_durable(vec![ContextBlock::user_event(
+            "user prompt",
+            "fix the issue backlog",
+        )])
+        .unwrap();
+        let group = ContextExecutionGroupId::new("active-issue-execution").unwrap();
+        let rationale = format!(
+            "rationale: Continue active issue iss-42\nthinking: Active issue: iss-42\n{}",
+            "implementation evidence ".repeat(3_000)
+        );
+        context
+            .append_assistant_event("active issue action", rationale.clone(), group)
+            .unwrap();
+        let original = context.clone();
+
+        let (compacted, report) =
+            compact_model_context_for_budget_with_retained_tail_percent(context, 500, 1).unwrap();
+
+        assert!(!report.changed());
+        assert_eq!(compacted, original);
+        assert_eq!(compacted.chronology()[1].block().content, rationale);
+    }
+
     /// Verifies explicit bulk compaction prefers older recoverable history
     /// before the recent context tail.
     ///

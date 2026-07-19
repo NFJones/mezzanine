@@ -333,6 +333,9 @@ pub enum AgentActionPayload {
         text: Option<String>,
         /// Optional maximum records to return.
         limit: Option<u64>,
+        /// Forces a store refresh despite an unchanged successful query in the
+        /// current logical turn.
+        refresh: bool,
     },
     /// Deletes one local project issue through the runtime-owned issue store.
     IssueDelete {
@@ -799,6 +802,7 @@ impl AgentAction {
                 state,
                 text,
                 limit,
+                ..
             } => validate_agent_contract(validate_issue_query(IssueQueryValidation {
                 kind: kind.as_deref(),
                 state: state.as_deref(),
@@ -1263,6 +1267,7 @@ fn parse_maap_action_value(
             state: optional_string(object, "state")?.map(str::to_string),
             text: optional_string(object, "text")?.map(str::to_string),
             limit: optional_nullable_u64(object, "limit")?,
+            refresh: optional_bool(object, "refresh")?.unwrap_or(false),
         },
         "issue_delete" => AgentActionPayload::IssueDelete {
             id: required_string(object, "id")?.to_string(),

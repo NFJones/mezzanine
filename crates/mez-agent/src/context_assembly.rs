@@ -6,6 +6,8 @@
 //! request defaults. Product code supplies stable turn identity and prompt
 //! assets without exposing runtime records or filesystem access.
 
+use std::collections::BTreeSet;
+
 #[cfg(test)]
 use crate::ProviderTranscriptEvent;
 use crate::{
@@ -50,6 +52,17 @@ pub fn assemble_model_request_from_context(
     } else {
         repository_instruction_blocks.clone()
     };
+    let provider_native_execution_groups = blocks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, _)| context.metadata_for_block(index))
+        .filter(|metadata| {
+            metadata
+                .provider_owner()
+                .is_some_and(|owner| owner.matches_provider(&profile.provider))
+        })
+        .filter_map(|metadata| metadata.execution_group_id().cloned())
+        .collect::<BTreeSet<_>>();
     let prompt_profile = AgentPromptProfile::default_for(identity.agent_id, identity.pane_id)
         .with_provider(&profile.provider);
     let mut messages = Vec::with_capacity(blocks.len() + 1);
@@ -84,6 +97,16 @@ pub fn assemble_model_request_from_context(
                 placement: block.placement,
                 content: block.content.clone(),
             });
+            continue;
+        }
+        if metadata
+            .execution_group_id()
+            .is_some_and(|group| provider_native_execution_groups.contains(group))
+            && matches!(
+                block.source,
+                ContextSourceKind::TranscriptAssistant | ContextSourceKind::ActionResult
+            )
+        {
             continue;
         }
         if block.source == ContextSourceKind::ProjectGuidance {
@@ -290,6 +313,260 @@ mod tests {
                 .iter()
                 .any(|message| message.content.contains("session_id="))
         );
+    }
+
+    /// Verifies provider-native replay replaces only the neutral assistant and
+    /// result projection for its owning provider.
+    ///
+    /// The canonical context retains both representations so provider switches
+    /// remain possible. DeepSeek receives one valid adjacent native tool-call
+    /// pair, while another provider receives the neutral causal history and no
+    /// DeepSeek-only payload.
+    #[test]
+    fn model_request_assembly_selects_native_or_neutral_execution_projection() {
+        let mut context = AgentContext::new(vec![ContextBlock::user_event(
+            "user",
+            "inspect the issue backlog",
+        )])
+        .unwrap();
+        let group = crate::ContextExecutionGroupId::new("provider-execution-1").unwrap();
+        context
+            .append_assistant_event(
+                "assistant",
+                "rationale: inspect issues\naction query-1: issue_query",
+                group.clone(),
+            )
+            .unwrap();
+        let assistant_native = ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+            content: String::new(),
+            reasoning_content: Some("inspect issues".to_string()),
+            tool_calls: vec![serde_json::json!({
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": "submit_maap_action_batch",
+                    "arguments": "{}"
+                }
+            })],
+        }
+        .to_transcript_content();
+        context
+            .append_evidence_event(
+                ContextSourceKind::TranscriptTool,
+                "native assistant",
+                assistant_native.clone(),
+                group.clone(),
+                Some(crate::ProviderContinuityOwner::DeepSeek),
+                true,
+            )
+            .unwrap();
+        context
+            .append_evidence_event(
+                ContextSourceKind::ActionResult,
+                "action result query-1",
+                "[action_result query-1 issue_query succeeded]",
+                group.clone(),
+                None,
+                true,
+            )
+            .unwrap();
+        let tool_native = ProviderTranscriptEvent::DeepSeekToolResult {
+            tool_call_id: "call-1".to_string(),
+            content: "[action_result query-1 issue_query succeeded]".to_string(),
+        }
+        .to_transcript_content();
+        context
+            .append_evidence_event(
+                ContextSourceKind::TranscriptTool,
+                "native tool result",
+                tool_native.clone(),
+                group,
+                Some(crate::ProviderContinuityOwner::DeepSeek),
+                true,
+            )
+            .unwrap();
+
+        let deepseek = assemble_model_request_from_context(
+            &model_profile("deepseek"),
+            ModelRequestIdentity {
+                turn_id: "turn-1",
+                agent_id: "agent-1",
+                pane_id: "%1",
+            },
+            &context,
+            &TestPromptAssets,
+        )
+        .unwrap();
+        assert!(
+            deepseek
+                .messages
+                .iter()
+                .any(|message| message.content == assistant_native)
+        );
+        assert!(
+            deepseek
+                .messages
+                .iter()
+                .any(|message| message.content == tool_native)
+        );
+        assert!(!deepseek.messages.iter().any(|message| {
+            message.content.contains("rationale: inspect issues")
+                || message
+                    .content
+                    .contains("[action_result query-1 issue_query succeeded]")
+                    && !message
+                        .content
+                        .starts_with(crate::PROVIDER_TRANSCRIPT_EVENT_MARKER)
+        }));
+
+        let openai = assemble_model_request_from_context(
+            &model_profile("openai"),
+            ModelRequestIdentity {
+                turn_id: "turn-1",
+                agent_id: "agent-1",
+                pane_id: "%1",
+            },
+            &context,
+            &TestPromptAssets,
+        )
+        .unwrap();
+        assert!(
+            openai
+                .messages
+                .iter()
+                .any(|message| message.content.contains("rationale: inspect issues"))
+        );
+        assert!(openai.messages.iter().any(|message| {
+            message
+                .content
+                .contains("[action_result query-1 issue_query succeeded]")
+        }));
+        assert!(openai.messages.iter().all(|message| {
+            !message
+                .content
+                .starts_with(crate::PROVIDER_TRANSCRIPT_EVENT_MARKER)
+        }));
+    }
+
+    /// Verifies durable transcript import reconstructs one provider execution
+    /// group before selecting its provider-specific projection.
+    ///
+    /// Persistence stores the neutral assistant first, followed by the hidden
+    /// native call/result pair and the generic action result. Compatibility
+    /// import must group that contiguous sequence so a restored DeepSeek turn
+    /// receives only the native pair, while a provider switch receives only
+    /// the neutral assistant and generic result.
+    #[test]
+    fn restored_model_request_selects_one_complete_execution_projection() {
+        let assistant_native = ProviderTranscriptEvent::DeepSeekAssistantToolCall {
+            content: String::new(),
+            reasoning_content: Some("inspect issues".to_string()),
+            tool_calls: vec![serde_json::json!({
+                "id": "call-1",
+                "type": "function",
+                "function": {
+                    "name": "submit_maap_action_batch",
+                    "arguments": "{}"
+                }
+            })],
+        }
+        .to_transcript_content();
+        let tool_native = ProviderTranscriptEvent::DeepSeekToolResult {
+            tool_call_id: "call-1".to_string(),
+            content: "[action_result query-1 issue_query succeeded]".to_string(),
+        }
+        .to_transcript_content();
+        let context = AgentContext::import_durable_blocks(vec![
+            ContextBlock::user_event("user", "inspect the issue backlog"),
+            ContextBlock {
+                source: ContextSourceKind::TranscriptAssistant,
+                placement: ContextPlacement::ConversationAppend,
+                label: "previous assistant".to_string(),
+                content: "rationale: inspect issues\naction query-1: issue_query".to_string(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::TranscriptTool,
+                placement: ContextPlacement::ConversationAppend,
+                label: "native assistant".to_string(),
+                content: assistant_native.clone(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::TranscriptTool,
+                placement: ContextPlacement::ConversationAppend,
+                label: "native tool result".to_string(),
+                content: tool_native.clone(),
+            },
+            ContextBlock {
+                source: ContextSourceKind::ActionResult,
+                placement: ContextPlacement::ConversationAppend,
+                label: "generic action result".to_string(),
+                content: "[action_result query-1 issue_query succeeded]".to_string(),
+            },
+        ])
+        .unwrap();
+
+        let deepseek = assemble_model_request_from_context(
+            &model_profile("deepseek"),
+            ModelRequestIdentity {
+                turn_id: "turn-1",
+                agent_id: "agent-1",
+                pane_id: "%1",
+            },
+            &context,
+            &TestPromptAssets,
+        )
+        .unwrap();
+        let native_messages = deepseek
+            .messages
+            .iter()
+            .filter(|message| {
+                message
+                    .content
+                    .starts_with(crate::PROVIDER_TRANSCRIPT_EVENT_MARKER)
+            })
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            native_messages,
+            vec![assistant_native.as_str(), tool_native.as_str()]
+        );
+        assert!(!deepseek.messages.iter().any(|message| {
+            !message
+                .content
+                .starts_with(crate::PROVIDER_TRANSCRIPT_EVENT_MARKER)
+                && (message.content.contains("rationale: inspect issues")
+                    || message
+                        .content
+                        .contains("[action_result query-1 issue_query succeeded]"))
+        }));
+
+        let openai = assemble_model_request_from_context(
+            &model_profile("openai"),
+            ModelRequestIdentity {
+                turn_id: "turn-1",
+                agent_id: "agent-1",
+                pane_id: "%1",
+            },
+            &context,
+            &TestPromptAssets,
+        )
+        .unwrap();
+        assert!(
+            openai
+                .messages
+                .iter()
+                .any(|message| message.content.contains("rationale: inspect issues"))
+        );
+        assert!(openai.messages.iter().any(|message| {
+            message
+                .content
+                .contains("[action_result query-1 issue_query succeeded]")
+        }));
+        assert!(openai.messages.iter().all(|message| {
+            !message
+                .content
+                .starts_with(crate::PROVIDER_TRANSCRIPT_EVENT_MARKER)
+        }));
     }
 
     /// Builds one minimal profile for lower request-assembly tests.

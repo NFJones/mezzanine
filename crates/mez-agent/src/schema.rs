@@ -710,8 +710,15 @@ fn maap_issue_query_action_schema() -> serde_json::Value {
                     "description": "Optional maximum issue records to return."
                 }),
             ),
+            (
+                "refresh",
+                serde_json::json!({
+                    "type": "boolean",
+                    "description": "Whether to bypass same-turn query freshness after concrete evidence that the issue store changed externally. Use false for ordinary discovery and continuations."
+                }),
+            ),
         ],
-        &["kind", "state", "text", "limit"],
+        &["kind", "state", "text", "limit", "refresh"],
     )
 }
 

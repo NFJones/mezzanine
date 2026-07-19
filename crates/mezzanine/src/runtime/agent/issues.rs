@@ -14,7 +14,8 @@ use super::{
 };
 use crate::runtime::runtime_effective_config_value;
 use mez_agent::issues::{
-    issue_delete_action_result, issue_query_action_result, issue_record_action_result,
+    issue_delete_action_result, issue_query_action_result, issue_query_freshness_key,
+    issue_query_freshness_skip_action_result, issue_record_action_result,
     issue_update_action_result,
 };
 use std::path::Path;
@@ -123,7 +124,10 @@ impl RuntimeSessionService {
                     current_unix_seconds(),
                 );
                 match result {
-                    Ok(record) => Ok(issue_record_action_result(turn, action, "added", &record)),
+                    Ok(record) => {
+                        self.clear_agent_issue_query_freshness_for_turn(&turn.turn_id);
+                        Ok(issue_record_action_result(turn, action, "added", &record))
+                    }
                     Err(error) => Ok(ActionResult::failed(
                         turn,
                         action,
@@ -168,7 +172,12 @@ impl RuntimeSessionService {
                     current_unix_seconds(),
                 );
                 match result {
-                    Ok(result) => Ok(issue_update_action_result(turn, action, &result)),
+                    Ok(result) => {
+                        if result.updated {
+                            self.clear_agent_issue_query_freshness_for_turn(&turn.turn_id);
+                        }
+                        Ok(issue_update_action_result(turn, action, &result))
+                    }
                     Err(error) => Ok(ActionResult::failed(
                         turn,
                         action,
@@ -183,6 +192,7 @@ impl RuntimeSessionService {
                 state,
                 text,
                 limit,
+                refresh,
             } => {
                 let kind = kind
                     .as_deref()
@@ -200,8 +210,31 @@ impl RuntimeSessionService {
                     text.clone(),
                     limit,
                 )?;
+                let freshness_key = issue_query_freshness_key(&query);
+                if !*refresh
+                    && let Some(reused_action_id) = self
+                        .agent
+                        .agent_turn_issue_query_freshness
+                        .get(&turn.turn_id)
+                        .and_then(|queries| queries.get(&freshness_key))
+                {
+                    return Ok(issue_query_freshness_skip_action_result(
+                        turn,
+                        action,
+                        &query,
+                        reused_action_id,
+                    ));
+                }
                 match store.query_issues(&query) {
-                    Ok(records) => Ok(issue_query_action_result(turn, action, &records)),
+                    Ok(records) => {
+                        let result = issue_query_action_result(turn, action, &query, &records);
+                        self.agent
+                            .agent_turn_issue_query_freshness
+                            .entry(turn.turn_id.clone())
+                            .or_default()
+                            .insert(freshness_key, action.id.clone());
+                        Ok(result)
+                    }
                     Err(error) => Ok(ActionResult::failed(
                         turn,
                         action,
@@ -213,7 +246,12 @@ impl RuntimeSessionService {
             }
             AgentActionPayload::IssueDelete { id } => match store.delete_issue(project, id.clone())
             {
-                Ok(result) => Ok(issue_delete_action_result(turn, action, &result)),
+                Ok(result) => {
+                    if result.deleted {
+                        self.clear_agent_issue_query_freshness_for_turn(&turn.turn_id);
+                    }
+                    Ok(issue_delete_action_result(turn, action, &result))
+                }
                 Err(error) => Ok(ActionResult::failed(
                     turn,
                     action,

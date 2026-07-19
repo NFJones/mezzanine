@@ -105,6 +105,7 @@ fn agent_action_execution_header_summarizes_issue_actions() {
             state: Some("open".to_string()),
             text: Some("rendering".to_string()),
             limit: Some(5),
+            refresh: false,
         },
     };
     let delete = AgentAction {

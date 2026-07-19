@@ -2904,11 +2904,26 @@ evidence it causes. Steering MUST be appended at the exact boundary where it is
 received, without synthetic timestamps, turn ids, precedence prose, or a late
 prompt restatement. Assistant actions, settled results, controller results,
 local/delegated messages, and routed evidence MUST remain in occurrence order.
+The active user prompt is therefore the last conversation event only at the
+instant it is appended; every assistant response, action result, message, or
+steering event that occurs later MUST follow it. Event sequence assigned at
+commit is authoritative. Assembly and restoration MUST NOT timestamp-sort,
+role-sort, or move the active prompt to the end.
 Repository guidance, memory, local messages, controller facts, and other
 neutral context MUST NOT be classified as direct user speech. Provider adapters
 MAY use a supported transport-role wrapper, but the wrapper MUST explicitly
 identify the material as non-user-authored and MUST NOT move it across canonical
 events.
+
+An accepted assistant action response MUST enter chronology through a canonical
+provider-neutral projection that retains the batch rationale, optional durable
+thought, action-local rationale, conversational response text, and bounded
+action summaries in provider order. Presentation-only rationale suppression
+MUST NOT mutate that canonical projection. The projection MUST omit raw MAAP
+envelopes and unbounded action payloads. These rationale lines are causal
+assistant context: they MUST remain available to continuation, transcript
+restoration, and provider switching until their complete execution group is
+atomically compacted.
 
 Durable `AgentContext` MUST contain only `StablePrefix` and
 `ConversationAppend`; provider preparation MUST construct and discard a
@@ -2977,11 +2992,23 @@ removed atomically. A settlement batch containing a running action or blocked
 approval MUST be rejected without mutating chronology. Replaying a completed
 settlement MUST preserve the original chronological position and MUST NOT
 create a duplicate. Provider assistant output and its provider-native tool
-events plus terminal action results share one causal execution owner. If an
+events plus terminal action results share one causal execution owner. That
+owner MUST be stable for one accepted provider request/response pair: exact
+replay is idempotent, while identical response text produced from different
+consumed request chronology MUST create distinct owners. Every synthesized
+action id MUST be registered to that owner before execution, and each terminal
+result MUST commit to the registered owner rather than whichever response is
+most recent when the result arrives. If an
 exact user or message event arrives after dispatch and before a result settles,
 the owner MAY occur on both sides of that barrier; chronology MUST remain
 unchanged and compaction MUST NOT gather those fragments into one replacement
-range. Provider-neutral continuity diagnostics MUST keep
+range. Canonical context MUST retain both a provider-neutral projection and any
+typed provider-native replay events for the same owner. Request assembly for
+the owning provider MUST emit only the native assistant/tool-call projection;
+assembly for every other provider MUST emit only the neutral assistant/action-
+result projection. Persistence and restoration MUST reconstruct the same
+complete owner before making that selection. Provider-neutral continuity
+diagnostics MUST keep
 immutable and volatile token estimates, the immutable projection byte length
 and digest, the longest common immutable prefix, and an append-only flag without
 retaining prompt text. Transitions MUST distinguish new turns, compaction,
@@ -4453,7 +4480,8 @@ prevent identifying an action ID MUST be recorded as malformed response errors
 in the agent transcript. Action results MUST be appended to the agent
 transcript. Before the model is asked to continue from an action, Mezzanine
 MUST supply assistant context for the provider response being continued from,
-including rendered thinking/rationale lines, and a compact model-facing
+including the batch `rationale`, optional `thinking` lines, and every
+action-local rationale in original action order, plus a compact model-facing
 projection of the result that preserves the action identity, action type,
 status, error code/message, approval prompt when blocked, command line,
 exit/timeout/signal state, truncation state, and bounded cleaned output needed
@@ -7138,11 +7166,16 @@ two short sentences by default and reserve bullets for cases where they improve
 scan value. It MUST prefer concrete progress, changed behavior, validation
 evidence, or blocker reports over long self-explanation, repeated intent
 statements, apologies that do not clarify a failure, or duplicated command
-output. Because batch rationale is transient current-turn guidance rather than
-durable memory, the prompt MUST direct it to be an additive delta: each
+output. Because batch rationale is current-turn causal guidance rather than
+persistent cross-conversation memory, the prompt MUST direct it to be an
+additive delta: each
 rationale should state only what is newly decisive about the next listed
 actions and should not restate prior rationales, the user request, global task
-goal, loaded context, or visible action summaries. The prompt MUST also
+goal, loaded context, or visible action summaries. `Transient` in this rule
+MUST NOT mean discard at an action or provider boundary: accepted rationale is
+retained in its assistant execution group for continuation and durable
+transcript replay, then may leave exact raw context only through complete-group
+compaction. The prompt MUST also
 instruct the model to compare a planned rationale, optional batch `thought`, or
 progress `say` against recent thinking lines, visible text, action results, and
 other text in the same response; if the text would only repeat existing
@@ -8048,7 +8081,25 @@ gated `issues` capability whose concrete action subset contains `issue_add`,
 `issue_update`, `issue_query`, and `issue_delete`. These on-demand actions MUST
 execute through the runtime-owned local issue store, MUST scope records to the
 active pane project, and MUST return bounded action results for provider
-continuation. `issue_query` MUST default to open issues when no state filter is provided and MAY filter by open or resolved state. `issue_update` MAY mark issues open or resolved while preserving resolved records for history. `issue_add` and `issue_update` MAY set dependency issue ids through a `depends_on` list; `issue_update` MAY also mutate body text, title, kind, notes, state, and dependencies. Dependencies MUST reference existing same-project issues and MUST NOT introduce cycles. Notes are the intended field for model working progress and handoff state.
+continuation. `issue_query` MUST default to open issues when no state filter is
+provided and MAY filter by open or resolved state. `issue_update` MAY mark
+issues open or resolved while preserving resolved records for history.
+`issue_add` and `issue_update` MAY set dependency issue ids through a
+`depends_on` list; `issue_update` MAY also mutate body text, title, kind, notes,
+state, and dependencies. Dependencies MUST reference existing same-project
+issues and MUST NOT introduce cycles. Notes are the intended field for model
+working progress and handoff state.
+`issue_query` MUST carry a Boolean `refresh` field in compact provider-native
+schemas; compatibility inputs that omit it MUST behave as `false`. A successful
+query result MUST include the normalized query descriptor and a deterministic
+snapshot digest. Within one logical turn, an unchanged normalized query with
+`refresh=false` MUST reuse the latest successful result rather than execute the
+issue store again. The skipped result MUST identify the reused action and a
+stable `unchanged_issue_query` code. A successful issue add, effective update,
+or effective delete MUST invalidate same-turn query freshness. Failed queries
+MUST NOT establish freshness. `refresh=true` MUST bypass the guard only when
+concrete evidence indicates that the issue store changed outside the current
+turn.
 When local issue tracking is disabled, the harness MUST deny the `issues`
 capability and MUST NOT expose issue actions.
 

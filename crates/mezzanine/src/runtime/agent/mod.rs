@@ -168,6 +168,23 @@ pub(crate) struct RuntimeAgentComponent {
     agent_turn_output_limit_recovery_attempts: BTreeMap<String, u32>,
     /// Exceptional provider interaction selected for each active turn.
     agent_turn_interaction_kinds: BTreeMap<String, ModelInteractionKind>,
+    /// Causal execution group keyed by turn and locally synthesized action id.
+    ///
+    /// Late results use this ownership map instead of attaching to whichever
+    /// assistant execution happens to be newest when they settle.
+    agent_execution_groups_by_turn:
+        BTreeMap<String, BTreeMap<String, mez_agent::ContextExecutionGroupId>>,
+    /// DeepSeek-native tool-call ids keyed by turn and causal execution group.
+    ///
+    /// Once every action in the group settles, the runtime appends the matching
+    /// native tool-result events without replacing provider-neutral chronology.
+    agent_provider_tool_calls_by_turn:
+        BTreeMap<String, BTreeMap<mez_agent::ContextExecutionGroupId, Vec<String>>>,
+    /// Successful normalized issue queries keyed by turn and freshness key.
+    ///
+    /// Values retain the originating action id so a redundant query can point
+    /// the model back to the exact committed result without reading SQLite.
+    agent_turn_issue_query_freshness: BTreeMap<String, BTreeMap<String, String>>,
     /// Per-turn successful shell dispatch history.
     agent_turn_shell_dispatch_history: BTreeMap<String, AgentShellDispatchHistory>,
     /// Per-turn network action history.
@@ -1281,6 +1298,8 @@ impl RuntimeSessionService {
     /// Clears correction attempts and action histories for one completed turn.
     pub(crate) fn clear_agent_action_bookkeeping_for_turn(&mut self, turn_id: &str) {
         self.clear_agent_failure_feedback_attempts_for_turn(turn_id);
+        self.clear_agent_execution_group_ownership_for_turn(turn_id);
+        self.clear_agent_issue_query_freshness_for_turn(turn_id);
         self.agent.agent_turn_shell_dispatch_history.remove(turn_id);
         self.agent.agent_turn_network_action_history.remove(turn_id);
         self.agent
@@ -1296,10 +1315,24 @@ impl RuntimeSessionService {
         self.agent.agent_turn_failure_feedback_attempts.clear();
         self.agent.agent_turn_output_limit_recovery_attempts.clear();
         self.agent.agent_turn_interaction_kinds.clear();
+        self.agent.agent_execution_groups_by_turn.clear();
+        self.agent.agent_provider_tool_calls_by_turn.clear();
+        self.agent.agent_turn_issue_query_freshness.clear();
         self.agent.agent_turn_shell_dispatch_history.clear();
         self.agent.agent_turn_network_action_history.clear();
         self.agent.agent_turn_config_change_successes.clear();
         self.agent.agent_pre_shell_hook_completions.clear();
+    }
+
+    /// Clears provider-execution identities and action ownership for one turn.
+    pub(crate) fn clear_agent_execution_group_ownership_for_turn(&mut self, turn_id: &str) {
+        self.agent.agent_execution_groups_by_turn.remove(turn_id);
+        self.agent.agent_provider_tool_calls_by_turn.remove(turn_id);
+    }
+
+    /// Clears successful issue-query freshness state for one logical turn.
+    pub(crate) fn clear_agent_issue_query_freshness_for_turn(&mut self, turn_id: &str) {
+        self.agent.agent_turn_issue_query_freshness.remove(turn_id);
     }
 
     /// Reports whether one pre-shell hook already completed for an action.
@@ -1735,7 +1768,6 @@ use mez_agent::outcome::{
     runtime_unrecovered_failure_reason, runtime_validate_provider_completion_execution,
     runtime_validate_provider_completion_identity,
 };
-use mez_agent::progress::suppress_redundant_batch_rationale as runtime_suppress_redundant_batch_rationale;
 use mez_agent::subagent_task_output_for_execution;
 use outcome::{
     runtime_agent_action_outcome_line, runtime_agent_action_rationale_repeats_visible_summary,
