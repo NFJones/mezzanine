@@ -82,6 +82,7 @@ pub(crate) fn wrap_runtime_command_display_overlay_content(
                 let end = selection_end.min(wrapped.source_end_column);
                 if start < end {
                     wrapped_content.selections.push(OverlaySelection {
+                        logical_id: selection.logical_id,
                         line_index,
                         start_column: wrapped
                             .display_prefix_width
@@ -139,6 +140,7 @@ fn command_overlay_wrapping_preserves_split_selection_and_style_ranges() {
         line_kinds: vec![RichTextLineKind::Normal],
         line_copy_texts: vec![Some("prefix **alpha beta gamma** suffix".to_string())],
         selections: vec![OverlaySelection {
+            logical_id: 7,
             line_index: 0,
             start_column: 7,
             width: 16,
@@ -162,6 +164,13 @@ fn command_overlay_wrapping_preserves_split_selection_and_style_ranges() {
             .selections
             .windows(2)
             .any(|selections| selections[0].line_index != selections[1].line_index),
+        "{wrapped:?}"
+    );
+    assert!(
+        wrapped
+            .selections
+            .iter()
+            .all(|selection| selection.logical_id == 7),
         "{wrapped:?}"
     );
     assert!(
@@ -406,6 +415,7 @@ pub(super) fn list_themes_rendered_overlay_lines_align_headers_with_selectable_r
         line_copy_texts: vec![None; 3],
         scroll_offset: 0,
         selections: vec![OverlaySelection {
+            logical_id: 0,
             line_index: 2,
             start_column: 13,
             width: 8,
@@ -749,12 +759,19 @@ impl RuntimeCommandDisplayOverlayContent {
         self.line_kinds.append(&mut markdown_content.line_kinds);
         self.line_copy_texts
             .append(&mut markdown_content.line_copy_texts);
+        let logical_id_offset = self
+            .selections
+            .iter()
+            .map(|selection| selection.logical_id)
+            .max()
+            .map_or(0, |logical_id| logical_id.saturating_add(1));
         self.selections.extend(
             markdown_content
                 .selections
                 .into_iter()
                 .map(|mut selection| {
                     selection.line_index += line_offset;
+                    selection.logical_id = selection.logical_id.saturating_add(logical_id_offset);
                     selection
                 }),
         );
@@ -770,7 +787,14 @@ impl RuntimeCommandDisplayOverlayContent {
                 self.line_kinds.push(RichTextLineKind::Normal);
                 self.line_copy_texts.push(None);
                 for choice in display_line.choices {
+                    let logical_id = self
+                        .selections
+                        .iter()
+                        .map(|selection| selection.logical_id)
+                        .max()
+                        .map_or(0, |logical_id| logical_id.saturating_add(1));
                     self.selections.push(OverlaySelection {
+                        logical_id,
                         line_index,
                         start_column: choice.start_column,
                         width: choice.width,

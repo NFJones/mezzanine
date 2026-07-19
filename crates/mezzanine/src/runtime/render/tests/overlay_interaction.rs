@@ -247,6 +247,7 @@ fn display_overlay_single_selection_hit_testing_requires_link_bounds() {
         line_copy_texts: vec![None],
         scroll_offset: 0,
         selections: vec![OverlaySelection {
+            logical_id: 0,
             line_index: 0,
             start_column: "text before ".len(),
             width: "[open]".len(),
@@ -298,6 +299,7 @@ fn display_overlay_scroll_keeps_active_selection_visible() {
         scroll_offset: 0,
         selections: vec![
             OverlaySelection {
+                logical_id: 0,
                 line_index: 0,
                 start_column: 0,
                 width: 5,
@@ -305,6 +307,7 @@ fn display_overlay_scroll_keeps_active_selection_visible() {
                 kind: OverlaySelectionKind::Primary,
             },
             OverlaySelection {
+                logical_id: 1,
                 line_index: 3,
                 start_column: 0,
                 width: 6,

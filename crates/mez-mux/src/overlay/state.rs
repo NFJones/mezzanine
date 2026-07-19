@@ -107,6 +107,8 @@ pub struct OverlaySearchMatch {
 /// One selectable command-output overlay range.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OverlaySelection {
+    /// Logical action identity shared by physical wrapped-row fragments.
+    pub logical_id: usize,
     /// Zero-based content line containing the selection.
     pub line_index: usize,
     /// Display column where the interactive range begins.

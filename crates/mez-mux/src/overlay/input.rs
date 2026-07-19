@@ -370,8 +370,29 @@ fn move_overlay_selection<Source>(
     if overlay.selections.is_empty() {
         return apply_overlay_scroll_delta(overlay, delta, size);
     }
-    let previous = overlay.active_selection_index.unwrap_or(0);
-    let next = selector_step_index(previous, overlay.selections.len(), delta);
+    let previous = overlay
+        .active_selection_index
+        .unwrap_or(0)
+        .min(overlay.selections.len().saturating_sub(1));
+    let active_logical_id = overlay.selections[previous].logical_id;
+    let next = if delta.is_negative() {
+        let target = overlay.selections[..previous]
+            .iter()
+            .rposition(|selection| selection.logical_id != active_logical_id)
+            .unwrap_or(previous);
+        let target_logical_id = overlay.selections[target].logical_id;
+        overlay
+            .selections
+            .iter()
+            .position(|selection| selection.logical_id == target_logical_id)
+            .unwrap_or(target)
+    } else {
+        overlay.selections[previous.saturating_add(1)..]
+            .iter()
+            .position(|selection| selection.logical_id != active_logical_id)
+            .map(|offset| previous.saturating_add(1).saturating_add(offset))
+            .unwrap_or(previous)
+    };
     overlay.active_selection_index = Some(next);
     if let Some(line_index) = overlay
         .selections
@@ -400,7 +421,13 @@ fn set_overlay_selection_index<Source>(
         return changed;
     }
     let previous = overlay.active_selection_index.unwrap_or(0);
-    let next = index.min(overlay.selections.len().saturating_sub(1));
+    let target = index.min(overlay.selections.len().saturating_sub(1));
+    let target_logical_id = overlay.selections[target].logical_id;
+    let next = overlay
+        .selections
+        .iter()
+        .position(|selection| selection.logical_id == target_logical_id)
+        .unwrap_or(target);
     overlay.active_selection_index = Some(next);
     if let Some(line_index) = overlay
         .selections
@@ -584,6 +611,7 @@ mod tests {
         let size = Size::new(20, 3).unwrap();
         let mut overlay = overlay(&["alpha", "beta", "gamma"]);
         overlay.selections.push(OverlaySelection {
+            logical_id: 0,
             line_index: 1,
             start_column: 0,
             width: 4,
@@ -626,6 +654,98 @@ mod tests {
             OverlayInputOutcome::Updated
         );
         assert_eq!(overlay.search_input.as_deref(), Some(""));
+    }
+
+    /// Verifies keyboard navigation treats wrapped physical fragments as one
+    /// logical choice while preserving a physical index for command execution.
+    #[test]
+    fn overlay_reducer_skips_fragments_of_one_logical_selection() {
+        let size = Size::new(20, 8).unwrap();
+        let mut overlay = overlay(&["first", "continued", "second"]);
+        overlay.selections = vec![
+            OverlaySelection {
+                logical_id: 10,
+                line_index: 0,
+                start_column: 0,
+                width: 5,
+                command: "open-first".to_string(),
+                kind: OverlaySelectionKind::Primary,
+            },
+            OverlaySelection {
+                logical_id: 10,
+                line_index: 1,
+                start_column: 0,
+                width: 9,
+                command: "open-first".to_string(),
+                kind: OverlaySelectionKind::Primary,
+            },
+            OverlaySelection {
+                logical_id: 11,
+                line_index: 2,
+                start_column: 0,
+                width: 6,
+                command: "open-second".to_string(),
+                kind: OverlaySelectionKind::Primary,
+            },
+        ];
+        overlay.active_selection_index = Some(0);
+
+        assert_eq!(
+            apply_overlay_input(
+                &mut overlay,
+                OverlayInputAction::SelectNext,
+                None,
+                true,
+                size
+            ),
+            OverlayInputOutcome::Updated
+        );
+        assert_eq!(overlay.active_selection_index, Some(2));
+        assert_eq!(
+            apply_overlay_input(
+                &mut overlay,
+                OverlayInputAction::SelectPrevious,
+                None,
+                true,
+                size,
+            ),
+            OverlayInputOutcome::Updated
+        );
+        assert_eq!(overlay.active_selection_index, Some(0));
+        assert_eq!(
+            apply_overlay_input(
+                &mut overlay,
+                OverlayInputAction::SelectFirst,
+                None,
+                true,
+                size
+            ),
+            OverlayInputOutcome::Unchanged
+        );
+        assert_eq!(overlay.active_selection_index, Some(0));
+        assert_eq!(
+            apply_overlay_input(
+                &mut overlay,
+                OverlayInputAction::SelectLast,
+                None,
+                true,
+                size
+            ),
+            OverlayInputOutcome::Updated
+        );
+        assert_eq!(overlay.active_selection_index, Some(2));
+        assert_eq!(
+            apply_overlay_input(
+                &mut overlay,
+                OverlayInputAction::SelectActive,
+                None,
+                true,
+                size,
+            ),
+            OverlayInputOutcome::Invoke {
+                command: "open-second".to_string()
+            }
+        );
     }
 
     /// Verifies pager filtering is reduced entirely inside mux state and an

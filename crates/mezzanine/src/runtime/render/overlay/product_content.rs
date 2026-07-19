@@ -330,7 +330,9 @@ pub(crate) fn runtime_agent_shell_markdown_overlay_content_for_width(
         } = rendered;
         let line_index = content.lines.len();
         for (start_column, width, command) in agent_command_links_in_line(&display) {
+            let logical_id = content.selections.len();
             content.selections.push(OverlaySelection {
+                logical_id,
                 line_index,
                 start_column,
                 width,
@@ -349,7 +351,9 @@ pub(crate) fn runtime_agent_shell_markdown_overlay_content_for_width(
                         && selection.command == command
                 });
                 if !duplicate {
+                    let logical_id = content.selections.len();
                     content.selections.push(OverlaySelection {
+                        logical_id,
                         line_index,
                         start_column,
                         width,

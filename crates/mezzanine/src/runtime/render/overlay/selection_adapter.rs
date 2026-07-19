@@ -115,6 +115,7 @@ pub(super) fn render_record_browser_overlay(
             .skip(prompt_selection.start_line)
             .take(prompt_selection.option_count)
             .map(|(line_index, line)| OverlaySelection {
+                logical_id: line_index,
                 line_index,
                 start_column: 0,
                 width: UnicodeWidthStr::width(line.as_str()),

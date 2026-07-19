@@ -322,11 +322,15 @@ pub fn overlay_rendered_line_style_spans(
             rendition: ui_theme.colors.copy_selection.rendition(),
         })
     });
-    for (selection_index, selection) in overlay.selections.iter().enumerate() {
+    let active_logical_id = overlay
+        .active_selection_index
+        .and_then(|index| overlay.selections.get(index))
+        .map(|selection| selection.logical_id);
+    for selection in &overlay.selections {
         if selection.line_index != line_index {
             continue;
         }
-        let active = overlay.active_selection_index == Some(selection_index);
+        let active = active_logical_id == Some(selection.logical_id);
         let start = overlay_rendered_selection_start(overlay, selection);
         if start < max_columns && selection.width > 0 {
             append_uncovered_overlay_selection_span(
@@ -351,10 +355,8 @@ pub fn overlay_rendered_line_style_spans(
     for span in &body_spans {
         push_or_extend_style_span(&mut spans, *span);
     }
-    for (selection_index, selection) in overlay.selections.iter().enumerate() {
-        if selection.line_index != line_index
-            || overlay.active_selection_index != Some(selection_index)
-        {
+    for selection in &overlay.selections {
+        if selection.line_index != line_index || active_logical_id != Some(selection.logical_id) {
             continue;
         }
         let start = overlay_rendered_selection_start(overlay, selection);
@@ -683,6 +685,7 @@ mod tests {
         let mut overlay = overlay(&["zero", "one", "two", "three"]);
         overlay.selections = vec![
             OverlaySelection {
+                logical_id: 0,
                 line_index: 0,
                 start_column: 0,
                 width: 4,
@@ -690,6 +693,7 @@ mod tests {
                 kind: OverlaySelectionKind::Primary,
             },
             OverlaySelection {
+                logical_id: 1,
                 line_index: 3,
                 start_column: 0,
                 width: 5,
@@ -759,6 +763,7 @@ mod tests {
     fn overlay_style_layering_keeps_gutter_separate() {
         let mut overlay = overlay(&["select"]);
         overlay.selections.push(OverlaySelection {
+            logical_id: 0,
             line_index: 0,
             start_column: 0,
             width: 6,
@@ -769,5 +774,52 @@ mod tests {
         let spans = overlay_rendered_line_style_spans(&overlay, 0, 20, &default_ui_theme());
         assert!(spans.iter().any(|span| span.start == 0 && span.length == 2));
         assert!(spans.iter().any(|span| span.start == 2 && span.length == 6));
+    }
+
+    /// Verifies every physical fragment of one active logical selection uses
+    /// active styling while an unrelated selection remains inactive.
+    #[test]
+    fn overlay_style_layering_activates_all_logical_selection_fragments() {
+        let mut overlay = overlay(&["first", "continued", "other"]);
+        overlay.selections = vec![
+            OverlaySelection {
+                logical_id: 4,
+                line_index: 0,
+                start_column: 0,
+                width: 5,
+                command: "open".to_string(),
+                kind: OverlaySelectionKind::Primary,
+            },
+            OverlaySelection {
+                logical_id: 4,
+                line_index: 1,
+                start_column: 0,
+                width: 9,
+                command: "open".to_string(),
+                kind: OverlaySelectionKind::Primary,
+            },
+            OverlaySelection {
+                logical_id: 5,
+                line_index: 2,
+                start_column: 0,
+                width: 5,
+                command: "other".to_string(),
+                kind: OverlaySelectionKind::Primary,
+            },
+        ];
+        overlay.active_selection_index = Some(0);
+        let theme = default_ui_theme();
+
+        let first = overlay_rendered_line_style_spans(&overlay, 0, 20, &theme);
+        let continued = overlay_rendered_line_style_spans(&overlay, 1, 20, &theme);
+        let other = overlay_rendered_line_style_spans(&overlay, 2, 20, &theme);
+
+        assert!(first.iter().any(|span| span.start == 0 && span.length == 2));
+        assert!(
+            continued
+                .iter()
+                .any(|span| span.start == 0 && span.length == 2)
+        );
+        assert!(!other.iter().any(|span| span.start == 0 && span.length == 2));
     }
 }
