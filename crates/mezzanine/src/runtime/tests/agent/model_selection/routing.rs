@@ -550,6 +550,13 @@ fn runtime_routed_loop_continues_in_one_worker_before_terminal_handoff() {
     service
         .emit_subagent_task_result_for_execution(&first_worker_turn, &patched_execution)
         .unwrap();
+    service
+        .complete_running_agent_turn_and_start_ready(
+            &first_worker_turn,
+            AgentTurnState::Completed,
+            "routed_loop_iteration_settled",
+        )
+        .unwrap();
 
     let second_worker_turn_id = service
         .routed_workflow_for_tests(&parent_turn_id)

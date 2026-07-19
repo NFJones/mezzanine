@@ -578,6 +578,13 @@ impl RuntimeSessionService {
         if turn.cooperation_mode.as_deref() == Some("routed-worker") {
             return Ok(());
         }
+        if self
+            .agent
+            .routed_workflow_by_child_turn
+            .contains_key(&turn.turn_id)
+        {
+            return Ok(());
+        }
         let loop_dependency = self.take_agent_loop_dependency_for_turn(&turn.turn_id);
         match state {
             AgentTurnState::Completed => self.emit_subagent_task_result_with_dependency(
