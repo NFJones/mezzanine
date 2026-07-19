@@ -91,6 +91,8 @@ pub enum RecordBrowserAction {
     StartFilter(RecordBrowserFilterField),
     /// Begin editing a save destination path.
     StartSave,
+    /// Request deletion of the active record through the owning backend.
+    DeleteActive,
     /// Move the active selector row inside the open kind prompt.
     MovePromptSelection(isize),
     /// Jump to the first selector row inside the open kind prompt.
@@ -133,6 +135,11 @@ pub enum RecordBrowserOutcome {
         /// Markdown content to write, including the metadata table.
         markdown: String,
     },
+    /// The caller should delete one stable record id and refresh the browser.
+    DeleteSubmitted {
+        /// Stable backend record id selected for deletion.
+        id: String,
+    },
     /// The action had no effect in the current state.
     Ignored,
 }
@@ -144,6 +151,7 @@ pub struct RecordBrowser {
     scope_indicator: Option<String>,
     records: Vec<RecordBrowserRecord>,
     kind_filter_choices: Vec<RecordBrowserFilterChoice>,
+    deletion_enabled: bool,
     active_index: usize,
     scroll_offset: usize,
     detail_index: Option<usize>,
@@ -179,6 +187,7 @@ impl RecordBrowser {
             scope_indicator: None,
             records,
             kind_filter_choices,
+            deletion_enabled: false,
             active_index: 0,
             scroll_offset: 0,
             detail_index: None,
@@ -221,6 +230,34 @@ impl RecordBrowser {
     /// Returns the selected row index retained by the list view.
     pub fn active_index(&self) -> usize {
         self.active_index
+    }
+
+    /// Selects one bounded list record by index.
+    pub fn set_active_index(&mut self, active_index: usize) {
+        self.active_index = active_index.min(self.records.len().saturating_sub(1));
+    }
+
+    /// Selects the record with one stable backend id when it is present.
+    pub fn set_active_record_id(&mut self, record_id: &str) -> bool {
+        let Some(index) = self
+            .records
+            .iter()
+            .position(|record| record.id == record_id)
+        else {
+            return false;
+        };
+        self.active_index = index;
+        true
+    }
+
+    /// Enables destructive deletion intent for browsers whose backend supports it.
+    pub fn enable_deletion(&mut self) {
+        self.deletion_enabled = true;
+    }
+
+    /// Reports whether the current browser exposes destructive deletion.
+    pub fn deletion_enabled(&self) -> bool {
+        self.deletion_enabled
     }
 
     /// Returns the retained list scroll offset.
@@ -283,6 +320,17 @@ impl RecordBrowser {
                     input: String::new(),
                 });
                 Ok(RecordBrowserOutcome::Updated)
+            }
+            RecordBrowserAction::DeleteActive => {
+                if !self.deletion_enabled {
+                    return Ok(RecordBrowserOutcome::Ignored);
+                }
+                let Some(record) = self.records.get(self.active_index) else {
+                    return Ok(RecordBrowserOutcome::Ignored);
+                };
+                Ok(RecordBrowserOutcome::DeleteSubmitted {
+                    id: record.id.clone(),
+                })
             }
             RecordBrowserAction::MovePromptSelection(delta) => {
                 Ok(self.move_prompt_selection(delta))
@@ -353,8 +401,12 @@ impl RecordBrowser {
     }
 
     fn render_list_page(&self) -> RecordBrowserPage {
-        let raw_markdown =
-            list_markdown(&self.title, self.scope_indicator.as_deref(), &self.records);
+        let raw_markdown = list_markdown(
+            &self.title,
+            self.scope_indicator.as_deref(),
+            &self.records,
+            self.deletion_enabled,
+        );
         let mut markdown = String::new();
         if let Some(error) = &self.error {
             markdown.push_str(&format!("Error: {error}\n\n"));
@@ -487,16 +539,18 @@ fn list_markdown(
     title: &str,
     scope_indicator: Option<&str>,
     records: &[RecordBrowserRecord],
+    deletion_enabled: bool,
 ) -> String {
     let mut lines = vec![format!("# {title}"), String::new()];
     if let Some(scope_indicator) = scope_indicator {
         lines.push(format!("**Scope:** {scope_indicator}"));
         lines.push(String::new());
     }
-    lines.push(
-        "**Keys:** `a` all/default scope · `k` kind · `p` project · `x` text · `s` save"
-            .to_string(),
-    );
+    lines.push(if deletion_enabled {
+        "**Keys:** `Enter` open · `d` delete · `/` search · `s` save".to_string()
+    } else {
+        "**Keys:** `a` all/default scope · `k` kind · `p` project · `x` text · `s` save".to_string()
+    });
     lines.push(String::new());
     if records.is_empty() {
         lines.push("No records found.".to_string());
@@ -783,5 +837,39 @@ mod tests {
             }
             other => panic!("expected save outcome, got {other:?}"),
         }
+    }
+
+    /// Verifies destructive intent uses the highlighted stable record id and
+    /// safely ignores deletion when the browser has no records.
+    #[test]
+    fn record_browser_delete_intent_tracks_the_active_record() {
+        let mut browser = RecordBrowser::new(
+            "Context",
+            vec![
+                browser_record("1", "User"),
+                browser_record("2", "Assistant"),
+            ],
+            Vec::new(),
+        )
+        .unwrap();
+        browser.enable_deletion();
+        browser.set_active_index(1);
+
+        assert_eq!(
+            browser
+                .apply_action(RecordBrowserAction::DeleteActive)
+                .unwrap(),
+            RecordBrowserOutcome::DeleteSubmitted {
+                id: "2".to_string(),
+            }
+        );
+
+        let mut empty = RecordBrowser::new("Context", Vec::new(), Vec::new()).unwrap();
+        assert_eq!(
+            empty
+                .apply_action(RecordBrowserAction::DeleteActive)
+                .unwrap(),
+            RecordBrowserOutcome::Ignored
+        );
     }
 }

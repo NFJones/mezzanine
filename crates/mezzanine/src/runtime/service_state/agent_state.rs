@@ -62,6 +62,13 @@ pub(crate) type RuntimeRecordBrowserOverlayFrame =
 /// Query context retained for one backend-specific record-browser overlay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RuntimeRecordBrowserOverlaySource {
+    /// Durable transcript backing the current pane's context browser.
+    Context {
+        /// Conversation whose entries are displayed and may be deleted.
+        conversation_id: String,
+        /// Pane that owns the active conversation.
+        pane_id: String,
+    },
     /// Issue browser filters and bounded result limit.
     Issues {
         /// Optional project glob filter; `None` means all projects.

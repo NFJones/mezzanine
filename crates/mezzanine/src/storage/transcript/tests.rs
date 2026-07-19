@@ -198,6 +198,38 @@ fn transcript_store_append_many_reports_written_bytes() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// Verifies deleting one durable entry rewrites the remaining transcript in
+/// order, keeps append sequencing contiguous, and refreshes summary metadata.
+#[test]
+fn transcript_store_deletes_one_entry_and_rebuilds_summary() {
+    let root = temp_root("delete-entry");
+    let _ = fs::remove_dir_all(&root);
+    let store = AgentTranscriptStore::new(root.clone());
+    store
+        .append_many(&[
+            entry("conv1", 1, TranscriptRole::User),
+            entry("conv1", 2, TranscriptRole::Tool),
+            entry("conv1", 3, TranscriptRole::Assistant),
+        ])
+        .unwrap();
+
+    assert!(store.delete_entry("conv1", 2).unwrap());
+    assert!(!store.delete_entry("conv1", 9).unwrap());
+
+    let inspected = store.inspect("conv1").unwrap();
+    assert_eq!(inspected.len(), 2);
+    assert_eq!(inspected[0].content, "content 1");
+    assert_eq!(inspected[0].sequence, 1);
+    assert_eq!(inspected[1].content, "content 3");
+    assert_eq!(inspected[1].sequence, 2);
+    assert_eq!(store.next_sequence("conv1").unwrap(), 3);
+
+    let summary = store.summary("conv1").unwrap().unwrap();
+    assert_eq!(summary.entries, 2);
+    assert_eq!(summary.last_turn_id, "turn-3");
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Verifies that durable presentation entries are persisted separately from
 /// model-facing transcript entries while retaining multiline copy text.
 #[test]

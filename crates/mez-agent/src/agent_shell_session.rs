@@ -841,6 +841,7 @@ fn agent_shell_command_description(name: &str) -> &'static str {
         "logout" => "log out of a provider account.",
         "list-mcp" => "list configured MCP servers and tools.",
         "issue" => "create, inspect, update, or delete project issue records.",
+        "show-context" => "browse and delete entries in the current pane conversation.",
         "show-issues" => "browse project issue records and open issue details.",
         "memory" => "inspect or change persistent memory enablement.",
         "show-memories" => "browse durable memory records and open memory details.",

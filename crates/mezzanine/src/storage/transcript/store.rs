@@ -409,6 +409,63 @@ impl AgentTranscriptStore {
             .collect()
     }
 
+    /// Deletes one transcript entry identified by its current sequence number.
+    ///
+    /// Surviving entries retain transcript order and are renumbered contiguously
+    /// before an atomic file replacement. The saved-session summary is rebuilt
+    /// from the rewritten transcript so later appends and session listings stay
+    /// consistent. Returns `false` without mutation when the sequence is absent.
+    pub fn delete_entry(&self, conversation_id: &str, sequence: u64) -> Result<bool> {
+        validate_conversation_id(conversation_id)?;
+        if sequence == 0 {
+            return Err(MezError::invalid_args(
+                "transcript entry sequence must be non-zero",
+            ));
+        }
+        let existing_path = self.existing_transcript_path_for(conversation_id)?;
+        let mut entries = self.inspect(conversation_id)?;
+        let Some(index) = entries.iter().position(|entry| entry.sequence == sequence) else {
+            return Ok(false);
+        };
+        entries.remove(index);
+        for (index, entry) in entries.iter_mut().enumerate() {
+            entry.sequence = u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1);
+            entry.validate()?;
+        }
+
+        let session_dir = self.ensure_session_dir(conversation_id)?;
+        let path = self.transcript_path_for(conversation_id)?;
+        let temp_path = session_dir.join("history.tsv.tmp");
+        {
+            let mut file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&temp_path)?;
+            for entry in &entries {
+                file.write_all(encode_transcript_entry(entry)?.as_bytes())?;
+                file.write_all(b"\n")?;
+            }
+            file.sync_all()?;
+        }
+        set_private_file_permissions(&temp_path)?;
+        std_fs::rename(&temp_path, &path)?;
+        set_private_file_permissions(&path)?;
+        if existing_path != path && existing_path.exists() {
+            std_fs::remove_file(existing_path)?;
+        }
+
+        if let Some(summary) = summarize_conversation(entries) {
+            self.write_summary_sidecar(&summary)?;
+        } else {
+            let summary_path = session_dir.join(SESSION_SUMMARY_FILE_NAME);
+            if summary_path.exists() {
+                std_fs::remove_file(summary_path)?;
+            }
+        }
+        Ok(true)
+    }
+
     /// Reads and decodes the latest entries for one conversation without
     /// loading the entire transcript file.
     ///

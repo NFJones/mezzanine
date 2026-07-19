@@ -123,6 +123,12 @@ pub fn baseline_slash_commands() -> Vec<SlashCommandSpec> {
         slash("logout", &[], SlashCommandEffect::CredentialMutation, true),
         slash("list-mcp", &[], SlashCommandEffect::ReadOnly, true),
         slash("issue", &[], SlashCommandEffect::SessionMutation, true),
+        slash(
+            "show-context",
+            &[],
+            SlashCommandEffect::SessionMutation,
+            true,
+        ),
         slash("show-issues", &[], SlashCommandEffect::ReadOnly, true),
         slash("memory", &[], SlashCommandEffect::PolicyMutation, true),
         slash("show-memories", &[], SlashCommandEffect::ReadOnly, true),

@@ -22,6 +22,142 @@ use std::{fs, path::PathBuf};
 const DEFAULT_SHOW_RECORD_LIMIT: usize = 100;
 
 impl RuntimeSessionService {
+    /// Executes `/show-context` for the active pane conversation.
+    pub(super) fn execute_agent_shell_show_context_command(
+        &mut self,
+        pane_id: &str,
+        input: &str,
+    ) -> Result<AgentShellCommandOutcome> {
+        let slash = parse_slash_command(input)?.ok_or_else(|| {
+            MezError::invalid_args("show-context command must be a slash command")
+        })?;
+        let args = slash.args.split_whitespace().collect::<Vec<_>>();
+        if args.len() > 1 {
+            return Err(MezError::invalid_args(
+                "show-context accepts at most one transcript sequence",
+            ));
+        }
+        let detail_sequence = args
+            .first()
+            .map(|value| {
+                value.parse::<u64>().map_err(|_| {
+                    MezError::invalid_args("show-context transcript sequence must be an integer")
+                })
+            })
+            .transpose()?;
+        let conversation_id = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| session.session_id.clone())
+            .ok_or_else(|| {
+                MezError::invalid_state("show-context requires an active pane session")
+            })?;
+        let mut browser = self.context_record_browser(&conversation_id, pane_id)?;
+        if let Some(sequence) = detail_sequence {
+            if !browser.set_active_record_id(&sequence.to_string()) {
+                return Err(MezError::new(
+                    crate::error::MezErrorKind::NotFound,
+                    "context entry was not found in the active pane",
+                ));
+            }
+            browser.apply_action(mez_mux::record_browser::RecordBrowserAction::OpenActive)?;
+        }
+        let source = Some(RuntimeRecordBrowserOverlaySource::Context {
+            conversation_id,
+            pane_id: pane_id.to_string(),
+        });
+        let page = browser.render_page();
+        self.register_pending_record_browser_overlay(pane_id, "show-context", browser, source);
+        Ok(AgentShellCommandOutcome::Display {
+            command: "show-context".to_string(),
+            body: page.raw_markdown,
+        })
+    }
+
+    /// Loads one pane conversation into the shared record browser.
+    fn context_record_browser(
+        &self,
+        conversation_id: &str,
+        pane_id: &str,
+    ) -> Result<RecordBrowser> {
+        let store = self
+            .persistence
+            .cloned_transcript_store()
+            .ok_or_else(|| MezError::invalid_state("show-context requires transcript storage"))?;
+        let entries = match store.inspect(conversation_id) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == crate::error::MezErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error),
+        };
+        let mut browser = RecordBrowser::new(
+            "Context",
+            entries
+                .into_iter()
+                .filter(|entry| entry.pane_id == pane_id)
+                .map(context_browser_record)
+                .collect(),
+            Vec::new(),
+        )?;
+        browser.enable_deletion();
+        Ok(browser)
+    }
+
+    /// Deletes one pane-owned context entry and returns a refreshed browser.
+    pub(crate) fn delete_context_browser_entry(
+        &mut self,
+        source: &RuntimeRecordBrowserOverlaySource,
+        record_id: &str,
+        active_index: usize,
+    ) -> Result<RecordBrowser> {
+        let RuntimeRecordBrowserOverlaySource::Context {
+            conversation_id,
+            pane_id,
+        } = source
+        else {
+            return Err(MezError::invalid_state(
+                "record browser source does not support context deletion",
+            ));
+        };
+        let sequence = record_id.parse::<u64>().map_err(|_| {
+            MezError::invalid_args("context browser record id must be a transcript sequence")
+        })?;
+        let store = self
+            .persistence
+            .cloned_transcript_store()
+            .ok_or_else(|| MezError::invalid_state("show-context requires transcript storage"))?;
+        let entries = store.inspect(conversation_id)?;
+        let entry_index = entries
+            .iter()
+            .position(|entry| entry.sequence == sequence && entry.pane_id == *pane_id)
+            .ok_or_else(|| {
+                MezError::new(
+                    crate::error::MezErrorKind::NotFound,
+                    "context entry was not found in the active pane",
+                )
+            })?;
+        let transcript_entries = self
+            .agent_shell_store()
+            .get(pane_id)
+            .map(|session| session.transcript_entries)
+            .unwrap_or(0);
+        let retained_start = entries
+            .len()
+            .saturating_sub(usize::try_from(transcript_entries).unwrap_or(usize::MAX));
+        if !store.delete_entry(conversation_id, sequence)? {
+            return Err(MezError::new(
+                crate::error::MezErrorKind::NotFound,
+                "context entry was already deleted",
+            ));
+        }
+        if entry_index >= retained_start {
+            self.agent_shell_store_mut()
+                .retain_recent_transcript_entries(pane_id, transcript_entries.saturating_sub(1))?;
+        }
+        let mut browser = self.context_record_browser(conversation_id, pane_id)?;
+        browser.set_active_index(active_index);
+        Ok(browser)
+    }
+
     /// Executes `/show-issues` by querying issue records and rendering browser Markdown.
     pub(super) fn execute_agent_shell_show_issues_command(
         &mut self,
@@ -229,6 +365,10 @@ impl RuntimeSessionService {
         source: &RuntimeRecordBrowserOverlaySource,
     ) -> Result<RecordBrowser> {
         match source {
+            RuntimeRecordBrowserOverlaySource::Context {
+                conversation_id,
+                pane_id,
+            } => self.context_record_browser(conversation_id, pane_id),
             RuntimeRecordBrowserOverlaySource::Issues {
                 project_glob,
                 kind,
@@ -315,6 +455,7 @@ impl RuntimeSessionService {
         source: &RuntimeRecordBrowserOverlaySource,
     ) -> RuntimeRecordBrowserOverlaySource {
         match source {
+            RuntimeRecordBrowserOverlaySource::Context { .. } => source.clone(),
             RuntimeRecordBrowserOverlaySource::Issues {
                 project_glob,
                 default_project_glob,
@@ -365,6 +506,7 @@ impl RuntimeSessionService {
     ) -> Result<RuntimeRecordBrowserOverlaySource> {
         let value = value.trim();
         match source {
+            RuntimeRecordBrowserOverlaySource::Context { .. } => Ok(source.clone()),
             RuntimeRecordBrowserOverlaySource::Issues {
                 project_glob,
                 default_project_glob,
@@ -453,6 +595,9 @@ fn set_record_browser_scope_indicator(
     source: &RuntimeRecordBrowserOverlaySource,
 ) {
     let indicator = match source {
+        RuntimeRecordBrowserOverlaySource::Context { pane_id, .. } => {
+            format!("current pane {pane_id}")
+        }
         RuntimeRecordBrowserOverlaySource::Issues { project_glob, .. } => project_glob
             .clone()
             .unwrap_or_else(|| "all projects".to_string()),
@@ -649,6 +794,38 @@ fn parse_show_limit(value: &str) -> Result<usize> {
         ));
     }
     Ok(limit.min(DEFAULT_SHOW_RECORD_LIMIT))
+}
+
+fn context_browser_record(entry: mez_agent::transcript::TranscriptEntry) -> RecordBrowserRecord {
+    let role = match entry.role {
+        mez_agent::transcript::TranscriptRole::User => "user",
+        mez_agent::transcript::TranscriptRole::Assistant => "assistant",
+        mez_agent::transcript::TranscriptRole::Tool => "tool",
+        mez_agent::transcript::TranscriptRole::System => "system",
+    };
+    let preview = entry
+        .content
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map(|line| line.chars().take(80).collect::<String>())
+        .unwrap_or_else(|| "empty entry".to_string());
+    RecordBrowserRecord {
+        id: entry.sequence.to_string(),
+        open_command: Some(format!("/show-context {}", entry.sequence)),
+        title: format!("{role} · {preview}"),
+        metadata: vec![
+            ("sequence".to_string(), entry.sequence.to_string()),
+            ("role".to_string(), role.to_string()),
+            ("turn_id".to_string(), entry.turn_id),
+            ("agent_id".to_string(), entry.agent_id),
+            ("pane_id".to_string(), entry.pane_id),
+            (
+                "created_at_unix_seconds".to_string(),
+                entry.created_at_unix_seconds.to_string(),
+            ),
+        ],
+        markdown: entry.content,
+    }
 }
 
 fn issue_browser_record(record: mez_agent::issues::IssueRecord) -> RecordBrowserRecord {

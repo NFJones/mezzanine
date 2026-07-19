@@ -144,12 +144,54 @@ impl RuntimeSessionService {
                 )));
             }
         }
+        if input == b"d" && record_browser.browser.deletion_enabled() {
+            let source = record_browser.source.clone().ok_or_else(|| {
+                MezError::invalid_state("deletable record browser is missing its backend source")
+            })?;
+            let active_index = overlay
+                .active_selection_index
+                .unwrap_or_else(|| record_browser.browser.active_index());
+            let outcome = {
+                let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                    return Ok(Some(false));
+                };
+                let Some(record_browser) = overlay.record_browser.as_mut() else {
+                    return Ok(None);
+                };
+                record_browser.browser.set_active_index(active_index);
+                record_browser
+                    .browser
+                    .apply_action(mez_mux::record_browser::RecordBrowserAction::DeleteActive)?
+            };
+            let mez_mux::record_browser::RecordBrowserOutcome::DeleteSubmitted { id } = outcome
+            else {
+                return Ok(None);
+            };
+            let browser = self.delete_context_browser_entry(&source, &id, active_index)?;
+            let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                return Ok(Some(false));
+            };
+            let Some(record_browser) = overlay.record_browser.as_mut() else {
+                return Ok(None);
+            };
+            record_browser.browser = browser;
+            return Ok(Some(render_record_browser_overlay(
+                overlay,
+                &self.presentation.settings.ui_theme,
+                terminal_width,
+                prose_width,
+            )));
+        }
+        let active_selection_index = overlay.active_selection_index;
         let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
             return Ok(Some(false));
         };
         let Some(record_browser) = overlay.record_browser.as_mut() else {
             return Ok(None);
         };
+        if let Some(active_index) = active_selection_index {
+            record_browser.browser.set_active_index(active_index);
+        }
         let action = match input {
             b"k" => Some(mez_mux::record_browser::RecordBrowserAction::StartFilter(
                 mez_mux::record_browser::RecordBrowserFilterField::Kind,

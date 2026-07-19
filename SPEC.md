@@ -5549,6 +5549,11 @@ The baseline command capabilities are:
   records to open, preserve resolved records for history, and support an
   optional body for the stable description and optional mutable notes for
   progress, handoff context, and next steps.
+- `/show-context`: Browse durable transcript entries for the current pane conversation
+  in transcript order. It MUST support arrow-key selection, `Enter` for entry
+  details, `/` search, and `d` to delete the selected entry from durable context.
+  Deletion MUST remain scoped to the active pane conversation and refresh the
+  browser while preserving a valid selection.
 - `/show-issues`: Browse local issue records in a pager-backed record browser.
   It MUST default to open issues for the active pane project, support optional
   project glob, kind, state, full-text, and limit filters, render selectable

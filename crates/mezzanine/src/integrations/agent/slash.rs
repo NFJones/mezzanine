@@ -361,6 +361,10 @@ fn execute_agent_shell_command_with_context_inner(
             command,
             reason: "local issue tracking requires the live runtime".to_string(),
         },
+        "show-context" => AgentShellCommandOutcome::RequiresRuntime {
+            command,
+            reason: "current conversation browsing requires the live runtime".to_string(),
+        },
         "show-issues" => AgentShellCommandOutcome::RequiresRuntime {
             command,
             reason: "issue browser display requires the live runtime".to_string(),

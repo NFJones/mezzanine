@@ -414,3 +414,136 @@ fn runtime_agent_shell_record_browser_escape_restores_parent_view_stack() {
     assert_eq!(overlay.active_selection_index, Some(1));
     assert!(overlay.lines.iter().any(|line| line.contains("issue-2")));
 }
+
+/// Verifies `/show-context` renders only the active pane conversation in
+/// transcript order and deletes the entry selected with pager arrow keys.
+#[test]
+fn runtime_agent_shell_show_context_deletes_the_selected_active_session_entry() {
+    let root = temp_root("runtime-show-context-delete");
+    let _ = fs::remove_dir_all(&root);
+    let transcript_store = AgentTranscriptStore::new(root.clone());
+    let mut service = test_runtime_service();
+    service.set_agent_transcript_store(transcript_store.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 14).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    let conversation_id = service
+        .agent_shell_store()
+        .get(&pane_id)
+        .unwrap()
+        .session_id
+        .clone();
+    transcript_store
+        .append_many(&[
+            TranscriptEntry {
+                conversation_id: conversation_id.clone(),
+                sequence: 1,
+                created_at_unix_seconds: 1,
+                role: TranscriptRole::User,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                pane_id: pane_id.clone(),
+                content: "first context entry".to_string(),
+            },
+            TranscriptEntry {
+                conversation_id: conversation_id.clone(),
+                sequence: 2,
+                created_at_unix_seconds: 2,
+                role: TranscriptRole::Assistant,
+                turn_id: "turn-1".to_string(),
+                agent_id: "agent-%1".to_string(),
+                pane_id: pane_id.clone(),
+                content: "second context entry".to_string(),
+            },
+        ])
+        .unwrap();
+    transcript_store
+        .append(&TranscriptEntry {
+            conversation_id: "other-conversation".to_string(),
+            sequence: 1,
+            created_at_unix_seconds: 3,
+            role: TranscriptRole::User,
+            turn_id: "other-turn".to_string(),
+            agent_id: "agent-%2".to_string(),
+            pane_id: "%2".to_string(),
+            content: "other pane context".to_string(),
+        })
+        .unwrap();
+    service
+        .agent_shell_store_mut()
+        .record_transcript_entries(&pane_id, 2)
+        .unwrap();
+
+    let response = service
+        .execute_agent_shell_command(&primary, "/show-context")
+        .unwrap();
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+    let overlay = service.primary_display_overlay().unwrap();
+    let first_line = overlay
+        .lines
+        .iter()
+        .position(|line| line.contains("first context entry"))
+        .unwrap();
+    let second_line = overlay
+        .lines
+        .iter()
+        .position(|line| line.contains("second context entry"))
+        .unwrap();
+    assert!(first_line < second_line);
+    assert!(
+        !overlay
+            .lines
+            .iter()
+            .any(|line| line.contains("other pane context"))
+    );
+
+    for input in [b"\x1b[B".as_slice(), b"d".as_slice()] {
+        service
+            .apply_attached_terminal_step_plan(
+                &primary,
+                &AttachedTerminalClientStepPlan {
+                    actions: vec![TerminalClientLoopAction::ForwardToPane(input.to_vec())],
+                    output_lines: Vec::new(),
+                    output_line_style_spans: Vec::new(),
+                    input_hangup: false,
+                    output_hangup: false,
+                    error_roles: Vec::new(),
+                },
+            )
+            .unwrap();
+    }
+
+    let entries = transcript_store.inspect(&conversation_id).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].content, "first context entry");
+    assert_eq!(
+        service
+            .agent_shell_store()
+            .get(&pane_id)
+            .unwrap()
+            .transcript_entries,
+        1
+    );
+    let overlay = service.primary_display_overlay().unwrap();
+    assert!(
+        overlay
+            .lines
+            .iter()
+            .any(|line| line.contains("first context entry"))
+    );
+    assert!(
+        !overlay
+            .lines
+            .iter()
+            .any(|line| line.contains("second context entry"))
+    );
+    assert!(transcript_store.inspect("other-conversation").is_ok());
+    let _ = fs::remove_dir_all(root);
+}
