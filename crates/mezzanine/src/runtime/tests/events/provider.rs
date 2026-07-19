@@ -936,7 +936,15 @@ fn runtime_routed_handoff_summary_persists_once_and_rehydrates_with_parent_answe
     }));
     assert!(next_context.blocks().iter().any(|block| {
         block.source == ContextSourceKind::TranscriptAssistant
-            && block.content == "The routed implementation is complete."
+            && block
+                .content
+                .contains("rationale: present the routed result")
+            && block
+                .content
+                .contains("action rationale present-routed-result (say): present the routed result")
+            && block
+                .content
+                .contains("The routed implementation is complete.")
     }));
     let ordinary_provider = RuntimeBatchProvider {
         response: runtime_say_response_for_agent(

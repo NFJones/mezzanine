@@ -460,12 +460,13 @@ fn runtime_agent_debug_mode_prints_maap_without_shell_view() {
     service.terminate_all_pane_processes().unwrap();
 }
 
-/// Verifies provider continuation uses durable assistant chronology without a
-/// model-facing rationale ledger.
+/// Verifies provider continuation uses complete durable assistant chronology
+/// without a separate model-facing rationale ledger.
 ///
-/// Visible progress from the first execution is sufficient continuation
-/// context. Controller-side rationale handling must not create a request-local
-/// ledger that invalidates the reusable prefix.
+/// The accepted rationale and visible progress from the first execution are
+/// causal continuation context. Controller-side handling must preserve those
+/// assistant lines without creating a request-local ledger that invalidates the
+/// reusable prefix.
 #[test]
 fn runtime_agent_continues_from_assistant_chronology_without_rationale_ledger() {
     let mut service = test_runtime_service();
@@ -565,12 +566,27 @@ fn runtime_agent_continues_from_assistant_chronology_without_rationale_ledger() 
                 .content
                 .contains("The selector owner is narrowed to the resume path.")
     }));
-    assert!(!request.messages.iter().any(|message| {
-        message.content.contains("[current-turn rationale ledger]")
-            || message
-                .content
-                .contains("rationale: Check exact selector owner")
-    }));
+    let assistant = request
+        .messages
+        .iter()
+        .find(|message| {
+            message.source == ContextSourceKind::TranscriptAssistant
+                && message
+                    .content
+                    .contains("rationale: Check exact selector owner")
+        })
+        .expect("the accepted batch rationale should remain assistant context");
+    assert!(
+        assistant
+            .content
+            .contains("action rationale say-progress (say): tell the user the owner is narrowed")
+    );
+    assert!(
+        !request
+            .messages
+            .iter()
+            .any(|message| message.content.contains("[current-turn rationale ledger]"))
+    );
 
     let pane_text = service
         .pane_screen("%1")
