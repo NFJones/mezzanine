@@ -983,6 +983,19 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
     assert_eq!(service.agent_scheduler().snapshot().queued, 0);
     assert!(!service.has_joined_subagent_dependency(&child_one.turn_id));
     assert!(service.has_joined_subagent_dependency(&child_two.turn_id));
+    let parent_context = service.agent_turn_contexts().get(&parent.turn_id).unwrap();
+    assert!(
+        parent_context
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("child one done"))
+    );
+    assert!(
+        !parent_context
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("child two done"))
+    );
     assert_eq!(
         service
             .agent_turn_ledger()
@@ -1035,5 +1048,38 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
             .pending_agent_provider_tasks()
             .iter()
             .any(|task| task.turn_id == parent.turn_id)
+    );
+    let parent_context = service.agent_turn_contexts().get(&parent.turn_id).unwrap();
+    assert!(
+        parent_context
+            .blocks()
+            .iter()
+            .any(|block| block.content.contains("child two done"))
+    );
+    let child_two_result_blocks = parent_context
+        .blocks()
+        .iter()
+        .filter(|block| block.content.contains(&child_two.turn_id))
+        .count();
+    let terminal_child_two = service
+        .agent_turn_ledger()
+        .turns()
+        .iter()
+        .find(|turn| turn.turn_id == child_two.turn_id)
+        .cloned()
+        .unwrap();
+    service
+        .emit_subagent_task_result_for_state(&terminal_child_two, AgentTurnState::Completed)
+        .unwrap();
+    assert_eq!(
+        service
+            .agent_turn_contexts()
+            .get(&parent.turn_id)
+            .unwrap()
+            .blocks()
+            .iter()
+            .filter(|block| block.content.contains(&child_two.turn_id))
+            .count(),
+        child_two_result_blocks
     );
 }

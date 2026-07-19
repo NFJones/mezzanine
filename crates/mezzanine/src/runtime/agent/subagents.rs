@@ -22,6 +22,8 @@ use super::{
 
 /// Maximum routed result idempotency keys retained by the runtime actor.
 const SETTLED_ROUTED_PARENT_RESULT_LIMIT: usize = 4096;
+/// Maximum terminal subagent result idempotency keys retained by the runtime actor.
+const SETTLED_SUBAGENT_RESULT_LIMIT: usize = 4096;
 
 /// Converts controller-owned loop completion metadata into the ordinary join shape.
 fn joined_dependency_from_loop_completion(
@@ -46,6 +48,16 @@ impl RuntimeSessionService {
             > SETTLED_ROUTED_PARENT_RESULT_LIMIT
         {
             self.agent.settled_routed_parent_result_turns.pop_first();
+        }
+    }
+
+    /// Records a terminal subagent result after its parent handoff commits.
+    fn record_settled_subagent_result(&mut self, turn_id: &str) {
+        self.agent
+            .settled_subagent_result_turns
+            .insert(turn_id.to_string());
+        while self.agent.settled_subagent_result_turns.len() > SETTLED_SUBAGENT_RESULT_LIMIT {
+            self.agent.settled_subagent_result_turns.pop_first();
         }
     }
 
@@ -374,6 +386,13 @@ impl RuntimeSessionService {
     ) -> Result<()> {
         if self
             .agent
+            .settled_subagent_result_turns
+            .contains(&turn.turn_id)
+        {
+            return Ok(());
+        }
+        if self
+            .agent
             .settled_routed_parent_result_turns
             .contains(&turn.turn_id)
         {
@@ -549,6 +568,13 @@ impl RuntimeSessionService {
         turn: &AgentTurnRecord,
         state: AgentTurnState,
     ) -> Result<()> {
+        if self
+            .agent
+            .settled_subagent_result_turns
+            .contains(&turn.turn_id)
+        {
+            return Ok(());
+        }
         if turn.cooperation_mode.as_deref() == Some("routed-worker") {
             return Ok(());
         }
@@ -723,6 +749,19 @@ impl RuntimeSessionService {
         summary: &str,
         output: &str,
     ) -> Result<()> {
+        let dependency = dependency.or_else(|| {
+            self.agent
+                .joined_subagent_dependencies
+                .get(&turn.turn_id)
+                .cloned()
+                .or_else(|| {
+                    self.agent
+                        .joined_subagent_dependencies
+                        .values()
+                        .find(|dependency| dependency.child_agent_id == turn.agent_id)
+                        .cloned()
+                })
+        });
         let parent_agent_id = dependency
             .as_ref()
             .and_then(|dependency| {
@@ -767,11 +806,43 @@ impl RuntimeSessionService {
                 Ok(())
             }
         };
+        let is_macro_step =
+            dependency.is_some() || turn.cooperation_mode.as_deref() == Some("macro-step");
+        let terminal_macro_step_failure = is_macro_step && !success;
+        let settlement_error = if let Some(dependency) = dependency.as_ref() {
+            self.resolve_joined_subagent_dependency_record(
+                turn,
+                dependency.clone(),
+                success,
+                summary,
+                output,
+            )
+            .err()
+        } else {
+            self.resolve_joined_subagent_dependency(turn, success, summary, output)
+                .err()
+        };
+        if let Some(error) = settlement_error {
+            if let Some(dependency) = dependency.as_ref() {
+                self.fail_joined_parent_settlement(turn, dependency, &error)?;
+            } else {
+                return Err(error);
+            }
+            self.agent.subagent_task_routes.remove(&turn.turn_id);
+            if !is_macro_step || terminal_macro_step_failure {
+                self.remove_subagent_authority_state(&turn.agent_id);
+                self.agent
+                    .pending_terminal_subagent_pane_closes
+                    .insert(turn.pane_id.clone());
+            }
+            self.record_settled_subagent_result(&turn.turn_id);
+            return Ok(());
+        }
         if let Some(parent_agent_id) = parent_agent_id.as_deref() {
             self.append_subagent_parent_status_line(
                 parent_agent_id,
                 &format!(
-                    "subagent {} {}: {}",
+                    "subagent {} {}; result committed: {}",
                     child_label,
                     runtime_subagent_result_status_label(success, summary),
                     summary
@@ -779,18 +850,8 @@ impl RuntimeSessionService {
             )?;
         }
         self.agent.subagent_task_routes.remove(&turn.turn_id);
-        let is_macro_step =
-            dependency.is_some() || turn.cooperation_mode.as_deref() == Some("macro-step");
-        let terminal_macro_step_failure = is_macro_step && !success;
         if !is_macro_step || terminal_macro_step_failure {
             self.remove_subagent_authority_state(&turn.agent_id);
-        }
-        if let Some(dependency) = dependency {
-            self.resolve_joined_subagent_dependency_record(
-                turn, dependency, success, summary, output,
-            )?;
-        } else {
-            self.resolve_joined_subagent_dependency(turn, success, summary, output)?;
         }
         if !is_macro_step || terminal_macro_step_failure {
             self.agent
@@ -810,6 +871,59 @@ impl RuntimeSessionService {
                 ),
             )?;
         }
+        self.record_settled_subagent_result(&turn.turn_id);
+        Ok(())
+    }
+
+    /// Fails a blocked parent when a joined child result cannot be committed.
+    ///
+    /// Join corruption must terminate visibly instead of discarding the only
+    /// dependency capable of waking the parent. The dependency is retained
+    /// until the scheduler and ledger both record the failed parent outcome.
+    fn fail_joined_parent_settlement(
+        &mut self,
+        child_turn: &AgentTurnRecord,
+        dependency: &JoinedSubagentDependency,
+        error: &MezError,
+    ) -> Result<()> {
+        let parent_turn = self
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == dependency.parent_turn_id)
+            .cloned();
+        self.append_lifecycle_event(
+            EventKind::AgentStatus,
+            format!(
+                r#"{{"pane_id":"{}","agent_prompt_turn":"{}","child_turn":"{}","parent_action":"{}","state":"failed","subagent_task_result":"settlement_failed","error_code":"{}","error":"{}"}}"#,
+                json_escape(parent_turn.as_ref().map_or(&child_turn.pane_id, |turn| &turn.pane_id)),
+                json_escape(&dependency.parent_turn_id),
+                json_escape(&dependency.child_turn_id),
+                json_escape(&dependency.parent_action_id),
+                runtime_mezzanine_error_code(error.kind()),
+                json_escape(error.message())
+            ),
+        )?;
+        if let Some(parent_turn) = parent_turn {
+            let _ = self.agent.agent_scheduler.cancel(&parent_turn.turn_id);
+            let previous_state = parent_turn.state;
+            self.agent_turn_ledger_mut()
+                .finish_turn(&parent_turn.turn_id, AgentTurnState::Failed)?;
+            self.append_agent_trace_turn_transition(
+                &parent_turn,
+                previous_state,
+                AgentTurnState::Failed,
+                "joined_subagent_settlement_failed",
+            )?;
+            self.append_agent_status_text_to_terminal_buffer(
+                &parent_turn.pane_id,
+                "agent: subagent result could not be attached; parent turn failed",
+            )?;
+        }
+        self.agent
+            .joined_subagent_dependencies
+            .remove(&dependency.child_turn_id);
+        self.start_ready_agent_turns()?;
         Ok(())
     }
 
@@ -958,18 +1072,36 @@ impl RuntimeSessionService {
             .find(|candidate| candidate.turn_id == dependency.parent_turn_id)
             .cloned()
         else {
-            return Ok(());
+            return Err(MezError::invalid_state(format!(
+                "joined subagent parent turn `{}` is missing",
+                dependency.parent_turn_id
+            )));
         };
+        if !self
+            .agent_turn_contexts()
+            .contains_key(&dependency.parent_turn_id)
+        {
+            return Err(MezError::invalid_state(format!(
+                "joined subagent parent context `{}` is missing",
+                dependency.parent_turn_id
+            )));
+        }
         let parent_previous_state = parent_turn.state;
         let (observed_result, ready_for_continuation) = {
             let Some(execution) = self
                 .agent_turn_executions_mut()
                 .get_mut(&dependency.parent_turn_id)
             else {
-                return Ok(());
+                return Err(MezError::invalid_state(format!(
+                    "joined subagent parent execution `{}` is missing",
+                    dependency.parent_turn_id
+                )));
             };
             let Some(batch) = execution.response.action_batch.as_ref() else {
-                return Ok(());
+                return Err(MezError::invalid_state(format!(
+                    "joined subagent parent action batch `{}` is missing",
+                    dependency.parent_turn_id
+                )));
             };
             let Some(action) = batch
                 .actions
@@ -977,14 +1109,20 @@ impl RuntimeSessionService {
                 .find(|action| action.id == dependency.parent_action_id)
                 .cloned()
             else {
-                return Ok(());
+                return Err(MezError::invalid_state(format!(
+                    "joined subagent parent action `{}` is missing",
+                    dependency.parent_action_id
+                )));
             };
             let Some(result_index) = execution
                 .action_results
                 .iter()
                 .position(|result| result.action_id == dependency.parent_action_id)
             else {
-                return Ok(());
+                return Err(MezError::invalid_state(format!(
+                    "joined subagent parent result `{}` is missing",
+                    dependency.parent_action_id
+                )));
             };
             let child_label = runtime_subagent_display_label(
                 &dependency.child_agent_id,
@@ -1036,15 +1174,7 @@ impl RuntimeSessionService {
                 runtime_execution_ready_for_provider_continuation(execution);
             (observed_result, ready_for_continuation)
         };
-        if self
-            .agent_turn_contexts()
-            .contains_key(&dependency.parent_turn_id)
-        {
-            self.append_action_result_context_if_absent(
-                &dependency.parent_turn_id,
-                &observed_result,
-            )?;
-        }
+        self.append_action_result_context_if_absent(&dependency.parent_turn_id, &observed_result)?;
         let mut failed_macro_parent_turn = None;
         let mut macro_result_status = None;
         if let Some(parent_run_id) = self
@@ -1075,9 +1205,6 @@ impl RuntimeSessionService {
                 failed_macro_parent_turn = Some(parent_run_id);
             }
         }
-        self.agent
-            .joined_subagent_dependencies
-            .remove(&dependency.child_turn_id);
         if let Some((macro_name, step_index, total_steps, true)) = macro_result_status.as_ref() {
             self.append_agent_macro_status_to_terminal_buffer(
                 &parent_turn.pane_id,
@@ -1116,6 +1243,9 @@ impl RuntimeSessionService {
                 *total_steps,
                 &format!("worker failed: {summary}"),
             )?;
+            self.agent
+                .joined_subagent_dependencies
+                .remove(&dependency.child_turn_id);
             self.start_ready_agent_turns()?;
             return Ok(());
         }
@@ -1133,6 +1263,9 @@ impl RuntimeSessionService {
                 "agent: subagent results received; continuing",
             )?;
         }
+        self.agent
+            .joined_subagent_dependencies
+            .remove(&dependency.child_turn_id);
         self.start_ready_agent_turns()?;
         Ok(())
     }

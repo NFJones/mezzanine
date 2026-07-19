@@ -275,6 +275,8 @@ pub(crate) struct RuntimeAgentComponent {
     routed_loop_completions_by_parent_turn: BTreeMap<String, RuntimeAgentLoopCompletion>,
     /// Routed parent task results already emitted through terminal presentation.
     settled_routed_parent_result_turns: BTreeSet<String>,
+    /// Subagent terminal results already committed through their parent handoff.
+    settled_subagent_result_turns: BTreeSet<String>,
     /// Test-only one-shot failure injected after a routed worker spawn succeeds.
     #[cfg(test)]
     fail_routed_worker_after_spawn: bool,

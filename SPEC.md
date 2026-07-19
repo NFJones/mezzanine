@@ -5046,9 +5046,14 @@ not continue or complete before joined child results are available as action
 result context. A joined parent turn MUST release global scheduler capacity
 while waiting so child agents can run even when the concurrency limit is low.
 The scheduler MUST retain the waiting parent's lifecycle, cancellation,
-correlation, agent, and pane ownership while that capacity is released. After
-the last joined dependency settles, the parent MUST re-enter the ordinary fair
-ready queue and MUST NOT resume provider execution until it reacquires capacity.
+correlation, agent, and pane ownership while that capacity is released. The joined child result MUST be committed to the parent action-result context
+before a child-completed status is shown or the child route is removed. After
+the last joined dependency settles, the dependency MUST remain recoverable
+until the parent re-enters the ordinary fair ready queue or is explicitly
+failed, and the parent MUST NOT resume provider execution until it reacquires
+capacity. Duplicate terminal child observations MUST be idempotent. A join
+settlement invariant failure MUST fail the parent visibly and MUST NOT leave it
+indefinitely blocked.
 In `detach` mode, the parent may continue immediately after spawn creation
 while status updates may route to the controlling pane and final output routes
 to the parent agent through the local message passing protocol.
