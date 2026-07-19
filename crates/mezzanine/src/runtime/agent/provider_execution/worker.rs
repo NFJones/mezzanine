@@ -173,6 +173,8 @@ impl RuntimeSessionService {
                 context.blocks().len()
             ),
         )?;
+        let (allowed_actions, interaction_kind) =
+            self.agent_provider_request_control_for_turn(&turn);
         self.record_runtime_provider_request_shape_for_context(
             &model_profile,
             &turn,
@@ -184,6 +186,11 @@ impl RuntimeSessionService {
         if self.agent_debug_enabled(&turn.pane_id) {
             match assemble_model_request(&model_profile, &turn, &context) {
                 Ok(mut request) => {
+                    mez_agent::apply_model_request_control(
+                        &mut request,
+                        allowed_actions.clone(),
+                        interaction_kind,
+                    );
                     mez_agent::apply_default_action_gates(
                         &mut request,
                         &available_mcp_tools,
@@ -221,13 +228,12 @@ impl RuntimeSessionService {
             self.path_scopes_for_pane(&turn.pane_id)
         };
         let permission_policy = self.permission_policy_for_turn(&turn);
-        let loop_allowed_actions = turn
-            .initial_capability
-            .map(mez_agent::AllowedActionSet::for_capability);
         let mut provider_context = context;
         let mut context_limit_recovery_attempts = 0u32;
         let mut output_limit_recovery_attempts = 0u32;
         let mut execution = loop {
+            let (allowed_actions, interaction_kind) =
+                self.agent_provider_request_control_for_turn(&turn);
             let mut provider_ledger = AgentTurnLedger::new(false);
             let runner = AgentTurnRunner {
                 provider,
@@ -248,11 +254,8 @@ impl RuntimeSessionService {
                 &mut provider_ledger,
                 turn.clone(),
                 &provider_context,
-                loop_allowed_actions.clone(),
-                self.agent
-                    .agent_turn_interaction_kinds
-                    .get(turn_id)
-                    .copied(),
+                allowed_actions.clone(),
+                interaction_kind,
             ) {
                 Ok(execution) => break execution,
                 Err(error) => {
@@ -531,13 +534,12 @@ impl RuntimeSessionService {
             self.path_scopes_for_pane(&turn.pane_id)
         };
         let permission_policy = self.permission_policy_for_turn(&turn);
-        let loop_allowed_actions = turn
-            .initial_capability
-            .map(mez_agent::AllowedActionSet::for_capability);
         let mut provider_context = context;
         let mut context_limit_recovery_attempts = 0u32;
         let mut output_limit_recovery_attempts = 0u32;
         let mut execution = loop {
+            let (allowed_actions, interaction_kind) =
+                self.agent_provider_request_control_for_turn(&turn);
             let mut provider_ledger = AgentTurnLedger::new(false);
             let runner = AgentTurnRunner {
                 provider,
@@ -558,11 +560,8 @@ impl RuntimeSessionService {
                 &mut provider_ledger,
                 turn.clone(),
                 &provider_context,
-                loop_allowed_actions.clone(),
-                self.agent
-                    .agent_turn_interaction_kinds
-                    .get(turn_id)
-                    .copied(),
+                allowed_actions.clone(),
+                interaction_kind,
             ) {
                 Ok(execution) => break execution,
                 Err(error) => {

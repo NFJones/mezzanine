@@ -130,6 +130,9 @@ pub struct RuntimeAgentProviderDispatch {
     /// The field is part of structured state exchanged across this module
     /// boundary and should remain aligned with the owning type invariant.
     pub context: PreparedModelContext,
+    /// Accumulated action surface retained across provider-worker boundaries
+    /// for this logical turn.
+    pub allowed_actions: Option<mez_agent::AllowedActionSet>,
     /// Controller-selected exceptional interaction for this provider request.
     pub interaction_kind: Option<mez_agent::ModelInteractionKind>,
     /// Stores the model profile value for this data structure.
@@ -188,8 +191,6 @@ pub struct RuntimeAgentProviderDispatch {
     pub memory_actions_enabled: bool,
     /// Whether local issue-tracking actions are enabled for this provider turn.
     pub issue_actions_enabled: bool,
-    /// Restricts this request to final response actions for routed presentation.
-    pub respond_only: bool,
     /// Optional `/loop` controller metadata for this provider turn.
     #[allow(
         dead_code,

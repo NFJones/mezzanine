@@ -145,7 +145,7 @@ fn append_test_execution_assistant_context(
     execution: &mez_agent::AgentTurnExecution,
 ) {
     service
-        .append_agent_execution_assistant_context(turn, execution)
+        .append_agent_execution_chronology(turn, execution)
         .unwrap();
 }
 

@@ -1202,7 +1202,7 @@ fn runtime_shell_pane_not_ready_queues_model_self_correction() {
         terminal_state: AgentTurnState::Failed,
     };
     service
-        .append_agent_execution_assistant_context(&turn, &execution)
+        .append_agent_execution_chronology(&turn, &execution)
         .unwrap();
 
     let queued = service

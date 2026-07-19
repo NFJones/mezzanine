@@ -2960,6 +2960,17 @@ dynamic errors and prior output belong in chronological evidence or one bounded
 factual live-state block. The runtime MUST replace older state for the same
 mode rather than accumulate retry prompts. Context diagnostics MUST label the
 intentional instruction-profile change as an expected cache break.
+An accepted capability decision MUST become a neutral controller-evidence event
+at its actual occurrence boundary before the assistant action response it
+enabled. It MUST NOT become a late task prelude, direct-user message, or
+request-local reminder. The cumulative allowed-action surface and its
+capability-continuation interaction kind MUST remain actor-owned state for the
+logical turn and MUST survive every provider-worker, action-execution, approval,
+and provider-continuation boundary. A continuation request MUST NOT restart from
+the default capability-decision surface merely because the previous action was
+executed outside the provider worker. Live MCP, memory, and issue availability
+MUST still remove retained actions that are no longer executable before the
+next provider request.
 Once deterministic action evidence settles, it MUST be committed exactly once
 to append-only `ConversationAppend` chronology and any volatile copy MUST be
 removed atomically. A settlement batch containing a running action or blocked

@@ -296,7 +296,7 @@ impl RuntimeSessionService {
             final_turn: false,
             terminal_state: AgentTurnState::Running,
         };
-        self.append_agent_execution_assistant_context(&parent_turn, &execution)?;
+        self.append_agent_execution_chronology(&parent_turn, &execution)?;
         self.agent_turn_executions_mut()
             .insert(parent_turn.turn_id.clone(), execution);
         self.agent

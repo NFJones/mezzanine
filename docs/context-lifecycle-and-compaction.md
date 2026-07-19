@@ -109,6 +109,26 @@ and compaction. An owner may straddle steering when already-dispatched work
 settles later; that fact does not permit compaction to gather records across the
 barrier.
 
+## Capability continuation across provider workers
+
+Capability negotiation is logical-turn state, not provider-worker-local state.
+When the controller accepts a capability request, it commits one neutral
+controller-evidence event immediately before the assistant response that uses
+the granted surface. That evidence is part of the same causal execution group;
+it is neither a new user instruction nor a late task prelude.
+
+If an action returns control to the runtime actor and the logical turn remains
+running, the next provider dispatch inherits the last accepted request's
+cumulative allowed-action set and interaction kind. The newly assembled request
+therefore continues from the latest assistant action and settled result instead
+of presenting the original prompt under a fresh capability-decision mode.
+Actor-owned exceptional modes still override inherited state. Live MCP, memory,
+and issue gates are reapplied before dispatch and revoke retained actions whose
+backing integration is no longer available.
+
+This continuation rule is scoped to one logical turn. It does not change how a
+controller command chooses to create separate turns or conversations.
+
 ## Durable routed handoffs
 
 The parent presentation turn stores one versioned routed-handoff reference event

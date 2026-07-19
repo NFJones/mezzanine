@@ -905,7 +905,7 @@ fn runtime_joined_child_completion_starts_next_queued_child() {
         .unwrap()
         .clone();
     service
-        .append_agent_execution_assistant_context(&parent_turn, &parent_execution)
+        .append_agent_execution_chronology(&parent_turn, &parent_execution)
         .unwrap();
     service.insert_joined_subagent_dependency(
         child_one.turn_id.clone(),

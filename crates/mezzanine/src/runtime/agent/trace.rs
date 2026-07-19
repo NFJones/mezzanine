@@ -198,30 +198,27 @@ impl RuntimeSessionService {
             .agent_context_continuity_snapshot_by_conversation
             .get(&conversation_id)
             .cloned();
-        let interaction_kind = self
-            .agent
-            .agent_turn_interaction_kinds
-            .get(&turn.turn_id)
-            .copied()
-            .unwrap_or(mez_agent::ModelInteractionKind::CapabilityDecision);
-        let continuity = mez_agent::context_continuity_diagnostics_for_interaction(
-            context,
-            &model_profile.provider,
-            &model_profile.model,
-            &turn.turn_id,
-            previous.as_ref(),
-            interaction_kind,
-        );
-        self.record_agent_context_continuity(&conversation_id, continuity);
         let Ok(mut request) = assemble_model_request(model_profile, turn, context) else {
             return;
         };
+        let (allowed_actions, interaction_kind) =
+            self.agent_provider_request_control_for_turn(turn);
+        mez_agent::apply_model_request_control(&mut request, allowed_actions, interaction_kind);
         apply_default_action_gates(
             &mut request,
             available_mcp_tools,
             memory_actions_enabled,
             issue_actions_enabled,
         );
+        let continuity = mez_agent::context_continuity_diagnostics_for_interaction(
+            context,
+            &model_profile.provider,
+            &model_profile.model,
+            &turn.turn_id,
+            previous.as_ref(),
+            request.interaction_kind,
+        );
+        self.record_agent_context_continuity(&conversation_id, continuity);
         let (diagnostics, diagnostics_failed) = if request.provider == "openai" {
             match openai_prompt_cache_diagnostics_for_request(&request) {
                 Ok(diagnostics) => (Some(diagnostics), false),

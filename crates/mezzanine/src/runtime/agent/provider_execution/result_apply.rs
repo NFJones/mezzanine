@@ -76,7 +76,7 @@ impl RuntimeSessionService {
         )?;
         self.suppress_redundant_rationale_entries(turn, &mut execution)?;
         self.present_agent_response_actions_to_terminal_buffer(&turn.pane_id, &execution)?;
-        self.append_agent_execution_assistant_context(turn, &execution)?;
+        self.append_agent_execution_chronology(turn, &execution)?;
         self.record_agent_copy_output(turn, &execution);
         let mut terminal_observations = RuntimeTerminalActionObservations::default();
         terminal_observations.observe(&execution);

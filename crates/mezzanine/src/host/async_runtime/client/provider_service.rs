@@ -498,6 +498,7 @@ async fn execute_runtime_agent_provider_dispatch(
     let RuntimeAgentProviderDispatch {
         turn,
         context,
+        allowed_actions,
         interaction_kind,
         model_profile,
         macro_judge_request,
@@ -512,14 +513,10 @@ async fn execute_runtime_agent_provider_dispatch(
         available_mcp_tools,
         memory_actions_enabled,
         issue_actions_enabled,
-        respond_only,
         loop_turn: _,
     } = dispatch;
     let context = context.into_agent_context();
     let routing_token_usage_by_model = std::collections::BTreeMap::new();
-    let loop_allowed_actions = respond_only.then(|| {
-        mez_agent::AllowedActionSet::for_capability(mez_agent::AgentCapability::RespondOnly)
-    });
     if let Some(request) = macro_judge_request {
         let response = match provider {
             RuntimeAgentProviderDispatchProvider::OpenAi(provider) => {
@@ -680,7 +677,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     &mut ledger,
                     turn.clone(),
                     &context,
-                    loop_allowed_actions.clone(),
+                    allowed_actions.clone(),
                     interaction_kind,
                 )
                 .await?;
@@ -712,7 +709,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     &mut ledger,
                     turn.clone(),
                     &context,
-                    loop_allowed_actions.clone(),
+                    allowed_actions.clone(),
                     interaction_kind,
                 )
                 .await?;
@@ -744,7 +741,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     &mut ledger,
                     turn.clone(),
                     &context,
-                    loop_allowed_actions.clone(),
+                    allowed_actions.clone(),
                     interaction_kind,
                 )
                 .await?;
@@ -776,7 +773,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     &mut ledger,
                     turn.clone(),
                     &context,
-                    loop_allowed_actions.clone(),
+                    allowed_actions.clone(),
                     interaction_kind,
                 )
                 .await?;
@@ -808,7 +805,7 @@ async fn execute_runtime_agent_provider_dispatch(
                     &mut ledger,
                     turn.clone(),
                     &context,
-                    loop_allowed_actions.clone(),
+                    allowed_actions.clone(),
                     interaction_kind,
                 )
                 .await?;

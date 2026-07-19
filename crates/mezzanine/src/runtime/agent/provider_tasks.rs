@@ -18,12 +18,12 @@ use mez_agent::{
 #[cfg(test)]
 use super::AgentTurnExecution;
 use super::{
-    AgentId, AgentTurnState, DEFAULT_PROVIDER_TIMEOUT_MS, EventKind, HookEvent, MezError,
-    ProviderApiCompatibility, ReqwestProviderHttpTransport, Result, RuntimeAgentProviderClaim,
-    RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider, RuntimeAgentProviderTask,
-    RuntimeProviderConfig, RuntimeSessionService, assemble_model_request, current_unix_millis,
-    deepseek_chat_completions_provider_from_auth_store_with_provider_options, json_escape,
-    openai_compatible_provider_from_auth_store_with_provider_options,
+    AgentId, AgentTurnRecord, AgentTurnState, DEFAULT_PROVIDER_TIMEOUT_MS, EventKind, HookEvent,
+    MezError, ProviderApiCompatibility, ReqwestProviderHttpTransport, Result,
+    RuntimeAgentProviderClaim, RuntimeAgentProviderDispatch, RuntimeAgentProviderDispatchProvider,
+    RuntimeAgentProviderTask, RuntimeProviderConfig, RuntimeSessionService, assemble_model_request,
+    current_unix_millis, deepseek_chat_completions_provider_from_auth_store_with_provider_options,
+    json_escape, openai_compatible_provider_from_auth_store_with_provider_options,
     openai_responses_provider_from_auth_store_with_provider_options, resolve_provider_api,
     runtime_agent_turn_start_hook_payload, runtime_mezzanine_error_code,
     runtime_provider_event_error,
@@ -32,6 +32,42 @@ use super::{
 use crate::integrations::agent::provider::ModelProvider;
 
 impl RuntimeSessionService {
+    /// Resolves the provider control state that remains active for one logical
+    /// turn across actor-owned action execution boundaries.
+    ///
+    /// Routed presentation is always response-only. Otherwise the most recent
+    /// accepted execution owns the cumulative capability surface and
+    /// interaction mode; the turn's initial capability is used only before an
+    /// execution exists. Explicit exceptional interactions remain authoritative.
+    pub(super) fn agent_provider_request_control_for_turn(
+        &self,
+        turn: &AgentTurnRecord,
+    ) -> (
+        Option<mez_agent::AllowedActionSet>,
+        Option<mez_agent::ModelInteractionKind>,
+    ) {
+        let previous_execution = self.agent_turn_executions().get(&turn.turn_id);
+        let allowed_actions = if self.routed_presentation_turn(&turn.turn_id) {
+            Some(mez_agent::AllowedActionSet::for_capability(
+                mez_agent::AgentCapability::RespondOnly,
+            ))
+        } else {
+            previous_execution
+                .map(|execution| execution.request.allowed_actions.clone())
+                .or_else(|| {
+                    turn.initial_capability
+                        .map(mez_agent::AllowedActionSet::for_capability)
+                })
+        };
+        let interaction_kind = self
+            .agent
+            .agent_turn_interaction_kinds
+            .get(&turn.turn_id)
+            .copied()
+            .or_else(|| previous_execution.map(|execution| execution.request.interaction_kind));
+        (allowed_actions, interaction_kind)
+    }
+
     /// Installs a deterministic provider claim at a supplied context boundary
     /// for actor-level causal-order regression tests.
     #[cfg(test)]
@@ -447,6 +483,8 @@ impl RuntimeSessionService {
         };
         let provider_context = context.to_agent_context();
         let respond_only = self.routed_presentation_turn(turn_id);
+        let (allowed_actions, interaction_kind) =
+            self.agent_provider_request_control_for_turn(&turn);
         let auto_sizing = if macro_judge_step_index.is_some() || respond_only {
             None
         } else {
@@ -548,6 +586,11 @@ impl RuntimeSessionService {
         if self.agent_debug_enabled(&turn.pane_id) {
             match assemble_model_request(&model_profile, &turn, &provider_context) {
                 Ok(mut request) => {
+                    mez_agent::apply_model_request_control(
+                        &mut request,
+                        allowed_actions.clone(),
+                        interaction_kind,
+                    );
                     mez_agent::apply_default_action_gates(
                         &mut request,
                         &available_mcp_tools,
@@ -594,11 +637,8 @@ impl RuntimeSessionService {
         Ok(Some(RuntimeAgentProviderDispatch {
             turn,
             context,
-            interaction_kind: self
-                .agent
-                .agent_turn_interaction_kinds
-                .get(turn_id)
-                .copied(),
+            allowed_actions,
+            interaction_kind,
             model_profile,
             macro_judge_request,
             auto_sizing,
@@ -612,7 +652,6 @@ impl RuntimeSessionService {
             available_mcp_tools,
             memory_actions_enabled: self.runtime_persistent_memory_enabled(),
             issue_actions_enabled: super::issues::runtime_issues_enabled(self),
-            respond_only,
             loop_turn: self.agent.agent_loop_turns.get(turn_id).cloned(),
         }))
     }

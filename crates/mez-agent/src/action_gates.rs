@@ -17,6 +17,8 @@ pub fn apply_default_action_gates(
     request.available_mcp_tools = available_mcp_tools.to_vec();
     if !available_mcp_tools.is_empty() {
         request.allowed_actions.extend([AllowedAction::McpCall]);
+    } else {
+        request.allowed_actions.remove(AllowedAction::McpCall);
     }
 
     request.memory_actions_enabled = memory_actions_enabled;
@@ -24,9 +26,18 @@ pub fn apply_default_action_gates(
         request
             .allowed_actions
             .extend([AllowedAction::MemorySearch, AllowedAction::MemoryStore]);
+    } else {
+        request.allowed_actions.remove(AllowedAction::MemorySearch);
+        request.allowed_actions.remove(AllowedAction::MemoryStore);
     }
 
     request.issue_actions_enabled = issue_actions_enabled;
+    if !issue_actions_enabled {
+        request.allowed_actions.remove(AllowedAction::IssueAdd);
+        request.allowed_actions.remove(AllowedAction::IssueUpdate);
+        request.allowed_actions.remove(AllowedAction::IssueQuery);
+        request.allowed_actions.remove(AllowedAction::IssueDelete);
+    }
 }
 
 #[cfg(test)]
@@ -109,5 +120,34 @@ mod tests {
         assert!(allowed_actions.contains(&"request_capability"));
         assert_eq!(request.available_mcp_tools, vec![tool]);
         assert!(request.memory_actions_enabled);
+    }
+
+    #[test]
+    /// Verifies live availability gates revoke actions retained from an earlier
+    /// provider continuation when the underlying integration is no longer
+    /// available.
+    fn default_action_gates_revoke_unavailable_retained_actions() {
+        let mut request = request();
+        request.allowed_actions.extend([
+            AllowedAction::McpCall,
+            AllowedAction::MemorySearch,
+            AllowedAction::MemoryStore,
+            AllowedAction::IssueAdd,
+            AllowedAction::IssueUpdate,
+            AllowedAction::IssueQuery,
+            AllowedAction::IssueDelete,
+        ]);
+
+        apply_default_action_gates(&mut request, &[], false, false);
+
+        let allowed_actions = request.allowed_actions.action_type_names();
+        assert!(!allowed_actions.contains(&"mcp_call"));
+        assert!(!allowed_actions.contains(&"memory_search"));
+        assert!(!allowed_actions.contains(&"memory_store"));
+        assert!(!allowed_actions.contains(&"issue_add"));
+        assert!(!allowed_actions.contains(&"issue_update"));
+        assert!(!allowed_actions.contains(&"issue_query"));
+        assert!(!allowed_actions.contains(&"issue_delete"));
+        assert!(allowed_actions.contains(&"request_capability"));
     }
 }

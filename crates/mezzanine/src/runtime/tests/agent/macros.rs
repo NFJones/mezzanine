@@ -1011,7 +1011,7 @@ fn runtime_macro_step_failure_without_shell_session_requeues_parent() {
         .unwrap()
         .clone();
     service
-        .append_agent_execution_assistant_context(&parent_turn, &parent_execution)
+        .append_agent_execution_chronology(&parent_turn, &parent_execution)
         .unwrap();
     service.insert_joined_subagent_dependency(
         child.turn_id.clone(),

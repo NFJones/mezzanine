@@ -127,15 +127,7 @@ pub async fn run_agent_turn_async<E: AgentTurnEnvironment>(
 ) -> Result<AgentTurnExecution, E::Error> {
     project_ledger_result(ledger.start_turn(turn.clone()))?;
     let mut request = environment.assemble_request(&turn, context)?;
-    if let Some(allowed_actions) = allowed_actions {
-        if interaction_kind.is_none() {
-            request.interaction_kind = ModelInteractionKind::ActionExecution;
-        }
-        request.allowed_actions = allowed_actions;
-    }
-    if let Some(interaction_kind) = interaction_kind {
-        select_model_interaction_kind(&mut request, interaction_kind);
-    }
+    apply_model_request_control(&mut request, allowed_actions, interaction_kind);
     apply_default_action_gates(
         &mut request,
         environment.available_mcp_tools(),
@@ -320,6 +312,30 @@ pub async fn run_agent_turn_async<E: AgentTurnEnvironment>(
         project_ledger_result(ledger.finish_turn(&turn.turn_id, execution.terminal_state))?;
     }
     Ok(execution)
+}
+
+/// Applies actor-owned action-surface and interaction state to one assembled
+/// provider request.
+///
+/// An explicit interaction kind always wins. Supplying only an allowed action
+/// surface selects ordinary action execution, matching the provider runner's
+/// historical behavior for pre-authorized turns. Product diagnostics and
+/// external worker dispatches use this helper so the traced request cannot
+/// diverge from the request the provider receives.
+pub fn apply_model_request_control(
+    request: &mut ModelRequest,
+    allowed_actions: Option<AllowedActionSet>,
+    interaction_kind: Option<ModelInteractionKind>,
+) {
+    if let Some(allowed_actions) = allowed_actions {
+        if interaction_kind.is_none() {
+            request.interaction_kind = ModelInteractionKind::ActionExecution;
+        }
+        request.allowed_actions = allowed_actions;
+    }
+    if let Some(interaction_kind) = interaction_kind {
+        select_model_interaction_kind(request, interaction_kind);
+    }
 }
 
 /// Applies one controller-owned exceptional interaction before provider gates
