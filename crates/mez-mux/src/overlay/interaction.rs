@@ -112,12 +112,17 @@ pub fn overlay_footer(overlay: &DisplayOverlay<impl Sized>, size: Size) -> Strin
         format!("/{input}")
     } else if let Some(status) = overlay.search_status.as_deref() {
         status.to_string()
+    } else if overlay.record_browser.as_ref().is_some_and(|browser| {
+        browser.browser.deletion_enabled() && browser.command == "show-context"
+    }) {
+        "esc: back | /: search | enter: open | d: delete | s: save | arrows pgup/pgdn".to_string()
     } else if overlay
         .record_browser
         .as_ref()
         .is_some_and(|browser| browser.browser.deletion_enabled())
     {
-        "esc: back | /: search | enter: open | d: delete | s: save | arrows pgup/pgdn".to_string()
+        "esc: back | /: search | enter: open | a: all | k/p/x: filter | d: delete | s: save | arrows pgup/pgdn"
+            .to_string()
     } else if overlay.record_browser.is_some() {
         "esc: back | /: search | enter: open | a: all | k/p/x: filter | s: save | arrows pgup/pgdn"
             .to_string()

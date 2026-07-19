@@ -167,7 +167,26 @@ impl RuntimeSessionService {
             else {
                 return Ok(None);
             };
-            let browser = self.delete_context_browser_entry(&source, &id, active_index)?;
+            let browser = match self.delete_record_browser_entry(&source, &id, active_index) {
+                Ok(browser) => browser,
+                Err(error) => {
+                    let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
+                        return Ok(Some(false));
+                    };
+                    let Some(record_browser) = overlay.record_browser.as_mut() else {
+                        return Ok(None);
+                    };
+                    record_browser
+                        .browser
+                        .set_error(Some(error.message().to_string()));
+                    return Ok(Some(render_record_browser_overlay(
+                        overlay,
+                        &self.presentation.settings.ui_theme,
+                        terminal_width,
+                        prose_width,
+                    )));
+                }
+            };
             let Some(overlay) = self.presentation.primary_display_overlay.as_mut() else {
                 return Ok(Some(false));
             };

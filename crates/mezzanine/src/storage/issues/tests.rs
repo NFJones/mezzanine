@@ -422,6 +422,63 @@ fn issue_store_persists_dependencies_and_rejects_cycles() {
     assert!(cycle.is_err());
 }
 
+/// Verifies an open dependent protects its prerequisite from deletion while a
+/// resolved dependent no longer blocks cleanup of the prerequisite record.
+#[test]
+fn issue_store_delete_rejects_open_dependents_and_allows_resolved_dependents() {
+    let store = temp_store("delete-dependencies");
+    let prerequisite = store
+        .add_issue(
+            "/repo".to_string(),
+            IssueKind::Task,
+            "Implement storage".to_string(),
+            None,
+            None,
+            10,
+        )
+        .unwrap();
+    let dependent = store
+        .add_issue_with_dependencies(
+            NewIssueRecord {
+                project: "/repo".to_string(),
+                kind: IssueKind::Task,
+                title: "Teach skills".to_string(),
+                body: None,
+                notes: None,
+                depends_on: vec![prerequisite.id.clone()],
+            },
+            20,
+        )
+        .unwrap();
+
+    let blocked = store.delete_issue("/repo".to_string(), prerequisite.id.clone());
+    assert!(blocked.is_err());
+    assert!(
+        blocked
+            .unwrap_err()
+            .message()
+            .contains(dependent.id.as_str())
+    );
+
+    store
+        .update_issue(
+            "/repo".to_string(),
+            dependent.id,
+            IssueUpdate {
+                state: Some(IssueState::Resolved),
+                ..IssueUpdate::default()
+            },
+            30,
+        )
+        .unwrap();
+    assert!(
+        store
+            .delete_issue("/repo".to_string(), prerequisite.id)
+            .unwrap()
+            .deleted
+    );
+}
+
 /// Verifies existing databases without a notes column migrate in place and
 /// preserve older issue rows with empty notes.
 #[test]

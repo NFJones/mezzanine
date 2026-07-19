@@ -406,6 +406,7 @@ impl RecordBrowser {
             self.scope_indicator.as_deref(),
             &self.records,
             self.deletion_enabled,
+            !self.kind_filter_choices.is_empty(),
         );
         let mut markdown = String::new();
         if let Some(error) = &self.error {
@@ -424,7 +425,12 @@ impl RecordBrowser {
 
     fn render_detail_page(&self, detail_index: usize) -> RecordBrowserPage {
         let record = &self.records[detail_index.min(self.records.len().saturating_sub(1))];
-        let raw_markdown = detail_markdown(record, self.scope_indicator.as_deref());
+        let raw_markdown = detail_markdown(
+            record,
+            self.scope_indicator.as_deref(),
+            self.deletion_enabled,
+            !self.kind_filter_choices.is_empty(),
+        );
         let mut markdown = String::new();
         if let Some(error) = &self.error {
             markdown.push_str(&format!("Error: {error}\n\n"));
@@ -540,14 +546,18 @@ fn list_markdown(
     scope_indicator: Option<&str>,
     records: &[RecordBrowserRecord],
     deletion_enabled: bool,
+    filter_controls_enabled: bool,
 ) -> String {
     let mut lines = vec![format!("# {title}"), String::new()];
     if let Some(scope_indicator) = scope_indicator {
         lines.push(format!("**Scope:** {scope_indicator}"));
         lines.push(String::new());
     }
-    lines.push(if deletion_enabled {
+    lines.push(if deletion_enabled && !filter_controls_enabled {
         "**Keys:** `Enter` open · `d` delete · `/` search · `s` save".to_string()
+    } else if deletion_enabled {
+        "**Keys:** `a` all/default scope · `k` kind · `p` project · `x` text · `d` delete · `s` save"
+            .to_string()
     } else {
         "**Keys:** `a` all/default scope · `k` kind · `p` project · `x` text · `s` save".to_string()
     });
@@ -571,13 +581,24 @@ fn list_markdown(
     lines.join("\n")
 }
 
-fn detail_markdown(record: &RecordBrowserRecord, scope_indicator: Option<&str>) -> String {
+fn detail_markdown(
+    record: &RecordBrowserRecord,
+    scope_indicator: Option<&str>,
+    deletion_enabled: bool,
+    filter_controls_enabled: bool,
+) -> String {
     let mut lines = vec![format!("# {}", record.title), String::new()];
     if let Some(scope_indicator) = scope_indicator {
         lines.push(format!("**Scope:** {scope_indicator}"));
         lines.push(String::new());
     }
-    lines.push("**Keys:** `a` all/default scope · `Esc` back · `s` save".to_string());
+    lines.push(if deletion_enabled && !filter_controls_enabled {
+        "**Keys:** `Esc` back · `d` delete · `s` save".to_string()
+    } else if deletion_enabled {
+        "**Keys:** `a` all/default scope · `Esc` back · `d` delete · `s` save".to_string()
+    } else {
+        "**Keys:** `a` all/default scope · `Esc` back · `s` save".to_string()
+    });
     lines.push(String::new());
     lines.push(record.title.clone());
     lines.push(String::new());

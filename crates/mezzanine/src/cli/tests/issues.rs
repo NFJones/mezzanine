@@ -70,6 +70,12 @@ fn issue_cli_adds_queries_and_deletes_project_records() {
     .unwrap();
     let dependent_output = String::from_utf8(dependent_stdout).unwrap();
     assert!(dependent_output.contains(&format!(r#""depends_on":["{}"]"#, id)));
+    let dependent_id = dependent_output
+        .split(r#""id":""#)
+        .nth(1)
+        .and_then(|tail| tail.split('"').next())
+        .unwrap()
+        .to_string();
 
     let mut query_stdout = Vec::new();
     run_with(
@@ -134,6 +140,30 @@ fn issue_cli_adds_queries_and_deletes_project_records() {
         String::from_utf8(show_stdout)
             .unwrap()
             .contains(r#""notes":"reproduced in narrow pane""#)
+    );
+
+    let mut resolve_stdout = Vec::new();
+    run_with(
+        vec![
+            "mez".to_string(),
+            "issue".to_string(),
+            "--project".to_string(),
+            "/work/repo".to_string(),
+            "update".to_string(),
+            dependent_id,
+            "--state".to_string(),
+            "resolved".to_string(),
+        ],
+        env.clone(),
+        false,
+        &mut resolve_stdout,
+        &mut stderr,
+    )
+    .unwrap();
+    assert!(
+        String::from_utf8(resolve_stdout)
+            .unwrap()
+            .contains(r#""state":"resolved""#)
     );
 
     let mut delete_stdout = Vec::new();

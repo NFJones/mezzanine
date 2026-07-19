@@ -102,22 +102,90 @@ impl RuntimeSessionService {
         Ok(browser)
     }
 
-    /// Deletes one pane-owned context entry and returns a refreshed browser.
-    pub(crate) fn delete_context_browser_entry(
+    /// Deletes one selected record through its retained backend source and
+    /// returns a refreshed browser with a valid active selection.
+    pub(crate) fn delete_record_browser_entry(
         &mut self,
         source: &RuntimeRecordBrowserOverlaySource,
         record_id: &str,
         active_index: usize,
     ) -> Result<RecordBrowser> {
-        let RuntimeRecordBrowserOverlaySource::Context {
-            conversation_id,
-            pane_id,
-        } = source
-        else {
-            return Err(MezError::invalid_state(
-                "record browser source does not support context deletion",
-            ));
+        let mut browser = match source {
+            RuntimeRecordBrowserOverlaySource::Context {
+                conversation_id,
+                pane_id,
+            } => self.delete_context_browser_record(conversation_id, pane_id, record_id)?,
+            RuntimeRecordBrowserOverlaySource::Issues {
+                project_glob,
+                kind,
+                state,
+                text,
+                limit,
+                ..
+            } => {
+                let config_root = self
+                    .integration
+                    .config_root()
+                    .map(|path| path.to_path_buf())
+                    .ok_or_else(|| {
+                        MezError::config("show-issues requires a configured config root")
+                    })?;
+                let store = crate::storage::issues::IssueStore::from_database_path(
+                    issues::runtime_issue_database_path(self, &config_root),
+                );
+                let query = mez_agent::issues::IssueBrowserQuery::new(
+                    project_glob.clone(),
+                    *kind,
+                    *state,
+                    text.clone(),
+                    Some(*limit),
+                )?;
+                let record = store
+                    .query_issue_browser(&query)?
+                    .into_iter()
+                    .find(|record| record.id == record_id)
+                    .ok_or_else(|| {
+                        MezError::new(
+                            crate::error::MezErrorKind::NotFound,
+                            "issue browser record was not found",
+                        )
+                    })?;
+                if !store.delete_issue(record.project, record.id)?.deleted {
+                    return Err(MezError::new(
+                        crate::error::MezErrorKind::NotFound,
+                        "issue browser record was already deleted",
+                    ));
+                }
+                self.refresh_record_browser_overlay_source(source)?
+            }
+            RuntimeRecordBrowserOverlaySource::Memories { .. } => {
+                let config_root = self.integration.config_root().ok_or_else(|| {
+                    MezError::invalid_state(
+                        "show-memories requires a configured Mezzanine config root",
+                    )
+                })?;
+                let store =
+                    crate::storage::memory::PersistentMemoryStore::under_config_root(config_root);
+                if !store.delete(record_id)? {
+                    return Err(MezError::new(
+                        crate::error::MezErrorKind::NotFound,
+                        "memory browser record was already deleted",
+                    ));
+                }
+                self.refresh_record_browser_overlay_source(source)?
+            }
         };
+        browser.set_active_index(active_index);
+        Ok(browser)
+    }
+
+    /// Deletes one pane-owned transcript record and refreshes its context browser.
+    fn delete_context_browser_record(
+        &mut self,
+        conversation_id: &str,
+        pane_id: &str,
+        record_id: &str,
+    ) -> Result<RecordBrowser> {
         let sequence = record_id.parse::<u64>().map_err(|_| {
             MezError::invalid_args("context browser record id must be a transcript sequence")
         })?;
@@ -128,7 +196,7 @@ impl RuntimeSessionService {
         let entries = store.inspect(conversation_id)?;
         let entry_index = entries
             .iter()
-            .position(|entry| entry.sequence == sequence && entry.pane_id == *pane_id)
+            .position(|entry| entry.sequence == sequence && entry.pane_id == pane_id)
             .ok_or_else(|| {
                 MezError::new(
                     crate::error::MezErrorKind::NotFound,
@@ -153,9 +221,7 @@ impl RuntimeSessionService {
             self.agent_shell_store_mut()
                 .retain_recent_transcript_entries(pane_id, transcript_entries.saturating_sub(1))?;
         }
-        let mut browser = self.context_record_browser(conversation_id, pane_id)?;
-        browser.set_active_index(active_index);
-        Ok(browser)
+        self.context_record_browser(conversation_id, pane_id)
     }
 
     /// Executes `/show-issues` by querying issue records and rendering browser Markdown.
@@ -193,18 +259,19 @@ impl RuntimeSessionService {
         let store = crate::storage::issues::IssueStore::from_database_path(
             issues::runtime_issue_database_path(self, &config_root),
         );
-        let issue_state = args.state.or(Some(mez_agent::issues::IssueState::Open));
-        let source = args
-            .detail_id
-            .is_none()
-            .then(|| RuntimeRecordBrowserOverlaySource::Issues {
-                project_glob: project_glob.clone(),
-                default_project_glob: project_glob.clone(),
-                kind: args.kind,
-                state: issue_state,
-                text: args.text.clone(),
-                limit: args.limit,
-            });
+        let issue_state = if args.detail_id.is_some() {
+            args.state
+        } else {
+            args.state.or(Some(mez_agent::issues::IssueState::Open))
+        };
+        let source = Some(RuntimeRecordBrowserOverlaySource::Issues {
+            project_glob: project_glob.clone(),
+            default_project_glob: project_glob.clone(),
+            kind: args.kind,
+            state: issue_state,
+            text: args.text.clone(),
+            limit: args.limit,
+        });
         let records = if let Some(id) = args.detail_id.as_ref() {
             store
                 .get_issue(current_project, id.clone())?
@@ -229,6 +296,7 @@ impl RuntimeSessionService {
             records.into_iter().map(issue_browser_record).collect(),
             issue_kind_filter_choices(),
         )?;
+        browser.enable_deletion();
         if let Some(source) = source.as_ref() {
             set_record_browser_scope_indicator(&mut browser, source);
         }
@@ -280,17 +348,14 @@ impl RuntimeSessionService {
             )
         };
         let memory_state = Some(args.state.unwrap_or(mez_agent::memory::MemoryState::Active));
-        let source =
-            args.detail_id
-                .is_none()
-                .then(|| RuntimeRecordBrowserOverlaySource::Memories {
-                    scope: scope.clone(),
-                    default_scope: scope.clone(),
-                    kind: args.kind,
-                    state: memory_state,
-                    text: args.text.clone(),
-                    limit: args.limit,
-                });
+        let source = Some(RuntimeRecordBrowserOverlaySource::Memories {
+            scope: scope.clone(),
+            default_scope: scope.clone(),
+            kind: args.kind,
+            state: memory_state,
+            text: args.text.clone(),
+            limit: args.limit,
+        });
         let records = if let Some(id) = args.detail_id.as_ref() {
             vec![store.inspect(id)?]
         } else {
@@ -316,6 +381,7 @@ impl RuntimeSessionService {
             records.into_iter().map(memory_browser_record).collect(),
             memory_kind_filter_choices(),
         )?;
+        browser.enable_deletion();
         if let Some(source) = source.as_ref() {
             set_record_browser_scope_indicator(&mut browser, source);
         }
@@ -405,6 +471,7 @@ impl RuntimeSessionService {
                         .collect(),
                     issue_kind_filter_choices(),
                 )?;
+                browser.enable_deletion();
                 set_record_browser_scope_indicator(&mut browser, source);
                 Ok(browser)
             }
@@ -443,6 +510,7 @@ impl RuntimeSessionService {
                         .collect(),
                     memory_kind_filter_choices(),
                 )?;
+                browser.enable_deletion();
                 set_record_browser_scope_indicator(&mut browser, source);
                 Ok(browser)
             }

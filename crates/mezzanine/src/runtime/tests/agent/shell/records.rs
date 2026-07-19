@@ -547,3 +547,179 @@ fn runtime_agent_shell_show_context_deletes_the_selected_active_session_entry() 
     assert!(transcript_store.inspect("other-conversation").is_ok());
     let _ = fs::remove_dir_all(root);
 }
+
+/// Sends one key sequence through the attached terminal into the active pager.
+fn apply_record_browser_input(
+    service: &mut RuntimeSessionService,
+    primary: &mez_core::ids::ClientId,
+    input: &[u8],
+) {
+    service
+        .apply_attached_terminal_step_plan(
+            primary,
+            &AttachedTerminalClientStepPlan {
+                actions: vec![TerminalClientLoopAction::ForwardToPane(input.to_vec())],
+                output_lines: Vec::new(),
+                output_line_style_spans: Vec::new(),
+                input_hangup: false,
+                output_hangup: false,
+                error_roles: Vec::new(),
+            },
+        )
+        .unwrap();
+}
+
+/// Verifies the memory record browser deletes its selected durable record and
+/// refreshes the same pager to an empty, valid selection state.
+#[test]
+fn runtime_agent_shell_show_memories_deletes_the_selected_record() {
+    let root = temp_root("runtime-show-memories-delete");
+    let _ = fs::remove_dir_all(&root);
+    let config_root = root.join("config");
+    fs::create_dir_all(&config_root).unwrap();
+    let mut service = test_runtime_service();
+    service.set_config_root(config_root.clone());
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 14).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    let store = crate::storage::memory::PersistentMemoryStore::under_config_root(&config_root);
+    store
+        .upsert(MemoryRecord::new_with_defaults(
+            "memory-delete",
+            mez_agent::memory::MemoryScope::Global,
+            10,
+            10,
+            mez_agent::memory::MemorySource::Agent,
+            50,
+            "delete this memory from the pager",
+        ))
+        .unwrap();
+
+    let response = service
+        .execute_agent_shell_command(&primary, "/show-memories memory-delete")
+        .unwrap();
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+    apply_record_browser_input(&mut service, &primary, b"d");
+
+    assert!(store.inspect("memory-delete").is_err());
+    let overlay = service.primary_display_overlay().unwrap();
+    assert!(
+        overlay
+            .lines
+            .iter()
+            .any(|line| line.contains("No records found."))
+    );
+    assert_eq!(overlay.active_selection_index, None);
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies issue pager deletion reports an open dependent in-place, then
+/// succeeds after that dependent is resolved without closing the pager.
+#[test]
+fn runtime_agent_shell_show_issues_blocks_open_dependents_then_deletes() {
+    let root = temp_root("runtime-show-issues-delete");
+    let _ = fs::remove_dir_all(&root);
+    let config_root = root.join("config");
+    fs::create_dir_all(&config_root).unwrap();
+    let mut service = test_runtime_service();
+    service.set_config_root(config_root.clone());
+    service
+        .replace_config_layers(vec![ConfigLayer {
+            name: "primary".to_string(),
+            path: None,
+            format: ConfigFormat::Toml,
+            scope: ConfigScope::Primary,
+            trusted: true,
+            text: "[issues]\nenabled = true\n".to_string(),
+        }])
+        .unwrap();
+    let primary = service
+        .attach_primary("primary", true, Size::new(100, 14).unwrap(), 120)
+        .unwrap();
+    let pane_id = service.active_pane_id().unwrap().to_string();
+    service
+        .agent_shell_store_mut()
+        .enter_or_resume(&pane_id)
+        .unwrap();
+    let project = crate::storage::issues::project_key_for_working_directory(
+        service
+            .pane_current_working_directory(&pane_id)
+            .unwrap_or_else(|| config_root.clone()),
+    );
+    let store = crate::storage::issues::IssueStore::under_config_root(config_root.clone());
+    let prerequisite = store
+        .add_issue(
+            project.clone(),
+            mez_agent::issues::IssueKind::Task,
+            "Pager prerequisite".to_string(),
+            None,
+            None,
+            10,
+        )
+        .unwrap();
+    let dependent = store
+        .add_issue_with_dependencies(
+            mez_agent::issues::NewIssueRecord {
+                project: project.clone(),
+                kind: mez_agent::issues::IssueKind::Task,
+                title: "Open dependent".to_string(),
+                body: None,
+                notes: None,
+                depends_on: vec![prerequisite.id.clone()],
+            },
+            20,
+        )
+        .unwrap();
+
+    let response = service
+        .execute_agent_shell_command(&primary, &format!("/show-issues {}", prerequisite.id))
+        .unwrap();
+    service
+        .set_agent_prompt_response_display_output_for_tests(&pane_id, &response)
+        .unwrap();
+    apply_record_browser_input(&mut service, &primary, b"d");
+
+    assert!(
+        store
+            .get_issue(project.clone(), prerequisite.id.clone())
+            .unwrap()
+            .is_some()
+    );
+    let overlay = service.primary_display_overlay().unwrap();
+    assert!(
+        overlay
+            .lines
+            .iter()
+            .any(|line| line.contains(&dependent.id))
+    );
+
+    store
+        .update_issue(
+            project.clone(),
+            dependent.id,
+            mez_agent::issues::IssueUpdate {
+                state: Some(mez_agent::issues::IssueState::Resolved),
+                ..mez_agent::issues::IssueUpdate::default()
+            },
+            30,
+        )
+        .unwrap();
+    apply_record_browser_input(&mut service, &primary, b"d");
+
+    assert!(store.get_issue(project, prerequisite.id).unwrap().is_none());
+    let overlay = service.primary_display_overlay().unwrap();
+    assert!(
+        !overlay
+            .lines
+            .iter()
+            .any(|line| line.contains("Pager prerequisite"))
+    );
+    let _ = fs::remove_dir_all(root);
+}

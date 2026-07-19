@@ -280,11 +280,32 @@ impl IssueStore {
         if id.trim().is_empty() {
             return Err(MezError::invalid_args("issue id must not be empty"));
         }
-        let connection = self.open()?;
-        let changed = connection.execute(
+        let mut connection = self.open()?;
+        let transaction = connection.transaction()?;
+        let mut statement = transaction.prepare(
+            "SELECT issues.id FROM issue_dependencies
+             JOIN issues ON issues.project = issue_dependencies.project
+                AND issues.id = issue_dependencies.issue_id
+             WHERE issue_dependencies.project = ?1
+               AND issue_dependencies.depends_on_id = ?2
+               AND issues.state = 'open'
+             ORDER BY issues.id ASC",
+        )?;
+        let open_dependents = statement
+            .query_map(params![project, id], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(statement);
+        if !open_dependents.is_empty() {
+            return Err(MezError::conflict(format!(
+                "issue cannot be deleted while open issues depend on it: {}",
+                open_dependents.join(", ")
+            )));
+        }
+        let changed = transaction.execute(
             "DELETE FROM issues WHERE project = ?1 AND id = ?2",
             params![project, id],
         )?;
+        transaction.commit()?;
         Ok(DeleteIssueResult {
             project,
             id,
