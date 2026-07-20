@@ -72,6 +72,16 @@ impl RuntimeSessionService {
                 error.message()
             ),
         );
+        if self
+            .complete_running_agent_turn_and_start_ready(
+                turn,
+                AgentTurnState::Failed,
+                "completion_application_error_fallback",
+            )
+            .is_ok()
+        {
+            return;
+        }
         let _ = self.agent.agent_scheduler.complete(&turn.turn_id);
         let _ = self
             .agent_turn_ledger_mut()

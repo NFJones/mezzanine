@@ -434,62 +434,68 @@ impl RuntimeSessionService {
             Some(&task.model_profile),
         );
         self.record_agent_provider_quota_usage(pane_id, &response.quota_usage);
-        let summary = match runtime_model_compaction_summary_from_response(&response) {
-            Ok(summary) => summary,
-            Err(error) => {
-                self.append_agent_status_text_to_terminal_buffer(
-                    pane_id,
-                    &format!(
-                        "agent: compact failed while reading summary: {}",
-                        error.message()
-                    ),
-                )?;
-                return Ok(true);
+        let application = (|| -> Result<()> {
+            let summary = runtime_model_compaction_summary_from_response(&response)?;
+            let now = current_unix_seconds().max(1);
+            let memory_id = format!("compact-{}", task.conversation_id);
+            let content = runtime_model_compact_memory_content(
+                pane_id,
+                &task.conversation_id,
+                task.transcript_entries,
+                task.summarized_entries,
+                &task.model_profile_name,
+                &task.model_profile,
+                &summary,
+            );
+            self.upsert_session_memory(MemoryRecord::new_with_defaults(
+                memory_id.clone(),
+                MemoryScope::Pane {
+                    session_id: self.session.id.to_string(),
+                    pane_id: pane_id.to_string(),
+                },
+                now,
+                now,
+                MemorySource::Agent,
+                224,
+                content,
+            ))?;
+            let remaining_transcript_entries = self
+                .agent_shell_store_mut()
+                .retain_recent_transcript_entries(pane_id, task.retained_transcript_entries)?
+                .transcript_entries;
+            self.append_agent_status_text_to_terminal_buffer(
+                pane_id,
+                &format!(
+                    "agent: compacted conversation summary memory_id={} summarized_entries={} remaining_transcript_entries={} source=model-compact trigger={}",
+                    memory_id, task.summarized_entries, remaining_transcript_entries, task.source
+                ),
+            )?;
+            if let Some(resume_turn_id) = task.resume_turn_id.as_deref() {
+                let refreshed = self
+                    .refresh_running_turn_context_after_conversation_compaction(resume_turn_id)?;
+                if refreshed {
+                    self.queue_agent_provider_recovery_task_after_compaction(resume_turn_id)?;
+                    self.append_agent_trace_turn_event(
+                        pane_id,
+                        resume_turn_id,
+                        "provider_request recovery_resuming reason=provider_output_limit_compaction_completed",
+                    )?;
+                }
             }
-        };
-        let now = current_unix_seconds().max(1);
-        let memory_id = format!("compact-{}", task.conversation_id);
-        let content = runtime_model_compact_memory_content(
-            pane_id,
-            &task.conversation_id,
-            task.transcript_entries,
-            task.summarized_entries,
-            &task.model_profile_name,
-            &task.model_profile,
-            &summary,
-        );
-        self.upsert_session_memory(MemoryRecord::new_with_defaults(
-            memory_id.clone(),
-            MemoryScope::Pane {
-                session_id: self.session.id.to_string(),
-                pane_id: pane_id.to_string(),
-            },
-            now,
-            now,
-            MemorySource::Agent,
-            224,
-            content,
-        ))?;
-        let remaining_transcript_entries = self
-            .agent_shell_store_mut()
-            .retain_recent_transcript_entries(pane_id, task.retained_transcript_entries)?
-            .transcript_entries;
-        self.append_agent_status_text_to_terminal_buffer(
-            pane_id,
-            &format!(
-                "agent: compacted conversation summary memory_id={} summarized_entries={} remaining_transcript_entries={} source=model-compact trigger={}",
-                memory_id, task.summarized_entries, remaining_transcript_entries, task.source
-            ),
-        )?;
-        if let Some(resume_turn_id) = task.resume_turn_id.as_deref() {
-            let refreshed =
-                self.refresh_running_turn_context_after_conversation_compaction(resume_turn_id)?;
-            if refreshed {
-                self.queue_agent_provider_recovery_task_after_compaction(resume_turn_id)?;
-                self.append_agent_trace_turn_event(
-                    pane_id,
+            Ok(())
+        })();
+        if let Err(error) = application {
+            self.append_agent_status_text_to_terminal_buffer(
+                pane_id,
+                &format!(
+                    "agent: compact failed while applying completion: {}",
+                    error.message()
+                ),
+            )?;
+            if let Some(resume_turn_id) = task.resume_turn_id.as_deref() {
+                self.fail_running_turn_after_output_limit_compaction_failure(
                     resume_turn_id,
-                    "provider_request recovery_resuming reason=provider_output_limit_compaction_completed",
+                    error.message(),
                 )?;
             }
         }
@@ -539,12 +545,20 @@ impl RuntimeSessionService {
         let error = MezError::invalid_state(format!(
             "automatic output-limit compaction failed before provider retry: {message}"
         ));
-        self.fail_agent_turn_for_provider_error(
+        if let Err(application_error) = self.fail_agent_turn_for_provider_error(
             &turn,
             &model_profile.provider,
             &model_profile,
             &error,
-        )
+        ) {
+            self.fail_agent_turn_after_provider_completion_application_error(
+                &turn,
+                &model_profile.provider,
+                Some(&model_profile),
+                &application_error,
+            );
+        }
+        Ok(())
     }
 
     /// Runs the inspect agent shell transcript for compaction operation for this subsystem.

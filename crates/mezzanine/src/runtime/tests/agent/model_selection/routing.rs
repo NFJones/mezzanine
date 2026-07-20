@@ -5,6 +5,7 @@
 //! cancellation, recovery, terminal handoff, and late-result idempotency.
 
 use super::*;
+use crate::runtime::RuntimeAgentCompactionTask;
 use mez_agent::AutoSizingWorkerSelection;
 
 /// Starts a routed loop and returns its blocked parent plus selected worker turn.
@@ -681,6 +682,153 @@ fn runtime_routed_child_missing_execution_recovers_parent() {
         .normal_content_lines()
         .join("\n");
     assert!(!pane_text.contains("result committed: subagent task completed"));
+}
+
+/// Verifies malformed automatic-compaction completion fails a routed worker
+/// through normal terminal settlement and releases its blocked parent.
+///
+/// A provider completion without a usable summary previously discarded the
+/// claimed compaction task and its resume turn id, leaving the worker running
+/// and the routed parent blocked in `waiting` indefinitely.
+#[test]
+fn runtime_routed_child_malformed_compaction_completion_recovers_parent() {
+    let (mut service, parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 3 recover malformed compaction completion");
+    let model_profile = service
+        .agent_turn_model_profile(&worker_turn.turn_id)
+        .expect("worker profile should exist")
+        .clone();
+    let conversation_id = service
+        .agent_shell_store()
+        .get(&worker_turn.pane_id)
+        .expect("worker shell should exist")
+        .session_id
+        .clone();
+    service.claim_agent_compaction_task_state(
+        worker_turn.pane_id.clone(),
+        RuntimeAgentCompactionTask {
+            pane_id: worker_turn.pane_id.clone(),
+            conversation_id,
+            source: "provider-output-limit".to_string(),
+            transcript_entries: 1,
+            retained_transcript_entries: 1,
+            summarized_entries: 1,
+            model_profile_name: worker_turn.model_profile.clone(),
+            model_profile,
+            request: runtime_model_request_fixture_for_agent(
+                &worker_turn.turn_id,
+                &worker_turn.agent_id,
+            ),
+            resume_turn_id: Some(worker_turn.turn_id.clone()),
+        },
+    );
+
+    assert!(
+        service
+            .apply_agent_compaction_completed_event(
+                &worker_turn.pane_id,
+                runtime_test_compaction_response("")
+            )
+            .unwrap()
+    );
+
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == worker_turn.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    let workflow = service
+        .routed_workflow_for_tests(&parent_turn_id)
+        .expect("malformed compaction should retain routed recovery state");
+    assert_eq!(
+        workflow.phase,
+        mez_agent::routed_workflow::RoutedWorkflowPhase::ReadyForErrorExplanation
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == parent_turn_id)
+    );
+}
+
+/// Verifies an automatic-compaction failure after summary parsing still fails
+/// the routed worker and releases its blocked parent.
+///
+/// Removing the worker shell session after the task is claimed makes transcript
+/// retention fail after the valid summary has already been parsed and stored.
+/// Completion application must retain the resume turn id through that failure.
+#[test]
+fn runtime_routed_child_post_summary_compaction_failure_recovers_parent() {
+    let (mut service, parent_turn_id, worker_turn) =
+        selected_routed_loop("/loop --limit 3 recover post-summary compaction failure");
+    let model_profile = service
+        .agent_turn_model_profile(&worker_turn.turn_id)
+        .expect("worker profile should exist")
+        .clone();
+    let conversation_id = service
+        .agent_shell_store()
+        .get(&worker_turn.pane_id)
+        .expect("worker shell should exist")
+        .session_id
+        .clone();
+    service.claim_agent_compaction_task_state(
+        worker_turn.pane_id.clone(),
+        RuntimeAgentCompactionTask {
+            pane_id: worker_turn.pane_id.clone(),
+            conversation_id,
+            source: "provider-output-limit".to_string(),
+            transcript_entries: 1,
+            retained_transcript_entries: 1,
+            summarized_entries: 1,
+            model_profile_name: worker_turn.model_profile.clone(),
+            model_profile,
+            request: runtime_model_request_fixture_for_agent(
+                &worker_turn.turn_id,
+                &worker_turn.agent_id,
+            ),
+            resume_turn_id: Some(worker_turn.turn_id.clone()),
+        },
+    );
+    service
+        .agent_shell_store_mut()
+        .remove_session(&worker_turn.pane_id);
+
+    assert!(
+        service
+            .apply_agent_compaction_completed_event(
+                &worker_turn.pane_id,
+                runtime_test_compaction_response("valid compacted summary")
+            )
+            .unwrap()
+    );
+
+    assert_eq!(
+        service
+            .agent_turn_ledger()
+            .turns()
+            .iter()
+            .find(|turn| turn.turn_id == worker_turn.turn_id)
+            .map(|turn| turn.state),
+        Some(AgentTurnState::Failed)
+    );
+    let workflow = service
+        .routed_workflow_for_tests(&parent_turn_id)
+        .expect("post-summary failure should retain routed recovery state");
+    assert_eq!(
+        workflow.phase,
+        mez_agent::routed_workflow::RoutedWorkflowPhase::ReadyForErrorExplanation
+    );
+    assert!(
+        service
+            .pending_agent_provider_tasks()
+            .iter()
+            .any(|task| task.turn_id == parent_turn_id)
+    );
 }
 
 /// Verifies routed loop continuation queue failure terminates the controller
