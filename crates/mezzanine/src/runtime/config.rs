@@ -64,13 +64,14 @@ pub(super) use model::{
     runtime_model_override_scope_name, runtime_model_profile_display,
     runtime_validate_latency_preference,
 };
-pub(super) use permissions::{
-    ConfiguredPermissions, runtime_approval_decision_name_to_kind,
+#[cfg(test)]
+pub(super) use permissions::SandboxConfig;
+pub(crate) use permissions::{
+    BubblewrapConfig, BubblewrapNetworkMode, ConfiguredPermissions, NetworkPolicy,
+    SandboxEnvironmentPolicy, SandboxUnavailablePolicy, runtime_approval_decision_name_to_kind,
     runtime_blocked_approval_request, runtime_config_permission_preset,
     runtime_configured_permissions_from_config, runtime_message_recipient,
 };
-#[cfg(test)]
-pub(super) use permissions::{NetworkPolicy, SandboxConfig};
 pub(crate) use providers::runtime_default_models_for_provider;
 pub(super) use providers::{
     runtime_preset_registry_from_config, runtime_provider_registry_from_config,

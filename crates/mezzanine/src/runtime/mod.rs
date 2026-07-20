@@ -244,6 +244,10 @@ mod commands_support;
 /// The nested module keeps its implementation details isolated while this
 /// declaration makes the boundary available to the crate.
 mod config;
+pub(crate) use config::{
+    BubblewrapConfig, BubblewrapNetworkMode, NetworkPolicy, SandboxEnvironmentPolicy,
+    SandboxUnavailablePolicy,
+};
 /// Exposes the control module boundary.
 ///
 /// The nested module keeps its implementation details isolated while this
